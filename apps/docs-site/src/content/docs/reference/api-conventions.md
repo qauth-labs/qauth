@@ -274,7 +274,8 @@ to. No job removes approvals: one that expires unused keeps its body until the n
 the requester wrote: every security operation registers a renderer, which returns typed display
 data, never HTML, and the admin listener refuses to boot a security operation without one. The
 requester's reason is shown apart, as quoted text. Every string is length-capped, and a control,
-bidirectional, format or other default-ignorable character in it is shown escaped (`\u{202E}`), a
+bidirectional, format or other default-ignorable character in it is shown escaped (`\u{202E}`), as
+is a private-use or unassigned code point and every space but U+0020, a
 backslash doubled and a combining mark past the third on one character escaped, so the text can
 neither hide nor reorder what the page shows, nor pass for an escape. Every reader of an approval
 gets its display data, so a renderer must never show a secret value of the request: nothing checks it.

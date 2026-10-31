@@ -1140,7 +1140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   operation registers a renderer, and the admin listener refuses to boot one
   without it: the approver sees typed display data rendered from the stored
   request, every string length-capped with its control, bidirectional, format
-  and other default-ignorable characters shown escaped and its backslashes
+  and other default-ignorable characters, private-use and unassigned code
+  points and spaces other than U+0020 shown escaped and its backslashes
   doubled, and the requester's reason apart, as quoted text. A consumed,
   cancelled or denied approval drops the operation's body, which may hold a
   secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.

@@ -121,7 +121,18 @@ describe('the display rules (#512, ADR-019 Decision 6)', () => {
         `a\\u{${codePoint.toString(16).toUpperCase().padStart(4, '0')}}b`
       );
     }
-    // Letters, emoji and combining marks stay as they are.
+    // Private use, which a font may draw as anything; unassigned, the
+    // noncharacters among them; and every space but U+0020.
+    for (const codePoint of [
+      0xe000, 0xf8ff, 0xf0000, 0x10fffd, 0x0378, 0xfdd0, 0xffff, 0x10ffff, 0x00a0, 0x1680, 0x2000,
+      0x2009, 0x200a, 0x202f, 0x205f, 0x3000,
+    ]) {
+      const shown = displayText(`a${String.fromCodePoint(codePoint)}b`, 100);
+      expect(shown, codePoint.toString(16)).toBe(
+        `a\\u{${codePoint.toString(16).toUpperCase().padStart(4, '0')}}b`
+      );
+    }
+    // Letters, emoji, combining marks and the ordinary space stay as they are.
     expect(displayText('Zürich 🔑 é', 100)).toBe('Zürich 🔑 é');
   });
 

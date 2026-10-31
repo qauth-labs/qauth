@@ -17,12 +17,14 @@ import {
  *
  * Every string, the renderer's and the reason, follows the display rules of
  * ADR-019 Decision 6: it is length-capped, and it shows no control,
- * bidirectional or other invisible character. Each such character is shown
- * escaped, as `\u{202E}`, so the approver sees that the text held one and the
- * text cannot reorder or hide what the page shows around it. A backslash is
- * shown doubled, so a text that spells an escape out cannot pass for one, and
- * combining marks past the third on one character are shown escaped, so a
- * pile of them cannot spill over the lines around it.
+ * bidirectional or other invisible character, nor one whose look the page
+ * cannot vouch for (private use, unassigned, a space other than U+0020).
+ * Each such character is shown escaped, as `\u{202E}`, so the approver sees
+ * that the text held one and the text cannot reorder or hide what the page
+ * shows around it. A backslash is shown doubled, so a text that spells an
+ * escape out cannot pass for one, and combining marks past the third on one
+ * character are shown escaped, so a pile of them cannot spill over the lines
+ * around it.
  *
  * The display data goes to every reader of the approval: a renderer never
  * shows a secret value of the request, such as a password in its body.
@@ -47,10 +49,13 @@ export const DISPLAY_LIMITS = Object.freeze({
  * Unicode says to render as nothing (`Default_Ignorable_Code_Point`: the
  * Hangul fillers, the combining grapheme joiner, variation selectors), and
  * two that render blank or as a box, the blank Braille pattern and the object
- * replacement character.
+ * replacement character. And code points whose look the page cannot vouch
+ * for: private-use ones, which a font may draw as anything; unassigned ones;
+ * and every space but U+0020, so no-break, ideographic, thin and other
+ * spaces cannot pass for an ordinary one.
  */
 const UNSAFE_CODE_POINT =
-  /^(?:[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}\u2800\ufffc]|\p{Cs})$/u;
+  /^(?:[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\p{Co}\p{Cn}\p{Default_Ignorable_Code_Point}\u2800\ufffc]|\p{Cs}|(?!\u0020)\p{Zs})$/u;
 
 /** A combining mark, which draws on the character before it. */
 const COMBINING_MARK = /^\p{M}$/u;
