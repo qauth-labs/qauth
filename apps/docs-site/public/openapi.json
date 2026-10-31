@@ -583,7 +583,7 @@
         "tags": [
           "Account API"
         ],
-        "description": "List the active OAuth consents of the token's user, newest first, one page at a time.",
+        "description": "List the active OAuth consents of the token's user, one page at a time, by when each was first given, newest first. A new grant to the same client keeps its consent where it is in the list.",
         "parameters": [
           {
             "schema": {
@@ -5725,7 +5725,7 @@
         "tags": [
           "Developer API"
         ],
-        "description": "List the active OAuth consents of the token's user, newest first, one page at a time.",
+        "description": "List the active OAuth consents of the token's user, one page at a time, by when each was first given, newest first. A new grant to the same client keeps its consent where it is in the list.",
         "parameters": [
           {
             "schema": {
