@@ -64,7 +64,11 @@ export interface TestSigner {
   readonly signer: Signer;
   /** Create a realm with the standard keys (and RS256 when asked); returns its id. */
   addRealm(realm: TestRealmKeys): Promise<string>;
-  /** Change the status of a realm's key, as a rotation or a retirement would. */
+  /**
+   * Change the status of a realm's key, as a rotation or a retirement would.
+   * It sets no `unpublishAt`, so a key it retires neither verifies nor is
+   * published; `rotateTokenKeys` retires a key that does.
+   */
   setKeyStatus(realmId: string, kid: string, status: StoredKeyStatus): void;
   /**
    * Rotate the realm's `token_signing` keys of one algorithm (#492): a new
@@ -80,7 +84,7 @@ export interface TestSigner {
 interface MemoryRow {
   key: Omit<NewStoredKeyRow, 'status'> & { status: StoredKeyStatus };
   publicJwk?: Record<string, unknown>;
-  /** Epoch ms. When a retired key leaves its JWKS; `null` while it stays. */
+  /** Epoch ms. When a retired key leaves its JWKS; a retired key with `null` is out at once. */
   unpublishAt: number | null;
 }
 
