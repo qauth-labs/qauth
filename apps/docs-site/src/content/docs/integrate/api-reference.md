@@ -495,7 +495,9 @@ server is too busy to check the client secret (`temporarily_unavailable`; RFC
 
 Unauthenticated and cacheable. The discovery documents carry
 `Cache-Control: public, max-age=3600`; the JWKS carries `public, max-age=300`,
-so a relying party keeps a key set for at most five minutes.
+so an HTTP cache keeps a key set for at most five minutes. A JWKS client
+library keeps its own cache: set it to five minutes at most
+([Caching the JWKS](/integrate/oauth-flow/#caching-the-jwks)).
 
 | Endpoint                                      | Returns                                                    |
 | --------------------------------------------- | ---------------------------------------------------------- |
@@ -511,16 +513,20 @@ Decision 1):
   is built on it.
 - The JWKS lists the realm's published keys, each under its own `kid`: its
   active keys, a next key from its publication, before it signs, and a retired
-  key until its retention ends. No other realm's key is in it.
-- `id_token_signing_alg_values_supported` lists the algorithms of the realm's
-  active keys: `["RS256","EdDSA"]` when it has an active RS256 key, else
-  `["EdDSA"]`.
-- The settings that add members, such as `CIMD_ENABLED`, `ID_JAG_ENABLED` and
-  `DPOP_ENABLED`, belong to the deployment: every realm advertises them alike.
+  key while it stays published (after a rotation, until its retention ends).
+  No other realm's key is in it.
+- `id_token_signing_alg_values_supported` follows the realm's active keys:
+  `["RS256","EdDSA"]` when it has an active RS256 key, else `["EdDSA"]`.
+- The settings that add members belong to the deployment, and every realm
+  advertises them alike: `CIMD_ENABLED`, `DPOP_ENABLED`, and `ID_JAG_ENABLED`
+  once `ID_JAG_TRUSTED_ISSUERS` names an issuer.
 
-Every node of a deployment answers the same bytes for the same realm, whether
-or not it holds the signer. A host that names no realm gets `421` for all three,
-with no fallback to the default realm.
+Every node that serves these documents (a process holding the `api` role, see
+[Service roles](/operate/service-roles/)) answers the same bytes for the same
+realm, whether or not it holds the signer, given the same settings. After a key
+changes, a node may serve its previous key list for up to a minute, its key
+refresh interval. A host that names no realm gets `421` for all three, with no
+fallback to the default realm.
 
 An endpoint host (`DEFAULT_REALM_ENDPOINT_HOSTS`) gets its realm's documents
 unchanged: `issuer` and every URL name the realm's issuer, never the endpoint

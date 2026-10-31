@@ -38,12 +38,13 @@ const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
  * during bootstrap and cache responses locally.
  *
  * Each document belongs to the realm the request's host names (ADR-019
- * Decisions 1 and 9, #494) and is built from the realm's row and published
- * keys alone, so every node answers the same bytes for the same realm. A
- * host that names no realm never reaches these handlers: the realm resolver
- * answers it 421, with no fallback. An endpoint host of a realm gets the
- * realm's documents unchanged, the realm issuer and its URLs included:
- * endpoint hosts are not advertised.
+ * Decisions 1 and 9, #494) and is built from the realm's row, its published
+ * keys and the deployment's settings, so every node that serves it answers
+ * the same bytes for the same realm, once its key list is no older than the
+ * last key change (the signer's refresh interval). A host that names no realm
+ * never reaches these handlers: the realm resolver answers it 421, with no
+ * fallback. An endpoint host of a realm gets the realm's documents unchanged,
+ * the realm issuer and its URLs included: endpoint hosts are not advertised.
  */
 export default async function (fastify: FastifyInstance) {
   // ADR-018 §5 (#477): the experimental items that are on, read once from the
