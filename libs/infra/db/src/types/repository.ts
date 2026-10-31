@@ -246,6 +246,19 @@ export interface BaseRepository<TSelect, TInsert, TUpdate> {
  * an unknown id gets, so neither the answer nor its timing tells the caller
  * that the id exists elsewhere.
  */
+/**
+ * One page of a list read by keyset (#524): at most `limit` rows, ordered by a
+ * time column and then the row id, both descending, starting after the row
+ * `after` names. The API's cursor carries `after`; a list never pages by
+ * offset, which skips or repeats rows when rows are added between two reads.
+ */
+export interface KeysetPage {
+  /** Most rows to return. */
+  readonly limit: number;
+  /** The time (epoch milliseconds) and id of the last row of the previous page. */
+  readonly after?: { readonly at: number; readonly id: string };
+}
+
 export interface RealmScopedRepository<TSelect, TInsert, TUpdate> {
   /** Create a new entity; its realm is in `data` */
   create(data: TInsert, tx?: DbClient): Promise<TSelect>;
@@ -284,6 +297,25 @@ export interface OAuthClientsRepository extends RealmScopedRepository<
    * therefore never returned here.
    */
   listByDeveloper(realmId: string, developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
+
+  /**
+   * One page of the OAuth clients a developer owns, newest first: the rows
+   * {@link listByDeveloper} returns, by `created_at` and then `id`, both
+   * descending (#524).
+   */
+  pageByDeveloper(
+    realmId: string,
+    developerId: string,
+    page: KeysetPage,
+    tx?: DbClient
+  ): Promise<OAuthClient[]>;
+
+  /**
+   * Find an OAuth client of the realm by ID and lock its row until the
+   * transaction `tx` ends (`SELECT … FOR UPDATE`), for a write that is
+   * conditional on what it read (#524, `If-Match`).
+   */
+  findByIdForUpdate(realmId: string, id: string, tx: DbClient): Promise<OAuthClient | undefined>;
 
   /**
    * Count the OAuth clients owned by a developer: the rows
@@ -519,6 +551,23 @@ export interface OAuthConsentsRepository {
     >
   >;
   /**
+   * One page of {@link listActiveForUserWithClient}'s rows, by `granted_at`
+   * and then `id`, both descending (#524).
+   */
+  pageActiveForUserWithClient(
+    realmId: string,
+    userId: string,
+    page: KeysetPage,
+    tx?: DbClient
+  ): Promise<
+    Array<
+      OAuthConsent & {
+        clientClientId: string;
+        clientName: string;
+      }
+    >
+  >;
+  /**
    * Grant/update consent for (user, client).
    *
    * If an active row exists, its `scopes` array is replaced with the union
@@ -624,6 +673,16 @@ export interface ApiKeysRepository {
    * (callers mask them); the route projects to non-secret fields only.
    */
   listByClient(realmId: string, clientId: string, tx?: DbClient): Promise<ApiKey[]>;
+  /**
+   * One page of {@link listByClient}'s rows, by `created_at` and then `id`,
+   * both descending (#524).
+   */
+  pageByClient(
+    realmId: string,
+    clientId: string,
+    page: KeysetPage,
+    tx?: DbClient
+  ): Promise<ApiKey[]>;
   /**
    * Find a single API key of the realm by id, or undefined.
    */

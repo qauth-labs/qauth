@@ -4,9 +4,10 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, lt, or, sql } from 'drizzle-orm';
 
 import type {
+  KeysetPage,
   NewOAuthClient,
   OAuthClient,
   OAuthClientsRepository,
@@ -138,6 +139,69 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .from(oauthClients)
         .where(ownedBy(realmId, developerId))
         .orderBy(desc(oauthClients.createdAt));
+    },
+
+    /**
+     * One page of the OAuth clients of the realm a developer owns, newest
+     * first (#524): the filter of {@link listByDeveloper}, ordered by
+     * `created_at` and then `id`, both descending, so rows created in the same
+     * millisecond still have one order, starting after `page.after`.
+     *
+     * @param realmId - Realm the request was resolved to
+     * @param developerId - Owning developer's user id
+     * @param page - How many rows, and the last row of the previous page
+     * @param tx - Optional transaction client
+     * @returns At most `page.limit` owned OAuth clients
+     */
+    async pageByDeveloper(
+      realmId: string,
+      developerId: string,
+      page: KeysetPage,
+      tx?: DbClient
+    ): Promise<OAuthClient[]> {
+      const invoker = tx ?? defaultDb;
+      const after = page.after;
+      return invoker
+        .select()
+        .from(oauthClients)
+        .where(
+          and(
+            ownedBy(realmId, developerId),
+            after === undefined
+              ? undefined
+              : or(
+                  lt(oauthClients.createdAt, after.at),
+                  and(eq(oauthClients.createdAt, after.at), lt(oauthClients.id, after.id))
+                )
+          )
+        )
+        .orderBy(desc(oauthClients.createdAt), desc(oauthClients.id))
+        .limit(page.limit);
+    },
+
+    /**
+     * Find an OAuth client of the realm by ID and lock its row
+     * (`SELECT … FOR UPDATE`) until `tx` ends (#524). A write conditional on
+     * what was read (`If-Match`) reads through this, so no other write lands
+     * between the read and the write.
+     *
+     * @param realmId - Realm the request was resolved to
+     * @param id - OAuth client ID
+     * @param tx - The transaction that holds the lock
+     * @returns OAuth client if found, undefined otherwise
+     */
+    async findByIdForUpdate(
+      realmId: string,
+      id: string,
+      tx: DbClient
+    ): Promise<OAuthClient | undefined> {
+      const [client] = await tx
+        .select()
+        .from(oauthClients)
+        .where(clientOfRealm(realmId, id))
+        .limit(1)
+        .for('update');
+      return client;
     },
 
     /**

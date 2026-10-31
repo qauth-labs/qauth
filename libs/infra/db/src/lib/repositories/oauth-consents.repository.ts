@@ -1,7 +1,8 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, or } from 'drizzle-orm';
 
 import type {
+  KeysetPage,
   NewOAuthConsent,
   OAuthConsent,
   OAuthConsentsRepository,
@@ -107,6 +108,48 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
         .innerJoin(oauthClients, eq(oauthConsents.oauthClientId, oauthClients.id))
         .where(activeConsentsOf(realmId, userId))
         .orderBy(desc(oauthConsents.grantedAt));
+
+      return rows.map((r) => ({
+        ...r.consent,
+        clientClientId: r.clientClientId,
+        clientName: r.clientName,
+      }));
+    },
+
+    /**
+     * One page of the active consents a user of the realm holds, with each
+     * one's client, newest first (#524): ordered by `granted_at` and then
+     * `id`, both descending, starting after `page.after`.
+     */
+    async pageActiveForUserWithClient(
+      realmId: string,
+      userId: string,
+      page: KeysetPage,
+      tx?: DbClient
+    ) {
+      const invoker = tx ?? defaultDb;
+      const after = page.after;
+      const rows = await invoker
+        .select({
+          consent: oauthConsents,
+          clientClientId: oauthClients.clientId,
+          clientName: oauthClients.name,
+        })
+        .from(oauthConsents)
+        .innerJoin(oauthClients, eq(oauthConsents.oauthClientId, oauthClients.id))
+        .where(
+          and(
+            activeConsentsOf(realmId, userId),
+            after === undefined
+              ? undefined
+              : or(
+                  lt(oauthConsents.grantedAt, after.at),
+                  and(eq(oauthConsents.grantedAt, after.at), lt(oauthConsents.id, after.id))
+                )
+          )
+        )
+        .orderBy(desc(oauthConsents.grantedAt), desc(oauthConsents.id))
+        .limit(page.limit);
 
       return rows.map((r) => ({
         ...r.consent,
