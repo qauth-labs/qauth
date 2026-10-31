@@ -6,6 +6,7 @@ import { calculateJwkThumbprint, CompactSign, exportJWK, generateKeyPair, type J
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  allowConsentScreen,
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
@@ -185,7 +186,11 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
     });
   }
 
-  /** Run the browser half of the code flow and return the code. */
+  /**
+   * Run the browser half of the code flow and return the code. An agent
+   * client never skips the consent screen (ADR-015 Decision 11), so the
+   * screen is allowed when authorize sends the browser there.
+   */
   async function authorize(
     app: FastifyInstance,
     jar: CookieJar,
@@ -208,9 +213,12 @@ describe('DPoP-bound tokens at the token endpoint (#480, real containers)', () =
       headers: { cookie: jar.header() as string },
     });
     expect(response.statusCode).toBe(302);
-    const code = new URL(response.headers['location'] as string).searchParams.get('code');
-    if (code === null)
-      throw new Error(`authorize returned no code: ${response.headers['location']}`);
+    let location = response.headers['location'] as string;
+    if (location.startsWith('/ui/consent?')) {
+      location = await allowConsentScreen(app, jar.header() as string, location);
+    }
+    const code = new URL(location).searchParams.get('code');
+    if (code === null) throw new Error(`authorize returned no code: ${location}`);
     return code;
   }
 

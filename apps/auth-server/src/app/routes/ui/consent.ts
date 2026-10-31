@@ -20,6 +20,7 @@ import {
 } from '../../helpers/client-resolution';
 import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import {
+  agentPersistenceLine,
   canSkipConsent,
   describeScope,
   filterRequestedScopes,
@@ -131,6 +132,12 @@ function consentPage(opts: {
   redirectIsLoopback: boolean;
   /** True for CIMD-resolved clients (no operator pre-registration). */
   isCimd: boolean;
+  /**
+   * ADR-014 §11 (#845): for an agent client (fail-closed `isAgentClient`), the
+   * realm's `sso_max_lifespan` the persistence line names, `null` when the
+   * realm sets none. Absent for any other client, whose page has neither line.
+   */
+  agent?: { ssoMaxLifespanSeconds: number | null };
 }): string {
   const scopeRows = opts.scopes.length
     ? opts.scopes.map((s) => html`<li><code>${s}</code> — ${describeScope(s)}</li>`)
@@ -161,6 +168,17 @@ function consentPage(opts: {
           (your own device). Only continue if you started this sign-in yourself.
         </div>`
       : safe('');
+
+  // ADR-014 §11 (#845): an agent client is named as an AI agent, in QAuth's
+  // words rather than anything the client declared, and the page says how long
+  // it may keep working once allowed. The client name stays escaped by the
+  // `html` tag, as in the heading.
+  const agentNotice = opts.agent
+    ? html`<div class="agent">
+        <p>${opts.clientName} is an AI agent.</p>
+        <p>${agentPersistenceLine(opts.agent.ssoMaxLifespanSeconds)}</p>
+      </div>`
+    : safe('');
 
   const badge = opts.badgeDynamic
     ? html`<div class="badge">
@@ -232,6 +250,21 @@ function consentPage(opts: {
               border-radius: 4px;
               font-size: 12px;
             }
+            .agent {
+              background: #eef2ff;
+              color: #1e3a8a;
+              border: 1px solid #c7d2fe;
+              border-radius: 6px;
+              padding: 10px 12px;
+              margin: 16px 0;
+              font-size: 13px;
+            }
+            .agent p {
+              margin: 0;
+            }
+            .agent p + p {
+              margin-top: 4px;
+            }
             .badge {
               background: #fff4e5;
               color: #8a4b08;
@@ -295,7 +328,7 @@ function consentPage(opts: {
             <h1>${opts.clientName} wants to access your account</h1>
             ${homepage}
             <p class="as-user">Signed in as ${opts.userIdentifier}</p>
-            ${badge} ${loopbackWarning}
+            ${agentNotice} ${badge} ${loopbackWarning}
             <p><strong>Requested access:</strong></p>
             <ul class="scopes">
               ${scopeRows}
@@ -542,6 +575,12 @@ export default async function (fastify: FastifyInstance) {
           redirectHost: redirectHost(query.redirect_uri),
           redirectIsLoopback: isLoopbackRedirect(query.redirect_uri),
           isCimd,
+          // ADR-014 §11 (#845): the AI-agent line and the persistence line,
+          // which names the realm's `sso_max_lifespan` (#552) when it sets
+          // one. Read from the request realm's row, as /oauth/token reads it.
+          agent: isAgentClient(client)
+            ? { ssoMaxLifespanSeconds: realm.ssoMaxLifespan }
+            : undefined,
         })
       );
     }
@@ -822,7 +861,8 @@ export default async function (fastify: FastifyInstance) {
       // Allow: issue a code and, if the user checked the box, persist the
       // grant. The grant upsert merges with any prior record so subsequent
       // requests with a subset of these scopes, for the resource(s) this
-      // screen named as the audience, skip the screen. An approval that is
+      // screen named as the audience, skip the screen, unless the client is
+      // an agent (ADR-015 Decision 11). An approval that is
       // not persisted is one-time: /oauth/token mints a refresh token only
       // under a stored consent, the row the user can list and revoke.
       //
