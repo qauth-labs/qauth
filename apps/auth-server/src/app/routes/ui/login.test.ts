@@ -300,6 +300,7 @@ describe('UI /ui/login — CSRF defence', () => {
       assuranceLevel: null,
       ipAddress: '127.0.0.1',
       userAgent: 'TestBrowser/1.0',
+      issuedAt: expect.any(Number),
     });
     expect(input.authTime).toBeGreaterThanOrEqual(before);
     expect(input.authTime).toBeLessThanOrEqual(Date.now());
@@ -323,6 +324,47 @@ describe('UI /ui/login — CSRF defence', () => {
       { method: 'password' },
       { realmId: 'realm-1', userId: 'user-1', actor: 'user' }
     );
+  });
+
+  // A disablement that commits while the account is being read is not seen
+  // by the read: the session counts from before the read (#748).
+  it('POST counts the new session from the time taken before the account is read (#748)', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await loginRoute(fastify);
+    const getReply = createReply();
+    await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[0];
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const beforeRead = Date.now();
+      (fastify.repositories.users.findById as unknown as Mock).mockImplementation(async () => {
+        // The read waits, on the disabling transaction's row lock say, while
+        // the clock moves on.
+        vi.setSystemTime(Date.now() + 5_000);
+        return { id: 'user-1', email: 'user@example.com', passwordHash: 'hash', enabled: true };
+      });
+      const { reply, state } = createReply();
+      await ctx.post!(
+        {
+          body: { email: 'user@example.com', password: 'correct', csrf_token: rawToken },
+          headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(state.statusCode).toBe(302);
+      expect(sessions.service.create).toHaveBeenCalledOnce();
+      expect(sessions.service.create.mock.calls[0][0].issuedAt).toBe(beforeRead);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('POST signs in to a NEW session even when the browser already carries one (session fixation)', async () => {

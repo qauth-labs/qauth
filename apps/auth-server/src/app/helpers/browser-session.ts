@@ -33,6 +33,12 @@ export interface BrowserSignIn {
    * `null` or absent when nothing above `low` was.
    */
   assuranceLevel?: SessionAssuranceLevel | null;
+  /**
+   * When the sign-in was issued: the time the caller took before it read the
+   * account (#748). The session counts from it, so a disablement that commits
+   * after that read finds the session issued before it.
+   */
+  issuedAt?: number;
 }
 
 /**
@@ -64,6 +70,7 @@ export async function createBrowserSession(
     assuranceLevel: signIn.assuranceLevel ?? null,
     ipAddress: origin?.ip ?? null,
     userAgent: origin?.userAgent ?? null,
+    issuedAt: signIn.issuedAt,
   });
   await trackBrowserSession(fastify, session);
   if (signIn.identifier !== undefined) {

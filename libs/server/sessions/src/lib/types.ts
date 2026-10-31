@@ -138,6 +138,13 @@ export interface CreateSessionInput {
   ipAddress?: string | null;
   /** The `User-Agent` of the sign-in request. */
   userAgent?: string | null;
+  /**
+   * When the session is issued, in epoch milliseconds: its `createdAt`. A
+   * sign-in passes the time it took before it read the account (#748), so a
+   * disablement that commits after that read finds the session issued before
+   * it. Absent, or later than the service's clock, it is the service's clock.
+   */
+  issuedAt?: number;
 }
 
 /** Names one session. Every lookup takes the realm (ADR-019 Decision 1). */

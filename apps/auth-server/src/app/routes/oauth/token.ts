@@ -948,6 +948,12 @@ async function handleAuthorizationCode(
   // unspent code.
   if (authCode.used) return rejectCodeReplay(ctx, authCode);
 
+  // When the grant is issued: the start of the refresh family it may begin,
+  // taken before the account is read (#748). A disablement that commits after
+  // the read is not seen by it, so a start stamped later could fall past that
+  // disablement's time and outlive the account being enabled again. An
+  // earlier start only shortens the family under `sso_max_lifespan`.
+  const issuedAt = Date.now();
   const user = await fastify.repositories.users.findById(ctx.realmId, authCode.userId);
   if (!user) {
     // The code names no user any more, so the event has none. Answered as the
@@ -1005,7 +1011,7 @@ async function handleAuthorizationCode(
     user.id,
     client.id
   );
-  const familyCreatedAt = Date.now();
+  const familyCreatedAt = issuedAt;
   const refresh =
     consent && isScopeSubset(authCode.scopes, consent.scopes)
       ? {

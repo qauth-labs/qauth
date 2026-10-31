@@ -671,6 +671,9 @@ async function advanceWalletLoginFlow(
   // credential for a disabled account is still a refused sign-in, and it must
   // look like every other refusal.
   // In the flow's realm, where the presentation was resolved to the account.
+  // The session's issue time is taken before the read (#748): a disablement
+  // that commits after the read is not seen by it.
+  const issuedAt = Date.now();
   const user = await fastify.repositories.users.findById(flow.realmId, resolution.userId);
   if (!user || !user.enabled) {
     fastify.log.warn(
@@ -702,6 +705,7 @@ async function advanceWalletLoginFlow(
       resolution.assuranceLevel === 'substantial' || resolution.assuranceLevel === 'high'
         ? resolution.assuranceLevel
         : null,
+    issuedAt,
   });
 
   await fastify.repositories.users.updateLastLogin(flow.realmId, user.id);

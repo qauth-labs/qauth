@@ -434,6 +434,53 @@ describe('POST /auth/login', () => {
     }
   );
 
+  // A disablement that commits while the account is being read is not seen
+  // by the read: the family counts from before the read (#748).
+  it('starts the refresh family at the time taken before the account is read (#748)', async () => {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'sc-uuid',
+      clientId: 'system',
+      audience: ['https://auth.example.com'],
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      let beforeRead: number | undefined;
+      (fastify.repositories.users.findById as unknown as Mock).mockImplementation(async () => {
+        // The read waits, on the disabling transaction's row lock say, while
+        // the clock moves on.
+        beforeRead = Date.now();
+        vi.setSystemTime(beforeRead + 5_000);
+        return userFixture();
+      });
+      await ctx.handler(
+        {
+          realm: testRealm({ id: 'realm-1' }),
+          body: { email: 'user@example.com', password: 'p' },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+          log: requestLog(),
+        },
+        createReply()
+      );
+
+      expect(beforeRead).toBeDefined();
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ familyCreatedAt: beforeRead })
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('mints the first-party token with no email claims, even for a verified address — ANT-2026-2O0T72HY', async () => {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);

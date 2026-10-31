@@ -114,6 +114,10 @@ export default async function (fastify: FastifyInstance) {
         // The users row supplies the stable subject id plus session/event/log
         // fields. The row must exist for any live credential (FK), so a miss
         // is treated as invalid below.
+        // The refresh family's start, taken before the account is read
+        // (#748): a disablement that commits after the read is not seen by
+        // it, and a start stamped later could fall past its time.
+        const issuedAt = Date.now();
         const user =
           check.status === 'ok' && !unverified
             ? await fastify.repositories.users.findById(realm.id, check.credential.userId)
@@ -188,7 +192,7 @@ export default async function (fastify: FastifyInstance) {
         // the refresh-token family from its start (ADR-019 Decision 3, #552).
         // No browser session backs this sign-in, so no session end caps it.
         const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
-        const familyCreatedAt = Date.now();
+        const familyCreatedAt = issuedAt;
         const refreshExpiresAt = refreshTokenExpiresAt(
           familyCreatedAt,
           fastify.jwtUtils.getRefreshTokenLifespan(),

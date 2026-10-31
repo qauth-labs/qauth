@@ -379,6 +379,9 @@ export default async function (fastify: FastifyInstance) {
       const unverified =
         check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
 
+      // The session's issue time, taken before the account is read (#748): a
+      // disablement that commits after the read is not seen by it.
+      const issuedAt = Date.now();
       const user =
         check.status === 'ok' && !unverified
           ? await fastify.repositories.users.findById(realm.id, check.credential.userId)
@@ -424,6 +427,7 @@ export default async function (fastify: FastifyInstance) {
         userId: user.id,
         // #230: the credential's external_sub is the authenticated address.
         identifier: check.credential.externalSub,
+        issuedAt,
       });
 
       await fastify.repositories.users.updateLastLogin(realm.id, user.id);

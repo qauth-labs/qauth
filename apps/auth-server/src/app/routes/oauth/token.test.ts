@@ -3014,6 +3014,36 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([]);
   });
 
+  // A disablement that commits while the account is being read is not seen
+  // by the read: the family it starts counts from before the read, so it
+  // cannot postdate that disablement's time.
+  it('starts the refresh family at the time taken before the account is read (#748)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { fastify, ctx, user } = setupAuthCodeStub();
+      const beforeRead = Date.now();
+      (fastify.repositories.users.findById as unknown as Mock).mockImplementation(async () => {
+        // The read waits, on the disabling transaction's row lock say, while
+        // the clock moves on.
+        vi.setSystemTime(Date.now() + 5_000);
+        return user;
+      });
+      await tokenRoute(fastify);
+      const handler = ctx.handler;
+      if (!handler) throw new Error('Handler missing');
+
+      await expect(handler(baseRequest(), createReply())).resolves.toMatchObject({
+        refresh_token: 'refresh-token-plain',
+      });
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ familyCreatedAt: beforeRead }),
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A code the previous release minted after the account was enabled again,
   // from a session older than the disablement: the sign-in behind it counts.
   it('rejects a new code minted from a sign-in older than the last disablement (#748)', async () => {

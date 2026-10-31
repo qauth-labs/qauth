@@ -83,6 +83,17 @@ describe('createBrowserSession', () => {
     });
   });
 
+  it('counts the session from the issue time the sign-in took before reading the account (#748)', async () => {
+    const issuedAt = Date.now() - 1500;
+    await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      issuedAt,
+    });
+
+    expect(sessions.service.create.mock.calls[0][0].issuedAt).toBe(issuedAt);
+  });
+
   it('carries the assurance level the authentication established', async () => {
     await createBrowserSession(fastify, makeRequest(), {
       realmId: REALM.id,
