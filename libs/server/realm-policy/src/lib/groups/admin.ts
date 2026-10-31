@@ -14,6 +14,26 @@ const link = groupDocsLink('admin');
  */
 const OPERATION_ID_PATTERN = /^[a-z][a-zA-Z0-9]*(?:\.[a-z][a-zA-Z0-9]*)+$/;
 
+/** The JSON Schema form of {@link isIssuerUrl}, for a reader that cannot run it. */
+const ISSUER_URL_PATTERN = '^https://[^\\s?#@]+$';
+
+/**
+ * An issuer identifier: an https URL with no user info, query or fragment
+ * (RFC 8414 §2). User info would also put a credential into a field the
+ * representation and every diff show.
+ */
+function isIssuerUrl(value: string): boolean {
+  if (/[\s?#@]/.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' && url.hostname !== '' && url.username === '' && url.password === ''
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Administration (`admin`, #514): changes who administers, so every security
  * change of it has the effect `administration` (ADR-019 Decision 7).
@@ -54,7 +74,10 @@ export const ADMIN_POLICY_GROUP = {
         z
           .url({ protocol: /^https$/ })
           .max(2048)
-          .regex(/^https:\/\//)
+          .refine(isIssuerUrl, {
+            message: 'is an https URL with no user info, query or fragment',
+          })
+          .meta({ pattern: ISSUER_URL_PATTERN })
       )
       .max(20),
     {

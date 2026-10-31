@@ -36,7 +36,8 @@ const minScore = policyField(z.number().int().min(0).max(4), {
 
 `policyField` refuses a definition that leaves out an annotation, names an unknown direction, rule
 or effect, has a default its type refuses, or is a secret that is not `opaque`, `any-change` and
-default `null`.
+default `null`. The registry checks every field it registers the same way (`assertPolicyField`),
+so a field from another copy of the library, or a forged one, meets the same rules.
 
 The directions are `lower-is-stricter`, `higher-is-stricter`, `true-is-stricter`,
 `false-is-stricter`, `ordered([...])` (from the loosest value to the strictest),
@@ -70,7 +71,14 @@ import {
 } from '@qauth-labs/server-realm-policy';
 
 const policies = defaultsFromEnv(env); // a new realm's policies; env as parsed, or raw strings
-const { changes, class: needs, effects } = diffPolicies(before, after);
+const {
+  changes,
+  class: needs,
+  effects,
+} = diffPolicies(before, after, {
+  setSecrets: ['mail.smtp.password'], // what the secret store holds; no document does
+  clearSecrets: [], // secrets this change clears
+});
 // changes: [{ path: 'password.minScore', before: 2, after: 1, direction: 'loosening',
 //             class: 'security', effects: ['credential-path'], ... }]
 const stored = parseRealmPolicies(row.policies); // defaults filled, unknown members refused
@@ -83,7 +91,9 @@ The three views:
 
 - `document`: the stored policies and the realm file's `policies`. No secret appears.
 - `input`: a write. A secret field may be set here and is marked `writeOnly`.
-- `representation`: what the admin API returns. A secret `<name>` appears as `<name>Set`.
+- `representation`: what the admin API returns. A secret `<name>` appears as `<name>Set`. Every
+  member must be present: its Zod schema never fills a default, so a serialiser built on it cannot
+  show a loosened realm as a strict one, and it strips any member it does not name.
 
 ## Versions
 

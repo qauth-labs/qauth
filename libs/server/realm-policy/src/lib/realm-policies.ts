@@ -4,6 +4,7 @@ import {
   createPolicyRegistry,
   type JsonSchemaObject,
   type PolicyDiff,
+  type PolicyDiffOptions,
   type PolicyGroupShape,
   type PolicyRegistry,
   type PolicySeedEnv,
@@ -67,9 +68,17 @@ export function registerPolicyGroup(name: string, shape: PolicyGroupShape): void
   REALM_POLICY_REGISTRY.registerPolicyGroup(name, shape);
 }
 
-/** The changed fields between two policy documents, with direction, class and effects. */
-export function diffPolicies(before: unknown, after: unknown): PolicyDiff {
-  return REALM_POLICY_REGISTRY.diffPolicies(before, after);
+/**
+ * The changed fields between two policy documents, with direction, class and
+ * effects. `options` names the secrets set before the change and those it
+ * clears, which no document holds.
+ */
+export function diffPolicies(
+  before: unknown,
+  after: unknown,
+  options?: PolicyDiffOptions
+): PolicyDiff {
+  return REALM_POLICY_REGISTRY.diffPolicies(before, after, options);
 }
 
 /**

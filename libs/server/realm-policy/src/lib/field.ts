@@ -278,6 +278,49 @@ export function policyField<S extends z.ZodType, Secret extends boolean>(
   schema: S,
   annotations: PolicyFieldAnnotations<z.output<S>> & { readonly secret: Secret }
 ): PolicyField<z.output<S>, Secret> {
+  checkDefinition(schema, annotations);
+  const {
+    seedEnv,
+    default: defaultValue,
+    direction,
+    securityWhen,
+    effects,
+    secret,
+    environmentBound,
+    doc,
+  } = annotations as PolicyFieldAnnotations<unknown>;
+  return Object.freeze({
+    [POLICY_FIELD]: true as const,
+    schema,
+    seedEnv,
+    default: deepFreeze(structuredClone(defaultValue)),
+    direction: typeof direction === 'string' ? direction : ordered(direction.order),
+    securityWhen,
+    effects: Object.freeze([...effects]),
+    secret,
+    environmentBound,
+    doc: Object.freeze({ summary: doc.summary, link: doc.link }),
+  }) as unknown as PolicyField<z.output<S>, Secret>;
+}
+
+/**
+ * Check a value that carries the field brand as {@link policyField} checks a
+ * definition. The registry runs it on every field it registers, so a field
+ * from another copy of this library, or an object that only carries the
+ * brand, is held to the same rules.
+ *
+ * @throws PolicyDefinitionError when it breaks one
+ */
+export function assertPolicyField(value: unknown): asserts value is PolicyField {
+  if (!isPolicyField(value)) {
+    throw new PolicyDefinitionError('not a field made by policyField');
+  }
+  const { schema, ...annotations } = value as unknown as Record<string, unknown>;
+  checkDefinition(schema as z.ZodType, annotations);
+}
+
+/** The rules of {@link policyField}, over a type and its annotations. */
+function checkDefinition(schema: z.ZodType, annotations: unknown): void {
   if (typeof (schema as { safeParse?: unknown } | null)?.safeParse !== 'function') {
     throw new PolicyDefinitionError('a policy field needs a Zod type');
   }
@@ -384,17 +427,4 @@ export function policyField<S extends z.ZodType, Secret extends boolean>(
       }
     }
   }
-
-  return Object.freeze({
-    [POLICY_FIELD]: true as const,
-    schema,
-    seedEnv,
-    default: deepFreeze(structuredClone(defaultValue)),
-    direction: typeof direction === 'string' ? direction : ordered(direction.order),
-    securityWhen,
-    effects: Object.freeze([...effects]),
-    secret,
-    environmentBound,
-    doc: Object.freeze({ summary: doc.summary, link: doc.link }),
-  }) as unknown as PolicyField<z.output<S>, Secret>;
 }

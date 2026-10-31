@@ -76,7 +76,7 @@ export const REGISTRATION_POLICY_GROUP = {
       },
     }),
     trustedDomains: policyField(
-      z.array(z.string().max(253).regex(TRUSTED_DOMAIN_PATTERN)).max(100),
+      z.array(z.string().max(253).toLowerCase().regex(TRUSTED_DOMAIN_PATTERN)).max(100),
       {
         seedEnv: 'CIMD_TRUSTED_DOMAINS',
         default: [],
@@ -87,7 +87,7 @@ export const REGISTRATION_POLICY_GROUP = {
         environmentBound: true,
         doc: {
           summary:
-            'The hosts the allowlist policy accepts, in lower case; an entry `*.example.com` accepts every subdomain of `example.com` but not `example.com` itself.',
+            'The hosts the allowlist policy accepts, stored in lower case; an entry `*.example.com` accepts every subdomain of `example.com` but not `example.com` itself.',
           link,
         },
       }

@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { type ChangeDirection, compareDirection, sameEntries } from './direction';
 import {
+  assertPolicyField,
   directionKind,
   isPolicyField,
   isSetDirection,
@@ -72,8 +73,9 @@ export interface PolicyChange {
   readonly path: string;
   /**
    * The value before and after. For a secret field these are never the
-   * values: `before` says whether the before document held one, and `after`
-   * is `true`, since a secret field changes only when a value is set.
+   * values but whether one is set: `before` from `setSecrets` (or a value in
+   * the before document), `after` true when the change sets one and false
+   * when it clears it.
    */
   readonly before: unknown;
   readonly after: unknown;
@@ -94,6 +96,14 @@ export interface PolicyDiff {
   readonly class: PolicyChangeClass;
   /** Every effect of the security changes, in the order of `SECURITY_EFFECTS`. */
   readonly effects: readonly SecurityEffect[];
+}
+
+/** What a diff needs to know about secrets, which no policy document holds. */
+export interface PolicyDiffOptions {
+  /** The secret field paths that hold a value before the change. */
+  readonly setSecrets?: Iterable<string>;
+  /** The secret field paths the change clears. */
+  readonly clearSecrets?: Iterable<string>;
 }
 
 /** One reason a value is not a valid policy document. */
@@ -178,8 +188,13 @@ export interface PolicyRegistry {
   /**
    * The changes from `before` to `after`, both parsed as the `input` view
    * (missing members take their defaults, so `{}` is the default policies).
+   *
+   * A stored document holds no secret, so the caller says which secrets are
+   * set before the change (`options.setSecrets`, from the secret store) and
+   * which the change clears (`options.clearSecrets`); a secret is set by
+   * giving its value in `after`. Clearing is always recorded as a change.
    */
-  diffPolicies(before: unknown, after: unknown): PolicyDiff;
+  diffPolicies(before: unknown, after: unknown, options?: PolicyDiffOptions): PolicyDiff;
   /** The JSON Schema (draft 2020-12) of a view, `representation` by default. */
   toJsonSchema(view?: PolicyView): JsonSchemaObject;
   /**
@@ -192,6 +207,14 @@ export interface PolicyRegistry {
 
 /** A group or field name: one lower camelCase word. */
 const MEMBER_NAME_PATTERN = /^[a-z][a-zA-Z0-9]*$/;
+
+/**
+ * Whether `name` can name a group or a member. A name that `Object.prototype`
+ * already has (`constructor`, `toString`, …) is refused: a parser reading a
+ * document that leaves it out would find the inherited function instead.
+ */
+const isMemberName = (name: unknown): name is string =>
+  typeof name === 'string' && MEMBER_NAME_PATTERN.test(name) && !(name in Object.prototype);
 
 /** How deep a group may nest (`registration.cimd.enabled` is depth 3). */
 const MAX_DEPTH = 4;
@@ -212,6 +235,12 @@ const setFlagName = (name: string) => `${name}Set`;
 
 const isUniqueList = (value: unknown) =>
   !Array.isArray(value) || new Set(value).size === value.length;
+
+/** Whether two values of a field are the same: `0` and `-0` are, as JSON writes them. */
+function samePolicyValue(a: unknown, b: unknown): boolean {
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return a === b;
+  return isDeepStrictEqual(a, b);
+}
 
 /** The value at `segments` in `root`, or `undefined`. */
 function valueAt(root: unknown, segments: readonly string[]): unknown {
@@ -264,7 +293,11 @@ function readEnvString(kind: string, raw: string): unknown {
       .filter((entry) => entry.length > 0);
   }
   if (text === '') return undefined;
-  if (kind === 'number') return /^-?\d+(?:\.\d+)?$/.test(text) ? Number(text) : raw;
+  if (kind === 'number') {
+    // As the env schemas' z.coerce.number() reads it (`1e3`, `0x10`, `+5`).
+    const value = Number(text);
+    return Number.isFinite(value) ? value : raw;
+  }
   if (kind === 'boolean') {
     if (text === 'true' || text === '1') return true;
     if (text === 'false' || text === '0') return false;
@@ -315,9 +348,9 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     }
     const folded = new Map<string, string>();
     for (const name of names) {
-      if (!MEMBER_NAME_PATTERN.test(name)) {
+      if (!isMemberName(name)) {
         throw new PolicyDefinitionError(
-          `${where}.${name}: a member name is one lower camelCase word`
+          `${where}.${name}: a member name is one lower camelCase word, and not one Object.prototype has`
         );
       }
       const other = folded.get(name.toLowerCase());
@@ -334,6 +367,15 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
       const value = shape[name];
       const segments = [...prefix, name];
       if (isPolicyField(value)) {
+        // A field from another copy of this library, or an object that only
+        // carries the brand, is held to policyField's rules.
+        try {
+          assertPolicyField(value);
+        } catch (error) {
+          throw new PolicyDefinitionError(
+            `${segments.join('.')}: ${error instanceof Error ? error.message : 'not a valid field'}`
+          );
+        }
         if (value.secret && folded.has(setFlagName(name).toLowerCase())) {
           throw new PolicyDefinitionError(
             `${segments.join('.')}: the representation shows this secret as ${setFlagName(name)}, which another member already is`
@@ -358,9 +400,9 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
   }
 
   function registerPolicyGroup(name: string, shape: PolicyGroupShape): void {
-    if (typeof name !== 'string' || !MEMBER_NAME_PATTERN.test(name)) {
+    if (!isMemberName(name)) {
       throw new PolicyDefinitionError(
-        `"${String(name)}": a group name is one lower camelCase word`
+        `"${String(name)}": a group name is one lower camelCase word, and not one Object.prototype has`
       );
     }
     if (roots.has(name)) {
@@ -407,7 +449,9 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     if (field.secret) {
       return view === 'input' ? base.optional() : undefined;
     }
-    return base.default(() => structuredClone(field.default));
+    // The representation has every member: a missing one is an error, never
+    // its default, which could show a loosened realm as a strict one.
+    return view === 'representation' ? base : base.default(() => structuredClone(field.default));
   }
 
   function groupSchema(node: TreeNode & { kind: 'group' }, view: PolicyView): z.ZodType {
@@ -424,9 +468,7 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     }
     // The representation strips what it does not name, so a value that is not
     // in it (a secret above all) never reaches a response serialised with it.
-    return view === 'representation'
-      ? z.object(shape).prefault({})
-      : z.strictObject(shape).prefault({});
+    return view === 'representation' ? z.object(shape) : z.strictObject(shape).prefault({});
   }
 
   function schema(view: PolicyView): z.ZodType {
@@ -477,8 +519,12 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
           : readEnvString(kind, raw);
     }
     if (candidate === undefined) return undefined;
-    const base = fieldSchema(entry, 'input') ?? field.schema;
-    const result = base.safeParse(candidate);
+    let result = field.schema.safeParse(candidate);
+    // A set listed with a repeat in the environment is the same set; the
+    // repeat is dropped after the type normalised the entries.
+    if (result.success && isSetDirection(field.direction) && Array.isArray(result.data)) {
+      result = (fieldSchema(entry, 'input') ?? field.schema).safeParse([...new Set(result.data)]);
+    }
     if (!result.success) {
       throw new PolicySeedError(
         key,
@@ -523,9 +569,28 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     return secrets;
   }
 
-  function diffPolicies(before: unknown, after: unknown): PolicyDiff {
+  /** `paths` as a set of secret field paths; an entry that is not one is refused, unrepeated. */
+  function secretPaths(paths: Iterable<string> | undefined, what: string): ReadonlySet<string> {
+    const set = new Set(paths ?? []);
+    for (const path of set) {
+      if (byPath.get(path)?.field.secret !== true) {
+        // Never repeat the entry: a secret's value passed here by mistake
+        // would reach the message.
+        throw new PolicyDefinitionError(`${what} names a path that is not a secret field`);
+      }
+    }
+    return set;
+  }
+
+  function diffPolicies(
+    before: unknown,
+    after: unknown,
+    options: PolicyDiffOptions = {}
+  ): PolicyDiff {
     const from = parse(before, 'input');
     const to = parse(after, 'input');
+    const setBefore = secretPaths(options.setSecrets, 'setSecrets');
+    const cleared = secretPaths(options.clearSecrets, 'clearSecrets');
     const changes: PolicyChange[] = [];
     for (const entry of entries) {
       const { field } = entry;
@@ -533,21 +598,25 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
       const b = valueAt(to, entry.segments);
       let change: Omit<PolicyChange, 'class' | 'effects'>;
       if (field.secret) {
-        // A secret changes when a value is set. Only whether one is set is
-        // recorded; the values never leave this function.
-        if (b === undefined || b === a) continue;
+        // A secret changes when a value is set or it is cleared. Only whether
+        // one is set is recorded; the values never leave this function.
+        const wasSet = setBefore.has(entry.path) || a !== undefined;
+        if (b !== undefined && cleared.has(entry.path)) {
+          throw new PolicyDefinitionError(`${entry.path} is both set and cleared`);
+        }
+        if (b === undefined && !cleared.has(entry.path)) continue;
+        if (b !== undefined && b === a) continue;
         change = {
           path: entry.path,
-          before: a !== undefined,
-          after: true,
+          before: wasSet,
+          after: b !== undefined,
           direction: 'neutral',
           secret: true,
           environmentBound: field.environmentBound,
         };
       } else {
-        const unchanged = isSetDirection(field.direction)
-          ? sameEntries(a, b)
-          : isDeepStrictEqual(a, b);
+        const unchanged =
+          samePolicyValue(a, b) || (isSetDirection(field.direction) && sameEntries(a, b));
         if (unchanged) continue;
         change = {
           path: entry.path,
@@ -558,9 +627,15 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
           environmentBound: field.environmentBound,
         };
       }
+      // FAIL CLOSED: only `never` is never a security change, and a `loosening`
+      // field's change is one unless it tightens. A rule this code does not
+      // know makes every change one.
       const security =
-        field.securityWhen === 'any-change' ||
-        (field.securityWhen === 'loosening' && change.direction === 'loosening');
+        field.securityWhen === 'never'
+          ? false
+          : field.securityWhen === 'loosening'
+            ? change.direction !== 'tightening'
+            : true;
       changes.push(
         Object.freeze({
           ...change,
@@ -614,6 +689,9 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
       const property = properties[name];
       if (property === undefined) continue;
       property['description'] = field.doc.summary;
+      // The representation's type has no default (every member is present);
+      // the keyword still tells a reader which value a value differs from.
+      if (view === 'representation') property['default'] = structuredClone(field.default);
       if (isSetDirection(field.direction)) property['uniqueItems'] = true;
       if (field.secret) property['writeOnly'] = true;
       property['x-qauth-policy'] = policyAnnotation(field);
@@ -646,12 +724,7 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
     document: unknown,
     setSecrets: Iterable<string> = []
   ): Record<string, unknown> {
-    const set = new Set(setSecrets);
-    for (const path of set) {
-      if (byPath.get(path)?.field.secret !== true) {
-        throw new PolicyDefinitionError(`${path} is not a secret field`);
-      }
-    }
+    const set = secretPaths(setSecrets, 'setSecrets');
     const values = parse(document, 'input');
     const representation: Record<string, unknown> = {};
     for (const entry of entries) {

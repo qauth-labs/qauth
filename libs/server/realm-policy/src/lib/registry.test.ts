@@ -87,6 +87,36 @@ describe('registerPolicyGroup', () => {
     expect(registry.groups()).toEqual([]);
   });
 
+  it.each(['constructor', 'toString', 'valueOf', 'hasOwnProperty'])(
+    'refuses %s, which Object.prototype already has, as a group or a member name',
+    (name) => {
+      const registry = createPolicyRegistry();
+      expect(() => registry.registerPolicyGroup(name, { a: lifetime() })).toThrow(
+        /Object\.prototype/
+      );
+      expect(() => registry.registerPolicyGroup('sessions', { [name]: lifetime() })).toThrow(
+        /Object\.prototype/
+      );
+      expect(registry.groups()).toEqual([]);
+    }
+  );
+
+  it('holds a field from another copy of the library, or a forged one, to the same rules', () => {
+    const registry = createPolicyRegistry();
+    const forged = { ...lifetime(), securityWhen: 'loosening-or-widening' };
+    expect(() => registry.registerPolicyGroup('sessions', { maxSeconds: forged as never })).toThrow(
+      /sessions\.maxSeconds: securityWhen "loosening-or-widening"/
+    );
+    const silentSecret = { ...secret(), securityWhen: 'never', effects: [] };
+    expect(() => registry.registerPolicyGroup('sessions', { key: silentSecret as never })).toThrow(
+      /sessions\.key: a secret field/
+    );
+    expect(registry.groups()).toEqual([]);
+    // A copy that keeps the rules is accepted: the brand is shared across copies.
+    registry.registerPolicyGroup('sessions', { maxSeconds: { ...lifetime() } });
+    expect(registry.field('sessions.maxSeconds')?.field.default).toBe(60);
+  });
+
   it('refuses a seed key that already seeds another field, and registers nothing of the group', () => {
     const registry = createPolicyRegistry();
     registry.registerPolicyGroup('first', { a: lifetime({ seedEnv: 'TEST_LIFETIME' }) });

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import {
   ANNOTATION_KEYS,
+  assertPolicyField,
   isPolicyField,
   ordered,
   PolicyDefinitionError,
@@ -161,5 +162,23 @@ describe('policyField', () => {
     expect(() => define({ ...secret, securityWhen: 'never', effects: [] }, schema)).toThrow(
       /a secret field/
     );
+  });
+});
+
+describe('assertPolicyField', () => {
+  it('accepts a field policyField made, and a copy of it', () => {
+    const field = policyField(z.number().int(), NUMBER);
+    expect(() => assertPolicyField(field)).not.toThrow();
+    expect(() => assertPolicyField({ ...field })).not.toThrow();
+  });
+
+  it('refuses a value without the brand, and a branded one that breaks a rule', () => {
+    expect(() => assertPolicyField({ ...NUMBER, schema: z.number() })).toThrow(/not a field/);
+    const field = policyField(z.number().int(), NUMBER);
+    expect(() => assertPolicyField({ ...field, effects: [] })).toThrow(/names the effects/);
+    expect(() => assertPolicyField({ ...field, extra: true })).toThrow(
+      /"extra" is not an annotation/
+    );
+    expect(() => assertPolicyField({ ...field, default: 'five' })).toThrow(/value of the type/);
   });
 });

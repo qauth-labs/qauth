@@ -232,55 +232,82 @@ describe('diffPolicies', () => {
     });
   });
 
-  it('counts the verified-account switch, brute force and CIMD by their direction', () => {
-    const cases: Array<[Record<string, Record<string, unknown>>, string, string]> = [
-      [{ accounts: { requireVerifiedAccount: false } }, 'loosening', 'security'],
-      [{ bruteForce: { enabled: false } }, 'loosening', 'security'],
-      [{ bruteForce: { maxAttempts: 10 } }, 'loosening', 'security'],
-      [{ bruteForce: { maxAttempts: 3 } }, 'tightening', 'write'],
-      [{ bruteForce: { windowSeconds: 60 } }, 'loosening', 'security'],
-      [{ bruteForce: { lockoutSeconds: 3600 } }, 'tightening', 'write'],
+  it('counts the verified-account switch, brute force, CIMD and mail links by their direction', () => {
+    const cimd = (changes: Record<string, unknown>) => ({
+      registration: {
+        ...TABLE_DEFAULTS.registration,
+        cimd: { ...TABLE_DEFAULTS.registration.cimd, ...changes },
+      },
+    });
+    const cases: Array<[Record<string, Record<string, unknown>>, string, string, string]> = [
       [
-        {
-          registration: {
-            ...TABLE_DEFAULTS.registration,
-            cimd: { ...TABLE_DEFAULTS.registration.cimd, trustPolicy: 'allowlist' },
-          },
-        },
-        'tightening',
-        'write',
-      ],
-      [
-        {
-          registration: {
-            ...TABLE_DEFAULTS.registration,
-            cimd: { ...TABLE_DEFAULTS.registration.cimd, enabled: false },
-          },
-        },
-        'tightening',
-        'write',
-      ],
-      [
-        {
-          registration: {
-            ...TABLE_DEFAULTS.registration,
-            cimd: { ...TABLE_DEFAULTS.registration.cimd, trustedDomains: ['*.example.com'] },
-          },
-        },
+        { accounts: { requireVerifiedAccount: false } },
+        'accounts.requireVerifiedAccount',
         'loosening',
         'security',
       ],
-      [{ mail: { verificationTokenExpirySeconds: 172800 } }, 'loosening', 'write'],
-      [{ mail: { invalidateExistingTokensOnResend: false } }, 'loosening', 'write'],
+      [{ bruteForce: { enabled: false } }, 'bruteForce.enabled', 'loosening', 'security'],
+      [{ bruteForce: { maxAttempts: 10 } }, 'bruteForce.maxAttempts', 'loosening', 'security'],
+      [{ bruteForce: { maxAttempts: 3 } }, 'bruteForce.maxAttempts', 'tightening', 'write'],
+      [{ bruteForce: { windowSeconds: 60 } }, 'bruteForce.windowSeconds', 'loosening', 'security'],
+      [{ bruteForce: { windowSeconds: 3600 } }, 'bruteForce.windowSeconds', 'tightening', 'write'],
+      [
+        { bruteForce: { lockoutSeconds: 60 } },
+        'bruteForce.lockoutSeconds',
+        'loosening',
+        'security',
+      ],
+      [
+        { bruteForce: { lockoutSeconds: 3600 } },
+        'bruteForce.lockoutSeconds',
+        'tightening',
+        'write',
+      ],
+      [cimd({ trustPolicy: 'allowlist' }), 'registration.cimd.trustPolicy', 'tightening', 'write'],
+      [cimd({ enabled: false }), 'registration.cimd.enabled', 'tightening', 'write'],
+      [
+        cimd({ trustedDomains: ['*.example.com'] }),
+        'registration.cimd.trustedDomains',
+        'loosening',
+        'security',
+      ],
+      [
+        { mail: { verificationTokenExpirySeconds: 172800 } },
+        'mail.verificationTokenExpirySeconds',
+        'loosening',
+        'write',
+      ],
+      [
+        { mail: { invalidateExistingTokensOnResend: false } },
+        'mail.invalidateExistingTokensOnResend',
+        'loosening',
+        'write',
+      ],
     ];
-    for (const [patch, direction, changeClass] of cases) {
-      const [change] = diffPolicies(TABLE_DEFAULTS, withPolicies(patch)).changes;
-      expect({ path: change.path, direction: change.direction, class: change.class }).toEqual({
-        path: change.path,
-        direction,
-        class: changeClass,
-      });
+    for (const [patch, path, direction, changeClass] of cases) {
+      const { changes } = diffPolicies(TABLE_DEFAULTS, withPolicies(patch));
+      expect(
+        changes.map((change) => [change.path, change.direction, change.class]),
+        path
+      ).toEqual([[path, direction, changeClass]]);
     }
+    // And back again: each change reversed moves the other way.
+    const allowlist = withPolicies(cimd({ trustPolicy: 'allowlist', enabled: false }));
+    expect(
+      diffPolicies(allowlist, TABLE_DEFAULTS).changes.map((change) => [
+        change.path,
+        change.direction,
+        change.class,
+      ])
+    ).toEqual([
+      ['registration.cimd.enabled', 'loosening', 'security'],
+      ['registration.cimd.trustPolicy', 'loosening', 'security'],
+    ]);
+  });
+
+  it('reads -0 as 0, as JSON does', () => {
+    const zero = withPolicies({ password: { minScore: 0 } });
+    expect(diffPolicies(zero, withPolicies({ password: { minScore: -0 } })).changes).toEqual([]);
   });
 
   it('gives a mixed change the strictest class and every effect, in the list order', () => {
@@ -322,6 +349,65 @@ describe('diffPolicies', () => {
     expect(JSON.stringify(diff)).not.toContain(secret);
     // A document that leaves the secret out leaves it as it is.
     expect(diffPolicies(after, TABLE_DEFAULTS).changes).toEqual([]);
+  });
+
+  it('records a replaced and a cleared secret with what the secret store says was set', () => {
+    const after = withPolicies({
+      mail: { smtp: { ...TABLE_DEFAULTS.mail.smtp, password: 'new-password-value' } },
+    });
+    expect(
+      diffPolicies(TABLE_DEFAULTS, after, { setSecrets: ['mail.smtp.password'] }).changes
+    ).toEqual([
+      expect.objectContaining({
+        path: 'mail.smtp.password',
+        before: true,
+        after: true,
+        class: 'security',
+      }),
+    ]);
+
+    const cleared = diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, {
+      setSecrets: ['mail.resend.apiKey'],
+      clearSecrets: ['mail.resend.apiKey'],
+    });
+    expect(cleared.changes).toEqual([
+      {
+        path: 'mail.resend.apiKey',
+        before: true,
+        after: false,
+        direction: 'neutral',
+        class: 'security',
+        effects: ['credential-path'],
+        secret: true,
+        environmentBound: true,
+      },
+    ]);
+    // Clearing counts even when the caller does not say the secret was set.
+    expect(
+      diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, { clearSecrets: ['mail.smtp.password'] }).class
+    ).toBe('security');
+  });
+
+  it('refuses a secret both set and cleared, and a path that is not a secret, without echoing it', () => {
+    const after = withPolicies({
+      mail: { smtp: { ...TABLE_DEFAULTS.mail.smtp, password: 'p4ss' } },
+    });
+    expect(() =>
+      diffPolicies(TABLE_DEFAULTS, after, { clearSecrets: ['mail.smtp.password'] })
+    ).toThrow(/both set and cleared/);
+    for (const options of [
+      { setSecrets: ['hunter2-secret'] },
+      { clearSecrets: ['mail.fromAddress'] },
+    ]) {
+      let caught: unknown;
+      try {
+        diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, options);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as Error).message).toMatch(/not a secret field/);
+      expect((caught as Error).message).not.toMatch(/hunter2|fromAddress/);
+    }
   });
 
   it('refuses a document with an unknown member, naming its path and not its value', () => {
@@ -375,6 +461,21 @@ describe('defaultsFromEnv', () => {
     });
   });
 
+  it('reads numbers as the env schemas do, and a set listed with a repeat as the set', () => {
+    const policies = defaultsFromEnv({
+      ACCESS_TOKEN_LIFESPAN: '1e3',
+      REFRESH_TOKEN_LIFESPAN: '0x10',
+      FAILED_LOGIN_MAX_ATTEMPTS: '+5',
+      DEFAULT_DYNAMIC_REGISTRATION_SCOPES: 'openid openid profile',
+      CIMD_TRUSTED_DOMAINS: 'Example.com example.com *.Example.org',
+    });
+    expect(policies.tokens.accessTokenLifespanSeconds).toBe(1000);
+    expect(policies.tokens.refreshTokenLifespanSeconds).toBe(16);
+    expect(policies.bruteForce.maxAttempts).toBe(5);
+    expect(policies.registration.dynamicRegistrationAllowedScopes).toEqual(['openid', 'profile']);
+    expect(policies.registration.cimd.trustedDomains).toEqual(['example.com', '*.example.org']);
+  });
+
   it('takes values the env schema already parsed as they are', () => {
     const policies = defaultsFromEnv({
       ACCESS_TOKEN_LIFESPAN: 300,
@@ -403,7 +504,8 @@ describe('defaultsFromEnv', () => {
       { DEFAULT_DYNAMIC_REGISTRATION_SCOPES: 'openid qauth:admin:read' },
       { DEFAULT_DYNAMIC_REGISTRATION_SCOPES: 'openid QAuth:Admin:Security' },
       { EMAIL_FROM_NAME: 'QAuth\r\nBcc: someone@example.com' },
-      { CIMD_TRUSTED_DOMAINS: 'example.com example.com' },
+      { CIMD_TRUSTED_DOMAINS: 'example.com/path' },
+      { ACCESS_TOKEN_LIFESPAN: 'Infinity' },
     ]) {
       const [key, value] = Object.entries(env)[0];
       let caught: unknown;
@@ -443,6 +545,13 @@ describe('parseRealmPolicies', () => {
     );
   });
 
+  it('accepts an https issuer with a path', () => {
+    const issuers = ['https://ci.example.com', 'https://ci.example.com/oidc/realm-1'];
+    expect(
+      parseRealmPolicies({ admin: { workloadIssuers: issuers } }).admin.workloadIssuers
+    ).toEqual(issuers);
+  });
+
   it('refuses values outside the bounds the issue sets', () => {
     for (const document of [
       { tokens: { adminAccessTokenLifespanSeconds: 901 } },
@@ -450,6 +559,10 @@ describe('parseRealmPolicies', () => {
       { mail: { verificationTokenExpirySeconds: 3599 } },
       { posture: { maxEnvironmentLaxity: 'test' } },
       { admin: { workloadIssuers: ['http://ci.example.com'] } },
+      { admin: { workloadIssuers: ['https://'] } },
+      { admin: { workloadIssuers: ['https://user:pass@ci.example.com'] } },
+      { admin: { workloadIssuers: ['https://ci.example.com?audience=x'] } },
+      { admin: { workloadIssuers: ['https://ci.example.com#f'] } },
       { admin: { twoAdminMandatoryOperations: ['users'] } },
       { registration: { dynamicRegistrationAllowedScopes: ['openid', 'openid'] } },
     ]) {
@@ -476,6 +589,21 @@ describe('the representation', () => {
     expect(representation.mail.resend).toEqual({ apiKeySet: false });
     expect(JSON.stringify(representation)).not.toContain('p4ss');
     expect(representation.tokens).toEqual(TABLE_DEFAULTS.tokens);
+  });
+
+  it('never fills a missing member with its default, which could show a loosened realm as strict', () => {
+    const loosened = toRealmPoliciesRepresentation(
+      withPolicies({ accounts: { requireVerifiedAccount: false } })
+    );
+    const schema = REALM_POLICY_REGISTRY.schema('representation');
+    expect(schema.parse(loosened)).toEqual(loosened);
+    const withoutAccounts: Record<string, unknown> = { ...loosened };
+    delete withoutAccounts['accounts'];
+    expect(schema.safeParse(withoutAccounts).success).toBe(false);
+    expect(
+      schema.safeParse({ ...loosened, bruteForce: { ...loosened.bruteForce, enabled: undefined } })
+        .success
+    ).toBe(false);
   });
 
   it('refuses to flag a path that is not a secret field', () => {

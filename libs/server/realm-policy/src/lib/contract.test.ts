@@ -307,7 +307,7 @@ describe('the configuration key registry (#449)', () => {
     }
   });
 
-  it("gives each field its env schema's default, and reads what that schema reads", () => {
+  it("gives each field its env schema's default", () => {
     for (const { path, field } of FIELDS) {
       if (field.seedEnv === null) continue;
       const envField = envFields.get(field.seedEnv);
@@ -315,15 +315,105 @@ describe('the configuration key registry (#449)', () => {
       if (envField === undefined) continue;
       const unset = envField.safeParse(undefined);
       expect(unset.success ? (unset.data ?? null) : null, path).toEqual(field.default);
+    }
+  });
 
-      const sample = keys.get(field.seedEnv)?.default;
-      if (typeof sample !== 'string' || field.secret) continue;
-      // The env schema's reading of the key and this schema's give one value.
-      const fromParsed = REALM_POLICY_REGISTRY.defaultsFromEnv({
-        [field.seedEnv]: envField.parse(sample),
-      });
-      const fromRaw = REALM_POLICY_REGISTRY.defaultsFromEnv({ [field.seedEnv]: sample });
-      expect(fromParsed, path).toEqual(fromRaw);
+  /** Raw values of each kind, as an operator writes them. */
+  const SAMPLES: Readonly<Record<string, readonly string[]>> = {
+    number: ['1', '3', '60', '587', ' 900 ', '3600', '1e3', '0x10', '+5', '86400', '2.5', 'soon'],
+    boolean: ['true', 'false', '1', '0', 'TRUE', 'yes'],
+    list: [
+      'a',
+      'openid profile',
+      'openid,profile',
+      ' x , y ',
+      'openid openid',
+      'Example.com',
+      '*.example.org',
+      'qauth:admin:read',
+    ],
+    text: [
+      'QAuth',
+      'smtp',
+      'resend',
+      'mock',
+      'allowlist',
+      'accept-any-https',
+      'noreply@example.com',
+      'mail.example.com',
+      'x',
+    ],
+  };
+  const kindOf = (value: unknown, path: string) =>
+    typeof value === 'number' || path.endsWith('.port')
+      ? 'number'
+      : typeof value === 'boolean'
+        ? 'boolean'
+        : Array.isArray(value)
+          ? 'list'
+          : 'text';
+  const valueAtPath = (document: unknown, path: string) =>
+    path
+      .split('.')
+      .reduce<unknown>((node, segment) => (node as Record<string, unknown>)[segment], document);
+
+  // Every value the env schema accepts seeds the value it parses to (a set
+  // without repeats); where seeding refuses one, the policy type refuses the
+  // env schema's value too, so the refusal is the policy's stricter bound and
+  // never a misreading of the string.
+  it('reads a raw value as the env schema reads it, wherever that schema accepts it', () => {
+    let compared = 0;
+    for (const { path, field } of FIELDS) {
+      if (field.seedEnv === null || field.secret) continue;
+      const envField = envFields.get(field.seedEnv);
+      if (envField === undefined) continue;
+      for (const sample of SAMPLES[kindOf(field.default, path)]) {
+        const parsed = envField.safeParse(sample);
+        if (!parsed.success) continue;
+        const expected = Array.isArray(parsed.data)
+          ? [...new Set(parsed.data as unknown[])]
+          : parsed.data;
+        let seeded: unknown;
+        try {
+          seeded = valueAtPath(
+            REALM_POLICY_REGISTRY.defaultsFromEnv({ [field.seedEnv]: sample }),
+            path
+          );
+        } catch {
+          expect(field.schema.safeParse(expected).success, `${field.seedEnv}=${sample}`).toBe(
+            false
+          );
+          continue;
+        }
+        expect(seeded, `${field.seedEnv}=${JSON.stringify(sample)}`).toEqual(expected);
+        compared++;
+      }
+    }
+    expect(compared).toBeGreaterThan(40);
+  });
+
+  it('seeds from the parsed environment exactly what it seeds from the raw one', () => {
+    for (const { path, field } of FIELDS) {
+      if (field.seedEnv === null || field.secret) continue;
+      const envField = envFields.get(field.seedEnv);
+      if (envField === undefined) continue;
+      for (const sample of SAMPLES[kindOf(field.default, path)]) {
+        const parsed = envField.safeParse(sample);
+        if (!parsed.success) continue;
+        const seed = (value: unknown) => {
+          try {
+            return valueAtPath(
+              REALM_POLICY_REGISTRY.defaultsFromEnv({ [field.seedEnv as string]: value }),
+              path
+            );
+          } catch {
+            return 'refused';
+          }
+        };
+        expect(seed(parsed.data), `${field.seedEnv}=${JSON.stringify(sample)}`).toEqual(
+          seed(sample)
+        );
+      }
     }
   });
 });
