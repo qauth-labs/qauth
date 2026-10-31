@@ -297,6 +297,33 @@ curl -s http://localhost:8088/mcp/memory \
 A resource server (e.g. one using [`resource-guard`](https://github.com/qauth-labs/qauth/blob/main/libs/sdk/resource-guard/README.md))
 verifies the signature against the JWKS and checks `iss`, `exp`, `aud`, and scope.
 
+### Caching the JWKS
+
+Every token names the key that signed it in `kid` (a hybrid token names its
+ML-DSA-65 key in `pqc_kid` too). A realm's JWKS lists every key that signs or
+may still verify: its active keys, a next key before it starts signing, and a
+retired key until its retention ends. A relying party or resource server that
+verifies tokens locally follows three rules:
+
+- **Cache the JWKS for at most 5 minutes.** `/.well-known/jwks.json` answers
+  `Cache-Control: public, max-age=300`.
+- **Fetch it again when a token names a `kid` the cached set lacks, at most
+  once a minute.** A token whose `kid` is still unknown after that fetch is
+  refused, not retried.
+- **Drop every key the JWKS no longer lists.** A key leaves the JWKS when its
+  retention ends, or at once when it is retired as compromised; a token it
+  signed must stop verifying then.
+
+Pick the key by `kid` and `alg` together, never by `kid` alone: the JWKS of a
+realm with hybrid signing holds an `OKP` and an `AKP` key, and retired keys sit
+beside active ones. `resource-guard` follows these rules with its default
+`jwksCacheTtlMs` of 5 minutes, which is also the least time between two
+fetches.
+
+A rotation through QAuth's key store then changes nothing for users or relying
+parties: the new key is in the JWKS before it signs, and the old one stays in it, and keeps verifying at
+QAuth's own endpoints, until its retention ends ([Keys](/operate/keys/)).
+
 ---
 
 ## Refresh Token (rotation)

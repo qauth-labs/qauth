@@ -1850,6 +1850,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A token signed by a retired key keeps verifying until the key's retention
+  ends** ([#492], ADR-019 Decision 9, ADR-001). The server picks a token's key
+  by its `kid` and `alg` together (`selectJwksKey`) among the realm's
+  verification set: its active keys and its retired keys still inside their
+  retention. A `kid` that names a key of another algorithm, a `next` key or a
+  `compromised` key finds none, and the token is refused. A hybrid token's
+  ML-DSA-65 key is found the same way, by its signed `pqc_kid`, among the active
+  and retired keys. A token without a `kid`, from before the upgrade, keeps
+  verifying against the imported key after that key retires. Every check of the
+  server uses the set: `requireJwt`, userinfo, introspection, revocation,
+  `/auth/logout` and the token-exchange subject and actor tokens. So a rotation
+  through the key store (scheduled #542, manual #544) will not make anyone sign
+  in again; replacing a key through its variable still unpublishes the old key
+  at once. ADR-001's and ADR-019's notes on the three retired-key gaps now say
+  they are closed. The OAuth 2.1 flow page states the JWKS cache rule for
+  relying parties: cache it for at most 5 minutes, fetch it again for an unknown
+  `kid` at most once a minute, and drop the keys it no longer lists.
+
 - **Enabling an account again no longer brings back what it held before it
   was disabled** ([#748], the case [GHSA-vw34-9q55-2vg3](https://github.com/qauth-labs/qauth/security/advisories/GHSA-vw34-9q55-2vg3)
   left open). Since 0.1.0 a disabled account's sessions and tokens are refused
@@ -1928,6 +1946,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#638]) and the hosted account verification UI ([#644]) replace link
   verification.
 
+[#492]: https://github.com/qauth-labs/qauth/issues/492
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
