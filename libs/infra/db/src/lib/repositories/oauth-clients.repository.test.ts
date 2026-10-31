@@ -125,6 +125,74 @@ describe('createOAuthClientsRepository.upsertCimdClient', () => {
   });
 });
 
+/** The INSERT's column list and the parameter each column takes (`default` for none). */
+function insertedValues(query: CapturedQuery): Map<string, unknown> {
+  const sql = query.text.toLowerCase();
+  const columns = sql
+    .slice(sql.indexOf('(') + 1, sql.indexOf(')'))
+    .split(',')
+    .map((c) => c.trim());
+  const tupleStart = sql.indexOf('values (') + 'values ('.length;
+  const placeholders = sql
+    .slice(tupleStart, sql.indexOf(')', tupleStart))
+    .split(',')
+    .map((p) => p.trim());
+  return new Map(
+    columns.map((column, i) => {
+      const placeholder = /^\$(\d+)$/.exec(placeholders[i]);
+      return [column, placeholder ? query.values[Number(placeholder[1]) - 1] : placeholders[i]];
+    })
+  );
+}
+
+const FIRST_PARTY_COLUMNS = [
+  '"first_party_profile"',
+  '"first_party_policy"',
+  '"first_party_reason"',
+] as const;
+
+/** What a caller might try to pass: a profile with its policy and reason. */
+const FLAGGED = {
+  firstPartyProfile: 'native_backend' as const,
+  firstPartyPolicy: { flows: ['login'] },
+  firstPartyReason: 'Our own app',
+};
+
+// #631 (ADR-017 Decision 2): first-partyness is operator-set. The paths that
+// go through the repository (dynamic registration, the developer API, the
+// server's own system client, CIMD materialisation) write no profile, policy
+// or reason, whatever the caller passed.
+describe('the repository writes no first-party profile (#631)', () => {
+  it('create writes NULL for the three first-party columns', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOAuthClientsRepository(db).create({ ...CIMD_ROW, ...FLAGGED });
+
+    expect(queries).toHaveLength(1);
+    const inserted = insertedValues(queries[0]);
+    for (const column of FIRST_PARTY_COLUMNS) {
+      expect(inserted.get(column), column).toBeNull();
+    }
+  });
+
+  it('upsertCimdClient writes NULL on insert and never names them on conflict', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOAuthClientsRepository(db).upsertCimdClient({ ...CIMD_ROW, ...FLAGGED });
+
+    expect(queries).toHaveLength(1);
+    const inserted = insertedValues(queries[0]);
+    for (const column of FIRST_PARTY_COLUMNS) {
+      expect(inserted.get(column), column).toBeNull();
+    }
+    const sql = queries[0].text.toLowerCase();
+    const conflictSet = sql.slice(sql.indexOf('on conflict'), sql.indexOf('returning'));
+    for (const column of FIRST_PARTY_COLUMNS) {
+      expect(conflictSet, column).not.toContain(column);
+    }
+  });
+});
+
 // ANT-2026-DR5XI3LV: application code writes clients through `update`, and
 // `UpdateOAuthClient` has no `suspended` / `suspendedAt`, so no route can set
 // or lift a suspension, even by mistake. Pinned at compile time.
@@ -145,5 +213,18 @@ describe('UpdateOAuthClient', () => {
     // @ts-expect-error -- nor can an update clear it.
     const unverify: UpdateOAuthClient = { verifiedDomain: null };
     expect([verify, unverify]).toHaveLength(2);
+  });
+
+  // #631: only the operator sets a client's first-party profile.
+  it('cannot carry a first-party profile, policy or reason', () => {
+    // @ts-expect-error -- `firstPartyProfile` is operator state, not an update field.
+    const flag: UpdateOAuthClient = { firstPartyProfile: 'web_redirect' };
+    // @ts-expect-error -- nor can an update remove it.
+    const unflag: UpdateOAuthClient = { firstPartyProfile: null };
+    // @ts-expect-error -- nor write its policy.
+    const policy: UpdateOAuthClient = { firstPartyPolicy: { flows: ['register'] } };
+    // @ts-expect-error -- nor its reason.
+    const reason: UpdateOAuthClient = { firstPartyReason: 'ours' };
+    expect([flag, unflag, policy, reason]).toHaveLength(4);
   });
 });

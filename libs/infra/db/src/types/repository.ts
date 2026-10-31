@@ -65,6 +65,12 @@ export type UpdateOAuthClient = Partial<
     // #593: the verified domain is admin state (`clients.update`, a security
     // operation), so no owner or self-registration path may write it.
     | 'verifiedDomain'
+    // #631: first-partyness is operator-set (ADR-017 Decision 2). Only the
+    // seed manifest, the system-client provisioner and, later, a
+    // `qauth:admin:security` operation write these, none through `update`.
+    | 'firstPartyProfile'
+    | 'firstPartyPolicy'
+    | 'firstPartyReason'
   >
 > & {
   updatedAt?: number;
