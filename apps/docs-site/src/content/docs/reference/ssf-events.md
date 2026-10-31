@@ -58,8 +58,11 @@ resource server, a live refresh token whose audience names it. Any other user, a
 does not exist, is refused with `403`, as SSF 1.0 §8.1.3.2 prescribes for a subject the receiver
 may not add. A user subject lasts as long as its relation: the hourly `ssf-subject-sweep` job
 deletes it once the relation has ended and every event about the user has reached the stream, so
-the SET that tells of the end still arrives. The [SSF transmitter](/operate/ssf-transmitter/)
-guide gives the whole rule.
+the SET that tells of the end still arrives. A disabled user is related to no receiver, so after
+`account-disabled` reaches a stream the sweep deletes the user's subject there, and
+`account-enabled` reaches only a stream the sweep has not cleared yet: once the user is enabled,
+the receiver adds them again. The [SSF transmitter](/operate/ssf-transmitter/) guide gives the
+whole rule.
 
 ## Mapping
 

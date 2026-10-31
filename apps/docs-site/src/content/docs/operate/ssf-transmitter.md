@@ -101,7 +101,10 @@ withdrew the consent, the refresh tokens were revoked or ran out, or the user wa
 deleted) and every event about the user has reached the stream (delivered, or given up after its
 attempts), the job deletes the subject. So the SET that tells of the end, a withdrawn consent's
 `token-claims-change` say, still reaches the receiver, and none after it does. The receiver adds
-the user again once they are related again.
+the user again once they are related again. A disablement ends the relation too: after
+`account-disabled` reaches the stream the sweep deletes the subject, so `account-enabled` reaches
+only a stream the sweep has not cleared yet, and the receiver adds the user again once they are
+enabled.
 
 A receiver may add any client of the realm, but a client's own credential changes (its secret, its
 API keys) reach only that client's stream. Taking the scope away, disabling or suspending the
