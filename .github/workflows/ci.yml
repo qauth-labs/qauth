@@ -97,6 +97,43 @@ jobs:
 
       - run: pnpm exec oxfmt --check
 
+  # Workflow lint (#796): actionlint over every workflow file, with the
+  # shellcheck its image bundles reading each `run:` script, so a broken
+  # expression, a step or job output that does not exist, or a shell mistake
+  # fails here and not on the first run that reaches it. Then the rule
+  # actionlint does not have: every `uses:` names a major tag or a full commit
+  # SHA, never a branch or `latest` (scripts/action-refs). Not affected-scoped:
+  # Nx sees no workflow file, and both checks take seconds.
+  #
+  # The image is pinned to a version, as that rule requires of a Docker image.
+  # A newer actionlint can report findings this one does not, so moving it is a
+  # change of its own. The checkout keeps no credentials: the container sees
+  # the whole workspace.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      # `-color` keeps the findings readable in the log.
+      - name: actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+
+      # No install: the check uses Node's standard library only. `always()`
+      # so one run reports both checks.
+      - name: Every uses names a major tag or a commit SHA
+        if: always()
+        run: node scripts/action-refs/check.mjs .github/workflows
+
   # Coverage gate: a single repo-wide vitest run enforces the global
   # thresholds in vitest.config.ts and fails CI on a regression. Run
   # separately from the affected per-project `test` targets (which write

@@ -60,9 +60,11 @@ jobs:
           set -euo pipefail
           if [ "$EVENT" != push ] || [ "$REF_TYPE" != tag ]; then
             # A dry run: a version no release can have.
-            echo "version=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
-            echo "tags=0.0.0-dryrun" >> "$GITHUB_OUTPUT"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "version=0.0.0-dryrun"
+              echo "tags=0.0.0-dryrun"
+              echo "publish=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if ! printf '%s' "$REF_NAME" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-rc\.(0|[1-9][0-9]*))?$'; then
@@ -83,9 +85,11 @@ jobs:
               tags="$tags ${version%.*}"
               ;;
           esac
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tags=$tags" >> "$GITHUB_OUTPUT"
-          echo "publish=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$version"
+            echo "tags=$tags"
+            echo "publish=true"
+          } >> "$GITHUB_OUTPUT"
 
   # Builds both images without credentials and pushes nothing.
   dry-run:
