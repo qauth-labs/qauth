@@ -87,6 +87,12 @@ are unique, and every JWK `kid` starts with `throwaway-test-`.
 - **Changing a case's expected result needs a new case id.** The old case is then wrong, so the same
   change removes it, and its id stays retired. An SDK pinned to an older commit keeps the old case
   and its old meaning.
+- **A generated file follows its source's release candidate.** `interaction/steps.json` is written
+  from the Interaction API contract's step examples and the step grammar's mappers, one case per
+  step with the step's name as its id. Until QAuth 1.0.0 the contract is a release candidate, and
+  the file is replaced whole whenever its source changes, so its cases may change under the same
+  ids; the two rules above do not bind it yet. From 1.0.0 on its cases are fixed, and those rules
+  apply to it as to every other file.
 - **The format is a release candidate until QAuth 1.0.0**, `qauth-vectors/1-rc.<M>`, and nothing
   about it is promised yet. A breaking change before then raises `<M>` and comes with its own
   schema, so a format id never names two formats. The release that ships 1.0.0 drops the suffix,

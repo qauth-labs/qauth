@@ -142,8 +142,9 @@ pnpm exec nx run server-step-grammar:vectors-export
 ```
 
 `json-schema.test.ts` fails while a generated step file differs from the published one, and names
-the step. The shared vectors are append-only (`test-vectors/README.md`): a changed example needs a
-new case id, not an edited case.
+the step. The shared vectors follow the contract's release candidate (`test-vectors/README.md`):
+until QAuth 1.0.0 the generated file is replaced whole when an example or a mapper changes, and its
+cases keep their ids; from 1.0.0 on its cases are fixed, and a changed one needs a new case id.
 
 Zod and the published schema's validator read the same rules, `format` included: the Zod schemas
 run ajv-formats' `uri` and `date-time` checks, the ones the contract's own tests validate with.

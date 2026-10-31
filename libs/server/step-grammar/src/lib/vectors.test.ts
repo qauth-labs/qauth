@@ -25,7 +25,7 @@ describe('the step vectors (test-vectors/interaction/steps.json)', () => {
     const committed: unknown = JSON.parse(readFileSync(join(REPO_ROOT, STEP_VECTORS_PATH), 'utf8'));
     expect(
       committed,
-      `run \`${VECTORS_EXPORT_COMMAND.replace(' --skip-nx-cache', '')}\` and commit the result. The vectors are append-only (test-vectors/README.md): a changed example needs a new case id, not an edited case.`
+      `run \`${VECTORS_EXPORT_COMMAND.replace(' --skip-nx-cache', '')}\` and commit the result. Until QAuth 1.0.0 the file follows the contract's release candidate and is replaced whole (test-vectors/README.md); from 1.0.0 on its cases are fixed.`
     ).toStrictEqual(JSON.parse(JSON.stringify(stepVectorFile())));
   });
 
