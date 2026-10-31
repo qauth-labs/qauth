@@ -748,7 +748,7 @@ stricter than the draft or fills a place where it is silent.
   client assertions of first-party and agent clients.
 - Issues **#383** (accept ID-JAG assertions at `/oauth/token`) and **#384**
   (`private_key_jwt` token-endpoint authentication).
-- [MCP Enterprise-Managed Authorization (`ext-auth`, STABLE)](https://github.com/modelcontextprotocol/ext-auth/blob/main/specification/stable/enterprise-managed-authorization.mdx) ·
+- [MCP Enterprise-Managed Authorization (`ext-auth`, STABLE)](https://github.com/modelcontextprotocol/ext-auth/blob/main/specification/stable/enterprise-managed-authorization/2026-07-28/enterprise-managed-authorization.mdx) ·
   [`ext-auth` extension catalogue](https://github.com/modelcontextprotocol/ext-auth)
 - [Identity Assertion Authorization Grant — `draft-ietf-oauth-identity-assertion-authz-grant`](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-identity-assertion-authz-grant)
   (ID-JAG; `-04` at the time of writing)

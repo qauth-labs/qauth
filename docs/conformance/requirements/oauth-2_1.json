@@ -1,6 +1,6 @@
 {
   "specId": "oauth-2_1",
-  "note": "Hand-authored, the authorization-code replay rows only (#627, ADR-017 Decision 10). `quote` is verbatim from draft-ietf-oauth-v2-1-16 (2026-09-03, the revision docs/spec-pin-log.md pins) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The same obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
+  "note": "Hand-authored, the authorization-code replay rows only (#627, ADR-017 Decision 10). `quote` is verbatim from draft-ietf-oauth-v2-1-17 (2026-10-31, the revision docs/spec-pin-log.md pins; the three passages read the same in -16) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The same obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
   "requirements": [
     {
       "id": "oauth-2_1-4_1_3-code-once",

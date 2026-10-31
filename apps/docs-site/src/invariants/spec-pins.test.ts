@@ -186,10 +186,11 @@ describe('docs/spec-pin-log.md — real tree', () => {
   });
 
   it('pins ID-JAG on a DERIVED basis and re-checks it at the quarterly pass (#466)', () => {
-    // `-04` expires on 2026-11-22 with no `-05` published. The MCP `ext-auth`
-    // EMA file at the commit the log pins names `-04`, and QAuth follows that
-    // extension (ADR-018 §3), so the row is `derived` and the expiry is not its
-    // re-check date. The maintainer chose this on 2026-10-19.
+    // `-04` expires on 2026-11-22; `-05` and `-06` are published, but the MCP
+    // `ext-auth` EMA file the log pins (dated revision `2026-07-28`) still
+    // names `-04`, and QAuth follows that extension (ADR-018 §3), so the row is
+    // `derived` and the expiry is not its re-check date. The maintainer chose
+    // this on 2026-10-19.
     const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8'));
     const idJag = rows.find((row) => row.spec.includes('ID-JAG'));
     expect(idJag?.revision).toBe('-04');
