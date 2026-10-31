@@ -2,7 +2,14 @@ import { z } from 'zod';
 
 import { defineEventType } from '../definition';
 import { CAEP_SESSION_REVOKED, RISC_ACCOUNT_DISABLED, RISC_ACCOUNT_ENABLED } from '../ssf-mapping';
-import { FIRST_RELEASE, identifierHmac, reason, signInMethod, verifierProfile } from './fields';
+import {
+  FIRST_RELEASE,
+  identifierHmac,
+  reason,
+  signInMethod,
+  stepName,
+  verifierProfile,
+} from './fields';
 
 /**
  * A person's own account activity: sign-in, sign-out and registration; and an
@@ -40,6 +47,27 @@ export const userSignInFailed = defineEventType({
     reason: reason(),
     identifierHmac: identifierHmac().optional(),
     verifierProfile: verifierProfile().optional(),
+  }),
+});
+
+/**
+ * One accepted step of a sign-in, from the sign-in engine (#614): every
+ * transport that runs the engine records it, the Interaction API and the
+ * FiPA endpoint alike. A refused or ended step is `user.sign_in_failed`.
+ */
+export const userSignInStepPassed = defineEventType({
+  name: 'user.sign_in_step_passed',
+  version: 1,
+  rc: 0,
+  description:
+    'The sign-in engine accepted an answer to one step of a sign-in: the identifier, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.',
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    step: stepName('The step whose answer was accepted.'),
+    identifierHmac: identifierHmac().optional(),
   }),
 });
 
@@ -140,6 +168,7 @@ export const userEnabled = defineEventType({
 export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
+  userSignInStepPassed,
   userSignedOut,
   userSignOutFailed,
   userRegistered,

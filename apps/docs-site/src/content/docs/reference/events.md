@@ -211,6 +211,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | ------------------------------------------------------------------------------------------------------ | -------- | -------- | ------ |
 | [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                      | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                            | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                    | user     | info     | v0.2.0 |
@@ -282,6 +283,20 @@ A sign-in was refused: an unknown identifier, a wrong credential, a locked or di
 | `reason`          | string                                        | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                                                                                                                |
 | `identifierHmac`  | string                                        | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
 | `verifierProfile` | string                                        | no       | The verifier profile the wallet presentation was checked under, such as `haip-1.0`.                                                                                                                                            |
+
+### user.sign_in_step_passed v1-rc.0
+
+The sign-in engine accepted an answer to one step of a sign-in: the identifier, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.
+
+- Identifier: `urn:qauth:event:user.sign_in_step_passed:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.sign_in_step_passed.v1-rc.0.json](/schemas/events/user.sign_in_step_passed.v1-rc.0.json)
+
+| Member           | Type   | Required | Meaning                                                                                                                                                                                                                        |
+| ---------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `step`           | string | yes      | The step whose answer was accepted.                                                                                                                                                                                            |
+| `identifierHmac` | string | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
 
 ### user.signed_out v1-rc.0
 
