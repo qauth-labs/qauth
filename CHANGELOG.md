@@ -904,6 +904,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The typed client rejects a redirect a browser hides from `fetch` with
     `UnexpectedRedirectError` rather than as status 0.
 
+- **The step grammar library** ([#591], ADR-017 Decision 3, ADR-019 Decision
+  6). `libs/server/step-grammar` (`@qauth-labs/server-step-grammar`) holds the
+  17 steps of the Interaction API contract as Zod schemas, the single source of
+  their params, personal-data and answer types, with each step's URN, closed
+  error set and `amr`. The JSON Schema generated from the Zod schemas must
+  equal the step files the contract publishes, and a unit test compares all 17.
+  One mapper per transport turns the engine's next step into its envelope: the
+  Interaction API's step-read members (`step`, `error`, `alternatives`,
+  `params`), and the FiPA endpoint's `403 insufficient_authorization` with
+  `interaction_type_required`, `qauth_interaction_types_offered`,
+  `qauth_interaction_params` and `qauth_interaction_error`. The steps a
+  transport serves are its configuration. The FiPA mapper cannot emit a step
+  only the Interaction API serves: as the required step it answers
+  `403 redirect_to_web`, as an alternative it is left out, and no
+  configuration can list one. Neither mapper sends prose: an offer with an
+  undeclared member, an out-of-schema value or an error outside the step's set
+  is refused. A step added without a mapper on each transport fails the type
+  check. Nothing serves the mappers yet; the engine and the two endpoints use
+  them in later issues. The contract's step examples are published as shared
+  test vectors, `test-vectors/interaction/steps.json`, with each transport's
+  answer.
+
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -1818,6 +1840,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
+[#591]: https://github.com/qauth-labs/qauth/issues/591
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#627]: https://github.com/qauth-labs/qauth/issues/627
