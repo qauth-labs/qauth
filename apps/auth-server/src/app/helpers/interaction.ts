@@ -17,6 +17,8 @@ import {
 } from './flow-cookie';
 import { InteractionExpiredError } from './interaction-expired';
 import {
+  abandonInteraction,
+  deleteInteraction,
   IDENTIFIER_STEP,
   insertInteraction,
   INTERACTION_RECORD_VERSION,
@@ -30,10 +32,10 @@ import {
   type InteractionTransaction,
   isInteractionId,
   mintInteractionId,
-  putInteraction,
   readInteractionRecord,
-  takeInteractionRecord,
-  unlistInteraction,
+  returnInteractionTurn,
+  takeInteractionTurn,
+  writeInteractionState,
 } from './interaction-record';
 import { requestRealm } from './request-realm';
 import { setSessionCookie } from './session-cookie';
@@ -71,12 +73,14 @@ import { emitUserEvent } from './user-events';
  * ## Answers: burn first, then bind
  *
  * An answer first checks the binding on a plain read, so a request that holds
- * only the id cannot destroy the interaction of the browser that owns it. It
- * then takes the state with `GETDEL` and checks the binding and the revision
- * again on what it took (ADR-013 §5, ADR-017 Decision 6). Of two concurrent
- * answers to one step, only the one that took the state is processed; the
- * other gets `stale`. If the engine throws while it decides, the state stays
- * taken: the interaction ends, and the sweep audits its expiry.
+ * only the id cannot take the turn of the browser that owns the interaction.
+ * It then takes the interaction's turn with `GETDEL` and reads the record
+ * again, checking that it is still the state and the binding it was given
+ * for (ADR-013 §5, ADR-017 Decision 6). Of two concurrent answers to one
+ * step, only the one that took the turn is processed; the other gets `stale`.
+ * The record stays readable while the engine works. If the engine throws
+ * while it decides, the interaction ends: its record and turn go, and the
+ * sweep audits its expiry.
  */
 
 /** The step view a reader of the interaction id may see: no personal data. */
@@ -242,32 +246,35 @@ async function locateBound(request: FastifyRequest, id: unknown): Promise<Bound>
 }
 
 /**
- * Take the record a bound request read: `GETDEL`, then the binding and, when
- * given, the revision checked again on what was taken. `null` when the
- * request lost a race: another request took the state first, or what it took
- * is a later state. A later state is put back as it was.
+ * Take the turn of the interaction a bound request located, then read the
+ * record again and check that it is still the state at `revision` and the
+ * binding the request was checked against: burn first, then bind. `null` when
+ * the request lost a race: another request holds the turn, or the
+ * interaction moved on or ended (a turn taken for a later state is given
+ * back).
  */
 async function takeBound(
   request: FastifyRequest,
   bound: Bound,
-  revision?: number
+  revision: number = bound.record.revision
 ): Promise<InteractionRecord | null> {
   const { redis } = request.server;
-  const taken = await takeInteractionRecord(redis, request.log, bound.record.realmId, bound.idHash);
-  if (taken === null) return null;
-  if (
-    taken.ref !== bound.record.ref ||
-    taken.flowBinding !== bound.record.flowBinding ||
-    (revision !== undefined && taken.revision !== revision)
-  ) {
-    await putInteraction(redis, bound.idHash, taken);
-    return null;
-  }
-  if (taken.expiresAt <= Date.now()) {
-    // Burned, and left in the expiry index for the sweep to audit.
+  const { realmId, ref, flowBinding } = bound.record;
+  const turn = await takeInteractionTurn(redis, request.log, realmId, bound.idHash);
+  if (turn === null) return null;
+  const current = await readInteractionRecord(redis, request.log, realmId, bound.idHash);
+  if (current === null || current.ref !== ref) return null;
+  if (current.expiresAt <= Date.now()) {
+    // The turn stays taken; the sweep audits the expiry.
     refuse(request, 'expired');
   }
-  return taken;
+  if (turn !== revision || current.revision !== revision || current.flowBinding !== flowBinding) {
+    if (turn === current.revision) {
+      await returnInteractionTurn(redis, current, bound.idHash, turn);
+    }
+    return null;
+  }
+  return current;
 }
 
 /** The input of {@link startInteraction}. */
@@ -423,6 +430,29 @@ export async function answerInteraction(
   const taken = await takeBound(request, bound, answer.revision);
   if (taken === null) return { kind: 'stale' };
 
+  // From here the turn is taken. Until the next state is written (or the
+  // interaction deleted), any failure ends the interaction: its record and
+  // turn go, and the sweep audits its expiry. Fail closed, and never leave a
+  // record that reads as live but can no longer be answered.
+  const settled = { done: false };
+  try {
+    return await settleAnswer(request, reply, bound, taken, decide, settled);
+  } catch (error) {
+    if (!settled.done) await abandonInteraction(request.server.redis, taken, bound.idHash);
+    throw error;
+  }
+}
+
+/** {@link answerInteraction} once the turn is taken: decide, then write what was decided. */
+async function settleAnswer(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  bound: Bound,
+  taken: InteractionRecord,
+  decide: (state: InteractionState) => Promise<InteractionDecision>,
+  settled: { done: boolean }
+): Promise<InteractionAnswerResult> {
+  const { redis } = request.server;
   const decision = await decide(
     Object.freeze({
       request: taken.request,
@@ -432,8 +462,10 @@ export async function answerInteraction(
       revision: taken.revision,
     })
   );
-  const { redis } = request.server;
-  const answered = (outcome: 'next_step' | 'authenticated' | 'finished', record = taken) =>
+  const answered = (
+    outcome: 'next_step' | 'authenticated' | 'finished',
+    record: InteractionRecord
+  ) =>
     emitInteractionEvent(request, record, 'urn:qauth:event:interaction.answered:v1-rc.0', {
       interaction: record.ref,
       step: taken.step.name,
@@ -441,13 +473,14 @@ export async function answerInteraction(
     });
 
   if (decision.kind === 'finished') {
-    await unlistInteraction(redis, taken, bound.idHash);
+    await deleteInteraction(redis, taken, bound.idHash);
+    settled.done = true;
     setFlowCookie(
       reply,
       nextFlowSecrets(bound.secrets, { remove: bound.secret }),
       env.INTERACTION_TTL
     );
-    await answered('finished');
+    await answered('finished', taken);
     return { kind: 'finished', request: taken.request, transaction: taken.transaction };
   }
 
@@ -459,7 +492,8 @@ export async function answerInteraction(
       transaction: { ...taken.transaction, amr: withAmr(taken.transaction.amr, decision.amr) },
       revision: taken.revision + 1,
     };
-    if (!(await putInteraction(redis, bound.idHash, next))) return { kind: 'stale' };
+    settled.done = await writeInteractionState(redis, bound.idHash, next);
+    if (!settled.done) return { kind: 'stale' };
     await answered('next_step', next);
     return { kind: 'step', view: viewOf(next) };
   }
@@ -468,7 +502,7 @@ export async function answerInteraction(
   const step = interactionStepSchema.parse(decision.step);
   if (taken.transaction.userId !== undefined && taken.transaction.userId !== signIn.userId) {
     // An engine bug, never a user's doing: the user switch starts a new
-    // interaction. The state stays taken, so the interaction ends here.
+    // interaction. Thrown before anything is written, so the interaction ends.
     throw new Error('an interaction has one subject; switch users with a new interaction');
   }
   const session = await createBrowserSession(request.server, request, {
@@ -492,7 +526,8 @@ export async function answerInteraction(
     flowBinding: flowBindingOf(secret),
     revision: taken.revision + 1,
   };
-  if (!(await putInteraction(redis, bound.idHash, next))) return { kind: 'stale' };
+  settled.done = await writeInteractionState(redis, bound.idHash, next);
+  if (!settled.done) return { kind: 'stale' };
   setSessionCookie(reply, session.sid);
   setFlowCookie(
     reply,
@@ -518,7 +553,7 @@ export async function cancelInteraction(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
-  await unlistInteraction(request.server.redis, taken, bound.idHash);
+  await deleteInteraction(request.server.redis, taken, bound.idHash);
   setFlowCookie(
     reply,
     nextFlowSecrets(bound.secrets, { remove: bound.secret }),
@@ -550,13 +585,13 @@ export async function switchInteractionUser(
   id: unknown,
   identifierStep: InteractionStep = { name: IDENTIFIER_STEP, params: {}, alternatives: [] }
 ): Promise<InteractionSwitchResult> {
-  if (identifierStep.name !== IDENTIFIER_STEP) {
+  if (interactionStepSchema.parse(identifierStep).name !== IDENTIFIER_STEP) {
     throw new Error('a user switch starts at the identifier step');
   }
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
-  await unlistInteraction(request.server.redis, taken, bound.idHash);
+  await deleteInteraction(request.server.redis, taken, bound.idHash);
   await emitInteractionEvent(request, taken, 'urn:qauth:event:interaction.cancelled:v1-rc.0', {
     interaction: taken.ref,
     step: taken.step.name,

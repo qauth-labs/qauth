@@ -210,6 +210,15 @@ export const REDIS_KEYS = {
    */
   INTERACTION: (realmId: string, idHash: string) => `interaction:${realmId}:${idHash}`,
   /**
+   * The turn of one interaction (#592): the revision of
+   * {@link REDIS_KEYS.INTERACTION} that may be answered next, as a decimal
+   * string. An answer, a cancel and a user switch take it with `GETDEL`
+   * before they act, so of two concurrent requests only one acts; the answer
+   * writes the next turn with the next state. Same components and deadline as
+   * the record.
+   */
+  INTERACTION_TURN: (realmId: string, idHash: string) => `interaction-turn:${realmId}:${idHash}`,
+  /**
    * Every live interaction, by its absolute expiry (#592): a sorted set whose
    * score is the expiry in epoch milliseconds and whose member is
    * `<realmId>:<reference>:<id hash>` ({@link REDIS_KEYS.INTERACTION}'s

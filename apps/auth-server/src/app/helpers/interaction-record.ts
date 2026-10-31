@@ -25,9 +25,13 @@ import { authorizeQuerySchema } from '../schemas/oauth';
  *   keeps it {@link INTERACTION_SWEEP_GRACE_MS} longer so the expiry sweep can
  *   audit it, and an expiry index ({@link REDIS_KEYS.INTERACTION_EXPIRY_INDEX})
  *   lists every live record for that sweep.
- * - **Taking.** An answer takes the state with `GETDEL` and writes the next one
- *   (`interaction.ts`): of two concurrent answers, only the one that took the
- *   state is processed.
+ * - **Turn.** Beside the record, Redis holds the record's turn: the revision
+ *   that may be answered next. An answer takes the turn with `GETDEL` and
+ *   writes the next state with the next turn (`interaction.ts`): of two
+ *   concurrent answers, only the one that took the turn is processed. The
+ *   record itself stays readable meanwhile, so a step read or a second answer
+ *   that arrives while the engine works sees the interaction, not an expired
+ *   one.
  *
  * This module holds the shape and the Redis commands; `interaction.ts` holds
  * the rules (binding, expiry, audit) on top of them.
@@ -177,6 +181,10 @@ function recordKey(realmId: string, idHash: string): string {
   return REDIS_KEYS.INTERACTION(realmId, idHash);
 }
 
+function turnKey(realmId: string, idHash: string): string {
+  return REDIS_KEYS.INTERACTION_TURN(realmId, idHash);
+}
+
 /** The record's member in the expiry index. */
 function indexMember(record: Pick<InteractionRecord, 'realmId' | 'ref'>, idHash: string): string {
   return `${record.realmId}:${record.ref}:${idHash}`;
@@ -196,8 +204,9 @@ function assertExecuted(results: [Error | null, unknown][] | null): unknown[] {
 }
 
 /**
- * Store a new interaction and list it in the expiry index, in one `MULTI`.
- * `SET NX`: an id is never reused, so a key that exists is a failure.
+ * Store a new interaction, its first turn (revision 0) and its member of the
+ * expiry index, in one `MULTI`. `SET NX`: an id is never reused, so a record
+ * that exists is a failure.
  */
 export async function insertInteraction(
   redis: Redis,
@@ -205,11 +214,12 @@ export async function insertInteraction(
   record: InteractionRecord
 ): Promise<void> {
   const serialized = serialize(record);
-  const key = recordKey(record.realmId, idHash);
+  const deadline = redisDeadline(record);
   const [stored] = assertExecuted(
     await redis
       .multi()
-      .set(key, serialized, 'PXAT', redisDeadline(record), 'NX')
+      .set(recordKey(record.realmId, idHash), serialized, 'PXAT', deadline, 'NX')
+      .set(turnKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline)
       .zadd(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), record.expiresAt, indexMember(record, idHash))
       .exec()
   );
@@ -217,23 +227,29 @@ export async function insertInteraction(
 }
 
 /**
- * Write a record back after it was taken: the next state of an answer, or the
- * taken state itself when the taker may not use it. `SET NX`, so it never
- * overwrites a state someone else wrote; `false` when one is there.
+ * Write the next state of an interaction whose turn the caller took, and give
+ * the new revision its turn, in one `MULTI`. The record is written only over
+ * the one that is there (`XX`): a record the expiry sweep or a cancel removed
+ * meanwhile is not brought back. `false` when it was gone.
  */
-export async function putInteraction(
+export async function writeInteractionState(
   redis: Redis,
   idHash: string,
   record: InteractionRecord
 ): Promise<boolean> {
-  const stored = await redis.set(
-    recordKey(record.realmId, idHash),
-    serialize(record),
-    'PXAT',
-    redisDeadline(record),
-    'NX'
+  const serialized = serialize(record);
+  const deadline = redisDeadline(record);
+  const [stored] = assertExecuted(
+    await redis
+      .multi()
+      .set(recordKey(record.realmId, idHash), serialized, 'PXAT', deadline, 'XX')
+      .set(turnKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline, 'NX')
+      .exec()
   );
-  return stored === 'OK';
+  if (stored === 'OK') return true;
+  // No record to write over: the turn just set opens nothing, so drop it.
+  await redis.del(turnKey(record.realmId, idHash));
+  return false;
 }
 
 /** Parse a stored record; anything else reads as absent. */
@@ -264,28 +280,72 @@ export async function readInteractionRecord(
   return parseRecord(await redis.get(recordKey(realmId, idHash)), log);
 }
 
+const turnSchema = z.int().min(0);
+
 /**
- * Take a record: read it and delete it in one `GETDEL`, so no one else can
- * take it. `null` when it is absent or does not parse (and is then gone).
+ * Take the interaction's turn: read the revision that may be answered and
+ * delete it in one `GETDEL`, so no one else can take it. `null` when there is
+ * none: another request took it, or the interaction ended.
  */
-export async function takeInteractionRecord(
+export async function takeInteractionTurn(
   redis: Redis,
   log: FastifyBaseLogger,
   realmId: string,
   idHash: string
-): Promise<InteractionRecord | null> {
-  // A record that does not parse is logged with its key, which holds the
-  // realm and the id's hash, never the id.
-  return takeValue(redis, recordKey(realmId, idHash), log, interactionRecordSchema);
+): Promise<number | null> {
+  // A turn that does not parse is logged with its key, which holds the realm
+  // and the id's hash, never the id.
+  return takeValue(redis, turnKey(realmId, idHash), log, turnSchema);
 }
 
-/** Take a record out of the expiry index, once it finished or was cancelled. */
-export async function unlistInteraction(
+/**
+ * Give a turn back that the caller took but may not use, unless another turn
+ * is there. Only for a turn taken moments ago: the record's deadline bounds it.
+ */
+export async function returnInteractionTurn(
+  redis: Redis,
+  record: Pick<InteractionRecord, 'realmId' | 'expiresAt'>,
+  idHash: string,
+  revision: number
+): Promise<void> {
+  await redis.set(
+    turnKey(record.realmId, idHash),
+    String(revision),
+    'PXAT',
+    redisDeadline(record),
+    'NX'
+  );
+}
+
+/**
+ * Remove an interaction for good: its record, its turn and its member of the
+ * expiry index, once it finished, was cancelled or was replaced by a user
+ * switch.
+ */
+export async function deleteInteraction(
   redis: Redis,
   record: Pick<InteractionRecord, 'realmId' | 'ref'>,
   idHash: string
 ): Promise<void> {
-  await redis.zrem(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), indexMember(record, idHash));
+  assertExecuted(
+    await redis
+      .multi()
+      .del(recordKey(record.realmId, idHash), turnKey(record.realmId, idHash))
+      .zrem(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), indexMember(record, idHash))
+      .exec()
+  );
+}
+
+/**
+ * End an interaction the engine failed on: its record and turn go, and its
+ * member stays in the expiry index, so the sweep audits its end at expiry.
+ */
+export async function abandonInteraction(
+  redis: Redis,
+  record: Pick<InteractionRecord, 'realmId'>,
+  idHash: string
+): Promise<void> {
+  await redis.del(recordKey(record.realmId, idHash), turnKey(record.realmId, idHash));
 }
 
 /** An index member the expiry sweep may claim: its member string and its expiry. */
@@ -335,13 +395,13 @@ export async function expiredInteractionEntries(
 
 /**
  * Claim one expired interaction for the sweep: take its member out of the
- * expiry index with `ZREM`, then its record out of Redis with `GETDEL`.
+ * expiry index with `ZREM`, then its turn and its record out of Redis.
  *
  * Only the caller whose `ZREM` removed the member claims it, so of two sweeps
- * (or a sweep and a finishing answer, which unlists the member itself) only
- * one reports it. The record is present when the interaction was still
- * waiting for an answer, and absent when an answer took it after its expiry
- * (refused there, and gone) or Redis already dropped it.
+ * (or a sweep and an interaction that finishes, which removes the member
+ * itself) only one reports it. The turn goes first, so no answer can start on
+ * the record any more; the record is present when the interaction was still
+ * waiting, and absent when Redis already dropped it or the engine failed on it.
  *
  * @returns `null` when someone else claimed the member, or it is not one this
  *   module writes (then it is dropped)
@@ -357,20 +417,36 @@ export async function claimExpiredInteraction(
     log.warn('interaction expiry index held a member it cannot read; removed');
     return null;
   }
-  const record = await takeInteractionRecord(redis, log, parts.realmId, parts.idHash);
+  await redis.del(turnKey(parts.realmId, parts.idHash));
+  // A record that does not parse is logged with its key, which holds the
+  // realm and the id's hash, never the id.
+  const record = await takeValue(
+    redis,
+    recordKey(parts.realmId, parts.idHash),
+    log,
+    interactionRecordSchema
+  );
   return { ...entry, ...parts, record };
 }
 
 /**
  * Undo {@link claimExpiredInteraction} when its audit could not be written:
- * the member goes back into the index and the record back into Redis, so the
- * next run claims it again. The record is past its expiry, so no request can
- * use it meanwhile.
+ * the member goes back into the index and the record back into Redis (with no
+ * turn: it can never be answered), so the next run claims it again. The record
+ * is past its expiry, so no request can use it meanwhile.
  */
 export async function relistExpiredInteraction(
   redis: Redis,
   expired: ExpiredInteraction
 ): Promise<void> {
   await redis.zadd(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), expired.expiresAt, expired.member);
-  if (expired.record !== null) await putInteraction(redis, expired.idHash, expired.record);
+  if (expired.record !== null) {
+    await redis.set(
+      recordKey(expired.realmId, expired.idHash),
+      serialize(expired.record),
+      'PXAT',
+      redisDeadline(expired.record),
+      'NX'
+    );
+  }
 }
