@@ -265,6 +265,21 @@ describe('fetch processes (integration: real processes, local TLS servers)', PRO
     if (LINUX) expect(fetchProcessPids()).toHaveLength(1);
   });
 
+  it('returns a redirect from a fetch process with its location and no body', async () => {
+    okHandler = (_req, _body, res) => {
+      res.writeHead(302, { location: '/elsewhere?a=1' });
+      res.end('moved');
+    };
+    const outcome = await pool().exchange(okJob(), within(CALL_MS));
+    expect(outcome).toMatchObject({
+      kind: 'response',
+      status: 302,
+      location: '/elsewhere?a=1',
+      headers: { location: '/elsewhere?a=1' },
+    });
+    expect(text(outcome)).toBe('');
+  });
+
   it('sends the request body and reuses an idle process for the next call', async () => {
     okHandler = (_req, body, res) => res.end(`got ${body.length} bytes`);
     const fetches = pool();

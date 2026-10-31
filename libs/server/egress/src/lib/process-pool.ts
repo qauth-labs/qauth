@@ -690,7 +690,9 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
         windowsHide: true,
       }
     );
-    const channel = child.stdio[FETCH_PROCESS_CHANNEL_FD];
+    // `stdio` is null when the spawn failed before its descriptors were set
+    // up (EMFILE); the process then never started, and 'error' says so.
+    const channel = (child.stdio as ChildProcess['stdio'] | null)?.[FETCH_PROCESS_CHANNEL_FD];
     let markExited: () => void = () => undefined;
     const proc: FetchProcess = {
       child,

@@ -485,7 +485,7 @@ export function encodeFrame(type: number, parts: readonly Uint8Array[] = []): Ui
   const header = Buffer.alloc(FRAME_HEADER_BYTES);
   header.writeUInt8(type, 0);
   header.writeUInt32BE(length, 1);
-  return [header, ...parts];
+  return [header, ...parts.filter((part) => part.byteLength > 0)];
 }
 
 /** How a frame reader treats the frames of its channel. */
