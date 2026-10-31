@@ -60,6 +60,46 @@ function withPolicies(patch: Record<string, Record<string, unknown>>): Record<st
   return document;
 }
 
+/** Trusted domains the type accepts, as a writer may send them, and those it refuses. */
+const DOMAINS = {
+  accepted: [
+    'example.com',
+    'auth.eu.example.co.uk',
+    '*.example.com',
+    'Login.Example.ORG',
+    'xn--bcher-kva.example',
+    '1password.com',
+    `${'a'.repeat(63)}.com`,
+  ],
+  refused: [
+    'com',
+    '*.com',
+    'a..b',
+    'a.-b',
+    '-a.com',
+    'a-.com',
+    '.example.com',
+    'example.com.',
+    '*.',
+    '**.example.com',
+    'example.com/path',
+    '192.168.0.1',
+    '*.10.0.0.1',
+    '[::1]',
+    '::1',
+    `${'a'.repeat(64)}.com`,
+  ],
+};
+const ISSUERS = {
+  accepted: ['https://ci.example.com', 'https://ci.example.com:8443/oidc'],
+  refused: [
+    'https:ci.example.com',
+    'https:/ci.example.com',
+    'HTTPS://ci.example.com',
+    'http://ci.example.com',
+  ],
+};
+
 describe('the schema version', () => {
   it('is a release candidate of version 1 until QAuth 1.0.0 (ADR-018 §5)', () => {
     expect(REALM_POLICY_SCHEMA_VERSION).toMatch(/^1-rc\.\d+$/);
@@ -599,6 +639,22 @@ describe('parseRealmPolicies', () => {
     );
   });
 
+  it('accepts a trusted domain of two labels or more, stored in lower case', () => {
+    expect(
+      parseRealmPolicies({ registration: { cimd: { trustedDomains: DOMAINS.accepted } } })
+        .registration.cimd.trustedDomains
+    ).toEqual(DOMAINS.accepted.map((domain) => domain.toLowerCase()));
+  });
+
+  it('refuses a trusted domain that is a bare top-level domain, an IP literal or not a host', () => {
+    for (const domain of DOMAINS.refused) {
+      expect(
+        () => parseRealmPolicies({ registration: { cimd: { trustedDomains: [domain] } } }),
+        domain
+      ).toThrow(PolicyValidationError);
+    }
+  });
+
   it('accepts an https issuer with a path', () => {
     const issuers = ['https://ci.example.com', 'https://ci.example.com/oidc/realm-1'];
     expect(
@@ -617,6 +673,7 @@ describe('parseRealmPolicies', () => {
       { admin: { workloadIssuers: ['https://user:pass@ci.example.com'] } },
       { admin: { workloadIssuers: ['https://ci.example.com?audience=x'] } },
       { admin: { workloadIssuers: ['https://ci.example.com#f'] } },
+      ...ISSUERS.refused.map((issuer) => ({ admin: { workloadIssuers: [issuer] } })),
       { admin: { twoAdminMandatoryOperations: ['users'] } },
       { registration: { dynamicRegistrationAllowedScopes: ['openid', 'openid'] } },
     ]) {
@@ -749,6 +806,35 @@ describe('toJsonSchema', () => {
     expect(JSON.stringify(toJsonSchema('representation'))).not.toContain(
       '"additionalProperties":false'
     );
+  });
+
+  it('gives a pattern that accepts what the input accepts, for the trusted domains and the issuers', () => {
+    const input = toJsonSchema('input');
+    const cases = [
+      [
+        properties(input, 'registration', 'cimd')['trustedDomains'],
+        DOMAINS,
+        (value: string[]) => ({
+          registration: { cimd: { trustedDomains: value } },
+        }),
+      ],
+      [
+        properties(input, 'admin')['workloadIssuers'],
+        ISSUERS,
+        (value: string[]) => ({
+          admin: { workloadIssuers: value },
+        }),
+      ],
+    ] as const;
+    for (const [property, samples, document] of cases) {
+      const pattern = new RegExp((property['items'] as { pattern: string }).pattern);
+      for (const sample of [...samples.accepted, ...samples.refused]) {
+        const accepted = REALM_POLICY_REGISTRY.schema('input').safeParse(
+          document([sample])
+        ).success;
+        expect(pattern.test(sample), sample).toBe(accepted);
+      }
+    }
   });
 
   it('is plain JSON', () => {

@@ -13,8 +13,20 @@ const link = groupDocsLink('registration');
  */
 const OPEN_SCOPE_PATTERN = /^(?![qQ][aA][uU][tT][hH]:)[\x21\x23-\x5B\x5D-\x7E]+$/;
 
-/** A host a CIMD `client_id` URL may have, or `*.` and a parent domain of such hosts. */
-const TRUSTED_DOMAIN_PATTERN = /^(?:\*\.)?[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
+/** A DNS label: 1 to 63 letters, digits and inner hyphens. */
+const LABEL = '[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?';
+
+/**
+ * A host a CIMD `client_id` URL may have, or `*.` and a parent domain of such
+ * hosts: at least two labels, the last of them not all digits, so neither a
+ * bare top-level domain (`com`, `*.com`) nor an IPv4 literal is one; an IPv6
+ * literal has characters no label has.
+ *
+ * Upper-case letters match too. The type lower-cases a domain before this
+ * check, so it never sees one, but the JSON Schema of the input views shows
+ * this pattern to a writer, who may send one.
+ */
+const TRUSTED_DOMAIN_PATTERN = new RegExp(`^(?:\\*\\.)?(?:${LABEL}\\.)+(?![0-9]+$)${LABEL}$`);
 
 /**
  * Client registration (`registration`, #514; read from the realm row by

@@ -23,7 +23,9 @@ const ISSUER_URL_PATTERN = '^https://[^\\s?#@]+$';
  * representation and every diff show.
  */
 function isIssuerUrl(value: string): boolean {
-  if (/[\s?#@]/.test(value)) return false;
+  // The URL parser also reads `https:host`, `https:/host` and `HTTPS://host`
+  // as https URLs; the pattern, and so the JSON Schema, does not.
+  if (!value.startsWith('https://') || /[\s?#@]/.test(value)) return false;
   try {
     const url = new URL(value);
     return (
