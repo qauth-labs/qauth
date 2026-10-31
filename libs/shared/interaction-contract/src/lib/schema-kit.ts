@@ -131,6 +131,21 @@ export function absoluteUri(maxLength: number, description: string): JsonSchema 
   };
 }
 
+/** {@link URI_CHARACTERS} without `#`, so the URI has no fragment. */
+const URI_CHARACTERS_WITHOUT_FRAGMENT = '[!$-;=?-\\[\\]-~]';
+
+/**
+ * An {@link absoluteUri} with no fragment: RFC 3986 §4.3 `absolute-URI`. A
+ * resource indicator is one, since RFC 8707 §2 says it "MUST NOT include a
+ * fragment component".
+ */
+export function absoluteUriWithoutFragment(maxLength: number, description: string): JsonSchema {
+  return {
+    ...absoluteUri(maxLength, description),
+    pattern: `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS_WITHOUT_FRAGMENT}+$`,
+  };
+}
+
 /**
  * Mark a value that a client or a device declared, which is not text but must
  * still be shown as declared (a resource URL the request named). Text a client

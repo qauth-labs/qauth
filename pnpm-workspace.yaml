@@ -323,7 +323,10 @@ catalog:
   # mode. Dev only, in libs/shared/interaction-contract. Both were already in the
   # tree through Fastify's own validator, so no new package is resolved. ajv
   # 8.20.0 is past GHSA-2g4f-4pwh-qvx6 (patched in 8.18.0), and no advisory names
-  # ajv-formats (GHSA advisory database, checked 2026-10-26).
+  # ajv-formats (GHSA advisory database, checked 2026-10-26). The step grammar
+  # (libs/server/step-grammar, #591) also uses ajv-formats at run time, for its
+  # `uri` and `date-time` checks alone: its Zod schemas then check a format the
+  # way the published step schemas' validator does.
   ajv: '^8.20.0'
   ajv-formats: '^3.0.1'
   '@commitlint/cli': '^21.2.3'

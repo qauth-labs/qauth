@@ -14,8 +14,12 @@
 export const INTERACTION_API_MAJOR = 1;
 export const INTERACTION_API_RC = 0;
 
-/** `v1-rc.0`: the version label of the path, the step names and the published files. */
-export const INTERACTION_API_VERSION = `v${INTERACTION_API_MAJOR}-rc.${INTERACTION_API_RC}`;
+/**
+ * `v1-rc.0`: the version label of the path, the step names and the published
+ * files. Its type is the literal, so a step name's type can carry it (#591).
+ */
+export const INTERACTION_API_VERSION =
+  `v${INTERACTION_API_MAJOR}-rc.${INTERACTION_API_RC}` as const;
 
 /** The path prefix every operation of this version is served under. */
 export const INTERACTION_API_PREFIX = `/interaction/${INTERACTION_API_VERSION}`;
