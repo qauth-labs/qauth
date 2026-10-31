@@ -863,8 +863,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid_token` challenge, and a token that lacks a route's scope 403
   `forbidden` with the `insufficient_scope` challenge, whose `scope` names the
   scopes. `ForbiddenError`'s `requiredScope` takes a list for that, joined with
-  spaces in the challenge. No route uses the guards yet; the developer and
-  account routes move under their prefixes in [#524]. The token endpoint issues
+  spaces in the challenge. The developer and account routes moved under their
+  prefixes in [#524], behind these guards. The token endpoint issues
   an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
   `audience` lists it, on every grant (`invalid_target` otherwise, at
   `/oauth/authorize` and `/ui/consent` too); a code refused this way is not
@@ -872,8 +872,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/oauth/register` lists none, whatever its row holds. On a user's grant
   (authorization code and refresh token) a family audience is issued only when a
   `resource` names it, so a client's default audience leaves it out there. The
-  Bearer path of `/oauth/authorize` refuses `access_denied` when the request or
-  the client's default audience holds one, and a family audience never makes a
+  Bearer path of `/oauth/authorize`, retired since by [#524], refused
+  `access_denied` when the request or the client's default audience held one,
+  and a family audience never makes a
   client authoritative at introspection. Self-registration never obtains one,
   by the rule the reserved `qauth:` scopes follow: dynamic registration and a
   Client ID Metadata Document ignore it in `audience` or `resource` metadata,
@@ -1213,7 +1214,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
 
+- **The developer API and the account API's consents, under versioned
+  prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
+  serves a developer's clients (list, create, read, merge-patch update,
+  delete, `regenerate-secret`), their static API keys and the developer's own
+  consents; `/account/v1-rc.0` serves the user's consents (list and revoke).
+  Each route is guarded by its family's token guard ([#509]) and follows the API
+  conventions: RFC 7591 names for registered client metadata, RFC 3339 times,
+  lists as `{ items, nextCursor }` with `limit` and `cursor` (`invalid_cursor`
+  for a cursor another list issued), an `ETag` on each read of a client and a
+  JSON Merge Patch update that needs `If-Match` (428 without it, 412 for a stale
+  one, 415 for another media type, 422 for `client_name` set to `null`), and
+  problem documents. A client of another developer is 404, as before. The
+  domain logic is shared with the deprecated paths, which keep their shapes.
+
 ### Changed
+
+- **The developer portal's token carries the developer audience** ([#524]).
+  The system client is created with `urn:qauth:aud:developer:v1-rc.0`, and a
+  boot step gives it to the system client of every realm that has one, so
+  `POST /auth/login` mints the developer audience and the token reaches the
+  developer API. `/auth/logout` and the deprecated `/api/clients` and
+  `/api/consents` accept exactly that audience on a system-client token.
+
+  **Action for operators**: developers sign in to the portal again once, when
+  the first node of this release boots: a portal token minted before carries
+  the system client's id as its audience, which no node accepts any more. Roll
+  from a release that accepts the new token ([#509]). See **Upgrades**
+  (`operate/upgrades`).
+
+- **The developer portal calls the developer API** ([#524]). Its server
+  functions reach `/developer/v1-rc.0` for clients, API keys and consents, read
+  each list page by page, and name the client's `ETag` in `If-Match` when they
+  save it, so an edit to a client changed in another tab is refused ("this
+  client was changed since you opened it") rather than overwriting it.
 
 - **An agent client always sees the consent screen** ([#845], ADR-015
   Decision 11, ADR-014 §11). A stored consent that covers the request no
@@ -1423,11 +1457,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
   `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
   the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, beside
-  today's token, whose `aud` is the system client's id. Nothing mints it in
-  this release: `/auth/login` still mints today's token and the system client's
-  row is left as it is. [#524] mints it. Expand, then contract (ADR-018 §5): a
-  node of the previous release accepts every portal token this release mints,
-  so the upgrade is safe to roll. See **Upgrades** (`operate/upgrades`).
+  the token of before, whose `aud` is the system client's id. [#524] then mints
+  it and retires the old token (below). Expand, then contract (ADR-018 §5): a
+  node that accepts the new token must run everywhere before a node mints it.
+  See **Upgrades** (`operate/upgrades`).
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
@@ -2023,6 +2056,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
+
+### Deprecated
+
+- **`/api/clients`, `/api/consents` and the cookie-authenticated `/consents`**
+  ([#524]). Each operation is `deprecated: true` in the OpenAPI document, and
+  every answer, errors included, carries the RFC 9745 `Deprecation` header and
+  a `Link` to the API conventions page, whose Deprecations table names each
+  replacement under `/developer/v1-rc.0` or `/account/v1-rc.0`. They keep their
+  shapes until the release-candidate cleanup removes them.
+
+### Removed
+
+- **The Bearer path of `/oauth/authorize`** ([#524]). The developer portal's
+  access token no longer stands in for a sign-in there: an `Authorization`
+  header signs no one in, a request without a browser session goes to the
+  login page, and `prompt=none` answers `login_required`. Nothing QAuth ships
+  used it. A web-only process no longer loads the JWT plugin.
+- **The system client's id as a portal token's audience** ([#524]). Its
+  acceptance had no end date at `/auth/logout`, where an expired token still
+  passed.
 
 ### Fixed
 

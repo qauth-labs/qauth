@@ -129,10 +129,8 @@ the line leaves to this page:
   session's own end, which the old limit set.
 
 A stored consent never skips the screen for an agent client (ADR-015
-Decision 11): every authorization request from an agent shows it, `prompt=none`
-from an agent answers `consent_required` with no code, and the legacy Bearer
-path of `/oauth/authorize`, which cannot show the screen, issues an agent no
-code.
+Decision 11): every authorization request from an agent shows it, and
+`prompt=none` from an agent answers `consent_required` with no code.
 
 The decision is taken for the page the user saw. A client whose `is_agent`
 changes between the page and the decision (a Client ID Metadata Document can

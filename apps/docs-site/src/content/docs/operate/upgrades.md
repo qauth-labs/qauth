@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-31'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -127,25 +127,43 @@ During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.
 
-### The developer portal's token: the new audience is accepted first
+### The developer portal's token: the new audience is accepted first, then minted
 
 The developer portal's token moves to the developer API's audience,
-`urn:qauth:aud:developer:v1-rc.0`, in two releases, expand then contract
-(ADR-018 §5; [#509](https://github.com/qauth-labs/qauth/issues/509),
-[API conventions](/reference/api-conventions/#issuing-a-family-audience)):
+`urn:qauth:aud:developer:v1-rc.0`, in two steps, expand then contract
+(ADR-018 §5; [API conventions](/reference/api-conventions/#issuing-a-family-audience)):
 
-- **v0.2 accepts it.** `/api/clients`, `/api/consents`, `/auth/logout`, the
-  Bearer path of `/oauth/authorize` and userinfo accept a system-client token
-  whose `aud` is the developer audience, beside today's token, whose `aud` is
-  the system client's id. Nothing mints the new token yet: `POST /auth/login`
-  still mints today's, and the system client's row is not changed.
-- **A later release mints it** ([#524](https://github.com/qauth-labs/qauth/issues/524)).
-  Every v0.2 node accepts the tokens such a node mints.
+- **Accepted** ([#509](https://github.com/qauth-labs/qauth/issues/509)).
+  `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
+  `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
+  the developer audience, beside the old token, whose `aud` is the system
+  client's id. Nothing mints the new token yet.
+- **Minted, and the old token retired**
+  ([#524](https://github.com/qauth-labs/qauth/issues/524)). As each node of this
+  release boots, it gives the system client of every realm the developer
+  audience, so `POST /auth/login` mints the new token from then on, on every
+  node, since each one reads the client's row. The deprecated `/api/clients`,
+  `/api/consents` and `/auth/logout` accept only the new token, and the Bearer
+  path of `/oauth/authorize` is gone: an `Authorization` header there signs no
+  one in, and a request without a browser session goes to the login page.
 
-The upgrade to v0.2 is safe to roll: a node of the previous release accepts
-every portal token a v0.2 node mints, because it is the same token. There is no
-migration and nothing to run. Upgrade every node to v0.2 before the release
-that mints the new token, so no node that refuses it is left.
+What an operator sees when the second step rolls out:
+
+- **Developers sign in to the portal again, once.** A portal token minted before
+  the first node of the new release booted carries the system client's id as its
+  `aud`, and every node refuses it from that boot on (a token lives
+  `ACCESS_TOKEN_LIFESPAN`, 15 minutes by default). The portal answers the
+  refusal by sending the developer to its login page.
+- **Roll from a release that accepts the new token.** A node that does not, one
+  older than the first step, refuses userinfo to the new token, so a developer
+  whose request reaches it is signed out of the portal until that node is
+  upgraded. Upgrade every node to a release with the first step before the one
+  with the second.
+- **A caller of `/oauth/authorize` with a Bearer token stops getting codes.** No
+  shipped component used that path; anything that did must send the user through
+  the browser flow, as every other client does.
+- There is no migration and nothing to run: the boot step changes one row per
+  realm and logs `Gave the system client the developer API audience` when it does.
 
 ### Refresh tokens pause while migration 0038 runs
 
