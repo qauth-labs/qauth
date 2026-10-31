@@ -279,7 +279,7 @@ affected-scoped, for the same reason as the image smoke test: almost any change 
 image. Its JSON report joins the unit suite's in the spec-conformance matrix, so a wire test that
 cites a registered spec section counts as evidence for that row.
 
-Three rules keep it honest:
+Four rules keep it honest:
 
 - **It shares no code with the server.** `nx lint` fails an import of any workspace project into
   the suite, and an import of the suite from anywhere (`scope:wire-suite` in `.oxlintrc.json`).
@@ -289,6 +289,10 @@ Three rules keep it honest:
 - **Its `*.wire.test.ts` files never run in the fast tier.** The root config excludes them; only
   `apps/wire-suite/vitest.wire.config.ts` includes them. The suite's own unit tests — the
   configuration guard and the helpers — run with Tier 1.
+- **Every OAuth and discovery operation has a wire test.** A wire test names the operation it
+  calls, as in `call('POST /oauth/token', …)`, and a unit test,
+  `apps/wire-suite/src/operation-coverage.test.ts`, fails when an `/oauth/*` or `/.well-known/*`
+  operation of the published OpenAPI document has no such call.
 
 What it cannot catch: anything a client cannot observe. It sees responses, not the database or
 the logs, so a write that should not have happened, or a secret in a log line, is outside it.
