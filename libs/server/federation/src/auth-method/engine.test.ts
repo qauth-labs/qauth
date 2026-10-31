@@ -268,10 +268,10 @@ describe('completeUpstreamStep', () => {
     // writes only the indexes it mapped: a species that hands back a longer
     // list slips its extra members past every check.
     class Smuggling extends Array<unknown> {
-      static override get [Symbol.species]() {
+      static override get [Symbol.species](): ArrayConstructor {
         return function () {
           return [undefined, smuggled];
-        };
+        } as unknown as ArrayConstructor;
       }
     }
     const broken = withMembers({

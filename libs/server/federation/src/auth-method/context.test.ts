@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSampleAuthMethod, SAMPLE_CONFIG } from '../../testing/sample-auth-method.fixture';
 import { type AuthMethodContextParts, createAuthMethodContext } from './context';
@@ -145,7 +145,7 @@ describe('createAuthMethodContext', () => {
         realmId: '0190a5c4-0000-7000-8000-000000000001',
         providerId: 'oidc_sample',
         audience: 'https://provider.example',
-        claims: { exp: 1, jti: 'j' },
+        claims: { exp: 1, jti: 'j', iat: expect.any(Number) },
         algorithm: 'ES256',
       },
     ]);
@@ -159,11 +159,191 @@ describe('createAuthMethodContext', () => {
     ).rejects.toThrow(TypeError);
   });
 
-  it('logs through the four levels with a fields object and a message only', () => {
-    const { host, parts: given } = parts();
-    const context = createAuthMethodContext(createSampleAuthMethod(), given);
-    (context.log.warn as (...args: unknown[]) => void)({ a: 1 }, 'message', 'extra');
-    expect(host.log.warn.mock.calls[0]).toEqual([{ a: 1 }, 'message']);
+  describe('client assertions', () => {
+    const NOW = 1_800_000_000;
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    async function signed(claims: Record<string, unknown>) {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW * 1000);
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      await context.signer.signClientAssertion({ audience: 'https://provider.example', claims });
+      return (host.signer.signClientAssertion.mock.calls[0][1] as { claims: unknown }).claims;
+    }
+
+    it('lowers an exp past five minutes from now to five minutes from now', async () => {
+      expect(await signed({ exp: NOW + 86_400, jti: 'j' })).toEqual({
+        exp: NOW + 300,
+        jti: 'j',
+        iat: NOW,
+      });
+      expect(await signed({ exp: NOW + 120, jti: 'j' })).toEqual({
+        exp: NOW + 120,
+        jti: 'j',
+        iat: NOW,
+      });
+    });
+
+    it('sets iat when the claims carry none, and keeps a past one', async () => {
+      expect(await signed({ exp: NOW + 60, jti: 'j', iat: NOW - 5 })).toEqual({
+        exp: NOW + 60,
+        jti: 'j',
+        iat: NOW - 5,
+      });
+    });
+
+    it('refuses an iat that is not a time or lies in the future, without signing', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW * 1000);
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      for (const iat of ['now', Number.NaN, NOW + 3600]) {
+        await expect(
+          context.signer.signClientAssertion({
+            audience: 'https://provider.example',
+            claims: { exp: NOW + 60, jti: 'j', iat },
+          })
+        ).rejects.toThrow(TypeError);
+      }
+      await expect(
+        context.signer.signClientAssertion({ audience: 'x', claims: null as never })
+      ).rejects.toThrow(TypeError);
+      expect(host.signer.signClientAssertion).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the egress source', () => {
+    async function sentSource(url: string, source: 'operator' | 'admin' | 'remote_document') {
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      await context.egress.request({ method: 'GET', url, purpose: 'upstream-discovery', source });
+      return (host.egress.request.mock.calls[0][0] as { source: string }).source;
+    }
+
+    it.each(['operator', 'admin'] as const)(
+      'keeps %s for a URL on the origin of a URL the config holds',
+      async (source) => {
+        // SAMPLE_CONFIG names https://provider.example/authorize and /token.
+        expect(await sentSource('https://provider.example/.well-known/jwks.json', source)).toBe(
+          source
+        );
+      }
+    );
+
+    it.each(['operator', 'admin'] as const)(
+      'sends %s for any other destination as remote_document, which the allowlist never covers',
+      async (source) => {
+        for (const url of [
+          'https://internal.corp.example/metadata',
+          'https://provider.example:8443/token',
+          'http://provider.example/token',
+          'not a url',
+        ]) {
+          expect(await sentSource(url, source)).toBe('remote_document');
+        }
+      }
+    );
+
+    it('keeps remote_document as it is', async () => {
+      expect(await sentSource('https://provider.example/jwks', 'remote_document')).toBe(
+        'remote_document'
+      );
+    });
+  });
+
+  describe('the logger', () => {
+    it('logs through the four levels with a message and the fields nested under authMethod', () => {
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      (context.log.warn as (...args: unknown[]) => void)({ a: 1 }, 'message', 'extra');
+      expect(host.log.warn.mock.calls[0]).toEqual([{ authMethod: { a: 1 } }, 'message']);
+    });
+
+    it("never lets a method overwrite the host's fields of the line", () => {
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      context.log.info({ reqId: 'forged', realm: 'other', msg: 'x' }, 'calling');
+      const [fields] = host.log.info.mock.calls[0] as [Record<string, unknown>];
+      expect(Object.keys(fields)).toEqual(['authMethod']);
+    });
+
+    it('redacts secrets at any depth, whatever their case', () => {
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      const secrets = {
+        code: 'secret-code-1',
+        verifier: 'secret-verifier-2',
+        clientSecret: 'secret-client-3',
+        idToken: 'secret-id-token-4',
+        accessToken: 'secret-access-5',
+        refreshToken: 'secret-refresh-6',
+        nonce: 'secret-nonce-7',
+        password: 'secret-password-8',
+        assertion: 'secret-assertion-9',
+        nested: 'secret-access-10',
+      };
+      context.log.error(
+        {
+          code: secrets.code,
+          request: {
+            form: {
+              Code_Verifier: secrets.verifier,
+              client_secret: secrets.clientSecret,
+              grant_type: 'authorization_code',
+            },
+            answers: [
+              {
+                id_token: secrets.idToken,
+                access_token: secrets.accessToken,
+                refresh_token: secrets.refreshToken,
+              },
+            ],
+          },
+          NONCE: secrets.nonce,
+          password: secrets.password,
+          client_assertion: secrets.assertion,
+          err: Object.assign(new Error('token call failed'), {
+            body: { access_token: secrets.nested },
+          }),
+        },
+        'token call failed'
+      );
+      const [fields] = host.log.error.mock.calls[0] as [{ authMethod: Record<string, unknown> }];
+      const line = JSON.stringify(fields);
+      for (const secret of Object.values(secrets)) expect(line).not.toContain(secret);
+      expect(fields.authMethod['request']).toEqual({
+        form: {
+          Code_Verifier: '[Redacted]',
+          client_secret: '[Redacted]',
+          grant_type: 'authorization_code',
+        },
+        answers: [
+          { id_token: '[Redacted]', access_token: '[Redacted]', refresh_token: '[Redacted]' },
+        ],
+      });
+      expect(fields.authMethod['err']).toMatchObject({
+        type: 'Error',
+        message: 'token call failed',
+        body: { access_token: '[Redacted]' },
+      });
+    });
+
+    it('copies a cycle and a deep nesting without throwing', () => {
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      const cyclic: Record<string, unknown> = { name: 'loop' };
+      cyclic['self'] = cyclic;
+      let deep: Record<string, unknown> = { code: 'deep-code' };
+      for (let i = 0; i < 20; i += 1) deep = { inner: deep };
+      context.log.debug({ cyclic, deep }, 'shapes');
+      const line = JSON.stringify(host.log.debug.mock.calls[0][0]);
+      expect(line).toContain('[Circular]');
+      expect(line).toContain('[Truncated]');
+      expect(line).not.toContain('deep-code');
+    });
   });
 
   it('parses the config with the method schema, and freezes a copy', () => {
@@ -173,6 +353,28 @@ describe('createAuthMethodContext', () => {
     expect(context.config).toEqual(SAMPLE_CONFIG);
     expect(Object.isFrozen(context.config)).toBe(true);
     expect(Object.isFrozen(config)).toBe(false);
+  });
+
+  it.each([
+    ['a Map', new Map([['k', 'v']])],
+    ['a Set', new Set(['v'])],
+    ['a Date', new Date()],
+    ['a class instance', new (class Settings {})()],
+  ])('refuses a parsed config holding %s, which does not freeze', (_label, value) => {
+    const method = {
+      ...createSampleAuthMethod(),
+      configSchema: { safeParse: () => ({ success: true, data: { nested: { value } } }) },
+    } as unknown as Parameters<typeof createAuthMethodContext>[0];
+    const { parts: given } = parts();
+    try {
+      createAuthMethodContext(method, given);
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AuthMethodConfigError);
+      expect((error as AuthMethodConfigError).issues).toEqual([
+        'nested.value: not plain data (a Map, Set, Date or class instance does not freeze)',
+      ]);
+    }
   });
 
   it('refuses a config the schema refuses, naming members and never their values', () => {
@@ -198,7 +400,9 @@ describe('createAuthMethodContext', () => {
     expect(context.routeUrl('/callback')).toBe(
       'https://auth.example.com/upstream/oidc_corp/callback'
     );
-    for (const path of ['/../oauth/token', 'callback', '//evil.example', '/%2e%2e']) {
+    // A path the method does not declare is refused too, however well formed:
+    // a redirect_uri must name a route that is mounted.
+    for (const path of ['/../oauth/token', 'callback', '//evil.example', '/%2e%2e', '/other']) {
       expect(() => context.routeUrl(path)).toThrow(TypeError);
     }
   });
