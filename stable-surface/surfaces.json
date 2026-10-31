@@ -177,6 +177,42 @@
       "stability": "stable"
     },
     {
+      "name": "event-interaction-answered-v1",
+      "description": "The urn:qauth:event:interaction.answered:v1-rc.0 event: the envelope with that type's data (ADR-019 Decision 6, #592).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/interaction.answered.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-interaction-cancelled-v1",
+      "description": "The urn:qauth:event:interaction.cancelled:v1-rc.0 event: the envelope with that type's data (ADR-019 Decision 6, #592).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/interaction.cancelled.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-interaction-created-v1",
+      "description": "The urn:qauth:event:interaction.created:v1-rc.0 event: the envelope with that type's data (ADR-019 Decision 6, #592).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/interaction.created.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
+      "name": "event-interaction-expired-v1",
+      "description": "The urn:qauth:event:interaction.expired:v1-rc.0 event: the envelope with that type's data (ADR-019 Decision 6, #592).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/interaction.expired.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-key-emergency-retired-v1",
       "description": "The urn:qauth:event:key.emergency_retired:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #540).",
       "format": "json-schema",

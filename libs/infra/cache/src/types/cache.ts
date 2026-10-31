@@ -12,6 +12,12 @@ export interface CacheUtilsInstance {
    * returning a mis-typed object or throwing.
    */
   getCache<T>(key: string, schema?: ZodType<T>): Promise<T | null>;
+  /**
+   * Read a cached value and delete it in one atomic step (Redis `GETDEL`): of
+   * two concurrent callers only the first gets the value. The key is deleted
+   * even when its value does not parse or validate, which then reads as a miss.
+   */
+  takeCache<T>(key: string, schema?: ZodType<T>): Promise<T | null>;
   deleteCache(key: string): Promise<void>;
   hasCache(key: string): Promise<boolean>;
   /**

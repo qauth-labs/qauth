@@ -298,6 +298,7 @@ export async function bootAuthServer(
       key.startsWith('SSF_') ||
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
+      key.startsWith('INTERACTION_') ||
       key.startsWith('JWT_') ||
       key.startsWith('PQC_') ||
       key === 'HYBRID_SIGNING_ENABLED' ||

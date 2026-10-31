@@ -79,6 +79,37 @@ function parseCached<T>(
 }
 
 /**
+ * Read a key and delete it in one atomic step (Redis `GETDEL`, Redis 6.2 or
+ * later), parsed as {@link parseCached} parses a read.
+ *
+ * This is how a single-use value is consumed: of two concurrent callers, only
+ * the first gets the value and the other gets `null`, so a value can never be
+ * acted on twice. A `GET` followed by a `DEL` cannot promise that: both callers
+ * may read before either deletes. The key is deleted whether or not its value
+ * parses, so a corrupt or injected entry is consumed too and cannot be probed
+ * again.
+ *
+ * Unprefixed: the caller passes the full key. {@link SessionUtilsInstance.takeSession}
+ * and {@link CacheUtilsInstance.takeCache} are the prefixed forms.
+ *
+ * @param client - Redis client instance
+ * @param key - the full key
+ * @param logger - Logger used to warn on malformed/invalid entries
+ * @param schema - Optional Zod schema to validate the parsed value
+ * @returns The typed value, or `null` when the key was absent, or held a value
+ *   that does not parse or validate
+ */
+export async function takeValue<T>(
+  client: CacheClient,
+  key: string,
+  logger: Logger = console,
+  schema?: ZodType<T>
+): Promise<T | null> {
+  const data = await client.getdel(key);
+  return parseCached(data, key, logger, schema);
+}
+
+/**
  * Key prefixes for different data types
  */
 export const KEY_PREFIXES = {
@@ -128,6 +159,13 @@ export function createSessionUtils(
       const key = `${KEY_PREFIXES.SESSION}${sessionId}`;
       const data = await client.get(key);
       return parseCached(data, key, logger, schema);
+    },
+
+    async takeSession<T extends SessionData>(
+      sessionId: string,
+      schema?: ZodType<T>
+    ): Promise<T | null> {
+      return takeValue(client, `${KEY_PREFIXES.SESSION}${sessionId}`, logger, schema);
     },
 
     async deleteSession(sessionId: string): Promise<void> {
@@ -217,6 +255,10 @@ export function createCacheUtils(
       const cacheKey = `${KEY_PREFIXES.CACHE}${key}`;
       const data = await client.get(cacheKey);
       return parseCached(data, cacheKey, logger, schema);
+    },
+
+    async takeCache<T>(key: string, schema?: ZodType<T>): Promise<T | null> {
+      return takeValue(client, `${KEY_PREFIXES.CACHE}${key}`, logger, schema);
     },
 
     async deleteCache(key: string): Promise<void> {
