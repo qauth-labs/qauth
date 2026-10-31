@@ -204,7 +204,8 @@ export interface AdminPipelineOptions {
 /**
  * The handlers the pipeline made, each running a route's own in the
  * pipeline's transaction ({@link inTransaction}): a route is never wrapped
- * twice, and no module can mark a handler of its own as one.
+ * twice, and no module can mark a handler of its own as one. Read at boot
+ * only ({@link keepWrapped}): Fastify runs a bound copy of the handler.
  */
 const wrappedHandlers = new WeakSet<object>();
 
@@ -478,21 +479,6 @@ function authorizeAdminRequest(
 async function adminApprovalGate(request: FastifyRequest): Promise<void> {
   if (requestClassification(request).class === 'security') {
     throw new ApprovalRequiredError();
-  }
-}
-
-/**
- * Stage 8's guard, the last of the pipeline's hooks: the handler the route
- * runs is the one the pipeline made. An `onRoute` hook of a scope registered
- * behind the pipeline runs after the pipeline's, and could put the route's
- * own handler back, which would run outside the transaction and write no
- * audit row: such a call fails before its handler runs.
- */
-async function adminHandlerGuard(request: FastifyRequest): Promise<void> {
-  if (!wrappedHandlers.has(request.routeOptions.handler)) {
-    throw new Error(
-      `${request.method} ${request.routeOptions.url ?? ''} runs a handler the admin pipeline did not wrap`
-    );
   }
 }
 
@@ -791,6 +777,56 @@ function refuseEarlyScopeHooks(scope: FastifyInstance): void {
   });
 }
 
+/** `hooks`, each a route preHandler the pipeline made ({@link refusingPreHandler}), in place. */
+function wrapPreHandlers(hooks: unknown[]): unknown[] {
+  hooks.forEach((hook, index) => {
+    if (!wrappedPreHandlers.has(hook as object)) {
+      hooks[index] = refusingPreHandler(hook as RoutePreHandler);
+    }
+  });
+  return hooks;
+}
+
+/**
+ * Make `route`'s handler and preHandlers the pipeline's, for good: each
+ * becomes an accessor of the route's options that wraps whatever is
+ * assigned to it. Fastify reads `handler` and the hooks from these options
+ * once every `onRoute` hook has run, so a later hook, such as one of a scope
+ * registered behind the pipeline, that puts the route's own handler back, or
+ * assigns or pushes a preHandler, gets it wrapped all the same. Fastify binds
+ * the handler it reads, so nothing can check at request time which handler
+ * runs: it is made sure of here.
+ */
+function keepWrapped(route: RouteOptions, registry: OperationRegistry): void {
+  let handler = route.handler;
+  const wrapHandler = (value: RouteHandlerMethod) =>
+    wrappedHandlers.has(value) ? value : (inTransaction(value, registry) as RouteHandlerMethod);
+  handler = wrapHandler(handler);
+  Object.defineProperty(route, 'handler', {
+    configurable: true,
+    enumerable: true,
+    get: () => handler,
+    set: (value: RouteHandlerMethod) => {
+      handler = wrapHandler(value);
+    },
+  });
+
+  // Kept as one array, wrapped in place whenever it is read, so a hook a
+  // later `onRoute` hook pushes onto it is wrapped too.
+  let preHandlers: unknown[] | undefined =
+    route.preHandler === undefined || route.preHandler === null
+      ? undefined
+      : [route.preHandler].flat();
+  Object.defineProperty(route, 'preHandler', {
+    configurable: true,
+    enumerable: true,
+    get: () => (preHandlers === undefined ? undefined : wrapPreHandlers(preHandlers)),
+    set: (value: unknown) => {
+      preHandlers = value === undefined || value === null ? undefined : [value].flat();
+    },
+  });
+}
+
 /**
  * The admin pipeline: its stages as hooks of an encapsulated scope, then the
  * routes `options.routes` registers in it. Register it on the admin listener,
@@ -807,25 +843,13 @@ export async function adminPipeline(
 
   fastify.decorateRequest('adminPipeline', null);
 
-  // At boot: every route acts on a realm named in its path, and runs its
-  // handler in the pipeline's transaction.
+  // At boot: every route acts on a realm named in its path, runs its
+  // handler in the pipeline's transaction, and its own preHandlers so that
+  // they refuse by throwing.
   fastify.addHook('onRoute', (route) => {
     const problem = adminRealmRouteProblem(route) ?? earlyRouteHookProblem(route);
     if (problem !== undefined) throw new Error(problem);
-    if (!wrappedHandlers.has(route.handler)) {
-      route.handler = inTransaction(route.handler, registry) as RouteHandlerMethod;
-    }
-    // A route's own preHandlers run after the approval gate, and refuse by
-    // throwing: none may answer.
-    if (route.preHandler !== undefined && route.preHandler !== null) {
-      route.preHandler = [route.preHandler]
-        .flat()
-        .map((hook: unknown) =>
-          wrappedPreHandlers.has(hook as object)
-            ? hook
-            : refusingPreHandler(hook as RoutePreHandler)
-        ) as RouteOptions['preHandler'];
-    }
+    keepWrapped(route, registry);
   });
 
   // Every route behind the pipeline authorizes, so none runs without a
@@ -900,9 +924,8 @@ export async function adminPipeline(
       authorizeAdminRequest(request, classification, registry.permissions),
   });
 
-  // Stage 7, after stage 6's `preHandler`, then stage 8's guard.
+  // Stage 7, after stage 6's `preHandler`.
   fastify.addHook('preHandler', adminApprovalGate);
-  fastify.addHook('preHandler', adminHandlerGuard);
 
   // The stages are in place: no route module may add a hook that would run
   // before stages 6 and 7.

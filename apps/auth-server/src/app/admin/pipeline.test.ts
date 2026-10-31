@@ -3,14 +3,24 @@ import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
+import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import {
   type AdminOperation,
   createOperationRegistry,
   defineOperation,
   operationSchemaExtensions,
 } from '../helpers/admin-operations';
-import { AdminCallsInFlight, adminPipeline, type AdminRateLimitCheck } from './pipeline';
+import { ADMIN_SCOPE_LIST } from '../helpers/admin-scopes';
+import {
+  AdminCallsInFlight,
+  adminPipeline,
+  type AdminRateLimitCheck,
+  adminTransaction,
+  recordAdminChange,
+  requestAdminCaller,
+} from './pipeline';
 
 /**
  * What the admin pipeline refuses at boot (#511): a route that names no realm
@@ -393,5 +403,199 @@ describe('the calls that owe an audit row', () => {
     // Settling again changes nothing.
     request.adminPipeline?.rowSettled?.();
     expect(calls.size).toBe(0);
+  });
+});
+
+/**
+ * Calls the pipeline admits, end to end through a bare listener whose
+ * database, token verification and repositories are stubs: an operator-realm
+ * viewer with a grant on one realm, and a transaction that is a plain object.
+ * A stage that refused every call would fail here, not only in the suite
+ * against real containers.
+ */
+describe('a call the pipeline admits', () => {
+  const ISSUER = 'https://operator.example.com';
+  const OPERATOR = {
+    id: '018f2d6e-0000-7000-8000-000000000001',
+    issuer: ISSUER,
+    enabled: true,
+    isOperator: true,
+  };
+  const TARGET = {
+    id: '018f2d6e-0000-7000-8000-000000000002',
+    issuer: 'https://alpha.example.com',
+    enabled: true,
+    isOperator: false,
+  };
+  const USER = '018f2d6e-0000-7000-8000-000000000003';
+  const TX = Object.freeze({ fixture: 'transaction' });
+
+  /** The rows the stub audit log received, with the transaction each came in. */
+  let rows: { outcome: string; transaction: unknown }[] = [];
+
+  /** Boot the stubbed listener with `routes` behind the pipeline, and call `path` on it. */
+  async function admit(
+    routes: (scope: FastifyInstance) => void,
+    path = ''
+  ): Promise<{ statusCode: number; body: string }> {
+    rows = [];
+    await boot(routes, async (app) => {
+      app.decorate('jwtUtils', {
+        extractCredentialFromHeader: () => ({ scheme: 'Bearer', token: 'token' }),
+        decodeTokenUnsafe: () => ({ iss: ISSUER }),
+      } as never);
+      app.decorate('verifyRequestAccessToken', (async () => ({
+        iss: ISSUER,
+        sub: USER,
+        exp: Math.floor(Date.now() / 1000) + 300,
+        jti: 'jti-1',
+        aud: API_FAMILY_AUDIENCES.admin,
+        scope: ADMIN_SCOPE_LIST.join(' '),
+        clientId: 'admin-console',
+      })) as never);
+      app.decorate('repositories', {
+        realms: {
+          findByIssuer: async (issuer: string) => (issuer === ISSUER ? OPERATOR : undefined),
+          findById: async (id: string) => (id === TARGET.id ? TARGET : undefined),
+        },
+        users: {
+          findById: async (realmId: string, id: string) =>
+            realmId === OPERATOR.id && id === USER
+              ? { id: USER, enabled: true, realmId: OPERATOR.id }
+              : undefined,
+        },
+        adminGrants: {
+          listLive: async () => [
+            {
+              grant: {
+                id: 'grant-1',
+                builtInRole: 'viewer',
+                roleId: null,
+                targetRealmId: TARGET.id,
+              },
+              role: null,
+            },
+          ],
+        },
+        adminAuditLog: {
+          appendAdminAudit: async (transaction: unknown, entry: { outcome: string }) => {
+            rows.push({ outcome: entry.outcome, transaction });
+          },
+        },
+      } as never);
+      app.decorate('db', {
+        transaction: async (work: (transaction: unknown) => Promise<unknown>) => work(TX),
+      } as never);
+    });
+    const app = instance;
+    if (app === undefined) throw new Error('not booted');
+    const response = await app.inject({
+      method: 'GET',
+      url: `/admin/v1-rc.0/realms/${TARGET.id}${path}`,
+      headers: { authorization: 'Bearer token' },
+    });
+    return { statusCode: response.statusCode, body: response.body };
+  }
+
+  it('runs the handler in its transaction, answers 200 and writes one succeeded row in it', async () => {
+    const seen: unknown[] = [];
+    const response = await admit((scope) => {
+      scope.get('/admin/v1-rc.0/realms/:realmId', options, async (request) => {
+        seen.push(adminTransaction(request));
+        return { realm: requestAdminCaller(request).targetRealm.id };
+      });
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ realm: TARGET.id });
+    expect(seen).toEqual([TX]);
+    expect(rows).toEqual([{ outcome: 'succeeded', transaction: TX }]);
+  });
+
+  it('runs a handler a later onRoute hook put back in the transaction all the same', async () => {
+    const seen: unknown[] = [];
+    const own = async (request: FastifyRequest) => {
+      seen.push(adminTransaction(request));
+      return { own: true };
+    };
+    const response = await admit((scope) => {
+      void scope.register(async (module) => {
+        module.addHook('onRoute', (route) => {
+          route.handler = own;
+        });
+        module.get('/admin/v1-rc.0/realms/:realmId', options, own);
+      });
+    });
+    expect(response.statusCode).toBe(200);
+    expect(seen).toEqual([TX]);
+    expect(rows).toEqual([{ outcome: 'succeeded', transaction: TX }]);
+  });
+
+  it("fails a call whose route's own preHandler sends the reply, before its handler", async () => {
+    const ran: string[] = [];
+    const response = await admit((scope) => {
+      scope.get(
+        '/admin/v1-rc.0/realms/:realmId',
+        {
+          ...options,
+          preHandler: [
+            async (_request, reply) => {
+              ran.push('preHandler');
+              return reply.send({ early: true });
+            },
+          ],
+        },
+        async () => {
+          ran.push('handler');
+          return {};
+        }
+      );
+    });
+    expect(response.statusCode).toBe(500);
+    expect(ran).toEqual(['preHandler']);
+    expect(rows.map((row) => row.outcome)).toEqual(['failed']);
+  });
+
+  it('fails a call whose preHandler a module added sends the reply, and lets one that throws refuse', async () => {
+    const sending = await admit((scope) => {
+      void scope.register(async (module) => {
+        module.addHook('preHandler', async (_request, reply) => reply.send({ early: true }));
+        module.get('/admin/v1-rc.0/realms/:realmId', options, async () => ({}));
+      });
+    });
+    expect(sending.statusCode).toBe(500);
+    expect(rows.map((row) => row.outcome)).toEqual(['failed']);
+    await instance?.close();
+
+    const throwing = await admit((scope) => {
+      void scope.register(async (module) => {
+        module.addHook('preHandler', async () => {
+          throw new JWTInvalidError('refused by the module');
+        });
+        module.get('/admin/v1-rc.0/realms/:realmId', options, async () => ({}));
+      });
+    });
+    expect(throwing.statusCode).toBe(401);
+    expect(rows.map((row) => row.outcome)).toEqual(['denied']);
+  });
+
+  it('fails a call whose body its response schema refuses, before the commit, with no succeeded row', async () => {
+    const response = await admit((scope) => {
+      scope.get(
+        '/admin/v1-rc.0/realms/:realmId',
+        {
+          ...options,
+          schema: { ...options.schema, response: { 200: z.object({ id: z.uuid() }) } },
+        },
+        async (request) => {
+          recordAdminChange(request, {
+            change: { before: null, after: { id: 'x' } },
+            annotations: {},
+          });
+          return { id: 'not-a-uuid' };
+        }
+      );
+    });
+    expect(response.statusCode).toBe(500);
+    expect(rows.map((row) => row.outcome)).toEqual(['failed']);
   });
 });

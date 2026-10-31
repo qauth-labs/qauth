@@ -111,7 +111,7 @@ async function fixtureAdminApi() {
     class: 'write',
     effects: [],
     permissions: ['realms.policies.write'],
-    description: 'Create an account outside the pipeline transaction (fixture).',
+    description: 'Create an account, from a handler a later onRoute hook put back (fixture).',
   });
   const early = operations.defineOperation({
     id: 'fixtureEarly.create',
@@ -246,12 +246,15 @@ async function fixtureAdminApi() {
         }
       );
       // A module whose own `onRoute` hook, which runs after the pipeline's,
-      // puts the handler the pipeline wrapped back to its own.
+      // puts the route's own handler back: the pipeline wraps it again.
+      // `adminTransaction` throws outside the pipeline's transaction.
       const unwrappedHandler = async (request: FastifyRequest) => {
         runs.push(unwrapped.id);
+        const tx = adminTransaction(request);
+        handlerTransactions.push(tx);
         const realmId = requestAdminCaller(request).targetRealm.id;
-        await request.server.repositories.users.create({ realmId });
-        return { unwrapped: true };
+        const account = await request.server.repositories.users.create({ realmId }, tx);
+        return { id: account.id };
       };
       void scope.register(async (module) => {
         module.addHook('onRoute', (route) => {
@@ -954,17 +957,17 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       ]);
     });
 
-    it('fails a route whose handler a later onRoute hook put back, before it runs, with one failed row', async () => {
+    it('runs a handler a later onRoute hook put back in its transaction, with one succeeded row', async () => {
       const realmId = await tenant('alpha');
       const { token } = await adminWith(realmId, 'editor');
 
       const response = await call('POST', realmPath(realmId, '/fixture-unwrapped'), token);
-      expect(response.statusCode).toBe(500);
-      expect(response.json()).toMatchObject({ code: 'internal_error' });
-      expect(runs).toEqual([]);
-      expect(await accountsIn(realmId)).toBe(0);
+      expect(response.statusCode).toBe(200);
+      expect(runs).toEqual(['fixtureUnwrapped.create']);
+      expect(handlerTransactions).toHaveLength(1);
+      expect(await accountsIn(realmId)).toBe(1);
       expect(await auditRows(realmId)).toMatchObject([
-        { operation_id: 'fixtureUnwrapped.create', outcome: 'failed', masked_diff: null },
+        { operation_id: 'fixtureUnwrapped.create', outcome: 'succeeded' },
       ]);
     });
 
