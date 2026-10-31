@@ -209,9 +209,9 @@ describe('docs/spec-pin-log.md — real tree', () => {
   });
 
   it('pins SD-JWT VC at draft-13 on a DERIVED basis, not as a latest-published pin', () => {
-    // The row the Pin basis column exists for. `-18` is current; HAIP 1.0 §9.4
-    // requires `-13`. An "update to latest" pass that bumped this would break
-    // EUDI conformance while making the docs look more current.
+    // The row the Pin basis column exists for. `-23` is current (2026-10-31);
+    // HAIP 1.0 §9.4 requires `-13`. An "update to latest" pass that bumped this
+    // would break EUDI conformance while making the docs look more current.
     const rows = parseSpecPinTable(readFileSync(LOG_PATH, 'utf8'));
     const sdJwt = rows.find((row) => row.spec.includes('SD-JWT VC'));
     expect(sdJwt?.revision).toBe('-13');
