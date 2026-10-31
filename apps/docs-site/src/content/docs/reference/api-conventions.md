@@ -244,6 +244,16 @@ the call when it differs, so a changed body, path parameter, query, realm or req
 approval. `op_hash` is its SHA-256 with the nonce, and the challenge an approver's factor signs is
 derived from it, so an approval given for one filing approves nothing else.
 
+**What a security operation's route and handler must do.** The admin listener refuses to boot a
+security operation's route that cannot be bound this way: it needs a renderer, one method, a Zod
+object schema for its path parameters naming every parameter of its URL, and a Zod body schema
+under every method that carries a body; and every admin operation has exactly one route. Its
+handler reads only the parsed path parameters, query and body, whose schemas are deterministic,
+and makes an effect outside the database (a KMS or KEK call, a mail, an outbound request) only
+through an outbox written in its transaction or after the commit, since an operation that rolls
+back leaves its approval usable. The rules in full are on the
+[Security operations](/reference/security-operations/#rules) page.
+
 **Who approves.** A human requester's own fresh step-up is its first approval, and only the
 requester gives it. An approval needs that one approval today. The engine already counts a
 required second approval only from a different account that holds `approvals.approve` on the

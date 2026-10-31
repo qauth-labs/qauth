@@ -76,6 +76,9 @@ operation of the OpenAPI document as `x-qauth-effects`
   `x-qauth-two-admin` differs from the registry. The classification stage is registered before
   every route, and checks each route again on its first request. In CI, the API conventions check
   fails when an admin operation of the OpenAPI document disagrees with the registry.
+- Every admin operation, of any class, is served by exactly one route: the admin listener refuses
+  to boot a second route that names an operation another route already serves. A `HEAD` route
+  beside it is checked as any route, but is never the operation's route.
 - A security operation runs only with a fresh approval bound to that exact request
   ([API conventions](/reference/api-conventions/#approvals)). So each one an admin route performs
   registers a renderer (`render`): what its approver is shown of one request, typed display data
@@ -90,6 +93,11 @@ operation of the OpenAPI document as `x-qauth-effects`
   Zod query schema if it has one. Its handler reads only the parsed path parameters, query and
   body, and those schemas are deterministic: no default a parse makes up anew, such as a random id
   or the current time, since the filed request and its retry are parsed apart.
+- A security operation's handler makes an effect outside the database, such as a KMS or KEK call,
+  a mail or an outbound request, only through a record its transaction writes and that is acted
+  on after the commit (an outbox), or after the commit itself. An operation that rolls back leaves
+  its approval `approved`, so a retry may run it again: an effect made before the rollback
+  would be made twice, or once with no change and no audit row to show for it.
 
 These are not security operations:
 
