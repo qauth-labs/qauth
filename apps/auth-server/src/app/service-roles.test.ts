@@ -173,17 +173,18 @@ describe('what each role loads (the boot-time list)', () => {
 });
 
 describe('the jobs of each role', () => {
-  it('places purge-expired and the SSF subject sweep on api, event retention on delivery, and the interaction sweep and the session purge on web', () => {
+  it('places purge-expired and the SSF subject sweep on api, event retention on delivery, and the interaction sweep and the session expiry and purge on web', () => {
     expect(Object.fromEntries(SERVER_JOBS.map((job) => [job.name, job.role]))).toEqual({
       'purge-expired': 'api',
       'event-retention': 'delivery',
       'ssf-subject-sweep': 'api',
       'interaction-expiry': 'web',
+      'session-expiry': 'web',
       'session-purge': 'web',
     });
   });
 
-  it('registers the session service wherever the session purge runs', () => {
+  it('registers the session service wherever the session jobs run', () => {
     expect(pluginsFor(['web']).has('sessions')).toBe(true);
   });
 
@@ -202,8 +203,8 @@ describe('the jobs of each role', () => {
       metrics: {},
     } as unknown as FastifyInstance;
     expect(serverJobs(fastify, {}, ['admin', 'signer'])).toEqual([]);
-    // The session purge reads no repository: it runs through the session
-    // service, and refuses to be built without it.
+    // The session jobs read no repository: they run through the session
+    // service, and refuse to be built without it.
     const withEvents = {
       repositories: { events: {} },
       redis: {},
@@ -213,6 +214,7 @@ describe('the jobs of each role', () => {
     const withSessions = { ...withEvents, sessionService: {} } as unknown as FastifyInstance;
     expect(serverJobs(withSessions, {}, ['web']).map((job) => job.name)).toEqual([
       'interaction-expiry',
+      'session-expiry',
       'session-purge',
     ]);
     expect(serverJobs(fastify, {}, ['api']).map((job) => job.name)).toEqual([

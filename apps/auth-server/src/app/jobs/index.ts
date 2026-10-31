@@ -24,6 +24,11 @@ import {
   PURGE_EXPIRED_ROLE,
 } from './purge-expired';
 import {
+  createSessionExpiryJob,
+  SESSION_EXPIRY_JOB_NAME,
+  SESSION_EXPIRY_ROLE,
+} from './session-expiry';
+import {
   createSessionPurgeJob,
   DEFAULT_SESSION_RETENTION_DAYS,
   SESSION_PURGE_JOB_NAME,
@@ -40,6 +45,7 @@ export * from './event-retention';
 export * from './interaction-expiry';
 export * from './job-runner';
 export * from './purge-expired';
+export * from './session-expiry';
 export * from './session-purge';
 export * from './ssf-subject-sweep';
 
@@ -116,8 +122,15 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
       createInteractionExpiryJob({ redis: fastify.redis, events: fastify.repositories.events }),
   },
   {
-    // Ends the sessions past an end and deletes old ended rows (#550),
-    // through the session service, which reads `sessions` and `realms`.
+    // Marks the sessions past an end (#550), through the session service,
+    // which reads `sessions` and `realms`.
+    name: SESSION_EXPIRY_JOB_NAME,
+    role: SESSION_EXPIRY_ROLE,
+    repositories: [],
+    create: (fastify) => createSessionExpiryJob({ sessions: fastify.sessionService }),
+  },
+  {
+    // Deletes the rows of sessions ended long ago (#550), the same way.
     name: SESSION_PURGE_JOB_NAME,
     role: SESSION_PURGE_ROLE,
     repositories: [],

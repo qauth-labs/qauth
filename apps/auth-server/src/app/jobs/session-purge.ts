@@ -9,10 +9,7 @@ export const SESSION_PURGE_JOB_NAME = 'session-purge';
 /** One hour. */
 export const SESSION_PURGE_INTERVAL_MS = 60 * 60_000;
 
-/**
- * The role whose nodes run the job: `web`, which serves the browser sessions
- * and registers the session service.
- */
+/** The role whose nodes run the job: `web`, beside the session expiry job. */
 export const SESSION_PURGE_ROLE = 'web';
 
 /** `SESSION_RETENTION_DAYS`'s default. */
@@ -21,31 +18,26 @@ export const DEFAULT_SESSION_RETENTION_DAYS = 30;
 /** What {@link createSessionPurgeJob} takes. */
 export interface SessionPurgeJobOptions {
   /** `fastify.sessionService`. */
-  readonly sessions: Pick<SessionService, 'endLapsed' | 'purge'>;
+  readonly sessions: Pick<SessionService, 'purge'> | undefined;
   /** `SESSION_RETENTION_DAYS`: how long an ended session's row is kept. */
   readonly retentionDays: number;
 }
 
 /**
- * The browser session purge (ADR-019 Decision 3, issue #550).
+ * The browser session purge (ADR-019 Decision 3, issue #550): delete the rows
+ * of sessions that ended, or passed their stored `expires_at`, more than
+ * `SESSION_RETENTION_DAYS` ago. Until then the account and admin session
+ * lists show them as ended. A live session is never deleted.
  *
- * Each run first ends, in Postgres, the sessions past their absolute end or
- * their realm's idle limit: the session service already treats them as
- * absent, but their rows still said live, so the clients they served stayed
- * in the registry and back-channel logout never heard of the end. They are
- * marked `expired` or `idle`, at the time each ended, and the service's
- * `onSessionsEnded` listeners hear of them with the `system` actor.
+ * A session that lapsed is marked by the `session-expiry` job at the time it
+ * runs, and its retention counts from that mark; one whose `expires_at` is
+ * older than the retention goes whether or not it was marked.
  *
- * It then deletes the rows that ended, or passed their stored `expires_at`,
- * more than `SESSION_RETENTION_DAYS` ago: until then the account and admin
- * session lists show them as ended. A live session is never deleted.
+ * It works in batches and stops between batches when the run's signal
+ * aborts. Repeating it deletes nothing new, so a run cut short is finished by
+ * the next one.
  *
- * Both steps work in batches of short transactions and stop between batches
- * when the run's signal aborts. Repeating the job ends and deletes nothing
- * new, so a run cut short is finished by the next one.
- *
- * Placed on the `web` role: its nodes register the session service, whose
- * cache the tombstones of the ended sessions go to.
+ * Placed on the `web` role, beside the session expiry job.
  */
 export function createSessionPurgeJob(options: SessionPurgeJobOptions): JobDefinition {
   const { sessions, retentionDays } = options;
@@ -64,13 +56,11 @@ export function createSessionPurgeJob(options: SessionPurgeJobOptions): JobDefin
     intervalMs: SESSION_PURGE_INTERVAL_MS,
     async run({ signal, now, log }) {
       signal.throwIfAborted();
-      const { ended } = await sessions.endLapsed({ signal });
-      signal.throwIfAborted();
       const { deleted } = await sessions.purge({
         endedBefore: now() - retentionDays * DAY_MS,
         signal,
       });
-      log.info({ ended, deleted }, 'lapsed sessions ended and old sessions purged');
+      log.info({ deleted }, 'old sessions purged');
     },
   });
 }

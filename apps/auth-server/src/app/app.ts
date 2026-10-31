@@ -807,8 +807,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // The browser session service (ADR-019 Decision 3, #469): Postgres as the
   // source of truth, Redis as a cache. It needs the database, cache and
   // metrics plugins above it and only decorates the instance; the browser
-  // sign-in and the session lookup use it (#488), and so does the session
-  // purge job (#550), which the jobs plugin below builds.
+  // sign-in and the session lookup use it (#488), and so do the session
+  // expiry and purge jobs (#550), which the jobs plugin below builds.
   if (plugins.has('sessions')) {
     await fastify.register(sessionServicePlugin, {
       settings: {
@@ -824,8 +824,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   // Background jobs (ADR-019 Decision 8): purge-expired and the SSF subject
-  // sweep (#540) on `api`, the session purge (#550) on `web`, which keeps
-  // ended sessions for SESSION_RETENTION_DAYS, and event retention (#536) on
+  // sweep (#540) on `api`, the session expiry and purge (#550) on `web`,
+  // which mark lapsed sessions and keep ended ones for
+  // SESSION_RETENTION_DAYS, and event retention (#536) on
   // `delivery`, which reads the delivery routes' enabled
   // destinations and falls back to the retention seeds for a realm whose row
   // is gone. A process builds and runs only the jobs of its roles (#495).

@@ -7,10 +7,13 @@ import {
 } from '@qauth-labs/fastify-plugin-sessions';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import Fastify, { type FastifyBaseLogger, type FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type E2eInfrastructure, startE2eInfrastructure } from '../testing/e2e-harness';
+import { createManualClock } from '../testing/manual-clock';
+import { createSessionExpiryJob } from './jobs/session-expiry';
 import { createSessionPurgeJob } from './jobs/session-purge';
+import { jobsPlugin } from './plugins/jobs';
 import { metricsPlugin } from './plugins/metrics';
 
 /**
@@ -52,8 +55,24 @@ interface NodeSettings {
 }
 
 /** A node, as the auth-server builds the service. */
-async function startNode(settings: NodeSettings): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+async function startNode(
+  settings: NodeSettings,
+  beforeReady?: (app: FastifyInstance) => Promise<void>,
+  logLines?: Array<Record<string, unknown>>
+): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger:
+      logLines === undefined
+        ? false
+        : {
+            level: 'info',
+            stream: {
+              write(chunk: string) {
+                logLines.push(JSON.parse(chunk) as Record<string, unknown>);
+              },
+            },
+          },
+  });
   await app.register(databasePlugin, {
     config: {
       connectionString: settings.databaseUrl,
@@ -79,6 +98,7 @@ async function startNode(settings: NodeSettings): Promise<FastifyInstance> {
         : { cacheTtlSeconds: settings.cacheTtlSeconds }),
     },
   });
+  await beforeReady?.(app);
   await app.ready();
   return app;
 }
@@ -572,13 +592,15 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
       [realm, user, now - 2 * DAY, now - DAY, now - DAY - MINUTE]
     );
     const info: unknown[] = [];
-    const job = createSessionPurgeJob({ sessions: a.sessionService, retentionDays: 30 });
-
-    await job.run({
+    const context = {
       signal: new AbortController().signal,
       now: () => Date.now(),
       log: { info: (fields: unknown) => info.push(fields) } as unknown as FastifyBaseLogger,
-    });
+    };
+
+    // As the runner does: the expiry job marks, the purge job deletes.
+    await createSessionExpiryJob({ sessions: a.sessionService }).run(context);
+    await createSessionPurgeJob({ sessions: a.sessionService, retentionDays: 30 }).run(context);
 
     const { rows } = await a.dbPool.query<{ id: string; revoked_reason: string | null }>(
       `SELECT id, revoked_reason FROM sessions WHERE realm_id = $1`,
@@ -599,9 +621,55 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
       idle,
       1,
     ]);
-    expect(info).toContainEqual(
-      expect.objectContaining({ ended: expect.any(Number), deleted: expect.any(Number) })
+    expect(info).toContainEqual({ ended: expect.any(Number) });
+    expect(info).toContainEqual({ deleted: expect.any(Number) });
+  });
+
+  it('runs the session expiry and purge jobs on the job runner of a web node', async (ctx) => {
+    if (!dockerUp || !infra) return ctx.skip();
+    const { a } = nodes();
+    const realm = await seedRealm({ idleTimeout: 600 });
+    const user = await seedUser(realm);
+    const idle = await signIn(a, realm, user);
+    await a.dbPool.query(`UPDATE sessions SET last_seen_at = $2 WHERE id = $1`, [
+      idle,
+      Date.now() - 11 * MINUTE,
+    ]);
+    const clock = createManualClock();
+    const lines: Array<Record<string, unknown>> = [];
+    // The server's own job list for the `web` role, its lock and its settings:
+    // only the clock is injected.
+    const web = await startNode(
+      { databaseUrl: infra.postgres.connectionString, redisUrl: infra.redis.connectionUrl },
+      async (app) => {
+        await app.register(jobsPlugin, {
+          roles: ['web'],
+          clock,
+          random: () => 0,
+          sessionRetentionDays: 30,
+        });
+      },
+      lines
     );
+    try {
+      // One slot at a time: a run takes its lock in real time, and a clock
+      // moved past its slot first would make it skip the run.
+      const logged = (msg: string) =>
+        lines.find((line) => line.msg === msg)?.job as string | undefined;
+      await clock.advanceTo(5 * 60_000);
+      await vi.waitFor(() => expect(logged('lapsed sessions ended')).toBe('session-expiry'), {
+        timeout: 15_000,
+        interval: 50,
+      });
+      await clock.advanceTo(60 * 60_000);
+      await vi.waitFor(() => expect(logged('old sessions purged')).toBe('session-purge'), {
+        timeout: 15_000,
+        interval: 50,
+      });
+      expect(await revokedReason(idle)).toBe('idle');
+    } finally {
+      await stopNode(web);
+    }
   });
 
   it('leaves refresh-token families as they were after every one of these calls', async (ctx) => {
