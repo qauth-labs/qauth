@@ -164,10 +164,12 @@ export interface UpstreamStepCompletionOptions {
  * checked and its assurance level lowered to `options.maxAssurance`, then
  * `method.extractAttributes()` gives its attributes, which are checked too.
  *
- * @param outcome - what the callback route's handler returned, unchecked
+ * @param outcome - what the callback route's handler returned, unchecked, or
+ *   the {@link AuthMethodFaultError} the route mount made of a handler that
+ *   threw or a context that could not be built
  * @param options - the assurance ceiling
- * @throws AuthMethodFaultError when the outcome is outside the closed set, or
- *   the identity or an attribute fails a check
+ * @throws AuthMethodFaultError when the outcome is a fault or outside the
+ *   closed set, or the identity or an attribute fails a check
  * @throws TypeError when `options.maxAssurance` is not an assurance level
  * @experimental
  */
@@ -179,6 +181,16 @@ export async function completeUpstreamStep(
   const maxAssurance = options.maxAssurance ?? DEFAULT_UPSTREAM_MAX_ASSURANCE;
   if (!ASSURANCE_LEVELS.includes(maxAssurance)) {
     throw new TypeError(`maxAssurance must be one of ${ASSURANCE_LEVELS.join(', ')}`);
+  }
+  // A fault the route mount caught (a handler that threw, a bounce that went
+  // wrong, a context that could not be built) arrives as the outcome, so it
+  // ends the step the way every other fault of the method does.
+  if (outcome instanceof AuthMethodFaultError) {
+    throw outcome.methodType === method.type
+      ? outcome
+      : new AuthMethodFaultError(method.type, 'the callback answered a fault of another method', {
+          cause: outcome,
+        });
   }
   if (typeof outcome !== 'object' || outcome === null) {
     throw new AuthMethodFaultError(method.type, 'the callback did not answer an outcome');

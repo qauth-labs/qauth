@@ -12,6 +12,7 @@ import type {
 import { createAuthMethodContext } from '../auth-method/context';
 import { completeUpstreamStep, startUpstreamStep } from '../auth-method/engine';
 import { AuthMethodContractError } from '../auth-method/errors';
+import { authMethodParameters } from '../auth-method/parameters';
 import { authMethodProblems } from '../auth-method/validate';
 import { disableFetch } from './fetch-guard';
 
@@ -465,8 +466,10 @@ async function callback(
       `the scenario's callback names ${request.method} ${request.path}, which is not a route of the method`
     );
   }
-  let query = request.query ?? {};
-  let form = request.form ?? {};
+  // The objects the host hands a handler: frozen, with no prototype, within
+  // the caps (`authMethodParameters`); a GET has an empty form.
+  let query = authMethodParameters(request.query);
+  let form = authMethodParameters(request.method === 'POST' ? request.form : undefined);
   if (route.kind === 'bounce') {
     const bounceRoute = route;
     // A bounce is handed no context, as the host hands it none.
@@ -488,13 +491,19 @@ async function callback(
     if (
       typeof carried !== 'object' ||
       carried === null ||
+      Array.isArray(carried) ||
+      (Object.getPrototypeOf(carried) !== Object.prototype &&
+        Object.getPrototypeOf(carried) !== null) ||
       !Object.values(carried).every((value) => typeof value === 'string')
     ) {
-      return run.stop('the bounce route carried a query that is not a map of strings');
+      return run.stop('the bounce route carried a query that is not a plain object of strings');
     }
     route = target;
-    query = { ...(carried as Record<string, string>) };
-    form = {};
+    // As the browser brings it back: through the URL the host redirects to.
+    query = authMethodParameters(
+      Object.fromEntries(new URLSearchParams(carried as Record<string, string>))
+    );
+    form = authMethodParameters(undefined);
   }
   if (route.kind !== 'callback') {
     return run.stop(`${route.method} ${route.path} is not a callback route`);

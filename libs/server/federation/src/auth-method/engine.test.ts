@@ -196,6 +196,19 @@ describe('completeUpstreamStep', () => {
     );
   });
 
+  it('ends a step whose outcome is a fault the route mount caught with that fault', async () => {
+    const method = createSampleAuthMethod();
+    const own = new AuthMethodFaultError('oidc_sample', 'the callback route threw', {
+      cause: new Error('boom'),
+    });
+    await expect(completeUpstreamStep(method, own)).rejects.toBe(own);
+    // A fault naming another method is still a fault, of this one.
+    const other = new AuthMethodFaultError('oidc_other', 'the callback route threw');
+    await expect(completeUpstreamStep(method, other)).rejects.toThrow(
+      'AuthMethod oidc_sample: the callback answered a fault of another method'
+    );
+  });
+
   it('ends as verification_refused when verify() rejects, keeping the cause for the log', async () => {
     const method = createSampleAuthMethod();
     // A result the callback never produced: the sample's verify() refuses it.

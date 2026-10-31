@@ -54,6 +54,7 @@ describe('the AuthMethod contract is marked experimental', () => {
       'src/auth-method/contract.ts',
       'src/auth-method/engine.ts',
       'src/auth-method/errors.ts',
+      'src/auth-method/parameters.ts',
       'src/auth-method/validate.ts',
       'src/testing/contract-kit.ts',
       'src/testing/fetch-guard.ts',

@@ -5,4 +5,5 @@ export * from './context';
 export * from './contract';
 export * from './engine';
 export * from './errors';
+export * from './parameters';
 export * from './validate';

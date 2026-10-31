@@ -1,8 +1,11 @@
 import {
   AUTH_METHOD_CONTRACT,
   type AuthMethod,
+  AuthMethodConfigError,
   AuthMethodContractError,
+  AuthMethodFaultError,
   type AuthMethodRoute,
+  completeUpstreamStep,
   createPasswordProvider,
   UPSTREAM_STEP_URN,
 } from '@qauth-labs/server-federation';
@@ -301,17 +304,98 @@ describe('AuthMethod routes', () => {
     ['its own POST route', { to: '/start', query: {} }],
     ['its own GET bounce route', { to: '/loop', query: {} }],
     ['a query that is not strings', { to: '/callback', query: { code: 1 } }],
+    ['a query that is a list', { to: '/callback', query: ['ab'] }],
+    ['a query that is a class instance', { to: '/callback', query: new URL('https://x.example') }],
     ['nothing', undefined],
-  ])('never bounces to %s', async (_label, bounce) => {
+  ])('never bounces to %s, and hands the fault to the engine', async (_label, bounce) => {
     const routes: AuthMethodRoute[] = [
       { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
       { kind: 'bounce', method: 'POST', path: '/start', handle: async () => bounce as never },
       { kind: 'bounce', method: 'GET', path: '/loop', handle: async () => bounce as never },
     ];
-    const booted = await boot([method('oidc_corp', routes)]);
+    const routeHost = host();
+    const booted = await boot([method('oidc_corp', routes)], routeHost);
     const response = await booted.app.inject({ method: 'POST', url: '/upstream/oidc_corp/start' });
-    expect(response.statusCode).toBe(500);
     expect(response.headers['location']).toBeUndefined();
+    expect(routeHost.complete).toHaveBeenCalledTimes(1);
+    const [, outcome] = routeHost.complete.mock.calls[0];
+    expect(outcome).toBeInstanceOf(AuthMethodFaultError);
+    expect((outcome as AuthMethodFaultError).methodType).toBe('oidc_corp');
+    expect(routeHost.takeTransaction).not.toHaveBeenCalled();
+  });
+
+  it('hands a bounce route that throws to the engine as a fault with its cause', async () => {
+    const thrown = new Error('bounce broke');
+    const routes: AuthMethodRoute[] = [
+      { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
+      {
+        kind: 'bounce',
+        method: 'POST',
+        path: '/callback',
+        handle: async () => {
+          throw thrown;
+        },
+      },
+    ];
+    const routeHost = host();
+    const booted = await boot([method('oidc_corp', routes)], routeHost);
+    const response = await booted.app.inject({
+      method: 'POST',
+      url: '/upstream/oidc_corp/callback',
+    });
+    expect(response.statusCode).toBe(200);
+    const [, outcome] = routeHost.complete.mock.calls[0];
+    expect(outcome).toBeInstanceOf(AuthMethodFaultError);
+    expect((outcome as Error).cause).toBe(thrown);
+  });
+
+  it('hands a callback that throws after the transaction was taken to the engine as a fault', async () => {
+    const thrown = new TypeError('handler broke');
+    const routes: AuthMethodRoute[] = [
+      {
+        kind: 'callback',
+        method: 'GET',
+        path: '/callback',
+        handle: () => {
+          throw thrown;
+        },
+      },
+    ];
+    const routeHost = host();
+    const corp = method('oidc_corp', routes);
+    const booted = await boot([corp], routeHost);
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: '/upstream/oidc_corp/callback?code=c1&state=s1',
+    });
+    // The host's completion answers, not a raw 500.
+    expect(response.statusCode).toBe(200);
+    expect(routeHost.takeTransaction).toHaveBeenCalledTimes(1);
+    const [, outcome] = routeHost.complete.mock.calls[0];
+    expect(outcome).toBeInstanceOf(AuthMethodFaultError);
+    expect((outcome as Error).message).toBe('AuthMethod oidc_corp: the callback route threw');
+    expect((outcome as Error).cause).toBe(thrown);
+    // The engine ends the step with that fault, as with any other fault.
+    await expect(completeUpstreamStep(corp, outcome)).rejects.toBe(outcome);
+  });
+
+  it('hands a context that could not be built to the engine as a fault, and never runs the method', async () => {
+    const routeHost = host();
+    const refused = new AuthMethodConfigError('oidc_corp', ['clientSecret: too_small']);
+    routeHost.contextFor = vi.fn(async () => Promise.reject(refused));
+    const booted = await boot([method()], routeHost);
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: '/upstream/oidc_corp/callback?code=c1&state=s1',
+    });
+    expect(response.statusCode).toBe(200);
+    expect(callbackHandle).not.toHaveBeenCalled();
+    const [, outcome] = routeHost.complete.mock.calls[0];
+    expect(outcome).toBeInstanceOf(AuthMethodFaultError);
+    expect((outcome as Error).message).toBe(
+      "AuthMethod oidc_corp: the method's context could not be built"
+    );
+    expect((outcome as Error).cause).toBe(refused);
   });
 
   it('keeps a parameter named __proto__ a parameter', async () => {
@@ -322,9 +406,16 @@ describe('AuthMethod routes', () => {
     });
     const [request] = callbackHandle.mock.calls[0];
     expect(Object.getPrototypeOf(request.query)).toBeNull();
-    expect(request.query).toEqual(
-      Object.assign(Object.create(null), { ['__proto__']: 'x', state: 's' })
-    );
+    // Built with defineProperty: an own member named __proto__, as the query
+    // the handler sees holds it.
+    const expected = Object.defineProperty(Object.create(null), '__proto__', {
+      value: 'x',
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    }) as Record<string, string>;
+    expected['state'] = 's';
+    expect(request.query).toEqual(expected);
   });
 
   it('registers a method beside the password provider through the single registration point', () => {

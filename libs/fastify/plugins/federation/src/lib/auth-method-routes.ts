@@ -3,7 +3,7 @@ import {
   type AuthMethodContext,
   AuthMethodContractError,
   AuthMethodFaultError,
-  type AuthMethodParameters,
+  authMethodParameters,
   type AuthMethodRoute,
   authMethodRoutePrefix,
   authMethodTypeProblems,
@@ -56,6 +56,13 @@ export interface AuthMethodRouteHost {
   /**
    * Hand a callback's outcome, unchecked, to the engine
    * (`completeUpstreamStep`), which answers the request.
+   *
+   * The outcome is an `AuthMethodFaultError` when the method failed before it
+   * had one: its handler threw, its bounce went somewhere it may not, or its
+   * context could not be built (`contextFor` rejected, as with an
+   * `AuthMethodConfigError`). `completeUpstreamStep` throws it, as it throws
+   * any other fault of the method, so every fault ends the same way: the
+   * generic error page and its trace id, never a raw 500.
    */
   complete(
     method: AuthMethod,
@@ -139,12 +146,6 @@ export function mountAuthMethodRoutes(
 
 /** The largest body a method's route reads, in bytes. */
 const MAX_ROUTE_BODY_BYTES = 64 * 1024;
-/** The most parameters a method sees from one query or form; the rest are dropped. */
-const MAX_PARAMETERS = 64;
-/** The longest parameter value a method sees; a longer one is dropped. */
-const MAX_PARAMETER_LENGTH = 8192;
-/** The most values of one repeated parameter a method sees; more drops the parameter. */
-const MAX_PARAMETER_VALUES = 16;
 
 /** One route as mounted: the method's snapshot and the host. */
 interface MountedMethod {
@@ -161,22 +162,26 @@ async function handle(
   request: FastifyRequest,
   reply: FastifyReply
 ): Promise<unknown> {
-  const { method, route, host } = mounted;
+  const { method, route, host, type } = mounted;
   const seen = {
     method: route.method,
-    query: parametersOf(request.query),
-    form:
-      route.method === 'POST' && isFormPost(request)
-        ? parametersOf(request.body)
-        : (Object.freeze(Object.create(null)) as AuthMethodParameters),
+    query: authMethodParameters(request.query),
+    form: authMethodParameters(
+      route.method === 'POST' && isFormPost(request) ? request.body : undefined
+    ),
   };
 
   if (route.kind === 'bounce') {
     // A bounce is handed no context: a cross-site POST that anyone can send
     // reaches it, so it holds no egress client and no signer.
-    const bounce: unknown = await route.handle(seen);
+    let location: string;
+    try {
+      location = bounceLocation(mounted, await route.handle(seen));
+    } catch (error) {
+      return host.complete(method, fault(type, 'the bounce route failed', error), request, reply);
+    }
     reply.header('cache-control', 'no-store');
-    return reply.redirect(bounceLocation(mounted, bounce), 303);
+    return reply.redirect(location, 303);
   }
 
   // The host, not the method, refuses a callback with no pending transaction:
@@ -193,9 +198,33 @@ async function handle(
       reply
     );
   }
-  const context = await host.contextFor(method, request);
-  const outcome: unknown = await route.handle({ ...seen, transaction }, context);
+  // The transaction is spent from here on: whatever goes wrong now ends the
+  // step through the engine, never as an error that escapes the route.
+  let context: AuthMethodContext;
+  try {
+    context = await host.contextFor(method, request);
+  } catch (error) {
+    return host.complete(
+      method,
+      fault(type, "the method's context could not be built", error),
+      request,
+      reply
+    );
+  }
+  let outcome: unknown;
+  try {
+    outcome = await route.handle({ ...seen, transaction }, context);
+  } catch (error) {
+    outcome = fault(type, 'the callback route threw', error);
+  }
   return host.complete(method, outcome, request, reply);
+}
+
+/** `error` as a fault of the method: itself when it already is one, else wrapped. */
+function fault(type: string, problem: string, error: unknown): AuthMethodFaultError {
+  return error instanceof AuthMethodFaultError && error.methodType === type
+    ? error
+    : new AuthMethodFaultError(type, problem, { cause: error });
 }
 
 /** Whether a POST carries a form: a provider's `form_post` is urlencoded. */
@@ -206,7 +235,8 @@ function isFormPost(request: FastifyRequest): boolean {
 
 /**
  * Where a bounce sends the browser: one of the method's own `GET` callback
- * routes, on the same origin, with string query members only.
+ * routes, on the same origin, with a query that is a plain object of
+ * strings.
  */
 function bounceLocation(mounted: MountedMethod, bounce: unknown): string {
   const { to, query } = (typeof bounce === 'object' && bounce !== null ? bounce : {}) as {
@@ -222,14 +252,10 @@ function bounceLocation(mounted: MountedMethod, bounce: unknown): string {
       "a bounce went somewhere other than the method's own GET callback routes"
     );
   }
-  if (
-    typeof query !== 'object' ||
-    query === null ||
-    !Object.values(query).every((value) => typeof value === 'string')
-  ) {
+  if (!isPlainObject(query) || !Object.values(query).every((value) => typeof value === 'string')) {
     throw new AuthMethodFaultError(
       mounted.type,
-      'a bounce carried a query that is not a map of strings'
+      'a bounce carried a query that is not a plain object of strings'
     );
   }
   const search = new URLSearchParams(query as Record<string, string>).toString();
@@ -238,31 +264,9 @@ function bounceLocation(mounted: MountedMethod, bounce: unknown): string {
     : `${mounted.prefix}${target.path}?${search}`;
 }
 
-/**
- * The string and string-list members of a parsed query or form, within the
- * caps, frozen. Anything else is dropped: a method that misses a parameter it
- * needs refuses the request.
- */
-function parametersOf(value: unknown): AuthMethodParameters {
-  // No prototype: a parameter named `__proto__` stays a parameter.
-  const parameters = Object.create(null) as Record<string, string | readonly string[]>;
-  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-    let count = 0;
-    for (const [name, member] of Object.entries(value)) {
-      if (count >= MAX_PARAMETERS) break;
-      if (typeof member === 'string') {
-        if (member.length > MAX_PARAMETER_LENGTH) continue;
-        parameters[name] = member;
-        count += 1;
-      } else if (
-        Array.isArray(member) &&
-        member.length <= MAX_PARAMETER_VALUES &&
-        member.every((item) => typeof item === 'string' && item.length <= MAX_PARAMETER_LENGTH)
-      ) {
-        parameters[name] = Object.freeze([...(member as string[])]);
-        count += 1;
-      }
-    }
-  }
-  return Object.freeze(parameters);
+/** An object with the plain prototype or none: not a list, not a class instance. */
+function isPlainObject(value: unknown): value is object {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
 }

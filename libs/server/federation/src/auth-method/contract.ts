@@ -254,6 +254,30 @@ export const AUTH_METHOD_ATTRIBUTE_KEY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 export const MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH = 8192;
 
 /**
+ * The most parameters a method's route handler sees from one query or one
+ * form; the rest are dropped.
+ *
+ * @experimental
+ */
+export const MAX_AUTH_METHOD_PARAMETERS = 64;
+
+/**
+ * The longest parameter value a method's route handler sees, in UTF-16 code
+ * units; a parameter with a longer value is dropped.
+ *
+ * @experimental
+ */
+export const MAX_AUTH_METHOD_PARAMETER_LENGTH = 8192;
+
+/**
+ * The most values of one repeated parameter a method's route handler sees;
+ * a parameter repeated more often is dropped.
+ *
+ * @experimental
+ */
+export const MAX_AUTH_METHOD_PARAMETER_VALUES = 16;
+
+/**
  * Why a method's callback did not produce a result, other than the person
  * declining at the provider:
  *
