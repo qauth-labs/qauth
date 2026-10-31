@@ -2,12 +2,12 @@
  * Real-Postgres integration tests for approval requests (issue #512, ADR-019
  * Decision 7).
  *
- * Every move of an approval is one conditional `UPDATE … RETURNING`: these
- * tests hold that each move happens only from the state it names, only before
- * the expiry, at most once under concurrent writers, and not at all when the
- * transaction that made it rolls back. The table's CHECKs are exercised with
- * raw SQL. Who may make each move is the auth server's approval engine, tested
- * there.
+ * Every move of an approval takes its row lock, then is one conditional
+ * `UPDATE … RETURNING`: these tests hold that each move happens only from the
+ * state it names, only before the expiry, at most once under concurrent
+ * writers, and not at all when the transaction that made it rolls back. The
+ * table's CHECKs are exercised with raw SQL. Who may make each move is the
+ * auth server's approval engine, tested there.
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
@@ -26,7 +26,12 @@ import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createRealmsRepository, type RealmsRepository } from './realms.repository';
 import { createUsersRepository, type UsersRepository } from './users.repository';
 
-const NOW = 1_800_000_000_000;
+/**
+ * When most approvals here are filed: far ahead of the database's clock, which
+ * a write checks the expiry against too, so only the `now` a test hands over
+ * expires one. 2100-01-01.
+ */
+const NOW = 4_102_444_800_000;
 const LIFETIME = 5 * 60_000;
 
 const sha256 = (text: string) => createHash('sha256').update(text).digest();
@@ -262,6 +267,48 @@ describe('approval requests (real Postgres)', () => {
 
     const results = await Promise.all([first, second]);
     expect(results.map((result) => result?.status)).toEqual(['consumed', undefined]);
+  });
+
+  it('is not consumed once it expired while another transaction held it', async () => {
+    // A transaction that consumed it holds its row past the expiry, then
+    // rolls back. The consumer that waited on the row sampled its `now`
+    // before the wait: the expiry is checked again once it holds the row.
+    const filedAt = Date.now();
+    const { realm, requester, approval } = await filed(1, {
+      createdAt: filedAt - 1_000,
+      expiresAt: filedAt + 1_000,
+    });
+    await approvals.addApproval(realm.id, approval.id, {
+      expectedCount: 0,
+      entry: entry(requester.id, realm.id),
+      now: filedAt,
+    });
+    let rollBack: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      rollBack = resolve;
+    });
+    const consume = (tx: Parameters<AdminApprovalsRepository['consume']>[3]) =>
+      approvals.consume(
+        realm.id,
+        approval.id,
+        { requestHash: sha256('request'), now: filedAt },
+        tx
+      );
+
+    const first = db().database.db.transaction(async (tx) => {
+      expect(await consume(tx)).toMatchObject({ status: 'consumed' });
+      await held;
+      throw new Error('the operation failed after the approval expired');
+    });
+    await waitFor(async () => (await openTransactionsOnApprovals()) >= 1);
+    const second = db().database.db.transaction((tx) => consume(tx));
+    await waitFor(async () => (await lockWaiters()) >= 1);
+    await new Promise((resolve) => setTimeout(resolve, approval.expiresAt - Date.now() + 200));
+    rollBack();
+
+    await expect(first).rejects.toThrow('the operation failed');
+    expect(await second).toBeUndefined();
+    expect((await approvals.findById(realm.id, approval.id))?.status).toBe('approved');
   });
 
   it('stays approved when the transaction that consumed it rolls back', async () => {

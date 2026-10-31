@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, type InferSelectModel, lte, sql } from 'drizzle-orm';
+import { and, eq, inArray, type InferSelectModel, lte, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import {
@@ -43,11 +43,16 @@ export interface AdminApprovalExpectedState {
 
 /**
  * Approval requests for security operations (ADR-019 Decision 7, issue
- * #512). Every write is one conditional `UPDATE … RETURNING` that names the
- * state it moves from and the time it is made at: it returns the row it
- * changed, or `undefined` when the approval is not in that state any more,
- * has expired, or is not the one named. So two writers that race cannot both
- * move one approval, and a write that rolls back moves nothing.
+ * #512). Every write takes the approval's row lock, then makes one
+ * conditional `UPDATE … RETURNING` that names the state it moves from: it
+ * returns the row it changed, or `undefined` when the approval is not in that
+ * state any more, has expired, or is not the one named. So two writers that
+ * race cannot both move one approval, and a write that rolls back moves
+ * nothing. A write given no transaction runs in one of its own.
+ *
+ * The expiry is checked once the row is held, at the later of the caller's
+ * `now` and the database's clock: a write that waited on the row, for a
+ * writer that then rolled back, moves nothing that expired while it waited.
  *
  * Who may make each write is the approval engine's to decide
  * (`apps/auth-server/src/app/admin/approvals`); the repository only keeps
@@ -125,13 +130,47 @@ export interface AdminApprovalsRepository {
   ): Promise<AdminApproval | undefined>;
 }
 
-/** The rows of one approval of the realm, and only while it is unexpired at `now`. */
+/** The row of one approval of the realm. */
+function approvalRow(realmId: string, id: string) {
+  return and(eq(adminApprovals.realmId, realmId), eq(adminApprovals.id, id));
+}
+
+/**
+ * The time a write checks the expiry at, in epoch milliseconds: the later of
+ * the caller's `now` and the database's clock as the check runs. The caller
+ * samples `now` before the write may wait on the row. `clock_timestamp()`,
+ * since `now()` is when the transaction began, which an operation's
+ * transaction may be long before its write.
+ */
+const checkedAt = (now: number) =>
+  sql`greatest(${now}::bigint, floor(extract(epoch from clock_timestamp()) * 1000)::bigint)`;
+
+/**
+ * The row of one approval of the realm, and only while it is unexpired at
+ * {@link checkedAt}. Run it only on a row the transaction holds
+ * ({@link lockApproval}).
+ */
 function openApproval(realmId: string, id: string, now: number) {
-  return and(
-    eq(adminApprovals.realmId, realmId),
-    eq(adminApprovals.id, id),
-    gt(adminApprovals.expiresAt, now)
-  );
+  return and(approvalRow(realmId, id), sql`${adminApprovals.expiresAt} > ${checkedAt(now)}`);
+}
+
+/**
+ * Take the row lock of one approval of the realm in `tx`, waiting for a
+ * writer that holds it. PostgreSQL evaluates an `UPDATE`'s condition before
+ * it waits on a row, and evaluates it again only when the holder commits: one
+ * that rolls back leaves the waiter to write on the condition it read before
+ * the wait, an expiry check included. Taken first, the lock puts the wait
+ * before the conditional `UPDATE`, whose check then runs on the held row.
+ *
+ * @returns whether the approval exists
+ */
+async function lockApproval(tx: DbClient, realmId: string, id: string): Promise<boolean> {
+  const [row] = await tx
+    .select({ id: adminApprovals.id })
+    .from(adminApprovals)
+    .where(approvalRow(realmId, id))
+    .for('no key update');
+  return row !== undefined;
 }
 
 /** The approval holds exactly `count` approvals. */
@@ -150,6 +189,22 @@ const withoutBody = sql`${adminApprovals.canonicalRequest} - 'body'`;
  * @param defaultDb - The database a call without a transaction runs on.
  */
 export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprovalsRepository {
+  /**
+   * Run `write` once its transaction holds the approval's row
+   * ({@link lockApproval}): in `tx`, or in a transaction of its own, so the
+   * lock lasts until the write has run.
+   */
+  function onHeldRow<T>(
+    realmId: string,
+    id: string,
+    tx: DbClient | undefined,
+    write: (invoker: DbClient) => Promise<T | undefined>
+  ): Promise<T | undefined> {
+    const run = async (invoker: DbClient) =>
+      (await lockApproval(invoker, realmId, id)) ? write(invoker) : undefined;
+    return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+  }
+
   return {
     async create(approval, tx) {
       const invoker = tx ?? defaultDb;
@@ -214,74 +269,82 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       const sameApprover = JSON.stringify([
         { approverRealmId: entry.approverRealmId, approverId: entry.approverId },
       ]);
-      const [record] = await (tx ?? defaultDb)
-        .update(adminApprovals)
-        .set({
-          approvals: sql`${adminApprovals.approvals} || ${JSON.stringify([stored])}::jsonb`,
-          status: sql`case when jsonb_array_length(${adminApprovals.approvals}) + 1 >= ${adminApprovals.approvalsRequired} then 'approved' else 'pending' end`,
-        })
-        .where(
-          and(
-            openApproval(realmId, id, now),
-            eq(adminApprovals.status, 'pending'),
-            holds(expectedCount),
-            sql`not (${adminApprovals.approvals} @> ${sameApprover}::jsonb)`
+      return onHeldRow(realmId, id, tx, async (invoker) => {
+        const [record] = await invoker
+          .update(adminApprovals)
+          .set({
+            approvals: sql`${adminApprovals.approvals} || ${JSON.stringify([stored])}::jsonb`,
+            status: sql`case when jsonb_array_length(${adminApprovals.approvals}) + 1 >= ${adminApprovals.approvalsRequired} then 'approved' else 'pending' end`,
+          })
+          .where(
+            and(
+              openApproval(realmId, id, now),
+              eq(adminApprovals.status, 'pending'),
+              holds(expectedCount),
+              sql`not (${adminApprovals.approvals} @> ${sameApprover}::jsonb)`
+            )
           )
-        )
-        .returning();
-      return record;
+          .returning();
+        return record;
+      });
     },
 
     async deny(realmId, id, { expectedCount, now }, tx) {
       if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
-      const [record] = await (tx ?? defaultDb)
-        .update(adminApprovals)
-        .set({ status: 'denied', canonicalRequest: withoutBody })
-        .where(
-          and(
-            openApproval(realmId, id, now),
-            eq(adminApprovals.status, 'pending'),
-            holds(expectedCount)
+      return onHeldRow(realmId, id, tx, async (invoker) => {
+        const [record] = await invoker
+          .update(adminApprovals)
+          .set({ status: 'denied', canonicalRequest: withoutBody })
+          .where(
+            and(
+              openApproval(realmId, id, now),
+              eq(adminApprovals.status, 'pending'),
+              holds(expectedCount)
+            )
           )
-        )
-        .returning();
-      return record;
+          .returning();
+        return record;
+      });
     },
 
     async cancel(realmId, id, { requesterRealmId, requesterId, expected, now }, tx) {
       if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
       if (expected.status !== 'pending' && expected.status !== 'approved') return undefined;
-      const [record] = await (tx ?? defaultDb)
-        .update(adminApprovals)
-        .set({ status: 'cancelled', canonicalRequest: withoutBody })
-        .where(
-          and(
-            openApproval(realmId, id, now),
-            inArray(adminApprovals.status, ['pending', 'approved']),
-            eq(adminApprovals.status, expected.status),
-            holds(expected.approvalCount),
-            eq(adminApprovals.requesterRealmId, requesterRealmId),
-            eq(adminApprovals.requesterId, requesterId)
+      return onHeldRow(realmId, id, tx, async (invoker) => {
+        const [record] = await invoker
+          .update(adminApprovals)
+          .set({ status: 'cancelled', canonicalRequest: withoutBody })
+          .where(
+            and(
+              openApproval(realmId, id, now),
+              inArray(adminApprovals.status, ['pending', 'approved']),
+              eq(adminApprovals.status, expected.status),
+              holds(expected.approvalCount),
+              eq(adminApprovals.requesterRealmId, requesterRealmId),
+              eq(adminApprovals.requesterId, requesterId)
+            )
           )
-        )
-        .returning();
-      return record;
+          .returning();
+        return record;
+      });
     },
 
     async consume(realmId, id, { requestHash, now }, tx) {
       if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
-      const [record] = await tx
-        .update(adminApprovals)
-        .set({ status: 'consumed', usedAt: now, canonicalRequest: withoutBody })
-        .where(
-          and(
-            openApproval(realmId, id, now),
-            eq(adminApprovals.status, 'approved'),
-            eq(adminApprovals.requestHash, requestHash)
+      return onHeldRow(realmId, id, tx, async (invoker) => {
+        const [record] = await invoker
+          .update(adminApprovals)
+          .set({ status: 'consumed', usedAt: now, canonicalRequest: withoutBody })
+          .where(
+            and(
+              openApproval(realmId, id, now),
+              eq(adminApprovals.status, 'approved'),
+              eq(adminApprovals.requestHash, requestHash)
+            )
           )
-        )
-        .returning();
-      return record;
+          .returning();
+        return record;
+      });
     },
   };
 }
