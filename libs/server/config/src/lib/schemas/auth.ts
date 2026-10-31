@@ -307,6 +307,15 @@ export const authEnvSchema = z.object({
     .default(30 * 60),
 
   /**
+   * How long, in days, a browser session row is kept once it has ended or
+   * expired (ADR-019 Decision 3, issue #550). The session purge job deletes
+   * a row whose revocation or absolute end is older than this; until then
+   * the account and admin session lists show it as ended. Default 30. At
+   * least a day and at most ten years.
+   */
+  SESSION_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+
+  /**
    * Whether to set the Secure attribute on the session cookie. Defaults true;
    * tests and local dev can set false to use plain HTTP. Production MUST
    * keep this true — the __Host- prefix will reject the cookie otherwise.
