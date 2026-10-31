@@ -48,6 +48,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `.env.example` disagree. Stable keys follow the deprecation policy, an
   advanced key may change in a minor release, and an experimental key may change
   at any time.
+- **A typed, versioned schema for realm policies** ([#514], ADR-019 Decisions 7
+  and 10, ADR-018 §5). The new library `libs/server/realm-policy` defines the
+  realm policies once, at schema version `1-rc.0`, as groups of fields made with
+  `policyField`: each field carries the environment key that seeds it, its
+  default, which way is stricter (`lower-is-stricter` to `opaque`), when a change
+  is a security operation (`never`, `loosening` or `any-change`) and with which
+  effects, whether it is a secret or environment-bound, and one sentence with a
+  docs link. Eight groups ship: `tokens`, `accounts`, `password`, `bruteForce`,
+  `registration`, `mail`, `posture` and `admin`; other areas add theirs with
+  `registerPolicyGroup`, and a name is taken once. `diffPolicies` marks each
+  changed field as tightening, loosening or neutral with its class and effects,
+  and a change it cannot place counts as a loosening. `defaultsFromEnv` gives a
+  new realm's policies, and `toJsonSchema` the JSON Schema of the stored
+  document, a write and the realm representation, where a secret such as the
+  SMTP password appears only as `passwordSet`. The docs site's new **Realm
+  policies** page (`reference/realm-policies`) is generated from the schema.
+  Nothing reads the policies from the realm row yet.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).
@@ -1744,6 +1761,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#511]: https://github.com/qauth-labs/qauth/issues/511
 [#512]: https://github.com/qauth-labs/qauth/issues/512
 [#513]: https://github.com/qauth-labs/qauth/issues/513
+[#514]: https://github.com/qauth-labs/qauth/issues/514
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
 [#522]: https://github.com/qauth-labs/qauth/issues/522

@@ -6,6 +6,8 @@ export type * from './lib/field';
 export * from './lib/field';
 export type * from './lib/groups';
 export * from './lib/groups';
+export type * from './lib/page';
+export * from './lib/page';
 export type * from './lib/realm-policies';
 export * from './lib/realm-policies';
 export type * from './lib/registry';
