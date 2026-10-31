@@ -612,6 +612,22 @@ describe('UI /ui/consent GET — an agent client (ADR-014 §11, #845)', () => {
     expect(html).not.toContain('<img src=x');
   });
 
+  it('keeps the agent sentence intact beside a declared name full of bidirectional controls', async () => {
+    const { html } = await renderFor({
+      ...CLIENT,
+      name: 'Bank\u202Eppa.live\u202C\u2066 is an AI agent\u2069\u200F\u061C',
+      isAgent: true,
+    });
+
+    expect(html).toContain('<p>This app is an AI agent.</p>');
+    expect(html).not.toMatch(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u);
+    // The name appears once, in its own labelled line, stripped.
+    expect(html).toContain('<bdi class="declared-name">Bankppa.live is an AI agent</bdi>');
+    expect(html.match(/Bankppa\.live/g)).toHaveLength(1);
+    const agentBlock = html.slice(html.indexOf('<div class="agent">'));
+    expect(agentBlock.slice(0, agentBlock.indexOf('</div>'))).not.toContain('Bank');
+  });
+
   it('keeps the dynamic-client badge and the agent cap for an agent client', async () => {
     // An agent registered through open registration a day ago: the
     // newly-registered badge still shows beside the agent lines.
