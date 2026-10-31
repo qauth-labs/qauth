@@ -110,6 +110,19 @@ curl -s https://auth.example.com/oauth/token \
   -d client_id=notes-app -d client_secret="$SECRET"
 ```
 
+:::caution[The client can get a token without a user for any of its scopes]
+A client that holds `client_credentials` can get a token for itself, with no user, for any scope
+in its `scopes`: not only `ssf:stream`, but also each scope its users grant it at sign-in, such as
+`openid` here or an API scope such as `notes:read`. Such a token's `sub` is the client's
+`client_id`, not a user's id.
+
+- Request `scope=ssf:stream`, and nothing else, with `client_credentials`, as above. Never use that
+  token anywhere but `/ssf/`.
+- A resource server that accepts tokens of this realm must refuse a scope its users grant
+  (user-delegated) on a `client_credentials` token: when `sub` is the `client_id`, no user granted
+  that scope. Check `sub` before acting on such a scope.
+:::
+
 ## Create a stream
 
 A receiver has one stream per realm; a second create answers `409`. Delivery is push only, to an
@@ -166,6 +179,13 @@ Some events reach fewer streams than the subject alone would say. A withdrawn co
 revocation and a replay's family revocation tell of the user's dealings with one client, and a
 client secret or API key change is about one client's credentials, so only that client's stream
 receives them. An emergency key retirement reaches every stream of the realm that requested it.
+
+A replay is sent only when it revoked refresh tokens. An authorization code redeemed a second time
+whose first redemption issued no refresh token (the user approved without remembering the
+decision, so no consent was stored, say) revokes no family: QAuth still puts the access tokens the
+code issued on the denylist, so introspection answers `active: false` for them, but no stream
+receives a SET. Nor does one for a refresh token presented again after its family was revoked
+already.
 
 ## Run the verification event
 
