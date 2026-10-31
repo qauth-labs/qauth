@@ -1848,20 +1848,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the workspace's TypeScript 6.0 or at TypeScript 7: TypeScript 5 rejects
   `"bundler"` with the libraries' `module: commonjs` (TS5095).
 
-- Nx tasks use a remote cache (Nx Cloud, `nxCloudId` in `nx.json`). CI's
-  `affected` legs write to it only on a push to main, with a read-write token
-  that only main can reach; every other run reads at most, so a pull request
-  replays what main already built and checked and never stores its own
-  results. A run with no token, such as a fork's pull request or a local run,
-  is anonymous and never stores. Jobs whose Nx targets are not cacheable, the
-  image builds and the dev containers set `NX_NO_CLOUD=true`.
-
-  **Action for contributors**: nothing is required. Nx contacts the cache
-  service on every task run; offline, or to keep a run local, set
-  `NX_NO_CLOUD=true`. Without it, a network that drops packets delays each
-  `nx` command by up to about 50 seconds before Nx falls back to the local
-  cache.
-
 [#359]: https://github.com/qauth-labs/qauth/issues/359
 [#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433

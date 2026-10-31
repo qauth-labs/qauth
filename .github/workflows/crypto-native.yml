@@ -27,9 +27,6 @@ permissions:
   contents: read
 
 env:
-  # The one Nx call here passes --skip-nx-cache, so the remote cache has
-  # nothing to give it.
-  NX_NO_CLOUD: 'true'
   CRATE_DIR: libs/core/crypto-native
   CARGO_TERM_COLOR: always
   # Determinism: no incremental artefacts, no build-host paths in the binary.
