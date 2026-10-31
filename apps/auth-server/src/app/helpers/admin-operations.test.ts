@@ -1157,6 +1157,7 @@ describe('the reserved security cases (#508)', () => {
         'switches DPoP binding off',
         'makes the client first-party',
         'sets the verified domain',
+        'changes the verified domain',
       ])
     );
   });

@@ -384,7 +384,8 @@ catalog:
   # server's client display data uses it too (ADR-019 Decision 6, #593): a
   # screen highlights the registrable domain of a client's verified host and
   # flags a host under a private-section (shared-hosting) entry, where anyone
-  # can get a name next to the real app's. tldts ships the list compiled in,
+  # can get a name next to the real app's; and a domain an admin verifies for
+  # a client must not itself be a public suffix. tldts ships the list compiled in,
   # with no network access and no runtime dependency but its own tldts-core;
   # it is already in the tree through tough-cookie. No advisory names tldts or
   # tldts-core (GHSA advisory database, checked 2026-10-24 and again

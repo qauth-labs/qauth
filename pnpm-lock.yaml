@@ -1664,6 +1664,9 @@ importers:
 
   libs/shared/validation:
     dependencies:
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.18
       tslib:
         specifier: 'catalog:'
         version: 2.8.1

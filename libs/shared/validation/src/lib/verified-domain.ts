@@ -15,6 +15,8 @@
  * code checks it again before it shows a stored value, so a value written by
  * hand can never reach a screen in any other form.
  */
+import { getPublicSuffix } from 'tldts';
+
 import { InvalidRealmHostError, normaliseRealmHost } from './realm-host';
 
 /** Longest DNS name in ASCII, without the trailing dot (RFC 1035 §2.3.4). */
@@ -43,8 +45,16 @@ const VERIFIED_DOMAIN = new RegExp(VERIFIED_DOMAIN_PATTERN);
  * - `single_label` — one label only (`localhost`, `intranet`): no registrable
  *   domain can be shown for it.
  * - `too_long` — over {@link VERIFIED_DOMAIN_MAX_LENGTH} characters in ASCII.
+ * - `public_suffix` — a name on the Public Suffix List itself (`co.uk`, or a
+ *   private-section entry such as `eu.org`), under which unrelated parties
+ *   hold names: no one client owns it.
  */
-export type InvalidVerifiedDomainReason = 'malformed' | 'ip_literal' | 'single_label' | 'too_long';
+export type InvalidVerifiedDomainReason =
+  | 'malformed'
+  | 'ip_literal'
+  | 'single_label'
+  | 'too_long'
+  | 'public_suffix';
 
 /**
  * Thrown by {@link normaliseVerifiedDomain}. The message is fixed text and
@@ -94,7 +104,7 @@ export function isVerifiedDomain(value: unknown): value is string {
  * @param input - the domain as the admin wrote it, Unicode or ASCII.
  * @returns the stored form.
  * @throws InvalidVerifiedDomainError when the value is not a DNS name of at
- * least two labels.
+ * least two labels, or is itself a public suffix.
  *
  * @example
  * ```typescript
@@ -152,6 +162,16 @@ export function normaliseVerifiedDomain(input: string): string {
     throw new InvalidVerifiedDomainError(
       'malformed',
       'Verified domain is not a DNS name in ASCII form',
+      input
+    );
+  }
+  // The Public Suffix List with its private section, as the passkey RP ID
+  // rule reads it (#553): a suffix names a registry or a hosting service, not
+  // a client.
+  if (getPublicSuffix(host, { allowPrivateDomains: true }) === host) {
+    throw new InvalidVerifiedDomainError(
+      'public_suffix',
+      'Verified domain is a public suffix',
       input
     );
   }

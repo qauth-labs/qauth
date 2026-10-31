@@ -281,6 +281,7 @@ ships, and may add cases but never drop one or lower its effects.
 - switches DPoP binding off: at least `posture-loosening`.
 - makes the client first-party: at least `token-content`.
 - sets the verified domain: at least `token-content`.
+- changes the verified domain: at least `token-content`.
 - loosens the environment: at least `posture-loosening`.
 
 #### `realms.imports.apply`

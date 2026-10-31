@@ -59,6 +59,14 @@ describe('normaliseVerifiedDomain (#593)', () => {
     }
   });
 
+  it('refuses a public suffix, from the ICANN or the private section', () => {
+    for (const input of ['co.uk', 'com.au', 'eu.org', 'co.com']) {
+      expect(reasonFor(input), input).toBe('public_suffix');
+    }
+    expect(normaliseVerifiedDomain('alice.eu.org')).toBe('alice.eu.org');
+    expect(normaliseVerifiedDomain('example.co.uk')).toBe('example.co.uk');
+  });
+
   it('refuses a name over 253 characters', () => {
     const label = 'a'.repeat(63);
     const long = [label, label, label, label].join('.') + '.example';

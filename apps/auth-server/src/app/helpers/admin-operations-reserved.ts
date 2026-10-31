@@ -404,6 +404,12 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
       // ADR-019 Decision 6 (#593): the domain every screen shows first for the
       // client, above the name it declares.
       clientCase('sets the verified domain', { verifiedDomain: 'app.example' }, ['token-content']),
+      {
+        name: 'changes the verified domain',
+        request: patch(CLIENT, { verifiedDomain: 'other.example' }),
+        state: { ...CLIENT_STATE, verifiedDomain: 'app.example' },
+        effects: ['token-content'],
+      },
       clientCase('loosens the environment', { environment: 'development' }, ['posture-loosening']),
     ]
   ),

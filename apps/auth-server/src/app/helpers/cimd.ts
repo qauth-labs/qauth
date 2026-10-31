@@ -241,6 +241,13 @@ export interface CimdClientInsert {
    * operator's setting survives a re-resolution.
    */
   dpopBoundAccessTokens: false;
+  /**
+   * No admin-set verified domain (ADR-019 Decision 6, #593): a CIMD client's
+   * verified domain is the host of its client id URL, which the display reads
+   * instead. Pinned for a new row; `upsertCimdClient` leaves the column out of
+   * its conflict set.
+   */
+  verifiedDomain: null;
   scopes: string[];
   /** ADR-007 §2 agent classification, mirrored from the metadata document. */
   isAgent: boolean;
@@ -473,6 +480,7 @@ export function toCimdClientInsert(
     provisionedByOperator: false,
     idJagTargets: [],
     dpopBoundAccessTokens: false,
+    verifiedDomain: null,
     // The document's `scope` grants nothing: a CIMD client's scopes are the
     // operator's grant in the seed manifest (#770). A scope in QAuth's own
     // `qauth:` namespace there is ignored like every other (#507); the
