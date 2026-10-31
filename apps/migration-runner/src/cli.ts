@@ -7,6 +7,12 @@ import {
   MigrationRunError,
   runMigrations,
 } from '@qauth-labs/infra-db/migrations';
+import {
+  describeSystemClientResult,
+  provisionSystemClientAt,
+  SYSTEM_CLIENT_ENV,
+  systemClientConfigFromEnv,
+} from '@qauth-labs/infra-db/system-client';
 
 /**
  * The migration runner's command line (issue #474, ADR-018 §5): parse the
@@ -24,6 +30,11 @@ export const RUNNER_EXIT = Object.freeze({
   usage: 2,
   /** The run could not start: the database unreachable, or the migrations folder unreadable. */
   cannotRun: 3,
+  /**
+   * Every migration is applied, but the system client configured by the
+   * `SYSTEM_CLIENT_*` environment could not be provisioned (#631).
+   */
+  systemClientFailed: 4,
 } as const);
 
 export const RUNNER_USAGE =
@@ -35,7 +46,16 @@ export const RUNNER_USAGE =
   '                                  shipped beside this program\n' +
   '       Exits 0 when the database is current, 1 when a migration failed (the run rolled\n' +
   '       back) or, with --check, when migrations are pending, 2 on a usage error and 3\n' +
-  '       when the run could not start.';
+  '       when the run could not start.\n' +
+  '\n' +
+  "       With SYSTEM_CLIENT_REDIRECT_URI set (the developer portal's callback), a run also\n" +
+  '       provisions the system client once the migrations are applied: private_key_jwt\n' +
+  "       with the portal's public keys, SYSTEM_CLIENT_JWKS_URI or SYSTEM_CLIENT_JWKS (one\n" +
+  '       of them), the first-party profile web_redirect and that callback. SYSTEM_CLIENT_ID\n' +
+  '       (default system) and DEFAULT_REALM_NAME (default master) name the row, as on the\n' +
+  '       auth server. A realm the auth server has not created yet is reported and\n' +
+  '       skipped. Exits 4 when the migrations are applied but the system client could\n' +
+  '       not be provisioned.';
 
 export interface RunnerArgs {
   readonly check: boolean;
@@ -109,6 +129,17 @@ export async function runRunner(
     io.err('DATABASE_URL must be set in the environment.');
     return RUNNER_EXIT.usage;
   }
+  // Read before anything runs, so a half-written configuration changes
+  // nothing (#631).
+  const systemClient = systemClientConfigFromEnv(env);
+  if (systemClient.configured === 'invalid') {
+    for (const problem of systemClient.problems) io.err(`System client: ${problem}`);
+    io.err(
+      `Set ${SYSTEM_CLIENT_ENV.redirectUri} with exactly one of ${SYSTEM_CLIENT_ENV.jwksUri} and ` +
+        `${SYSTEM_CLIENT_ENV.jwks}, or none of them. Nothing was done.`
+    );
+    return RUNNER_EXIT.usage;
+  }
   const target = {
     connectionString,
     migrationsFolder: args.migrationsFolder ?? defaultMigrationsFolder,
@@ -151,7 +182,6 @@ export async function runRunner(
           aheadNote(report.unknownApplied)
       );
     }
-    return RUNNER_EXIT.current;
   } catch (error) {
     if (error instanceof MigrationRunError) {
       io.err(error.message);
@@ -160,5 +190,39 @@ export async function runRunner(
     }
     io.err(`Cannot run the migrations: ${reasonOf(error)}`);
     return RUNNER_EXIT.cannotRun;
+  }
+
+  if (systemClient.configured !== true) return RUNNER_EXIT.current;
+  return provisionTheSystemClient(connectionString, systemClient.realm, systemClient.spec, io);
+}
+
+/**
+ * ADR-017 phase F0 (#631): provision the developer portal's system client from
+ * the `SYSTEM_CLIENT_*` environment, once the migrations are applied. A realm
+ * the auth server has not created yet (a new deployment, whose auth server
+ * boots after this runner) is reported and skipped: the run still succeeds,
+ * and the next run provisions it.
+ */
+async function provisionTheSystemClient(
+  connectionString: string,
+  realm: string,
+  spec: Parameters<typeof provisionSystemClientAt>[2],
+  io: RunnerIo
+): Promise<number> {
+  try {
+    const result = await provisionSystemClientAt(connectionString, realm, spec);
+    const line = describeSystemClientResult(result);
+    if (result.status === 'refused') {
+      io.err(line);
+      return RUNNER_EXIT.systemClientFailed;
+    }
+    if (result.status === 'realm_not_found') io.err(line);
+    else io.out(line);
+    return RUNNER_EXIT.current;
+  } catch (error) {
+    io.err(
+      `The migrations are applied, but the system client could not be provisioned: ${describeDatabaseError(error)}`
+    );
+    return RUNNER_EXIT.systemClientFailed;
   }
 }

@@ -220,7 +220,8 @@ A dedicated service that applies the pending database migrations before
 auth-server starts.
 
 - The image holds Node and one bundled program with the migrations beside it:
-  no pnpm, nx or drizzle-kit. Only `DATABASE_URL` is read.
+  no pnpm, nx or drizzle-kit. It reads `DATABASE_URL`, and the optional
+  system-client variables below.
 - It takes a Postgres advisory lock, so a second runner waits, then finds
   nothing to do. It logs each migration it applies with its duration.
 - It exits `0` when the database is current, whether it applied migrations or
@@ -244,6 +245,45 @@ then exits naming them.
 > Upgrading an existing deployment past the ADR-002 identity migration
 > (0011)? Read the [Upgrades runbook](/operate/upgrades/) before running this
 > — that migration is destructive and has a required backfill precondition.
+
+#### The system client
+
+The developer portal signs in through the **system client**, the client named
+by `SYSTEM_CLIENT_ID` (`system` by default) in the default realm. The operator
+provisions it
+([ADR-017](/reference/records/adr/017-first-party-login/) phase F0): a
+`private_key_jwt` client with the portal's public keys, the first-party profile
+`web_redirect` and the portal's callback as its redirect URI. Set these on the
+migration runner, and every run provisions it once the migrations are applied:
+
+| Variable                     | Required                          | Meaning                                                                             |
+| ---------------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| `SYSTEM_CLIENT_REDIRECT_URI` | to provision                      | The portal's callback: `https`, or `http` on a loopback address for a local portal. |
+| `SYSTEM_CLIENT_JWKS_URI`     | one of the two, with the callback | An `https` URL of the portal's JWK Set.                                             |
+| `SYSTEM_CLIENT_JWKS`         | one of the two, with the callback | The portal's JWK Set inline, as JSON: public keys only.                             |
+| `SYSTEM_CLIENT_ID`           | no                                | The system client's id, `system` by default. The same value as on the auth server.  |
+| `DEFAULT_REALM_NAME`         | no                                | The realm, `master` by default. The same value as on the auth server.               |
+
+- Without `SYSTEM_CLIENT_REDIRECT_URI` the runner leaves the system client
+  alone. A key variable set without it, or the callback without exactly one key
+  variable, is a usage error (exit `2`) and the runner does nothing at all.
+- The runner rewrites only the authentication method, the keys, the redirect
+  URI, the `authorization_code` and `refresh_token` grants, PKCE and the
+  profile. The row keeps its id, name, scopes, audience and an operator's
+  suspension, so tokens issued under it before stay valid. A second run with
+  the same values changes nothing.
+- A new deployment has no realm yet when the runner first runs: the auth server
+  creates it at its first boot. The runner reports that and still exits `0`;
+  run it once more after that boot, or provision through the seed manifest's
+  `system_client` section (see
+  [First-party clients](#first-party-clients-adr-017)).
+- A row named by `SYSTEM_CLIENT_ID` that a developer owns, an agent, or a
+  dynamic or CIMD registration can never be first party: the runner names it,
+  changes nothing and exits `4`.
+
+Until the system client is provisioned, the portal's sign-in still works: the
+auth server creates a placeholder that holds no secret and no key, and so
+authenticates nowhere.
 
 ### Auth Server
 
@@ -606,6 +646,77 @@ Two client columns hold resource identifiers, and each does one job:
 - Before migration 0027 the targets were read from `audience`. The migration
   copies nothing, so a client set up that way mints and redeems nothing until its
   targets are listed here.
+
+### First-party clients (ADR-017)
+
+A client is **first party** only when the operator says so
+([ADR-017 Decision 2](/reference/records/adr/017-first-party-login/)): an app
+that the entity operating this server controls and that users see under that
+entity's brand. Another entity's app, a tenant's included, stays a third-party
+client on `/oauth/authorize`. Set the profile on the client's entry in the
+`db:seed-oauth-clients` manifest, with a written reason:
+
+```json
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "notes-backend",
+      "name": "Notes",
+      "grant_types": ["authorization_code", "refresh_token"],
+      "redirect_uris": ["com.example.notes:/callback"],
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks_uri": "https://notes.example.com/.well-known/jwks.json",
+      "first_party_profile": "native_backend",
+      "first_party_policy": { "flows": ["login", "register", "reset"] },
+      "first_party_reason": "Notes is our own app, published under our brand."
+    }
+  ],
+  "system_client": {
+    "redirect_uris": ["https://portal.example.com/auth/callback"],
+    "jwks_uri": "https://portal.example.com/.well-known/jwks.json"
+  }
+}
+```
+
+| Manifest field        | Meaning                                                                                                                                                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `first_party_profile` | `web_redirect`: a web front-end on the redirect flow; it earns only the consent waiver at `/oauth/authorize`. `native_backend`: the backend of a native app, for the authorization challenge endpoint.                                                 |
+| `first_party_policy`  | `native_backend` only: `flows` (a non-empty set of `login`, `register`, `reset`; default `["login"]`), `email_code_after_password` (default `false`) and `pkce_required` (default `true`). No other member is accepted.                                |
+| `first_party_reason`  | Required with a profile, refused without one: why the app is first party. It is stored with the client and recorded in the change's event.                                                                                                             |
+| `system_client`       | The developer portal's system client, as the migration runner provisions it: `redirect_uris`, `jwks` or `jwks_uri`, and optionally `client_id` (default `system`, the auth server's `SYSTEM_CLIENT_ID`) and `first_party_reason`. It always converges. |
+
+- A profile needs `token_endpoint_auth_method: "private_key_jwt"` and is refused
+  on an agent. `native_backend` also needs `jwks` or `jwks_uri`, the
+  `authorization_code` grant and at least one redirect URI for the browser leg:
+  `https`, a private-use scheme in reverse domain-name form
+  (`com.example.app:/callback`) or an `http` loopback IP literal
+  (`http://127.0.0.1/callback`). The seed cannot check that an `https` URI is
+  claimed by the app and never served by its backend; that stays the
+  operator's to ensure.
+- With `pkce_required: false` the seed prints a warning naming the client. PKCE
+  stays required on the redirect flow for every client.
+- A `--rotate` entry that sets a profile on a client a developer, dynamic
+  registration or a CIMD document created is refused by name before a secret
+  is issued for it, and that client is left unchanged. The other entries run
+  as usual, and the seed exits `1`.
+- The system client is provisioned only through `system_client` (or the
+  migration runner): a `clients` entry with its id is refused before anything
+  is written. The seed takes that id from the manifest's `system_client`, or
+  else from `SYSTEM_CLIENT_ID` (default `system`), so set one of them when the
+  auth server uses another id.
+- The database holds the rules on every path: no profile on a dynamic, CIMD,
+  agent or developer-owned client, a profile only with `private_key_jwt`, a
+  policy exactly on `native_backend`, `native_backend` only with the
+  `authorization_code` grant, and a written reason of at most 1000 characters
+  exactly with a profile. Dynamic registration, `POST /api/clients` and a
+  CIMD document can never set one.
+- The seed skips a client that already exists. Changing or removing a profile
+  goes through `--rotate`, which also issues a new secret. Removing it revokes
+  every refresh token of the client not already revoked, in every family and
+  for every user.
+  Each change of the profile, its policy or its reason is recorded as a
+  `client.first_party_changed` event (see [Events](/reference/events/)).
 
 ### Outbound calls and the egress allowlist
 

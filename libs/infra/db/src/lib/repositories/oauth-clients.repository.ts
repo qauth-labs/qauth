@@ -27,6 +27,16 @@ function ownedBy(realmId: string, developerId: string) {
 }
 
 /**
+ * The first-party columns as every application write leaves them: empty
+ * (ADR-017 Decision 2, #631). Spread last, so no caller's value survives.
+ */
+const NOT_FIRST_PARTY = {
+  firstPartyProfile: null,
+  firstPartyPolicy: null,
+  firstPartyReason: null,
+} as const;
+
+/**
  * Factory function that creates an OAuth clients repository with CRUD operations
  *
  * @param defaultDb - Database client to use for queries
@@ -46,7 +56,15 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     async create(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
       try {
-        const [client] = await invoker.insert(oauthClients).values(data).returning();
+        const [client] = await invoker
+          .insert(oauthClients)
+          // Never first party (ADR-017 Decision 2, #631): dynamic registration,
+          // the developer API and the server's own system client create rows
+          // here, and first-partyness is the operator's to set, through the
+          // seed manifest or the system-client provisioner, whatever the
+          // caller passed.
+          .values({ ...data, ...NOT_FIRST_PARTY })
+          .returning();
         return client;
       } catch (error) {
         if (isUniqueConstraintError(error)) {
@@ -274,7 +292,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .insert(oauthClients)
         // A CIMD client is never operator-provisioned (ANT-2026-O8U3P920),
         // whatever the caller passed.
-        .values({ ...data, provisionedByOperator: false })
+        // Nor first party (#631): its document is self-asserted. The conflict
+        // update below never names the first-party columns either.
+        .values({ ...data, provisionedByOperator: false, ...NOT_FIRST_PARTY })
         .onConflictDoUpdate({
           target: [oauthClients.realmId, oauthClients.clientId],
           set: {

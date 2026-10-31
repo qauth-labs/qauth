@@ -451,6 +451,14 @@ export async function createDeveloperClient(
     // client's domain. Admin state, pinned here and excluded from
     // `UpdateOAuthClient`.
     verifiedDomain: null,
+    // ADR-017 Decision 2 (#631): a developer's client is never first
+    // party; the database refuses a profile on a row with a developer.
+    // Operator state, pinned here, written NULL by the repository whatever
+    // it is given, and excluded from `UpdateOAuthClient`, so `PATCH`
+    // cannot write it either. The request schemas define no such field.
+    firstPartyProfile: null,
+    firstPartyPolicy: null,
+    firstPartyReason: null,
   });
 
   // Best-effort: the client (and its secret hash) is already committed, so

@@ -528,6 +528,36 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(state.createdClients[0].provisionedByOperator).toBe(false);
   });
 
+  it('never stores a first-party profile, whatever the body says (ADR-017 Decision 2, #631)', async () => {
+    // First-partyness is operator-set: dynamic registration writes NULL, and
+    // the database refuses a profile on a dynamically registered row.
+    const { fastify, ctx, state } = createFastifyStub();
+    await registerRoute(fastify);
+
+    const { reply } = createReply();
+    await ctx.handler!(
+      {
+        body: {
+          client_name: 'Claims to be ours',
+          redirect_uris: ['https://app.example.com/cb'],
+          first_party_profile: 'native_backend',
+          first_party_policy: { flows: ['login', 'register'], pkce_required: false },
+          first_party_reason: 'trust me',
+          firstPartyProfile: 'web_redirect',
+        },
+        ip: '127.0.0.1',
+        headers: {},
+      },
+      reply
+    );
+
+    expect(state.createdClients[0]).toMatchObject({
+      firstPartyProfile: null,
+      firstPartyPolicy: null,
+      firstPartyReason: null,
+    });
+  });
+
   it('never stores ID-JAG targets from the body (ADR-011, #434 — seed manifest only)', async () => {
     // The targets name foreign authorization servers and MCP servers a client
     // may mint or redeem an ID-JAG for: an operator decision, never the

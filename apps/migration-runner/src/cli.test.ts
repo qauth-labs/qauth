@@ -70,3 +70,59 @@ describe('runRunner without a database', () => {
     ]);
   });
 });
+
+describe('runRunner with a system client configuration (#631)', () => {
+  const env = (extra: Record<string, string>) => ({
+    DATABASE_URL: 'postgresql://u:p@127.0.0.1:1/db',
+    ...extra,
+  });
+
+  it('exits 2 on a half-written configuration before reading anything, in both modes', async () => {
+    for (const args of [argv(), argv('--check')]) {
+      const halfWritten: Array<Record<string, string>> = [
+        { SYSTEM_CLIENT_REDIRECT_URI: 'https://portal.example.com/auth/callback' },
+        { SYSTEM_CLIENT_JWKS_URI: 'https://portal.example.com/jwks.json' },
+        {
+          SYSTEM_CLIENT_REDIRECT_URI: 'http://portal.example.com/auth/callback',
+          SYSTEM_CLIENT_JWKS_URI: 'https://portal.example.com/jwks.json',
+        },
+      ];
+      for (const extra of halfWritten) {
+        const { out, err, io } = capture();
+        // The folder does not exist: reaching it would exit 3, not 2.
+        await expect(runRunner(args, env(extra), '/nonexistent/drizzle', io)).resolves.toBe(
+          RUNNER_EXIT.usage
+        );
+        expect(out).toEqual([]);
+        expect(err.at(-1)).toBe(
+          'Set SYSTEM_CLIENT_REDIRECT_URI with exactly one of SYSTEM_CLIENT_JWKS_URI and ' +
+            'SYSTEM_CLIENT_JWKS, or none of them. Nothing was done.'
+        );
+        expect(err[0]).toMatch(/^System client: SYSTEM_CLIENT_/);
+      }
+    }
+  });
+
+  it('does not provision when a migration cannot run', async () => {
+    const { err, io } = capture();
+    await expect(
+      runRunner(
+        argv(),
+        env({
+          SYSTEM_CLIENT_REDIRECT_URI: 'https://portal.example.com/auth/callback',
+          SYSTEM_CLIENT_JWKS_URI: 'https://portal.example.com/jwks.json',
+        }),
+        '/nonexistent/drizzle',
+        io
+      )
+    ).resolves.toBe(RUNNER_EXIT.cannotRun);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(/^Cannot run the migrations:/);
+  });
+
+  it('describes the variables and the new exit code in the usage', () => {
+    expect(RUNNER_USAGE).toContain('SYSTEM_CLIENT_REDIRECT_URI');
+    expect(RUNNER_USAGE).toContain('Exits 4 when the migrations are applied');
+    expect(RUNNER_EXIT.systemClientFailed).toBe(4);
+  });
+});

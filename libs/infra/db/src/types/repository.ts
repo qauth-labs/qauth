@@ -65,6 +65,12 @@ export type UpdateOAuthClient = Partial<
     // #593: the verified domain is admin state (`clients.update`, a security
     // operation), so no owner or self-registration path may write it.
     | 'verifiedDomain'
+    // #631: first-partyness is operator-set (ADR-017 Decision 2). Only the
+    // seed manifest, the system-client provisioner and, later, a
+    // `qauth:admin:security` operation write these, none through `update`.
+    | 'firstPartyProfile'
+    | 'firstPartyPolicy'
+    | 'firstPartyReason'
   >
 > & {
   updatedAt?: number;
@@ -498,6 +504,16 @@ export interface RefreshTokensRepository {
     reason: string,
     tx?: DbClient
   ): Promise<number>;
+  /**
+   * Revoke every refresh token of one client not already revoked, for every
+   * user, expired ones included, under the
+   * client's exclusive token lock, which every rotation and every insert of
+   * the client's tokens holds shared (#631: removing a client's first-party
+   * profile ends every family it holds).
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeAllForClient(oauthClientId: string, reason: string, tx?: DbClient): Promise<number>;
   /**
    * Delete the families whose every token has expired, whole. A rotated token
    * is kept while its family has a live token, so replay detection lasts as

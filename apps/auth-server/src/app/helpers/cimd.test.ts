@@ -369,6 +369,26 @@ describe('toCimdClientInsert — never DPoP-bound by its document (RFC 9449 §5.
   });
 });
 
+describe('toCimdClientInsert — never first party (ADR-017 Decision 2, #631)', () => {
+  it('omits the first-party columns, whatever the document says', () => {
+    // First-partyness is the operator's to set. The insert never names the
+    // columns, so the repository writes NULL on insert and its conflict
+    // update never touches them; the database refuses a profile on a CIMD row.
+    const doc = cimdDocumentSchema.parse(
+      validDoc({
+        first_party_profile: 'native_backend',
+        first_party_policy: { flows: ['login', 'register'] },
+        first_party_reason: 'trust me',
+        firstPartyProfile: 'web_redirect',
+      })
+    );
+    const insert = toCimdClientInsert('realm-1', CLIENT_ID, doc, 'sentinel');
+    for (const key of ['firstPartyProfile', 'firstPartyPolicy', 'firstPartyReason']) {
+      expect(insert, key).not.toHaveProperty(key);
+    }
+  });
+});
+
 describe('toCimdClientInsert — grant/response type tolerance (RFC 7591 §2)', () => {
   const REALM = 'realm-1';
   const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
