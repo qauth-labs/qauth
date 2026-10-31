@@ -24,6 +24,7 @@ publishes cannot drift apart.
 | `lib/interaction-mapper.ts` | The Interaction API mapper: the step-grammar members of the step read                           |
 | `lib/fipa-mapper.ts`        | The FiPA mapper: `403 insufficient_authorization`, or `403 redirect_to_web`                     |
 | `lib/mapping-error.ts`      | `StepMappingError`: why a mapper refused an offer (a code fault, never sent)                    |
+| `lib/amr.ts`                | `transactionAmr`: a transaction's `amr` from the steps it verified (ADR-017 Decision 10)        |
 | `lib/answer-error.ts`       | `StepAnswerError`: why an answer was refused before the engine read it (a fault of the request) |
 | `lib/formats.ts`            | The `uri` and `date-time` checks of ajv-formats, which the Zod schemas run beside each pattern  |
 | `lib/vectors.ts`            | The contract's step examples as shared test vectors, with each transport's answer               |
@@ -39,6 +40,11 @@ publishes cannot drift apart.
   `pop` (`password` `pwd`, `webauthn_get` `pop` and `mfa`, `totp` `otp`, none for the others).
 - `FIPA_STEP_NAMES`, `INTERACTION_ONLY_STEP_NAMES`: the nine steps ADR-017 lists, which the FiPA
   endpoint may serve, and the eight only the Interaction API serves.
+- `transactionAmr(verifiedSteps)`: a transaction's `amr`, ADR-017 Decision 10's table, from the
+  steps it verified with the params they were offered with. Each step adds its `STEP_AMR` values,
+  and factors of two kinds add `mfa` (password and TOTP give `["pwd","otp","mfa"]`). An email code
+  or a recovery code adds nothing. A registration or a reset, whatever else it verified, and a
+  transaction that verified no factor give `undefined`: no `amr` and no `auth_time`.
 - The steps, their lists, the constants above, the mapper tables and `FIPA_SERVES_ALL` are frozen.
   The freeze is shallow: the Zod schemas a step holds are Zod's own objects and are not frozen, so
   no code may change them.
@@ -187,6 +193,7 @@ names, which JSON Schema's `contentSchema` only annotates.
 | `fipa-mapper.test.ts`        | ADR-017's wire examples; `redirect_to_web`; `interaction_type_required` is always a version-1 name                    |
 | `no-prose.test.ts`           | No output of either mapper, personal data included, carries prose; an offer that tries is refused                     |
 | `answer.test.ts`             | Every example answer on both transports; an answer to a step not presented, foreign members, lengths, empty answers   |
+| `amr.test.ts`                | Every row of ADR-017 Decision 10's `amr` table, and what adds nothing                                                 |
 | `zod-kit.test.ts`            | A value over its maximum length is refused before a pattern, a `format` or a JSON parse reads it                      |
 | `exhaustive.test.ts`         | Runs the TypeScript compiler: a step without a mapper fails the type check                                            |
 | `vectors.test.ts`            | The committed vectors are what the mappers give, and a reader recovers each step from them                            |

@@ -1,3 +1,4 @@
+export { type AmrValue, transactionAmr } from './lib/amr';
 export {
   STEP_ANSWER_ERROR_CODES,
   StepAnswerError,
