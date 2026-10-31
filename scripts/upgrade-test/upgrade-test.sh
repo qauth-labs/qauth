@@ -213,9 +213,10 @@ start_server() {
   load_secrets
   docker rm -f "$container" >/dev/null 2>&1 || true
   # The same configuration for every server of the run, as the wire-suite CI
-  # job's, with raised rate limits (every request comes from one address) and
-  # mail over SMTP to Mailpit: every release since 0.1.0 signs in only
-  # verified accounts, and the mock provider delivers no verification mail.
+  # job's, with raised rate limits (every request comes from one address; the
+  # wire suite's code flows spend more than the default 30 token requests a
+  # minute) and mail over SMTP to Mailpit: every release since 0.1.0 signs in
+  # only verified accounts, and the mock provider delivers no verification mail.
   run docker run -d --name "$container" --network "$NETWORK" -p "127.0.0.1:$HTTP_PORT:3000" \
     -e NODE_ENV=production -e HOST=0.0.0.0 -e PORT=3000 -e LOG_LEVEL=info \
     -e DATABASE_URL="$NETWORK_DATABASE_URL" \
@@ -226,6 +227,8 @@ start_server() {
     -e SMTP_USER=upgrade-test -e SMTP_PASSWORD=upgrade-test \
     -e EMAIL_FROM_ADDRESS=noreply@qauth.dev -e EMAIL_BASE_URL="$BASE_URL" \
     -e RATE_LIMIT_MAX=10000 -e REGISTRATION_RATE_LIMIT=100 -e LOGIN_RATE_LIMIT=100 \
+    -e TOKEN_RATE_LIMIT=1000 -e AUTHORIZE_RATE_LIMIT=1000 -e INTROSPECT_RATE_LIMIT=1000 \
+    -e USERINFO_RATE_LIMIT=1000 -e VERIFICATION_RATE_LIMIT=100 -e REGISTER_CLIENT_RATE_LIMIT=100 \
     "$image" >/dev/null
   local body=''
   for _ in $(seq 1 90); do
@@ -268,7 +271,8 @@ upgrade_step() {
 # The wire suite against the upgraded database, seeded and run as the
 # wire-suite CI job does: realm first, then the manifest's client through the
 # operator seed command from this checkout, its secret handed over in the
-# environment and masked in CI.
+# environment and masked in CI. The suite signs accounts in, and verifies each
+# one through the mail the server delivered to Mailpit.
 wire_suite() {
   local output secret
   run docker exec "$POSTGRES" psql -v ON_ERROR_STOP=1 -U qauth -d qauth \
@@ -290,6 +294,7 @@ wire_suite() {
       QAUTH_BASE_URL="$BASE_URL" \
       QAUTH_WIRE_CLIENT_ID=wire-confidential \
       QAUTH_WIRE_CLIENT_SECRET="$secret" \
+      QAUTH_WIRE_MAIL_URL="$MAIL_URL" \
       run pnpm exec nx run wire-suite:run --skip-nx-cache --output-style=static
   )
 }
