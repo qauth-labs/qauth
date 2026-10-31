@@ -456,7 +456,7 @@ document this flag as gating the whole bundle"
 (`apps/auth-server/src/app/helpers/environment-policy.ts:157`). Its one consumer is the consent
 screen — the rare browser surface that unambiguously carries a `client_id` — which marks the reply
 for a relaxed style CSP when the flag is false
-(`apps/auth-server/src/app/routes/ui/consent.ts:490`), so a developer iterating on that page is not
+(`apps/auth-server/src/app/routes/ui/consent.ts:540`), so a developer iterating on that page is not
 forced to nonce every style.
 
 A row reading "T3 hardening bundle: Relaxed" would therefore tell a `development` client's owner
@@ -800,7 +800,7 @@ authorize route (`apps/auth-server/src/app/routes/oauth/authorize.ts:309`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:550`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:587`,
 `apps/auth-server/src/app/routes/oauth/authorize.ts:616`) and one in the consent UI
-(`apps/auth-server/src/app/routes/ui/consent.ts:763`) — and `oauth.consent.revoked` likewise
+(`apps/auth-server/src/app/routes/ui/consent.ts:806`) — and `oauth.consent.revoked` likewise
 (`apps/auth-server/src/app/routes/consents/index.ts:181`). A developer holds their own application
 logs; joining "a step-up was demanded at 14:02:11.431" against their own request log identifies
 which of their users it was, and what that user was doing at the time. `user_id` being absent does
@@ -874,7 +874,7 @@ Three verdicts, not two — because a third category turned out to exist and mat
 | `oauth.userinfo.failure`          | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oauth/userinfo.ts:115`). Policy answer if that ever changes: allow                                    |
 | `oauth.client.registered`         | Unreachable       | Attributed, but dynamic registration creates clients with `developerId: null` — see below                                                                     |
 | `oid4vp.response.received`        | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/oid4vp/response.ts:240`); also wallet federation behind a default-off flag                            |
-| `oauth.consent.csrf_failure`      | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/ui/consent.ts:591`)                                                                                   |
+| `oauth.consent.csrf_failure`      | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/ui/consent.ts:634`)                                                                                   |
 | `consents.revoke.csrf_failure`    | Unreachable       | `oauthClientId: null` (`apps/auth-server/src/app/routes/consents/index.ts:146`)                                                                               |
 
 **On the three that prompted this enumeration.** `oauth.introspect.success` was a genuine omission —
