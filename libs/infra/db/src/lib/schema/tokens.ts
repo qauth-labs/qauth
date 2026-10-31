@@ -119,7 +119,8 @@ export const authorizationCodes = pgTable(
      * lifespan, even when the code came from a silent re-authorization just
      * before the session's end.
      *
-     * NULL when no browser session backs the code (the legacy Bearer path), and
+     * NULL when no browser session backs the code (the legacy Bearer path,
+     * retired by #524), and
      * for a code minted by a release before migration 0038.
      */
     sessionExpiresAt: bigint('session_expires_at', { mode: 'number' }),
@@ -129,7 +130,7 @@ export const authorizationCodes = pgTable(
      * `sid` claim and back-channel logout names.
      *
      * NULL when no browser session backs the code (the legacy Bearer path,
-     * whose ID token then has no `sid`), and for a code minted by a release
+     * retired by #524, whose ID token then has no `sid`), and for a code minted by a release
      * before migration 0042. Deleting the session sets it to NULL and keeps
      * the code, so a session purge never removes a code mid-flight.
      *
@@ -243,7 +244,7 @@ export const refreshTokens = pgTable(
      * limit and this, so no token outlives the SSO session that granted it.
      *
      * NULL when no browser session started the family (`/auth/login`, the
-     * legacy Bearer authorize path) or the family predates migration 0038; the
+     * legacy Bearer authorize path #524 retired) or the family predates migration 0038; the
      * family's start plus the limit then applies alone. The repository's insert
      * type requires the key, so a rotation cannot forget to copy it; the 0038
      * trigger copies it for the previous release during a rolling upgrade.

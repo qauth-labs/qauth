@@ -14,7 +14,7 @@
  * session end), so no token outlives the SSO session that granted it, as with
  * an SSO session maximum: a silent re-authorization just before the session's
  * end starts a family that ends with the session. A family no browser session
- * started (`/auth/login`, the legacy Bearer path) has only its start plus the
+ * started (`/auth/login`, the legacy Bearer path #524 retired) has only its start plus the
  * limit. Both caps apply only when the realm sets `sso_max_lifespan`.
  *
  * The limit is read from the request's realm row at each use (the realm

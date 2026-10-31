@@ -438,7 +438,9 @@ Updates use optimistic concurrency (RFC 9110 §13.1.1).
 - The patch itself is a request body: an unknown member is refused with 400 `validation_error`.
   A body sent as another media type is refused with 415 `unsupported_media_type`.
 - The merged result is checked against the resource's schema. A result that fails is refused with
-  422 `unprocessable_content`, and `errors` names each failing field.
+  422 `unprocessable_content`, and `errors` names each failing field. A rule of the resource that a
+  create checks too answers as the create does, such as a developer client's `invalid_redirect_uri`
+  and `invalid_client_metadata` (400), so the same mistake gets the same code on both.
 
 ## Errors
 

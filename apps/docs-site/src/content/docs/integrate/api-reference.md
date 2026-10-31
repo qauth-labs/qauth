@@ -708,8 +708,12 @@ keeps its value; a list is replaced whole; `null` gives a member the value a cre
 is left out (`description` none, the lists empty, the grant and response types and the auth method
 their defaults, `enabled` true). `enabled` does not lift an operator's suspension.
 
+The merged client must pass the rules a create checks, and a refusal answers as there: `400`
+`invalid_redirect_uri` (a user-facing grant left without a redirect URI) or `invalid_client_metadata`
+(grant and response types that do not fit, a scope the realm does not allow).
+
 **`200 OK`**: the client and its new `ETag`. Errors: `400` (`validation_error`, also for a member the
-patch may not name, such as `client_id`), `401`, `404`, `412` (`precondition_failed`: the client
+patch may not name, such as `client_id`; the create rules above), `401`, `404`, `412` (`precondition_failed`: the client
 changed since that `ETag`; read it again), `415` (a body that is not a merge patch), `422`
 (`unprocessable_content`: `client_name` set to `null`), `428` (`precondition_required`: no
 `If-Match`).
@@ -742,7 +746,8 @@ Revoke a key, idempotently: **`200 OK`** with the key, `revokedAt` set. Errors: 
 
 ### `GET /developer/v1-rc.0/consents`
 
-The caller's own active consents, as a user, newest first. It serves the developer portal until the
+The caller's own active consents, as a user, by when each was first given, newest first (a new grant
+to the same client keeps its place, so a page never skips one). It serves the developer portal until the
 account console takes them over.
 
 **`200 OK`**
@@ -780,7 +785,7 @@ refused here with `401`, and the reverse. The conventions are those of the devel
 
 ### `GET /account/v1-rc.0/consents`
 
-The user's active consents, newest first, in the representation of
+The user's active consents, in the order and representation of
 `GET /developer/v1-rc.0/consents`. Errors: `400`, `401`.
 
 ### `DELETE /account/v1-rc.0/consents/{consentId}`
