@@ -111,11 +111,12 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   admin: {
     // The admin API's internal listener (#511): its token guard verifies with
     // the JWT plugin, finds the account in `users` and its grants in
-    // `adminGrants`, and writes `adminAuditLog`. The key operations arrive on
-    // the same listener (#496).
+    // `adminGrants`, and writes `adminAuditLog`. Its approval gate and
+    // approval routes read and write `adminApprovals` (#512). The key
+    // operations arrive on the same listener (#496).
     summary: 'the admin API and key operations, on the internal listener',
     plugins: ['jwt'],
-    repositories: ['users', 'adminGrants', 'adminAuditLog'],
+    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals'],
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role

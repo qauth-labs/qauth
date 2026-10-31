@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import {
   type AdminOperation,
+  createAdminOperationRegistry,
   createOperationRegistry,
   defineOperation,
   operationSchemaExtensions,
@@ -171,6 +172,241 @@ describe('the admin pipeline at boot', () => {
     });
     expect(handler).toBeTypeOf('function');
     expect(handler).not.toBe(own);
+  });
+});
+
+describe('the routes of security operations at boot (#512)', () => {
+  const rotate = (render?: () => { title: string }) =>
+    defineOperation({
+      id: 'fixtureKeys.rotate',
+      class: 'security',
+      effects: ['key-custody'],
+      permissions: ['realms.policies.security'],
+      description: 'A security operation (fixture).',
+      ...(render === undefined ? {} : { render }),
+    });
+
+  /** Boot `routes` behind the pipeline, with a registry of `operation` and the approval operations. */
+  async function bootSecurity(
+    operation: AdminOperation,
+    routes: (scope: FastifyInstance, extensions: object) => void
+  ): Promise<FastifyInstance> {
+    const app = Fastify({ logger: false });
+    instance = app;
+    app.setValidatorCompiler(validatorCompiler);
+    app.setSerializerCompiler(serializerCompiler);
+    const registry = createAdminOperationRegistry([operation], { reserved: [] });
+    await app.register(adminPipeline, {
+      registry,
+      refusalsByAddress: UNCOUNTED,
+      callsBySubject: UNCOUNTED,
+      routes: (scope) =>
+        routes(scope, operationSchemaExtensions(registry.get(operation.id) as AdminOperation)),
+    });
+    await app.ready();
+    return app;
+  }
+
+  const path = '/admin/v1-rc.0/realms/:realmId/keys/rotate';
+  const body = z.strictObject({ retireAfterDays: z.int() });
+
+  // Acceptance criterion: the boot fails for a security operation without a
+  // renderer (also against the real listener, admin-listener.integration.test.ts).
+  it('refuses the route of a security operation without a renderer', async () => {
+    await expect(
+      bootSecurity(rotate(), (scope, schema) => {
+        scope.post(path, { config: { operation: 'fixtureKeys.rotate' }, schema }, async () => ({}));
+      })
+    ).rejects.toThrow(/fixtureKeys.rotate, which has no renderer/);
+  });
+
+  it('boots it with a renderer, and keeps its route for the approvals filed against it', async () => {
+    const params = z.object({ realmId: z.uuid() });
+    let context: FastifyInstance['adminApi'] | undefined;
+    await bootSecurity(
+      rotate(() => ({ title: 'Rotate' })),
+      (scope, schema) => {
+        context = scope.adminApi;
+        scope.post(
+          path,
+          { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params, body } },
+          async () => ({})
+        );
+      }
+    );
+    expect(context?.routeOf('fixtureKeys.rotate')).toEqual({
+      method: 'POST',
+      url: path,
+      params,
+      body,
+    });
+    expect(context?.routeOf('realms.get')).toBeUndefined();
+  });
+
+  it('refuses a second route of one operation, and a security route under several methods', async () => {
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    const params = z.object({ realmId: z.uuid() });
+    await expect(
+      bootSecurity(operation, (scope, schema) => {
+        const options = {
+          config: { operation: 'fixtureKeys.rotate' },
+          schema: { ...schema, params, body },
+        };
+        scope.post(path, options, async () => ({}));
+        scope.put(path, options, async () => ({}));
+      })
+    ).rejects.toThrow(/an operation has one route/);
+    await instance?.close();
+    await expect(
+      bootSecurity(operation, (scope, schema) => {
+        scope.route({
+          method: ['POST', 'PUT'],
+          url: path,
+          config: { operation: 'fixtureKeys.rotate' },
+          schema,
+          handler: async () => ({}),
+        });
+      })
+    ).rejects.toThrow(/under several methods/);
+  });
+
+  it('refuses a security route whose schemas a filed request cannot be parsed with', async () => {
+    const params = z.object({ realmId: z.uuid() });
+    const withSchema = (extra: object) => (scope: FastifyInstance, schema: object) => {
+      scope.post(
+        path,
+        { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, ...extra } },
+        async () => ({})
+      );
+    };
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    // The path always holds the realm, so the route parses its parameters.
+    await expect(bootSecurity(operation, withSchema({}))).rejects.toThrow(
+      /fixtureKeys.rotate has no Zod params schema/
+    );
+    await instance?.close();
+    await expect(
+      bootSecurity(operation, withSchema({ params, body: { type: 'object' } }))
+    ).rejects.toThrow(
+      /body schema of the security operation fixtureKeys.rotate is not a Zod schema/
+    );
+    await instance?.close();
+    // Fastify's `query`, which it folds into `querystring` after onRoute.
+    await expect(
+      bootSecurity(operation, withSchema({ params, query: { type: 'object' } }))
+    ).rejects.toThrow(/querystring schema of the security operation fixtureKeys.rotate/);
+  });
+
+  it('refuses a security route whose params schema does not name every path parameter', async () => {
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    const keyPath = '/admin/v1-rc.0/realms/:realmId/keys/:keyId/rotate';
+    const route = (params: object) => (scope: FastifyInstance, schema: object) => {
+      scope.post(
+        keyPath,
+        { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params, body } },
+        async () => ({})
+      );
+    };
+    // The handler could read a key the approval never bound.
+    await expect(bootSecurity(operation, route(z.object({ realmId: z.uuid() })))).rejects.toThrow(
+      /not a Zod object naming every path parameter \(keyId\)/
+    );
+    await instance?.close();
+    await expect(bootSecurity(operation, route(z.record(z.string(), z.string())))).rejects.toThrow(
+      /not a Zod object naming every path parameter/
+    );
+    await instance?.close();
+    await expect(
+      bootSecurity(operation, route(z.object({ realmId: z.uuid(), keyId: z.string() })))
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a security route that carries a body without a body schema', async () => {
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    const params = z.object({ realmId: z.uuid() });
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE'] as const) {
+      await expect(
+        bootSecurity(operation, (scope, schema) => {
+          scope.route({
+            method,
+            url: path,
+            config: { operation: 'fixtureKeys.rotate' },
+            schema: { ...schema, params },
+            handler: async () => ({}),
+          });
+        })
+      ).rejects.toThrow(/fixtureKeys.rotate has no Zod body schema/);
+      await instance?.close();
+    }
+    // A method that carries no body needs none.
+    await expect(
+      bootSecurity(operation, (scope, schema) => {
+        scope.get(
+          path,
+          { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params } },
+          async () => ({})
+        );
+      })
+    ).resolves.toBeDefined();
+  });
+
+  it("files a request against a route's `query` schema as its querystring", async () => {
+    const params = z.object({ realmId: z.uuid() });
+    const query = z.object({ dryRun: z.enum(['true', 'false']) });
+    let context: FastifyInstance['adminApi'] | undefined;
+    await bootSecurity(
+      rotate(() => ({ title: 'Rotate' })),
+      (scope, schema) => {
+        context = scope.adminApi;
+        scope.post(
+          path,
+          {
+            config: { operation: 'fixtureKeys.rotate' },
+            schema: { ...schema, params, query, body },
+          },
+          async () => ({})
+        );
+      }
+    );
+    expect(context?.routeOf('fixtureKeys.rotate')).toEqual({
+      method: 'POST',
+      url: path,
+      params,
+      querystring: query,
+      body,
+    });
+  });
+
+  it('boots a HEAD route beside the operation route, and files only against the latter', async () => {
+    const params = z.object({ realmId: z.uuid() });
+    let context: FastifyInstance['adminApi'] | undefined;
+    await bootSecurity(
+      rotate(() => ({ title: 'Rotate' })),
+      (scope, schema) => {
+        context = scope.adminApi;
+        const options = {
+          config: { operation: 'fixtureKeys.rotate' },
+          schema: { ...schema, params },
+        };
+        scope.route({ method: 'HEAD', url: path, ...options, handler: async () => ({}) });
+        scope.post(path, { ...options, schema: { ...options.schema, body } }, async () => ({}));
+      }
+    );
+    expect(context?.routeOf('fixtureKeys.rotate')).toMatchObject({ method: 'POST', url: path });
+  });
+
+  it('checks a HEAD route of a security operation, but never files against it', async () => {
+    await expect(
+      bootSecurity(rotate(), (scope, schema) => {
+        scope.route({
+          method: 'HEAD',
+          url: path,
+          config: { operation: 'fixtureKeys.rotate' },
+          schema,
+          handler: async () => ({}),
+        });
+      })
+    ).rejects.toThrow(/fixtureKeys.rotate, which has no renderer/);
   });
 });
 

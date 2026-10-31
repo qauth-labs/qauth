@@ -1086,9 +1086,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
   the caller's grants and scopes, the classification and permission check, an
   approval gate, the handler inside one database transaction, and the audit
-  row. Until approvals ship ([#512]) the gate fails closed: every request
-  classified `security` answers the new `approval_required` problem code (403)
-  and never runs. A call that reaches a realm within the caller's grants writes
+  row. A request classified `security` that carries no approval bound to it
+  ([#512]) answers the new `approval_required` problem code (403) and never
+  runs. A call that reaches a realm within the caller's grants writes
   exactly one admin audit row, reads included: `succeeded` in the handler's
   transaction, or `denied` or `failed` in a new one with no diff (a `denied`
   or `failed` row that cannot be written is logged instead). A realm
@@ -1107,6 +1107,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+
+- **Approvals for security operations, bound to the exact request** ([#512],
+  ADR-019 Decision 7). The admin pipeline's approval gate, which refused every
+  security operation, now lets one run with the approval its `QAuth-Approval`
+  header names. The client files the approval with
+  `POST /admin/v1-rc.0/realms/{realmId}/approvals` (the operation's id, path
+  parameters, query and body, and an optional reason), reads it with
+  `GET …/approvals/{approvalId}` and may withdraw it with
+  `POST …/approvals/{approvalId}/cancel` (`If-Match` on the version its `ETag`
+  gave). Migration 0045 adds `admin_approvals`. The server keeps the canonical
+  request (operation id, method, path parameters, query, body, realm and
+  requester, RFC 8785): `request_hash` without the server's nonce, which the
+  gate recomputes from the retried call, and `op_hash` with it, which an
+  approver's factor signs a challenge derived from. The retry consumes the
+  approval with one conditional update in its own transaction, so it runs once,
+  and an operation that rolls back leaves the approval usable until it expires,
+  five minutes after it was filed. Filing and withdrawing take the
+  classification of the operation they name, reading needs `approvals.read`,
+  and anyone but the requester and an eligible approver gets 404. A human
+  requester's own fresh step-up is the one approval an operation needs today;
+  the engine counts a required second approval only from a different account
+  that holds `approvals.approve`, which the two-admin rule ([#521]) will
+  require where a realm asks, with ADR-019's other eligibility rules. Approving
+  happens through a factor (the `ApprovalFactor` interface), never through an
+  admin route. Neither the passkey factor nor the approval page has shipped,
+  so no code a deployment runs gives an approval; the one factor that exists is
+  for tests and is built only in a test run, never under
+  `NODE_ENV=production`. The answer
+  carries `approvalUrl`, `/approvals/{realmId}/{approvalId}` on the requester
+  realm's issuer, built from its row. Every security
+  operation registers a renderer, and the admin listener refuses to boot one
+  without it: the approver sees typed display data rendered from the stored
+  request, every string length-capped with its control, bidirectional, format
+  and other default-ignorable characters, private-use and unassigned code
+  points and spaces other than U+0020 shown escaped and its backslashes
+  doubled, and the requester's reason apart, as quoted text. A consumed,
+  cancelled or denied approval drops the operation's body, which may hold a
+  secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
+  Filing, approving, declining, withdrawing and consuming each write the admin
+  audit log; the operation's own row lists the approvals it ran on.
 
 ### Changed
 
@@ -1872,6 +1912,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#514]: https://github.com/qauth-labs/qauth/issues/514
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
+[#521]: https://github.com/qauth-labs/qauth/issues/521
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536

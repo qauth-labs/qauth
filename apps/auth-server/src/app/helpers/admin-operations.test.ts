@@ -569,8 +569,13 @@ describe('createOperationRegistry (#508)', () => {
 });
 
 describe('the server registry and reserved table (#508)', () => {
-  it('builds from the server definitions', () => {
-    expect(OPERATION_REGISTRY.all).toEqual(ADMIN_OPERATIONS);
+  it('builds from the server definitions and the approval operations (#512)', () => {
+    expect(OPERATION_REGISTRY.all.map((operation) => operation.id)).toEqual([
+      ...ADMIN_OPERATIONS.map((operation) => operation.id),
+      'approvals.create',
+      'approvals.get',
+      'approvals.cancel',
+    ]);
     expect(OPERATION_REGISTRY.permissions).toBe(PERMISSION_REGISTRY);
     expect(OPERATION_REGISTRY.reserved).toEqual(RESERVED_OPERATIONS);
   });
