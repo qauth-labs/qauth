@@ -45,10 +45,6 @@ pnpm nx affected -t lint dependency-checks test typecheck build
 pnpm format:check
 ```
 
-Nx replays task results from a remote cache (`nxCloudId` in `nx.json`) that only CI on main writes
-to. Your runs read at most and never store; offline, or to keep a run entirely local, set
-`NX_NO_CLOUD=true` (for example `NX_NO_CLOUD=true pnpm nx test <project>`).
-
 `lint` runs Oxlint (`.oxlintrc.json`); `dependency-checks` runs the one rule still on ESLint,
 `@nx/dependency-checks`, on package.json files (`eslint.config.mjs`); Oxfmt formats with
 `.oxfmtrc.json`. `typecheck` runs TypeScript 7's `tsgo` (`"compiler": "tsgo"` in `nx.json`),

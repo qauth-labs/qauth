@@ -29,14 +29,8 @@ pnpm nx affected -t test --base=origin/main --head=HEAD
 
 ## Nx Cloud
 
-- **Cloud ID**: `68ed5766d0a8584639447f54`
-- **Dashboard**: https://cloud.nx.app
-
-Benefits:
-
-- Remote caching
-- Distributed execution
-- Build analytics
+Not used. The workspace has no remote cache (`neverConnectToCloud` in `nx.json`); each CI
+leg computes its tasks with the local cache only.
 
 ## Local CI Simulation
 
@@ -65,6 +59,5 @@ pnpm nx report                         # Cache status
 
 1. Use affected commands in CI
 2. Keep main branch green
-3. Use Nx Cloud for remote caching
-4. Set proper base/head refs
-5. Use `--parallel` for independent tasks
+3. Set proper base/head refs
+4. Use `--parallel` for independent tasks
