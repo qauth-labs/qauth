@@ -411,6 +411,77 @@ describe('SSF streams integration (real Postgres)', () => {
     expect(await streams.isRelatedUser(elsewhere, receiver.id, withToken, NOW)).toBe(false);
   });
 
+  it('relates no disabled user, and a refresh token only while its family lives (#540)', async () => {
+    const realmId = await realm();
+    const receiver = await client(realmId);
+    // The token endpoint's rule (ADR-019 Decision 3): with `sso_max_lifespan`
+    // set, a family ends at its start plus the limit, and no later than the
+    // browser session that started it.
+    const LIFESPAN_SECONDS = 3600;
+    await pool().query(`UPDATE realms SET sso_max_lifespan = $2 WHERE id = $1`, [
+      realmId,
+      LIFESPAN_SECONDS,
+    ]);
+    const user = async (enabled = true) =>
+      (
+        await pool().query<{ id: string }>(
+          `INSERT INTO users (realm_id, enabled) VALUES ($1, $2) RETURNING id::text AS id`,
+          [realmId, enabled]
+        )
+      ).rows[0].id;
+    const refresh = (
+      userId: string,
+      family: { createdAt: number; sessionExpiresAt?: number | null }
+    ) =>
+      pool().query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_created_at,
+           family_session_expires_at, expires_at, revoked)
+         VALUES ($1, $2, $3, $4, $5, $6, false)`,
+        [
+          randomUUID().replaceAll('-', '').padEnd(64, '0'),
+          userId,
+          receiver.id,
+          family.createdAt,
+          family.sessionExpiresAt ?? null,
+          NOW + 60_000,
+        ]
+      );
+    const related = (userId: string) => streams.isRelatedUser(realmId, receiver.id, userId, NOW);
+
+    // Within both bounds: the normal case, related.
+    const live = await user();
+    await refresh(live, { createdAt: NOW - 1000, sessionExpiresAt: NOW + 1000 });
+    // No browser session started it: its start plus the limit alone.
+    const noSession = await user();
+    await refresh(noSession, { createdAt: NOW - 1000 });
+    // Past the limit, though the token itself has not expired.
+    const pastLimit = await user();
+    await refresh(pastLimit, { createdAt: NOW - LIFESPAN_SECONDS * 1000 });
+    // Past the end of the browser session that started it.
+    const pastSession = await user();
+    await refresh(pastSession, { createdAt: NOW - 1000, sessionExpiresAt: NOW });
+    // A disabled user, by a live token or an active consent.
+    const disabled = await user(false);
+    await refresh(disabled, { createdAt: NOW - 1000 });
+    await pool().query(
+      `INSERT INTO oauth_consents (realm_id, user_id, oauth_client_id) VALUES ($1, $2, $3)`,
+      [realmId, disabled, receiver.id]
+    );
+
+    expect(await related(live)).toBe(true);
+    expect(await related(noSession)).toBe(true);
+    for (const userId of [pastLimit, pastSession, disabled]) {
+      expect(await related(userId), userId).toBe(false);
+    }
+
+    // A realm that sets no limit bounds neither: the token endpoint keeps
+    // such a family alive by its tokens' own expiry.
+    await pool().query(`UPDATE realms SET sso_max_lifespan = NULL WHERE id = $1`, [realmId]);
+    expect(await related(pastLimit)).toBe(true);
+    expect(await related(pastSession)).toBe(true);
+    expect(await related(disabled)).toBe(false);
+  });
+
   it('reads a type rule: the client as the subject, no subject filter, or one client only (#540)', async () => {
     const realmId = randomUUID();
     const userId = randomUUID();

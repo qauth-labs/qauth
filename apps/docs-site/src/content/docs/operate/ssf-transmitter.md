@@ -73,7 +73,10 @@ A receiver is an OAuth client of the realm. It authenticates with its own access
 
 Give `ssf:stream` only to clients you trust with the realm's security events. A receiver may add
 a user only when the user is related to its own client: the user holds an active consent for it,
-or a live refresh token it was issued (decided on 2026-10-26). So the receiver is the client your
+or a live refresh token it was issued (decided on 2026-10-26). A refresh token is live as the token
+endpoint reads it: not revoked, not expired, and its family not past the realm's
+`sso_max_lifespan` or the browser session that started it. A disabled user is related to no
+client. So the receiver is the client your
 users sign in through, given `client_credentials` and `ssf:stream` as well; a client of its own,
 which no user signs in to, can add no user. The relation is checked when the subject is added:
 the subject then stays on the stream until the receiver removes it, also after the user withdraws

@@ -152,10 +152,13 @@ export interface SsfStreamsRepository {
   /**
    * Whether a user of the realm is related to the receiver's client, so that
    * the receiver may add the user as a subject (#540, decided 2026-10-26): the
-   * user holds an active consent for the client, or a refresh token the client
-   * was issued for the user that is neither revoked nor expired at `now`
-   * (epoch milliseconds). `false` for a user of another realm, a user id that
-   * does not exist, and an id that is not a UUID.
+   * user is enabled and holds an active consent for the client, or a refresh
+   * token the client was issued for the user that is live at `now` (epoch
+   * milliseconds) as the token endpoint reads it: neither revoked nor
+   * expired, and its family not past the realm's `sso_max_lifespan` or the
+   * end of the browser session that started it. `false` for a disabled user,
+   * a user of another realm, a user id that does not exist, and an id that is
+   * not a UUID.
    */
   isRelatedUser(
     realmId: string,

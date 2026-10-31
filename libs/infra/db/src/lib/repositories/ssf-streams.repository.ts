@@ -194,21 +194,43 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
 
     async isRelatedUser(realmId, receiverClientId, userId, now) {
       if (![realmId, receiverClientId, userId].every(isUuid)) return false;
+      // A refresh token is live as the token endpoint reads it: neither
+      // revoked nor expired, and its family not ended. The family ends at
+      // its start plus the realm's `sso_max_lifespan`, and no later than the
+      // browser session that started it; a realm that sets no limit (`null`;
+      // the realm refuses 0) bounds neither (`refreshFamilyEnd` in the auth
+      // server).
       const { rows } = await db.execute<{ related: boolean }>(sql`
         select exists (
-          select 1 from ${oauthConsents}
-          where ${oauthConsents.realmId} = ${realmId}
-            and ${oauthConsents.userId} = ${userId}
-            and ${oauthConsents.oauthClientId} = ${receiverClientId}
-            and ${oauthConsents.revokedAt} is null
-        ) or exists (
-          select 1 from ${refreshTokens}
-          join ${users} on ${users.id} = ${refreshTokens.userId}
+          select 1 from ${users}
+          where ${users.id} = ${userId}
             and ${users.realmId} = ${realmId}
-          where ${refreshTokens.userId} = ${userId}
-            and ${refreshTokens.oauthClientId} = ${receiverClientId}
-            and not ${refreshTokens.revoked}
-            and ${refreshTokens.expiresAt} > ${now}
+            and ${users.enabled}
+        ) and (
+          exists (
+            select 1 from ${oauthConsents}
+            where ${oauthConsents.realmId} = ${realmId}
+              and ${oauthConsents.userId} = ${userId}
+              and ${oauthConsents.oauthClientId} = ${receiverClientId}
+              and ${oauthConsents.revokedAt} is null
+          ) or exists (
+            select 1 from ${refreshTokens}
+            join ${realms} on ${realms.id} = ${realmId}
+            where ${refreshTokens.userId} = ${userId}
+              and ${refreshTokens.oauthClientId} = ${receiverClientId}
+              and not ${refreshTokens.revoked}
+              and ${refreshTokens.expiresAt} > ${now}
+              and (
+                ${realms.ssoMaxLifespan} is null
+                or (
+                  ${refreshTokens.familyCreatedAt} + ${realms.ssoMaxLifespan} * 1000 > ${now}
+                  and (
+                    ${refreshTokens.familySessionExpiresAt} is null
+                    or ${refreshTokens.familySessionExpiresAt} > ${now}
+                  )
+                )
+              )
+          )
         ) as "related"
       `);
       return rows[0]?.related === true;
