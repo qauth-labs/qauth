@@ -330,6 +330,18 @@ export const users = pgTable(
       .notNull()
       .references(() => realms.id, { onDelete: 'cascade' }),
     enabled: boolean('enabled').notNull().default(true),
+    /**
+     * When the account was last disabled, in epoch ms (#748): every browser
+     * session and token of the user issued before it is refused, even after
+     * the account is enabled again. NULL for an account never disabled.
+     *
+     * The trigger `users_not_valid_before` (migration 0044) sets it whenever
+     * `enabled` turns from true to false, from the database's clock, however
+     * the account is disabled (the `db:disable-user` script or an `UPDATE` by
+     * hand), and refuses an update that moves it back or clears it. So
+     * enabling the account again leaves it as it is.
+     */
+    notValidBefore: bigint('not_valid_before', { mode: 'number' }),
     firstName: varchar('first_name', { length: 255 }),
     lastName: varchar('last_name', { length: 255 }),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
