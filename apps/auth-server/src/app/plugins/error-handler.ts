@@ -88,8 +88,11 @@ const MAX_BODY_DESCRIPTION = 500;
  * a `statusCode` of their own and it agrees (400). A route's
  * `schemaErrorFormatter` may return a domain error, and Fastify attaches the
  * issues to it as `validation`: its status is still 400.
+ *
+ * The admin pipeline reads it too, so an audit row records a failure of the
+ * server exactly when the answer is a 5xx.
  */
-function intendedStatusCode(error: FastifyError | Error): number {
+export function intendedStatusCode(error: FastifyError | Error): number {
   if (isValidationError(error)) return 400;
 
   const declared = (error as { statusCode?: unknown }).statusCode;

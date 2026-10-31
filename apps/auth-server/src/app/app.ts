@@ -35,6 +35,8 @@ import type { FastifyInstance, RouteOptions } from 'fastify';
 
 import { env } from '../config/env';
 import { logExperimentalFeatures } from '../config/experimental-features';
+import { type AdminApiOptions, installAdminApi } from './admin/listener';
+import { publicRouteProblem } from './admin/route-placement';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { ADMIN_ROLE_CATALOG } from './helpers/admin-roles';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
@@ -70,6 +72,7 @@ import {
   pluginsFor,
   repositoriesFor,
   routeRolesProblem,
+  servesAdminListener,
   ServiceRoleBootError,
 } from './service-roles';
 
@@ -169,6 +172,15 @@ export interface AppOptions {
    * `main.ts` never sets it.
    */
   egressClientFactory?: EgressPluginOptions['createClient'];
+  /**
+   * The admin listener (ADR-019 Decision 7, #511): the Fastify instance
+   * `createAdminServer` built, on which the app installs the admin API once
+   * its own plugins are registered (`admin/listener.ts`), and which it closes
+   * when it closes. `main.ts` passes one when the process holds the `admin`
+   * role and ADMIN_API_ENABLED is on; the app refuses one otherwise. Its
+   * other members are test support.
+   */
+  adminListener?: AdminApiOptions & { readonly server: FastifyInstance };
 }
 
 declare module 'fastify' {
@@ -492,6 +504,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     eventTelemetryLimits,
     eventDeliveryRoutes,
     egressClientFactory,
+    adminListener,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -930,10 +943,26 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     });
   }
 
-  const unassigned = registeredRoutes
-    .map((route) => routeRolesProblem(route, roles))
+  // Over every route of the app, a plugin's as well as a route module's: an
+  // admin route registers only on the admin listener (#511), and every route
+  // names its roles.
+  const unplaced = registeredRoutes
+    .map((route) => publicRouteProblem(route) ?? routeRolesProblem(route, roles))
     .filter((problem) => problem !== undefined);
-  if (unassigned.length > 0) {
-    throw new Error(unassigned.join('\n'));
+  if (unplaced.length > 0) {
+    throw new Error(unplaced.join('\n'));
+  }
+
+  // The admin API, on its own listener (ADR-019 Decisions 7 and 8, #511),
+  // last: it shares the database, cache, signer, DPoP and JWT plugins above,
+  // and closes before them.
+  if (adminListener !== undefined) {
+    if (!servesAdminListener(roles, env.ADMIN_API_ENABLED) || !plugins.has('jwt')) {
+      throw new Error(
+        `The admin listener runs only on a process that holds the admin role while ADMIN_API_ENABLED is on (SERVICE_ROLES=${describeServiceRoles(roles)}, ADMIN_API_ENABLED=${String(env.ADMIN_API_ENABLED)})`
+      );
+    }
+    const { server: adminServer, ...adminOptions } = adminListener;
+    await installAdminApi(adminServer, fastify, adminOptions);
   }
 }

@@ -14,6 +14,7 @@ import Fastify, { type FastifyInstance, type InjectOptions, type RouteOptions } 
 import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 
+import type { AdminApiOptions } from '../app/admin/listener';
 import type { AppOptions } from '../app/app';
 import { WALLET_LOGIN_FLOW_TTL_MS } from '../app/constants';
 import type { EventLogQueueLimits } from '../app/helpers/event-log-queue';
@@ -60,7 +61,13 @@ export interface BootedAuthServer {
    * `.inject().get(…)`, is not covered and goes to `localhost`.
    */
   readonly app: FastifyInstance;
-  /** Close the server (and its pools). Containers survive. */
+  /**
+   * The admin listener (#511), ready for `.inject(options)`, when the suite
+   * asked for it with `adminListener`. It sends no host: the listener never
+   * routes by host.
+   */
+  readonly admin?: FastifyInstance;
+  /** Close the server (and its pools), the admin listener with it. Containers survive. */
   close(): Promise<void>;
 }
 
@@ -235,6 +242,14 @@ export interface BootAuthServerOptions {
    * server uses the production client, which refuses localhost.
    */
   readonly egressClientFactory?: AppOptions['egressClientFactory'];
+  /**
+   * Boot the admin listener beside the app (#511), installed by the app as
+   * `main.ts` has it. Called once the boot reset the module registry, so it
+   * may import app modules (an operation registry, a fixture route's
+   * helpers) as the instances the app loaded. The listener is ready but not
+   * listening: `BootedAuthServer.admin.inject()` reaches it.
+   */
+  readonly adminListener?: () => AdminApiOptions | Promise<AdminApiOptions>;
 }
 
 /**
@@ -279,6 +294,7 @@ export async function bootAuthServer(
       key.startsWith('OTEL_') ||
       key.startsWith('EVENT_RETENTION_') ||
       key.startsWith('DPOP_') ||
+      key.startsWith('ADMIN_API_') ||
       key.startsWith('SSF_') ||
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
@@ -303,6 +319,7 @@ export async function bootAuthServer(
   vitest.vi.resetModules();
 
   const { app, defaultRealmBootSettings } = await import('../app/app');
+  const { createAdminServer } = await import('../app/admin/listener');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
   const { keyVariableSettings } = await import('../app/helpers/key-variables');
   // The same module instance the app just loaded, since the registry was reset.
@@ -341,7 +358,16 @@ export async function bootAuthServer(
   // Nothing under test observes the difference.
   const defaultRealmBoot = options.defaultRealmBoot ?? true;
   if (options.onRoute !== undefined) server.addHook('onRoute', options.onRoute);
+  const adminServer =
+    options.adminListener === undefined
+      ? undefined
+      : createAdminServer({ loggerInstance: server.log.child({ listener: 'admin' }) });
+  const adminOptions =
+    adminServer === undefined || options.adminListener === undefined
+      ? undefined
+      : { server: adminServer, ...(await options.adminListener()) };
   await server.register(fp(app), {
+    ...(adminOptions === undefined ? {} : { adminListener: adminOptions }),
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined
       ? {}
@@ -358,6 +384,7 @@ export async function bootAuthServer(
     await server.register(async (scope) => routes(scope));
   }
   await server.ready();
+  await adminServer?.ready();
   injectToRealmHost(server, new URL(env.JWT_ISSUER).host);
   if (defaultRealmBoot) {
     // The environment as this server booted with it: a later boot of another
@@ -391,6 +418,7 @@ export async function bootAuthServer(
 
   return {
     app: server,
+    ...(adminServer === undefined ? {} : { admin: adminServer }),
     async close(): Promise<void> {
       await server.close();
     },

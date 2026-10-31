@@ -58,3 +58,35 @@ export function resolveRealmRateLimitMax(
   const environment = parseEnvironment(realm.maxEnvironmentLaxity);
   return resolveRateLimitMax(ENVIRONMENT_PROFILES[environment].rateLimitTier, config);
 }
+
+/**
+ * The bucket key of the admin listener's per-address ceiling (#511): the
+ * client address key alone, as the listener has no host and so no realm
+ * before the token guard runs. The ceiling counts every call to the
+ * listener, a call without a token included.
+ */
+export function adminAddressRateLimitKey(request: ClientAddressSource): string {
+  return `admin:address:${clientAddressKey(request)}`;
+}
+
+/** The parts of a Fastify request {@link adminSubjectRateLimitKey} reads. */
+export interface AdminSubjectRateLimitSource {
+  /** The claims of the token the admin token guard verified. */
+  readonly jwtPayload?: { readonly iss?: string; readonly sub?: string };
+}
+
+/**
+ * The bucket key of the admin listener's per-subject ceiling (#511): the
+ * issuer and subject of the token the guard verified, so one account has one
+ * bucket whatever address it calls from.
+ *
+ * @throws {Error} before the token guard, which sets the claims
+ */
+export function adminSubjectRateLimitKey(request: AdminSubjectRateLimitSource): string {
+  const issuer = request.jwtPayload?.iss;
+  const subject = request.jwtPayload?.sub;
+  if (issuer === undefined || subject === undefined) {
+    throw new Error('The per-subject ceiling runs after the admin token guard');
+  }
+  return `admin:subject:${issuer}:${subject}`;
+}

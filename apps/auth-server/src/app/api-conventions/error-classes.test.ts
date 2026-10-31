@@ -6,6 +6,7 @@ import { SsfRequestError } from '@qauth-labs/fastify-plugin-ssf';
 import * as sharedErrors from '@qauth-labs/shared-errors';
 import { InvalidDpopProofError } from '@qauth-labs/shared-errors';
 
+import { ApprovalRequiredError } from '../helpers/approval-required';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import {
@@ -130,6 +131,8 @@ describe('the error registry (#513)', () => {
     [SsfRequestError, 'bad_request', 400],
     [SsfNotFoundError, 'not_found', 404],
     [SsfStreamExistsError, 'conflict', 409],
+    // The admin pipeline's approval gate (#511).
+    [ApprovalRequiredError, 'approval_required', 403],
   ] as const)('answers %o with %s (%i)', (errorClass, code, status) => {
     const { code: entryCode } = errorClassEntryOf(new errorClass()) ?? {};
 

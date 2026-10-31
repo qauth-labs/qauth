@@ -215,6 +215,10 @@ function setEphemeralEnv(surface: FlagSurface): void {
     SERVICE_ROLES: 'all',
   });
 
+  // The committed documents are no release's: a caller's `QAUTH_VERSION`
+  // cannot put a version into them (`openapiVersion()`, 0.0.0-dev).
+  delete process.env['QAUTH_VERSION'];
+
   if (surface === 'default') {
     Object.assign(process.env, {
       WALLET_FEDERATION_ENABLED: 'false',

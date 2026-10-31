@@ -1,5 +1,11 @@
 // Schema exports
 export {
+  type AdminApiEnv,
+  adminApiEnvSchema,
+  DEFAULT_ADMIN_API_HOST,
+  DEFAULT_ADMIN_API_PORT,
+} from './admin-api';
+export {
   type AssuranceEnv,
   assuranceEnvSchema,
   type ConfiguredIssuerAssuranceStatement,
