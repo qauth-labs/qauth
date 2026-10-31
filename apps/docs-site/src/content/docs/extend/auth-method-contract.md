@@ -60,8 +60,10 @@ start(context, { uiLocales })  ──► { redirectTo, transaction }
         │  interaction and its flow cookie, and sends the browser on
         ▼
 provider ──► GET /upstream/<type>/callback?code=…&state=…
-        │  the host takes the pending transaction (once) and hands it
-        │  to the callback with the query; no header, no cookie
+        │  the host takes the pending transaction (once); with none it
+        │  answers transaction_mismatch and the method never runs.
+        │  Otherwise it hands the callback the query and the
+        │  transaction; no header, no cookie
         ▼
 callback ──► result | declined | failed (reason)
         │
@@ -75,14 +77,18 @@ engine: verify(result) ──► VerifiedIdentity, checked
    answer (`startUpstreamStep`): the redirect is an absolute `https` URL with no credentials and no
    fragment, and the transaction is JSON data of at most 4096 bytes.
 2. **Callback.** The provider sends the browser back to one of the method's callback routes. The
-   host takes the transaction the flow cookie names, once, and hands it to the route's handler. The
-   handler checks `state` against it before it does anything else, and answers one of three
-   outcomes: `result`, `declined` (the person cancelled at the provider, `access_denied`), or
+   host takes the transaction the flow cookie names, once. A request with none (no flow cookie,
+   another interaction, a replay) ends as `transaction_mismatch` in the host: the method never
+   runs for it, so it never spends the code. Otherwise the host hands the transaction to the
+   route's handler, which checks `state` against it before it does anything else (a `state` that
+   is missing, empty, repeated or another start's is a `transaction_mismatch` too), and answers
+   one of three outcomes: `result`, `declined` (the person cancelled at the provider, `access_denied`), or
    `failed` with a reason from a closed set (`transaction_mismatch`, `provider_error`,
    `invalid_response`, `upstream_unavailable`).
 3. **Identity.** The engine (`completeUpstreamStep`) passes a `result` to `verify()`, checks the
    identity it resolves (an `externalSub` of 1 to 255 characters with no control character, an
-   assurance level, raw claims), then takes the attributes. Every attribute's `source` must equal
+   assurance level, raw claims of JSON data within 64 KiB, which it copies and freezes), then
+   takes the attributes. Every attribute's `source` must equal
    the method's `type`: a method cannot write attributes under another source, such as `wallet`,
    which outranks every other in claim resolution. A `verify()` rejection ends the step as
    `verification_refused`; any other broken answer is an `AuthMethodFaultError`, and the engine
@@ -97,19 +103,22 @@ Plugin code is trusted code that runs in-process
 the contract hands it only what it needs. `createAuthMethodContext`
 (`libs/server/federation/src/auth-method/context.ts`) builds the context, with five members:
 
-- `config`: the realm's config of the method, parsed by `configSchema` and frozen;
-- `egress`: `request()` of the egress client, with the realm bound, so every outbound call is
-  checked (ADR-019 Decision 8). A destination's `source` is `operator`, `admin` or
-  `remote_document`, never one a client or an end user chose;
-- `signer`: `signClientAssertion()` and `getUpstreamJwks()` of the signer role, with the realm, the
-  provider and the caller role bound. Signatures, never a key (ADR-019 Decision 9);
-- `log`: a logger's four levels;
+- `config`: the realm's config of the method, parsed by `configSchema`, copied and frozen;
+- `egress`: `request()` over the egress client, so every outbound call is checked (ADR-019
+  Decision 8). It passes on only `method` (`GET` or `POST`), `url`, `headers`, `body`, `purpose`
+  and `source` (`operator`, `admin` or `remote_document`, never a destination a client or an end
+  user chose), and adds the realm's name itself: a method cannot pick another realm's allowlist
+  entries or lift the client's caps;
+- `signer`: `signClientAssertion()` and `getUpstreamJwks()` over the signer role, with the realm,
+  the provider and the caller role fixed by the host. Signatures, never a key (ADR-019 Decision 9);
+- `log`: a logger's four levels, with a fields object and a message;
 - `routeUrl(path)`: the absolute URL of one of the method's own routes on the realm host, for a
   `redirect_uri`.
 
-The builder copies each function bound to the object it came from, so handing it the whole egress
-client, the whole signer or a full logger still gives the method nothing more. No database or
-cache handle, no private key, no Fastify instance, no request header and no cookie.
+Each member is an adapter the builder writes, not a bound copy of the host's function, so the host
+can hand over its whole egress client, signer and logger and the method still reaches nothing
+more. No database or cache handle, no private key, no Fastify instance, no request header and no
+cookie.
 
 ## Routes
 
@@ -126,8 +135,13 @@ There are two kinds of route:
 - a **callback** route gets the query, the form and the taken transaction, and answers an outcome
   that goes to the engine;
 - a **bounce** route gets no transaction and may only send the browser to one of the method's own
-  `GET` routes on the same origin. It is for a provider's `form_post`, which arrives cross-site
-  without the `SameSite=Lax` flow cookie.
+  `GET` callback routes on the same origin. It is for a provider's `form_post`, which arrives
+  cross-site without the `SameSite=Lax` flow cookie.
+
+A route has no `HEAD` twin, a `POST` route reads only a urlencoded form (a JSON body reaches the
+method as an empty form), and a method sees at most 64 parameters, each at most 8192 characters.
+The request log censors the value of a `code` parameter in the logged URL, since an upstream
+authorization code rides there.
 
 The path carries no version: the callback URL is registered at the provider, and a path that
 changed at 1.0 would break every registration.
@@ -136,7 +150,9 @@ changed at 1.0 would break every registration.
 
 The provider registry holds AuthMethods beside plain providers, in one `type` space
 (`libs/server/federation/src/providers/provider-registry.ts`). `resolve(type)` finds either kind,
-`resolveAuthMethod(type)` finds only an AuthMethod, and `authMethods()` lists them for the mount.
+`resolveAuthMethod(type)` finds only an AuthMethod, `findAuthMethod(type)` answers `undefined`
+for a type that came from a request and names none, and `authMethods()` lists them for the
+mount.
 A provider that carries a `contract` member is held to the whole contract at registration, so a
 method written against another contract version, with a route that could leave its prefix, or
 under a reserved type, fails the boot, and so does a duplicate `type`.
@@ -147,10 +163,13 @@ the built-in providers; leaving them out registers none.
 
 `checkAuthMethod(method, scenario)` is the one function a method's author calls, in any test
 runner. The author plays the provider: the scenario gives a config, answers the method's
-outbound calls, and says what the browser comes back with.
+outbound calls, and says what the browser comes back with. It is test support: it comes from the
+`testing` entry point, never the main one, and it refuses to run with `NODE_ENV=production`,
+because it replaces the global `fetch` while it runs. Today the contract and the kit are exported
+from the workspace package `@qauth-labs/server-federation`, which is not published to npm.
 
 ```ts
-import { checkAuthMethod } from '@qauth-labs/server-federation';
+import { checkAuthMethod } from '@qauth-labs/server-federation/testing';
 
 it('meets the AuthMethod contract', async () => {
   await checkAuthMethod(myMethod, {
@@ -169,13 +188,19 @@ check the method failed:
 - `start()` answers a valid redirect and transaction, and two starts answer different
   transactions;
 - the callback, with its transaction, ends in an identity whose attributes carry the method's
-  `type`;
-- the same callback with no transaction, and with another start's transaction, never does;
-- `verify()` rejects inputs no callback produced, a well-formed identity among them;
+  `type`, and a second sign-in of the same person resolves the same `externalSub`;
+- the callback carries a value of the authorization request (`state`) that binds it to its
+  transaction; without it, with it empty or repeated, and with another start's transaction, the
+  callback never gives a result and never calls the provider;
+- `verify()` rejects inputs no callback produced: a well-formed identity, a copy of a real result,
+  and a result it has already verified;
 - a declined callback ends as `declined`, when the scenario gives one;
-- the method calls `fetch` nowhere: the kit disables it while the method runs;
-- no log line carries the value of a `writeOnly` config member.
+- the method never calls the global `fetch` while the kit runs it (the kit cannot see
+  `node:https`, `undici` or a `fetch` kept from before; the lint rule `qauth/no-direct-network`
+  refuses those in QAuth's own code);
+- no log line carries the value of a `writeOnly` config member, in a field, a message or an
+  error, wherever the member sits in the config schema.
 
 `libs/server/federation/testing/sample-auth-method.fixture.ts` is a sample method that passes,
-written the way a plugin would be; `contract-kit.test.ts` beside the kit shows the broken methods
-it refuses.
+written the way a plugin would be; `libs/server/federation/src/testing/contract-kit.test.ts`
+shows the broken methods the kit refuses, each with the problems it reports.

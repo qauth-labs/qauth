@@ -49,9 +49,11 @@ This library defines that abstraction (see
 >   plugin API of ADR-018 §4. `AuthMethod` extends `CredentialProvider` with an
 >   `id`, the contract version, display data, a config schema, the steps it
 >   contributes, the routes it mounts under `/upstream/<type>` and `start()`;
->   the engine's checks around it (`startUpstreamStep`, `completeUpstreamStep`),
->   the context a method is handed (`createAuthMethodContext`) and the contract
->   test kit (`checkAuthMethod`). See
+>   the engine's checks around it (`startUpstreamStep`, `completeUpstreamStep`)
+>   and the context a method is handed (`createAuthMethodContext`). The
+>   contract test kit (`checkAuthMethod`) is test support under `src/testing/`,
+>   served from the `@qauth-labs/server-federation/testing` entry point and
+>   never from the main one. See
 >   [the docs page](../../../apps/docs-site/src/content/docs/extend/auth-method-contract.md).
 
 ## Usage
