@@ -224,8 +224,9 @@ Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approv
    answer, 201, is the approval, `pending`, with `approvalUrl`: the approval page, on the auth
    server of the realm the requester's account lives in, built from that realm's row.
 3. An approver confirms on that page with a factor, or declines. There is no admin route for it.
-   The passkey factor is the only one a deployment will use; until it ships, no production process
-   can approve.
+   The passkey factor is the only one a deployment will use. Neither it nor the approval page has
+   shipped yet, so no code a deployment runs gives an approval; the one factor that exists is for
+   tests, and refuses to be built under `NODE_ENV=production`.
 4. The client reads the approval, `GET /admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}`,
    until its `status` is `approved`.
 5. It repeats the original call, unchanged, with the header `QAuth-Approval: <approvalId>`. The
@@ -241,17 +242,22 @@ approval. `op_hash` is its SHA-256 with the nonce, and the challenge an approver
 derived from it, so an approval given for one filing approves nothing else.
 
 **Who approves.** A human requester's own fresh step-up is its first approval, and only the
-requester gives it. A service account has no passkey: a human admin with `approvals.approve`
-approves in its place. Where a second approval is required, it comes from a different human
-account with `approvals.approve`. An approval needs one approval today; the two-admin rule raises
-it to two where a realm makes a second admin mandatory.
+requester gives it. An approval needs that one approval today. The engine already counts a
+required second approval only from a different account that holds `approvals.approve` on the
+realm; the two-admin rule (#521) will make a second admin mandatory where a realm asks for it, and
+add the rest of ADR-019's eligibility rules (the approver held the security scope before the
+request, no account or credential change in the 7 days before it, a passkey that is not the
+requester's). Service accounts (#522) have no passkey: a human admin will approve in their place.
+Until they ship, every admin API caller is a human account.
 
 **Who reads.** Filing (`approvals.create`) and withdrawing (`approvals.cancel`) take the
 classification of the operation the approval is for: the caller needs every permission it
 declares, and `qauth:admin:security`. Reading (`approvals.get`) needs `approvals.read`, and only
 the requester, an account that gave one of its approvals and an account that may still give one
 read an approval. Anyone else gets 404 `not_found`, exactly as for an id that does not exist. An
-approval's representation holds the operation's path parameters and query, never its body.
+approval's representation holds the operation's path parameters and query, never its body. Its
+`reason`, `params` and `query` are raw text; a page shows `display` instead, which is `null` once
+the approval is no longer open.
 
 **How an approval ends.** It expires 5 minutes after it is filed, a constant. It is `consumed`
 once the operation commits on it; an operation that fails or rolls back leaves it `approved`
@@ -259,14 +265,18 @@ until then. The requester withdraws it with
 `POST /admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}/cancel`, whose `If-Match` names the
 version the approval's `ETag` gave (428 without one, 412 for another version, 409 for an approval
 that is no longer open). An approver may decline it instead (`denied`). A consumed, expired,
-cancelled or denied approval approves nothing.
+cancelled or denied approval approves nothing. A consumed, cancelled or denied approval no longer
+keeps the operation's body, which may hold a secret: its two hashes are what the audit log binds
+to. One that expires unused keeps it until a retention job removes expired approvals.
 
 **What the approver is shown.** The operation, rendered from the stored request, never from text
 the requester wrote: every security operation registers a renderer, which returns typed display
 data, never HTML, and the admin listener refuses to boot a security operation without one. The
 requester's reason is shown apart, as quoted text. Every string is length-capped, and a control,
-bidirectional or other invisible character in it is shown escaped (`\u{202E}`), so it can neither
-hide nor reorder what the page shows.
+bidirectional, format or other default-ignorable character in it is shown escaped (`\u{202E}`), a
+backslash doubled and a combining mark past the third on one character escaped, so the text can
+neither hide nor reorder what the page shows, nor pass for an escape. Every reader of an approval
+gets its display data, so a renderer never shows a secret value of the request.
 
 **Audit rows.** Every state change writes the admin audit log of the approval's realm: filing and
 withdrawing write the rows of `approvals.create` and `approvals.cancel`; approving and declining

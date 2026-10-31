@@ -1084,18 +1084,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   five minutes after it was filed. Filing and withdrawing take the
   classification of the operation they name, reading needs `approvals.read`,
   and anyone but the requester and an eligible approver gets 404. A human
-  requester's own fresh step-up is the first approval; a service account's
-  comes from a human admin, and a required second approval from a different
-  human admin who holds `approvals.approve`. Approving happens through a factor
-  (the `ApprovalFactor` interface), never through an admin route: only a
-  test-only factor exists, which refuses to be built under
-  `NODE_ENV=production`, so no deployment can approve yet; the passkey factor
-  and the approval page come later. The answer carries `approvalUrl`, built
-  from the requester realm's row. Every security operation registers a
-  renderer, and the admin listener refuses to boot one without it: the
-  approver sees typed display data rendered from the stored request, every
-  string length-capped with its control, bidirectional and invisible
-  characters shown escaped, and the requester's reason apart, as quoted text.
+  requester's own fresh step-up is the one approval an operation needs today;
+  the engine counts a required second approval only from a different account
+  that holds `approvals.approve`, which the two-admin rule ([#521]) will
+  require where a realm asks, with ADR-019's other eligibility rules. Approving
+  happens through a factor (the `ApprovalFactor` interface), never through an
+  admin route. Neither the passkey factor nor the approval page has shipped,
+  so no code a deployment runs gives an approval; the one factor that exists is
+  for tests and refuses to be built under `NODE_ENV=production`. The answer
+  carries `approvalUrl`, built from the requester realm's row. Every security
+  operation registers a renderer, and the admin listener refuses to boot one
+  without it: the approver sees typed display data rendered from the stored
+  request, every string length-capped with its control, bidirectional, format
+  and other default-ignorable characters shown escaped and its backslashes
+  doubled, and the requester's reason apart, as quoted text. A consumed,
+  cancelled or denied approval drops the operation's body, which may hold a
+  secret; one that expires unused keeps it until a retention job removes it.
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
 
@@ -1863,6 +1867,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#514]: https://github.com/qauth-labs/qauth/issues/514
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
+[#521]: https://github.com/qauth-labs/qauth/issues/521
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
