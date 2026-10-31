@@ -612,12 +612,22 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
       [realm]
     );
     const left = new Map(rows.map((row) => [row.id, row.revoked_reason]));
-    expect([...left.keys()].sort()).toEqual([live, idle, recentlyEnded, recentlyExpired].sort());
+    expect([...left.keys()].sort()).toEqual(
+      [live, idle, recentlyEnded, recentlyExpired, longExpired].sort()
+    );
     expect(left.get(live)).toBeNull();
     expect(left.get(idle)).toBe('idle');
     expect(left.get(recentlyExpired)).toBe('expired');
     expect(left.has(longEnded)).toBe(false);
-    expect(left.has(longExpired)).toBe(false);
+    // Past its end for 31 days and never marked: the expiry job marks it now
+    // (idle, the earlier of its two ends in this realm), the listeners hear of
+    // it, and its retention counts from the mark.
+    expect(left.get(longExpired)).toBe('idle');
+    expect(
+      heard.a
+        .filter((notice) => notice.actor.type === 'system')
+        .flatMap((notice) => notice.sessions.map((s) => s.session.id))
+    ).toContain(longExpired);
     expect(await a.sessionService.get({ realmId: realm, sid: live })).not.toBeNull();
     // The idle session's end reached the listeners, with its client.
     const lapsed = heard.a.filter((notice) => notice.actor.type === 'system');

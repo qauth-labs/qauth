@@ -1101,8 +1101,9 @@ export interface RevokedSessionsBatch {
 /** One batch of {@link SessionsRepository.deleteEnded}. */
 export interface DeleteEndedSessionsBatch {
   /**
-   * Delete the rows revoked, or past `expires_at`, before this time, in epoch
-   * milliseconds.
+   * Delete the rows revoked before this time, in epoch milliseconds. A row
+   * past `expires_at` that was never marked ended is kept: its end has not
+   * reached the listeners yet.
    */
   before: number;
   /** Start after this session id; from the first when absent. */

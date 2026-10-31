@@ -336,8 +336,8 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
         .filter(
           (row) =>
             (batch.after === null || row.id > batch.after) &&
-            ((row.revokedAt !== null && row.revokedAt < batch.before) ||
-              row.expiresAt < batch.before)
+            row.revokedAt !== null &&
+            row.revokedAt < batch.before
         )
         .sort(byId)
         .slice(0, batch.limit);

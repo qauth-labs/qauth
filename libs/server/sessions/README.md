@@ -128,7 +128,8 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
 - **Lapsed and purged.** `endLapsed` marks the sessions past their absolute end or their realm's idle
   limit, which `get` already treats as absent, as `expired` or `idle`, so their registry rows go and
   the listeners hear of them; `revokedAt` is the time of the mark, which retention counts from.
-  `purge` deletes the rows revoked (or past their stored `expires_at`) before a time. The
+  `purge` deletes the rows revoked before a time; a row past its end that `endLapsed` has not
+  marked yet stays until it is, so its end reaches the listeners first. The
   auth-server runs them as two jobs on the `web` role: `session-expiry` every five minutes and
   `session-purge` hourly, keeping `SESSION_RETENTION_DAYS` (30 by default).
 - **A client's list is for admins.** `listForClient` gives each session with all the clients it

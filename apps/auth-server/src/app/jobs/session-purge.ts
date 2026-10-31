@@ -25,13 +25,15 @@ export interface SessionPurgeJobOptions {
 
 /**
  * The browser session purge (ADR-019 Decision 3, issue #550): delete the rows
- * of sessions that ended, or passed their stored `expires_at`, more than
- * `SESSION_RETENTION_DAYS` ago. Until then the account and admin session
- * lists show them as ended. A live session is never deleted.
+ * of sessions that ended more than `SESSION_RETENTION_DAYS` ago. Until then
+ * the account and admin session lists show them as ended. A live session is
+ * never deleted.
  *
  * A session that lapsed is marked by the `session-expiry` job at the time it
- * runs, and its retention counts from that mark; one whose `expires_at` is
- * older than the retention goes whether or not it was marked.
+ * runs, and its retention counts from that mark. One never marked is kept,
+ * however old its `expires_at`, so its end and the clients it served reach
+ * the listeners (back-channel logout) before its row goes, even after the
+ * expiry job was down for longer than the retention.
  *
  * It works in batches and stops between batches when the run's signal
  * aborts. Repeating it deletes nothing new, so a run cut short is finished by

@@ -160,7 +160,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'sessions',
     default: '30',
     since: '0.2.0',
-    docs: 'The days a browser session row is kept after it ended or expired, for the account and admin session lists, before the session purge job deletes it.',
+    docs: 'The days a browser session row is kept after it ended, or after the session expiry job marked it expired or idle, for the account and admin session lists, before the session purge job deletes it.',
   },
   {
     name: 'SESSION_COOKIE_SECURE',

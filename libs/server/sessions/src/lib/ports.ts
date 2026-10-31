@@ -122,8 +122,9 @@ export interface SessionStore {
     page: { limit: number; after?: SessionListPosition }
   ): Promise<StoredSessionList | undefined>;
   /**
-   * Delete one batch of rows, of every realm, revoked or past their stored
-   * `expires_at` before `batch.before`, in id order after `batch.after`.
+   * Delete one batch of rows, of every realm, revoked before `batch.before`,
+   * in id order after `batch.after`. A row past its end that was never marked
+   * ended is kept for `revokeLapsedBatch`.
    */
   deleteEnded(batch: {
     before: number;

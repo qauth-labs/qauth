@@ -813,7 +813,7 @@ describe('endLapsed', () => {
 });
 
 describe('purge', () => {
-  it('deletes the rows that ended or expired before the cut-off, and leaves the rest', async () => {
+  it('deletes the rows that ended before the cut-off, and leaves the rest', async () => {
     const longEnded = await signInAt();
     await service.revoke({
       realmId: REALM_A,
@@ -836,14 +836,34 @@ describe('purge', () => {
 
     const result = await service.purge({ endedBefore: clock.now() - 30 * DAY, batchSize: 1 });
 
-    expect(result).toEqual({ deleted: 2 });
+    expect(result).toEqual({ deleted: 1 });
     expect(store.row(longEnded)).toBeUndefined();
-    expect(store.row(longExpired)).toBeUndefined();
     expect(store.row(recentlyEnded)).toBeDefined();
     expect(store.row(live)).toBeDefined();
     expect(await service.get({ realmId: REALM_A, sid: live })).not.toBeNull();
-    // Batches of one: two deletions, then the batch that finds no row.
-    expect(store.calls.purgeBatches).toBe(3);
+    // Long past its end but never marked ended (the expiry job was down):
+    // kept, so its end still reaches the listeners.
+    expect(store.row(longExpired)?.revokedAt).toBeNull();
+    // Batches of one: one deletion, then the batch that finds no row.
+    expect(store.calls.purgeBatches).toBe(2);
+  });
+
+  it('keeps a lapsed session until it is marked, which the listeners hear, and counts its retention from the mark', async () => {
+    const lapsed = await signInAt();
+    store.recordClient(lapsed, APP);
+    clock.advance(40 * DAY);
+
+    expect(await service.purge({ endedBefore: clock.now() - 30 * DAY })).toEqual({ deleted: 0 });
+    expect(store.clientsOf(lapsed)).toHaveLength(1);
+
+    await service.endLapsed();
+    expect(noticedSids()).toEqual([lapsed]);
+    expect(notices[0].sessions[0].clients.map((client) => client.clientId)).toEqual(['app']);
+    expect(await service.purge({ endedBefore: clock.now() - 30 * DAY })).toEqual({ deleted: 0 });
+
+    clock.advance(31 * DAY);
+    expect(await service.purge({ endedBefore: clock.now() - 30 * DAY })).toEqual({ deleted: 1 });
+    expect(store.row(lapsed)).toBeUndefined();
   });
 
   it('stops between batches when its signal is aborted', async () => {

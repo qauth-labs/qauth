@@ -756,7 +756,7 @@ describe('session lists and bulk revocations (#550)', () => {
     expect(update.text).toContain('returning');
   });
 
-  it('deleteEnded selects rows revoked or expired before the cut-off, then deletes them if that still holds', async () => {
+  it('deleteEnded selects rows revoked before the cut-off, then deletes them if that still holds', async () => {
     const { db, queries } = createRecordingDb((text) =>
       text.toLowerCase().startsWith('select') ? [[SESSION_ID]] : [[SESSION_ID]]
     );
@@ -770,12 +770,12 @@ describe('session lists and bulk revocations (#550)', () => {
     ).toEqual({ deleted: 1, last: SESSION_ID, selected: 1 });
 
     const [select, remove] = queries.map((query) => ({ ...query, text: query.text.toLowerCase() }));
-    const ended = '("sessions"."revoked_at" < $2 or "sessions"."expires_at" < $3)';
-    expect(select.text).toContain(`where ("sessions"."id" > $1 and ${ended})`);
-    expect(select.values).toEqual([OTHER_SESSION, NOW, NOW, 1]);
+    expect(select.text).toContain('where ("sessions"."id" > $1 and "sessions"."revoked_at" < $2)');
+    expect(select.text).not.toContain('expires_at');
+    expect(select.values).toEqual([OTHER_SESSION, NOW, 1]);
     expect(remove.text).toContain('delete from "sessions"');
     expect(remove.text).toContain(
-      'where ("sessions"."id" = any($1::uuid[]) and ("sessions"."revoked_at" < $2 or "sessions"."expires_at" < $3))'
+      'where ("sessions"."id" = any($1::uuid[]) and "sessions"."revoked_at" < $2)'
     );
   });
 

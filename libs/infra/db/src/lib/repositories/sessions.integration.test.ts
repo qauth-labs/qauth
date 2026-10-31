@@ -1102,7 +1102,7 @@ describe('sessions integration (real Postgres)', () => {
       expect(await count('sessions', 'user_id = $1 AND revoked_at IS NULL', [user])).toBe(0);
     }, 120_000);
 
-    it('deletes rows revoked or expired before the cut-off and keeps the rest', async () => {
+    it('deletes rows revoked before the cut-off and keeps the rest, an expired row never marked too', async () => {
       const realm = await seedRealm();
       const user = await seedUser(realm);
       const now = Date.now();
@@ -1135,10 +1135,11 @@ describe('sessions integration (real Postgres)', () => {
         after = batch.last;
       }
 
-      expect(deleted).toBe(2);
+      expect(deleted).toBe(1);
       expect(await repo.findById(realm, longRevoked.id)).toBeUndefined();
-      expect(await repo.findById(realm, longExpired.id)).toBeUndefined();
-      for (const kept of [recentlyRevoked, recentlyExpired, live]) {
+      // Past its end for longer than the retention, but never marked ended:
+      // the lapsed-ending step tells the listeners before the row goes.
+      for (const kept of [longExpired, recentlyRevoked, recentlyExpired, live]) {
         expect(await repo.findById(realm, kept.id)).toBeDefined();
       }
     });

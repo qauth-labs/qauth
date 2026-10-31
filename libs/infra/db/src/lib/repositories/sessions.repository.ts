@@ -560,7 +560,11 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
     },
 
     async deleteEnded(batch) {
-      const ended = or(lt(sessions.revokedAt, batch.before), lt(sessions.expiresAt, batch.before));
+      // Only a row marked ended: one past its end but never marked waits for
+      // the lapsed-ending step, which takes its registry rows and tells the
+      // listeners (back-channel logout) first, and its retention counts from
+      // that mark.
+      const ended = lt(sessions.revokedAt, batch.before);
       const doomed = await defaultDb
         .select({ id: sessions.id })
         .from(sessions)

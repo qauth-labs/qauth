@@ -442,9 +442,11 @@ export interface SessionService {
    */
   endLapsed(input?: EndLapsedSessionsInput): Promise<{ ended: number }>;
   /**
-   * Delete the rows of sessions, of every realm, that ended (or passed their
-   * stored `expires_at`) before `endedBefore`. A live session is never
-   * deleted. The session purge job runs it with `SESSION_RETENTION_DAYS`.
+   * Delete the rows of sessions, of every realm, that ended before
+   * `endedBefore`. A live session is never deleted, nor one past its end that
+   * {@link endLapsed} has not marked yet: its end reaches the listeners
+   * (back-channel logout) first, however long the expiry job was down. The
+   * session purge job runs it with `SESSION_RETENTION_DAYS`.
    */
   purge(input: PurgeSessionsInput): Promise<{ deleted: number }>;
   /**
