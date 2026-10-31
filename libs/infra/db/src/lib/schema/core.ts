@@ -339,7 +339,11 @@ export const users = pgTable(
      * `enabled` turns from true to false, from the database's clock, however
      * the account is disabled (the `db:disable-user` script or an `UPDATE` by
      * hand), and refuses an update that moves it back or clears it. So
-     * enabling the account again leaves it as it is.
+     * enabling the account again leaves it as it is. The deferred trigger
+     * `users_not_valid_before_at_commit` moves it once more, to the commit of
+     * the disabling transaction, before which other transactions still read
+     * the account as enabled. Migration 0044 gave every account disabled
+     * when it ran the time it ran.
      */
     notValidBefore: bigint('not_valid_before', { mode: 'number' }),
     firstName: varchar('first_name', { length: 255 }),

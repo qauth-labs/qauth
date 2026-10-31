@@ -2,9 +2,10 @@
  * Seed-then-migrate test for migration 0044: `users.not_valid_before` (#748).
  *
  * The migration applies to a schema that holds accounts, enabled and disabled:
- * every one keeps its row with no time, and an insert without the column, as
- * the previous release makes during a rolling upgrade, still works. From then
- * on disabling an account, by any `UPDATE`, records the time of the change;
+ * an enabled one keeps its row with no time, a disabled one gets the time the
+ * migration ran, and an insert without the column, as the previous release
+ * makes during a rolling upgrade, still works. From then on disabling an
+ * account, by any `UPDATE`, records the time its transaction commits;
  * enabling it again leaves the time as it is, disabling it again moves it
  * forward, and no update moves it back or clears it.
  *
@@ -99,15 +100,20 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     await db().query(`UPDATE users SET enabled = $1 WHERE id = $2`, [enabled, userId]);
   }
 
-  it('keeps every existing account, enabled or disabled, with no time', async () => {
+  it('keeps an enabled account with no time, and gives one already disabled the time of the migration', async () => {
     const realm = await seedRealm();
     const enabled = await seedUser(realm);
     const disabled = await seedUser(realm, false);
 
+    const start = Date.now();
     await migrate();
+    const end = Date.now();
 
     expect(await notValidBefore(enabled)).toBeNull();
-    expect(await notValidBefore(disabled)).toBeNull();
+    // Disabled at a time nobody recorded: what it holds was issued before now.
+    const recorded = await notValidBefore(disabled);
+    expect(recorded).toBeGreaterThanOrEqual(start);
+    expect(recorded).toBeLessThanOrEqual(end);
   });
 
   it('lets the previous release insert an account without the column', async () => {
@@ -134,7 +140,7 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     expect(recorded).toBeLessThanOrEqual(end);
   });
 
-  it('takes the time of the row change, not the start of its transaction', async () => {
+  it('records the time the disabling transaction commits, not when it began or changed the row', async () => {
     const realm = await seedRealm();
     const user = await seedUser(realm);
     await migrate();
@@ -142,16 +148,47 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     const client = await db().connect();
     try {
       await client.query('BEGIN');
-      const {
-        rows: [started],
-      } = await client.query<{ at: string }>(
-        `SELECT floor(EXTRACT(EPOCH FROM now()) * 1000)::bigint AS at`
-      );
-      await client.query(`SELECT pg_sleep(0.2)`);
       await client.query(`UPDATE users SET enabled = false WHERE id = $1`, [user]);
+      const {
+        rows: [inside],
+      } = await client.query<{ not_valid_before: string }>(
+        `SELECT not_valid_before FROM users WHERE id = $1`,
+        [user]
+      );
+      // Other transactions read the account as enabled until the commit, and
+      // may sign it in meanwhile.
+      await client.query(`SELECT pg_sleep(0.3)`);
+      const beforeCommit = Date.now();
       await client.query('COMMIT');
 
-      expect(await notValidBefore(user)).toBeGreaterThanOrEqual(Number(started.at) + 200);
+      const committed = await notValidBefore(user);
+      expect(committed).toBeGreaterThanOrEqual(beforeCommit);
+      expect(committed).toBeGreaterThanOrEqual(Number(inside.not_valid_before) + 300);
+    } finally {
+      client.release();
+    }
+  });
+
+  it('moves nothing at commit for an account disabled and enabled again in one transaction', async () => {
+    const realm = await seedRealm();
+    const user = await seedUser(realm);
+    await migrate();
+
+    const client = await db().connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`UPDATE users SET enabled = false WHERE id = $1`, [user]);
+      const {
+        rows: [inside],
+      } = await client.query<{ not_valid_before: string }>(
+        `SELECT not_valid_before FROM users WHERE id = $1`,
+        [user]
+      );
+      await client.query(`UPDATE users SET enabled = true WHERE id = $1`, [user]);
+      await client.query(`SELECT pg_sleep(0.05)`);
+      await client.query('COMMIT');
+
+      expect(await notValidBefore(user)).toBe(Number(inside.not_valid_before));
     } finally {
       client.release();
     }
@@ -186,16 +223,16 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     expect(await notValidBefore(user)).toBe(first);
   });
 
-  it('records a time for an account the previous release left disabled once it is enabled and disabled again', async () => {
+  it('keeps the time of the migration for an account the previous release left disabled, once it is enabled', async () => {
     const realm = await seedRealm();
     const user = await seedUser(realm, false);
     await migrate();
+    const recorded = await notValidBefore(user);
 
     await setEnabled(user, true);
-    expect(await notValidBefore(user)).toBeNull();
-    await setEnabled(user, false);
 
-    expect(await notValidBefore(user)).not.toBeNull();
+    expect(recorded).not.toBeNull();
+    expect(await notValidBefore(user)).toBe(recorded);
   });
 
   it('refuses an update that clears the time or moves it back, also together with enabling', async () => {

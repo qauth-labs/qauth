@@ -93,11 +93,26 @@ function operatorUser(): string | undefined {
  * transaction. Idempotent: an account already in the requested state is
  * reported `unchanged` and nothing is written.
  *
- * Disabling sets `not_valid_before` through the trigger, from the database's
- * clock. Enabling never clears it: whoever held a session or a token from
- * before signs in again.
+ * Disabling sets `not_valid_before` through the triggers, from the database's
+ * clock at the commit. Enabling never clears it: whoever held a session or a
+ * token from before signs in again.
  */
 export async function setUserEnabled(
+  db: OperatorDb,
+  args: UserEnablementArgs
+): Promise<UserEnablementResult> {
+  const result = await changeEnablement(db, args);
+  if (result.status !== 'disabled') return result;
+  // The deferred trigger moved the time to the commit: report what is stored.
+  const [stored] = await db
+    .select({ notValidBefore: users.notValidBefore })
+    .from(users)
+    .where(eq(users.id, result.userId))
+    .limit(1);
+  return { ...result, notValidBefore: stored?.notValidBefore ?? result.notValidBefore };
+}
+
+async function changeEnablement(
   db: OperatorDb,
   args: UserEnablementArgs
 ): Promise<UserEnablementResult> {
