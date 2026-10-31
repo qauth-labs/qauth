@@ -204,9 +204,11 @@ export const REDIS_KEYS = {
    * record of one browser ceremony, as JSON. Keyed by the realm and the
    * SHA-256 (hex) of the interaction id: the id itself is never stored, so
    * reading Redis gives no id a browser could present. Expires a short grace
-   * after the interaction's absolute expiry (`INTERACTION_SWEEP_GRACE_MS`),
-   * which the server checks on every read, so the expiry sweep still finds
-   * the record it audits.
+   * (`INTERACTION_SWEEP_GRACE_MS`) after the interaction's deadline, which the
+   * server checks on every read, so the expiry sweep still finds the record it
+   * audits: ten minutes after creation while nobody has answered it
+   * (`INTERACTION_UNANSWERED_TTL_MS`), its absolute expiry from the first
+   * processed answer on.
    */
   INTERACTION: (realmId: string, idHash: string) => `interaction:${realmId}:${idHash}`,
   /**
@@ -219,8 +221,10 @@ export const REDIS_KEYS = {
    */
   INTERACTION_TURN: (realmId: string, idHash: string) => `interaction-turn:${realmId}:${idHash}`,
   /**
-   * Every live interaction, by its absolute expiry (#592): a sorted set whose
-   * score is the expiry in epoch milliseconds and whose member is
+   * Every live interaction, by its deadline (#592): a sorted set whose score
+   * is the deadline in epoch milliseconds (the short one of an unanswered
+   * interaction, moved to the absolute expiry by the first processed answer)
+   * and whose member is
    * `<realmId>:<reference>:<id hash>` ({@link REDIS_KEYS.INTERACTION}'s
    * components and the interaction's audit reference). An interaction leaves
    * it when it finishes or is cancelled; the expiry sweep takes the rest once

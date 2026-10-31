@@ -151,7 +151,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'sessions',
     default: '1800',
     since: '0.2.0',
-    docs: 'How long, in seconds, a browser sign-in ceremony and its flow cookie live, counted from the request that starts it; from 60 to 7200.',
+    docs: 'How long, in seconds, a browser sign-in ceremony and its flow cookie live, counted from the request that starts it (one whose first step nobody answers ends after 10 minutes); from 60 to 7200.',
   },
   {
     name: 'SESSION_COOKIE_SECURE',

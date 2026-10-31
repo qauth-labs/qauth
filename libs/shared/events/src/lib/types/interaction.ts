@@ -104,7 +104,7 @@ export const interactionExpired = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'An interaction reached its absolute expiry before it finished or was cancelled. It can no longer be read or answered.',
+    'An interaction expired before it finished or was cancelled: it reached its absolute expiry, or its first step went unanswered for too long. It can no longer be read or answered.',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,

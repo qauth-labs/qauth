@@ -26,7 +26,12 @@ import { buildLoggerOptions } from '../../config/logger';
 import { createBrowserSessionFixture, sessionCookie } from '../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
-import { REDIS_KEYS } from '../constants';
+import {
+  INTERACTION_SWEEP_GRACE_MS,
+  INTERACTION_UNANSWERED_TTL_MS,
+  REDIS_KEYS,
+} from '../constants';
+import { createInteractionExpiryJob } from '../jobs/interaction-expiry';
 import errorHandler from '../plugins/error-handler';
 import {
   answerInteraction,
@@ -845,7 +850,9 @@ describe('the user switch (#592)', () => {
     ).json() as {
       expiresAt: number;
     };
-    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 600_000 });
+    // Answered, so it lives past the ten minutes of an unanswered one.
+    await owner.answer(id, 0, { kind: 'step', step: PASSWORD_STEP });
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 1_200_000 });
 
     const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
     const newId = (switched.json() as { id: string }).id;
@@ -928,12 +935,13 @@ describe('bounds (#592)', () => {
 
   it('holds a request near its ceiling, and leaves room for the steps', async () => {
     const browser = new Browser();
+    // About 14.5 KiB as JSON: each `"` escapes to two bytes.
     const id = await browser.start({
       request: {
         state: '"'.repeat(2048),
         nonce: '"'.repeat(2048),
         scope: 'x'.repeat(2048),
-        resource: resources(10, 2048),
+        resource: resources(2, 2048),
       },
     });
     expect((await browser.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(200);
@@ -950,6 +958,17 @@ describe('bounds (#592)', () => {
         scope: '\u0001'.repeat(2048),
         resource: resources(10, 2048),
       },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'invalid_request' });
+    expect(harness.redis.strings.size).toBe(0);
+    expect(harness.redis.sortedSets.size).toBe(0);
+  });
+
+  it('refuses a first step too large to hold beside the request with invalid_request, and stores nothing', async () => {
+    const response = await new Browser().request('POST', '/start', {
+      step: SELECT_ACCOUNT_STEP,
+      personal: { accounts: ['a'.repeat(33 * 1024)] },
     });
     expect(response.statusCode).toBe(400);
     expect(response.json()).toMatchObject({ code: 'invalid_request' });
@@ -1010,5 +1029,145 @@ describe('bounds (#592)', () => {
     await new Browser().start({ request: { client_id: longClientId } });
     const [, , , options] = vi.mocked(emitUserEvent).mock.calls[0] ?? [];
     expect(options).toMatchObject({ clientId: null });
+  });
+});
+
+describe('expiry of an unanswered interaction (#592)', () => {
+  const EXPIRED = 'urn:qauth:event:interaction.expired:v1-rc.0';
+
+  /** The expiry sweep over the harness's Redis, and the events it wrote. */
+  function sweep() {
+    const emitted: Record<string, unknown>[] = [];
+    const job = createInteractionExpiryJob({
+      redis: harness.redis as unknown as FastifyInstance['redis'],
+      events: {
+        emitInOwnTransaction: async (event: Record<string, unknown>) => {
+          emitted.push(event);
+          return 'event-id';
+        },
+      } as unknown as FastifyInstance['repositories']['events'],
+    });
+    const run = () =>
+      job.run({
+        signal: new AbortController().signal,
+        now: () => Date.now(),
+        log: harness.app.log,
+      });
+    return { emitted, run };
+  }
+
+  /** The audit reference of the interaction the first `interaction.created` named. */
+  function createdRef(): string {
+    const [, , data] = vi.mocked(emitUserEvent).mock.calls[0] ?? [];
+    return (data as { interaction: string }).interaction;
+  }
+
+  /** The expiry-index score of every listed interaction. */
+  function indexScores(): number[] {
+    return [
+      ...(harness.redis.sortedSets.get(REDIS_KEYS.INTERACTION_EXPIRY_INDEX())?.values() ?? []),
+    ];
+  }
+
+  it('ends an interaction nobody answered ten minutes after it started, and the sweep audits it once', async () => {
+    const owner = new Browser();
+    const started = Date.now();
+    const id = await owner.start();
+    const { emitted, run } = sweep();
+
+    vi.useFakeTimers({ toFake: ['Date'], now: started + INTERACTION_UNANSWERED_TTL_MS - 1_000 });
+    expect(
+      (await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`)).statusCode
+    ).toBe(200);
+    await run();
+    expect(emitted).toHaveLength(0);
+
+    vi.setSystemTime(started + INTERACTION_UNANSWERED_TTL_MS + 1_000);
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+    expect((await owner.answer(id, 0, { kind: 'step', step: CONSENT_STEP })).statusCode).toBe(410);
+    await run();
+    await run();
+
+    expect(harness.decided).toHaveLength(0);
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: EXPIRED,
+        data: { interaction: createdRef(), step: PASSWORD_STEP.name },
+      }),
+    ]);
+    expect(harness.redis.strings.size).toBe(0);
+    expect(harness.redis.sortedSets.size).toBe(0);
+  });
+
+  it('keeps an interaction to its absolute expiry once an answer is processed, and finishes it', async () => {
+    const owner = new Browser();
+    const started = Date.now();
+    const id = await owner.start();
+    const idHash = interactionIdHash(id);
+    const { expiresAt } = (
+      await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)
+    ).json() as { expiresAt: number };
+    // Unanswered: listed by the short deadline (INTERACTION_TTL is 1800 here).
+    const createdAt = expiresAt - 1_800_000;
+    expect(indexScores()).toEqual([createdAt + INTERACTION_UNANSWERED_TTL_MS]);
+    const { emitted, run } = sweep();
+
+    vi.useFakeTimers({ toFake: ['Date'], now: started + 300_000 });
+    const answered = await owner.answer(id, 0, { kind: 'step', step: CONSENT_STEP });
+    expect(answered.json()).toMatchObject({ kind: 'step', view: { revision: 1, expiresAt } });
+    // The answer moved the record, its turn and its index entry to the
+    // absolute expiry, which itself did not move.
+    for (const key of [
+      REDIS_KEYS.INTERACTION(REALM.id, idHash),
+      REDIS_KEYS.INTERACTION_TURN(REALM.id, idHash),
+    ]) {
+      expect(harness.redis.strings.get(key)?.deadline, key).toBe(
+        expiresAt + INTERACTION_SWEEP_GRACE_MS
+      );
+    }
+    expect(indexScores()).toEqual([expiresAt]);
+
+    // Long past the ten minutes an unanswered one has: still live.
+    vi.setSystemTime(started + 1_500_000);
+    await run();
+    expect(emitted).toHaveLength(0);
+    expect(
+      (await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`)).statusCode
+    ).toBe(200);
+    const finished = await owner.answer(id, 1, { kind: 'finished' });
+
+    expect(finished.json()).toEqual({
+      kind: 'finished',
+      request: AUTHORIZE_REQUEST,
+      transaction: { amr: [] },
+    });
+    expect(vi.mocked(emitUserEvent).mock.calls.map(([, type]) => type)).toEqual([
+      'urn:qauth:event:interaction.created:v1-rc.0',
+      'urn:qauth:event:interaction.answered:v1-rc.0',
+      'urn:qauth:event:interaction.answered:v1-rc.0',
+    ]);
+    expect(harness.redis.sortedSets.size).toBe(0);
+  });
+
+  it('ends an answered interaction at its absolute expiry, and the sweep audits it once', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const { expiresAt } = (
+      await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)
+    ).json() as { expiresAt: number };
+    await owner.answer(id, 0, { kind: 'step', step: CONSENT_STEP });
+    const { emitted, run } = sweep();
+
+    vi.useFakeTimers({ toFake: ['Date'], now: expiresAt });
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+    await run();
+    await run();
+
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        type: EXPIRED,
+        data: { interaction: createdRef(), step: CONSENT_STEP.name },
+      }),
+    ]);
   });
 });

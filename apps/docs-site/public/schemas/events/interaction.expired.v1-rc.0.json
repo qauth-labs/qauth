@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/interaction.expired.v1-rc.0.json",
   "title": "urn:qauth:event:interaction.expired:v1-rc.0",
-  "description": "The interaction.expired event, v1-rc.0. An interaction reached its absolute expiry before it finished or was cancelled. It can no longer be read or answered.",
+  "description": "The interaction.expired event, v1-rc.0. An interaction expired before it finished or was cancelled: it reached its absolute expiry, or its first step went unanswered for too long. It can no longer be read or answered.",
   "type": "object",
   "properties": {
     "id": {

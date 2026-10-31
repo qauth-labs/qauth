@@ -7,7 +7,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { CHECKED_EVENT_ID } from '../../testing/user-events';
-import { REDIS_KEYS } from '../constants';
+import {
+  INTERACTION_SWEEP_GRACE_MS,
+  INTERACTION_UNANSWERED_TTL_MS,
+  REDIS_KEYS,
+} from '../constants';
 import {
   claimExpiredInteraction,
   deleteInteraction,
@@ -35,6 +39,11 @@ const REALM_ID = '22222222-2222-4222-8222-222222222222';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const NOW = Date.now();
 
+/**
+ * An answered interaction (revision 1), held to its absolute expiry; an
+ * unanswered one (revision 0) is held to the shorter deadline of
+ * `INTERACTION_UNANSWERED_TTL_MS`.
+ */
 function record(overrides: Partial<InteractionRecord> = {}): InteractionRecord {
   return {
     v: 1,
@@ -53,7 +62,7 @@ function record(overrides: Partial<InteractionRecord> = {}): InteractionRecord {
     personal: {},
     transaction: { amr: [] },
     flowBinding: 'A'.repeat(43),
-    revision: 0,
+    revision: 1,
     createdAt: NOW - 1_800_000,
     expiresAt: NOW,
     ...overrides,
@@ -196,6 +205,44 @@ describe('interaction-expiry (#592)', () => {
     ]).toEqual([expect.stringContaining(live.ref)]);
   });
 
+  it('audits an interaction nobody answered at its short deadline, once, and clears it', async () => {
+    const { redis, emitted, job } = world();
+    // Created ten minutes ago, twenty minutes before its absolute expiry.
+    const unanswered = record({
+      revision: 0,
+      createdAt: NOW - INTERACTION_UNANSWERED_TTL_MS,
+      expiresAt: NOW + 1_200_000,
+    });
+    const { idHash } = await insert(redis, unanswered);
+    // Listed, and kept in Redis, by the short deadline, not the absolute expiry.
+    expect(redis.sortedSets.get(REDIS_KEYS.INTERACTION_EXPIRY_INDEX())?.values().next().value).toBe(
+      NOW
+    );
+    expect(redis.strings.get(REDIS_KEYS.INTERACTION(REALM_ID, idHash))?.deadline).toBe(
+      NOW + INTERACTION_SWEEP_GRACE_MS
+    );
+
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW + 1 });
+    try {
+      await job.run(context());
+      await job.run(context());
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(emitted).toEqual([
+      {
+        type: 'urn:qauth:event:interaction.expired:v1-rc.0',
+        realm: REALM_ID,
+        actor: { type: 'system' },
+        client: { id: 'notes-app' },
+        data: { interaction: unanswered.ref, step: stepUrn('password') },
+      },
+    ]);
+    expect(redis.strings.size).toBe(0);
+    expect(redis.sortedSets.size).toBe(0);
+  });
+
   it('reports nothing for an interaction that finished or was cancelled', async () => {
     const { redis, emitted, job } = world();
     const done = record();
@@ -264,7 +311,7 @@ describe('interaction-expiry (#592)', () => {
         realmId: REALM_ID,
         ref: value.ref,
         idHash,
-        record: { ref: value.ref, step: value.step, revision: 0 },
+        record: { ref: value.ref, step: value.step, revision: 1 },
       });
       expect(again).toBeNull();
     } finally {

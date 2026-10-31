@@ -9,6 +9,7 @@ import {
   INTERACTION_MAX_RECORD_BYTES,
   INTERACTION_MAX_REQUEST_BYTES,
   INTERACTION_SWEEP_GRACE_MS,
+  INTERACTION_UNANSWERED_TTL_MS,
   REDIS_KEYS,
 } from '../constants';
 import { authorizeQuerySchema } from '../schemas/oauth';
@@ -26,10 +27,14 @@ import { authorizeQuerySchema } from '../schemas/oauth';
  *   the creation time and an absolute expiry. A revision counts the written
  *   states, so an answer is bound to the step view it answers.
  * - **Expiry.** Absolute, `INTERACTION_TTL` after creation; an answer never
- *   extends it. The server refuses an expired record on every read. Redis
- *   keeps it {@link INTERACTION_SWEEP_GRACE_MS} longer so the expiry sweep can
- *   audit it, and an expiry index ({@link REDIS_KEYS.INTERACTION_EXPIRY_INDEX})
- *   lists every live record for that sweep.
+ *   extends it. An interaction nobody has answered ends sooner, at
+ *   {@link INTERACTION_UNANSWERED_TTL_MS} after creation, and the first answer
+ *   the server processes lifts that deadline to the absolute expiry
+ *   ({@link interactionDeadline}). The server refuses an expired record on
+ *   every read. Redis keeps it {@link INTERACTION_SWEEP_GRACE_MS} past its
+ *   deadline so the expiry sweep can audit it, and an expiry index
+ *   ({@link REDIS_KEYS.INTERACTION_EXPIRY_INDEX}) lists every live record by
+ *   its deadline for that sweep.
  * - **Turn.** Beside the record, Redis holds the record's turn: the revision
  *   that may be answered next. An answer takes the turn with `GETDEL` and
  *   writes the next state with the next turn (`interaction.ts`): of two
@@ -229,9 +234,28 @@ function indexMember(record: Pick<InteractionRecord, 'realmId' | 'ref'>, idHash:
   return `${record.realmId}:${record.ref}:${idHash}`;
 }
 
-/** When Redis drops the record: a grace after its expiry, for the sweep. */
-function redisDeadline(record: Pick<InteractionRecord, 'expiresAt'>): number {
-  return record.expiresAt + INTERACTION_SWEEP_GRACE_MS;
+/** What {@link interactionDeadline} reads of a record. */
+type DeadlineFields = Pick<InteractionRecord, 'revision' | 'createdAt' | 'expiresAt'>;
+
+/**
+ * When the interaction expires: the moment from which the server refuses it
+ * and the expiry sweep reports it, and the score of its expiry-index member.
+ *
+ * Its absolute expiry once an answer has been processed (revision 1 or
+ * later). While nobody has answered it (revision 0), whichever comes first of
+ * {@link INTERACTION_UNANSWERED_TTL_MS} after its creation and its absolute
+ * expiry: starting an interaction takes no account, so an abandoned one must
+ * not hold its record in Redis for the whole `INTERACTION_TTL`. The absolute
+ * expiry never moves.
+ */
+export function interactionDeadline(record: DeadlineFields): number {
+  if (record.revision > 0) return record.expiresAt;
+  return Math.min(record.createdAt + INTERACTION_UNANSWERED_TTL_MS, record.expiresAt);
+}
+
+/** When Redis drops the record: a grace after its deadline, for the sweep. */
+function redisDeadline(record: DeadlineFields): number {
+  return interactionDeadline(record) + INTERACTION_SWEEP_GRACE_MS;
 }
 
 /** Throw the first failed command of a `MULTI`, which reports failures in its results. */
@@ -244,8 +268,9 @@ function assertExecuted(results: [Error | null, unknown][] | null): unknown[] {
 
 /**
  * Store a new interaction, its first turn (revision 0) and its member of the
- * expiry index, in one `MULTI`. `SET NX`: an id is never reused, so a record
- * that exists is a failure.
+ * expiry index, in one `MULTI`, all three with the short deadline of an
+ * unanswered interaction ({@link interactionDeadline}). `SET NX`: an id is
+ * never reused, so a record that exists is a failure.
  */
 export async function insertInteraction(
   redis: Redis,
@@ -259,7 +284,11 @@ export async function insertInteraction(
       .multi()
       .set(recordKey(record.realmId, idHash), serialized, 'PXAT', deadline, 'NX')
       .set(turnKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline)
-      .zadd(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), record.expiresAt, indexMember(record, idHash))
+      .zadd(
+        REDIS_KEYS.INTERACTION_EXPIRY_INDEX(),
+        interactionDeadline(record),
+        indexMember(record, idHash)
+      )
       .exec()
   );
   if (stored !== 'OK') throw new Error('an interaction with this id already exists');
@@ -270,6 +299,12 @@ export async function insertInteraction(
  * the new revision its turn, in one `MULTI`. The record is written only over
  * the one that is there (`XX`): a record the expiry sweep or a cancel removed
  * meanwhile is not brought back. `false` when it was gone.
+ *
+ * The next state is answered (revision 1 or later), so the record, its turn
+ * and its expiry-index member move to the absolute expiry
+ * ({@link interactionDeadline}): the first processed answer lifts the short
+ * deadline of an unanswered interaction. The member is moved only if it is
+ * there (`ZADD XX`), so one the sweep claimed is not listed again.
  */
 export async function writeInteractionState(
   redis: Redis,
@@ -283,6 +318,12 @@ export async function writeInteractionState(
       .multi()
       .set(recordKey(record.realmId, idHash), serialized, 'PXAT', deadline, 'XX')
       .set(turnKey(record.realmId, idHash), String(record.revision), 'PXAT', deadline, 'NX')
+      .zadd(
+        REDIS_KEYS.INTERACTION_EXPIRY_INDEX(),
+        'XX',
+        interactionDeadline(record),
+        indexMember(record, idHash)
+      )
       .exec()
   );
   if (stored === 'OK') return true;
@@ -343,7 +384,7 @@ export async function takeInteractionTurn(
  */
 export async function returnInteractionTurn(
   redis: Redis,
-  record: Pick<InteractionRecord, 'realmId' | 'expiresAt'>,
+  record: Pick<InteractionRecord, 'realmId'> & DeadlineFields,
   idHash: string,
   revision: number
 ): Promise<void> {
@@ -383,7 +424,10 @@ export async function deleteInteraction(
 /** An index member the expiry sweep may claim: its member string and its expiry. */
 export interface ExpiryIndexEntry {
   readonly member: string;
-  /** The interaction's absolute expiry, the member's score. */
+  /**
+   * When the interaction expired, the member's score: its absolute expiry, or
+   * the deadline of an unanswered one ({@link interactionDeadline}).
+   */
   readonly expiresAt: number;
 }
 

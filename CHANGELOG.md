@@ -933,11 +933,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Interaction API, for its routes to build on ([#616], [#628]); no route serves
   it yet. An interaction is a Redis record keyed by the realm and the SHA-256 of
   a 32-byte random id, so the id is stored nowhere, holding a bounded snapshot of
-  the validated authorization request (at most 32 KiB, refused with
-  `invalid_request` above), the engine transaction, the current step and its
-  personal data, the hash of the flow secret, the creation time and an absolute
-  expiry: `INTERACTION_TTL`, a new advanced key, 30 minutes by default (60 to
-  7200 seconds). The `__Host-qauth_flow` cookie (`HttpOnly`, `Secure`,
+  the validated authorization request (at most 16 KiB, as the
+  pending-authorization stash holds, and at most 32 KiB with the first step;
+  refused with `invalid_request` above), the engine transaction, the current
+  step and its personal data, the hash of the flow secret, the creation time and
+  an absolute expiry: `INTERACTION_TTL`, a new advanced key, 30 minutes by
+  default (60 to 7200 seconds). Starting an interaction takes no account, so one
+  nobody answers lives only 10 minutes: its record, turn and expiry-index entry
+  are written with that deadline, and the first answer the server processes
+  (which needs the flow cookie) moves them to the absolute expiry, which never
+  moves. The `__Host-qauth_flow` cookie (`HttpOnly`, `Secure`,
   `SameSite=Lax`, `Path=/`, no `Domain`) carries the flow secret; a browser
   holds up to four, one per ceremony. The id alone reads the step's display
   data. The personal data, an answer, a cancel and a user switch need the
@@ -955,9 +960,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no `instance`, `detail` or `errors`. Four new events, `interaction.created`,
   `.answered`, `.cancelled` and `.expired`, name an interaction by a random
   reference, never by its id or cookie; a sweep job on the `web` role audits
-  each expiry once, and a finish or cancel the sweep beat is answered as
-  expired. The request log now censors the interaction id in an
-  `/interaction/<version>/` path, plain or percent-encoded.
+  each expiry once, the 10-minute one of an unanswered interaction included,
+  claiming each in one Redis transaction so a dropped connection cannot lose
+  one, and a finish or cancel the sweep beat is answered as expired. The
+  request log now censors the interaction id in an `/interaction/<version>/`
+  path, plain or percent-encoded (once or twice), whatever else in the URL is
+  malformed, and a Redis error in the log names its command but no longer
+  carries the command's arguments.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,

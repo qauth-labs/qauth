@@ -795,7 +795,7 @@ An interaction ended before it finished, at the request of the browser that star
 
 ### interaction.expired v1-rc.0
 
-An interaction reached its absolute expiry before it finished or was cancelled. It can no longer be read or answered.
+An interaction expired before it finished or was cancelled: it reached its absolute expiry, or its first step went unanswered for too long. It can no longer be read or answered.
 
 - Identifier: `urn:qauth:event:interaction.expired:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0

@@ -22,9 +22,11 @@ import {
   IDENTIFIER_STEP,
   insertInteraction,
   INTERACTION_RECORD_VERSION,
+  interactionDeadline,
   interactionIdHash,
   type InteractionPersonalData,
   type InteractionRecord,
+  InteractionRecordTooLargeError,
   type InteractionRequest,
   InteractionRequestTooLargeError,
   type InteractionStep,
@@ -86,6 +88,15 @@ import { emitUserEvent } from './user-events';
  * that outlasts the interaction's expiry is refused, and so is a finish or a
  * cancel that the expiry sweep beat to the interaction: what the sweep reports
  * expired never also finishes.
+ *
+ * ## Expiry
+ *
+ * An interaction expires at its absolute expiry, `INTERACTION_TTL` after the
+ * request that started it, or sooner while nobody has answered it: an
+ * unanswered interaction expires `INTERACTION_UNANSWERED_TTL_MS` after it was
+ * created, and the first answer the server processes lifts that deadline to
+ * the absolute expiry, which never moves (`interactionDeadline`). Every
+ * operation refuses an expired interaction, whichever deadline it reached.
  */
 
 /** The step view a reader of the interaction id may see: no personal data. */
@@ -93,7 +104,11 @@ export interface InteractionView {
   readonly step: InteractionStep;
   /** The `client_id` of the request the interaction is for. */
   readonly clientId: string;
-  /** The absolute expiry, in epoch milliseconds. */
+  /**
+   * The absolute expiry, in epoch milliseconds. An interaction nobody has
+   * answered yet ends sooner (`INTERACTION_UNANSWERED_TTL_MS` after it was
+   * created); the first processed answer lifts that deadline, never this one.
+   */
   readonly expiresAt: number;
   /**
    * Which state of the interaction this is. An answer names it, so it applies
@@ -231,7 +246,7 @@ async function locate(request: FastifyRequest, id: unknown): Promise<Located> {
   const idHash = interactionIdHash(id);
   const record = await readInteractionRecord(request.server.redis, request.log, realmId, idHash);
   if (record === null) refuse(request, 'unknown');
-  if (record.expiresAt <= Date.now()) refuse(request, 'expired');
+  if (interactionDeadline(record) <= Date.now()) refuse(request, 'expired');
   return { record, idHash };
 }
 
@@ -269,7 +284,7 @@ async function takeBound(
   if (turn === null) return null;
   const current = await readInteractionRecord(redis, request.log, realmId, bound.idHash);
   if (current === null || current.ref !== ref) return null;
-  if (current.expiresAt <= Date.now()) {
+  if (interactionDeadline(current) <= Date.now()) {
     // The turn stays taken; the sweep audits the expiry.
     refuse(request, 'expired');
   }
@@ -333,9 +348,12 @@ async function createInteraction(
   try {
     await insertInteraction(request.server.redis, interactionIdHash(id), record);
   } catch (error) {
-    // Caller-driven: the request is too large to hold through a ceremony,
-    // as the pending-authorization stash refuses one.
-    if (error instanceof InteractionRequestTooLargeError) {
+    // The request, or the request with its first step, is too large to hold
+    // through a ceremony, as the pending-authorization stash refuses one.
+    if (
+      error instanceof InteractionRequestTooLargeError ||
+      error instanceof InteractionRecordTooLargeError
+    ) {
       throw new InvalidRequestError('authorization request is too large');
     }
     throw error;
@@ -357,7 +375,8 @@ async function createInteraction(
 /**
  * Start an interaction for an authorization request, in the request's realm,
  * bound to this browser: the record, a new secret in the flow cookie, and the
- * `interaction.created` event.
+ * `interaction.created` event. Until its first answer is processed, the
+ * interaction lives `INTERACTION_UNANSWERED_TTL_MS` at most.
  *
  * @throws {InvalidRequestError} when the request and the first step are too
  *   large to hold (`INTERACTION_MAX_RECORD_BYTES`)
@@ -487,7 +506,7 @@ async function giveTurnBack(
   taken: InteractionRecord,
   idHash: string
 ): Promise<void> {
-  if (taken.expiresAt <= Date.now()) return;
+  if (interactionDeadline(taken) <= Date.now()) return;
   await bestEffort(request, 'give the turn back', async () => {
     const { redis } = request.server;
     const current = await readInteractionRecord(redis, request.log, taken.realmId, idHash);
@@ -539,7 +558,7 @@ async function settleAnswer(
   );
   // The engine may take a while (a password hash): an interaction that
   // expired meanwhile is not answered. The turn stays taken; the sweep reports it.
-  if (taken.expiresAt <= Date.now()) refuse(request, 'expired');
+  if (interactionDeadline(taken) <= Date.now()) refuse(request, 'expired');
   const answered = (
     outcome: 'next_step' | 'authenticated' | 'finished',
     record: InteractionRecord

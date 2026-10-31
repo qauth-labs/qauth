@@ -65,7 +65,10 @@ function isEventValidationError(error: unknown): error is EventValidationError {
 }
 
 /**
- * Audit and clear the interactions that reached their absolute expiry (#592).
+ * Audit and clear the interactions that expired (#592): at their absolute
+ * expiry, or unanswered at the short deadline of an interaction nobody
+ * answered (`interactionDeadline`). The expiry index lists each by the
+ * deadline it is held to, so both are found and reported the same way.
  *
  * An interaction that expires is refused on every read from that moment
  * (`helpers/interaction.ts`); Redis keeps its record a short grace longer.

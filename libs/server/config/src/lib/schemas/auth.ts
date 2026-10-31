@@ -293,9 +293,11 @@ export const authEnvSchema = z.object({
    * ADR-019 Decision 6): the record of one browser ceremony and the flow
    * cookie that binds it to the browser that started it. Absolute, counted
    * from the request that starts the ceremony; an answer never extends it.
-   * Default 1800 (30 minutes). At least a minute and at most two hours: the
-   * record is written before anyone signs in, so its lifetime bounds what an
-   * unauthenticated caller keeps in Redis.
+   * Default 1800 (30 minutes). At least a minute and at most two hours. The
+   * record is written before anyone signs in, so an interaction nobody
+   * answers lives only ten minutes of it (`INTERACTION_UNANSWERED_TTL_MS` in
+   * the auth server); the first processed answer lets it run to this expiry,
+   * which never moves.
    */
   INTERACTION_TTL: z.coerce
     .number()

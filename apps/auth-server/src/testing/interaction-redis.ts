@@ -3,7 +3,8 @@ import { vi } from 'vitest';
 /**
  * The Redis commands the interaction store (`helpers/interaction-record.ts`,
  * #592) sends, held in memory for unit tests: strings with an absolute
- * `PXAT` deadline, `GETDEL`, and the sorted set of the expiry index.
+ * `PXAT` deadline, `GETDEL`, and the sorted set of the expiry index (`ZADD`
+ * with its `NX` and `XX` flags).
  *
  * `base` lends its commands to the same object, so a test can add the
  * browser-session commands (`createMemorySessionRedis`) that authentication
@@ -26,7 +27,7 @@ export interface MemoryInteractionRedis {
   getdel(key: string): Promise<string | null>;
   set(key: string, value: string, ...args: (string | number)[]): Promise<'OK' | null>;
   del(...keys: string[]): Promise<number>;
-  zadd(key: string, score: number, member: string): Promise<number>;
+  zadd(key: string, ...args: (string | number)[]): Promise<number>;
   zrem(key: string, member: string): Promise<number>;
   zrangebyscore(
     key: string,
@@ -107,13 +108,19 @@ export function createMemoryInteractionRedis<Base extends object>(
       }
       return removed;
     }),
-    zadd: vi.fn(async (key: string, score: number, member: string) => {
+    zadd: vi.fn(async (key: string, ...args: (string | number)[]) => {
       await tick();
+      const flags = new Set<string>();
+      while (typeof args[0] === 'string' && /^(NX|XX)$/i.test(args[0])) {
+        flags.add(String(args.shift()).toUpperCase());
+      }
+      const [score, member] = [Number(args[0]), String(args[1])];
       const set = sortedSets.get(key) ?? new Map<string, number>();
-      const added = set.has(member) ? 0 : 1;
-      set.set(member, Number(score));
+      const present = set.has(member);
+      if ((flags.has('NX') && present) || (flags.has('XX') && !present)) return 0;
+      set.set(member, score);
       sortedSets.set(key, set);
-      return added;
+      return present ? 0 : 1;
     }),
     zrem: vi.fn(async (key: string, member: string) => {
       await tick();
