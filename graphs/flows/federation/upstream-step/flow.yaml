@@ -21,11 +21,13 @@ id: federation.upstream-step
 status: proposed
 title: Sign in at an upstream provider through an AuthMethod
 summary: >-
-  The person picks an upstream provider on the sign-in step. The method answers where the browser goes and the
-  transaction it needs back, which the engine keeps server-side, bound to the interaction and its flow cookie. The
-  provider sends the browser back to the method's callback under /upstream/<type>; the host takes the transaction
-  once and hands it to the callback, which checks the answer against it. A result goes to verify(), and the engine
-  checks the identity and the attributes before the sign-in flow may use them.
+  The person picks an upstream provider on the sign-in step. The method answers where the browser goes, the
+  transaction it needs back and the binding (state) the provider carries back, which the engine keeps server-side,
+  bound to the interaction and its flow cookie. The provider sends the browser back to the method's callback under
+  /upstream/<type>; the host compares the callback's binding with the pending transaction's before it takes the
+  transaction, once, and hands it to the callback, which checks the provider's answer. A result goes to verify(), and
+  the engine checks the identity (its assurance level capped) and the attributes before the sign-in flow may use them.
+  Whatever the method throws ends the step as a fault, never as a raw error.
 
 scope:
   shows: the upstream step from the person's pick to the engine's completion, at the AuthMethod contract
@@ -47,8 +49,12 @@ context:
     values: [valid, invalid]
     initial: any
     say:
-      valid: 'an https redirect with no credentials and no fragment, and a transaction of JSON data within 4096 bytes'
-      invalid: 'anything else: an http redirect, credentials, a fragment, a transaction that is not JSON data or too big'
+      valid: >-
+        an https redirect with no credentials and no fragment, a transaction of JSON data within 4096 bytes, and a
+        binding of 22 to 512 base64url characters
+      invalid: >-
+        anything else: an http redirect, credentials, a fragment, a transaction that is not JSON data or too big, a
+        binding that is missing, short or outside base64url
   # How the provider sends the browser back.
   returnMode:
     values: [query, formPost]
@@ -60,8 +66,10 @@ context:
     values: [ownGetRoute, elsewhere]
     initial: any
     say:
-      ownGetRoute: "the bounce names one of the method's own GET callback routes, with a query of strings"
-      elsewhere: 'the bounce names any other place: an absolute URL, another path, a POST route'
+      ownGetRoute: "the bounce names one of the method's own GET callback routes, with a plain object of strings as its query"
+      elsewhere: >-
+        the bounce names any other place (an absolute URL, another path, a POST route), carries a query that is not a
+        plain object of strings, or throws
   # Which transaction the request that reaches the callback gets.
   arrival:
     values: [sameBrowser, otherBrowser, taken]
@@ -70,12 +78,22 @@ context:
       sameBrowser: 'the browser that started brings its flow cookie, and the transaction is still pending'
       otherBrowser: 'a browser with no flow cookie for the interaction, or another interaction: a forged or forwarded callback'
       taken: 'the transaction was taken already: a replay of the callback, a double submit'
-  stateCheck:
+  # The binding the callback carries back, in the route's bindingParameter (state by default).
+  bindingCheck:
     values: [matches, differs]
     initial: any
     say:
-      matches: "the callback's state is the transaction's"
-      differs: 'it is another one, or missing, empty or repeated: a response meant for another start, or forged'
+      matches: "the callback carries the pending transaction's binding, once"
+      differs: >-
+        it carries another one, or none, an empty one or the parameter repeated: a response meant for another start,
+        a forged one, or a cross-site request that would cancel the pending sign-in
+  # How the method's callback handler runs, once it is handed the transaction.
+  callbackRun:
+    values: [answers, faults]
+    initial: any
+    say:
+      answers: 'the context is built and the handler answers'
+      faults: "the handler throws, or the method's context cannot be built (contextFor rejects, as with a config the schema refuses)"
   providerAnswer:
     values: [signedIn, declined, error, invalid, unreachable]
     initial: any
@@ -95,7 +113,9 @@ context:
     values: [identity, malformed, rejects]
     initial: any
     say:
-      identity: 'verify() resolves an externalSub of 1 to 255 characters with no control character, an assurance level and raw claims'
+      identity: >-
+        verify() resolves an externalSub of 1 to 255 characters of well-formed text with no control character, an
+        assurance level and raw claims
       malformed: 'it resolves anything else'
       rejects: 'it rejects the result'
   attributeSource:
@@ -112,7 +132,8 @@ guards:
   startInvalid: "startAnswer == 'invalid'"
   bouncesElsewhere: "bounceTarget == 'elsewhere'"
   noTransaction: "arrival != 'sameBrowser'"
-  stateDiffers: "stateCheck == 'differs'"
+  bindingDiffers: "bindingCheck == 'differs'"
+  callbackFaults: "callbackRun == 'faults'"
   personDeclined: "providerAnswer == 'declined'"
   providerError: "providerAnswer == 'error'"
   answerInvalid: "providerAnswer == 'invalid'"
@@ -137,7 +158,8 @@ main:
     startAnswer: valid
     returnMode: query
     arrival: sameBrowser
-    stateCheck: matches
+    bindingCheck: matches
+    callbackRun: answers
     providerAnswer: signedIn
     outcomeShape: valid
     verifyAnswer: identity
@@ -161,9 +183,10 @@ states:
     title: Ask the method to start an upstream transaction
     description: >-
       start(context, { uiLocales }) answers where the browser goes (the provider's authorization endpoint with its
-      parameters, the redirect_uri a URL under /upstream/<type>) and the transaction the method needs back: a fresh
-      state, a nonce, a PKCE verifier.
-    source: libs/server/federation/src/auth-method/engine.ts:99
+      parameters, the redirect_uri a URL under /upstream/<type>, a PKCE S256 challenge), the transaction the method
+      needs back (a fresh state, a nonce, the PKCE verifier) and the binding: the fresh, random value the
+      authorization request carries to the provider and the callback carries back, usually the state.
+    source: libs/server/federation/src/auth-method/engine.ts:105
     invoke: { external: authMethodStart }
     on:
       DONE:
@@ -172,22 +195,22 @@ states:
       FAIL.rejected:
         target: startFailed
         say: "start() rejects, such as when the provider's discovery document cannot be read"
-        source: libs/server/federation/src/auth-method/engine.ts:99
+        source: libs/server/federation/src/auth-method/engine.ts:105
 
   checkingStart:
     title: Check what start() answered
-    source: libs/server/federation/src/auth-method/engine.ts:104
+    source: libs/server/federation/src/auth-method/engine.ts:110
     always:
       - guard: startInvalid
         target: methodFault
-        say: 'the redirect or the transaction fails a check; the browser goes nowhere'
-        source: libs/server/federation/src/auth-method/engine.ts:104
+        say: 'the redirect, the transaction or the binding fails a check; the browser goes nowhere'
+        source: libs/server/federation/src/auth-method/engine.ts:110
       - target: atProvider
         effect: [keepTransaction]
         say: >-
-          the engine keeps a frozen copy of the transaction server-side, bound to the interaction and its flow cookie,
-          and sends the browser to the redirect; the transaction never reaches the browser
-        source: libs/server/federation/src/auth-method/engine.ts:129
+          the engine keeps a frozen copy of the transaction, with its binding, server-side, bound to the interaction
+          and its flow cookie, and sends the browser to the redirect; the transaction never reaches the browser
+        source: libs/server/federation/src/auth-method/engine.ts:141
 
   atProvider:
     title: Wait while the person is at the provider
@@ -197,7 +220,7 @@ states:
         - guard: "returnMode == 'formPost'"
           target: bouncing
           say: "the provider posts its answer to the method's bounce route"
-        - target: takingTransaction
+        - target: checkingBinding
           say: "the provider sends the browser to the method's callback route, a GET under /upstream/<type>"
       ABANDON:
         target: abandoned
@@ -208,107 +231,131 @@ states:
     description: >-
       The bounce route gets the form, no transaction and no context. The browser follows a 303 to the GET route on the same origin
       and brings the SameSite=Lax flow cookie with it.
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:174
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:190
     always:
       - guard: bouncesElsewhere
         target: methodFault
-        say: "the bounce names a place other than the method's own GET callback routes; nothing is redirected"
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
-      - target: takingTransaction
+        say: >-
+          the bounce names a place other than the method's own GET callback routes, carries a query that is not a
+          plain object of strings, or throws: nothing is redirected, and the mount hands the engine an
+          AuthMethodFaultError through the host's completion, as for every other fault
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:197
+      - target: checkingBinding
         say: "the browser follows the bounce to the method's GET callback"
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:179
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:200
+
+  checkingBinding:
+    title: Compare the callback's binding with the pending transaction's, before taking it
+    description: >-
+      The host reads, without taking it, the pending transaction the flow cookie names, and compares the binding the
+      callback carries (one value of the route's bindingParameter, state by default: from the query of a GET, the
+      form of a POST) with the transaction's, in constant time. On any mismatch the method never runs, so it spends
+      no code and calls no provider, and the pending sign-in stays pending: another site cannot cancel it.
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:212
+    always:
+      - guard: noTransaction
+        target: failedTransactionMismatch
+        say: 'no transaction is pending for this browser: a forged or forwarded callback, or a replay'
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+      - guard: bindingDiffers
+        target: failedTransactionMismatch
+        say: "the binding is missing, empty, repeated or another start's: transaction_mismatch, and nothing is taken"
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+      - target: takingTransaction
+        say: "the binding is the pending transaction's"
+        source: libs/server/federation/src/auth-method/engine.ts:179
 
   takingTransaction:
     title: Take the pending transaction the flow cookie names
     description: >-
-      The host takes it once: a second request for the same transaction finds none. Only with one does the
-      callback run, and it gets the query, the form and the transaction, and no header and no cookie.
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:185
+      The host takes it once: a second request for the same transaction finds none. It compares the binding of what
+      it took once more (another start in the same browser may have replaced the transaction between the two reads),
+      and the callback gets the query, the form and the transaction, and no header and no cookie.
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
     always:
-      - guard: noTransaction
-        target: failedTransactionMismatch
-        say: >-
-          no transaction is pending for this browser: the host answers transaction_mismatch itself, and the method
-          never runs, so it spends no code and calls no provider
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:188
       - target: checkingCallback
         effect: [takeTransaction]
         say: 'the transaction is taken and handed to the callback'
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:197
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:239
 
   checkingCallback:
-    title: The method's callback checks the answer against the transaction
+    title: The method's callback checks the provider's answer
     description: >-
-      The method's own code. The contract test kit holds every method to these rules: a state that is another
-      start's, missing, empty or repeated never gives a result and never reaches the provider; a decline is
+      The method's own code, run only for a request whose binding matched. It redeems the code with its PKCE
+      verifier through the egress client and checks the provider's answer; it may compare state with its transaction
+      again, at no cost. The contract test kit holds every method to these rules: PKCE with S256, and a decline is
       declined, not a failure.
-    source: libs/server/federation/src/testing/contract-kit.ts:327
+    source: libs/server/federation/src/testing/contract-kit.ts:258
     always:
+      - guard: callbackFaults
+        target: methodFault
+        say: >-
+          the handler throws, or the method's context cannot be built: the transaction is spent, and the mount hands
+          the engine an AuthMethodFaultError with the error as its cause, never a raw 500
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:241
       - guard: outcomeInvalid
         target: methodFault
         say: 'the callback answers outside the closed set of outcomes'
-        source: libs/server/federation/src/auth-method/engine.ts:162
-      - guard: stateDiffers
-        target: failedTransactionMismatch
-        say: "the state is not the transaction's: transaction_mismatch, before the code is spent"
-        source: libs/server/federation/testing/sample-auth-method.fixture.ts:110
+        source: libs/server/federation/src/auth-method/engine.ts:261
       - guard: personDeclined
         target: declined
         say: 'the person declined at the provider'
-        source: libs/server/federation/testing/sample-auth-method.fixture.ts:114
+        source: libs/server/federation/testing/sample-auth-method.fixture.ts:129
       - guard: providerError
         target: failedProviderError
         say: 'the provider answered another error'
-        source: libs/server/federation/testing/sample-auth-method.fixture.ts:115
+        source: libs/server/federation/testing/sample-auth-method.fixture.ts:130
       - guard: answerInvalid
         target: failedInvalidResponse
         say: "the provider's answer fails a check"
-        source: libs/server/federation/testing/sample-auth-method.fixture.ts:139
+        source: libs/server/federation/testing/sample-auth-method.fixture.ts:155
       - guard: providerUnreachable
         target: failedUpstreamUnavailable
         say: 'the provider cannot be reached through the egress client'
-        source: libs/server/federation/testing/sample-auth-method.fixture.ts:137
+        source: libs/server/federation/testing/sample-auth-method.fixture.ts:153
       - target: verifying
         effect: [callVerify]
         say: 'the callback hands a result to the engine, which passes it to verify()'
-        source: libs/server/federation/src/auth-method/engine.ts:171
+        source: libs/server/federation/src/auth-method/engine.ts:270
 
   verifying:
     title: Turn the result into a VerifiedIdentity
     description: >-
       verify() receives only what the method's own callback returned; the engine calls it, and nothing else does. It
       rejects anything else, a well-formed identity forged elsewhere among them (the kit checks that too).
-    source: libs/server/federation/src/auth-method/engine.ts:171
+    source: libs/server/federation/src/auth-method/engine.ts:270
     always:
       - guard: verifyRejects
         target: failedVerificationRefused
         say: 'verify() rejects the result; its rejection is kept for the log'
-        source: libs/server/federation/src/auth-method/engine.ts:173
+        source: libs/server/federation/src/auth-method/engine.ts:272
       - guard: identityMalformed
         target: methodFault
         say: 'verify() resolves something that is not an identity the engine accepts'
-        source: libs/server/federation/src/auth-method/engine.ts:252
+        source: libs/server/federation/src/auth-method/engine.ts:351
       - target: extractingAttributes
-        say: 'the identity is checked and frozen'
-        source: libs/server/federation/src/auth-method/engine.ts:175
+        say: >-
+          the identity is checked and frozen, its assurance level lowered to the caller's ceiling: low unless the
+          operator raised it for this provider, since an upstream sign-in ranks with a password
+        source: libs/server/federation/src/auth-method/engine.ts:274
 
   extractingAttributes:
     title: Take the identity's attributes
-    source: libs/server/federation/src/auth-method/engine.ts:179
+    source: libs/server/federation/src/auth-method/engine.ts:278
     invoke: { external: authMethodExtractAttributes }
     on:
       DONE:
         - guard: foreignSource
           target: methodFault
           say: "an attribute claims a source other than the method's type, or is malformed"
-          source: libs/server/federation/src/auth-method/engine.ts:301
+          source: libs/server/federation/src/auth-method/engine.ts:426
         - target: identityVerified
-          say: "every attribute's source is the method's type"
-          source: libs/server/federation/src/auth-method/engine.ts:183
+          say: "every attribute's source is the method's type; the engine builds the list itself, so none is added"
+          source: libs/server/federation/src/auth-method/engine.ts:283
       FAIL.threw:
         target: methodFault
         say: 'extractAttributes() throws'
-        source: libs/server/federation/src/auth-method/engine.ts:181
+        source: libs/server/federation/src/auth-method/engine.ts:280
 
   # Exits: the engine's completions.
 
@@ -318,7 +365,7 @@ states:
     description: >-
       The sign-in flow (#639) looks the credential up by (realm, type, externalSub) and never matches an account by
       an attribute.
-    source: libs/server/federation/src/auth-method/engine.ts:183
+    source: libs/server/federation/src/auth-method/engine.ts:283
     response:
       body:
         kind: identity
@@ -329,7 +376,7 @@ states:
     type: final
     title: The person declined at the provider
     description: Nothing goes to the client, since the person has not refused the client's request.
-    source: libs/server/federation/src/auth-method/engine.ts:151
+    source: libs/server/federation/src/auth-method/engine.ts:250
     response:
       body:
         kind: declined
@@ -337,46 +384,47 @@ states:
   failedTransactionMismatch:
     type: final
     title: Refuse a callback that does not belong to a pending transaction
-    source: libs/server/federation/src/auth-method/engine.ts:152
+    source: libs/server/federation/src/auth-method/engine.ts:251
     response: { body: { kind: failed, reason: transaction_mismatch } }
 
   failedProviderError:
     type: final
     title: The provider answered an error
-    source: libs/server/federation/src/auth-method/engine.ts:152
+    source: libs/server/federation/src/auth-method/engine.ts:251
     response: { body: { kind: failed, reason: provider_error } }
 
   failedInvalidResponse:
     type: final
     title: "The provider's answer failed a check"
-    source: libs/server/federation/src/auth-method/engine.ts:152
+    source: libs/server/federation/src/auth-method/engine.ts:251
     response: { body: { kind: failed, reason: invalid_response } }
 
   failedUpstreamUnavailable:
     type: final
     title: The provider could not be reached
-    source: libs/server/federation/src/auth-method/engine.ts:152
+    source: libs/server/federation/src/auth-method/engine.ts:251
     response: { body: { kind: failed, reason: upstream_unavailable } }
 
   failedVerificationRefused:
     type: final
     title: verify() refused the result
-    source: libs/server/federation/src/auth-method/engine.ts:173
+    source: libs/server/federation/src/auth-method/engine.ts:272
     response: { body: { kind: failed, reason: verification_refused } }
 
   startFailed:
     type: final
     title: The method could not start
     description: start()'s own rejection, unchanged; the sign-in flow answers it like an unreachable provider.
-    source: libs/server/federation/src/auth-method/engine.ts:99
+    source: libs/server/federation/src/auth-method/engine.ts:105
 
   methodFault:
     type: final
     title: The method broke the contract
     description: >-
       An AuthMethodFaultError: the engine acts on none of the answer, and the sign-in flow shows its generic error
-      page with a trace id. The error names the method's type for the operator's log.
-    source: libs/server/federation/src/auth-method/errors.ts
+      page with a trace id. The error names the method's type for the operator's log. A fault the route mount caught
+      reaches the engine as the outcome, which completeUpstreamStep throws like its own.
+    source: libs/server/federation/src/auth-method/engine.ts:239
     response: { code: method_fault }
 
   abandoned:
@@ -391,30 +439,42 @@ assertions:
     say: >-
       An identity comes only from a callback that took the pending transaction of the browser that started, so a
       callback forged, forwarded to another browser or replayed never signs anyone in
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:188
-  - id: identity-needs-a-matching-state
-    never: "state == 'identityVerified' and stateDiffers"
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+  - id: identity-needs-the-binding
+    never: "state == 'identityVerified' and bindingDiffers"
     say: 'A response meant for another start, or forged, never gives an identity'
-    source: libs/server/federation/src/testing/contract-kit.ts:345
-  - id: verify-only-sees-callback-results
-    never: 'verifyCalled and (noTransaction or stateDiffers or outcomeInvalid)'
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+  - id: a-foreign-callback-takes-nothing
+    never: 'transactionTaken and (noTransaction or bindingDiffers)'
     say: >-
-      verify() is called only with a result the method's own callback produced from a pending transaction whose state
-      matched
-    source: libs/server/federation/src/auth-method/engine.ts:171
+      The host takes a pending transaction only for a callback that carries its binding, so a cross-site request
+      cannot spend or cancel a pending sign-in
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
+  - id: verify-only-sees-callback-results
+    never: 'verifyCalled and (noTransaction or bindingDiffers or callbackFaults or outcomeInvalid)'
+    say: >-
+      verify() is called only with a result the method's own callback produced from a pending transaction whose
+      binding matched
+    source: libs/server/federation/src/auth-method/engine.ts:270
+  - id: a-fault-never-escapes-the-engine
+    never: 'verifyCalled and callbackFaults'
+    say: >-
+      A handler that throws, or a context that cannot be built, ends the step as a fault through the engine, never as
+      an identity and never as a raw error
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:241
   - id: no-foreign-attribute-source
     never: "state == 'identityVerified' and foreignSource"
     say: "Every attribute the engine hands on carries the method's own type as its source"
-    source: libs/server/federation/src/auth-method/engine.ts:301
+    source: libs/server/federation/src/auth-method/engine.ts:426
   - id: a-broken-start-sends-the-browser-nowhere
     never: 'transactionKept and startInvalid'
     say: "The engine keeps no transaction and sends the browser nowhere when start()'s answer fails a check"
-    source: libs/server/federation/src/auth-method/engine.ts:104
+    source: libs/server/federation/src/auth-method/engine.ts:110
   - id: a-decline-is-not-a-failure
     never: "state == 'declined' and not personDeclined"
     say: 'Only the person declining at the provider ends as declined'
-    source: libs/server/federation/src/auth-method/engine.ts:151
+    source: libs/server/federation/src/auth-method/engine.ts:250
   - id: a-bounce-stays-on-the-method
-    never: "state == 'takingTransaction' and returnMode == 'formPost' and bouncesElsewhere"
+    never: "state == 'checkingBinding' and returnMode == 'formPost' and bouncesElsewhere"
     say: "A form_post is sent on only to one of the method's own GET callback routes, on the same origin"
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:281

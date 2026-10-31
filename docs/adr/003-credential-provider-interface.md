@@ -32,10 +32,15 @@
 > `id`, the contract version, default display data, a config schema, the steps it contributes (the
 > upstream step, `urn:qauth:ia:upstream:v1-rc.0`), the routes it mounts and `start()`. The registry
 > holds AuthMethods beside plain providers in one `type` space, and a duplicate `type` or a method
-> that breaks the contract fails the boot. A method's routes mount under `/upstream/<type>` on the
-> realm host, and it cannot declare one outside that prefix. It is handed its config, the egress
-> client, the signer role and a logger: no database handle and no private key, as ADR-019
-> Decision 12 requires. `WalletProvider` is not an AuthMethod, and its `verify()` keeps throwing.
+> that breaks the contract fails the boot. Only the engine's upstream step gets an AuthMethod
+> (`resolveAuthMethod`): an AuthMethod's `verify()` resolves for its own callback's results, so
+> the generic `resolve(type)` answers a stand-in whose `verify()` rejects. A method's routes mount
+> under `/upstream/<type>` on the realm host, and it cannot declare one outside that prefix; the
+> host binds each callback to its start (the `binding` `start()` answers, compared in constant
+> time before the pending transaction is taken). It is handed its config, the egress client, the
+> signer role and a logger: no database handle and no private key, as ADR-019 Decision 12
+> requires. The assurance level a method resolves is capped by the caller, `low` by default.
+> `WalletProvider` is not an AuthMethod, and its `verify()` keeps throwing.
 > The "plugin registry pattern with dynamic discovery" rejected below for the MVP is the layer
 > ADR-019 Decision 12 now adds on top of this interface; the plugin runtime that loads installed
 > methods is #600.

@@ -1175,8 +1175,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
 
+- **The AuthMethod contract, experimental** ([#599], ADR-003 as amended,
+  ADR-018 §4, ADR-019 Decision 12). The plugin API for sign-in methods, such as
+  an upstream OpenID Connect provider, versioned `qauth-auth-method/1-rc.0`
+  and outside the 1.0 stability promise (the experimental item `plugin-api`).
+  An AuthMethod extends `CredentialProvider` with an id, display data, a config
+  schema, the upstream step, the routes it mounts under `/upstream/<type>` and
+  `start()`. The engine checks every answer of a method: the redirect, the
+  transaction and its binding, which the host compares in constant time
+  before it takes the pending transaction, the identity (its assurance level
+  capped, `low` by default) and every attribute, whose source must be the
+  method's type. A method is handed its config, the egress client, the signer
+  role and a logger, never a database handle or a key, and `resolve(type)`
+  answers a fail-closed stand-in for it. The contract test kit
+  (`@qauth-labs/server-federation/testing`) checks a method against all of
+  it, PKCE with S256 included. Nothing registers a method in a running server
+  yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
+
 ### Changed
 
+- **The request log censors `code`, `id_token` and `access_token` in logged
+  URLs** ([#599]), as it censors `response_code` and `token`: an upstream
+  provider's authorization code rides in an AuthMethod's callback URL, and a
+  `form_post` bounce may carry a provider's tokens there.
 - **A process binds a second port only once the admin listener is turned
   on** ([#511]). An existing deployment binds nothing new: the listener is off
   by default. A process with `ADMIN_API_ENABLED=true` and the `admin` role
@@ -1961,9 +1982,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#592]: https://github.com/qauth-labs/qauth/issues/592
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#599]: https://github.com/qauth-labs/qauth/issues/599
+[#600]: https://github.com/qauth-labs/qauth/issues/600
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
+[#639]: https://github.com/qauth-labs/qauth/issues/639
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ### Fixed

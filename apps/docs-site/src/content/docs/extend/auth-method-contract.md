@@ -3,7 +3,7 @@ title: The AuthMethod contract
 description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, and the test kit that checks a method against the contract.
 sidebar:
   order: 6
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 experimental: true
 ---
 
@@ -42,7 +42,7 @@ provider whose `verify()` rejects; wallet sign-in keeps its own seam.
 | `configSchema`        | A Zod object schema of the method's config for one realm. A secret member is marked `.meta({ writeOnly: true })`.                                                            |
 | `steps`               | The Interaction API steps the method contributes, by versioned URN. Today only the upstream step, `urn:qauth:ia:upstream:v1-rc.0`.                                           |
 | `routes`              | The routes the method mounts below its prefix.                                                                                                                               |
-| `start()`             | Starts an upstream transaction.                                                                                                                                              |
+| `start()`             | Starts an upstream transaction: where the browser goes, the transaction the method needs back, and the binding the provider carries back.                                    |
 
 The type rules are strict because `type` lands in four places: lower-case ASCII letters, digits
 and `_`, starting with a letter, at most 63 characters. A type with `:` or `/` (an ID-JAG issuer
@@ -55,46 +55,64 @@ type, `oidc_<issuer URL>`) never matches, and the types QAuth writes itself (`pa
 engine offers the upstream step ──► person picks the method
         │
         ▼
-start(context, { uiLocales })  ──► { redirectTo, transaction }
-        │  the engine keeps the transaction server-side, bound to the
-        │  interaction and its flow cookie, and sends the browser on
+start(context, { uiLocales })  ──► { redirectTo, transaction, binding }
+        │  the engine keeps the transaction and its binding server-side,
+        │  bound to the interaction and its flow cookie, and sends the
+        │  browser on
         ▼
-provider ──► GET /upstream/<type>/callback?code=…&state=…
-        │  the host takes the pending transaction (once); with none it
-        │  answers transaction_mismatch and the method never runs.
-        │  Otherwise it hands the callback the query and the
-        │  transaction; no header, no cookie
+provider ──► GET /upstream/<type>/callback?code=…&state=<binding>
+        │  the host compares the binding with the pending transaction's
+        │  (constant time) BEFORE it takes the transaction; with none, or
+        │  a binding that does not match, it answers transaction_mismatch,
+        │  the transaction stays pending and the method never runs.
+        │  Otherwise it takes the transaction (once) and hands the
+        │  callback the query and the transaction; no header, no cookie
         ▼
-callback ──► result | declined | failed (reason)
+callback ──► result | declined | failed (reason)   (a throw: a fault)
         │
         ▼
-engine: verify(result) ──► VerifiedIdentity, checked
+engine: verify(result) ──► VerifiedIdentity, checked, assurance capped
         extractAttributes() ──► attributes, each with source = type
 ```
 
-1. **Start.** The engine calls `start()`. The method answers where the browser goes and the
-   transaction it needs back: a fresh `state`, a `nonce`, a PKCE verifier. The engine checks the
-   answer (`startUpstreamStep`): the redirect is an absolute `https` URL with no credentials and no
-   fragment, and the transaction is an object of JSON data of at most 4096 bytes.
+1. **Start.** The engine calls `start()`. The method answers where the browser goes, the
+   transaction it needs back (a fresh `state`, a `nonce`, a PKCE verifier) and the **binding**: a
+   fresh random value the authorization request carries to the provider and the provider carries
+   back, usually the `state` itself. The engine checks the answer (`startUpstreamStep`): the
+   redirect is an absolute `https` URL with no credentials and no fragment, the transaction is an
+   object of JSON data of at most 4096 bytes, and the binding is 22 to 512 base64url characters
+   (22 is the length of 128 random bits; the check is of length and alphabet, the method makes it
+   random). The host keeps the transaction with its binding (`PendingUpstreamTransaction`).
 2. **Callback.** The provider sends the browser back to one of the method's callback routes. The
-   host takes the transaction the flow cookie names, once. A request with none (no flow cookie,
-   another interaction, a replay; anything the host's store answers that is not an object reads
-   as none) ends as `transaction_mismatch` in the host: the method never
-   runs for it, so it never spends the code. Otherwise the host hands the transaction to the
-   route's handler, which checks `state` against it before it does anything else (a `state` that
-   is missing, empty, repeated or another start's is a `transaction_mismatch` too), and answers
-   one of three outcomes: `result`, `declined` (the person cancelled at the provider, `access_denied`), or
-   `failed` with a reason from a closed set (`transaction_mismatch`, `provider_error`,
-   `invalid_response`, `upstream_unavailable`).
+   host reads the pending transaction the flow cookie names without taking it, and compares the
+   binding the callback carries with its binding, in constant time (`upstreamBindingMatches`). The
+   callback carries it in the route's `bindingParameter`, `state` unless the route names another:
+   a query parameter of a `GET` route, a form member of a `POST` one, exactly once. With no pending
+   transaction (no flow cookie, another interaction, a replay) or a binding that is missing,
+   empty, repeated or another start's, the host answers `transaction_mismatch` itself: the method
+   never runs, so it never spends the code, and the transaction stays pending, so a request from
+   another site cannot cancel the sign-in. Otherwise the host takes the transaction, once, checks
+   the binding of what it took again, and hands the transaction to the route's handler, which
+   checks the provider's answer and answers one of three outcomes: `result`, `declined` (the
+   person cancelled at the provider, `access_denied`), or `failed` with a reason from a closed set
+   (`transaction_mismatch`, `provider_error`, `invalid_response`, `upstream_unavailable`). A
+   handler may compare `state` with its transaction again; it costs nothing. A handler that
+   throws, or a context the host cannot build (an `AuthMethodConfigError`), is a fault: the mount
+   hands the engine an `AuthMethodFaultError` with the error as its cause, through the same
+   completion as every other outcome, never a raw 500.
 3. **Identity.** The engine (`completeUpstreamStep`) passes a `result` to `verify()`, checks the
-   identity it resolves (an `externalSub` of 1 to 255 characters with no control character, an
-   assurance level, raw claims of JSON data within 64 KiB, which it copies and freezes; a claim
-   that is `undefined` or a `Date` is not JSON data and makes the answer a fault), then
-   takes the attributes. Every attribute's `source` must equal
-   the method's `type`: a method cannot write attributes under another source, such as `wallet`,
-   which outranks every other in claim resolution. A `verify()` rejection ends the step as
-   `verification_refused`; any other broken answer is an `AuthMethodFaultError`, and the engine
-   acts on none of it.
+   identity it resolves (an `externalSub` of 1 to 255 characters of well-formed text with no
+   control character, an assurance level, raw claims of JSON data within 64 KiB, which it copies
+   and freezes; a claim that is `undefined` or a `Date` is not JSON data and makes the answer a
+   fault), then takes the attributes. The assurance level is capped: `completeUpstreamStep` takes
+   `{ maxAssurance }` and lowers the method's level to it, `low` when the caller names none, since
+   an upstream sign-in ranks with a password until an operator raises the ceiling for a provider
+   it trusts more. Every attribute's `source` must equal the method's `type`: a method cannot
+   write attributes under another source, such as `wallet`, which outranks every other in claim
+   resolution. An attribute value is well-formed text too (Postgres stores a lone surrogate as
+   U+FFFD, which would make two values one), and the engine builds the checked list and copies
+   each `expiresAt` itself. A `verify()` rejection ends the step as `verification_refused`; any
+   other broken answer is an `AuthMethodFaultError`, and the engine acts on none of it.
 
 The graph of this step is `graphs/flows/federation/upstream-step/flow.yaml`.
 
@@ -105,17 +123,27 @@ Plugin code is trusted code that runs in-process
 the contract hands it only what it needs. `createAuthMethodContext`
 (`libs/server/federation/src/auth-method/context.ts`) builds the context, with five members:
 
-- `config`: the realm's config of the method, parsed by `configSchema`, copied and frozen;
+- `config`: the realm's config of the method, parsed by `configSchema`, copied and deep-frozen.
+  It must be plain data (objects, arrays and primitives): a parsed config that holds a `Map`,
+  `Set`, `Date` or other class instance is refused with an `AuthMethodConfigError` naming the
+  member, since none of them freezes;
 - `egress`: `request()` over the egress client, so every outbound call is checked (ADR-019
   Decision 8). It passes on only `method` (`GET` or `POST`), `url`, `headers`, `body`, `purpose`
   and `source` (`operator`, `admin` or `remote_document`, never a destination a client or an end
   user chose), and adds the realm's name itself: a method cannot pick another realm's allowlist
-  entries or lift the client's caps;
+  entries or lift the client's caps. `operator` and `admin` are the labels the realm's allowlist
+  applies to, for non-public addresses, so the adapter keeps them only for a URL whose origin is
+  the origin of a URL in the method's parsed config; any other call goes as `remote_document`;
 - `signer`: `signClientAssertion()` and `getUpstreamJwks()` over the signer role, with the realm,
-  the provider and the caller role fixed by the host. Signatures, never a key (ADR-019 Decision 9);
-- `log`: a logger's four levels, with a fields object and a message;
+  the provider and the caller role fixed by the host. Signatures, never a key (ADR-019 Decision 9).
+  An assertion gets `iat` when its claims carry none (a future one is refused), and its `exp` is
+  lowered to at most five minutes from now;
+- `log`: a logger's four levels, with a fields object and a message. The fields are nested under
+  `authMethod`, so a method cannot overwrite the line's `reqId` or `realm`, as a copy in which
+  `code`, `code_verifier`, `client_secret`, `client_assertion`, `refresh_token`, `access_token`,
+  `id_token`, `nonce` and `password` are redacted at any depth;
 - `routeUrl(path)`: the absolute URL of one of the method's own routes on the realm host, for a
-  `redirect_uri`.
+  `redirect_uri`. Only a path the method's `routes` declare.
 
 Each member is an adapter the builder writes, not a bound copy of the host's function, so the host
 can hand over its whole egress client, signer and logger and the method still reaches nothing
@@ -134,17 +162,22 @@ own callback URL, so a response meant for one provider cannot be replayed at ano
 
 There are two kinds of route:
 
-- a **callback** route gets the query, the form and the taken transaction, and answers an outcome
-  that goes to the engine;
+- a **callback** route gets the query, the form and the taken transaction, once its binding
+  matched, and answers an outcome that goes to the engine. It may name the parameter that
+  carries the binding back (`bindingParameter`, `state` by default);
 - a **bounce** route gets no transaction and no context, and may only send the browser to one of
-  the method's own `GET` callback routes on the same origin. It is for a provider's `form_post`,
-  which arrives cross-site without the `SameSite=Lax` flow cookie. Anyone can send that POST, so
-  the code it runs holds no egress client, no signer and no config.
+  the method's own `GET` callback routes on the same origin, with a query that is a plain object
+  of strings. It is for a provider's `form_post`, which arrives cross-site without the
+  `SameSite=Lax` flow cookie. Anyone can send that POST, so the code it runs holds no egress
+  client, no signer and no config. A bounce that throws or goes elsewhere is a fault, handed to
+  the engine like a callback's.
 
 A route has no `HEAD` twin, a `POST` route reads only a urlencoded form (a JSON body reaches the
-method as an empty form), and a method sees at most 64 parameters, each at most 8192 characters.
-The request log censors the value of a `code` parameter in the logged URL, since an upstream
-authorization code rides there.
+method as an empty form), and a method sees at most 64 parameters, each at most 8192 characters,
+a repeated one as a list of at most 16, in a frozen object with no prototype
+(`authMethodParameters`; the test kit hands a method the same objects). The request log censors
+the value of a `code`, `id_token` or `access_token` parameter in the logged URL: an upstream
+authorization code rides there, and a bounce may carry a provider's tokens on.
 
 The path carries no version: the callback URL is registered at the provider, and a path that
 changed at 1.0 would break every registration.
@@ -152,17 +185,20 @@ changed at 1.0 would break every registration.
 ## Registration
 
 The provider registry holds AuthMethods beside plain providers, in one `type` space
-(`libs/server/federation/src/providers/provider-registry.ts`). `resolve(type)` finds either kind,
-`resolveAuthMethod(type)` finds only an AuthMethod, `findAuthMethod(type)` answers `undefined`
-for a type that came from a request and names none, and `authMethods()` lists them for the
-mount.
+(`libs/server/federation/src/providers/provider-registry.ts`). `resolveAuthMethod(type)` finds
+only an AuthMethod, `findAuthMethod(type)` answers `undefined` for a type that came from a
+request and names none, and `authMethods()` lists them for the mount. `resolve(type)` answers a
+plain provider as registered, and for an AuthMethod's type a fail-closed stand-in whose
+`verify()` rejects and `extractAttributes()` throws: an AuthMethod's `verify()` resolves for its
+own callback's results, so it is handed out only to the engine's upstream step.
 The registry keeps a frozen snapshot of each method, read once and validated as kept: the `type`
 it checked, the routes it mounts and the members the engine calls cannot change afterwards. A
 provider that carries a `contract` member is held to the whole contract at registration, so a
 method written against another contract version, with a route that could leave its prefix, or
 under a reserved type, fails the boot, and so does a duplicate `type`.
-`createConfiguredProviders` takes the methods to register (`authMethods`) and appends them after
-the built-in providers; leaving them out registers none.
+`createConfiguredProviders` takes the methods to register (`authMethods`), holds every entry to the
+whole contract (one with no `contract` member too, which the registry alone would take for a plain
+provider) and appends them after the built-in providers; leaving them out registers none.
 
 ## Checking a method: the contract test kit
 
@@ -190,16 +226,17 @@ It resolves with the checks it ran and rejects with an `AuthMethodContractError`
 check the method failed:
 
 - the static checks the registry runs, and a config schema that renders as JSON Schema;
-- `start()` answers a valid redirect and transaction, and two starts answer different
+- `start()` answers a valid redirect, transaction and binding, and two starts answer different
   transactions;
-- the callback, with its transaction, ends in an identity whose attributes carry the method's
-  `type`, and a second sign-in of the same person resolves the same `externalSub`;
-- the callback carries back a value of its own start that binds it to its transaction (`state`:
-  a value one start sent the provider and another did not, in the redirect or in a body the method
-  posted, as a pushed authorization request does). At least one such value binds: without it, with
-  it empty or repeated, the callback never gives a result and never calls the provider, and the
-  value is at least 22 characters long (128 bits as base64url). With another start's transaction
-  the callback never gives a result either;
+- two starts answer different bindings, and each sends its binding to the provider, in the
+  redirect or in a body the method posted (as a pushed authorization request does);
+- the provider's callback carries the binding back in the route's `bindingParameter`: the kit
+  compares it as the host does, and calls the handler only when it matches. The callback ends in
+  an identity whose attributes carry the method's `type`, and a second sign-in of the same person
+  resolves the same `externalSub`;
+- PKCE with S256: an authorization request that asks for a code (`response_type=code`) carries
+  `code_challenge_method=S256` and a `code_challenge`, and every token request the callback makes
+  (`grant_type=authorization_code`) carries the `code_verifier` whose S256 is that challenge;
 - `verify()` rejects inputs no callback produced: a well-formed identity, a copy of a real result,
   and a result it has already verified;
 - a declined callback ends as `declined`, when the scenario gives one;
@@ -210,7 +247,9 @@ check the method failed:
   found through `properties`, `items`, `additionalProperties`, `anyOf`, `oneOf`, `allOf` and local
   `$ref`s, as it is, in base64 or base64url, percent-encoded, or as HTTP Basic credentials with
   another string of the config, in a field, a message, or an error's message, stack, cause or own
-  fields. It is a check for common leaks, not a proof that none exists.
+  fields. Every secret is looked for, however short, so give the scenario's secrets a realistic
+  length: a short one can match text that is no leak. It is a check for common leaks, not a proof
+  that none exists.
 
 `libs/server/federation/testing/sample-auth-method.fixture.ts` is a sample method that passes,
 written the way a plugin would be; `libs/server/federation/src/testing/contract-kit.test.ts`
