@@ -186,7 +186,9 @@ needs what its strictest change needs.
   it still parses.
 - **Secret** fields, such as the SMTP password, are write-only. Their value is never stored in the
   policy document and never returned: the realm representation shows only whether one is set, as
-  \`<name>Set\`, and the realm file never holds one.
+  \`<name>Set\`, and the realm file never holds one. A write sets one with its value and clears it
+  with \`null\`; leaving it out keeps it, and a \`<name>Set\` sent back from the representation
+  changes nothing. Setting or clearing a secret is always a security operation.
 - **Environment-bound** fields describe the environment a realm runs in, such as its mail transport
   or a trust list. Promoting a sandbox configuration to a live realm leaves them out unless each is
   selected ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),

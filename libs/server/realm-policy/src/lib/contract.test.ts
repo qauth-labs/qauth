@@ -222,6 +222,11 @@ describe('every secret field', () => {
         continue;
       }
       expect(at(views.input, segments)[name], path).toMatchObject({ writeOnly: true });
+      // A write may send the representation back, flag included.
+      expect(at(views.input, segments)[`${name}Set`], path).toMatchObject({
+        type: 'boolean',
+        readOnly: true,
+      });
       expect(at(views.document, segments), path).not.toHaveProperty(name);
       expect(at(views.representation, segments), path).not.toHaveProperty(name);
       expect(at(views.representation, segments)[`${name}Set`], path).toMatchObject({

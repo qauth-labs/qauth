@@ -23,8 +23,8 @@ import { isPolicySchemaVersion, REALM_POLICY_SCHEMA_VERSION } from './version';
  *
  * - the stored policy document (`document` view), which never holds a secret
  *   and is the realm file's `policies` (ADR-018 §5);
- * - a write (`input` view), where a secret field may be set and is
- *   write-only;
+ * - a write (`input` view), where a secret field may be set, or cleared
+ *   with `null`, and is write-only;
  * - the admin API's realm representation (`representation` view), where a
  *   secret field appears only as `<name>Set: true | false`;
  * - the JSON Schema of each view, for OpenAPI and the realm file;
@@ -48,7 +48,9 @@ export interface PolicyGroupShape {
  * - `document`: the stored policies and the realm file's `policies`. Every
  *   member is optional and takes its default; no secret field appears.
  * - `input`: a full policy document as a write sends it. A secret field may
- *   be set here, and nowhere else; it is write-only.
+ *   be set here, and nowhere else, and `null` clears it; it is write-only.
+ *   The representation's `<name>Set` is accepted and dropped, so a
+ *   representation sent back changes nothing.
  * - `representation`: what the admin API returns. Every member is present;
  *   a secret field `<name>` appears as `<name>Set`, a boolean.
  */
@@ -74,7 +76,7 @@ export interface PolicyChange {
   /**
    * The value before and after. For a secret field these are never the
    * values but whether one is set: `before` from `setSecrets`, `after` true
-   * when the change sets one and false when it clears it.
+   * when the change sets one and false when it clears it (`null`).
    */
   readonly before: unknown;
   readonly after: unknown;
@@ -101,8 +103,6 @@ export interface PolicyDiff {
 export interface PolicyDiffOptions {
   /** The secret field paths that hold a value before the change. */
   readonly setSecrets?: Iterable<string>;
-  /** The secret field paths the change clears. */
-  readonly clearSecrets?: Iterable<string>;
 }
 
 /** One reason a value is not a valid policy document. */
@@ -221,13 +221,13 @@ export interface PolicyRegistry {
    * view, to `after`, a write parsed as the `input` view (missing members
    * take their defaults, so `{}` is the default policies).
    *
-   * A stored document holds no secret, so `before` cannot carry one: the
-   * caller says which secrets are set before the change (`options.setSecrets`,
-   * from the secret store) and which the change clears
-   * (`options.clearSecrets`). A secret is set by giving its value in `after`,
-   * and every value given is recorded as a change, the same value again
-   * included, so the diff never compares a value with a stored one. Clearing
-   * is always recorded as a change.
+   * A stored document holds no secret, so `before` cannot carry one, and the
+   * caller says which secrets are set before the change
+   * (`options.setSecrets`, from the secret store). In `after`, a secret's
+   * value sets it, `null` clears it and leaving it out keeps it. Every value
+   * and every `null` given is a change, a security operation: the same value
+   * again included, so the diff never compares a value with a stored one,
+   * and a clear whether or not a value was set.
    */
   diffPolicies(before: unknown, after: unknown, options?: PolicyDiffOptions): PolicyDiff;
   /** The JSON Schema (draft 2020-12) of a view, `representation` by default. */
@@ -486,7 +486,8 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
       base = base.refine(isUniqueList, { message: 'lists an entry more than once' });
     }
     if (field.secret) {
-      return view === 'input' ? base.optional() : undefined;
+      // A write sets a secret with its value and clears it with null.
+      return view === 'input' ? base.nullable().optional() : undefined;
     }
     // The representation has every member: a missing one is an error, never
     // its default, which could show a loosened realm as a strict one.
@@ -495,19 +496,35 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
 
   function groupSchema(node: TreeNode & { kind: 'group' }, view: PolicyView): z.ZodType {
     const shape: Record<string, z.ZodType> = {};
+    const flags: string[] = [];
     for (const [name, member] of node.members) {
       if (member.kind === 'group') {
         shape[name] = groupSchema(member, view);
-      } else if (member.entry.field.secret && view === 'representation') {
-        shape[setFlagName(name)] = z.boolean();
-      } else {
-        const schema = fieldSchema(member.entry, view);
-        if (schema !== undefined) shape[name] = schema;
+        continue;
       }
+      if (member.entry.field.secret && view !== 'document') {
+        // The representation shows a secret as `<name>Set`. A write may send
+        // the representation back, so the input takes the flag too, and drops
+        // it: it sets and clears nothing.
+        const flag = setFlagName(name);
+        shape[flag] = view === 'representation' ? z.boolean() : z.boolean().optional();
+        if (view === 'input') flags.push(flag);
+      }
+      const schema = fieldSchema(member.entry, view);
+      if (schema !== undefined) shape[name] = schema;
     }
     // The representation strips what it does not name, so a value that is not
     // in it (a secret above all) never reaches a response serialised with it.
-    return view === 'representation' ? z.object(shape) : z.strictObject(shape).prefault({});
+    if (view === 'representation') return z.object(shape);
+    let group: z.ZodType = z.strictObject(shape);
+    if (flags.length > 0) {
+      group = group.transform((value) => {
+        const written: Record<string, unknown> = { ...(value as Record<string, unknown>) };
+        for (const flag of flags) delete written[flag];
+        return written;
+      });
+    }
+    return group.prefault({});
   }
 
   function schema(view: PolicyView): z.ZodType {
@@ -661,7 +678,6 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
     const from = parse(before, 'document');
     const to = parse(after, 'input');
     const setBefore = secretPaths(options.setSecrets, 'setSecrets');
-    const cleared = secretPaths(options.clearSecrets, 'clearSecrets');
     const changes: PolicyChange[] = [];
     for (const entry of entries) {
       const { field } = entry;
@@ -669,19 +685,15 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
       const b = valueAt(to, entry.segments);
       let change: Omit<PolicyChange, 'class' | 'effects'>;
       if (field.secret) {
-        // A secret changes when a value is given or it is cleared. Only whether
-        // one is set is recorded, and a value is never compared with another:
-        // giving the stored value again is a change too, so the diff cannot
-        // confirm a guessed secret.
-        const wasSet = setBefore.has(entry.path);
-        if (b !== undefined && cleared.has(entry.path)) {
-          throw new PolicyDefinitionError(`${entry.path} is both set and cleared`);
-        }
-        if (b === undefined && !cleared.has(entry.path)) continue;
+        // A value sets a secret, null clears it, and leaving it out keeps it.
+        // Only whether one is set is recorded, and a value is never compared
+        // with another: giving the stored value again is a change too, so the
+        // diff cannot confirm a guessed secret.
+        if (b === undefined) continue;
         change = {
           path: entry.path,
-          before: wasSet,
-          after: b !== undefined,
+          before: setBefore.has(entry.path),
+          after: b !== null,
           direction: 'neutral',
           secret: true,
           environmentBound: field.environmentBound,
@@ -751,16 +763,19 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
         continue;
       }
       const { field } = member.entry;
-      if (field.secret && view === 'representation') {
-        const flag = properties[setFlagName(name)];
+      const flag = field.secret ? properties[setFlagName(name)] : undefined;
+      if (flag !== undefined) {
         flag['readOnly'] = true;
         flag['description'] =
-          `Whether ${member.entry.path} is set. The value is write-only and never returned.`;
-        continue;
+          view === 'input'
+            ? `Whether ${member.entry.path} is set, as the representation shows it. A write may send it back; it sets and clears nothing.`
+            : `Whether ${member.entry.path} is set. The value is write-only and never returned.`;
       }
       const property = properties[name];
       if (property === undefined) continue;
-      property['description'] = field.doc.summary;
+      property['description'] = field.secret
+        ? `${field.doc.summary} A value sets it, null clears it, and leaving it out keeps it.`
+        : field.doc.summary;
       // The representation's type has no default (every member is present);
       // the keyword still tells a reader which value a value differs from.
       if (view === 'representation') property['default'] = structuredClone(field.default);

@@ -78,10 +78,10 @@ const {
   changes,
   class: needs,
   effects,
-} = diffPolicies(before, after, {
+} = diffPolicies(stored, write, {
   setSecrets: ['mail.smtp.password'], // what the secret store holds; no document does
-  clearSecrets: [], // secrets this change clears
 });
+// In the write, a secret's value sets it, null clears it, and leaving it out keeps it.
 // changes: [{ path: 'password.minScore', before: 2, after: 1, direction: 'loosening',
 //             class: 'security', effects: ['credential-path'], ... }]
 const stored = parseRealmPolicies(row.policies); // defaults filled, unknown members refused
@@ -93,7 +93,9 @@ const schema = toJsonSchema('representation'); // or 'document' (the realm file)
 The three views:
 
 - `document`: the stored policies and the realm file's `policies`. No secret appears.
-- `input`: a write. A secret field may be set here and is marked `writeOnly`.
+- `input`: a write. A secret field may be set here, or cleared with `null`, and is marked
+  `writeOnly`. The representation's `<name>Set` is accepted (`readOnly`) and dropped, so a
+  representation sent back changes nothing.
 - `representation`: what the admin API returns. A secret `<name>` appears as `<name>Set`. Every
   member must be present: its Zod schema never fills a default, so a serialiser built on it cannot
   show a loosened realm as a strict one, and it strips any member it does not name.

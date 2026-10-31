@@ -430,10 +430,14 @@ describe('diffPolicies', () => {
       }),
     ]);
 
-    const cleared = diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, {
-      setSecrets: ['mail.resend.apiKey'],
-      clearSecrets: ['mail.resend.apiKey'],
-    });
+    // null clears a secret.
+    const cleared = diffPolicies(
+      TABLE_DEFAULTS,
+      withPolicies({ mail: { resend: { apiKey: null } } }),
+      {
+        setSecrets: ['mail.resend.apiKey'],
+      }
+    );
     expect(cleared.changes).toEqual([
       {
         path: 'mail.resend.apiKey',
@@ -447,21 +451,42 @@ describe('diffPolicies', () => {
       },
     ]);
     // Clearing counts even when the caller does not say the secret was set.
-    expect(
-      diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, { clearSecrets: ['mail.smtp.password'] }).class
-    ).toBe('security');
+    const unset = diffPolicies(
+      TABLE_DEFAULTS,
+      withPolicies({ mail: { smtp: { ...TABLE_DEFAULTS.mail.smtp, password: null } } })
+    );
+    expect(unset.changes).toEqual([
+      expect.objectContaining({ path: 'mail.smtp.password', before: false, after: false }),
+    ]);
+    expect(unset.class).toBe('security');
   });
 
-  it('refuses a secret both set and cleared, and a path that is not a secret, without echoing it', () => {
-    const after = withPolicies({
-      mail: { smtp: { ...TABLE_DEFAULTS.mail.smtp, password: 'p4ss' } },
-    });
-    expect(() =>
-      diffPolicies(TABLE_DEFAULTS, after, { clearSecrets: ['mail.smtp.password'] })
-    ).toThrow(/both set and cleared/);
+  it('keeps a secret the write leaves out, and changes nothing when a representation is sent back', () => {
+    const setSecrets = ['mail.smtp.password'];
+    expect(diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, { setSecrets }).changes).toEqual([]);
+    const representation = toRealmPoliciesRepresentation(TABLE_DEFAULTS, setSecrets);
+    expect(representation.mail.smtp.passwordSet).toBe(true);
+    expect(diffPolicies(TABLE_DEFAULTS, representation, { setSecrets }).changes).toEqual([]);
+    // A flag that says otherwise sets and clears nothing either.
+    const flipped = {
+      ...representation,
+      mail: {
+        ...representation.mail,
+        smtp: { ...representation.mail.smtp, passwordSet: false },
+        resend: { apiKeySet: true },
+      },
+    };
+    expect(diffPolicies(TABLE_DEFAULTS, flipped, { setSecrets }).changes).toEqual([]);
+    // The write drops the flag, so what it parses to holds none.
+    expect(REALM_POLICY_REGISTRY.parse(flipped, 'input')).toEqual(
+      REALM_POLICY_REGISTRY.parse(TABLE_DEFAULTS, 'input')
+    );
+  });
+
+  it('refuses a path that is not a secret, without echoing it', () => {
     for (const options of [
       { setSecrets: ['hunter2-secret'] },
-      { clearSecrets: ['mail.fromAddress'] },
+      { setSecrets: ['mail.fromAddress'] },
     ]) {
       let caught: unknown;
       try {
@@ -756,10 +781,14 @@ describe('toJsonSchema', () => {
   });
 
   it('makes a secret field write-only in the input and leaves it out of the document', () => {
-    expect(properties(toJsonSchema('input'), 'mail', 'smtp')['password']).toMatchObject({
-      type: 'string',
+    const smtp = properties(toJsonSchema('input'), 'mail', 'smtp');
+    expect(smtp['password']).toMatchObject({
+      anyOf: [expect.objectContaining({ type: 'string' }), { type: 'null' }],
       writeOnly: true,
+      description: expect.stringContaining('null clears it'),
     });
+    // The representation's flag is accepted in a write, read-only.
+    expect(smtp['passwordSet']).toMatchObject({ type: 'boolean', readOnly: true });
     const document = toJsonSchema('document');
     expect(properties(document, 'mail', 'smtp')).not.toHaveProperty('password');
     expect(properties(document, 'mail', 'smtp')).not.toHaveProperty('passwordSet');

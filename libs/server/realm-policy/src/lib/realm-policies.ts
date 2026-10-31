@@ -111,9 +111,10 @@ export function registerPolicyGroup(name: string, shape: PolicyGroupShape): void
 }
 
 /**
- * The changed fields between two policy documents, with direction, class and
- * effects. `options` names the secrets set before the change and those it
- * clears, which no document holds.
+ * The changed fields from a stored policy document to a write, with
+ * direction, class and effects. `options.setSecrets` names the secrets set
+ * before the change, which no document holds; the write sets a secret with
+ * its value and clears it with `null`.
  */
 export function diffPolicies(
   before: unknown,
