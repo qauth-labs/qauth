@@ -74,7 +74,7 @@ await fastify.register(signerPlugin, {
   read only here: a new key in a token variable replaces the stored key, and a different secret in
   `SESSION_COOKIE_SECRET` replaces the stored cookie key, found by opening each stored cookie key
   and comparing it with the secret in constant time. The replaced cookie key stays the realm's
-  previous cookie key, so cookies it signed keep verifying for its retention.
+  previous cookie key, so cookies it signed keep verifying until the next replacement.
 - A refusal rejects `ready()`. The message names the variables, never a value. See the
   [server-keys README](../../../server/keys/README.md#importing-the-key-variables) for the
   refusals.

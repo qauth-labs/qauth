@@ -39,7 +39,9 @@ describe('createCookieKeyRing (#493)', () => {
     await ring.keys(REALM_A);
     clock.advance(COOKIE_KEY_REFRESH_INTERVAL_MS - 1);
     await ring.keys(REALM_A);
-    await ring.find(REALM_A, (await ring.keys(REALM_A)).current.kid);
+    expect(await ring.find(REALM_A, (await ring.keys(REALM_A)).current.kid)).toMatchObject({
+      status: 'found',
+    });
 
     expect(signer.getCookieSecrets).toHaveBeenCalledTimes(1);
     expect(signer.getCookieSecrets).toHaveBeenCalledWith('local', REALM_A);
@@ -68,12 +70,12 @@ describe('createCookieKeyRing (#493)', () => {
     const signer = createFakeCookieSigner();
     const ring = createCookieKeyRing(signer);
 
-    await Promise.all([ring.keys(REALM_A), ring.keys(REALM_A), ring.find(REALM_A, 'x')]);
+    await Promise.all([ring.keys(REALM_A), ring.keys(REALM_A), ring.keys(REALM_A)]);
 
     expect(signer.getCookieSecrets).toHaveBeenCalledTimes(1);
   });
 
-  it('reads again for a kid it does not know, at most once per forced-refresh interval', async () => {
+  it('reads again, naming the kid, for a kid it does not know, at most once per forced-refresh interval', async () => {
     const signer = createFakeCookieSigner();
     const clock = manualClock();
     const ring = createCookieKeyRing(signer, { now: clock.now });
@@ -83,19 +85,25 @@ describe('createCookieKeyRing (#493)', () => {
     const next = (await signer.getCookieSecrets('local', REALM_A)).current.kid;
     signer.getCookieSecrets.mockClear();
 
-    // Within the forced-refresh interval of the last read: no read.
-    expect(await ring.find(REALM_A, next)).toBeNull();
-    expect(signer.getCookieSecrets).not.toHaveBeenCalled();
-
-    clock.advance(COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS);
+    // Well inside the refresh interval: the unknown kid is read for at once,
+    // and the signer is told which key the cookie names.
     const found = await ring.find(REALM_A, next);
-    expect(found?.kid).toBe(next);
-    expect((await ring.find(REALM_A, before.current.kid))?.kid).toBe(before.current.kid);
-    expect(signer.getCookieSecrets).toHaveBeenCalledTimes(1);
+    expect(found).toEqual({ status: 'found', key: expect.objectContaining({ kid: next }) });
+    expect(signer.getCookieSecrets).toHaveBeenCalledExactlyOnceWith('local', REALM_A, {
+      kid: next,
+    });
+    // The read refreshed the cache: the old key is the previous one now.
+    expect(await ring.find(REALM_A, before.current.kid)).toMatchObject({ status: 'found' });
+    expect((await ring.keys(REALM_A)).current.kid).toBe(next);
 
-    // Made-up kids cost at most one read per interval.
-    for (let i = 0; i < 20; i++) expect(await ring.find(REALM_A, `made-up-${i}`)).toBeNull();
-    expect(signer.getCookieSecrets).toHaveBeenCalledTimes(1);
+    // Made-up kids: one read for the first, then none until the interval passed.
+    expect(await ring.find(REALM_A, 'made-up-0')).toEqual({ status: 'unchecked' });
+    clock.advance(COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS);
+    expect(await ring.find(REALM_A, 'made-up-1')).toEqual({ status: 'absent' });
+    for (let i = 2; i < 20; i++) {
+      expect(await ring.find(REALM_A, `made-up-${i}`)).toEqual({ status: 'unchecked' });
+    }
+    expect(signer.getCookieSecrets).toHaveBeenCalledTimes(2);
   });
 
   it('caches no failure: the next call asks the signer again', async () => {

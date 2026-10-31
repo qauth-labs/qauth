@@ -214,6 +214,36 @@ describe('resolveBrowserSession', () => {
     expect(sessions.service.get).not.toHaveBeenCalled();
   });
 
+  it('keeps a cookie that names a key this process may not read again yet (#493)', async () => {
+    const { cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+    const [, payload, mac] = cookie.slice(cookie.indexOf('=') + 1).split('.');
+
+    // The first unknown kid makes the ring read the signer again; it holds no
+    // such key, so that cookie is cleared.
+    const first = makeReply();
+    await expect(
+      resolveBrowserSession(
+        fastify,
+        makeRequest(`${SESSION_COOKIE_NAME}=first-unknown.${payload}.${mac}`),
+        first.reply
+      )
+    ).resolves.toBeNull();
+    expect(first.headers['Set-Cookie']).toContain('Max-Age=0');
+
+    // A second within five seconds is not read for: it may be a key another
+    // node started signing with, so it is left for the next request.
+    const second = makeReply();
+    await expect(
+      resolveBrowserSession(
+        fastify,
+        makeRequest(`${SESSION_COOKIE_NAME}=second-unknown.${payload}.${mac}`),
+        second.reply
+      )
+    ).resolves.toBeNull();
+    expect(second.headers['Set-Cookie']).toBeUndefined();
+    expect(sessions.service.get).not.toHaveBeenCalled();
+  });
+
   it('fails, and keeps the cookie, when the signer cannot answer', async () => {
     const { cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
     const down = createFakeCookieSigner();

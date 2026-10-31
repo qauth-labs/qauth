@@ -216,10 +216,10 @@ it cannot authenticate for a developer who signed in through this portal. Issue 
 three independent blockers, each fatal on its own:
 
 1. The page depends on `__Host-qauth_session`, the auth-server's hosted-UI cookie
-   (`apps/auth-server/src/app/helpers/session-cookie.ts:133`). The portal sets
+   (`apps/auth-server/src/app/helpers/session-cookie.ts:166`). The portal sets
    `__Host-qauth_portal_session` instead (`apps/developer-portal/src/server/session-cookie.ts:5`)
    and never visits `/ui/login`, so the cookie the page needs is simply absent.
-2. That cookie is issued `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:372`),
+2. That cookie is issued `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:434`),
    which withholds it from cross-site `fetch()` subresource requests regardless of
    `credentials: 'include'`.
 3. Production CORS is fail-closed: `origin` resolves to `false` unless an operator sets

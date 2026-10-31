@@ -8,12 +8,13 @@ import type { FastifyInstance } from 'fastify';
  *
  * The signer hands the browser-facing role the realm's cookie HMAC secrets
  * (`getCookieSecrets`): the current one, which signs new cookies, and the
- * previous one, which only verifies the cookies it signed until its retention
- * ends. This module keeps them in memory, per realm, and reads them again at
- * most once per {@link COOKIE_KEY_REFRESH_INTERVAL_MS}, so a request with a
- * warm cache makes no signer call. A rotation (#542) reaches this process
- * within one interval, or sooner when a cookie names a key this process does
- * not know yet ({@link CookieKeyRing.find}).
+ * previous one, the one the last rotation retired, which only verifies the
+ * cookies it signed. This module keeps them in memory, per realm, and reads
+ * them again at most once per {@link COOKIE_KEY_REFRESH_INTERVAL_MS}, so a
+ * request with a warm cache makes no signer call. A rotation reaches this
+ * process within one interval, or as soon as a cookie names a key this process
+ * does not know yet ({@link CookieKeyRing.find}): another node may already
+ * sign with it.
  *
  * Each secret is imported into a `KeyObject` and the buffer the signer handed
  * out is zeroed at once, so no plaintext copy stays on the JavaScript heap.
@@ -28,6 +29,21 @@ export const COOKIE_KEY_REFRESH_INTERVAL_MS = 60_000;
  * every request into a signer call.
  */
 export const COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS = 5_000;
+
+/**
+ * What {@link CookieKeyRing.find} found for a `kid`:
+ *
+ * - `found`: the realm's current or previous key has it;
+ * - `absent`: neither has it, after a read of the signer made for this `kid`,
+ *   which reads its store again too: no key of the realm verifies the cookie;
+ * - `unchecked`: neither has it, and a read for an unknown `kid` was already
+ *   made within {@link COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS}: the key may be
+ *   one this process has not read yet.
+ */
+export type CookieKeyLookup =
+  | { readonly status: 'found'; readonly key: CookieKey }
+  | { readonly status: 'absent' }
+  | { readonly status: 'unchecked' };
 
 /** One cookie key: its `kid` and the HMAC-SHA256 secret, which never leaves this module's callers. */
 export interface CookieKey {
@@ -55,14 +71,15 @@ export interface CookieKeyRing {
    */
   keys(realmId: string): Promise<RealmCookieKeys>;
   /**
-   * The realm's key named `kid`, the current or the previous one, or `null`.
-   * A `kid` neither names makes one more read of the signer, at most once per
+   * The realm's key named `kid`, the current or the previous one. A `kid`
+   * neither names makes one more read of the signer, naming that `kid` so the
+   * signer reads its store again too, at most once per
    * {@link COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS} per realm: another process
    * may already sign with a key this one has not read yet.
    *
    * @throws as {@link keys}
    */
-  find(realmId: string, kid: string): Promise<CookieKey | null>;
+  find(realmId: string, kid: string): Promise<CookieKeyLookup>;
 }
 
 /** What {@link createCookieKeyRing} reads the secrets from: the signer. */
@@ -104,14 +121,23 @@ export function createCookieKeyRing(
   const now = options.now ?? (() => Date.now());
   const cache = new Map<string, CachedKeys>();
   const pending = new Map<string, Promise<CachedKeys>>();
+  /** Per realm: when a read for an unknown `kid` last started. */
+  const forcedAt = new Map<string, number>();
 
-  /** One signer read per realm at a time: concurrent callers share it. */
-  function read(realmId: string): Promise<CachedKeys> {
-    let shared = pending.get(realmId);
+  /**
+   * One signer read per realm at a time, concurrent callers sharing it; a
+   * read for an unknown `kid` is its own, as it asks the signer for more.
+   */
+  function read(realmId: string, kid?: string): Promise<CachedKeys> {
+    const slot = kid === undefined ? realmId : `${realmId}\u0000forced`;
+    let shared = pending.get(slot);
     if (shared === undefined) {
       const readAt = now();
-      shared = source
-        .getCookieSecrets(SIGNER_CALLER, realmId)
+      const request =
+        kid === undefined
+          ? source.getCookieSecrets(SIGNER_CALLER, realmId)
+          : source.getCookieSecrets(SIGNER_CALLER, realmId, { kid });
+      shared = request
         .then((secrets) => {
           const entry: CachedKeys = {
             keys: Object.freeze({
@@ -120,13 +146,14 @@ export function createCookieKeyRing(
             }),
             readAt,
           };
-          cache.set(realmId, entry);
+          const held = cache.get(realmId);
+          if (held === undefined || held.readAt <= readAt) cache.set(realmId, entry);
           return entry;
         })
         .finally(() => {
-          pending.delete(realmId);
+          pending.delete(slot);
         });
-      pending.set(realmId, shared);
+      pending.set(slot, shared);
     }
     return shared;
   }
@@ -142,15 +169,16 @@ export function createCookieKeyRing(
       return (await cached(realmId, refreshIntervalMs)).keys;
     },
 
-    async find(realmId: string, kid: string): Promise<CookieKey | null> {
-      const first = await cached(realmId, refreshIntervalMs);
-      const known = named(first.keys, kid);
-      if (known !== null) return known;
-      const again = await cached(
-        realmId,
-        Math.min(refreshIntervalMs, COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS)
-      );
-      return again === first ? null : named(again.keys, kid);
+    async find(realmId: string, kid: string): Promise<CookieKeyLookup> {
+      const known = named((await cached(realmId, refreshIntervalMs)).keys, kid);
+      if (known !== null) return { status: 'found', key: known };
+      const last = forcedAt.get(realmId);
+      if (last !== undefined && now() - last < COOKIE_KEY_FORCED_REFRESH_INTERVAL_MS) {
+        return { status: 'unchecked' };
+      }
+      forcedAt.set(realmId, now());
+      const again = named((await read(realmId, kid)).keys, kid);
+      return again === null ? { status: 'absent' } : { status: 'found', key: again };
     },
   });
 }

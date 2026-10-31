@@ -10,6 +10,7 @@ import {
   DEV_SESSION_COOKIE_SECRET_DEFAULT,
   federationEnvSchema,
   keyAttestationEnvSchema,
+  PUBLISHED_SESSION_COOKIE_SECRETS,
 } from '@qauth-labs/server-config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -248,18 +249,27 @@ describe('service roles and key material (#495)', () => {
 });
 
 describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
-  it('refuses the published development value when NODE_ENV=production, on every role', async () => {
+  it('refuses every published value when NODE_ENV=production, on every role', async () => {
+    expect(PUBLISHED_SESSION_COOKIE_SECRETS).toEqual([
+      DEV_SESSION_COOKIE_SECRET_DEFAULT,
+      // What `.env.docker.example` shipped before #493.
+      'change-me-to-a-strong-secret-at-least-32-characters',
+    ]);
     try {
-      for (const roles of ['all', 'web', 'api', 'signer', 'signer,delivery']) {
-        setEnv({
-          NODE_ENV: 'production',
-          SESSION_COOKIE_SECRET: DEV_SESSION_COOKIE_SECRET_DEFAULT,
-          SERVICE_ROLES: roles,
-          // A process without the signer refuses a key variable first.
-          JWT_PRIVATE_KEY:
-            roles.includes('signer') || roles === 'all' ? JWT_PRIVATE_KEY : undefined,
-        });
-        await expect(import('./env'), roles).rejects.toThrow(/SESSION_COOKIE_SECRET/);
+      for (const secret of PUBLISHED_SESSION_COOKIE_SECRETS) {
+        for (const roles of ['all', 'web', 'api', 'signer', 'signer,delivery']) {
+          setEnv({
+            NODE_ENV: 'production',
+            SESSION_COOKIE_SECRET: secret,
+            SERVICE_ROLES: roles,
+            // A process without the signer refuses a key variable first.
+            JWT_PRIVATE_KEY:
+              roles.includes('signer') || roles === 'all' ? JWT_PRIVATE_KEY : undefined,
+          });
+          await expect(import('./env'), `${roles} ${secret}`).rejects.toThrow(
+            /SESSION_COOKIE_SECRET is set to a value QAuth's examples published/
+          );
+        }
       }
     } finally {
       setEnv({ SERVICE_ROLES: undefined });

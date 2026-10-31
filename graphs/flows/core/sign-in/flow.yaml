@@ -294,7 +294,7 @@ states:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
         say: 'the login-CSRF cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:275
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - target: rendered
         say: 'the page has its CSRF value'
         source: apps/auth-server/src/app/routes/ui/login.ts:249
@@ -392,7 +392,7 @@ states:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
         say: 'the login-CSRF cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:275
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - target: checkingCsrf
         say: 'the cookie is absent or decodes'
         source: apps/auth-server/src/app/routes/ui/login.ts:296

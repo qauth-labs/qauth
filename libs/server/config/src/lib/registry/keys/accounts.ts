@@ -121,7 +121,7 @@ export const ACCOUNT_KEYS = defineKeys([
     default: { computed: "none; the key store holds the realm's cookie key" },
     since: '0.1.0',
     secret: true,
-    docs: "A session cookie secret of at least 32 characters, imported into the default realm's key store when it differs from the stored cookie key, which it then replaces; the cookies are signed with the stored key, and `NODE_ENV=production` refuses the development value `.env.example` ships.",
+    docs: "A session cookie secret of at least 32 characters, imported into the default realm's key store when it differs from the stored cookie key, which it then replaces; the cookies are signed with the stored key, and `NODE_ENV=production` refuses every value QAuth's examples published.",
   },
   {
     name: 'SESSION_COOKIE_TTL',

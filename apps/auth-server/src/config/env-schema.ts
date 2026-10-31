@@ -6,7 +6,6 @@ import {
   authEnvSchema,
   baseEnvSchema,
   databaseEnvSchema,
-  DEV_SESSION_COOKIE_SECRET_DEFAULT,
   dpopEnvSchema,
   egressEnvSchema,
   emailEnvSchema,
@@ -19,6 +18,7 @@ import {
   observabilityEnvSchema,
   otlpExporterProblems,
   passwordEnvSchema,
+  PUBLISHED_SESSION_COOKIE_SECRETS,
   rateLimitEnvSchema,
   redisEnvSchema,
   serviceRolesEnvSchema,
@@ -176,23 +176,24 @@ export const envSchema = z
       .transform((v) => (v === undefined ? undefined : v.toLowerCase() === 'true')),
   })
   .superRefine((env, ctx) => {
-    // F-12 — reject the published development SESSION_COOKIE_SECRET in
-    // production. The cookies are signed with the realm's cookie key from the
-    // signer (#493), so the variable is optional; but while the key boot step
-    // still reads it, to import it or to replace the stored cookie key with it
-    // (until rotation through the store ships, #544 and #551), a value anyone
-    // can read in `.env.example` must never reach a production key store. The
-    // boot step drops that value outside production too, and every role
-    // refuses it here, whether or not this process runs the boot step.
+    // F-12 — reject a published SESSION_COOKIE_SECRET in production. The
+    // cookies are signed with the realm's cookie key from the signer (#493),
+    // so the variable is optional; but while the key boot step still reads it,
+    // to import it or to replace the stored cookie key with it (until rotation
+    // through the store ships, #544 and #551), a value anyone can read in
+    // QAuth's examples must never reach a production key store. The boot step
+    // drops those values outside production too, and every role refuses them
+    // here, whether or not this process runs the boot step.
     if (
       env.NODE_ENV === 'production' &&
-      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT
+      env.SESSION_COOKIE_SECRET !== undefined &&
+      PUBLISHED_SESSION_COOKIE_SECRETS.includes(env.SESSION_COOKIE_SECRET)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['SESSION_COOKIE_SECRET'],
         message:
-          "SESSION_COOKIE_SECRET is set to the published development value, which production refuses. Remove it, and the realm's key store keeps or generates the cookie key, or set it to a strong secret of at least 32 characters, for example `openssl rand -base64 48`.",
+          "SESSION_COOKIE_SECRET is set to a value QAuth's examples published, which production refuses: anyone can sign session cookies with it. Set it to a new strong secret of at least 32 characters, for example `openssl rand -base64 48`: at boot it replaces the realm's stored cookie key, which may be that published value. Remove the variable only after that boot.",
       });
     }
 

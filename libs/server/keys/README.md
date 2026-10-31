@@ -324,7 +324,8 @@ const result = await bootRealmKeys({
   signing key or the cookie key. Tokens are signed with the stored keys (#491) and the session
   cookie with the realm's cookie key (#493), so the replacement is what signs from then on. A
   replaced cookie key is never published: it is the realm's previous cookie key, so cookies it
-  signed keep verifying for its retention.
+  signed keep verifying until the next replacement (a retention limit comes with
+  rotation through the store, #542).
 - A variable that holds a key the store keeps, but not as its active key (one a replacement
   retired), changes nothing; it is reported in `inactive`.
 - It all runs in one transaction under `lockRealm`, a transaction-level advisory lock: nodes that
@@ -366,7 +367,7 @@ const token = await signer.signJws('api', {
 | `signHybrid({ realmId, typ, claims })`                                       | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                   |
 | `signWebhook({ realmId, subscriptionId, id, timestamp, body })`              | The `webhook-signature` header value. See [Webhook signatures](#webhook-signatures).                                                  |
 | `signClientAssertion({ realmId, providerId, audience, algorithm?, claims })` | A `private_key_jwt` client assertion toward an upstream provider. See [Client assertions](#client-assertions).                        |
-| `getCookieSecrets(realmId)`                                                  | The active cookie HMAC secret and the most recently retired one, as fresh buffers.                                                    |
+| `getCookieSecrets(realmId, { kid? })`                                        | The active cookie HMAC secret and the most recently retired one, as fresh buffers; a `kid` its list lacks reads the store again.      |
 | `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
 | `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
 | `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |

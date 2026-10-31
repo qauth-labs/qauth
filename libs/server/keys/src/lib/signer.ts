@@ -115,9 +115,20 @@ export interface Signer {
    * recently retired one, which only verifies until its retention ends (#542).
    * Each call returns fresh buffers that belong to the caller.
    *
+   * `options.kid` names a key a cookie was signed with (#493): when the key
+   * list the signer holds names neither secret by it, the store is read again
+   * (at most once a second), so a key another node started using since this
+   * one last read is found. The answer may still name neither.
+   *
    * @throws SignerKeyNotFoundError when the realm has no active `cookie_hmac` key
+   * @throws SignerRequestRefusedError when `options` is not an object with at
+   *   most a string `kid`
    */
-  getCookieSecrets(caller: SignerCaller, realmId: string): Promise<CookieSecrets>;
+  getCookieSecrets(
+    caller: SignerCaller,
+    realmId: string,
+    options?: CookieSecretsOptions
+  ): Promise<CookieSecrets>;
 
   /**
    * Encrypt `plaintext` with the realm's active `data_at_rest` key
@@ -245,6 +256,12 @@ export interface CookieSecret {
   readonly kid: string;
   /** The secret. A fresh buffer that belongs to the caller. */
   readonly secret: Buffer;
+}
+
+/** Options of {@link Signer.getCookieSecrets}. */
+export interface CookieSecretsOptions {
+  /** The key a cookie names: the store is read again when the signer's list lacks it. */
+  readonly kid?: string;
 }
 
 /** What {@link Signer.getCookieSecrets} returns. */

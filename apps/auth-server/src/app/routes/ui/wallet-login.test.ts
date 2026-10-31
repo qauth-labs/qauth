@@ -1,4 +1,5 @@
 import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
+import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -797,6 +798,39 @@ describe('wallet login — completion', () => {
       expect(state.body.status).toBe('complete');
       expect(sessions.service.create).toHaveBeenCalledOnce();
       expect(sessions.service.create.mock.calls[0][0].issuedAt).toBe(beforeRead);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails with the flow still there, and mints nothing, when the cookie keys cannot be read (#493)', async () => {
+    const { routes, sessionUtils, sessions, handle, flow, binderCookie } = await startFlow();
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      (resolveWalletPresentation as unknown as Mock).mockImplementation(async () => {
+        // The presentation takes a while: the cookie keys this process read
+        // when the flow started are due for a refresh, and the signer is down.
+        vi.setSystemTime(Date.now() + 61_000);
+        sessions.signer.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+        return AUTHENTICATED;
+      });
+      const { reply } = createReply();
+
+      await expect(
+        routes.get('GET /wallet-login/:handle/status')!(
+          {
+            params: { handle },
+            headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+            ip: '127.0.0.1',
+          },
+          reply
+        )
+      ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+
+      // Nothing burned: the flow can be polled again once the signer answers.
+      expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
+      expect(sessions.service.create).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }

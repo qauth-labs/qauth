@@ -249,6 +249,11 @@ describe('the browser cookies on the realm cookie key (#493, real containers)', 
     expect((await consents(second, before)).statusCode).toBe(200);
     const after = await signInWithPassword(second, EMAIL);
     expect(sessionCookieParts(after.get(SESSION_COOKIE) as string).kid).toBe(secondKid);
+    // The first node is still running and read the keys before the rotation:
+    // the new kid makes it read the store again, and the cookie verifies.
+    const atFirst = await consents(first, after);
+    expect(atFirst.statusCode).toBe(200);
+    expect(atFirst.headers['set-cookie']).toBeUndefined();
 
     // The end of the old key's retention: the store no longer holds it, as
     // the retention purge (#542) leaves it. A node that reads the keys after

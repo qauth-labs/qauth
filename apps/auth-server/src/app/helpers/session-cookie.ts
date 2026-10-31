@@ -15,7 +15,8 @@ import { requestRealm } from './request-realm';
  * Every signed cookie value is `<kid>.<payload>.<mac>`:
  *
  * - `kid` names the realm cookie key that signed it, so a rotation (#542)
- *   leaves the cookies the previous key signed verifiable for its retention;
+ *   leaves the cookies the previous key signed verifiable while it is the
+ *   realm's previous key;
  * - `payload` is the cookie's own content, which never holds a `.`;
  * - `mac` is the base64url HMAC-SHA256, under that key, of
  *   {@link COOKIE_MAC_LABEL}, the cookie's name, the realm id, the `kid` and
@@ -86,37 +87,69 @@ async function signCookieValue(
 }
 
 /**
- * Verify a `<kid>.<payload>.<mac>` value of the cookie `cookieName` for the
- * realm and return its payload, or `null`: absent, malformed, signed by a key
- * the realm does not hold (or no longer holds), signed for another realm or
- * another cookie, or tampered with. The MAC is compared in constant time.
+ * What checking a signed cookie value found:
+ *
+ * - `valid`: it verifies, and `payload` is its content;
+ * - `invalid`: absent or empty, malformed, signed by a key the realm does not
+ *   hold (or no longer holds), signed for another realm or another cookie, or
+ *   tampered with: nothing this realm signed;
+ * - `unchecked`: it names a key this process has not read, and may not read
+ *   again yet (`CookieKeyLookup`): it may be a cookie another node signed with
+ *   a key it started using since. It does not verify here, but is not known
+ *   to be invalid either.
+ */
+type CookieValueCheck =
+  | { readonly status: 'valid'; readonly payload: string }
+  | { readonly status: 'invalid' }
+  | { readonly status: 'unchecked' };
+
+const INVALID: CookieValueCheck = Object.freeze({ status: 'invalid' });
+
+/**
+ * Check a `<kid>.<payload>.<mac>` value of the cookie `cookieName` for the
+ * realm ({@link CookieValueCheck}). Its shape is checked before any key is
+ * looked up, and the MAC is compared in constant time.
  *
  * @throws the signer's error when the realm's cookie keys cannot be read: an
  *   unreachable signer is not an invalid cookie
  */
+async function checkCookieValue(
+  fastify: CookieKeyHolder,
+  cookieName: string,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<CookieValueCheck> {
+  if (!cookieValue) return INVALID;
+  const parts = cookieValue.split(SEPARATOR);
+  if (parts.length !== 3) return INVALID;
+  const [kid, payload, provided] = parts;
+  if (!KID_PATTERN.test(kid) || payload.length === 0 || !MAC_PATTERN.test(provided)) {
+    return INVALID;
+  }
+
+  const lookup = await cookieKeyRing(fastify).find(realmId, kid);
+  if (lookup.status === 'unchecked') return lookup;
+  if (lookup.status === 'absent') return INVALID;
+  const expected = mac(lookup.key, cookieName, realmId, payload);
+  const presented = Buffer.from(provided, 'base64url');
+  // The last of 43 characters carries two unused bits: only the canonical
+  // spelling of a MAC is accepted, so a signed value has one form. This says
+  // nothing about the key; the bytes are compared in constant time below.
+  if (presented.toString('base64url') !== provided) return INVALID;
+  // Both are 32 bytes here: the pattern above fixes the presented length.
+  if (presented.length !== expected.length) return INVALID;
+  return timingSafeEqual(presented, expected) ? { status: 'valid', payload } : INVALID;
+}
+
+/** {@link checkCookieValue}'s payload when it is valid, else `null`. */
 async function verifyCookieValue(
   fastify: CookieKeyHolder,
   cookieName: string,
   realmId: string,
   cookieValue: string | undefined | null
 ): Promise<string | null> {
-  if (!cookieValue) return null;
-  const parts = cookieValue.split(SEPARATOR);
-  if (parts.length !== 3) return null;
-  const [kid, payload, provided] = parts;
-  if (!KID_PATTERN.test(kid) || payload.length === 0 || !MAC_PATTERN.test(provided)) return null;
-
-  const key = await cookieKeyRing(fastify).find(realmId, kid);
-  if (key === null) return null;
-  const expected = mac(key, cookieName, realmId, payload);
-  const presented = Buffer.from(provided, 'base64url');
-  // The last of 43 characters carries two unused bits: only the canonical
-  // spelling of a MAC is accepted, so a signed value has one form. This says
-  // nothing about the key; the bytes are compared in constant time below.
-  if (presented.toString('base64url') !== provided) return null;
-  // Both are 32 bytes here: the pattern above fixes the presented length.
-  if (presented.length !== expected.length) return null;
-  return timingSafeEqual(presented, expected) ? payload : null;
+  const check = await checkCookieValue(fastify, cookieName, realmId, cookieValue);
+  return check.status === 'valid' ? check.payload : null;
 }
 
 /**
@@ -195,9 +228,39 @@ function isSessionId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= MAX_SESSION_ID_LENGTH;
 }
 
+/** What {@link inspectSessionCookie} found. */
+export interface SessionCookieInspection {
+  /** What the cookie lists, or `null` when it does not verify here. */
+  readonly contents: SessionCookieContents | null;
+  /**
+   * Whether the browser should drop the cookie: it is present but nothing
+   * this realm signed. `false` for a cookie that names a key this process has
+   * not read yet, which may verify on the next request.
+   */
+  readonly clear: boolean;
+}
+
+/**
+ * Verify a session cookie value for the realm: what it lists, and, when it
+ * does not verify, whether it is one to clear ({@link SessionCookieInspection}).
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
+ */
+export async function inspectSessionCookie(
+  fastify: CookieKeyHolder,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<SessionCookieInspection> {
+  if (cookieValue === undefined || cookieValue === null) return { contents: null, clear: false };
+  const check = await checkCookieValue(fastify, SESSION_COOKIE_NAME, realmId, cookieValue);
+  if (check.status === 'unchecked') return { contents: null, clear: false };
+  const contents = check.status === 'valid' ? decodeSessionPayload(check.payload) : null;
+  return { contents, clear: contents === null };
+}
+
 /**
  * Verify a session cookie value for the realm and return what it lists, or
- * `null` when it does not verify (see {@link verifyCookieValue}).
+ * `null` when it does not verify (see {@link checkCookieValue}).
  *
  * @throws the signer's error when the realm's cookie keys cannot be read
  */
@@ -206,8 +269,7 @@ export async function readSessionCookie(
   realmId: string,
   cookieValue: string | undefined | null
 ): Promise<SessionCookieContents | null> {
-  const payload = await verifyCookieValue(fastify, SESSION_COOKIE_NAME, realmId, cookieValue);
-  return payload === null ? null : decodeSessionPayload(payload);
+  return (await inspectSessionCookie(fastify, realmId, cookieValue)).contents;
 }
 
 /**

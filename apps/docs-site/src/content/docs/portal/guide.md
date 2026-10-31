@@ -274,7 +274,7 @@ none: a Bearer token has to be put on the request by code that already holds it.
 > `__Host-qauth_session` cookie. Three independent blockers made that impossible for a
 > portal-authenticated developer: that cookie is set only by the auth-server's own `POST /ui/login`
 > (`apps/auth-server/src/app/routes/ui/login.ts:459`), which the portal's login flow never visits;
-> it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:372`), so it is
+> it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:434`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`
 > (`apps/auth-server/src/app/app.ts:290-290`). The shipped topology is cross-origin to begin with —

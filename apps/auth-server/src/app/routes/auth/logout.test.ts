@@ -2,6 +2,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
+  TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
@@ -25,6 +26,7 @@ import {
   type BrowserSessionFixture,
   createBrowserSessionFixture,
 } from '../../../testing/browser-sessions';
+import { createFakeCookieSigner } from '../../../testing/cookie-keys';
 import { testRealm } from '../../../testing/request-realm';
 import { INACTIVE_SUBJECT_DESCRIPTION } from '../../helpers/token-subject';
 import { emitUserEvent } from '../../helpers/user-events';
@@ -275,6 +277,24 @@ describe('POST /auth/logout', () => {
       expect(sessions.service.sessions.has('sess-a')).toBe(false);
       expect(reply.headers['Set-Cookie']).toContain('__Host-qauth_session=');
       expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
+    });
+
+    it('still ends everything when the cookie keys cannot be read, and leaves the cookie (#493)', async () => {
+      // A process without the signer role, or a signer outage: the cookie's MAC
+      // cannot be checked, which must not stop the logout halfway.
+      const { fastify, ctx, sessions } = createFastifyStub();
+      const { cookie } = await signedIn(sessions, 'sess-a');
+      const down = createFakeCookieSigner();
+      down.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+      fastify.signer = down as unknown as FastifyInstance['signer'];
+
+      // Resolves: the logout completes.
+      const reply = await logOut(fastify, ctx, cookie);
+
+      expect(sessions.service.sessions.has('sess-a')).toBe(false);
+      expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalled();
+      expect(reply.headers['Set-Cookie']).toBeUndefined();
     });
 
     it("leaves the cookie of a session that is not the user's alone", async () => {

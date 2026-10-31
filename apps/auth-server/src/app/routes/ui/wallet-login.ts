@@ -16,6 +16,7 @@ import {
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
 import { createBrowserSession, resolveBrowserSession } from '../../helpers/browser-session';
+import { cookieKeyRing } from '../../helpers/cookie-keys';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -664,6 +665,10 @@ async function advanceWalletLoginFlow(
   // flow (the poll is gated and the code is spent), so keeping it addressable
   // for the few round trips below costs nothing and closes the window in
   // which that tab would have found neither flow nor marker.
+  // The session cookie is signed with the realm's cookie key (#493): read the
+  // keys before anything ends the flow or mints a session, so a signer that
+  // cannot answer fails this request while the flow is still there to retry.
+  await cookieKeyRing(fastify).keys(flow.realmId);
   if (via === 'poll') await terminate(fastify, handle, flow);
 
   if (resolution.status !== 'authenticated') {

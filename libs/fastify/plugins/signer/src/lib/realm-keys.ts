@@ -68,7 +68,7 @@ export interface RealmKeysDependencies {
  */
 export function keyVariableWarning(variable: string, purpose: KeyPurpose): string {
   return purpose === 'cookie_hmac'
-    ? `${variable} is in the realm's key store, which signs the session cookie: the variable is read only at boot, where a different secret in it replaces the stored cookie key. Cookies the replaced key signed keep verifying until its retention ends. Remove it unless you may roll back to a release that signs the cookie with it.`
+    ? `${variable} is in the realm's key store, which signs the session cookie: the variable is read only at boot, where a different secret in it replaces the stored cookie key. Cookies the replaced key signed keep verifying until the next replacement. Remove it unless you may roll back to a release that signs the cookie with it.`
     : `${variable} is in the realm's key store, which signs the tokens: the variable is read only at boot, where a new key in it replaces the stored key and unpublishes the old one at once. Remove it unless you may roll back to a release that signs with it.`;
 }
 
@@ -79,7 +79,7 @@ export function keyVariableWarning(variable: string, purpose: KeyPurpose): strin
  *
  * A replaced signing key leaves the JWKS at once. A replaced cookie key stays
  * the realm's previous cookie key (#493), which verifies the cookies it signed
- * until its retention ends.
+ * until the next replacement.
  */
 export function keyReplacedWarning(
   variables: readonly string[],
@@ -87,7 +87,7 @@ export function keyReplacedWarning(
   purpose: KeyPurpose = 'token_signing'
 ): string {
   return purpose === 'cookie_hmac'
-    ? `${variables.join(' and ')} held a session cookie secret the realm's key store lacked: the store now holds it as the active cookie key, which signs every new cookie, and retired the key it replaced. Cookies that key signed keep verifying until its retention ends.`
+    ? `${variables.join(' and ')} held a session cookie secret the realm's key store lacked: the store now holds it as the active cookie key, which signs every new cookie, and retired the key it replaced. Cookies that key signed keep verifying until the next replacement: replace a leaked secret twice.`
     : `${variables.join(' and ')} held a new ${algorithm} key: the realm's key store now holds it as the active key, and retired and unpublished the key it replaced at once. Tokens that key signed no longer verify.`;
 }
 

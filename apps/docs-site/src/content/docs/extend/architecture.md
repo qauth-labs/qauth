@@ -78,7 +78,7 @@ Every line below is `await`ed except where noted, so the order in the file is th
 | 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:238`            | Echoes the request id back on the response            |
 | 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:239`              | Prometheus registry                                   |
 | 13  | `cors`, `apps/auth-server/src/app/app.ts:257`                       | Fail-closed in production when `CORS_ORIGIN` is unset |
-| 14  | `formbody`, `apps/auth-server/src/app/app.ts:736`                   | Form-encoded body parsing                             |
+| 14  | `formbody`, `apps/auth-server/src/app/app.ts:737`                   | Form-encoded body parsing                             |
 
 Then three registrations whose **relative** order is the subject of the rest of this page, so this
 table deliberately does not pin them to line numbers:
@@ -114,7 +114,7 @@ the missing plugin.
 
 ### `formbody` must precede routes — verified
 
-`@fastify/formbody` at `apps/auth-server/src/app/app.ts:736`, with its own comment:
+`@fastify/formbody` at `apps/auth-server/src/app/app.ts:737`, with its own comment:
 
 > RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection) both mandate
 > `application/x-www-form-urlencoded` for request bodies. Fastify ships with a JSON parser by

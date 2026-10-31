@@ -650,10 +650,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // creates the realm: under the realm's key lock it imports each key variable
   // the realm's encrypted store lacks, creates the standard keys still missing
   // (an RS256 signing key too on a fresh deployment), and warns about every key
-  // variable still set. A signing variable that holds a new key replaces the
+  // variable still set. A signing variable that holds a new key, or a
+  // SESSION_COOKIE_SECRET that differs from the stored cookie key, replaces the
   // stored key until rotation through the store ships (#544, #551); otherwise
-  // tokens never read the variables. The session cookie keeps its variable
-  // until it moves onto the signer (#493).
+  // nothing reads the variables: tokens and the browser cookies are signed
+  // with the realm's keys (#491, #493).
   //
   // Only a process that holds the `signer` role loads it (#495). Any other
   // holds no KEK and no key: its `fastify.signer` refuses every signature,

@@ -121,11 +121,14 @@ other path to the others at the reverse proxy. `POST /auth/verify` is the
 API's and stays on `api`: route `/auth/verify` by method.
 
 The `web` and `api` roles read the session cookie (`api` for `/auth/logout`),
-with the realm's cookie key from the signer (#493). `SESSION_COOKIE_SECRET` is
-optional on every process: only the key boot step, on a process that holds the
-signer, reads it, to import it into the default realm's key store or to replace
-the stored cookie key with it. `NODE_ENV=production` refuses the development
-value `.env.example` ships, on every process.
+with the realm's cookie key from the signer (#493). Only the browser-facing
+role receives the cookie keys from a signer service (ADR-019 Decision 9): on a
+process that cannot read them, `/auth/logout` still ends the user's sessions and
+tokens, and leaves the request's cookie for the next page to clear.
+`SESSION_COOKIE_SECRET` is optional on every process: only the key boot step, on
+a process that holds the signer, reads it, to import it into the default realm's
+key store or to replace the stored cookie key with it. `NODE_ENV=production`
+refuses every value QAuth's examples published, on every process.
 
 With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.

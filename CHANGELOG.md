@@ -1290,7 +1290,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each process keeps a realm's current and previous cookie keys in memory and
   reads them again every 60 seconds. Each value is `<kid>.<payload>.<mac>`: it
   names the key that signed it, so after a rotation a cookie of the previous key
-  keeps verifying until that key's retention ends, and its HMAC-SHA256 covers
+  keeps verifying while it is the previous key, and its HMAC-SHA256 covers
   the cookie's name and the realm id, so a value never passes for another
   cookie or for a cookie of another realm. The session payload lists the
   session ids and the active one (`{ s: [sid], a: sid }`). The MAC is compared
@@ -1303,12 +1303,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SESSION_COOKIE_SECRET` is now optional: the key boot step imports it into
   the default realm's store, and a value that differs from the stored cookie key
   (compared in constant time, after opening the stored key with the KEK)
-  replaces it, the replaced key staying the previous key for its retention; a
-  value that matches a retired key changes nothing. `NODE_ENV=production`
-  refuses the development value `.env.example` ships on every process, and no
-  longer refuses an unset one. A process without the signer role answers `503`
-  on the pages that set a signed cookie until it can call the signer service
-  ([#497]): a split deployment keeps `web` with the signer for now.
+  replaces it. The replaced key stays the realm's previous cookie key, so
+  nobody is signed out, until the next replacement: a time limit comes with
+  rotation through the store ([#542]), so a leaked secret is cut off by
+  replacing it twice. A value that matches a retired key changes nothing.
+  `NODE_ENV=production` refuses the values QAuth's examples published (the
+  `.env.example` development value and the old `.env.docker.example` one) on
+  every process, and no longer refuses an unset one. A process without the
+  signer role answers `503` on the browser routes that read or set a signed
+  cookie until it can call the signer service ([#497]): a split deployment
+  keeps `web` with the signer for now, and `/auth/logout` there still ends
+  everything but leaves the cookie for the next page to clear.
 - ID tokens are signed with RS256 when the realm's key store holds an RS256
   key, and discovery's `id_token_signing_alg_values_supported` lists what each
   realm holds: `["RS256","EdDSA"]` or `["EdDSA"]`. A fresh deployment generates
@@ -2031,6 +2036,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#542]: https://github.com/qauth-labs/qauth/issues/542
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549
 [#550]: https://github.com/qauth-labs/qauth/issues/550

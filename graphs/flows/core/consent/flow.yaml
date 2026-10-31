@@ -96,7 +96,9 @@ context:
       malformedCookie: >-
         the request carries a session cookie whose value is not valid percent-encoding, such as %zz, which the cookie
         reader decodes without a catch
-      noSession: 'the request carries no session cookie'
+      noSession: >-
+        the request carries no session cookie, or one that names a cookie key this process has not read yet and may not
+        read again yet (#493), which is left for the next request
       staleSession: >-
         the cookie does not verify with the realm's cookie keys (#493), or it does but its session has ended or
         expired
@@ -358,7 +360,7 @@ states:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
         say: 'the session cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:275
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - guard: noSession
         target: parkingRequest
         say: 'the request carries no session; the authorize URL is rebuilt from the query'
@@ -366,13 +368,13 @@ states:
       - guard: staleSession
         target: parkingRequest
         say: 'the cookie does not verify, or names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:117
+        source: apps/auth-server/src/app/helpers/browser-session.ts:120
       - guard: accountDisabled
         target: parkingRequest
         say: >-
           the session's user is gone or disabled, or was disabled after the session began; the session is ended and
           its cookie cleared
-        source: apps/auth-server/src/app/helpers/browser-session.ts:130
+        source: apps/auth-server/src/app/helpers/browser-session.ts:135
       - target: showCheckingClient
         say: 'the session is live'
         source: apps/auth-server/src/app/routes/ui/consent.ts:457
@@ -652,7 +654,7 @@ states:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
         say: 'the session cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:275
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - guard: noSession
         target: parkingRequest
         say: 'the request carries no session; the authorize URL is rebuilt from the form'
@@ -660,13 +662,13 @@ states:
       - guard: staleSession
         target: parkingRequest
         say: 'the cookie does not verify, or names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:117
+        source: apps/auth-server/src/app/helpers/browser-session.ts:120
       - guard: accountDisabled
         target: parkingRequest
         say: >-
           the session's user is gone or disabled, or was disabled after the session began; the session is ended and
           its cookie cleared
-        source: apps/auth-server/src/app/helpers/browser-session.ts:130
+        source: apps/auth-server/src/app/helpers/browser-session.ts:135
       - target: checkingCsrf
         say: 'the session is live'
         source: apps/auth-server/src/app/routes/ui/consent.ts:703
@@ -684,7 +686,7 @@ states:
         source: apps/auth-server/src/app/routes/ui/consent.ts:712
       - target: burningCsrf
         say: 'the values are equal'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:388
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:450
 
   burningCsrf:
     title: Burn the CSRF value
@@ -1045,7 +1047,7 @@ states:
     type: final
     title: Clear the stale session cookie and send the browser to sign in
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:117
+    source: apps/auth-server/src/app/helpers/browser-session.ts:120
     response:
       status: 302
       headers:
@@ -1059,7 +1061,7 @@ states:
     title: End the session of a disabled or deleted user and send the browser to sign in
     description: The session is revoked and its side record deleted before the cookie is cleared.
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:130
+    source: apps/auth-server/src/app/helpers/browser-session.ts:135
     response:
       status: 302
       headers:

@@ -47,7 +47,7 @@ import type { WrappedSignerKey } from './signer-key-store';
  *    Changing the variable is how a deployment replaces a signing key or the
  *    cookie key until rotation through the store ships (manual rotation #544,
  *    emergency retirement #551). A replaced cookie key is the realm's previous
- *    cookie key: cookies it signed keep verifying for its retention.
+ *    cookie key: cookies it signed keep verifying until the next replacement.
  * 4. `provisionRealmKeys` creates the standard keys still missing:
  *    `event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
  *    on a fresh deployment.
@@ -365,9 +365,12 @@ async function sortEnvironmentKeys<Tx>(
  * stored key is opened with the KEK, the realm's active key first, and its
  * bytes compared with the secret's in constant time: the SHA-256 digests of
  * both, so neither the comparison nor its length check depends on where or
- * whether the two differ. Every opened copy is zeroed.
+ * whether the two differ. Every opened copy and every digest is zeroed.
  *
- * @throws the KEK provider's error when a stored cookie key does not open
+ * @throws the KEK provider's error when a stored cookie key does not open: a
+ *   retired cookie key sealed under a KEK no longer configured refuses every
+ *   boot whose secret differs from the active key, as the step cannot tell
+ *   whether the variable holds it
  */
 async function findStoredSecret<Tx>(
   store: RealmKeyBootStore<Tx>,
@@ -383,23 +386,29 @@ async function findStoredSecret<Tx>(
     ...stored.filter((row) => row.kid !== active?.kid && row.algorithm === key.algorithm),
   ];
   const wanted = createHash('sha256').update(key.material).digest();
-  for (const row of ordered) {
-    const sealed = await store.getWrappedKey(realmId, row.kid, tx);
-    if (sealed === undefined) continue;
-    const material = await openKeyMaterial(kekProvider, sealed, {
-      realmId: sealed.realmId,
-      purpose: sealed.purpose,
-      scopeId: sealed.scopeId,
-      kid: sealed.kid,
-      algorithm: sealed.algorithm,
-    });
-    try {
-      if (timingSafeEqual(createHash('sha256').update(material).digest(), wanted)) return row;
-    } finally {
+  try {
+    for (const row of ordered) {
+      const sealed = await store.getWrappedKey(realmId, row.kid, tx);
+      if (sealed === undefined) continue;
+      const material = await openKeyMaterial(kekProvider, sealed, {
+        realmId: sealed.realmId,
+        purpose: sealed.purpose,
+        scopeId: sealed.scopeId,
+        kid: sealed.kid,
+        algorithm: sealed.algorithm,
+      });
+      const digest = createHash('sha256').update(material).digest();
       material.fill(0);
+      try {
+        if (timingSafeEqual(digest, wanted)) return row;
+      } finally {
+        digest.fill(0);
+      }
     }
+    return undefined;
+  } finally {
+    wanted.fill(0);
   }
-  return undefined;
 }
 
 /**
@@ -438,7 +447,7 @@ function checkHybridPair(
  * change took it out of service, so no overlap applies; a deployment that
  * wants one waits for rotation through the store (#544). A retired cookie
  * key is never published: it stays the realm's previous cookie key, which
- * verifies the cookies it signed for its retention.
+ * verifies the cookies it signed until the next replacement.
  */
 async function retireReplacedKeys<Tx>(
   store: RealmKeyBootStore<Tx>,

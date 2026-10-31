@@ -4,7 +4,7 @@ import type {
   EnvironmentKeySettings,
   EnvironmentKeySource,
 } from '@qauth-labs/fastify-plugin-signer';
-import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
+import { PUBLISHED_SESSION_COOKIE_SECRETS } from '@qauth-labs/server-config';
 import { calculateJwkThumbprint, type JWK } from 'jose';
 
 /**
@@ -36,8 +36,9 @@ export interface KeyVariableConfig {
  *
  * - The ML-DSA-65 seed only with hybrid signing on: the store keeps it only as
  *   the second key of a hybrid pair.
- * - `SESSION_COOKIE_SECRET` only when the operator set it, and never the
- *   published development value `.env.example` ships: a development stack
+ * - `SESSION_COOKIE_SECRET` only when the operator set it, and never a value
+ *   QAuth's examples published (`PUBLISHED_SESSION_COOKIE_SECRETS`, such as
+ *   the development value `.env.example` ships): a development stack
  *   generates its cookie key instead. A set value the store lacks replaces
  *   the stored cookie key (#493).
  *
@@ -74,7 +75,8 @@ export function keyVariableSettings(
     : undefined;
   const mlDsaKid = source(config.JWT_MLDSA_KID, 'JWT_MLDSA_KID');
   const cookieSecret =
-    config.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT
+    config.SESSION_COOKIE_SECRET === undefined ||
+    PUBLISHED_SESSION_COOKIE_SECRETS.includes(config.SESSION_COOKIE_SECRET)
       ? undefined
       : source(config.SESSION_COOKIE_SECRET, 'SESSION_COOKIE_SECRET');
 

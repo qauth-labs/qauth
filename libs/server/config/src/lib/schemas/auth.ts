@@ -18,6 +18,18 @@ export const DEV_SESSION_COOKIE_SECRET_DEFAULT =
   'dev-only-session-secret-change-me-1234567890abcdef';
 
 /**
+ * Every {@link SESSION_COOKIE_SECRET} value QAuth's examples published: the
+ * development value above, and the one `.env.docker.example` shipped before
+ * the cookie moved onto the realm keys (#493). Anyone can sign cookies with
+ * them, so the auth server refuses each in production, and its key boot step
+ * never imports one into a key store.
+ */
+export const PUBLISHED_SESSION_COOKIE_SECRETS: readonly string[] = Object.freeze([
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
+  'change-me-to-a-strong-secret-at-least-32-characters',
+]);
+
+/**
  * A `'true'` / `'false'` flag. Unset and blank both take `defaultValue`.
  *
  * Uses `z.enum(['true', 'false'])`, NOT `z.coerce.boolean()`. `coerce.boolean`
