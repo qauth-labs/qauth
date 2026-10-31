@@ -100,12 +100,38 @@ function readStep(value: unknown, at: string, allowError: boolean) {
 }
 
 /**
+ * How many digits an email code has, by purpose (ADR-017 Decision 5): 8 for
+ * recovery and registration, where the code alone creates a verified binding
+ * or unlocks a reset; 6 after a password. Verifying an account is both: 8 at
+ * registration (Decision 8), 6 after a correct password on an account not yet
+ * verified (Decision 3's example).
+ */
+const EMAIL_CODE_LENGTHS: Readonly<Record<StepParams<'email_code'>['purpose'], readonly number[]>> =
+  Object.freeze({ verify_account: [6, 8], recovery: [8], confirm_sign_in: [6] });
+
+/** An email code is valid 10 minutes (ADR-017 Decision 5). */
+const EMAIL_CODE_MAX_EXPIRES_IN = 600;
+
+/**
  * The rules between members that a step's schema does not state, checked on
  * every offered step: `new_password` carries `reasons` exactly when it is the
  * current step and its last answer was refused with `password_rejected`
- * (ADR-017 Decision 3), and its bounds do not cross.
+ * (ADR-017 Decision 3), and its bounds do not cross; an `email_code` has the
+ * length its purpose takes and lives at most 10 minutes (ADR-017 Decision 5).
+ * The published schema is wider on purpose: it describes every value a page
+ * may meet, and the server's offers keep to these.
  */
 function checkStepRules(name: StepName, params: unknown, error: StepErrorCode | undefined): void {
+  if (name === 'email_code') {
+    const { purpose, length, expires_in: expiresIn } = params as StepParams<'email_code'>;
+    if (!EMAIL_CODE_LENGTHS[purpose].includes(length)) {
+      throw new StepMappingError('invalid_params', `email_code: length for purpose ${purpose}`);
+    }
+    if (expiresIn > EMAIL_CODE_MAX_EXPIRES_IN) {
+      throw new StepMappingError('invalid_params', 'email_code: expires_in above 600');
+    }
+    return;
+  }
   if (name !== 'new_password') return;
   const { min_length: min, max_length: max, reasons } = params as StepParams<'new_password'>;
   if (min > max)

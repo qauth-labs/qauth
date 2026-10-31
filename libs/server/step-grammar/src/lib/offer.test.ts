@@ -114,6 +114,49 @@ describe('new_password', () => {
   });
 });
 
+describe('email_code', () => {
+  const code = (purpose: string, length: number, expiresIn = 600) => ({
+    current: {
+      step: 'email_code',
+      params: { purpose, length, expires_in: expiresIn, resend_after: 60 },
+    },
+    alternatives: [],
+  });
+
+  // ADR-017 Decision 5: 8 digits for recovery and registration, 6 after a
+  // password; verifying an account is either, by where it comes.
+  it('has the length its purpose takes', () => {
+    for (const [purpose, length] of [
+      ['verify_account', 8],
+      ['verify_account', 6],
+      ['recovery', 8],
+    ] as const) {
+      const view = interaction.stepView(code(purpose, length) as StepOffer);
+      expect(view.params[STEP_GRAMMAR.email_code.urn]).toMatchObject({ purpose, length });
+    }
+    expect(fipa.challenge(code('confirm_sign_in', 6) as StepOffer, ROUND).body).toMatchObject({
+      error: 'insufficient_authorization',
+    });
+    refusedOnBoth(code('recovery', 6), 'invalid_params');
+    expect(() => fipa.challenge(code('confirm_sign_in', 8) as StepOffer, ROUND)).toThrow(
+      StepMappingError
+    );
+  });
+
+  it('lives at most 10 minutes', () => {
+    expect(() => interaction.stepView(code('recovery', 8, 1) as StepOffer)).not.toThrow();
+    refusedOnBoth(code('recovery', 8, 601), 'invalid_params');
+    refusedOnBoth(code('recovery', 8, 86400), 'invalid_params');
+    refusedOnBoth(
+      {
+        current: { step: 'password', params: {} },
+        alternatives: [code('verify_account', 8, 3600).current],
+      },
+      'invalid_params'
+    );
+  });
+});
+
 describe('what a per-step mapper returns', () => {
   it('is parsed again by the step’s schema, so a mapper cannot add a member or a sentence', () => {
     expect(() =>

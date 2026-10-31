@@ -105,7 +105,11 @@ createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).chall
 - **Rules between members.** A bot challenge (`captcha`) is offered alone and never as an
   alternative: the pending step resumes after it, so no other answer may skip it (ADR-017
   Decision 4). `new_password` carries `reasons` exactly when its last answer was refused with
-  `password_rejected`, and its `min_length` is not above its `max_length`.
+  `password_rejected`, and its `min_length` is not above its `max_length`. An `email_code` has the
+  length its purpose takes (ADR-017 Decision 5: 8 digits for `recovery`, 6 for `confirm_sign_in`,
+  8 or 6 for `verify_account`, at registration or after a password) and an `expires_in` of at most
+  600 seconds. The published schema is wider (6 or 8 digits for any purpose, up to a day); the
+  server's offers keep to these.
 - **Personal data is parsed before it is served.** `personalView(offer, data)` on the Interaction
   API mapper gives the personal data read (`PersonalData` in the contract): the current step's
   personal data, parsed by its step's strict schema into a new object. A member the step does not
