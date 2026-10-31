@@ -19,6 +19,7 @@ import type {
   DeliveryRoute,
   DeliverySigner,
   DeliveryStore,
+  DestinationTypeRule,
   EventSubjectRef,
 } from './types';
 
@@ -238,6 +239,8 @@ const KIND_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 /** An error class: what the store accepts. */
 const ERROR_CLASS_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const DESTINATION_ID_MAX_LENGTH = 255;
+/** What a type rule's subject filter may read (`DestinationTypeRule.subjectFrom`). */
+const SUBJECT_SOURCES: ReadonlySet<string> = new Set(['subject', 'client', 'none']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The real clock. Its timers are unref'd: a waiting role never keeps the process alive. */
@@ -459,7 +462,7 @@ class Runner implements DeliveryRole {
   /** A route's destination with its kind, or `undefined` (logged once) when it is malformed. */
   private checkDestination(kind: string, value: unknown): DeliveryDestination | undefined {
     const candidate = (value ?? {}) as Partial<DeliveryDestination>;
-    const { id, realmId, types, categories, subjects } = candidate;
+    const { id, realmId, types, categories, subjects, typeRules } = candidate;
     const listOf = (list: unknown): boolean =>
       Array.isArray(list) && list.every((item) => typeof item === 'string');
     const subjectsOf = (list: unknown): boolean =>
@@ -471,6 +474,19 @@ class Runner implements DeliveryRole {
           typeof (item as EventSubjectRef).type === 'string' &&
           typeof (item as EventSubjectRef).id === 'string'
       );
+    const rulesOf = (rules: unknown): boolean =>
+      typeof rules === 'object' &&
+      rules !== null &&
+      !Array.isArray(rules) &&
+      Object.values(rules).every((rule: unknown) => {
+        if (typeof rule !== 'object' || rule === null) return false;
+        const { subjectFrom, clientId } = rule as DestinationTypeRule;
+        return (
+          (subjectFrom === undefined || SUBJECT_SOURCES.has(subjectFrom)) &&
+          (clientId === undefined ||
+            (typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 255))
+        );
+      });
     if (
       typeof id !== 'string' ||
       id.length === 0 ||
@@ -479,7 +495,8 @@ class Runner implements DeliveryRole {
       !UUID_PATTERN.test(realmId) ||
       (types !== undefined && !listOf(types)) ||
       (categories !== undefined && !listOf(categories)) ||
-      (subjects !== undefined && !subjectsOf(subjects))
+      (subjects !== undefined && !subjectsOf(subjects)) ||
+      (typeRules !== undefined && !rulesOf(typeRules))
     ) {
       const key = destinationKey(kind, String(id));
       if (!this.reported.has(key)) {
@@ -500,6 +517,19 @@ class Runner implements DeliveryRole {
       ...(subjects === undefined
         ? {}
         : { subjects: subjects.map((subject) => ({ type: subject.type, id: subject.id })) }),
+      ...(typeRules === undefined
+        ? {}
+        : {
+            typeRules: Object.fromEntries(
+              Object.entries(typeRules).map(([type, rule]) => [
+                type,
+                {
+                  ...(rule.subjectFrom === undefined ? {} : { subjectFrom: rule.subjectFrom }),
+                  ...(rule.clientId === undefined ? {} : { clientId: rule.clientId }),
+                },
+              ])
+            ),
+          }),
     };
   }
 

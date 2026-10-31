@@ -589,9 +589,10 @@ jobs, and each job runs on one node at a time. The exception is a run that keeps
 going past its time limit (below): it can overlap the next node's run, which is
 why every job must be safe to repeat.
 
-| Job             | Interval | Time limit | What it does                                                                                                                                     |
-| --------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `purge-expired` | 1 hour   | 5 minutes  | Deletes expired authorization codes, email verification tokens and OID4VP requests, and each refresh-token family whose every token has expired. |
+| Job                 | Interval | Time limit | What it does                                                                                                                                                                                                  |
+| ------------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `purge-expired`     | 1 hour   | 5 minutes  | Deletes expired authorization codes, email verification tokens and OID4VP requests, and each refresh-token family whose every token has expired.                                                              |
+| `ssf-subject-sweep` | 1 hour   | 5 minutes  | Deletes each SSF user subject whose receiver is no longer related to the user, once every event about the user has reached the stream (see [SSF transmitter](/operate/ssf-transmitter/#register-a-receiver)). |
 
 How a run is placed:
 

@@ -8,8 +8,12 @@
  * receiver active, not disabled); a verification event's delivery row is
  * written only for the event its own transaction wrote and only for a stream
  * of that event's realm; the status reads the latest failed attempt; the
- * fan-out's subject filter gives a stream only events about its subjects; and
- * a role holding only the delivery grants can read what the route reads.
+ * fan-out's subject filter gives a stream only events about its subjects;
+ * a user is related to a receiver only as the token endpoint reads its
+ * tokens, a resource server's users included (#540); the sweep ends a user
+ * subject only once its relation has ended and no event about the user can
+ * still reach the stream; and a role holding only the delivery grants can
+ * read what the route reads.
  *
  * Requires Docker; self-skips without it, same as the sibling suites.
  */
@@ -24,6 +28,7 @@ import type {
   Database,
   EmitEvent,
   EventDeliveriesRepository,
+  EventDeliveryDestination,
   EventsRepository,
   NewSsfStream,
   SsfStreamsRepository,
@@ -78,9 +83,10 @@ describe('SSF streams integration (real Postgres)', () => {
   }
 
   async function realm(options: { ssf?: boolean } = {}): Promise<string> {
+    const name = `realm-${randomUUID()}`;
     const { rows } = await pool().query<{ id: string }>(
-      `INSERT INTO realms (name, ssf_transmitter_enabled) VALUES ($1, $2) RETURNING id`,
-      [`realm-${randomUUID()}`, options.ssf ?? true]
+      `INSERT INTO realms (name, ssf_transmitter_enabled, issuer) VALUES ($1, $2, $3) RETURNING id`,
+      [name, options.ssf ?? true, `https://${name}.example.com`]
     );
     return rows[0].id;
   }
@@ -248,6 +254,7 @@ describe('SSF streams integration (real Postgres)', () => {
       id: enabled.stream.id,
       realmId: enabled.realmId,
       status: 'enabled',
+      audience: enabled.stream.audience,
       eventsRequested: [],
       subjects: [{ type: 'user', id: 'u1' }],
     });
@@ -344,6 +351,459 @@ describe('SSF streams integration (real Postgres)', () => {
     });
   });
 
+  it('relates a user to a receiver by an active consent or a live refresh token only (#540)', async () => {
+    const realmId = await realm();
+    const receiver = await client(realmId);
+    const other = await client(realmId);
+    const user = async (inRealm = realmId) =>
+      (
+        await pool().query<{ id: string }>(
+          `INSERT INTO users (realm_id) VALUES ($1) RETURNING id::text AS id`,
+          [inRealm]
+        )
+      ).rows[0].id;
+    const consent = (userId: string, clientRowId: string, revokedAt: number | null = null) =>
+      pool().query(
+        `INSERT INTO oauth_consents (realm_id, user_id, oauth_client_id, revoked_at)
+         VALUES ($1, $2, $3, $4)`,
+        [realmId, userId, clientRowId, revokedAt]
+      );
+    const refresh = (
+      userId: string,
+      clientRowId: string,
+      options: { expiresAt?: number; revoked?: boolean } = {}
+    ) =>
+      pool().query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_created_at, expires_at, revoked)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          randomUUID().replaceAll('-', '').padEnd(64, '0'),
+          userId,
+          clientRowId,
+          NOW - 1000,
+          options.expiresAt ?? NOW + 60_000,
+          options.revoked ?? false,
+        ]
+      );
+    const related = (userId: string) => streams.isRelatedUser(realmId, receiver.id, userId, NOW);
+
+    const consented = await user();
+    await consent(consented, receiver.id);
+    const withToken = await user();
+    await refresh(withToken, receiver.id);
+    const withdrawn = await user();
+    await consent(withdrawn, receiver.id, NOW - 1);
+    const revokedToken = await user();
+    await refresh(revokedToken, receiver.id, { revoked: true });
+    const expiredToken = await user();
+    await refresh(expiredToken, receiver.id, { expiresAt: NOW });
+    const otherClients = await user();
+    await consent(otherClients, other.id);
+    await refresh(otherClients, other.id);
+    const stranger = await user();
+
+    expect(await related(consented)).toBe(true);
+    expect(await related(withToken)).toBe(true);
+    for (const userId of [withdrawn, revokedToken, expiredToken, otherClients, stranger]) {
+      expect(await related(userId), userId).toBe(false);
+    }
+    expect(await related(randomUUID())).toBe(false);
+    expect(await related('not-a-uuid')).toBe(false);
+    // The same user asked about from another realm is no user of it.
+    const elsewhere = await realm();
+    expect(await streams.isRelatedUser(elsewhere, receiver.id, consented, NOW)).toBe(false);
+    expect(await streams.isRelatedUser(elsewhere, receiver.id, withToken, NOW)).toBe(false);
+  });
+
+  it('relates no disabled user, and a refresh token only while its family lives (#540)', async () => {
+    const realmId = await realm();
+    const receiver = await client(realmId);
+    // The token endpoint's rule (ADR-019 Decision 3): with `sso_max_lifespan`
+    // set, a family ends at its start plus the limit, and no later than the
+    // browser session that started it.
+    const LIFESPAN_SECONDS = 3600;
+    await pool().query(`UPDATE realms SET sso_max_lifespan = $2 WHERE id = $1`, [
+      realmId,
+      LIFESPAN_SECONDS,
+    ]);
+    const user = async (enabled = true) =>
+      (
+        await pool().query<{ id: string }>(
+          `INSERT INTO users (realm_id, enabled) VALUES ($1, $2) RETURNING id::text AS id`,
+          [realmId, enabled]
+        )
+      ).rows[0].id;
+    const refresh = (
+      userId: string,
+      family: { createdAt: number; sessionExpiresAt?: number | null }
+    ) =>
+      pool().query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_created_at,
+           family_session_expires_at, expires_at, revoked)
+         VALUES ($1, $2, $3, $4, $5, $6, false)`,
+        [
+          randomUUID().replaceAll('-', '').padEnd(64, '0'),
+          userId,
+          receiver.id,
+          family.createdAt,
+          family.sessionExpiresAt ?? null,
+          NOW + 60_000,
+        ]
+      );
+    const related = (userId: string) => streams.isRelatedUser(realmId, receiver.id, userId, NOW);
+
+    // Within both bounds: the normal case, related.
+    const live = await user();
+    await refresh(live, { createdAt: NOW - 1000, sessionExpiresAt: NOW + 1000 });
+    // No browser session started it: its start plus the limit alone.
+    const noSession = await user();
+    await refresh(noSession, { createdAt: NOW - 1000 });
+    // Past the limit, though the token itself has not expired.
+    const pastLimit = await user();
+    await refresh(pastLimit, { createdAt: NOW - LIFESPAN_SECONDS * 1000 });
+    // Past the end of the browser session that started it.
+    const pastSession = await user();
+    await refresh(pastSession, { createdAt: NOW - 1000, sessionExpiresAt: NOW });
+    // A disabled user, by a live token or an active consent.
+    const disabled = await user(false);
+    await refresh(disabled, { createdAt: NOW - 1000 });
+    await pool().query(
+      `INSERT INTO oauth_consents (realm_id, user_id, oauth_client_id) VALUES ($1, $2, $3)`,
+      [realmId, disabled, receiver.id]
+    );
+
+    expect(await related(live)).toBe(true);
+    expect(await related(noSession)).toBe(true);
+    for (const userId of [pastLimit, pastSession, disabled]) {
+      expect(await related(userId), userId).toBe(false);
+    }
+
+    // A realm that sets no limit bounds neither: the token endpoint keeps
+    // such a family alive by its tokens' own expiry.
+    await pool().query(`UPDATE realms SET sso_max_lifespan = NULL WHERE id = $1`, [realmId]);
+    expect(await related(pastLimit)).toBe(true);
+    expect(await related(pastSession)).toBe(true);
+    expect(await related(disabled)).toBe(false);
+  });
+
+  /** A client of `realmId` with `audience` (`null` for none); its row id and `client_id`. */
+  async function clientWithAudience(realmId: string, audience: string[] | null) {
+    const clientId = `client-${randomUUID()}`;
+    const { rows } = await pool().query<{ id: string }>(
+      `INSERT INTO oauth_clients (realm_id, client_id, client_secret_hash, name, redirect_uris, scopes, audience)
+       VALUES ($1, $2, 'x', 'client', '[]', '["ssf:stream"]', $3) RETURNING id`,
+      [realmId, clientId, audience === null ? null : JSON.stringify(audience)]
+    );
+    return { id: rows[0].id, clientId };
+  }
+
+  /** A user of `realmId`. */
+  async function userOf(realmId: string, enabled = true): Promise<string> {
+    const { rows } = await pool().query<{ id: string }>(
+      `INSERT INTO users (realm_id, enabled) VALUES ($1, $2) RETURNING id::text AS id`,
+      [realmId, enabled]
+    );
+    return rows[0].id;
+  }
+
+  /** A refresh token issued to `clientRowId` for `userId`, live at NOW unless told otherwise. */
+  function refreshTokenOf(
+    userId: string,
+    clientRowId: string,
+    options: { resource?: string[]; revoked?: boolean; familyCreatedAt?: number } = {}
+  ) {
+    return pool().query(
+      `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_created_at,
+         expires_at, revoked, resource)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        randomUUID().replaceAll('-', '').padEnd(64, '0'),
+        userId,
+        clientRowId,
+        options.familyCreatedAt ?? NOW - 1000,
+        NOW + 60_000,
+        options.revoked ?? false,
+        JSON.stringify(options.resource ?? []),
+      ]
+    );
+  }
+
+  // Decided 2026-10-31: a resource server relates to the users who hold a
+  // live token for it. A receiver serves the values of its `audience`, the
+  // column introspection reads the same way, but never a `urn:qauth:aud:`
+  // value nor the realm's issuer, which every SSF receiver lists to manage
+  // its stream.
+  it('relates a user to a resource-server receiver by a live refresh token for its audience (#540)', async () => {
+    const realmId = await realm();
+    const { rows } = await pool().query<{ issuer: string }>(
+      `SELECT issuer FROM realms WHERE id = $1`,
+      [realmId]
+    );
+    const issuer = rows[0].issuer;
+    const API = 'https://api.notes.example';
+    const ADMIN = 'urn:qauth:aud:admin:v1-rc.0';
+    const LIFESPAN_SECONDS = 3600;
+    await pool().query(`UPDATE realms SET sso_max_lifespan = $2 WHERE id = $1`, [
+      realmId,
+      LIFESPAN_SECONDS,
+    ]);
+    const resourceServer = await clientWithAudience(realmId, [issuer, API, ADMIN]);
+    // The clients users sign in through: one with no audience, one whose
+    // default audience is the API, one whose default is the issuer only.
+    const app = await clientWithAudience(realmId, null);
+    const apiDefault = await clientWithAudience(realmId, [ADMIN, API]);
+    const issuerDefault = await clientWithAudience(realmId, [issuer]);
+    const related = (userId: string, inRealm = realmId, receiverId = resourceServer.id) =>
+      streams.isRelatedUser(inRealm, receiverId, userId, NOW);
+
+    // A token whose RFC 8707 resource is the API.
+    const byResource = await userOf(realmId);
+    await refreshTokenOf(byResource, app.id, { resource: [API] });
+    // A token with no resource, of a client whose default audience is the API.
+    const byDefault = await userOf(realmId);
+    await refreshTokenOf(byDefault, apiDefault.id);
+    // A token for another resource server.
+    const elsewhere = await userOf(realmId);
+    await refreshTokenOf(elsewhere, app.id, { resource: ['https://api.other.example'] });
+    // A token whose audience is the issuer: QAuth itself, not the receiver.
+    const forIssuer = await userOf(realmId);
+    await refreshTokenOf(forIssuer, issuerDefault.id);
+    await refreshTokenOf(forIssuer, app.id, { resource: [issuer] });
+    // A token for a QAuth API family: never the receiver's.
+    const forAdmin = await userOf(realmId);
+    await refreshTokenOf(forAdmin, app.id, { resource: [ADMIN] });
+    // A token with no resource of a client with no audience: `aud` is that
+    // client's own client_id.
+    const ownClientId = await userOf(realmId);
+    await refreshTokenOf(ownClientId, app.id);
+    // The C2 liveness rules hold on this path too.
+    const revoked = await userOf(realmId);
+    await refreshTokenOf(revoked, app.id, { resource: [API], revoked: true });
+    const familyEnded = await userOf(realmId);
+    await refreshTokenOf(familyEnded, app.id, {
+      resource: [API],
+      familyCreatedAt: NOW - LIFESPAN_SECONDS * 1000,
+    });
+    const disabled = await userOf(realmId, false);
+    await refreshTokenOf(disabled, app.id, { resource: [API] });
+
+    expect(await related(byResource)).toBe(true);
+    expect(await related(byDefault)).toBe(true);
+    for (const userId of [
+      elsewhere,
+      forIssuer,
+      forAdmin,
+      ownClientId,
+      revoked,
+      familyEnded,
+      disabled,
+    ]) {
+      expect(await related(userId), userId).toBe(false);
+    }
+    // A receiver that is no resource server for the API relates no one by it.
+    const plain = await clientWithAudience(realmId, [issuer]);
+    expect(await related(byResource, realmId, plain.id)).toBe(false);
+
+    // Another realm: a resource server there with the same audience relates
+    // no user of this realm, and this realm's receiver, asked about from
+    // there, relates no one either.
+    const otherRealm = await realm();
+    const otherServer = await clientWithAudience(otherRealm, [API]);
+    expect(await related(byResource, otherRealm, otherServer.id)).toBe(false);
+    expect(await related(byResource, otherRealm)).toBe(false);
+    const theirs = await userOf(otherRealm);
+    const theirApp = await clientWithAudience(otherRealm, null);
+    await refreshTokenOf(theirs, theirApp.id, { resource: [API] });
+    expect(await related(theirs)).toBe(false);
+    expect(await related(theirs, otherRealm, otherServer.id)).toBe(true);
+  });
+
+  // Decided 2026-10-31: a user subject ends when its relation ends, by a
+  // sweep, once no event about the user can still reach the stream.
+  it('sweeps a user subject once its relation has ended and nothing about the user can still reach the stream (#540)', async () => {
+    const { realmId, receiver, stream } = await streamOf();
+    // A second receiver's stream in the same realm.
+    const otherReceiver = await client(realmId);
+    const otherStream = await streams.create(newStream(realmId, otherReceiver.id));
+    if (!otherStream) throw new Error('no stream');
+    const other = { stream: otherStream };
+    const consent = (userId: string) =>
+      pool().query(
+        `INSERT INTO oauth_consents (realm_id, user_id, oauth_client_id) VALUES ($1, $2, $3)`,
+        [realmId, userId, receiver.id]
+      );
+
+    const related = await userOf(realmId);
+    await consent(related);
+    const settled = await userOf(realmId);
+    const pending = await userOf(realmId);
+    const unread = await userOf(realmId);
+    const delivered = await userOf(realmId);
+    const pendingElsewhere = await userOf(realmId);
+    const disabled = await userOf(realmId, false);
+    await consent(disabled);
+    const gone = randomUUID();
+    const users = [related, settled, pending, unread, delivered, pendingElsewhere, disabled, gone];
+
+    const add = (
+      streamId: string,
+      key: string,
+      eventSubject: { type: string; id: string } | null
+    ) =>
+      streams.addSubject(
+        streamId,
+        { subjectKey: key, subject: { format: 'opaque', id: key }, eventSubject, verified: true },
+        100
+      );
+    for (const userId of users) await add(stream.id, userId, { type: 'user', id: userId });
+    await add(stream.id, 'client', { type: 'client', id: 'notes-app' });
+    await add(stream.id, 'unplaced', null);
+    await add(other.stream.id, pendingElsewhere, { type: 'user', id: pendingElsewhere });
+
+    const destinations: EventDeliveryDestination[] = [
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: stream.id,
+        realmId,
+        subjects: users.map((id) => ({ type: 'user', id })),
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: other.stream.id,
+        realmId,
+        subjects: [{ type: 'user', id: pendingElsewhere }],
+      },
+    ];
+    const signedOut = (userId: string) =>
+      store.emitInOwnTransaction({
+        type: SIGNED_OUT,
+        realm: realmId,
+        actor: { type: 'user', id: userId },
+        subject: { type: 'user', id: userId },
+        data: {},
+      });
+    // The realm's fan-out position, then events it reads past.
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    await signedOut(pending);
+    const deliveredEvent = await signedOut(delivered);
+    // Delivered to this stream, still pending on the other one only.
+    const elsewhereEvent = await signedOut(pendingElsewhere);
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    await pool().query(
+      `UPDATE event_deliveries SET status = 'delivered', finished_at = $3
+       WHERE (event_id = $1 OR (event_id = $2 AND destination_id = $4))`,
+      [deliveredEvent, elsewhereEvent, NOW, stream.id]
+    );
+    // An event past the position: the fan-out has not read it yet.
+    await signedOut(unread);
+
+    const kept = async (streamId: string) =>
+      (
+        await pool().query<{ subject_key: string }>(
+          `SELECT subject_key FROM ssf_stream_subjects WHERE stream_id = $1`,
+          [streamId]
+        )
+      ).rows
+        .map((row) => row.subject_key)
+        .sort();
+
+    // Only the unrelated users nothing waits on: never a related one, one with
+    // an event to fan out or a delivery pending, a client or an unplaced one.
+    expect(await streams.sweepUserSubjects(NOW)).toBe(5);
+    expect(await kept(stream.id)).toEqual(['client', 'unplaced', related, pending, unread].sort());
+    // The other stream's receiver is not related to its user either; its
+    // delivery is still pending there.
+    expect(await kept(other.stream.id)).toEqual([pendingElsewhere]);
+    // Repeating it deletes nothing new.
+    expect(await streams.sweepUserSubjects(NOW)).toBe(0);
+
+    // Once the pending delivery finishes and the fan-out reads the last
+    // event, those subjects end too.
+    await pool().query(
+      `UPDATE event_deliveries SET status = 'failed', finished_at = $1 WHERE status = 'pending'`,
+      [NOW]
+    );
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    await pool().query(
+      `UPDATE event_deliveries SET status = 'delivered', finished_at = $1 WHERE status = 'pending'`,
+      [NOW]
+    );
+    expect(await streams.sweepUserSubjects(NOW)).toBe(3);
+    expect(await kept(stream.id)).toEqual(['client', 'unplaced', related].sort());
+    expect(await kept(other.stream.id)).toEqual([]);
+  });
+
+  it('reads a type rule: the client as the subject, no subject filter, or one client only (#540)', async () => {
+    const realmId = randomUUID();
+    const userId = randomUUID();
+    const API_KEY_REVOKED = 'urn:qauth:event:api_key.revoked:v1-rc.0';
+    const CONSENT_REVOKED = 'urn:qauth:event:consent.revoked:v1-rc.0';
+    const KEY_RETIRED = 'urn:qauth:event:key.emergency_retired:v1-rc.0';
+    const destinations: EventDeliveryDestination[] = [
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'client-a',
+        realmId,
+        subjects: [{ type: 'client', id: 'cli-a' }],
+        typeRules: { [API_KEY_REVOKED]: { subjectFrom: 'client' } },
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'client-a-no-rule',
+        realmId,
+        subjects: [{ type: 'client', id: 'cli-a' }],
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'own-client-a',
+        realmId,
+        subjects: [{ type: 'user', id: userId }],
+        typeRules: { [CONSENT_REVOKED]: { clientId: 'cli-a' } },
+      },
+      {
+        kind: SSF_DELIVERY_KIND,
+        id: 'realm-wide',
+        realmId,
+        subjects: [],
+        typeRules: { [KEY_RETIRED]: { subjectFrom: 'none' } },
+      },
+    ];
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    const keyRevoked = await store.emitInOwnTransaction({
+      type: API_KEY_REVOKED,
+      realm: realmId,
+      actor: { type: 'user', id: userId },
+      subject: { type: 'api_key', id: randomUUID() },
+      client: { id: 'cli-a' },
+      data: {},
+    });
+    const consentRevoked = (clientId: string) =>
+      store.emitInOwnTransaction({
+        type: CONSENT_REVOKED,
+        realm: realmId,
+        actor: { type: 'user', id: userId },
+        subject: { type: 'user', id: userId },
+        client: { id: clientId },
+        data: { consentId: randomUUID() },
+      });
+    const viaA = await consentRevoked('cli-a');
+    const viaB = await consentRevoked('cli-b');
+    const retired = await store.emitInOwnTransaction({
+      type: KEY_RETIRED,
+      realm: realmId,
+      actor: { type: 'operator_cli', id: 'root' },
+      data: { keyId: 'kid-1', purpose: 'token_signing' },
+    });
+    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+
+    const to = async (eventId: string) =>
+      (await queue.listForEvent(eventId)).map((row) => row.destinationId).sort();
+    expect(await to(keyRevoked)).toEqual(['client-a']);
+    expect(await to(viaA)).toEqual(['own-client-a']);
+    expect(await to(viaB)).toEqual([]);
+    expect(await to(retired)).toEqual(['realm-wide']);
+  });
+
   it('fans out to a destination only the events about its subjects', async () => {
     const realmId = randomUUID();
     const userA = randomUUID();
@@ -416,6 +876,7 @@ describe('SSF streams integration (real Postgres)', () => {
       expect(await deliveryStreams.findForDelivery(stream.id)).toMatchObject({
         id: stream.id,
         active: true,
+        issuer: expect.stringMatching(/^https:\/\/realm-.*\.example\.com$/),
       });
       await expect(deliveryStreams.setStatus(key, 'disabled', null, NOW)).rejects.toMatchObject({
         cause: { code: '42501' },
@@ -423,6 +884,16 @@ describe('SSF streams integration (real Postgres)', () => {
       await expect(
         delivery?.query(`SELECT client_secret_hash FROM oauth_clients`)
       ).rejects.toMatchObject({ code: '42501' });
+      // Before each attempt the route asks whether the stream still has the
+      // event's subject, through the same grants.
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u1' })).toBe(true);
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u2' })).toBe(false);
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'client', id: 'u1' })).toBe(false);
+      expect(await deliveryStreams.hasSubject(randomUUID(), { type: 'user', id: 'u1' })).toBe(
+        false
+      );
+      await streams.removeSubject(stream.id, 'user');
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u1' })).toBe(false);
     });
   });
 });

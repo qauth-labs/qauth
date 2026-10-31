@@ -1,6 +1,12 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
+import { extensibleEnum } from '../envelope';
+import {
+  CAEP_SESSION_REVOKED,
+  CAEP_TOKEN_CLAIMS_CHANGE,
+  QAUTH_TOKEN_REVOKED,
+} from '../ssf-mapping';
 import { count, FIRST_RELEASE, oauthError, reason, recordId, scopeList, scopeMode } from './fields';
 
 /**
@@ -92,6 +98,10 @@ export const stepUpElevated = defineEventType({
       .optional()
       .describe('When the fresh sign-in happened, as an RFC 3339 time in UTC.'),
   }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 §3.4 `assurance-level-change` signals that the authentication method changed, and needs the level before and after in a namespace. QAuth’s step-up asks for a fresh sign-in with the same method and records no assurance level, so that event would say nothing true. It maps once step-up can raise the level, with passkeys or TOTP (ADR-018 §3).',
 });
 
 export const consentGranted = defineEventType({
@@ -142,6 +152,14 @@ export const consentRevoked = defineEventType({
     consentId: recordId('The id of the consent that was withdrawn.'),
     revokedRefreshCount: count('How many refresh tokens were revoked with it.').optional(),
   }),
+  security: true,
+  ssf: {
+    event: CAEP_TOKEN_CLAIMS_CHANGE,
+    clientOnly: true,
+    members: { claims: { value: { scope: '' } } },
+  },
+  ssfNote:
+    'A withdrawn consent covered every scope the client held for the user, so the `scope` of its tokens for that user is now empty, and QAuth revoked the refresh tokens the consent covered.',
 });
 
 export const tokenIssued = defineEventType({
@@ -227,6 +245,54 @@ export const tokenRequestFailed = defineEventType({
   }),
 });
 
+/** The replays that revoke a refresh family (RFC 9700 §2.2.2, OAuth 2.1 §4.1.3). */
+export const REPLAY_REASONS = ['code_replay', 'refresh_replay'] as const;
+
+export const tokenFamilyRevoked = defineEventType({
+  name: 'token.family_revoked',
+  version: 1,
+  rc: 0,
+  description:
+    'A replayed grant made QAuth revoke the refresh family it had issued: an authorization code redeemed a second time, or a refresh token presented after it was rotated or revoked. Emitted only when the replay revoked refresh tokens, beside the `token.request_failed` that refused it.',
+  category: 'user',
+  severity: 'critical',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    reason: extensibleEnum(REPLAY_REASONS).describe(
+      '`code_replay`: an authorization code redeemed a second time. `refresh_replay`: a refresh token presented after it was rotated or revoked. The set may grow in a minor release.'
+    ),
+    refreshFamilyId: recordId('The refresh family that was revoked.'),
+    // Emitted only when the replay revoked something, so never 0.
+    revokedRefreshCount: z
+      .int()
+      .min(1)
+      .max(1_000_000)
+      .describe('How many refresh tokens of the family were revoked, at least 1.'),
+  }),
+  security: true,
+  ssf: {
+    event: CAEP_SESSION_REVOKED,
+    clientOnly: true,
+    initiatingEntity: 'policy',
+    members: {
+      reason_admin: {
+        data: 'reason',
+        map: {
+          code_replay: {
+            en: 'An authorization code was redeemed a second time; the refresh tokens it had issued were revoked.',
+          },
+          refresh_replay: {
+            en: 'A refresh token was presented after it was rotated or revoked; its family was revoked.',
+          },
+        },
+      },
+    },
+  },
+  ssfNote:
+    'A refresh family is the client’s standing session for the user, so its revocation is `session-revoked`. The replay policy revoked it, so `initiating_entity` is `policy`.',
+});
+
 export const tokenRevoked = defineEventType({
   name: 'token.revoked',
   version: 1,
@@ -244,6 +310,14 @@ export const tokenRevoked = defineEventType({
       .optional()
       .describe('The `token_type_hint` the client sent, such as `refresh_token`.'),
   }),
+  security: true,
+  ssf: {
+    event: QAUTH_TOKEN_REVOKED,
+    clientOnly: true,
+    members: { token_type_hint: { data: 'typeHint' } },
+  },
+  ssfNote:
+    'Sent only when the revoked token was a user’s: the event’s subject. A revocation that matched no token of the client, or a refresh token whose family was revoked already, records the event without one, and no stream receives it.',
 });
 
 export const tokenRevocationFailed = defineEventType({
@@ -324,6 +398,7 @@ export const OAUTH_EVENT_TYPES = [
   consentRevoked,
   tokenIssued,
   tokenRequestFailed,
+  tokenFamilyRevoked,
   tokenRevoked,
   tokenRevocationFailed,
   tokenIntrospected,

@@ -275,7 +275,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     prefix: '/oauth',
     roles: ['api'],
     plugins: ['egress', 'jwt', 'password'],
-    repositories: ['events', 'oauthClients', 'refreshTokens'],
+    repositories: ['events', 'oauthClients', 'refreshTokens', 'users'],
     load: () => import('./routes/oauth/revoke'),
   },
   {

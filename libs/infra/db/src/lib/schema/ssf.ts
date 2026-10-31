@@ -125,7 +125,7 @@ export const ssfStreamSubjects = pgTable(
       .references(() => ssfStreams.id, { onDelete: 'cascade' }),
     /** The canonical JSON of `subject`: keys sorted, no white space. */
     subjectKey: varchar('subject_key', { length: 2048 }).notNull(),
-    /** The subject identifier, as the receiver sent it. */
+    /** The subject identifier, as the receiver sent it; a user's UUID in lower case. */
     subject: jsonb('subject').$type<Record<string, unknown>>().notNull(),
     /** The event store subject's `type` it stands for; `null` when none. */
     eventSubjectType: varchar('event_subject_type', { length: 32 }),

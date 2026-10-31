@@ -10,6 +10,7 @@ import {
   eventArtifacts,
   EVENTS_PAGE_PATH,
   EXPORT_COMMAND,
+  GENERATED_PAGE_PATHS,
   SCHEMA_DIR,
   schemaArtifacts,
 } from './artifacts';
@@ -30,20 +31,19 @@ const OXFMT = join(
 );
 
 /**
- * The files as they are committed: the export script runs the page through
+ * The files as they are committed: the export script runs the pages through
  * Oxfmt, so the test does too, with the repository's configuration.
  */
 function generatedFiles(): Artifact[] {
-  const pagePath = join(REPO_ROOT, EVENTS_PAGE_PATH);
   return eventArtifacts().map((artifact) =>
-    artifact.path === EVENTS_PAGE_PATH
+    GENERATED_PAGE_PATHS.includes(artifact.path)
       ? {
           ...artifact,
-          content: execFileSync(process.execPath, [OXFMT, `--stdin-filepath=${pagePath}`], {
-            cwd: REPO_ROOT,
-            input: artifact.content,
-            encoding: 'utf8',
-          }),
+          content: execFileSync(
+            process.execPath,
+            [OXFMT, `--stdin-filepath=${join(REPO_ROOT, artifact.path)}`],
+            { cwd: REPO_ROOT, input: artifact.content, encoding: 'utf8' }
+          ),
         }
       : artifact
   );

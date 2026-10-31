@@ -23,6 +23,8 @@ the JSON Schema files under `apps/docs-site/public/schemas/events/`.
 | `lib/legacy.ts`               | Today's audit and log event names, mapped to registered types                                            |
 | `lib/json-schema.ts`          | The published JSON Schema of the envelope and of each type                                               |
 | `lib/docs-page.ts`            | The docs page, rendered from the registry                                                                |
+| `lib/ssf-mapping.ts`          | The SSF events security types are sent as (CAEP 1.0, RISC 1.0, QAuth-defined) and the mapping rules      |
+| `lib/ssf-docs-page.ts`        | The SSF mapping page `reference/ssf-events`, rendered from the registry                                  |
 | `scripts/export-schemas.ts`   | Writes the schema files and the page. The library's only I/O; nothing imports it                         |
 
 ```ts
@@ -45,11 +47,15 @@ const request = eventRequest({ traceId: req.id, ip: req.ip, userAgent: req.heade
    `src/lib/types/`, and list it in that file's array. Until QAuth 1.0.0 every type is a release
    candidate, so it carries `rc`. `since` is the release that will first ship it. Every `data`
    member has a description, and the schema is a `z.strictObject`.
-2. Run `pnpm exec nx run shared-events:schema-export`. It writes the type's schema file and the
-   docs page.
-3. Register the new schema file in `stable-surface/surfaces.json`, like its neighbours: format
+2. If the type records a security change (a session, a grant, a token, a credential, a key or an
+   account a receiver may have to act on), mark it `security: true` and declare `ssf`: the CAEP,
+   RISC or QAuth-defined event it is sent as, or `'none'`, with an `ssfNote` saying why. The
+   registry test fails a security type that declares neither (#540).
+3. Run `pnpm exec nx run shared-events:schema-export`. It writes the type's schema file and the
+   docs pages.
+4. Register the new schema file in `stable-surface/surfaces.json`, like its neighbours: format
    `json-schema`, role `both`, stability `stable`. The test names the entry it expects.
-4. `pnpm exec nx test shared-events` checks the entry, the payload rules and the generated files.
+5. `pnpm exec nx test shared-events` checks the entry, the payload rules and the generated files.
 
 ## The rules
 

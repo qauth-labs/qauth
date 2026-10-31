@@ -4,9 +4,9 @@ import { defineKeys } from '../types';
  * The Shared Signals Framework transmitter (ADR-018 §3, ADR-019 Decision 8,
  * issue #410): the keys of `ssfEnvSchema`.
  *
- * `advanced`: the event types a stream can receive arrive with EVT-11 (#540),
- * and the transmitter's surface may still change in a minor release before
- * then.
+ * `advanced`: the transmitter is experimental, and its surface, the mapping
+ * of QAuth's security events to SSF events (#540) included, may still change
+ * in a minor release.
  */
 export const SSF_KEYS = defineKeys([
   {

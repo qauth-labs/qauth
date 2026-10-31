@@ -14,6 +14,7 @@ import {
   streamConfiguration,
 } from './stream-config';
 import {
+  canonicalSubject,
   canonicalSubjectKey,
   eventSubjectOf,
   ssfSubjectOf,
@@ -114,6 +115,57 @@ describe('subject identifiers (RFC 9493)', () => {
       const ssf = ssfSubjectOf(subject, ISSUER);
       expect(ssf && eventSubjectOf(ssf, ISSUER)).toEqual(subject);
     }
+  });
+
+  // The event store holds a user id in lower case, and the fan-out compares
+  // it as text: a user added with an upper-case UUID must match the user's
+  // events, and be the same subject as the lower-case spelling.
+  it('names a user by a lower-case UUID, however the receiver spelled it', () => {
+    const USER = '0192a000-0000-7000-8000-0000000000b1';
+    const upper = { format: 'iss_sub', iss: ISSUER, sub: USER.toUpperCase() } as const;
+    const lower = { format: 'iss_sub', iss: ISSUER, sub: USER } as const;
+    expect(eventSubjectOf(upper, ISSUER)).toEqual({ type: 'user', id: USER });
+    expect(canonicalSubject(upper, ISSUER)).toEqual(lower);
+    expect(canonicalSubjectKey(canonicalSubject(upper, ISSUER))).toBe(
+      canonicalSubjectKey(canonicalSubject(lower, ISSUER))
+    );
+    // Inside aliases and complex subjects too.
+    expect(
+      canonicalSubject(
+        { format: 'aliases', identifiers: [upper, { format: 'email', email: 'A@example.com' }] },
+        ISSUER
+      )
+    ).toEqual({
+      format: 'aliases',
+      identifiers: [lower, { format: 'email', email: 'A@example.com' }],
+    });
+    expect(
+      canonicalSubject(
+        subjectIdentifierSchema.parse({
+          format: 'complex',
+          user: upper,
+          application: { format: 'opaque', id: 'App' },
+        }),
+        ISSUER
+      )
+    ).toEqual({ format: 'complex', user: lower, application: { format: 'opaque', id: 'App' } });
+    // What is not this realm's user id is kept as given: another issuer's
+    // `sub`, an id that is not a UUID, and a client_id.
+    const foreign = { format: 'iss_sub', iss: 'https://other', sub: USER.toUpperCase() } as const;
+    expect(canonicalSubject(foreign, ISSUER)).toEqual(foreign);
+    expect(canonicalSubject({ format: 'iss_sub', iss: ISSUER, sub: 'User-1' }, ISSUER)).toEqual({
+      format: 'iss_sub',
+      iss: ISSUER,
+      sub: 'User-1',
+    });
+    expect(eventSubjectOf({ format: 'iss_sub', iss: ISSUER, sub: 'User-1' }, ISSUER)).toEqual({
+      type: 'user',
+      id: 'User-1',
+    });
+    expect(canonicalSubject({ format: 'opaque', id: 'My-Client' }, ISSUER)).toEqual({
+      format: 'opaque',
+      id: 'My-Client',
+    });
   });
 
   it('places no subject of another issuer, another format, or too long an id', () => {
@@ -247,10 +299,22 @@ describe('SET claims (RFC 8417, SSF 1.0 §4)', () => {
 });
 
 describe('event types offered to streams', () => {
-  it('offers nothing until a registered type has an SSF mapping (EVT-11)', () => {
-    expect(ssfEventsSupported()).toEqual([]);
+  it('offers the SSF events the registry maps, and never the verification event (#540)', () => {
+    expect(ssfEventsSupported()).toEqual([
+      'https://schemas.openid.net/secevent/caep/event-type/credential-change',
+      'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+      'https://schemas.openid.net/secevent/caep/event-type/token-claims-change',
+      'urn:qauth:secevent:key-emergency-retired:v1-rc.0',
+      'urn:qauth:secevent:token-revoked:v1-rc.0',
+    ]);
     expect(eventTypesFor([SSF_VERIFICATION_EVENT])).toEqual([]);
-    expect(EVENT_TYPES.some((definition) => typeof definition.ssf === 'object')).toBe(false);
+    expect(
+      eventTypesFor(['https://schemas.openid.net/secevent/caep/event-type/session-revoked'])
+    ).toEqual([
+      'urn:qauth:event:user.signed_out:v1-rc.0',
+      'urn:qauth:event:token.family_revoked:v1-rc.0',
+    ]);
+    expect(EVENT_TYPES.some((definition) => typeof definition.ssf === 'object')).toBe(true);
   });
 
   it('offers a mapped type to a stream that requested its SSF event', () => {

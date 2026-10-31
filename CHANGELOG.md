@@ -683,10 +683,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /ssf/status` adds `delivery_status`, the pending deliveries and the latest
   failed attempt; a refused and an unreachable endpoint both read
   `destination_unreachable` there. With `SSF_TRANSMITTER_ENABLED` off, SSF
-  deliveries left from when it was on hold back no event retention. Until the
-  event mapping of #540, verification events are the only SETs sent. The docs
+  deliveries left from when it was on hold back no event retention. The docs
   site's new **SSF transmitter** page (`operate/ssf-transmitter`) walks through
   a receiver and the verification event.
+- **Security events on SSF streams** ([#540], ADR-018 §3, ADR-019 Decision 8).
+  The event registry marks every type that records a security change, and each
+  declares the SSF event it is sent as, or `ssf: 'none'`; the registry test
+  fails a security type that declares neither. A sign-out is CAEP 1.0
+  `session-revoked`, a withdrawn consent `token-claims-change`, a client
+  secret, API key or wallet credential change `credential-change`; RFC 7009
+  revocation and emergency key retirement get QAuth-defined events,
+  `urn:qauth:secevent:<name>:v1-rc.0`, release candidates until 1.0.0. Step-up
+  elevation and a client's suspension or deletion have none: no standard event
+  says what they are. Each SET carries the event's members with
+  `event_timestamp` and `initiating_entity`, and a `sub_id` naming a user as
+  `iss_sub` under the realm's issuer and a client by #410's rules. A withdrawn
+  consent, a revocation, a replay's family revocation and a client's own
+  credential change reach only the stream of the client concerned. Two types are new: `token.family_revoked`, recorded
+  beside `token.request_failed` when a code or refresh-token replay revokes
+  refresh tokens, and `key.emergency_retired`, which emergency retirement will
+  emit for a published key only. `token.revoked` now names the user whose token was revoked,
+  and commits in the transaction that revokes a refresh token's family; a refresh token whose
+  family was revoked already names no one, so a second revocation sends no second SET. A receiver
+  may add a user as a subject only when the user holds an active consent for
+  its client or a live refresh token it was issued, or a live refresh token
+  whose audience names the receiver as a resource server (a value of its
+  `audience`, never a `urn:qauth:aud:` value or the realm's issuer); any other
+  user is refused with `403`, and a disabled user is related to no receiver.
+  A user subject lasts as long as that relation: the new `ssf-subject-sweep`
+  job (hourly, on `api`) deletes it once the relation has ended and every event
+  about the user has reached the stream, so the SET of the withdrawal that
+  ended it is still sent. The delivery role now
+  reads `realms.issuer`, for the `iss_sub` subjects. Each delivery attempt reads
+  the stream as it is then: a held or retried delivery of an event the receiver
+  no longer requests, or about a subject it has removed, is not sent. The docs
+  site's new **SSF events** page (`reference/ssf-events`) is generated from the
+  registry, and a test fails when it differs.
+
+  **Action for operators**: a deployment that runs the delivery role as its
+  own database user grants that user `SELECT` on `realms.issuer` before it
+  upgrades, by applying `eventDeliveryGrantStatements(<role>)` of
+  `@qauth-labs/infra-db` again, or `GRANT SELECT ("issuer") ON TABLE "realms"
+  TO <role>`. Nothing checks the grants at boot: without this one every SSF
+  delivery attempt fails with `permission denied for table realms` (SQLSTATE
+  `42501`) until its attempts run out. A delivery role that uses the server's
+  own database user needs nothing. See the upgrade guide (`operate/upgrades`).
+
 - **Schema**: migration 0039 adds `ssf_streams`, `ssf_stream_subjects`,
   `realms.ssf_transmitter_enabled` (default off) and an index on
   `event_deliveries` that finds a destination's latest failed delivery ([#410]).
@@ -1749,6 +1791,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536
+[#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549

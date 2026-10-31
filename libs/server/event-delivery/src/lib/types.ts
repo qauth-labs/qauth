@@ -26,6 +26,24 @@ export interface RouteDestination {
    * and an event without a subject never matches a list.
    */
   readonly subjects?: readonly EventSubjectRef[];
+  /**
+   * How the filters read single event types, by type, where they do not read
+   * them as above: see {@link DestinationTypeRule}. The SSF route (#540) sets
+   * them from each type's mapping.
+   */
+  readonly typeRules?: Readonly<Record<string, DestinationTypeRule>>;
+}
+
+/** How a destination's filters read one event type. */
+export interface DestinationTypeRule {
+  /**
+   * What the `subjects` filter reads for the type: the envelope's `subject`
+   * (the default); its `client`, as a `client` subject with the `client_id`;
+   * or `none`, so that every event of the type passes it.
+   */
+  readonly subjectFrom?: 'subject' | 'client' | 'none';
+  /** Only events of the type whose envelope `client` is this `client_id`. */
+  readonly clientId?: string;
 }
 
 /** An event's subject, as a destination's filter names it. */

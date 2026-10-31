@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { defineEventType } from '../definition';
 import { extensibleEnum } from '../envelope';
+import { CAEP_CREDENTIAL_CHANGE } from '../ssf-mapping';
 import { FIRST_RELEASE, scopeList } from './fields';
 
 /**
@@ -11,6 +12,30 @@ import { FIRST_RELEASE, scopeList } from './fields';
  */
 
 export const CLIENT_REGISTRATIONS = ['dynamic', 'developer_api'] as const;
+
+/**
+ * Why a client's suspension and deletion have no SSF event: no standard event
+ * is about a client.
+ */
+const NO_CLIENT_STATE_EVENT =
+  'No CAEP 1.0 or RISC 1.0 event describes a client’s suspension or deletion: RISC `account-disabled` is about an account a person signs in to.';
+
+/**
+ * The CAEP `credential_type` of a client's credentials. CAEP 1.0 §3.3.1 lists
+ * the credentials a person authenticates with and allows any other type the
+ * transmitter and the receiver agree on; these two are QAuth's.
+ */
+const CLIENT_SECRET_CREDENTIAL = 'client-secret';
+const API_KEY_CREDENTIAL = 'api-key';
+
+/**
+ * Why a client's credential change goes to that client's own stream only, and
+ * names `admin`: a client id is no secret, so any receiver could add another
+ * client as a subject and watch its credentials change. A developer managing
+ * a client's credentials acts as its administrator, not as an end user.
+ */
+const OWN_CREDENTIALS_NOTE =
+  'Sent only to the stream of the client whose credential changed, never to another receiver that added that client: a receiver learns of its own credentials only. A developer managing a client acts as its administrator, so `initiating_entity` is `admin`.';
 
 export const clientCreated = defineEventType({
   name: 'client.created',
@@ -72,6 +97,9 @@ export const clientDeleted = defineEventType({
   since: FIRST_RELEASE,
   subject: 'client',
   data: z.strictObject({}),
+  security: true,
+  ssf: 'none',
+  ssfNote: NO_CLIENT_STATE_EVENT,
 });
 
 export const clientSecretRotated = defineEventType({
@@ -84,6 +112,17 @@ export const clientSecretRotated = defineEventType({
   since: FIRST_RELEASE,
   subject: 'client',
   data: z.strictObject({}),
+  security: true,
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    clientOnly: true,
+    initiatingEntity: 'admin',
+    members: {
+      credential_type: { value: CLIENT_SECRET_CREDENTIAL },
+      change_type: { value: 'update' },
+    },
+  },
+  ssfNote: OWN_CREDENTIALS_NOTE,
 });
 
 export const clientSuspended = defineEventType({
@@ -97,6 +136,9 @@ export const clientSuspended = defineEventType({
   since: FIRST_RELEASE,
   subject: 'client',
   data: z.strictObject({}),
+  security: true,
+  ssf: 'none',
+  ssfNote: NO_CLIENT_STATE_EVENT,
 });
 
 export const clientSuspensionLifted = defineEventType({
@@ -109,6 +151,9 @@ export const clientSuspensionLifted = defineEventType({
   since: FIRST_RELEASE,
   subject: 'client',
   data: z.strictObject({}),
+  security: true,
+  ssf: 'none',
+  ssfNote: NO_CLIENT_STATE_EVENT,
 });
 
 export const apiKeyCreated = defineEventType({
@@ -121,6 +166,19 @@ export const apiKeyCreated = defineEventType({
   since: FIRST_RELEASE,
   subject: 'api_key',
   data: z.strictObject({}),
+  security: true,
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    // The key is the client's credential: the SET is about the client.
+    subject: 'client',
+    clientOnly: true,
+    initiatingEntity: 'admin',
+    members: {
+      credential_type: { value: API_KEY_CREDENTIAL },
+      change_type: { value: 'create' },
+    },
+  },
+  ssfNote: OWN_CREDENTIALS_NOTE,
 });
 
 export const apiKeyRevoked = defineEventType({
@@ -133,6 +191,18 @@ export const apiKeyRevoked = defineEventType({
   since: FIRST_RELEASE,
   subject: 'api_key',
   data: z.strictObject({}),
+  security: true,
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    subject: 'client',
+    clientOnly: true,
+    initiatingEntity: 'admin',
+    members: {
+      credential_type: { value: API_KEY_CREDENTIAL },
+      change_type: { value: 'revoke' },
+    },
+  },
+  ssfNote: OWN_CREDENTIALS_NOTE,
 });
 
 export const CLIENT_EVENT_TYPES = [

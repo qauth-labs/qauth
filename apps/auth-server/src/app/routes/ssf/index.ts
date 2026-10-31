@@ -4,6 +4,7 @@ import {
   addSubjectRequestSchema,
   assertTransmitterMembers,
   authorizationHeaderContext,
+  canonicalSubject,
   canonicalSubjectKey,
   checkDelivery,
   eventSubjectOf,
@@ -23,7 +24,7 @@ import {
   SUBJECT_KEY_MAX,
   verificationRequestSchema,
 } from '@qauth-labs/fastify-plugin-ssf';
-import { TooManyRequestsError } from '@qauth-labs/shared-errors';
+import { ForbiddenError, TooManyRequestsError } from '@qauth-labs/shared-errors';
 import { scanValues, ssfStreamVerificationRequested } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -90,8 +91,9 @@ const streamIdQuerySchema = z.object({ stream_id: z.string().min(1).max(255) });
 /**
  * The error statuses a stream management route answers by design (#513): a
  * request the schema or the protocol refuses, a refused token, a token without
- * `ssf:stream`, and a stream the receiver does not have or a realm that does
- * not run the transmitter. The OpenAPI document adds 421, 429 and 500.
+ * `ssf:stream` or a user the receiver may not add as a subject (#540), and a
+ * stream the receiver does not have or a realm that does not run the
+ * transmitter. The OpenAPI document adds 421, 429 and 500.
  */
 const STREAM_ERRORS = [400, 401, 403, 404] as const;
 
@@ -453,18 +455,24 @@ export default async function (fastify: FastifyInstance) {
     }
   );
 
-  /** A subject's stored form: its canonical key and the event subject it stands for. */
+  /**
+   * A subject's stored form: the subject with a user's UUID in lower case, its
+   * canonical key and the event subject it stands for. Both spellings of a
+   * user's id are then one subject, which matches the user's events.
+   */
   function subjectRow(
     receiver: SsfReceiver,
-    subject: z.infer<typeof addSubjectRequestSchema>['subject']
+    received: z.infer<typeof addSubjectRequestSchema>['subject']
   ) {
+    const issuer = issuerOf(receiver);
+    const subject = canonicalSubject(received, issuer);
     const subjectKey = canonicalSubjectKey(subject);
     // Bytes, not characters: the key is indexed, and a long multibyte subject
     // would pass a character count and fail the index.
     if (Buffer.byteLength(subjectKey) > SUBJECT_KEY_MAX) {
       throw new SsfRequestError('The subject is too long');
     }
-    return { subjectKey, eventSubject: eventSubjectOf(subject, issuerOf(receiver)) };
+    return { subject, subjectKey, eventSubject: eventSubjectOf(subject, issuer) };
   }
 
   routes.post(
@@ -473,7 +481,7 @@ export default async function (fastify: FastifyInstance) {
       ...common,
       schema: {
         description:
-          'Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event.',
+          'Add a subject to the stream (SSF 1.0 §8.1.3.2). The transmitter’s `default_subjects` is `NONE`: the stream receives events only about the subjects added. A user is named `iss_sub` with the realm’s issuer, a client `uri` or `opaque` by its `client_id`; another subject is kept and matches no event. A user must be related to the receiver: an active consent for its client or a live refresh token its client was issued, or a live refresh token whose audience names the receiver as a resource server (a value of its `audience`, never a `urn:qauth:aud:` value or the realm’s issuer). Any other user, an unknown one included, is refused with 403. A user subject ends once the relation has ended and the events about the user have reached the stream.',
         ...streamSchema,
         'x-qauth-errors': STREAM_ERRORS,
         body: addSubjectRequestSchema,
@@ -483,12 +491,31 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const receiver = ssfReceiverOf(request);
       const stream = await ownStream(receiver, request.body.stream_id);
-      const { subjectKey, eventSubject } = subjectRow(receiver, request.body.subject);
+      const { subject, subjectKey, eventSubject } = subjectRow(receiver, request.body.subject);
+      // A receiver learns only of the users related to it (#540): one who
+      // consented to its client or holds a live refresh token its client was
+      // issued (decided 2026-10-26), or a live refresh token for it as a
+      // resource server (decided 2026-10-31). Any other user is refused as
+      // SSF 1.0 §8.1.3.2 prescribes for a subject the receiver may not add
+      // (403), an unknown id alike, so the answer tells no one which users
+      // exist. The subject ends by the `ssf-subject-sweep` job once the
+      // relation does.
+      if (
+        eventSubject?.type === 'user' &&
+        !(await streams.isRelatedUser(
+          receiver.realm.id,
+          receiver.client.id,
+          eventSubject.id,
+          Date.now()
+        ))
+      ) {
+        throw new ForbiddenError('The receiver may not add this subject');
+      }
       const added = await streams.addSubject(
         stream.id,
         {
           subjectKey,
-          subject: request.body.subject,
+          subject,
           eventSubject,
           verified: request.body.verified ?? true,
         },

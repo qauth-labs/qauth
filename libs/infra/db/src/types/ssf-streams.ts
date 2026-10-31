@@ -64,6 +64,8 @@ export interface SsfStreamDestination {
   readonly id: string;
   readonly realmId: string;
   readonly status: Extract<SsfStreamStatus, 'enabled' | 'paused'>;
+  /** The SETs' `aud`: the receiver's `client_id`. */
+  readonly audience: string;
   readonly eventsRequested: readonly string[];
   /** The event store subjects of its subjects; a subject QAuth cannot place is left out. */
   readonly subjects: ReadonlyArray<{ readonly type: string; readonly id: string }>;
@@ -77,6 +79,12 @@ export interface SsfStreamForDelivery extends SsfStream {
    * scope. Its own `status` comes on top.
    */
   readonly active: boolean;
+  /**
+   * The realm's issuer: the `iss` of a user's `iss_sub` subject identifier in
+   * the stream's SETs (#540). `null` for a realm that has none, whose events
+   * name no user.
+   */
+  readonly issuer: string | null;
 }
 
 /** The deliveries of one stream, as its status endpoint reports them. */
@@ -106,8 +114,9 @@ export interface SsfStreamDeliveryStatus {
  *
  * Every read and write a receiver makes names its realm and its client row,
  * so a receiver reaches only its own stream: another receiver's stream id
- * answers as if it did not exist. `listDestinations`, `findForDelivery` and
- * `deliveryStatus` serve the delivery route and the status endpoint.
+ * answers as if it did not exist. `listDestinations`, `findForDelivery`,
+ * `hasSubject` and `deliveryStatus` serve the delivery route and the status
+ * endpoint.
  */
 export interface SsfStreamsRepository {
   /** Create a stream. `null` when the receiver already has one in the realm. */
@@ -142,6 +151,39 @@ export interface SsfStreamsRepository {
   /** The subjects of a stream, oldest first. */
   listSubjects(streamId: string): Promise<SsfStreamSubject[]>;
   /**
+   * Whether a user of the realm is related to the receiver, so that the
+   * receiver may add the user as a subject (#540): the user is enabled and
+   * holds an active consent for the receiver's client or a live refresh token
+   * it was issued (decided 2026-10-26), or a live refresh token whose
+   * audience names the receiver as a resource server (decided 2026-10-31):
+   * a value of the receiver's `audience`, never a `urn:qauth:aud:` value nor
+   * the realm's issuer. A refresh token is live at `now` (epoch milliseconds)
+   * as the token endpoint reads it: neither revoked nor expired, and its
+   * family not past the realm's `sso_max_lifespan` or the end of the browser
+   * session that started it. `false` for a disabled user, a user of another
+   * realm, a user id that does not exist, and an id that is not a UUID.
+   */
+  isRelatedUser(
+    realmId: string,
+    receiverClientId: string,
+    userId: string,
+    now: number
+  ): Promise<boolean>;
+  /**
+   * End the user subjects whose relation has ended (#540, decided
+   * 2026-10-31): delete each user subject of a stream whose receiver is no
+   * longer related to the user at `now` (epoch milliseconds), by the rule of
+   * {@link isRelatedUser}, a user who is disabled or gone included, once no
+   * event about the user can still reach the stream: every such event is
+   * behind the realm's SSF fan-out position, and none of the stream's
+   * deliveries about the user is pending (held, queued or retrying). So the
+   * event that ended the relation, a withdrawn consent's say, is still sent.
+   * Client subjects and subjects QAuth cannot place are left alone.
+   *
+   * @returns how many subjects it deleted
+   */
+  sweepUserSubjects(now: number): Promise<number>;
+  /**
    * Every stream the delivery route serves: `enabled` and `paused` ones of an
    * active receiver (enabled, not suspended, holding `ssf:stream`), in realms
    * whose switch is on.
@@ -149,6 +191,15 @@ export interface SsfStreamsRepository {
   listDestinations(): Promise<SsfStreamDestination[]>;
   /** One stream for a delivery attempt, whatever its status, or `undefined`. */
   findForDelivery(streamId: string): Promise<SsfStreamForDelivery | undefined>;
+  /**
+   * Whether the stream has a subject that stands for this event store
+   * subject, read before a delivery attempt: the receiver may have removed it
+   * since the fan-out. Reads only what the delivery role may read.
+   */
+  hasSubject(
+    streamId: string,
+    subject: { readonly type: string; readonly id: string }
+  ): Promise<boolean>;
   /**
    * The stream's pending deliveries and its latest failed attempt. A row an
    * attempt is running on at `now` (epoch milliseconds) is left out of the

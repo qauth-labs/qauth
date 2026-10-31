@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
+import { CAEP_CREDENTIAL_CHANGE } from '../ssf-mapping';
 import { count, FIRST_RELEASE, reason, verifierProfile } from './fields';
 
 /**
@@ -34,6 +35,14 @@ export const walletLinked = defineEventType({
       .describe('Whether the link replaced an earlier binding of the same credential.'),
     verifierProfile: verifierProfile(),
   }),
+  security: true,
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    members: {
+      credential_type: { value: 'verifiable-credential' },
+      change_type: { data: 'rebound', map: { true: 'update', false: 'create' } },
+    },
+  },
 });
 
 export const walletLinkFailed = defineEventType({

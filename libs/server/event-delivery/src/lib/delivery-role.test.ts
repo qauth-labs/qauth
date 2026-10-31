@@ -515,6 +515,53 @@ describe('startDeliveryRole', () => {
     expect(rowsOf('anyone')).toEqual([aboutA.id, aboutB.id, aboutNone.id].sort());
   });
 
+  it('reads a type rule: the client as the subject, no subject filter, or one client only', async () => {
+    const { clock, store } = await setup((clock) => [
+      route(clock, [
+        {
+          id: 'client-a',
+          realmId: REALM,
+          subjects: [{ type: 'client', id: 'cli-a' }],
+          typeRules: { [SIGNED_IN]: { subjectFrom: 'client' } },
+        },
+        {
+          id: 'own-client',
+          realmId: REALM,
+          subjects: [{ type: 'user', id: 'a' }],
+          typeRules: { [SIGNED_IN]: { clientId: 'cli-a' } },
+        },
+        {
+          id: 'every-subject',
+          realmId: REALM,
+          subjects: [],
+          typeRules: { [SIGNED_IN]: { subjectFrom: 'none' } },
+        },
+      ]),
+    ]);
+    const viaA = {
+      ...envelope(),
+      subject: { type: 'user', id: 'a' },
+      client: { id: 'cli-a' },
+    } as EventEnvelope;
+    const viaB = {
+      ...envelope(),
+      subject: { type: 'user', id: 'a' },
+      client: { id: 'cli-b' },
+    } as EventEnvelope;
+    store.append(viaA);
+    store.append(viaB);
+    await clock.advanceBy(POLL);
+    await vi.waitFor(() => expect(store.rows).toHaveLength(4));
+    const rowsOf = (id: string) =>
+      store.rows
+        .filter((row) => row.destinationId === id)
+        .map((row) => row.eventId)
+        .sort();
+    expect(rowsOf('client-a')).toEqual([viaA.id]);
+    expect(rowsOf('own-client')).toEqual([viaA.id]);
+    expect(rowsOf('every-subject')).toEqual([viaA.id, viaB.id].sort());
+  });
+
   it('leaves out a malformed destination and says so once', async () => {
     const { clock, store, log } = await setup((clock) => [
       route(clock, [
@@ -522,6 +569,18 @@ describe('startDeliveryRole', () => {
         { id: '', realmId: REALM },
         { id: 'bad-realm', realmId: 'not-a-uuid' },
         { id: 'bad-subjects', realmId: REALM, subjects: [{ type: 'user' }] as never },
+        {
+          id: 'bad-rule',
+          realmId: REALM,
+          typeRules: { [SIGNED_IN]: { subjectFrom: 'actor' } } as never,
+        },
+        { id: 'bad-rules', realmId: REALM, typeRules: [] as never },
+        { id: 'empty-client', realmId: REALM, typeRules: { [SIGNED_IN]: { clientId: '' } } },
+        {
+          id: 'long-client',
+          realmId: REALM,
+          typeRules: { [SIGNED_IN]: { clientId: 'c'.repeat(256) } },
+        },
       ]),
     ]);
     store.append(envelope());
@@ -532,7 +591,7 @@ describe('startDeliveryRole', () => {
       ([, message]) =>
         message === 'a delivery route listed a malformed destination; it receives nothing'
     );
-    expect(malformed).toHaveLength(3);
+    expect(malformed).toHaveLength(7);
   });
 
   it('fails an event the store cannot read, without calling the route', async () => {

@@ -66,6 +66,7 @@ interface FanOutEventRow extends Record<string, unknown> {
   category: EventCategory;
   subject_type: string | null;
   subject_id: string | null;
+  client_id: string | null;
 }
 
 /** A claimed row, with its event's columns. */
@@ -174,16 +175,30 @@ function fanOutFilter(destination: EventDeliveryDestination): FanOutFilter {
   };
 }
 
-/** Whether a destination's filters take an event of this type, category and subject. */
+/**
+ * Whether a destination's filters take an event of this type, category,
+ * subject and client. A type rule may make the subject filter read the
+ * event's client instead, or nothing, and may take only one client's events.
+ */
 function matches(filter: FanOutFilter, event: FanOutEventRow): boolean {
   const { destination, subjects } = filter;
+  const rules = destination.typeRules;
+  const rule =
+    rules !== undefined && Object.hasOwn(rules, event.type) ? rules[event.type] : undefined;
+  if (rule?.clientId !== undefined && event.client_id !== rule.clientId) return false;
+  const from = rule?.subjectFrom ?? 'subject';
+  const about =
+    from === 'client'
+      ? event.client_id === null
+        ? null
+        : subjectKey('client', event.client_id)
+      : event.subject_type === null || event.subject_id === null
+        ? null
+        : subjectKey(event.subject_type, event.subject_id);
   return (
     (destination.types === undefined || destination.types.includes(event.type)) &&
     (destination.categories === undefined || destination.categories.includes(event.category)) &&
-    (subjects === undefined ||
-      (event.subject_type !== null &&
-        event.subject_id !== null &&
-        subjects.has(subjectKey(event.subject_type, event.subject_id))))
+    (subjects === undefined || from === 'none' || (about !== null && subjects.has(about)))
   );
 }
 
@@ -344,7 +359,8 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
           left join lateral (
             select ${events.id} as "id", ${events.xid}::text as "xid", ${events.seq}::text as "seq",
               ${events.time}::text as "time", ${events.type} as "type", ${events.category} as "category",
-              ${events.subjectType} as "subject_type", ${events.subjectId} as "subject_id"
+              ${events.subjectType} as "subject_type", ${events.subjectId} as "subject_id",
+              ${events.clientId} as "client_id"
             from ${events}
             where ${events.realmId} = ${realmId}
               and (${events.xid}, ${events.seq}) > (${position.xid}::xid8, ${position.seq}::bigint)
