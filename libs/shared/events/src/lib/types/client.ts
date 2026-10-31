@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { defineEventType } from '../definition';
 import { extensibleEnum } from '../envelope';
 import { CAEP_CREDENTIAL_CHANGE } from '../ssf-mapping';
-import { FIRST_RELEASE, scopeList } from './fields';
+import { count, FIRST_RELEASE, scopeList } from './fields';
 
 /**
  * OAuth clients and their API keys. The client is the subject, as its
@@ -156,6 +156,67 @@ export const clientSuspensionLifted = defineEventType({
   ssfNote: NO_CLIENT_STATE_EVENT,
 });
 
+/**
+ * The first-party profiles of ADR-017 Decision 2, as an event names them.
+ * ADR-017 phase F4 adds `native_attested`.
+ */
+export const CLIENT_FIRST_PARTY_PROFILES = ['web_redirect', 'native_backend'] as const;
+
+/** The flows a `native_backend` client's policy may allow. */
+export const CLIENT_FIRST_PARTY_FLOWS = ['login', 'register', 'reset'] as const;
+
+const firstPartyProfile = (description: string) =>
+  extensibleEnum(CLIENT_FIRST_PARTY_PROFILES).nullable().describe(description);
+
+export const clientFirstPartyChanged = defineEventType({
+  name: 'client.first_party_changed',
+  version: 1,
+  rc: 0,
+  description:
+    "An operator set, changed or removed a client's first-party profile (ADR-017 Decision 2), its policy or its written reason. Removing the profile revoked every refresh token family of the client in the same transaction.",
+  category: 'admin',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'client',
+  data: z.strictObject({
+    from: firstPartyProfile(
+      '`web_redirect` or `native_backend`: the profile before the change, or `null` when the client was not first party. The set may grow in a minor release.'
+    ),
+    to: firstPartyProfile(
+      'The profile after the change, or `null` when it was removed. The set may grow in a minor release.'
+    ),
+    flows: z
+      .array(extensibleEnum(CLIENT_FIRST_PARTY_FLOWS))
+      .min(1)
+      .max(16)
+      .optional()
+      .describe(
+        "A `native_backend` client's flows after the change: `login`, `register`, `reset`. Absent for any other profile."
+      ),
+    pkceRequired: z
+      .boolean()
+      .optional()
+      .describe(
+        "Whether a `native_backend` client's policy requires PKCE at the authorization challenge endpoint after the change. `false` is a deviation the operator chose for this client. Absent for any other profile."
+      ),
+    writtenReason: z
+      .string()
+      .min(1)
+      .max(1000)
+      .optional()
+      .describe(
+        'The reason the operator wrote for the profile, as stored with the client. Absent when the profile was removed.'
+      ),
+    revokedTokenCount: count(
+      'How many refresh tokens the removal revoked: every live token of every family of the client. `0` when the profile was set or changed.'
+    ),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'No CAEP 1.0 or RISC 1.0 event describes a change of trust in a client. The tokens the removal revoked were the client’s, not a person’s session.',
+});
+
 export const apiKeyCreated = defineEventType({
   name: 'api_key.created',
   version: 1,
@@ -212,6 +273,7 @@ export const CLIENT_EVENT_TYPES = [
   clientSecretRotated,
   clientSuspended,
   clientSuspensionLifted,
+  clientFirstPartyChanged,
   apiKeyCreated,
   apiKeyRevoked,
 ] as const;
