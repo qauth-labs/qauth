@@ -141,36 +141,39 @@ export function createAuthMethodContext<TConfig>(
     config: deepFreeze(config),
     egress: Object.freeze({
       request(request: AuthMethodEgressRequest): Promise<AuthMethodEgressResponse> {
-        if (!EGRESS_METHODS.includes(request.method)) {
+        // Each member read once: what is checked is what is sent.
+        const { method: verb, url, headers, body, purpose, source } = request;
+        if (!EGRESS_METHODS.includes(verb)) {
           return Promise.reject(new TypeError('egress method must be GET or POST'));
         }
-        if (!EGRESS_SOURCES.includes(request.source)) {
+        if (!EGRESS_SOURCES.includes(source)) {
           return Promise.reject(
             new TypeError('egress source must be operator, admin or remote_document')
           );
         }
         return egress.request({
-          method: request.method,
-          url: request.url,
-          ...(request.headers === undefined ? {} : { headers: { ...request.headers } }),
-          ...(request.body === undefined ? {} : { body: request.body }),
-          purpose: request.purpose,
-          source: request.source,
+          method: verb,
+          url,
+          ...(headers === undefined ? {} : { headers: { ...headers } }),
+          ...(body === undefined ? {} : { body }),
+          purpose,
+          source,
           realm: realmName,
         });
       },
     }),
     signer: Object.freeze({
       signClientAssertion(request: AuthMethodClientAssertionRequest): Promise<string> {
-        if (request.algorithm !== undefined && !ASSERTION_ALGORITHMS.includes(request.algorithm)) {
+        const { audience, claims, algorithm } = request;
+        if (algorithm !== undefined && !ASSERTION_ALGORITHMS.includes(algorithm)) {
           return Promise.reject(new TypeError('algorithm must be RS256, ES256 or EdDSA'));
         }
         return signer.signClientAssertion(signerCaller, {
           realmId,
           providerId,
-          audience: request.audience,
-          claims: request.claims,
-          ...(request.algorithm === undefined ? {} : { algorithm: request.algorithm }),
+          audience,
+          claims,
+          ...(algorithm === undefined ? {} : { algorithm }),
         });
       },
       async getUpstreamJwks() {

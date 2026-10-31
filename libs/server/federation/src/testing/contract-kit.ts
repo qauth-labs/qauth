@@ -115,6 +115,8 @@ interface KitRun {
   readonly problems: string[];
   readonly checks: string[];
   readonly logLines: string[];
+  /** The bodies of the method's outbound calls, in order, as text. */
+  readonly egressBodies: string[];
   egressCalls: number;
   fail(problem: string): void;
   stop(problem: string): never;
@@ -163,6 +165,7 @@ export async function checkAuthMethod(
     problems: [],
     checks: [],
     logLines: [],
+    egressBodies: [],
     egressCalls: 0,
     fail(problem) {
       this.problems.push(problem);
@@ -176,20 +179,22 @@ export async function checkAuthMethod(
   const fetchGuard = disableFetch();
   let secrets: readonly string[] = [];
   try {
-    const staticProblems = authMethodProblems(method);
-    if (staticProblems.length > 0) {
-      run.problems.push(...staticProblems);
-      throw new KitStop('static');
-    }
-    run.checks.push('static');
+    await fetchGuard.run(async () => {
+      const staticProblems = authMethodProblems(method);
+      if (staticProblems.length > 0) {
+        run.problems.push(...staticProblems);
+        throw new KitStop('static');
+      }
+      run.checks.push('static');
 
-    secrets = configSecrets(method, scenario.config, run);
-    run.checks.push('config-schema');
+      secrets = configSecrets(method, scenario.config, run);
+      run.checks.push('config-schema');
 
-    const context = kitContext(method, scenario, run);
-    run.checks.push('context');
+      const context = kitContext(method, scenario, run);
+      run.checks.push('context');
 
-    await runChecks(method, scenario, context, run);
+      await runChecks(method, scenario, context, run);
+    });
   } catch (error) {
     if (!(error instanceof KitStop)) run.problems.push(`the run threw: ${describe(error)}`);
   } finally {
@@ -199,7 +204,8 @@ export async function checkAuthMethod(
   if (fetchGuard.calls() > 0) {
     run.problems.push('the method called fetch: its outbound calls go through context.egress');
   }
-  if (run.logLines.some((line) => secrets.some((secret) => line.includes(secret)))) {
+  const forms = secretForms(secrets, configStrings(scenario.config));
+  if (run.logLines.some((line) => forms.some((form) => line.includes(form)))) {
     run.problems.push('a log line carries the value of a writeOnly config member');
   }
   if (run.problems.length > 0) {
@@ -220,14 +226,14 @@ async function runChecks(
 ): Promise<void> {
   const first = await started(method, context, run);
   const second = await started(method, context, run);
-  if (JSON.stringify(first.transaction) === JSON.stringify(second.transaction)) {
+  if (JSON.stringify(first.start.transaction) === JSON.stringify(second.start.transaction)) {
     run.fail('two starts answered the same transaction: its state must be fresh for each start');
   }
   run.checks.push('start');
 
   // The provider signs the person in, for the second start.
-  const signIn = await scenario.callback(new URL(second.redirectTo));
-  const happy = await callback(method, context, signIn, second.transaction, run);
+  const signIn = await scenario.callback(new URL(second.start.redirectTo));
+  const happy = await callback(method, context, signIn, second.start.transaction, run);
   const completion = await completeUpstreamStep(method, happy).catch((error: unknown) =>
     run.stop(`the callback's outcome was refused: ${describe(error)}`)
   );
@@ -241,8 +247,8 @@ async function runChecks(
   const again = await callback(
     method,
     context,
-    await scenario.callback(new URL(third.redirectTo)),
-    third.transaction,
+    await scenario.callback(new URL(third.start.redirectTo)),
+    third.start.transaction,
     run
   );
   const repeated = await completeUpstreamStep(method, again).catch(() => undefined);
@@ -262,8 +268,14 @@ async function runChecks(
 
   if (scenario.declined !== undefined) {
     const fourth = await started(method, context, run);
-    const declinedRequest = await scenario.declined(new URL(fourth.redirectTo));
-    const declined = await callback(method, context, declinedRequest, fourth.transaction, run);
+    const declinedRequest = await scenario.declined(new URL(fourth.start.redirectTo));
+    const declined = await callback(
+      method,
+      context,
+      declinedRequest,
+      fourth.start.transaction,
+      run
+    );
     if ((declined as { kind?: unknown }).kind !== 'declined') {
       run.fail(`the declined callback answered ${describeOutcome(declined)}, not declined`);
     }
@@ -272,62 +284,91 @@ async function runChecks(
 }
 
 /**
- * The callback must be bound to its transaction by a value of the
- * authorization request it carries back (`state`), and check that binding
- * before it calls the provider.
+ * The callback must be bound to its transaction by a value of its own start
+ * that it carries back (`state`): a value one start sent to the provider and
+ * the other did not, in the redirect or in a body the method posted (a pushed
+ * authorization request). At least one such value must bind, with at least
+ * 128 bits of randomness: without it, with it empty or repeated, the callback
+ * never gives a result and never calls the provider. With another start's
+ * transaction it never does either.
  */
 async function bindingChecks(
   method: AuthMethod,
   context: AuthMethodContext,
   run: KitRun,
-  starts: { first: UpstreamStart; second: UpstreamStart; signIn: AuthMethodKitRequest }
+  starts: { first: KitStart; second: KitStart; signIn: AuthMethodKitRequest }
 ): Promise<void> {
   const { first, second, signIn } = starts;
-  const authorizationValues = new Set(new URL(second.redirectTo).searchParams.values());
-  const echoed = [
-    ...echoedNames(signIn.query, authorizationValues).map((name) => ['query', name] as const),
-    ...echoedNames(signIn.form, authorizationValues).map((name) => ['form', name] as const),
+  const firstValues = new Set(first.values);
+  const perStart = new Set(second.values.filter((value) => !firstValues.has(value)));
+  const candidates = [
+    ...echoedNames(signIn.query, perStart).map((name) => ['query', name] as const),
+    ...echoedNames(signIn.form, perStart).map((name) => ['form', name] as const),
   ];
-  if (echoed.length === 0) {
+  if (candidates.length === 0) {
     run.fail(
-      'the callback carries no value of the authorization request (such as state): nothing binds it to its transaction'
+      'the callback carries no value of its own start (such as state) back: nothing binds it to its transaction'
     );
   }
 
-  const refused = async (label: string, request: AuthMethodKitRequest, transaction: unknown) => {
+  /** Why the callback did not refuse `request`, or `undefined` when it did. */
+  const notRefused = async (label: string, request: AuthMethodKitRequest, transaction: unknown) => {
     const before = run.egressCalls;
     const outcome = await callback(method, context, request, transaction, run);
     if ((outcome as { kind?: unknown }).kind === 'result') {
-      run.fail(`the callback gave a result ${label}: it must check state against its transaction`);
-    } else if (run.egressCalls > before) {
-      run.fail(
-        `the callback called the provider ${label}: it must check state before it spends the code`
-      );
+      return `the callback gave a result ${label}: it must check state against its transaction`;
     }
+    if (run.egressCalls > before) {
+      return `the callback called the provider ${label}: it must check state before it spends the code`;
+    }
+    return undefined;
   };
 
-  await refused("with another start's transaction", signIn, first.transaction);
-  for (const [part, name] of echoed) {
-    const changed = (value: string | readonly string[] | undefined) => {
+  const mixed = await notRefused(
+    "with another start's transaction",
+    signIn,
+    first.start.transaction
+  );
+  if (mixed !== undefined) run.fail(mixed);
+
+  const unbound: string[] = [];
+  let bound = false;
+  for (const [part, name] of candidates) {
+    const value = String(signIn[part]?.[name]);
+    const changed = (replacement: string | readonly string[] | undefined) => {
       const parameters: Record<string, string | readonly string[]> = { ...(signIn[part] ?? {}) };
-      if (value === undefined) delete parameters[name];
-      else parameters[name] = value;
+      if (replacement === undefined) delete parameters[name];
+      else parameters[name] = replacement;
       return { ...signIn, [part]: parameters };
     };
-    const original = String(signIn[part]?.[name]);
-    await refused(`without ${name}`, changed(undefined), second.transaction);
-    await refused(`with ${name} empty`, changed(''), second.transaction);
-    await refused(`with ${name} repeated`, changed([original, original]), second.transaction);
+    const failures = [
+      await notRefused(`without ${name}`, changed(undefined), second.start.transaction),
+      await notRefused(`with ${name} empty`, changed(''), second.start.transaction),
+      await notRefused(`with ${name} repeated`, changed([value, value]), second.start.transaction),
+    ].filter((failure): failure is string => failure !== undefined);
+    if (failures.length > 0) {
+      unbound.push(...failures);
+      continue;
+    }
+    bound = true;
+    if (value.length < 22) {
+      run.fail(
+        `${name} binds the callback but is shorter than 22 characters: it must carry at least 128 bits of randomness (22 base64url characters)`
+      );
+    }
   }
+  if (!bound) for (const failure of unbound) run.fail(failure);
 }
 
 /** `verify()` rejects anything that is not a fresh result of its own callback. */
 async function verifyChecks(method: AuthMethod, result: unknown, run: KitRun): Promise<void> {
   const accepts = (input: unknown) =>
-    method.verify(input).then(
-      () => true,
-      () => false
-    );
+    Promise.resolve()
+      .then(() => method.verify(input))
+      .then(
+        () => true,
+        () => false
+      );
   for (const junk of JUNK_RESULTS) {
     if (await accepts(junk)) {
       run.fail(
@@ -348,17 +389,32 @@ async function verifyChecks(method: AuthMethod, result: unknown, run: KitRun): P
   }
 }
 
-/** The parameter names of `parameters` whose value appears in the authorization request. */
+/** The parameter names of `parameters` whose value is one of `values`. */
 function echoedNames(
   parameters: AuthMethodParameters | undefined,
-  authorizationValues: ReadonlySet<string>
+  values: ReadonlySet<string>
 ): string[] {
   if (parameters === undefined) return [];
   return Object.entries(parameters)
-    .filter(
-      ([, value]) => typeof value === 'string' && value !== '' && authorizationValues.has(value)
-    )
+    .filter(([, value]) => typeof value === 'string' && value !== '' && values.has(value))
     .map(([name]) => name);
+}
+
+/** A start, and every value it sent the provider: the redirect's query and posted bodies. */
+interface KitStart {
+  readonly start: UpstreamStart;
+  readonly values: readonly string[];
+}
+
+/** The values of a body the method posted: a form, or the strings of a JSON document. */
+function bodyValues(body: string): string[] {
+  const values = [...new URLSearchParams(body).values()];
+  try {
+    values.push(...stringLeaves(JSON.parse(body) as unknown, 0));
+  } catch {
+    // Not JSON: the form reading above is all there is.
+  }
+  return values;
 }
 
 /** A structural copy of `value`, or `undefined` when it cannot be copied. */
@@ -378,10 +434,21 @@ async function started(
   method: AuthMethod,
   context: AuthMethodContext,
   run: KitRun
-): Promise<UpstreamStart> {
-  return startUpstreamStep(method, context, { uiLocales: ['en'] }).catch((error: unknown) =>
-    run.stop(`start() failed: ${describe(error)}`)
+): Promise<KitStart> {
+  const before = run.egressBodies.length;
+  const start = await startUpstreamStep(method, context, { uiLocales: ['en'] }).catch(
+    (error: unknown) => run.stop(`start() failed: ${describe(error)}`)
   );
+  const values = [
+    ...new URL(start.redirectTo).searchParams.values(),
+    ...run.egressBodies.slice(before).flatMap(bodyValues),
+  ];
+  return { start, values };
+}
+
+/** `work()`, with a synchronous throw read as a rejection, as the host's `await` reads it. */
+function settled<T>(work: () => Promise<T>): Promise<T> {
+  return Promise.resolve().then(work);
 }
 
 /** Run one request through the method's routes as the host would, following a bounce once. */
@@ -401,9 +468,11 @@ async function callback(
   let query = request.query ?? {};
   let form = request.form ?? {};
   if (route.kind === 'bounce') {
-    const bounce: unknown = await route
-      .handle({ method: route.method, query, form }, context)
-      .catch((error: unknown) => run.stop(`the bounce route threw: ${describe(error)}`));
+    const bounceRoute = route;
+    // A bounce is handed no context, as the host hands it none.
+    const bounce: unknown = await settled(() =>
+      bounceRoute.handle({ method: bounceRoute.method, query, form })
+    ).catch((error: unknown) => run.stop(`the bounce route threw: ${describe(error)}`));
     const { to, query: carried } = (
       typeof bounce === 'object' && bounce !== null ? bounce : {}
     ) as { to?: unknown; query?: unknown };
@@ -430,9 +499,10 @@ async function callback(
   if (route.kind !== 'callback') {
     return run.stop(`${route.method} ${route.path} is not a callback route`);
   }
-  return route
-    .handle({ method: route.method, query, form, transaction }, context)
-    .catch((error: unknown) => run.stop(`the callback route threw: ${describe(error)}`));
+  const callbackRoute = route;
+  return settled(() =>
+    callbackRoute.handle({ method: callbackRoute.method, query, form, transaction }, context)
+  ).catch((error: unknown) => run.stop(`the callback route threw: ${describe(error)}`));
 }
 
 function findRoute(
@@ -460,6 +530,13 @@ function kitContext(
       egress: {
         async request(request) {
           run.egressCalls += 1;
+          if (request.body !== undefined) {
+            run.egressBodies.push(
+              typeof request.body === 'string'
+                ? request.body
+                : Buffer.from(request.body).toString('utf8')
+            );
+          }
           if (!/^[a-z][a-z0-9_.:-]{0,63}$/.test(request.purpose)) {
             throw new Error('egress refused: purpose must be a fixed label');
           }
@@ -500,29 +577,34 @@ function configSecrets(method: AuthMethod, config: unknown, run: KitRun): readon
   if ((schema as { type?: unknown }).type !== 'object') {
     run.fail('configSchema must be an object schema');
   }
-  return writeOnlyValues(schema, config, 0);
+  return writeOnlyValues(schema, schema, config, 0);
 }
 
 /**
- * The string values of `config` at the members its schema marks `writeOnly`,
- * through `properties`, `additionalProperties`, `items` and the members of
- * `anyOf`, `oneOf` and `allOf`.
+ * The string values of `config` under the members its schema marks
+ * `writeOnly`: every string leaf of such a member, whatever its shape. The
+ * walk follows `properties`, `additionalProperties`, `items`, the members of
+ * `anyOf`, `oneOf` and `allOf`, and local `$ref`s into `$defs`.
  */
-function writeOnlyValues(schema: unknown, config: unknown, depth: number): string[] {
-  if (typeof schema !== 'object' || schema === null || depth > 16) return [];
+function writeOnlyValues(root: unknown, schema: unknown, config: unknown, depth: number): string[] {
+  if (typeof schema !== 'object' || schema === null || depth > 32) return [];
   const node = schema as Record<string, unknown>;
+  const reference = node['$ref'];
+  if (typeof reference === 'string') {
+    return writeOnlyValues(root, resolveLocalRef(root, reference), config, depth + 1);
+  }
   if (node['writeOnly'] === true) {
-    return typeof config === 'string' && config.length >= 4 ? [config] : [];
+    return stringLeaves(config, 0).filter((value) => value.length >= 4);
   }
   const found: string[] = [];
   for (const keyword of ['anyOf', 'oneOf', 'allOf']) {
     const members = node[keyword];
     if (Array.isArray(members)) {
-      for (const member of members) found.push(...writeOnlyValues(member, config, depth + 1));
+      for (const member of members) found.push(...writeOnlyValues(root, member, config, depth + 1));
     }
   }
   if (Array.isArray(config)) {
-    found.push(...config.flatMap((item) => writeOnlyValues(node['items'], item, depth + 1)));
+    found.push(...config.flatMap((item) => writeOnlyValues(root, node['items'], item, depth + 1)));
     return found;
   }
   if (typeof config !== 'object' || config === null) return found;
@@ -531,9 +613,55 @@ function writeOnlyValues(schema: unknown, config: unknown, depth: number): strin
   ) as Record<string, unknown>;
   for (const [key, value] of Object.entries(config)) {
     const child = Object.hasOwn(properties, key) ? properties[key] : node['additionalProperties'];
-    found.push(...writeOnlyValues(child, value, depth + 1));
+    found.push(...writeOnlyValues(root, child, value, depth + 1));
   }
   return found;
+}
+
+/** The schema a local `#/...` reference names, or `undefined`. */
+function resolveLocalRef(root: unknown, reference: string): unknown {
+  if (!reference.startsWith('#/')) return undefined;
+  let node: unknown = root;
+  for (const segment of reference.slice(2).split('/')) {
+    if (typeof node !== 'object' || node === null) return undefined;
+    node = (node as Record<string, unknown>)[segment.replace(/~1/g, '/').replace(/~0/g, '~')];
+  }
+  return node;
+}
+
+/** Every string inside `value`, at any depth. */
+function stringLeaves(value: unknown, depth: number): string[] {
+  if (typeof value === 'string') return [value];
+  if (typeof value !== 'object' || value === null || depth > 32) return [];
+  return Object.values(value).flatMap((item) => stringLeaves(item, depth + 1));
+}
+
+/** Every string of the config, for the forms a secret takes beside another value. */
+function configStrings(config: unknown): string[] {
+  return stringLeaves(config, 0);
+}
+
+/**
+ * The forms a secret can take in a log line: itself, base64 and base64url,
+ * percent-encoded, and the HTTP Basic credentials it makes with any other
+ * string of the config (`client_secret_basic`, RFC 6749 §2.3.1).
+ */
+function secretForms(secrets: readonly string[], strings: readonly string[]): string[] {
+  const base64 = (text: string) => Buffer.from(text, 'utf8').toString('base64');
+  const base64url = (text: string) => Buffer.from(text, 'utf8').toString('base64url');
+  const forms = new Set<string>();
+  for (const secret of secrets) {
+    forms.add(secret);
+    forms.add(base64(secret));
+    forms.add(base64url(secret));
+    forms.add(encodeURIComponent(secret));
+    for (const other of strings) {
+      if (other === secret) continue;
+      forms.add(base64(`${other}:${secret}`));
+      forms.add(base64(`${encodeURIComponent(other)}:${encodeURIComponent(secret)}`));
+    }
+  }
+  return [...forms].filter((form) => form.length >= 4);
 }
 
 function kitLogger(lines: string[]) {
@@ -543,18 +671,26 @@ function kitLogger(lines: string[]) {
   return { debug: write, info: write, warn: write, error: write };
 }
 
-/** JSON of a log line's fields, with each Error's message, stack and cause written out. */
+/**
+ * JSON of a log line's fields. An Error is written out with its own fields
+ * (as the server's error serializer copies them), its message, stack and
+ * cause, and an AggregateError's errors.
+ */
 function serialised(value: unknown): string {
   const seen = new WeakSet<object>();
   try {
     return (
       JSON.stringify(value, (_key, member: unknown) => {
         if (member instanceof Error) {
+          if (seen.has(member)) return '[cycle]';
+          seen.add(member);
           return {
+            ...member,
             name: member.name,
             message: member.message,
             stack: member.stack,
             cause: member.cause,
+            ...(member instanceof AggregateError ? { errors: member.errors } : {}),
           };
         }
         if (typeof member === 'object' && member !== null) {

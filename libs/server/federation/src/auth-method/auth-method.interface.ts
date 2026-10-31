@@ -276,8 +276,8 @@ export interface UpstreamStart<TTransaction = unknown> {
   readonly redirectTo: string;
   /**
    * What the method needs back at its callback: `state`, `nonce`, a PKCE
-   * verifier. JSON data (objects, arrays, strings, finite numbers, booleans,
-   * `null`), at most 4096 bytes as JSON. The engine keeps it server-side and
+   * verifier. An object of JSON data (objects, arrays, strings, finite
+   * numbers, booleans, `null`), at most 4096 bytes as JSON. The engine keeps it server-side and
    * hands it, once, to the callback the same browser reaches.
    */
   readonly transaction: TTransaction;
@@ -290,7 +290,7 @@ export interface UpstreamStart<TTransaction = unknown> {
  */
 export type AuthMethodRoute<TConfig = unknown, TTransaction = unknown> =
   | AuthMethodCallbackRoute<TConfig, TTransaction>
-  | AuthMethodBounceRoute<TConfig>;
+  | AuthMethodBounceRoute;
 
 /**
  * Members every route has.
@@ -328,16 +328,17 @@ export interface AuthMethodCallbackRoute<
  * A route that only sends the browser on to one of the method's own `GET`
  * routes, on the same origin: a provider's `form_post` arrives cross-site,
  * without the `SameSite=Lax` flow cookie, and the bounce makes the browser
- * bring it. It is handed no transaction.
+ * bring it. It is handed no transaction and no context.
  *
  * @experimental
  */
-export interface AuthMethodBounceRoute<TConfig = unknown> extends AuthMethodRouteBase {
+export interface AuthMethodBounceRoute extends AuthMethodRouteBase {
   readonly kind: 'bounce';
-  handle(
-    request: AuthMethodRouteRequest,
-    context: AuthMethodContext<TConfig>
-  ): Promise<AuthMethodBounce>;
+  /**
+   * Name where the browser goes. No context: anyone can send a cross-site
+   * POST here, so a bounce holds no egress client, no signer and no config.
+   */
+  handle(request: AuthMethodRouteRequest): Promise<AuthMethodBounce>;
 }
 
 /**

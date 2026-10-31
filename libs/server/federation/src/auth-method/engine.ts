@@ -105,18 +105,28 @@ export async function startUpstreamStep<TConfig, TTransaction>(
   if (redirectProblem !== undefined) {
     throw new AuthMethodFaultError(method.type, `start() answered ${redirectProblem}`);
   }
-  const stored = storableTransaction(transaction);
+  // An object: the host tells "no transaction" apart by its absence, so a
+  // transaction that is null, a string or a list could read as none.
+  const stored =
+    typeof transaction === 'object' && transaction !== null && !Array.isArray(transaction)
+      ? storableTransaction(transaction)
+      : undefined;
   if (stored === undefined) {
     throw new AuthMethodFaultError(
       method.type,
-      `start() answered a transaction that is not JSON data of at most ${MAX_UPSTREAM_TRANSACTION_BYTES} bytes`
+      `start() answered a transaction that is not an object of JSON data of at most ${MAX_UPSTREAM_TRANSACTION_BYTES} bytes`
     );
   }
-  return Object.freeze({
-    // The URL as parsed, so what the engine sends is what it checked.
-    redirectTo: new URL(redirectTo as string).href,
-    transaction: stored as TTransaction,
-  });
+  // The URL as parsed, so what the engine sends is what it checked; parsing
+  // percent-encodes, so the cap is checked again.
+  const href = new URL(redirectTo as string).href;
+  if (href.length > MAX_UPSTREAM_REDIRECT_LENGTH) {
+    throw new AuthMethodFaultError(
+      method.type,
+      `start() answered a redirect longer than ${MAX_UPSTREAM_REDIRECT_LENGTH} characters`
+    );
+  }
+  return Object.freeze({ redirectTo: href, transaction: stored as TTransaction });
 }
 
 /**

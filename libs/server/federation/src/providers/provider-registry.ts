@@ -4,10 +4,9 @@ import {
 } from '@qauth-labs/shared-errors';
 
 import type { AuthMethod } from '../auth-method/auth-method.interface';
-import { AuthMethodContractError } from '../auth-method/errors';
 import {
   assertAuthMethod,
-  authMethodTypeProblems,
+  authMethodSnapshot,
   declaresAuthMethodContract,
 } from '../auth-method/validate';
 import type { CredentialProvider } from './credential-provider.interface';
@@ -26,7 +25,9 @@ import type { CredentialProvider } from './credential-provider.interface';
 export interface ProviderRegistry {
   /**
    * Register a provider under its `provider.type`. A provider that carries a
-   * `contract` member is an AuthMethod and must meet the whole contract.
+   * `contract` member is an AuthMethod and must meet the whole contract; the
+   * registry keeps a frozen snapshot of it, which `resolve` and
+   * `resolveAuthMethod` answer.
    *
    * @throws {AuthMethodContractError} when an AuthMethod does not meet the
    * contract (a wrong contract version, a route outside its prefix, …)
@@ -87,23 +88,23 @@ export function createProviderRegistry(
 
   const registry: ProviderRegistry = {
     register(provider: CredentialProvider): void {
-      // The contract first, so a broken method reports its own problems
-      // rather than a clash its broken `type` may cause.
-      const method = declaresAuthMethodContract(provider) ? provider : undefined;
-      // Read once: the type checked is the type the entry is stored under.
-      const type = provider.type;
-      if (method !== undefined) {
-        assertAuthMethod(method);
-        const typeProblems = authMethodTypeProblems(type);
-        if (typeProblems.length > 0) {
-          throw new AuthMethodContractError(`The AuthMethod ${String(type)}`, typeProblems);
-        }
+      // An AuthMethod is kept as a frozen snapshot, validated as it is kept:
+      // the type checked is the type stored, and nothing it holds changes
+      // later. The contract first, so a broken method reports its own
+      // problems rather than a clash its broken `type` may cause.
+      let method: AuthMethod | undefined;
+      if (declaresAuthMethodContract(provider)) {
+        const snapshot = authMethodSnapshot(provider);
+        assertAuthMethod(snapshot);
+        method = snapshot;
       }
+      const entry: CredentialProvider = method ?? provider;
+      const type = entry.type;
       if (providers.has(type)) {
         throw new ProviderAlreadyRegisteredError(type);
       }
-      providers.set(type, provider);
-      if (method !== undefined) methods.set(type, method as AuthMethod);
+      providers.set(type, entry);
+      if (method !== undefined) methods.set(type, method);
     },
     resolve(type: string): CredentialProvider {
       const provider = providers.get(type);

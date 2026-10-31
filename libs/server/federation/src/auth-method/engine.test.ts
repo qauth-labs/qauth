@@ -82,6 +82,9 @@ describe('startUpstreamStep', () => {
     ['a class instance', { map: new Map() }],
     ['NaN', { n: Number.NaN }],
     ['undefined', undefined],
+    ['null', null],
+    ['a string', 'state-value'],
+    ['a list', ['state-value']],
     ['a symbol key', { [Symbol('k')]: 1 }],
     ['a nesting deeper than 16', JSON.parse('['.repeat(20) + ']'.repeat(20))],
     ['more than the cap', { state: 'x'.repeat(MAX_UPSTREAM_TRANSACTION_BYTES) }],
@@ -91,6 +94,18 @@ describe('startUpstreamStep', () => {
     });
     await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
       AuthMethodFaultError
+    );
+  });
+
+  it('checks the cap again on the redirect as parsed, which percent-encodes', async () => {
+    const method = withMembers({
+      start: async () => ({
+        redirectTo: `https://provider.example/?q=${'é'.repeat(4000)}`,
+        transaction: {},
+      }),
+    });
+    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
+      'start() answered a redirect longer than 8192 characters'
     );
   });
 

@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 /**
  * The contract test kit's guard on `fetch` (#599): while the kit runs a
  * method, the global `fetch` refuses and counts every call, so a method that
@@ -19,12 +21,16 @@
  * @experimental
  */
 export interface FetchGuard {
-  /** How many times `fetch` was called while this guard was up. */
+  /** Run `work` as this guard's run: the `fetch` calls it makes count here. */
+  run<T>(work: () => Promise<T>): Promise<T>;
+  /** How many times `fetch` was called by this guard's run. */
   calls(): number;
   /** Lower this guard. The original `fetch` comes back with the last guard. */
   restore(): void;
 }
 
+/** The run a `fetch` call belongs to, across its awaits. */
+const runs = new AsyncLocalStorage<{ count: number }>();
 /** The guards up now, and the `fetch` the first one replaced. */
 let active = 0;
 let saved: { readonly fetch: typeof fetch } | undefined;
@@ -32,8 +38,10 @@ const counters = new Set<{ count: number }>();
 
 /**
  * Replace the global `fetch` with one that refuses and counts every call.
- * Guards nest: two overlapping runs each count the calls made while they are
- * up, and the original `fetch` comes back only when the last one is lowered.
+ * Guards nest, and overlapping runs each count only their own calls: a call
+ * is counted against the run it was made in, or, when it belongs to none,
+ * against every run that is up. The original `fetch` comes back when the
+ * last guard is lowered.
  *
  * @experimental
  */
@@ -41,7 +49,9 @@ export function disableFetch(): FetchGuard {
   if (active === 0) {
     saved = { fetch: globalThis.fetch };
     globalThis.fetch = (() => {
-      for (const counter of counters) counter.count += 1;
+      const current = runs.getStore();
+      if (current !== undefined) current.count += 1;
+      else for (const counter of counters) counter.count += 1;
       return Promise.reject(new Error('fetch is disabled: send through context.egress'));
     }) as typeof fetch;
   }
@@ -50,6 +60,7 @@ export function disableFetch(): FetchGuard {
   counters.add(counter);
   let lowered = false;
   return {
+    run: (work) => runs.run(counter, work),
     calls: () => counter.count,
     restore: () => {
       if (lowered) return;

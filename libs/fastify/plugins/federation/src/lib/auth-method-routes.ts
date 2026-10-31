@@ -6,6 +6,7 @@ import {
   type AuthMethodParameters,
   type AuthMethodRoute,
   authMethodRoutePrefix,
+  authMethodTypeProblems,
   routeProblems,
 } from '@qauth-labs/server-federation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -47,8 +48,9 @@ export interface AuthMethodRouteHost {
   contextFor(method: AuthMethod, request: FastifyRequest): Promise<AuthMethodContext>;
   /**
    * Take the pending transaction of `method` that the request's flow cookie
-   * names, once: a second call for the same transaction answers `undefined`.
-   * `undefined` too when there is no flow cookie or no such transaction.
+   * names, once: a second call for the same transaction answers `undefined`
+   * (or `null`). `undefined` or `null` too when there is no flow cookie or no
+   * such transaction. Anything but an object reads as no transaction.
    */
   takeTransaction(method: AuthMethod, request: FastifyRequest): Promise<unknown>;
   /**
@@ -104,7 +106,7 @@ export function mountAuthMethodRoutes(
   // request: a method that changes its members later changes nothing here.
   const type = method.type;
   const routes = Object.freeze([...method.routes]);
-  const problems = routeProblems(routes);
+  const problems = [...authMethodTypeProblems(type), ...routeProblems(routes)];
   if (problems.length > 0) {
     throw new AuthMethodContractError(`The AuthMethod ${type}`, problems);
   }
@@ -170,7 +172,9 @@ async function handle(
   };
 
   if (route.kind === 'bounce') {
-    const bounce: unknown = await route.handle(seen, await host.contextFor(method, request));
+    // A bounce is handed no context: a cross-site POST that anyone can send
+    // reaches it, so it holds no egress client and no signer.
+    const bounce: unknown = await route.handle(seen);
     reply.header('cache-control', 'no-store');
     return reply.redirect(bounceLocation(mounted, bounce), 303);
   }
@@ -179,7 +183,9 @@ async function handle(
   // a forged callback, one forwarded to another browser, a replay. The method
   // never runs for it, so it never spends the code or calls the provider.
   const transaction = await host.takeTransaction(method, request);
-  if (transaction === undefined) {
+  // `null` too: a cache's "no such key" (takeValue answers null). A stored
+  // transaction is always an object (`startUpstreamStep` refuses anything else).
+  if (typeof transaction !== 'object' || transaction === null) {
     return host.complete(
       method,
       { kind: 'failed', reason: 'transaction_mismatch' },

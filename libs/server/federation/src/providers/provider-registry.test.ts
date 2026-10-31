@@ -155,9 +155,24 @@ describe('AuthMethod entries (#599)', () => {
     const registry = createProviderRegistry([password, method]);
 
     expect(registry.resolve(PASSWORD_PROVIDER_TYPE)).toBe(password);
-    expect(registry.resolve('oidc_sample')).toBe(method);
-    expect(registry.resolveAuthMethod('oidc_sample')).toBe(method);
-    expect(registry.authMethods()).toEqual([method]);
+    // The registry keeps a frozen snapshot of the method, the same one by
+    // every lookup, with the method's members.
+    const kept = registry.resolveAuthMethod('oidc_sample');
+    expect(registry.resolve('oidc_sample')).toBe(kept);
+    expect(registry.authMethods()).toEqual([kept]);
+    expect(Object.isFrozen(kept)).toBe(true);
+    expect(Object.isFrozen(kept.routes)).toBe(true);
+    expect(kept).toMatchObject({
+      contract: method.contract,
+      type: 'oidc_sample',
+      id: method.id,
+      display: method.display,
+      configSchema: method.configSchema,
+      steps: method.steps,
+    });
+    expect(kept.routes.map(({ kind, method: verb, path }) => ({ kind, verb, path }))).toEqual(
+      method.routes.map(({ kind, method: verb, path }) => ({ kind, verb, path }))
+    );
     expect(registry.has('oidc_sample')).toBe(true);
     // The password path is unchanged: still a plain provider, never an AuthMethod.
     expect(() => registry.resolveAuthMethod(PASSWORD_PROVIDER_TYPE)).toThrow(
@@ -229,24 +244,35 @@ describe('AuthMethod entries (#599)', () => {
   it('finds a method by a type from a request without throwing for an unknown one', () => {
     const method = createSampleAuthMethod({ type: 'oidc_sample' });
     const registry = createProviderRegistry([createPasswordProvider(), method]);
-    expect(registry.findAuthMethod('oidc_sample')).toBe(method);
+    expect(registry.findAuthMethod('oidc_sample')).toBe(registry.resolveAuthMethod('oidc_sample'));
+    expect(method.type).toBe('oidc_sample');
     expect(registry.findAuthMethod(PASSWORD_PROVIDER_TYPE)).toBeUndefined();
     expect(registry.findAuthMethod('oidc_unknown')).toBeUndefined();
   });
 
-  it('stores a method under the type it checked, even when its type getter shifts', () => {
-    for (const reads of [
-      ['wallet', 'oidc_x'],
-      ['oidc_x', 'wallet'],
-    ]) {
+  it('reads a shifting type getter once, and keeps the type it checked for good', () => {
+    const shifting = (reads: readonly string[]) => {
       let read = 0;
-      const shifting = Object.defineProperty({ ...createSampleAuthMethod() }, 'type', {
+      return Object.defineProperty({ ...createSampleAuthMethod() }, 'type', {
         get: () => reads[Math.min(read++, reads.length - 1)],
       });
-      const registry = createProviderRegistry([createPasswordProvider()]);
-      expect(() => registry.register(shifting)).toThrow(AuthMethodContractError);
-      expect(registry.has(WALLET_PROVIDER_TYPE)).toBe(false);
-    }
+    };
+    // Read as wallet: refused.
+    const refusing = createProviderRegistry([createPasswordProvider()]);
+    expect(() => refusing.register(shifting(['wallet', 'oidc_x']))).toThrow(
+      AuthMethodContractError
+    );
+    expect(refusing.has(WALLET_PROVIDER_TYPE)).toBe(false);
+    // Read as oidc_x: kept as oidc_x, whatever the getter answers later.
+    const registry = createProviderRegistry([createPasswordProvider()]);
+    registry.register(shifting(['oidc_x', 'wallet']));
+    const kept = registry.resolveAuthMethod('oidc_x');
+    expect([kept.type, kept.type, registry.authMethods()[0].type]).toEqual([
+      'oidc_x',
+      'oidc_x',
+      'oidc_x',
+    ]);
+    expect(registry.has(WALLET_PROVIDER_TYPE)).toBe(false);
   });
 
   it('keeps WalletProvider a plain provider whose verify() still rejects', async () => {

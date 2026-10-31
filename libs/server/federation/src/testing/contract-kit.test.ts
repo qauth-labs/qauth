@@ -1,3 +1,5 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -240,6 +242,7 @@ describe('checkAuthMethod, the contract test kit', () => {
       expect(await kitProblems(fixed)).toMatchInlineSnapshot(`
         [
           "two starts answered the same transaction: its state must be fresh for each start",
+          "the callback carries no value of its own start (such as state) back: nothing binds it to its transaction",
           "the callback gave a result with another start's transaction: it must check state against its transaction",
         ]
       `);
@@ -270,7 +273,7 @@ describe('checkAuthMethod, the contract test kit', () => {
         })
       ).toMatchInlineSnapshot(`
         [
-          "the callback carries no value of the authorization request (such as state): nothing binds it to its transaction",
+          "the callback carries no value of its own start (such as state) back: nothing binds it to its transaction",
           "the callback gave a result with another start's transaction: it must check state against its transaction",
         ]
       `);
@@ -440,6 +443,207 @@ describe('checkAuthMethod, the contract test kit', () => {
           "start() failed: AuthMethod oidc_sample: start() answered a redirect that is not https",
         ]
       `);
+    });
+  });
+
+  describe('passes for a correct method', () => {
+    it('whose provider echoes scope and prompt back beside state', async () => {
+      const method = createSampleAuthMethod();
+      const echoing = {
+        ...method,
+        start: async (context: Parameters<typeof method.start>[0]) => {
+          const start = await method.start(context, { uiLocales: [] });
+          const url = new URL(start.redirectTo);
+          url.searchParams.set('scope', 'openid email');
+          url.searchParams.set('prompt', 'login');
+          return { redirectTo: url.href, transaction: start.transaction };
+        },
+      };
+      const scenario = sampleScenario();
+      await expect(
+        checkAuthMethod(echoing, {
+          ...scenario,
+          callback: (authorizationRequest) => ({
+            path: '/callback',
+            method: 'GET',
+            query: {
+              code: `code-for-${SAMPLE_SUBJECT}`,
+              state: authorizationRequest.searchParams.get('state') ?? '',
+              scope: 'openid email',
+              prompt: 'login',
+            },
+          }),
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it('that pushes its authorization request, so state travels in a posted body', async () => {
+      const method = createSampleAuthMethod();
+      const pushedState = new Map<string, string>();
+      const pushing = {
+        ...method,
+        start: async (context: Parameters<typeof method.start>[0]) => {
+          const state = randomBytes(16).toString('base64url');
+          const answer = await context.egress.request({
+            method: 'POST',
+            url: 'https://provider.example/par',
+            body: new URLSearchParams({
+              client_id: context.config.clientId,
+              state,
+              redirect_uri: context.routeUrl('/callback'),
+            }).toString(),
+            purpose: 'upstream-par',
+            source: 'admin',
+          });
+          const { request_uri: requestUri } = JSON.parse(Buffer.from(answer.body).toString()) as {
+            request_uri: string;
+          };
+          const url = new URL(context.config.authorizationEndpoint);
+          url.searchParams.set('client_id', context.config.clientId);
+          url.searchParams.set('request_uri', requestUri);
+          return { redirectTo: url.href, transaction: { state } };
+        },
+      };
+      const scenario = sampleScenario();
+      await expect(
+        checkAuthMethod(pushing, {
+          ...scenario,
+          egress: (request) => {
+            if (request.url !== 'https://provider.example/par')
+              return sampleProviderEgress(request);
+            const requestUri = `urn:ietf:params:oauth:request_uri:${randomUUID()}`;
+            pushedState.set(
+              requestUri,
+              new URLSearchParams(String(request.body)).get('state') ?? ''
+            );
+            return {
+              status: 201,
+              headers: {},
+              body: Buffer.from(JSON.stringify({ request_uri: requestUri })),
+              url: request.url,
+            };
+          },
+          callback: (authorizationRequest) => ({
+            path: '/callback',
+            method: 'GET',
+            query: {
+              code: `code-for-${SAMPLE_SUBJECT}`,
+              state:
+                pushedState.get(authorizationRequest.searchParams.get('request_uri') ?? '') ?? '',
+            },
+          }),
+          declined: undefined,
+        })
+      ).resolves.toBeDefined();
+    });
+
+    it('whose verify() throws, rather than rejects, on what it refuses', async () => {
+      const method = createSampleAuthMethod();
+      const throwing = {
+        ...method,
+        verify: (input: unknown) => {
+          if (typeof input !== 'object' || input === null) throw new Error('not a result');
+          return method.verify(input);
+        },
+      };
+      await expect(checkAuthMethod(throwing, sampleScenario())).resolves.toBeDefined();
+    });
+
+    it('run beside a broken one: each run counts only its own fetch calls', async () => {
+      const fetching = withCallback((original) => async (request, context) => {
+        await fetch('https://provider.example/token').catch(() => undefined);
+        return original(request, context);
+      });
+      const [correct, broken] = await Promise.all([
+        kitProblems(createSampleAuthMethod()),
+        kitProblems(fetching),
+      ]);
+      expect(correct).toEqual([]);
+      expect(broken).toEqual([
+        'the method called fetch: its outbound calls go through context.egress',
+      ]);
+    });
+  });
+
+  describe('fails for a method that leaks or guesses', () => {
+    it('one whose state is a short counter', async () => {
+      const method = createSampleAuthMethod();
+      let count = 0;
+      const counting = {
+        ...method,
+        start: async (context: Parameters<typeof method.start>[0]) => {
+          const start = await method.start(context, { uiLocales: [] });
+          count += 1;
+          const state = String(count);
+          const url = new URL(start.redirectTo);
+          url.searchParams.set('state', state);
+          return { redirectTo: url.href, transaction: { state } };
+        },
+      };
+      expect(await kitProblems(counting)).toMatchInlineSnapshot(`
+        [
+          "state binds the callback but is shorter than 22 characters: it must carry at least 128 bits of randomness (22 base64url characters)",
+        ]
+      `);
+    });
+
+    it.each([
+      [
+        'in an own field of an error',
+        (secret: string) => ({
+          err: Object.assign(new Error('token call failed'), {
+            requestBody: `client_secret=${secret}`,
+          }),
+        }),
+      ],
+      [
+        'as HTTP Basic credentials',
+        (secret: string) => ({
+          authorization: `Basic ${Buffer.from(`${SAMPLE_CONFIG.clientId}:${secret}`).toString('base64')}`,
+        }),
+      ],
+    ])('one that logs a secret %s', async (_label, leak) => {
+      const method = withCallback((original) => async (request, context) => {
+        context.log.warn(leak((context.config as typeof SAMPLE_CONFIG).clientSecret), 'calling');
+        return original(request, context);
+      });
+      expect(await kitProblems(method)).toEqual([
+        'a log line carries the value of a writeOnly config member',
+      ]);
+    });
+
+    it('one that logs a secret held in a list, or behind a $ref', async () => {
+      const shared = z.string().meta({ id: 'KitRefSecret599', writeOnly: true });
+      const configSchema = z.object({
+        authorizationEndpoint: z.url(),
+        tokenEndpoint: z.url(),
+        clientId: z.string(),
+        clientSecret: z.string(),
+        previousSecrets: z.array(z.string()).meta({ writeOnly: true }),
+        signingSecret: shared,
+        backupSigningSecret: shared,
+      });
+      const config = {
+        ...SAMPLE_CONFIG,
+        previousSecrets: ['rotated-out-secret'],
+        signingSecret: 'referenced-secret',
+        backupSigningSecret: 'other-referenced-secret',
+      };
+      for (const pick of [
+        (c: typeof config) => c.previousSecrets[0],
+        (c: typeof config) => c.signingSecret,
+      ]) {
+        const leaky = withCallback((original) => async (request, context) => {
+          context.log.info({ value: pick(context.config as typeof config) }, 'calling');
+          return original(request, context);
+        });
+        expect(
+          await kitProblems({ ...leaky, configSchema } as unknown as AuthMethod, {
+            ...sampleScenario(),
+            config,
+          })
+        ).toEqual(['a log line carries the value of a writeOnly config member']);
+      }
     });
   });
 

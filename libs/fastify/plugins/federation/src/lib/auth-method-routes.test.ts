@@ -193,6 +193,30 @@ describe('AuthMethod routes', () => {
     expect(routeHost.contextFor).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['null, as a cache answers a missing key', null],
+    ['a string', 'state-value'],
+  ])('treats a taken transaction that is %s as none', async (_label, taken) => {
+    const routeHost = host();
+    routeHost.takeTransaction.mockResolvedValue(taken);
+    const booted = await boot([method()], routeHost);
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: '/upstream/oidc_corp/callback?code=attacker',
+    });
+    expect(response.json()).toEqual({ handed: { kind: 'failed', reason: 'transaction_mismatch' } });
+    expect(callbackHandle).not.toHaveBeenCalled();
+  });
+
+  it('refuses at mount a method under a reserved type, even one that skipped the registry', () => {
+    const fastify = Fastify({ logger: false });
+    for (const type of ['wallet', 'password', 'self_reported']) {
+      expect(() => mountAuthMethodRoutes(fastify, { ...method(), type }, host())).toThrow(
+        AuthMethodContractError
+      );
+    }
+  });
+
   it('hands a POST callback only a urlencoded form, never a JSON body', async () => {
     const routes: AuthMethodRoute[] = [
       { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
@@ -245,6 +269,8 @@ describe('AuthMethod routes', () => {
     expect(response.headers['cache-control']).toBe('no-store');
     expect(routeHost.takeTransaction).not.toHaveBeenCalled();
     expect(routeHost.complete).not.toHaveBeenCalled();
+    // A bounce holds no egress client and no signer: it gets no context.
+    expect(routeHost.contextFor).not.toHaveBeenCalled();
   });
 
   it.each([

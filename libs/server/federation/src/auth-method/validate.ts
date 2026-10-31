@@ -40,6 +40,60 @@ export function declaresAuthMethodContract(provider: CredentialProvider): boolea
 }
 
 /**
+ * A frozen snapshot of a method: each member read once, functions bound to
+ * the method, routes and steps copied. The registry validates and keeps the
+ * snapshot, so the `type` it checked, the routes it mounts and the members the
+ * engine reads cannot change afterwards, whatever getters the method has.
+ * Members that are not what the contract asks are copied as they are, for
+ * the validation to report.
+ *
+ * @experimental
+ */
+export function authMethodSnapshot(method: object): unknown {
+  const member = method as Record<string, unknown>;
+  const bound = (value: unknown, self: object): unknown =>
+    typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(self) : value;
+  const display = member['display'];
+  const steps = member['steps'];
+  const routes = member['routes'];
+  return Object.freeze({
+    contract: member['contract'],
+    type: member['type'],
+    id: member['id'],
+    display: typeof display === 'object' && display !== null ? displaySnapshot(display) : display,
+    configSchema: member['configSchema'],
+    steps: Array.isArray(steps) ? Object.freeze([...steps]) : steps,
+    routes: Array.isArray(routes)
+      ? Object.freeze(
+          routes.map((route: unknown) => {
+            if (typeof route !== 'object' || route === null) return route;
+            const { kind, method: verb, path, handle } = route as Record<string, unknown>;
+            return Object.freeze({ kind, method: verb, path, handle: bound(handle, route) });
+          })
+        )
+      : routes,
+    start: bound(member['start'], method),
+    verify: bound(member['verify'], method),
+    extractAttributes: bound(member['extractAttributes'], method),
+  });
+}
+
+function displaySnapshot(display: object): Readonly<Record<string, unknown>> {
+  const { name, icon } = display as Record<string, unknown>;
+  if (typeof icon !== 'object' || icon === null) {
+    return Object.freeze(icon === undefined ? { name } : { name, icon });
+  }
+  const { mediaType, bytes } = icon as Record<string, unknown>;
+  return Object.freeze({
+    name,
+    icon: Object.freeze({
+      mediaType,
+      bytes: bytes instanceof Uint8Array ? new Uint8Array(bytes) : bytes,
+    }),
+  });
+}
+
+/**
  * Whether `value` meets the static checks of the contract.
  *
  * @experimental
