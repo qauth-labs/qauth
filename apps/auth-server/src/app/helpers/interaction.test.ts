@@ -164,10 +164,9 @@ async function buildHarness(): Promise<Harness> {
     readInteractionPersonalData(request, (request.params as { id: string }).id)
   );
   app.post(`${INTERACTION_API_PREFIX}/:id/answer`, async (request, reply) => {
-    const { revision, decision, delayMs } = request.body as {
+    const { revision, decision } = request.body as {
       revision: number;
       decision: DecisionSpec;
-      delayMs?: number;
     };
     return answerInteraction(
       request,
@@ -178,7 +177,6 @@ async function buildHarness(): Promise<Harness> {
         const action = duringDecide.action;
         duringDecide.action = undefined;
         if (action !== undefined) await action();
-        if (delayMs !== undefined) await new Promise((resolve) => setTimeout(resolve, delayMs));
         if (decision.kind === 'authenticated') {
           return {
             kind: 'authenticated',
@@ -251,12 +249,8 @@ class Browser {
     return (response.json() as { id: string }).id;
   }
 
-  answer(id: string, revision: number, decision: DecisionSpec, delayMs?: number) {
-    return this.request('POST', `${INTERACTION_API_PREFIX}/${id}/answer`, {
-      revision,
-      decision,
-      delayMs,
-    });
+  answer(id: string, revision: number, decision: DecisionSpec) {
+    return this.request('POST', `${INTERACTION_API_PREFIX}/${id}/answer`, { revision, decision });
   }
 }
 
@@ -441,17 +435,28 @@ describe('answers (#592)', () => {
     const id = await owner.start();
     const decision: DecisionSpec = { kind: 'step', step: CONSENT_STEP };
 
-    const [first, second, readMeanwhile] = await Promise.all([
-      owner.answer(id, 0, decision, 20),
-      owner.answer(id, 0, decision, 20),
-      // While the engine works, the interaction still reads as live.
-      new Promise<LightMyRequestResponse>((resolve) =>
-        setTimeout(
-          () => resolve(owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`)),
-          5
-        )
-      ),
+    // The engine holds the first answer that reaches it until the test lets
+    // it go; the action runs once, so a second answer it saw would not wait.
+    let entered!: () => void;
+    const inEngine = new Promise<void>((resolve) => (entered = resolve));
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => (release = resolve));
+    harness.duringDecide.action = async () => {
+      entered();
+      await released;
+    };
+
+    const answers = Promise.all([owner.answer(id, 0, decision), owner.answer(id, 0, decision)]);
+    await Promise.race([
+      inEngine,
+      answers.then(() => {
+        throw new Error('both answers returned without the engine holding one');
+      }),
     ]);
+    // While the engine works, the interaction still reads as live.
+    const readMeanwhile = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`);
+    release();
+    const [first, second] = await answers;
 
     expect(harness.decided).toHaveLength(1);
     expect(readMeanwhile.statusCode).toBe(200);
