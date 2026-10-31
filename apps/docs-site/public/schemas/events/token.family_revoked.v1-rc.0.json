@@ -161,7 +161,7 @@
         },
         "revokedRefreshCount": {
           "type": "integer",
-          "minimum": 0,
+          "minimum": 1,
           "maximum": 1000000,
           "description": "How many refresh tokens of the family were revoked, at least 1."
         }

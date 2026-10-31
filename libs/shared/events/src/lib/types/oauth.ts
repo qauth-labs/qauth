@@ -263,7 +263,12 @@ export const tokenFamilyRevoked = defineEventType({
       '`code_replay`: an authorization code redeemed a second time. `refresh_replay`: a refresh token presented after it was rotated or revoked. The set may grow in a minor release.'
     ),
     refreshFamilyId: recordId('The refresh family that was revoked.'),
-    revokedRefreshCount: count('How many refresh tokens of the family were revoked, at least 1.'),
+    // Emitted only when the replay revoked something, so never 0.
+    revokedRefreshCount: z
+      .int()
+      .min(1)
+      .max(1_000_000)
+      .describe('How many refresh tokens of the family were revoked, at least 1.'),
   }),
   security: true,
   ssf: {
