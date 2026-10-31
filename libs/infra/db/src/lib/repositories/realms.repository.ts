@@ -27,7 +27,16 @@ import {
 } from './realm-policy-record';
 
 export type Realm = InferSelectModel<typeof realms>;
-export type NewRealm = InferInsertModel<typeof realms>;
+/**
+ * A new realm. Its policy document, schema version and counter are left out
+ * (#516): a new realm stores the repository's policy seed, and only
+ * `writePolicies` writes them afterwards, so nothing the policy store did not
+ * parse reaches `realms.policies`.
+ */
+export type NewRealm = Omit<
+  InferInsertModel<typeof realms>,
+  'policies' | 'policySchemaVersion' | 'policiesVersion'
+>;
 /**
  * Fields a realm update may change. The passkey RP ID columns are left out on
  * purpose (#467, #553): `setWebAuthnRpId` writes the RP ID, refusing it once
@@ -40,17 +49,7 @@ export type NewRealm = InferInsertModel<typeof realms>;
  * `realms_policies_version` raises the counter when such a write changes one.
  */
 export type UpdateRealm = Partial<
-  Omit<
-    NewRealm,
-    | 'id'
-    | 'createdAt'
-    | 'webauthnRpId'
-    | 'webauthnRpIdLockedAt'
-    | 'isOperator'
-    | 'policies'
-    | 'policySchemaVersion'
-    | 'policiesVersion'
-  >
+  Omit<NewRealm, 'id' | 'createdAt' | 'webauthnRpId' | 'webauthnRpIdLockedAt' | 'isOperator'>
 > & {
   updatedAt?: number;
 };
@@ -96,10 +95,10 @@ export interface RealmPolicyDocumentSeed {
  */
 export type RealmPolicySeeds = Partial<EventRetentionPolicy> & {
   /**
-   * The policy document (#516). A new realm stores it, unless its creator
-   * sets the policies itself; a column-backed field its creator sets keeps
-   * the creator's value. Without it a new realm has no policies (counter 0)
-   * until the boot step fills them.
+   * The policy document (#516), which every new realm stores; a
+   * column-backed field its creator sets keeps the creator's value. Without
+   * it a new realm has no policies (counter 0) until the boot step fills
+   * them.
    */
   readonly policies?: RealmPolicyDocumentSeed;
 };
@@ -113,6 +112,12 @@ export interface RealmPoliciesWrite {
   /** The counter the realm must still have; the write sets it one higher. */
   readonly expectedVersion: number;
 }
+
+/** The policy columns of a realm row, which only the repository's seed and `writePolicies` set. */
+type RealmPolicyColumnsOfRow = Pick<
+  InferInsertModel<typeof realms>,
+  'policies' | 'policySchemaVersion' | 'policiesVersion'
+>;
 
 /** Options of {@link createRealmsRepository}. */
 export interface RealmsRepositoryOptions {
@@ -485,21 +490,23 @@ export function createRealmsRepository(
   const policyColumnsSeed =
     policySeed === undefined ? undefined : splitRealmPolicies(policySeed.document);
 
-  /** A new realm's row: the seeds, overridden by what the creator set. */
-  function seeded<T extends NewRealm>(data: T): T {
-    const row = { ...data };
+  /**
+   * A new realm's row: the seeds, overridden by what the creator set. The
+   * policy document, its schema version and its counter come from the seed
+   * alone, whatever the creator passed.
+   */
+  function seeded<T extends NewRealm>(data: T): T & RealmPolicyColumnsOfRow {
+    const row: T & Partial<RealmPolicyColumnsOfRow> = { ...data };
+    delete row.policies;
+    delete row.policySchemaVersion;
+    delete row.policiesVersion;
     for (const [key, value] of Object.entries(retentionSeeds) as [
       keyof EventRetentionPolicy,
       number,
     ][]) {
       if (row[key] === undefined) row[key] = value;
     }
-    if (
-      policySeed !== undefined &&
-      policyColumnsSeed !== undefined &&
-      row.policies === undefined &&
-      row.policiesVersion === undefined
-    ) {
+    if (policySeed !== undefined && policyColumnsSeed !== undefined) {
       const { columns, members } = structuredClone(policyColumnsSeed);
       for (const [column, value] of Object.entries(columns) as [keyof typeof columns, never][]) {
         if (row[column] === undefined) row[column] = value;
@@ -511,7 +518,7 @@ export function createRealmsRepository(
     assertEventRetention(row);
     assertSsoLimits(row);
     assertDynamicRegistrationScopes(row);
-    return row;
+    return row as T & RealmPolicyColumnsOfRow;
   }
 
   return {

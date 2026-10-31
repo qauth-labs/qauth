@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { policyField } from './field';
 import {
   createPolicyStore,
+  PolicySchemaVersionError,
   PolicySecretStoreUnavailableError,
   PolicyVersionConflictError,
   RealmPolicyNotFoundError,
@@ -435,6 +436,30 @@ describe('createPolicyStore — update', () => {
     });
   });
 
+  it('refuses to write policies that follow another schema version, changing nothing', async () => {
+    const { store, writes } = storeOver([realmWithPolicies({ schemaVersion: '1-rc.7' })]);
+
+    await expect(
+      store.update('realm-a', { password: { minScore: 4 } }, { expectedVersion: 3 })
+    ).rejects.toBeInstanceOf(PolicySchemaVersionError);
+    expect(writes).toEqual([]);
+  });
+
+  it('refuses a stored member named __proto__, which would drop its group on the next write', async () => {
+    const document = JSON.parse(
+      JSON.stringify(SEEDS).replace('"mail":{', '"mail":{"__proto__":{"x":1},')
+    ) as Record<string, unknown>;
+    const { store, writes } = storeOver([realmWithPolicies({ document })]);
+
+    await expect(store.get('realm-a')).rejects.toMatchObject({
+      issues: [{ path: 'mail.__proto__' }],
+    });
+    await expect(store.update('realm-a', {}, { expectedVersion: 3 })).rejects.toBeInstanceOf(
+      PolicyValidationError
+    );
+    expect(writes).toEqual([]);
+  });
+
   it('writes in the transaction it is given, as a savepoint of it', async () => {
     const { secrets, puts } = memorySecrets();
     const { store, writes, transactions } = storeOver([realmWithPolicies()], secrets);
@@ -527,7 +552,7 @@ describe('createPolicyStore — secrets never reach the stored document', () => 
     expect(puts).toEqual([]);
   });
 
-  it('keeps a secret out of every write of the boot fill, whatever the seeds were given', async () => {
+  it('refuses seeds that hold a secret when the store is created, before any write', async () => {
     const memory = memoryStorage([realmWithoutPolicies()]);
     const seeds = { ...structuredClone(SEEDS), mail: { ...structuredClone(SEEDS.mail) } };
     (seeds.mail.smtp as Record<string, unknown>)['password'] = SECRET;
@@ -548,6 +573,7 @@ describe('createPolicyStore — seedRealms', () => {
     expect(report).toEqual({
       filled: [{ realmId: 'realm-old', realmName: 'master' }],
       completed: [],
+      skipped: [],
     });
     expect(rows.get('realm-old')).toMatchObject({
       version: 1,
@@ -563,7 +589,7 @@ describe('createPolicyStore — seedRealms', () => {
       seeds: defaultsFromEnv({ ACCESS_TOKEN_LIFESPAN: '60', PASSWORD_MIN_SCORE: '0' }),
     });
 
-    expect(await store.seedRealms()).toEqual({ filled: [], completed: [] });
+    expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
     expect(memory.writes).toEqual([]);
     expect(memory.rows.get('realm-a')?.document).toEqual(SEEDS);
   });
@@ -584,8 +610,44 @@ describe('createPolicyStore — seedRealms', () => {
       },
     ]);
     expect(rows.get('realm-a')).toMatchObject({ version: 4, document: SEEDS });
-    expect(await store.seedRealms()).toEqual({ filled: [], completed: [] });
+    expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
     expect(writes).toHaveLength(1);
+  });
+
+  it('drops the repeats of a list the row kept, which an earlier release copied as written', async () => {
+    const { store, rows } = storeOver([
+      realmWithoutPolicies({
+        keptOnFill: {
+          registration: { dynamicRegistrationAllowedScopes: ['openid', 'email', 'openid'] },
+        },
+      }),
+    ]);
+
+    expect((await store.seedRealms()).filled).toHaveLength(1);
+    expect(rows.get('realm-old')?.document).toMatchObject({
+      registration: { dynamicRegistrationAllowedScopes: ['openid', 'email'] },
+    });
+  });
+
+  it('leaves a realm whose policies follow another schema version as it is, and says so', async () => {
+    const document = structuredClone(SEEDS) as unknown as Record<string, Record<string, unknown>>;
+    delete document['password'];
+    const { store, writes } = storeOver([realmWithPolicies({ document, schemaVersion: '1-rc.7' })]);
+
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      skipped: [{ realmId: 'realm-a', realmName: 'master', schemaVersion: '1-rc.7' }],
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it('does not read a realm that has every field, so a stored value it refuses does not stop the boot', async () => {
+    const document = structuredClone(SEEDS) as unknown as Record<string, Record<string, unknown>>;
+    document['password']['minScore'] = 9;
+    const { store } = storeOver([realmWithPolicies({ document })]);
+
+    expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
   });
 
   it('reports nothing for a realm another writer got to first', async () => {
@@ -595,7 +657,7 @@ describe('createPolicyStore — seedRealms', () => {
       if (realm) realm.version = 1;
     });
 
-    expect(await memory.store.seedRealms()).toEqual({ filled: [], completed: [] });
+    expect(await memory.store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
   });
 
   it('refuses the boot when a fill is not a valid document, naming the realm and path only', async () => {
@@ -646,7 +708,7 @@ describe('createPolicyStore — seedRealms', () => {
       seeds: registry.defaultsFromEnv({}),
       registry,
     });
-    expect(await before.seedRealms()).toEqual({ filled: [], completed: [] });
+    expect(await before.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
 
     registry.registerPolicyGroup('sessions', {
       idleSeconds: policyField(z.number().int().positive(), {

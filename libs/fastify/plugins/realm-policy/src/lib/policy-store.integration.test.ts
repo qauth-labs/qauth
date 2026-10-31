@@ -248,7 +248,11 @@ describe('policy store over the realms table (integration)', () => {
     // A later boot with another environment changes no realm.
     const later = defaultsFromEnv({ ACCESS_TOKEN_LIFESPAN: '30', PASSWORD_MIN_SCORE: '0' });
     const before = await row(kept);
-    expect(await storeOn(db(), later).seedRealms()).toEqual({ filled: [], completed: [] });
+    expect(await storeOn(db(), later).seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      skipped: [],
+    });
     expect(await row(kept)).toEqual(before);
   });
 
@@ -310,7 +314,7 @@ describe('policy store over the realms table (integration)', () => {
       await b;
 
       expect(reportA.filled).toEqual([{ realmId: id, realmName: 'race' }]);
-      expect(reportB).toEqual({ filled: [], completed: [] });
+      expect(reportB).toEqual({ filled: [], completed: [], skipped: [] });
       const stored = await storeOn(db()).get(id);
       expect(stored?.version).toBe(1);
       expect(fillOf(stored?.policies)).toBe('A');

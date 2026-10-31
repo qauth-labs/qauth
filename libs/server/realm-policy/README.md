@@ -132,7 +132,9 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
   = <read>`, so the first node to boot wins.
 - Members of a stored document this release does not know (a later release's) are skipped on read
   and carried over on write, so a node of the previous release never drops them during a rolling
-  upgrade.
+  upgrade. A document of another schema version is not written: `update` refuses it
+  (`PolicySchemaVersionError`) and `seedRealms` leaves it as it is (`skipped`).
+- A list a fill keeps from the row loses its repeats, as `defaultsFromEnv` drops them.
 - `seedKeysSetIn(process.env)` names the seed keys the environment sets, which a realm with
   policies ignores.
 

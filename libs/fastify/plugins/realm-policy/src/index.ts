@@ -3,6 +3,7 @@ export * from './lib/storage';
 // What the auth server works with, from the policy library it may not import.
 export {
   defaultsFromEnv,
+  PolicySchemaVersionError,
   PolicySecretStoreUnavailableError,
   PolicyValidationError,
   PolicyVersionConflictError,

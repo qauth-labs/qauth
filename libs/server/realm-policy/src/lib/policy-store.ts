@@ -1,3 +1,4 @@
+import { isSetDirection } from './field';
 import { REALM_POLICY_REGISTRY, type RealmPolicies } from './realm-policies';
 import {
   type PolicyIssue,
@@ -82,7 +83,9 @@ export interface RealmPolicySnapshot {
   /**
    * The policy counter the snapshot was read at: the `ETag`, and the
    * `expectedVersion` of an update based on it. 0 while the realm has no
-   * policies.
+   * policies, which is no `ETag`: such a realm reads as its fill, which
+   * depends on the environment of the node that reads it, until a boot
+   * writes it.
    */
   readonly version: number;
   /** Whether the realm has its policies (`version` above 0). */
@@ -121,6 +124,12 @@ export interface RealmPolicySeedReport {
   readonly filled: readonly SeededRealm[];
   /** The realms that lacked fields of this release, and the fields each got from the seeds. */
   readonly completed: readonly (SeededRealm & { readonly paths: readonly string[] })[];
+  /**
+   * The realms that lack fields of this release but whose policies follow
+   * another schema version (a later release's, during a rolling upgrade):
+   * left as they are, since completing them would relabel them.
+   */
+  readonly skipped: readonly (SeededRealm & { readonly schemaVersion: string | null })[];
 }
 
 /** The policy store. `Row` is a realm row of the storage, `Tx` its transaction. */
@@ -159,6 +168,9 @@ export interface RealmPolicyStore<Row, Tx> {
    *   refused; nothing is changed
    * @throws PolicySecretStoreUnavailableError when the patch sets or clears a
    *   secret and the store has no secret store; nothing is changed
+   * @throws PolicySchemaVersionError when the stored policies follow another
+   *   schema version than this release's: writing them would relabel a
+   *   document this release cannot read whole; nothing is changed
    */
   update(
     realmId: string,
@@ -171,11 +183,17 @@ export interface RealmPolicyStore<Row, Tx> {
    * read), and give every realm whose document lacks fields of this release
    * their seeds. Each write is `UPDATE ... WHERE policies_version = <read>`,
    * so of two nodes that boot together one writes and the other finds the
-   * work done. A realm that already has every field is not written: changing
-   * an environment key later changes no realm.
+   * work done. A realm that already has every field is not written, nor
+   * read further: changing an environment key later changes no realm. A
+   * realm whose policies follow another schema version is not completed
+   * (`skipped`).
    *
-   * @throws RealmPolicySeedRefusedError when a realm's fill or stored
-   *   policies are not valid; nothing is written
+   * A list a realm's row kept from before its policies existed is read with
+   * its repeats dropped, as `defaultsFromEnv` drops them from an environment
+   * value.
+   *
+   * @throws RealmPolicySeedRefusedError when a realm the boot would write
+   *   (filled or completed) has a value the schema refuses; nothing is written
    */
   seedRealms(tx?: Tx): Promise<RealmPolicySeedReport>;
 }
@@ -232,6 +250,21 @@ export class PolicySecretStoreUnavailableError extends Error {
   ) {
     super(
       `${paths.join(', ')}: a secret field is set only through the realm's secret store, which this server does not have yet`
+    );
+  }
+}
+
+/** The stored policies follow another schema version than the store's registry. */
+export class PolicySchemaVersionError extends Error {
+  override readonly name = 'PolicySchemaVersionError';
+
+  constructor(
+    readonly realmId: string,
+    readonly storedVersion: string | null,
+    readonly schemaVersion: string
+  ) {
+    super(
+      `The policies of realm ${realmId} follow schema version ${String(storedVersion)}, not ${schemaVersion}; a node of the release that wrote them must change them`
     );
   }
 }
@@ -363,6 +396,12 @@ function unknownMembersOf(
     for (const [name, value] of Object.entries(node)) {
       const segments = [...prefix, name];
       const path = segments.join('.');
+      if (name === '__proto__') {
+        // An own member of parsed JSON, but assigning it would set a
+        // prototype: carried over, it would drop the group it sits in.
+        issues.push({ path, message: 'is not a member name the realm policies can hold' });
+        continue;
+      }
       const field = layout.fieldPaths.get(path);
       if (field !== undefined) {
         if (field.field.secret) {
@@ -386,6 +425,23 @@ function unknownMembersOf(
     throw new PolicyValidationError('The stored realm policies are not valid', issues);
   }
   return unknown;
+}
+
+/**
+ * A list kept from a realm's row before its policies existed, with its
+ * repeats dropped, first occurrence first: an earlier release copied an
+ * environment value into the row as it was written, repeats included, which
+ * the schema refuses for a set field and `defaultsFromEnv` drops.
+ */
+function withoutRepeats(value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  const seen = new Set<string>();
+  return value.filter((entry) => {
+    const key = JSON.stringify(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** `document` with the members of `extra`, which name no path of it. */
@@ -445,7 +501,12 @@ export function createPolicyStore<Row, Tx>(
     for (const entry of layout.fields) {
       if (entry.field.secret) continue;
       if (hasAt(source, entry.segments)) {
-        setAt(document, entry.segments, structuredClone(valueAt(source, entry.segments)));
+        const value = structuredClone(valueAt(source, entry.segments));
+        setAt(
+          document,
+          entry.segments,
+          !hasPolicies && isSetDirection(entry.field.direction) ? withoutRepeats(value) : value
+        );
         continue;
       }
       if (hasPolicies) missing.push(entry.path);
@@ -554,6 +615,9 @@ export function createPolicyStore<Row, Tx>(
         if (record.version !== expectedVersion) {
           throw new PolicyVersionConflictError(realmId, expectedVersion, record.version);
         }
+        if (record.version > 0 && record.schemaVersion !== registry.version) {
+          throw new PolicySchemaVersionError(realmId, record.schemaVersion, registry.version);
+        }
         const current = effective(record);
         const merged = mergePatch(current.document, rest, []);
         // The `input` view takes the representation's `<name>Set` members and
@@ -581,6 +645,7 @@ export function createPolicyStore<Row, Tx>(
       return storage.transaction(async (inner) => {
         const filled: SeededRealm[] = [];
         const completed: (SeededRealm & { paths: readonly string[] })[] = [];
+        const skipped: (SeededRealm & { schemaVersion: string | null })[] = [];
         for (const record of await storage.list(inner)) {
           // A realm that has its policies and every field is not read further:
           // the environment only seeds, so nothing here changes it.
@@ -590,6 +655,14 @@ export function createPolicyStore<Row, Tx>(
               (entry) => entry.field.secret || hasAt(record.document, entry.segments)
             );
           if (complete) continue;
+          if (record.version > 0 && record.schemaVersion !== registry.version) {
+            skipped.push({
+              realmId: record.realmId,
+              realmName: record.realmName,
+              schemaVersion: record.schemaVersion,
+            });
+            continue;
+          }
           let policies: EffectivePolicies;
           try {
             policies = effective(record);
@@ -615,7 +688,7 @@ export function createPolicyStore<Row, Tx>(
           if (record.version === 0) filled.push(realm);
           else completed.push({ ...realm, paths: policies.missing });
         }
-        return { filled, completed };
+        return { filled, completed, skipped };
       }, tx);
     },
   });

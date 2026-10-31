@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { DbClient } from '../db';
 import { REALM_POLICY_COLUMNS, realmPolicyRecord, splitRealmPolicies } from './realm-policy-record';
-import { createRealmsRepository, type Realm } from './realms.repository';
+import { createRealmsRepository, type NewRealm, type Realm } from './realms.repository';
 
 /**
  * The two storage forms of a realm's policies (#516): four fields in the
@@ -274,6 +274,29 @@ describe('createRealmsRepository — the policy seed (#516)', () => {
 
     expect(insertedValue(queries[0], 'policies')).toBe('default');
     expect(insertedValue(queries[0], 'policies_version')).toBe('default');
+  });
+
+  it('stores the seed whatever policies the creator passes, so nothing unparsed reaches realms.policies', async () => {
+    const { db, queries } = createRecordingDb();
+    const forged = {
+      name: 'forged',
+      policies: { mail: { smtp: { password: 'a-secret-value' } } },
+      policySchemaVersion: '1-rc.9',
+      policiesVersion: 7,
+    } as unknown as NewRealm;
+
+    await createRealmsRepository(db, { seeds }).create(forged);
+    await createRealmsRepository(db).create(forged);
+
+    expect(insertedValue(queries[0], 'policies')).toEqual(
+      splitRealmPolicies(SEED_DOCUMENT).members
+    );
+    expect(insertedValue(queries[0], 'policy_schema_version')).toBe('1-rc.0');
+    expect(insertedValue(queries[0], 'policies_version')).toBe(1);
+    // Without the policy seed, the column defaults: no policies.
+    expect(insertedValue(queries[1], 'policies')).toBe('default');
+    expect(insertedValue(queries[1], 'policies_version')).toBe('default');
+    expect(JSON.stringify(queries)).not.toContain('a-secret-value');
   });
 
   it('refuses at construction a seed that lacks a column-backed field', () => {

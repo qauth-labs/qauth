@@ -230,7 +230,8 @@ export const realms = pgTable(
      * trigger `realms_policies_version` raises it on an UPDATE that changes
      * the document or one of the four policy columns and leaves the counter
      * as it was, and refuses an UPDATE that lowers it, so an `ETag` never
-     * names two documents.
+     * names two documents. 0 is no `ETag`: a realm without policies reads
+     * as its fill, which depends on the environment of the node reading it.
      */
     policiesVersion: integer('policies_version').notNull().default(0),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
