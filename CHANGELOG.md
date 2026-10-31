@@ -1022,6 +1022,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path, plain or percent-encoded (once or twice), whatever else in the URL is
   malformed, and a Redis error in the log names its command but no longer
   carries the command's arguments.
+- **The sign-in engine core** ([#614], ADR-017 Decisions 4 and 7, ADR-019
+  Decision 6). `libs/server/sign-in-engine`
+  (`@qauth-labs/server-sign-in-engine`) is the one engine both sign-in
+  transports will call, the Interaction API ([#616]) and the FiPA endpoint
+  ([#646]); no route calls it yet. Its entry point,
+  `advance(transaction, answer, context)`, answers the next step, a completed
+  sign-in (subject, `amr`, `auth_time`; the transport mints the session or the
+  code), a redirect or a refusal, and runs ADR-017's rules in order: the realm's
+  and client's MFA policy, read on every round through an interface (a policy
+  that cannot be read refuses the round; until it has storage, no second factor
+  is required), hooks for the limiters, the transport's request checks, the bot
+  challenge and the per-account ladder, the identifier, then the password.
+  Until a factor succeeds it reads no account and answers an unknown,
+  password-only, passkey-only, disabled or locked account alike, with one
+  Argon2id verification per password (a dummy hash when none is usable) and a
+  500 ms floor on every round. An answer counts only when its step is the next
+  one. A second identifier, or another user's proof, ends the transaction as
+  `subject_mismatch`. A disabled user gets the ordinary invalid-credentials
+  answer and no subject; an unverified account under `REQUIRE_VERIFIED_ACCOUNT`
+  still does too. After a password, the downgrade rule (a disabled factor still
+  counts as bound) and the MFA policy answer a redirect until the steps that
+  meet them exist. Later steps (passkeys, TOTP, the email code) join through a
+  step-handler interface. `libs/fastify/plugins/sign-in-engine` holds the auth
+  server's adapters: the account directory over the repositories, Argon2id with
+  the dummy verification, an identifier HMAC keyed from the realm's cookie
+  secret, and the mapping of the engine's audit records onto events. A new
+  event, `user.sign_in_step_passed`, records each accepted step; refusals stay
+  `user.sign_in_failed`, with the person named by the identifier HMAC until a
+  user is resolved. The sign-in graph `graphs/flows/core/sign-in` now describes
+  the engine (proposed), and the captured graph of the `/ui/login` page moved
+  to `graphs/flows/core/sign-in-page`.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -2018,9 +2049,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#593]: https://github.com/qauth-labs/qauth/issues/593
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#614]: https://github.com/qauth-labs/qauth/issues/614
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
+[#646]: https://github.com/qauth-labs/qauth/issues/646
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 
