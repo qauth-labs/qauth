@@ -906,6 +906,25 @@ describe('publishing a next key before it signs (#494)', () => {
       await app.close();
     }
   });
+
+  it('refuses to activate a next key that would split the active hybrid pair', async () => {
+    const realms = await createRealms({ hybridSigning: true, refreshIntervalMs: 0 });
+    const { prepublished } = await realms.signer.prepublishTokenKeys(realms.a.id);
+    // Only the EdDSA half is still `next`, as for a key created without
+    // hybrid signing: its activation would leave the old ML-DSA-65 key active.
+    realms.signer.setKeyStatus(realms.a.id, prepublished[1].kid, 'retired');
+    const before = await realms.signer.signer.getVerificationKeys(
+      'local',
+      realms.a.id,
+      'token_signing'
+    );
+    await expect(realms.signer.rotateTokenKeys(realms.a.id)).rejects.toThrow(
+      'the rotation would split the active pair'
+    );
+    expect(
+      await realms.signer.signer.getVerificationKeys('local', realms.a.id, 'token_signing')
+    ).toEqual(before);
+  });
 });
 
 describe('the plugin holds no private key (#491)', () => {

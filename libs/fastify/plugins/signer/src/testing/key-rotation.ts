@@ -74,8 +74,11 @@ export interface TokenKeyRotation {
 }
 
 /**
- * The realm's `next` `token_signing` keys of `algorithm`, with their hybrid
- * partners: the requested algorithm first. Empty when it has none.
+ * The realm's `next` `token_signing` key of `algorithm`, with its hybrid
+ * partner: the requested algorithm first. Empty when it has none.
+ *
+ * @throws Error when the realm has more than one `next` key of `algorithm`:
+ *   activating both would break the one-active-key index
  */
 async function nextTokenKeys<Tx>(
   store: RealmKeyBootStore<Tx>,
@@ -89,6 +92,9 @@ async function nextTokenKeys<Tx>(
     tx
   );
   const requested = next.filter((key) => key.algorithm === algorithm);
+  if (requested.length > 1) {
+    throw new Error(`The realm has ${requested.length} next ${algorithm} keys; activate one`);
+  }
   const pairs = new Set(requested.map((key) => key.pairId).filter((pairId) => pairId !== null));
   const partners = next.filter(
     (key) => key.algorithm !== algorithm && key.pairId !== null && pairs.has(key.pairId)
@@ -151,7 +157,9 @@ export async function prepublishTokenKeys<Tx>(
  * a test reads with a signer whose interval is `0`, or one created after the
  * rotation.
  *
- * @throws Error when a key moved meanwhile; nothing changes then
+ * @throws Error when a key moved meanwhile, when the realm has two `next`
+ *   keys of the algorithm, or when its `next` key lacks the hybrid partner
+ *   the active pair has; nothing changes then
  */
 export async function rotateTokenKeys<Tx>(
   store: RealmKeyBootStore<Tx>,
@@ -175,13 +183,26 @@ export async function rotateTokenKeys<Tx>(
             tx,
           });
     const algorithms = new Set<string>(created.map((key) => key.algorithm));
-    const active = (
-      await store.listByRealm(
-        realmId,
-        { purpose: 'token_signing', scopeId: null, status: 'active' },
-        tx
-      )
-    ).filter((key) => algorithms.has(key.algorithm));
+    const allActive = await store.listByRealm(
+      realmId,
+      { purpose: 'token_signing', scopeId: null, status: 'active' },
+      tx
+    );
+    const active = allActive.filter((key) => algorithms.has(key.algorithm));
+    // A hybrid pair retires whole (ADR-005): a pre-published key without the
+    // partner the old pair has would leave half of the old pair active.
+    const retiringKids = new Set(active.map((key) => key.kid));
+    const retiringPairs = new Set(
+      active.map((key) => key.pairId).filter((pairId) => pairId !== null)
+    );
+    const stranded = allActive.filter(
+      (key) => !retiringKids.has(key.kid) && key.pairId !== null && retiringPairs.has(key.pairId)
+    );
+    if (stranded.length > 0) {
+      throw new Error(
+        `The next ${algorithm} key has no ${stranded.map((key) => key.algorithm).join(', ')} partner: the rotation would split the active pair`
+      );
+    }
 
     const at = Date.now();
     const unpublishAt = at + retentionMs;
