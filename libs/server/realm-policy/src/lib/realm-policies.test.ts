@@ -347,8 +347,32 @@ describe('diffPolicies', () => {
       },
     ]);
     expect(JSON.stringify(diff)).not.toContain(secret);
-    // A document that leaves the secret out leaves it as it is.
-    expect(diffPolicies(after, TABLE_DEFAULTS).changes).toEqual([]);
+    // A write that leaves the secret out leaves it as it is.
+    expect(
+      diffPolicies(TABLE_DEFAULTS, TABLE_DEFAULTS, { setSecrets: ['mail.smtp.password'] }).changes
+    ).toEqual([]);
+  });
+
+  it('records a secret given again as a security change, so the diff never confirms a guess', () => {
+    const after = withPolicies({
+      mail: { smtp: { ...TABLE_DEFAULTS.mail.smtp, password: 'p4ss' } },
+    });
+    expect(
+      diffPolicies(TABLE_DEFAULTS, after, { setSecrets: ['mail.smtp.password'] })
+    ).toMatchObject({
+      changes: [{ path: 'mail.smtp.password', before: true, after: true, class: 'security' }],
+      class: 'security',
+    });
+    // The stored document holds no secret, so `before` cannot carry one to
+    // compare with; it is refused without the value.
+    let caught: unknown;
+    try {
+      diffPolicies(after, after);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PolicyValidationError);
+    expect(JSON.stringify((caught as PolicyValidationError).issues)).not.toContain('p4ss');
   });
 
   it('records a replaced and a cleared secret with what the secret store says was set', () => {

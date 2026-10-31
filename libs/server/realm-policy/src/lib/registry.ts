@@ -73,9 +73,8 @@ export interface PolicyChange {
   readonly path: string;
   /**
    * The value before and after. For a secret field these are never the
-   * values but whether one is set: `before` from `setSecrets` (or a value in
-   * the before document), `after` true when the change sets one and false
-   * when it clears it.
+   * values but whether one is set: `before` from `setSecrets`, `after` true
+   * when the change sets one and false when it clears it.
    */
   readonly before: unknown;
   readonly after: unknown;
@@ -218,13 +217,17 @@ export interface PolicyRegistry {
    */
   secretSeedsFromEnv(env: PolicySeedEnv): ReadonlyMap<string, string>;
   /**
-   * The changes from `before` to `after`, both parsed as the `input` view
-   * (missing members take their defaults, so `{}` is the default policies).
+   * The changes from `before`, the stored policies parsed as the `document`
+   * view, to `after`, a write parsed as the `input` view (missing members
+   * take their defaults, so `{}` is the default policies).
    *
-   * A stored document holds no secret, so the caller says which secrets are
-   * set before the change (`options.setSecrets`, from the secret store) and
-   * which the change clears (`options.clearSecrets`); a secret is set by
-   * giving its value in `after`. Clearing is always recorded as a change.
+   * A stored document holds no secret, so `before` cannot carry one: the
+   * caller says which secrets are set before the change (`options.setSecrets`,
+   * from the secret store) and which the change clears
+   * (`options.clearSecrets`). A secret is set by giving its value in `after`,
+   * and every value given is recorded as a change, the same value again
+   * included, so the diff never compares a value with a stored one. Clearing
+   * is always recorded as a change.
    */
   diffPolicies(before: unknown, after: unknown, options?: PolicyDiffOptions): PolicyDiff;
   /** The JSON Schema (draft 2020-12) of a view, `representation` by default. */
@@ -653,7 +656,9 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
     after: unknown,
     options: PolicyDiffOptions = {}
   ): PolicyDiff {
-    const from = parse(before, 'input');
+    // The stored document holds no secret, so `before` cannot carry one to
+    // compare a value with.
+    const from = parse(before, 'document');
     const to = parse(after, 'input');
     const setBefore = secretPaths(options.setSecrets, 'setSecrets');
     const cleared = secretPaths(options.clearSecrets, 'clearSecrets');
@@ -664,14 +669,15 @@ export function createPolicyRegistry(options: PolicyRegistryOptions = {}): Polic
       const b = valueAt(to, entry.segments);
       let change: Omit<PolicyChange, 'class' | 'effects'>;
       if (field.secret) {
-        // A secret changes when a value is set or it is cleared. Only whether
-        // one is set is recorded; the values never leave this function.
-        const wasSet = setBefore.has(entry.path) || a !== undefined;
+        // A secret changes when a value is given or it is cleared. Only whether
+        // one is set is recorded, and a value is never compared with another:
+        // giving the stored value again is a change too, so the diff cannot
+        // confirm a guessed secret.
+        const wasSet = setBefore.has(entry.path);
         if (b !== undefined && cleared.has(entry.path)) {
           throw new PolicyDefinitionError(`${entry.path} is both set and cleared`);
         }
         if (b === undefined && !cleared.has(entry.path)) continue;
-        if (b !== undefined && b === a) continue;
         change = {
           path: entry.path,
           before: wasSet,
