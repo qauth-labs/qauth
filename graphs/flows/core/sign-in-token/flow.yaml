@@ -12,7 +12,7 @@
 # - The four 401 exits answer the same, by design (ANT-2026-SPEMY9GU), each document's own trace_id aside: only the
 #   event, the log line and the metric they record tell them apart, and the metric not even then. They are four states because they are four
 #   causes, and a replay that sees one of them answer differently names the state that changed.
-# - The checks run in the same order as on POST /ui/login (graphs/flows/core/sign-in): the lockout, the password, the
+# - The checks run in the same order as on POST /ui/login (graphs/flows/core/sign-in-page): the lockout, the password, the
 #   verified-account gate, then the enabled flag, and the two routes share one failed-login counter.
 # - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
 #   `source:` of the transition it decides: the line of the check.

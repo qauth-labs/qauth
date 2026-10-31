@@ -1,4 +1,4 @@
--- The accounts the replays of the two password sign-in graphs start from (graphs/flows/core/sign-in and
+-- The accounts the replays of the two password sign-in graphs start from (graphs/flows/core/sign-in-page and
 -- graphs/flows/core/sign-in-token; their binding.yaml names each account). Replay fixture: never load it into a
 -- database that serves real users.
 --
