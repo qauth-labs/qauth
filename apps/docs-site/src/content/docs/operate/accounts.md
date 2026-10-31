@@ -109,19 +109,31 @@ it back. A session or token issued up to one second after that time counts
 as issued before it, and an access token, whose issue time is kept to the
 whole second, up to two seconds after. The margin allows for times kept to
 the second and for a skew between the auth server's clock and the database's
-of less than a second: keep both synchronised, for example with NTP. Nothing
-is issued to a disabled account, so the margin only matters for an account
-enabled again within those seconds.
+of less than a second. Nothing is issued to a disabled account, so the margin
+only matters for an account enabled again within those seconds.
 
-The margin bounds what slips through. A request that read the account as
-enabled before the disabling transaction committed, and stored its session,
-code or refresh token more than a second after that time, issued it after
-the time: it survives the account being enabled again. Such a request takes
-milliseconds between the read and the write. An access token issued that way
-lasts until it expires. A commit that waits more than a second for a
-synchronous standby has the same effect. A database superuser or the owner of
-the `users` table can turn the triggers off; QAuth does not guard against
-them.
+Keep every auth server node's clock and the database's synchronised, for
+example with NTP. A browser session's issue time is the node's clock, and the
+disablement's time the database's: on a node whose clock runs more than a
+second ahead of the database, a session issued just before the disablement
+counts as issued after it, and survives the account being enabled again.
+
+An ID-JAG assertion (the `jwt-bearer` grant) carries the issue time of the
+identity provider that signed it, whose clock may run up to
+`ID_JAG_CLOCK_SKEW_LEEWAY` (60 seconds by default) ahead of QAuth's, as its
+validation allows. It counts as issued that much before its `iat`: an
+assertion issued within that leeway after the disablement is refused too.
+
+The margin bounds what slips through. A sign-in or a code exchange takes the
+issue time of the session or the refresh family it starts before it reads
+the account, so one whose read came before the disabling commit counts as
+issued before it. An access token is signed after that read: one whose request
+read the account as enabled before the commit, and was signed more than two
+seconds after the time, survives the account being enabled again, until it
+expires. A commit that waits more than a second for a synchronous standby
+has the same effect on what is issued meanwhile. A database superuser or the
+owner of the `users` table can turn the triggers off; QAuth does not guard
+against them.
 
 ### Accounts from before the upgrade
 

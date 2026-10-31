@@ -1836,12 +1836,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and nothing can clear it or move it back. An account already disabled when
   the migration runs gets the time of the migration. Every browser session,
   refresh token, authorization code, access token and ID-JAG assertion of the
-  user issued before it is refused, a refresh token by the start of its family
-  and a code by the sign-in behind it: the hosted pages send the browser to
-  sign-in, the token endpoint answers `invalid_grant`, introspection reports
-  the token inactive, and userinfo, token exchange, the developer API, the API
-  families, the admin API and the `/oauth/authorize` Bearer path refuse it as
-  they refuse a disabled account's. Such a token cannot sign the owner out
+  user issued before it is refused, a refresh token by the start of its family,
+  a code by the sign-in behind it, and an ID-JAG assertion as issued
+  `ID_JAG_CLOCK_SKEW_LEEWAY` before its `iat`, the clock skew its validation
+  allows the identity provider. A sign-in and a code exchange take the issue
+  time of the session or the refresh family they start before they read the
+  account, so one that read it before the disabling commit counts as issued
+  before it. Where such a credential is used, the hosted pages send the
+  browser to sign-in, the token endpoint answers `invalid_grant`,
+  introspection reports the token inactive, and userinfo, token exchange, the
+  developer API, the API families, the admin API and the `/oauth/authorize`
+  Bearer path refuse it as they refuse a disabled account's. Such a token cannot sign the owner out
   either. The refusal `reason` in events is `issued_before_disablement`. The
   new operator tool `db:disable-user` disables an account or, with `--enable`,
   enables it again, and writes the new admin events `user.disabled` and

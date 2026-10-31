@@ -248,11 +248,14 @@ of the sessions and tokens it held. An account that is disabled when the
 migration runs gets the time of the migration; every other account starts with
 none. Only disabled rows are written, but finding them reads the whole `users`
 table while the runner holds the lock the new column takes, so on a large table
-sign-ins wait for the runner's commit. During a rolling upgrade a node of the
-previous release still accepts the old sessions and access tokens of an account
-enabled again, and can start new refresh families from its old sessions: enable
-an account that was disabled for a takeover only after every node runs this
-release ([Accounts](/operate/accounts/)).
+sign-ins wait for the runner's commit. Run it when no long transaction holds
+`users`: the migration sets no `lock_timeout`, so its `ALTER TABLE` queues
+behind any open transaction that read the table, and every sign-in and token
+request that reads `users` waits behind it while it queues. During a rolling
+upgrade a node of the previous release still accepts the old sessions and
+access tokens of an account enabled again, and can start new refresh families
+from its old sessions: enable an account that was disabled for a takeover only
+after every node runs this release ([Accounts](/operate/accounts/)).
 
 An account that was disabled and enabled again before the upgrade gets no
 time, and keeps every session and token the previous release brought back
