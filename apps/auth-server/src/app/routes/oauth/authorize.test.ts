@@ -1397,8 +1397,10 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    // Existing consent covers the requested scopes so the flow reaches code
-    // issuance (skips the /ui/consent redirect) — isolating the cap check.
+    // Existing consent covers the requested scopes, so the cap check is the
+    // only refusal in play. An agent never skips the consent screen (ADR-015
+    // Decision 11, #845), so a request within the cap goes to it; the screen's
+    // POST mints the code (ui/consent.test.ts).
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       scopes: ['agent:readonly', 'agent:exec', 'email'],
       revokedAt: null,
@@ -1430,11 +1432,12 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
     );
   });
 
-  it('allows an in-cap scope and issues a code', async () => {
+  it('lets an in-cap scope through to the consent screen', async () => {
     const { fastify, state } = await runAuthorize(READONLY_AGENT, 'agent:readonly', 'sid-ro-2');
-    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
-    expect(state.redirected).toContain('code=');
+    expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+    expect(state.redirected).toContain('scope=agent%3Areadonly');
     expect(state.redirected).not.toContain('error=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
   it('rejects ANY agent scope for a non-agent client even if allowlisted (untrusted is_agent)', async () => {
@@ -1741,6 +1744,57 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
   });
+
+  // ADR-015 Decision 11 (#845): an agent client always sees the consent
+  // screen, which names it as an agent; a stored consent never skips it, and
+  // prompt=none, which may show no screen, answers consent_required.
+  describe('an agent client (ADR-015 Decision 11, #845)', () => {
+    const AGENT = { ...CLIENT, clientId: 'app-agent', isAgent: true } as unknown as typeof CLIENT;
+
+    it('sends an agent to the consent screen even when a stored consent covers the request', async () => {
+      const { fastify, state } = await run({
+        client: AGENT,
+        scope: 'email',
+        priorConsent: ['email', 'read:foo'],
+        authTime: Date.now() - 1000,
+        sid: 'sid-agent-1',
+      });
+      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    });
+
+    it('answers prompt=none from an agent with consent_required and issues no code', async () => {
+      for (const priorConsent of [['email', 'read:foo'], null]) {
+        const { fastify, state } = await run({
+          client: AGENT,
+          scope: 'email',
+          priorConsent,
+          authTime: Date.now() - 1000,
+          prompt: 'none',
+          sid: `sid-agent-none-${priorConsent === null ? 'none' : 'covering'}`,
+        });
+        const location = new URL(state.redirected as string);
+        expect(`${location.origin}${location.pathname}`).toBe('https://example.com/cb');
+        expect(location.searchParams.get('error')).toBe('consent_required');
+        expect(location.searchParams.get('code')).toBeNull();
+        expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
+        expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      }
+    });
+
+    it('still skips the screen for the same request from a client that is not an agent', async () => {
+      const { fastify, state } = await run({
+        client: { ...AGENT, isAgent: false } as unknown as typeof CLIENT,
+        scope: 'email',
+        priorConsent: ['email', 'read:foo'],
+        authTime: Date.now() - 1000,
+        prompt: 'none',
+        sid: 'sid-agent-control',
+      });
+      expect(state.redirected).toContain('code=');
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    });
+  });
 });
 
 describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () => {
@@ -1848,6 +1902,19 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
       BEARER_USER,
       DANGEROUS_CLIENT.id
     );
+  });
+
+  // ADR-015 Decision 11 (#845): the Bearer path can show no screen, and an
+  // agent never skips it, so the path issues an agent no code at all.
+  it('refuses an agent client on the Bearer path even under a covering stored consent', async () => {
+    const { fastify, state } = await runBearer(
+      'email',
+      {},
+      { client: { ...DANGEROUS_CLIENT, isAgent: true } }
+    );
+    expect(state.redirected).toContain('error=access_denied');
+    expect(state.redirected).not.toContain('code=');
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
   it('gives a Bearer-path code no session and records no client (#549)', async () => {
@@ -2130,6 +2197,8 @@ describe('GET /oauth/authorize — disabled user', () => {
       realmId: REALM.id,
       sid: 'sid-1',
       reason: 'admin',
+      actor: { type: 'system' },
+      userId: 'user-1',
     });
     expect(sessions.service.sessions.has('sid-1')).toBe(false);
     expect(state.headers['Set-Cookie']).toContain('Max-Age=0');

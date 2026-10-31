@@ -1,4 +1,5 @@
 import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
+import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -13,6 +14,7 @@ import {
   findExceedingAgentScopesForClient,
   unlistedReservedAudiences,
 } from '../../helpers/client-auth';
+import { clientDisplay } from '../../helpers/client-display';
 import {
   isAgentClient,
   resolveClient,
@@ -20,16 +22,14 @@ import {
 } from '../../helpers/client-resolution';
 import { isClientUsable, unusableClientError } from '../../helpers/client-status';
 import {
+  agentPersistenceLine,
   canSkipConsent,
   describeScope,
   filterRequestedScopes,
-  isDynamicClientWithinBadgeWindow,
-  isLoopbackRedirect,
-  redirectHost,
 } from '../../helpers/consent';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
-import { html, render, safe, safeUrl } from '../../helpers/html';
+import { html, render, safe } from '../../helpers/html';
 import {
   buildRedirectUrl,
   isRedirectUriAllowedForPolicy,
@@ -112,12 +112,93 @@ function buildAuthorizeUrl(query: Record<string, string | string[] | number | un
   return `${u.pathname}?${u.searchParams.toString()}`;
 }
 
+/**
+ * The heading's subject: the verified host with its registrable domain in
+ * bold, or "An unverified app". Never the name the client declared
+ * (ADR-019 Decision 6, #593).
+ */
+function clientSubject(client: ClientDisplay) {
+  const verified = client.verifiedDomain;
+  if (!verified) return html`An unverified app`;
+  const { host, registrableDomain } = verified;
+  const prefix = host.endsWith(registrableDomain)
+    ? host.slice(0, host.length - registrableDomain.length)
+    : '';
+  const highlighted = prefix === '' ? host : registrableDomain;
+  return html`<span class="domain">${prefix}<strong>${highlighted}</strong></span>`;
+}
+
+/** The page title: the verified host, or a plain statement that there is none. */
+function clientTitle(client: ClientDisplay): string {
+  return client.verifiedDomain
+    ? `Authorize ${client.verifiedDomain.host}`
+    : 'Authorize an unverified app';
+}
+
+/**
+ * Who the client is, in the order of ADR-019 Decision 6: what the server
+ * verified (or that it verified nothing), a shared-hosting flag, where the
+ * code goes with the "this device" warning, and only then the name the client
+ * declared, marked as declared. Every value comes from `clientDisplay`; this
+ * page computes none of it.
+ */
+function clientBlock(client: ClientDisplay) {
+  const verifiedLine =
+    client.kind === 'cimd'
+      ? html`<p class="verified">The app's details are published at this address.</p>`
+      : client.kind === 'admin_registered'
+        ? html`<p class="verified">Verified by the operator of this server.</p>`
+        : html`<div class="badge">
+            This server could not verify who runs this app. Continue only if you trust where it
+            sends you.
+          </div>`;
+
+  const sharedHosting = client.verifiedDomain?.sharedHosting
+    ? html`<div class="warn">
+        This address is on a shared hosting service, where anyone can publish an app. Make sure the
+        whole address is the one you expect.
+      </div>`
+    : safe('');
+
+  const redirect = client.redirect;
+  const redirectBlock =
+    redirect === undefined
+      ? safe('')
+      : redirect.target === 'this_device'
+        ? html`<p class="redirect"><strong>You will be redirected to:</strong> this device</p>
+            <div class="warn">
+              This app will receive your authorization code on this device. Only continue if you
+              started this sign-in yourself.
+            </div>`
+        : redirect.target === 'app'
+          ? html`<p class="redirect">
+              <strong>You will be redirected to:</strong> the app
+              <code>${redirect.scheme ?? ''}</code>
+            </p>`
+          : html`<p class="redirect">
+              <strong>You will be redirected to:</strong> <code>${redirect.host ?? ''}</code>
+            </p>`;
+
+  const declaredName = client.declaredName
+    ? html`<p class="declared">
+        Name declared by the app: <bdi class="declared-name">${client.declaredName}</bdi>
+      </p>`
+    : safe('');
+
+  const badge = client.newClient
+    ? html`<div class="badge">
+        Newly registered application — double-check the address before approving.
+      </div>`
+    : safe('');
+
+  return html`${verifiedLine} ${sharedHosting} ${redirectBlock} ${declaredName} ${badge}`;
+}
+
 function consentPage(opts: {
-  clientName: string;
-  clientHomepage?: string;
+  /** Who the client is (`helpers/client-display.ts`). */
+  client: ClientDisplay;
   audience: string[];
   scopes: string[];
-  badgeDynamic: boolean;
   csrfToken: string;
   /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
   cspNonce: string;
@@ -125,12 +206,12 @@ function consentPage(opts: {
   /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
   resources: string[];
   userIdentifier: string;
-  /** Host portion of the redirect_uri, shown so the user can sanity-check the destination. */
-  redirectHost: string;
-  /** True when the redirect targets loopback/localhost (CIMD §6 impersonation warning). */
-  redirectIsLoopback: boolean;
-  /** True for CIMD-resolved clients (no operator pre-registration). */
-  isCimd: boolean;
+  /**
+   * ADR-014 §11 (#845): for an agent client (fail-closed `isAgentClient`), the
+   * realm's `sso_max_lifespan` the persistence line names, `null` when the
+   * realm sets none. Absent for any other client, whose page has neither line.
+   */
+  agent?: { ssoMaxLifespanSeconds: number | null };
 }): string {
   const scopeRows = opts.scopes.length
     ? opts.scopes.map((s) => html`<li><code>${s}</code> — ${describeScope(s)}</li>`)
@@ -147,37 +228,16 @@ function consentPage(opts: {
     ? html`<p><strong>Tokens will be valid for:</strong> ${opts.audience.join(', ')}</p>`
     : safe('');
 
-  // CIMD §6: always show where the authorization code will be sent, and warn
-  // when that destination is the user's own machine (localhost) for a client
-  // the operator never pre-registered.
-  const redirectBlock = html`<p class="redirect">
-    <strong>You will be redirected to:</strong> <code>${opts.redirectHost}</code>
-  </p>`;
-
-  const loopbackWarning =
-    opts.redirectIsLoopback && opts.isCimd
-      ? html`<div class="warn">
-          This app will receive your authorization code on <code>${opts.redirectHost}</code>
-          (your own device). Only continue if you started this sign-in yourself.
-        </div>`
-      : safe('');
-
-  const badge = opts.badgeDynamic
-    ? html`<div class="badge">
-        Newly registered application — double-check the name and URL before approving.
+  // ADR-014 §11 (#845): an agent client is named as an AI agent, in QAuth's
+  // words rather than anything the client declared, and the page says how long
+  // it may keep working once allowed. It says "This app", not the name the
+  // client declared, which the page shows only labelled as declared
+  // (ADR-019 Decision 6, #593).
+  const agentNotice = opts.agent
+    ? html`<div class="agent">
+        <p>This app is an AI agent.</p>
+        <p>${agentPersistenceLine(opts.agent.ssoMaxLifespanSeconds)}</p>
       </div>`
-    : safe('');
-
-  // #112: an OAuth client's homepage_uri is attacker-controlled (especially for
-  // CIMD/dynamically registered clients). HTML-escaping alone does not stop a
-  // `javascript:` URL from executing on click, so the href is gated through
-  // safeUrl(): only http(s)/mailto links are rendered clickable. The visible
-  // text is still escaped by the `html` tag so a rejected URL shows harmlessly.
-  const safeHomepage = safeUrl(opts.clientHomepage);
-  const homepage = safeHomepage
-    ? html`<p class="homepage">
-        <a href="${safeHomepage}" rel="noopener noreferrer" target="_blank">${safeHomepage}</a>
-      </p>`
     : safe('');
 
   return render(
@@ -187,7 +247,7 @@ function consentPage(opts: {
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
-          <title>Authorize ${opts.clientName}</title>
+          <title>${clientTitle(opts.client)}</title>
           <style nonce="${opts.cspNonce}">
             body {
               font-family:
@@ -216,9 +276,25 @@ function consentPage(opts: {
               margin: 0 0 8px;
               font-size: 20px;
             }
-            .homepage a {
-              color: #2a5bd7;
+            .domain {
+              overflow-wrap: anywhere;
+            }
+            .verified {
+              color: #1d6b3a;
               font-size: 13px;
+              margin-top: 0;
+            }
+            .declared {
+              color: #6b7280;
+              font-size: 13px;
+            }
+            .declared-name {
+              color: #1a1a1a;
+              overflow-wrap: anywhere;
+              display: inline-block;
+              max-width: 100%;
+              overflow: hidden;
+              vertical-align: bottom;
             }
             ul.scopes {
               padding-left: 20px;
@@ -231,6 +307,21 @@ function consentPage(opts: {
               padding: 1px 6px;
               border-radius: 4px;
               font-size: 12px;
+            }
+            .agent {
+              background: #eef2ff;
+              color: #1e3a8a;
+              border: 1px solid #c7d2fe;
+              border-radius: 6px;
+              padding: 10px 12px;
+              margin: 16px 0;
+              font-size: 13px;
+            }
+            .agent p {
+              margin: 0;
+            }
+            .agent p + p {
+              margin-top: 4px;
             }
             .badge {
               background: #fff4e5;
@@ -292,15 +383,15 @@ function consentPage(opts: {
         </head>
         <body>
           <form class="card" method="post" action="/ui/consent">
-            <h1>${opts.clientName} wants to access your account</h1>
-            ${homepage}
+            <h1>${clientSubject(opts.client)} wants to access your account</h1>
+            ${clientBlock(opts.client)}
             <p class="as-user">Signed in as ${opts.userIdentifier}</p>
-            ${badge} ${loopbackWarning}
+            ${agentNotice}
             <p><strong>Requested access:</strong></p>
             <ul class="scopes">
               ${scopeRows}
             </ul>
-            ${audienceBlock} ${redirectBlock}
+            ${audienceBlock}
             <label class="forever">
               <input type="checkbox" name="allow_forever" value="1" checked />
               Remember this decision
@@ -414,8 +505,10 @@ export default async function (fastify: FastifyInstance) {
         });
       }
 
-      const isCimd =
-        (client.metadata as Record<string, unknown> | null)?.registrationType === 'cimd';
+      // ADR-019 Decision 6 (#593): who the client is, verified domain first,
+      // from the server's own records. Computed before anything is bound to
+      // the session, since a redirect it cannot show refuses the screen.
+      const display = clientDisplay(client, { redirectUri: query.redirect_uri });
 
       const scopes = filterRequestedScopes(query.scope, client);
 
@@ -465,7 +558,9 @@ export default async function (fastify: FastifyInstance) {
       // extends it.
       await writeSessionSideRecord(fastify, session, {
         csrfToken,
-        consent: { clientId: client.clientId, scopes, resources },
+        // ADR-014 §11 (#845): whether this page names the client as an AI
+        // agent, which the POST checks the client still is.
+        consent: { clientId: client.clientId, scopes, resources, agent: isAgentClient(client) },
       });
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -496,16 +591,12 @@ export default async function (fastify: FastifyInstance) {
 
       return reply.send(
         consentPage({
-          clientName: client.name,
-          clientHomepage: (client.metadata as Record<string, unknown> | null)?.homepage_uri as
-            | string
-            | undefined,
+          client: display,
           // The precedence `resolveAudience` applies to the token's `aud`: the
           // requested `resource` overrides the client's configured audience,
           // so the screen names the resource server the token will be for.
           audience: resources.length > 0 ? resources : (client.audience ?? []),
           scopes,
-          badgeDynamic: isDynamicClientWithinBadgeWindow(client),
           csrfToken,
           cspNonce: reply.cspNonce.style,
           authorizeParams: {
@@ -539,9 +630,12 @@ export default async function (fastify: FastifyInstance) {
           // A sign-in without one, or a lost side record, shows the stable
           // subject id instead.
           userIdentifier: side.identifier ?? session.userId,
-          redirectHost: redirectHost(query.redirect_uri),
-          redirectIsLoopback: isLoopbackRedirect(query.redirect_uri),
-          isCimd,
+          // ADR-014 §11 (#845): the AI-agent line and the persistence line,
+          // which names the realm's `sso_max_lifespan` (#552) when it sets
+          // one. Read from the request realm's row, as /oauth/token reads it.
+          agent: isAgentClient(client)
+            ? { ssoMaxLifespanSeconds: realm.ssoMaxLifespan }
+            : undefined,
         })
       );
     }
@@ -698,6 +792,40 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
+      // ADR-014 §11 (#845): a code is minted only for the client the page
+      // showed. A CIMD document can change `is_agent` between the GET and
+      // this POST: a client that became an agent was never named as one or
+      // told the user how long it may keep working, and one that stopped
+      // being one was shown lines that no longer hold. Either way nothing is
+      // granted, and the request starts over at /oauth/authorize, which
+      // checks everything again and shows the page the client needs now. A
+      // binding without the flag (a record written by a node of the previous
+      // release) reads as a page that named no agent.
+      const shownAsAgent = side.consentAgent[client.clientId] === true;
+      if (shownAsAgent !== isAgentClient(client)) {
+        fastify.log.warn(
+          { realmId: realm.id, clientId: client.clientId, shownAsAgent },
+          'the client changed whether it is an agent since its consent page; showing the page again'
+        );
+        return reply.redirect(
+          buildAuthorizeUrl({
+            client_id: body.client_id,
+            redirect_uri: body.redirect_uri,
+            state: body.state,
+            scope: body.scope,
+            nonce: body.nonce,
+            code_challenge: body.code_challenge,
+            code_challenge_method: body.code_challenge_method,
+            response_type: body.response_type,
+            prompt: body.prompt,
+            max_age: body.max_age !== undefined ? String(body.max_age) : undefined,
+            dpop_jkt: typeof body.dpop_jkt === 'string' ? body.dpop_jkt : undefined,
+            resource: body.resource,
+          }),
+          302
+        );
+      }
+
       // Scope-presentation integrity (#150 hardening). The hidden `scope` field
       // is attacker-controllable, so we do NOT trust it to determine the granted
       // set. The GET render bound the EXACT scopes shown to the user into the
@@ -822,7 +950,8 @@ export default async function (fastify: FastifyInstance) {
       // Allow: issue a code and, if the user checked the box, persist the
       // grant. The grant upsert merges with any prior record so subsequent
       // requests with a subset of these scopes, for the resource(s) this
-      // screen named as the audience, skip the screen. An approval that is
+      // screen named as the audience, skip the screen, unless the client is
+      // an agent (ADR-015 Decision 11). An approval that is
       // not persisted is one-time: /oauth/token mints a refresh token only
       // under a stored consent, the row the user can list and revoke.
       //

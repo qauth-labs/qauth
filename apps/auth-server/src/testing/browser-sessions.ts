@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto';
 
 import type {
   BrowserSession,
+  EndedSession,
+  ListedSession,
   SessionAssuranceLevel,
   SessionRecord,
+  SessionRevokedReason,
+  SessionsEndedListener,
   SessionService,
 } from '@qauth-labs/fastify-plugin-sessions';
 import type { FastifyInstance } from 'fastify';
@@ -36,13 +40,23 @@ export interface FakeSessionSeed {
  * A stand-in for `fastify.sessionService` (#488) for unit tests, in place of
  * the old `sessionUtils` fakes. It keeps the service's contract where routes
  * rely on it: `get` finds a session only in its own realm and only before its
- * end, `create` always makes a new `sid`, `revoke` ends a session for good.
- * Each method is a `vi.fn`, so a test can assert calls or make one fail.
+ * end, `create` always makes a new `sid`, `revoke` ends a session for good
+ * and reports a second call, the bulk revocations end each session once and
+ * tell the `onSessionsEnded` listeners. It holds no client registry, so an
+ * ended session served no client. Each method is a `vi.fn`, so a test can
+ * assert calls or make one fail.
  */
 export interface FakeSessionService extends SessionService {
   create: Mock<SessionService['create']>;
   get: Mock<SessionService['get']>;
   revoke: Mock<SessionService['revoke']>;
+  revokeAllForUser: Mock<SessionService['revokeAllForUser']>;
+  revokeAllForRealm: Mock<SessionService['revokeAllForRealm']>;
+  endLapsed: Mock<SessionService['endLapsed']>;
+  purge: Mock<SessionService['purge']>;
+  listForUser: Mock<SessionService['listForUser']>;
+  listForClient: Mock<SessionService['listForClient']>;
+  onSessionsEnded: Mock<SessionService['onSessionsEnded']>;
   /** The live sessions, by `sid`. */
   readonly sessions: Map<string, BrowserSession>;
   /** Store a live session without counting a `create` call. */
@@ -65,9 +79,66 @@ function browserSession(seed: FakeSessionSeed & { amr?: readonly string[] }): Br
   };
 }
 
+/** The row a fake session ends as. */
+function endedRecord(session: BrowserSession, reason: SessionRevokedReason): SessionRecord {
+  return {
+    id: session.sid,
+    realmId: session.realmId,
+    userId: session.userId,
+    authTime: session.authTime,
+    amr: [...session.amr],
+    assuranceLevel: session.assuranceLevel,
+    ipAddress: null,
+    userAgent: null,
+    expiresAt: session.expiresAt,
+    revokedAt: Date.now(),
+    revokedReason: reason,
+    createdAt: session.createdAt,
+    lastSeenAt: session.lastSeenAt,
+  };
+}
+
 /** Create a {@link FakeSessionService}. */
 export function createFakeSessionService(): FakeSessionService {
   const sessions = new Map<string, BrowserSession>();
+  const ended = new Map<string, SessionRecord>();
+  const listeners = new Set<SessionsEndedListener>();
+
+  /** End `matching` sessions, record them and tell the listeners. */
+  async function endAll(
+    realmId: string,
+    reason: SessionRevokedReason,
+    actor: Parameters<SessionService['revoke']>[0]['actor'],
+    matching: (session: BrowserSession) => boolean
+  ): Promise<EndedSession[]> {
+    const done: EndedSession[] = [];
+    for (const session of [...sessions.values()].sort((a, b) => (a.sid < b.sid ? -1 : 1))) {
+      if (session.realmId !== realmId || !matching(session)) continue;
+      sessions.delete(session.sid);
+      const record = endedRecord(session, reason);
+      ended.set(session.sid, record);
+      done.push({ session: record, clients: [] });
+    }
+    if (done.length > 0) {
+      for (const listener of [...listeners]) {
+        await listener({ realmId, reason, actor, sessions: done });
+      }
+    }
+    return done;
+  }
+
+  function listed(session: BrowserSession): ListedSession {
+    return {
+      ...session,
+      ipAddress: null,
+      userAgent: null,
+      state: Date.now() < session.expiresAt ? 'live' : 'expired',
+      revokedAt: null,
+      revokedReason: null,
+      clients: [],
+    };
+  }
+
   return {
     sessions,
     seed(seed) {
@@ -91,26 +162,66 @@ export function createFakeSessionService(): FakeSessionService {
       if (session === undefined || session.realmId !== realmId) return null;
       return Date.now() < session.expiresAt ? session : null;
     }),
-    revoke: vi.fn<SessionService['revoke']>(async ({ realmId, sid, reason }) => {
-      const session = sessions.get(sid);
-      if (session === undefined || session.realmId !== realmId) return null;
-      sessions.delete(sid);
-      const ended: SessionRecord = {
-        id: session.sid,
-        realmId: session.realmId,
-        userId: session.userId,
-        authTime: session.authTime,
-        amr: [...session.amr],
-        assuranceLevel: session.assuranceLevel,
-        ipAddress: null,
-        userAgent: null,
-        expiresAt: session.expiresAt,
-        revokedAt: Date.now(),
-        revokedReason: reason,
-        createdAt: session.createdAt,
-        lastSeenAt: session.lastSeenAt,
+    revoke: vi.fn<SessionService['revoke']>(async ({ realmId, sid, userId, reason, actor }) => {
+      if (actor.type === 'user' && userId === undefined) {
+        throw new RangeError('A user ends a session only by naming its owner: pass userId');
+      }
+      const owned = (session: { userId: string }) =>
+        userId === undefined || session.userId === userId;
+      const before = ended.get(sid);
+      if (before !== undefined && before.realmId === realmId) {
+        return owned(before)
+          ? { outcome: 'already_ended', session: before }
+          : { outcome: 'not_found' };
+      }
+      const [done] = await endAll(
+        realmId,
+        reason,
+        actor,
+        (session) => session.sid === sid && owned(session)
+      );
+      return done === undefined
+        ? { outcome: 'not_found' }
+        : { outcome: 'ended', session: done.session, clients: done.clients };
+    }),
+    revokeAllForUser: vi.fn<SessionService['revokeAllForUser']>(async (input) => ({
+      sessions: await endAll(
+        input.realmId,
+        input.reason,
+        input.actor,
+        (session) =>
+          session.userId === input.userId &&
+          session.sid !== input.exceptSid &&
+          (input.createdBefore === undefined || session.createdAt < input.createdBefore)
+      ),
+    })),
+    revokeAllForRealm: vi.fn<SessionService['revokeAllForRealm']>(async (input) => {
+      const done = await endAll(
+        input.realmId,
+        input.reason,
+        input.actor,
+        (session) => input.activeSince === undefined || session.lastSeenAt >= input.activeSince
+      );
+      return { ended: done.length, batches: done.length === 0 ? 0 : 1 };
+    }),
+    endLapsed: vi.fn<SessionService['endLapsed']>(async () => ({ ended: 0 })),
+    purge: vi.fn<SessionService['purge']>(async () => ({ deleted: 0 })),
+    listForUser: vi.fn<SessionService['listForUser']>(async ({ realmId, userId }) => ({
+      items: [...sessions.values()]
+        .filter((session) => session.realmId === realmId && session.userId === userId)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(listed),
+      nextCursor: null,
+    })),
+    listForClient: vi.fn<SessionService['listForClient']>(async () => ({
+      items: [],
+      nextCursor: null,
+    })),
+    onSessionsEnded: vi.fn<SessionService['onSessionsEnded']>((listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
       };
-      return ended;
     }),
   };
 }
@@ -259,6 +370,11 @@ export interface FakeSideRecordSeed {
   consentScopes?: Record<string, string[]>;
   /** Bound resources by `client_id`; each client needs `consentScopes` too. */
   consentResources?: Record<string, string[]>;
+  /**
+   * Whether the bound page was an agent's, by `client_id`; each client needs
+   * `consentScopes` too. A client left out was shown as no agent.
+   */
+  consentAgent?: Record<string, boolean>;
 }
 
 /**
@@ -297,14 +413,22 @@ export function createBrowserSessionFixture(): BrowserSessionFixture {
           csrfToken: side.csrfToken,
           apiCsrfToken: side.apiCsrfToken,
         });
-        for (const clientId of Object.keys(side.consentResources ?? {})) {
+        for (const clientId of [
+          ...Object.keys(side.consentResources ?? {}),
+          ...Object.keys(side.consentAgent ?? {}),
+        ]) {
           if (side.consentScopes?.[clientId] === undefined) {
-            throw new Error(`seed consentScopes for ${clientId} with its consentResources`);
+            throw new Error(`seed consentScopes for ${clientId} with its other bindings`);
           }
         }
         for (const [clientId, scopes] of Object.entries(side.consentScopes ?? {})) {
           await writeSessionSideRecord(fastify, session, {
-            consent: { clientId, scopes, resources: side.consentResources?.[clientId] ?? [] },
+            consent: {
+              clientId,
+              scopes,
+              resources: side.consentResources?.[clientId] ?? [],
+              agent: side.consentAgent?.[clientId] ?? false,
+            },
           });
         }
       }

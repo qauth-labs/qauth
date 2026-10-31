@@ -6,7 +6,9 @@ holds the truth, Redis caches reads, and last-seen writes are throttled.
 
 > **Status:** the auth-server decorates it as `fastify.sessionService`. The password and wallet
 > sign-ins create sessions through it, and every route that reads the session cookie resolves the
-> session through it (#488).
+> session through it (#488). The session lists, the bulk revocations, the `onSessionsEnded` hook
+> and the purge (#550) have no HTTP route yet: the account and admin APIs, back-channel logout and
+> the session events build on them.
 
 ## Usage
 
@@ -26,17 +28,45 @@ const sessions = createSessionService({
 
 const session = await sessions.create({ realmId, userId, authTime: Date.now(), amr: ['pwd'] });
 const same = await sessions.get({ realmId, sid: session.sid }); // null when absent
-await sessions.revoke({ realmId, sid: session.sid, reason: 'sign_out' });
+const actor = { type: 'user', id: userId } as const;
+await sessions.revoke({ realmId, sid: session.sid, reason: 'sign_out', actor });
+// → { outcome: 'ended', session, clients }, then 'already_ended' on a second call
+
+// Lists, newest first, with each session's clients and state:
+const page = await sessions.listForUser({ realmId, userId, page: { limit: 20 } });
+await sessions.listForUser({ realmId, userId, page: { cursor: page.nextCursor ?? undefined } });
+
+// Bulk revocations:
+await sessions.revokeAllForUser({
+  realmId,
+  userId,
+  exceptSid,
+  reason: 'sign_out_everywhere',
+  actor,
+});
+await sessions.revokeAllForUser({
+  realmId,
+  userId,
+  createdBefore: resetAt,
+  reason: 'reset',
+  actor,
+});
+await sessions.revokeAllForRealm({ realmId, reason: 'key_retired', actor: { type: 'system' } });
+
+// Whoever must hear of an end (back-channel logout, events):
+const stop = sessions.onSessionsEnded(async ({ realmId, reason, actor, sessions: ended }) => {
+  // each ended session once, with the clients it served
+});
 ```
 
 ## Ports
 
 The service talks to Postgres and Redis through two small ports, so its unit tests need neither.
 
-| Port           | What it does                                                                                                    | Implemented by                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `SessionStore` | The realm's lifetimes; insert, find, the conditional last-seen `UPDATE` and revoke on `sessions`.               | the auth-server, over `@qauth-labs/infra-db`          |
-| `SessionCache` | Read an entry and its tombstone together; write an entry with a time to live; write a tombstone over the entry. | `createRedisSessionCache` (any `ioredis`-like client) |
+| Port           | What it does                                                                                                                     | Implemented by                                        |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `SessionStore` | The realm's lifetimes; insert, find, the conditional last-seen `UPDATE`, the revocations, the lists and the purge on `sessions`. | the auth-server, over `@qauth-labs/infra-db`          |
+| `SessionCache` | Read an entry and its tombstone together; write an entry with a time to live; write a tombstone over the entry.                  | `createRedisSessionCache` (any `ioredis`-like client) |
 
 `createMemorySessionStore`, `createMemorySessionCache` and `createManualClock` are in-memory ports
 for tests. The real service runs on them as it runs on Postgres and Redis, and each can be switched
@@ -65,7 +95,46 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
 - **Revoke.** Postgres first, then a tombstone is written over the cache entry for twice the cache
   time. A read that sees the tombstone answers "absent", so a fill that raced the revocation cannot
   bring the session back, even one that reached Redis late. Reads on the node that were already
-  waiting on Postgres do not answer the reads that start after the revocation.
+  waiting on Postgres do not answer the reads that start after the revocation. A sid is no secret
+  (an ID token carries it), so a `user` actor names the session's owner (`userId`; an admin names
+  the owner too): another user's session is `not_found`, and neither its row nor its cache entry is
+  touched.
+- **Revoke many.** `revokeAllForUser` ends a user's sessions in one transaction, but `exceptSid`
+  and, with `createdBefore`, the sessions created since then (a password reset: ADR-017's session
+  epoch). It ends the sessions Postgres holds when it runs: a sign-in that checked the old password
+  before the reset and stores its session after the call is not ended, unless the caller also checks
+  the reset time when a session is read. `revokeAllForRealm` ends a realm's sessions in batches of 500
+  (at most 5,000) in id order, each batch its own transaction, leaving a session created more than
+  `SESSION_CLOCK_SKEW_ALLOWANCE_MS` (5 seconds) after the call began, so a node whose clock runs
+  ahead cannot stamp a session made before the call past the cut; `activeSince` keeps the sessions not used since then, allowing for the last-seen write
+  interval. It returns counts only, and the sessions reach the listeners batch by batch. Every
+  revocation locks its rows in id order, takes their registry rows with it, spends their unredeemed
+  codes, binds the ids as one array (no parameter limit), and is safe to repeat; one Postgres aborts
+  as a deadlock runs again, up to three times. Refresh-token families and Authority Trees are the
+  caller's (ADR-014: trees survive sign-out).
+- **Listeners.** `onSessionsEnded(listener)` hears of every session a call ended, once, with its
+  realm, reason, actor and the clients it served, after Postgres committed and the tombstones were
+  written. Listeners run one at a time and the revocation waits for them; one that throws is logged,
+  and the others and the revocation stand. At most once, in the process that revoked: a process that
+  stops between the commit and a listener loses that notice, and nothing repeats it. Work that must
+  not be lost (the session events, a queued back-channel logout, #624) belongs in the revocation's
+  transaction.
+- **Lists.** `listForUser` and `listForClient` read one page, newest first (`limit` up to 200, 50 by
+  default, and the opaque `cursor`, which names its list and is refused for another with
+  `InvalidSessionCursorError`). Each session carries its address, user agent, `auth_time`,
+  `last_seen_at`, its ends, its clients and a state: `live`, `idle`, `expired` or `revoked`. A
+  user's list keeps ended sessions until the purge deletes them; a client's list holds only sessions
+  not yet revoked, since a revocation takes the registry rows.
+- **Lapsed and purged.** `endLapsed` marks the sessions past their absolute end or their realm's idle
+  limit, which `get` already treats as absent, as `expired` or `idle`, so their registry rows go and
+  the listeners hear of them; `revokedAt` is the time of the mark, which retention counts from.
+  `purge` deletes the rows revoked before a time; a row past its end that `endLapsed` has not
+  marked yet stays until it is, so its end reaches the listeners first. The
+  auth-server runs them as two jobs on the `web` role: `session-expiry` every five minutes and
+  `session-purge` hourly, keeping `SESSION_RETENTION_DAYS` (30 by default).
+- **A client's list is for admins.** `listForClient` gives each session with all the clients it
+  served, its address and its user agent. A caller that answers the client's own developer must not
+  pass those on.
 - **Not stored.** The CSRF values and the consent scopes are volatile per-flow values. They are not
   part of a session here and never reach Postgres; the session record keeps only its own columns,
   and the cache entry leaves out the address and the user agent too.

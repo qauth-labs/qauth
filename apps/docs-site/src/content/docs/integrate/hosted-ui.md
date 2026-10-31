@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-31'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -57,6 +57,87 @@ would. The **Remember this decision** checkbox (ticked by default) stores the
 consent, which lets later requests for the same scopes skip the screen and lists
 the client under `/consents`. Unticked, the approval is one-time: nothing is
 stored, and `/oauth/token` returns no `refresh_token` for that code.
+
+The screen names the client by what the server verified about it, never by the
+name the client gives itself
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)
+Decision 6):
+
+- A client whose `client_id` is a Client ID Metadata Document URL is shown by
+  that URL's host, in its ASCII (`xn--`) form, with the registrable domain in
+  bold. A host under a shared-hosting suffix (the private section of the Public
+  Suffix List) is flagged. The host is all the screen shows, and all the server
+  verified: with the default `CIMD_TRUST_POLICY=accept-any-https`, a document
+  anyone can publish on a host that serves anyone's files appears under that
+  host. A deployment that accepts third-party agents should use the
+  `allowlist` policy
+  ([CIMD](/operate/docker/#what-the-consent-screen-shows-for-a-cimd-client)).
+- A client the operator provisioned is shown by the domain the operator set on
+  it: `verified_domain` in the `db:seed-oauth-clients` manifest.
+- Any other client, a dynamically registered or developer-portal one included,
+  is shown as an unverified app, with the host that receives the code.
+
+A redirect to a loopback address is shown as "this device", with a warning. The
+name the client declared comes after all of this, labelled as declared, cut to
+64 characters and stripped of control and bidirectional characters. No logo or
+link the client supplied is shown.
+
+Since the screen always says where the code goes, registration refuses a
+redirect URI it could not show: a host that is not a DNS name of valid labels
+(an underscore, an empty label), an IPv6 address other than loopback, or a
+private-use scheme longer than 64 characters.
+
+### An AI agent client
+
+For an agent client (one with `is_agent`, see
+[Agent Authorization](/integrate/agent-authorization/#1-agent-client-type-is_agent)),
+the screen adds two lines after the "Signed in as" line. They are QAuth's own
+text, never anything the client declared:
+
+- **"This app is an AI agent."** The name the client declared stays in its
+  own line, labelled as declared.
+- **How long the agent may keep working.** In a realm without
+  `sso_max_lifespan`: "It may keep working until you revoke it." In a realm
+  that sets one: "It may keep working until you revoke it, or until &lt;the
+  limit&gt; after you signed in, whichever comes first." The limit is written
+  as an exact duration that names every unit it holds: `3600` is "1 hour",
+  `5400` "1 hour and 30 minutes".
+
+The second line is the end of the agent's refresh-token family. Without a
+limit each refresh moves the family's end forward, until the user revokes the
+consent under `/consents`. With one, the family ends no later than its start
+plus the limit and the end of the browser session behind the code, and that
+session ends the limit after the sign-in
+([Refresh Token](/integrate/oauth-flow/#refresh-token-rotation)). Three things
+the line leaves to this page:
+
+- **The family needs a stored consent.** The code exchange issues a refresh
+  token only under one: the approval with **Remember this decision** ticked,
+  or a consent the user remembered on an earlier visit, which unticking the
+  box later does not remove (revoke it under `/consents`). With neither, no
+  refresh token is issued and the agent stops when its access token expires.
+- **An access token outlives both ends.** Revoking the consent and the
+  family's end stop refreshes; an access token already issued works until it
+  expires, `ACCESS_TOKEN_LIFESPAN` (15 minutes by default) or, for a
+  `development` client, `DEV_ACCESS_TOKEN_LIFESPAN`.
+- **The limit is the one the page read.** The page states the realm's limit
+  as it is when the page renders. A limit the operator changes later applies
+  to the family as the Refresh Token section describes, not as the page said.
+  A browser session keeps the end it was given at sign-in, so after a realm
+  raises `sso_max_lifespan`, a family started from a session signed in before
+  the change ends at the earlier of its start plus the new limit and that
+  session's own end, which the old limit set.
+
+A stored consent never skips the screen for an agent client (ADR-015
+Decision 11): every authorization request from an agent shows it, `prompt=none`
+from an agent answers `consent_required` with no code, and the legacy Bearer
+path of `/oauth/authorize`, which cannot show the screen, issues an agent no
+code.
+
+The decision is taken for the page the user saw. A client whose `is_agent`
+changes between the page and the decision (a Client ID Metadata Document can
+change it) gets nothing from that decision: the browser goes back to
+`/oauth/authorize`, which shows the page the client needs now.
 
 ## `/ui/resume/{handle}`
 

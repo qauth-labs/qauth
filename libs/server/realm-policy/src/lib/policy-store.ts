@@ -66,6 +66,13 @@ export interface RealmPolicyStorage<Row, Tx> {
   /** Every realm's record. */
   list(tx?: Tx): Promise<readonly RealmPolicyRecord[]>;
   /**
+   * The record of the realm `realmId` with its row locked until `tx` ends
+   * (`SELECT ... FOR NO KEY UPDATE`), or `undefined` when there is none. A
+   * write of the policies reads the realm through it: a write of the row that
+   * commits first is in what the store reads, and one that comes later waits.
+   */
+  readLocked(realmId: string, tx: Tx): Promise<RealmPolicyRecord | undefined>;
+  /**
    * Write the policies where the realm's counter is still
    * `write.expectedVersion`, setting it one higher, in one statement.
    *
@@ -118,10 +125,23 @@ export interface SeededRealm {
   readonly realmName: string;
 }
 
+/**
+ * A field a fill took from the realm's row rather than from the environment:
+ * a value the server read from the row before the policies existed, such as
+ * the environment ceiling or a dynamic registration allowlist that holds a
+ * scope.
+ */
+export interface KeptFromRow {
+  /** The field's path in the policy document. */
+  readonly path: string;
+  /** Whether the kept value differs from the environment's seed, which the fill left unused. */
+  readonly differsFromSeed: boolean;
+}
+
 /** What {@link RealmPolicyStore.seedRealms} did. */
 export interface RealmPolicySeedReport {
-  /** The realms that had no policies and got them. */
-  readonly filled: readonly SeededRealm[];
+  /** The realms that had no policies and got them, each with the fields its row kept. */
+  readonly filled: readonly (SeededRealm & { readonly keptFromRow: readonly KeptFromRow[] })[];
   /** The realms that lacked fields of this release, and the fields each got from the seeds. */
   readonly completed: readonly (SeededRealm & { readonly paths: readonly string[] })[];
   /**
@@ -181,9 +201,10 @@ export interface RealmPolicyStore<Row, Tx> {
    * The boot step (#516): give every realm with no policies its fill (the
    * environment's seeds, with the values of its row the server already
    * read), and give every realm whose document lacks fields of this release
-   * their seeds. Each write is `UPDATE ... WHERE policies_version = <read>`,
-   * so of two nodes that boot together one writes and the other finds the
-   * work done. A realm that already has every field is not written, nor
+   * their seeds. Each realm to write is read with its row locked, and each
+   * write is `UPDATE ... WHERE policies_version = <read>`, so of two nodes
+   * that boot together one writes and the other finds the work done, and a
+   * plain write of the row is never overwritten with what it changed. A realm that already has every field is not written, nor
    * read further: changing an environment key later changes no realm. A
    * realm whose policies follow another schema version is not completed
    * (`skipped`).
@@ -428,6 +449,19 @@ function unknownMembersOf(
 }
 
 /**
+ * Whether two policy values are the same; a set field's lists in any order.
+ * The values are JSON: a list of a set field holds strings.
+ */
+function sameValue(a: unknown, b: unknown, set: boolean): boolean {
+  if (set && Array.isArray(a) && Array.isArray(b)) {
+    const members = (list: unknown[]) =>
+      [...new Set(list.map((entry) => JSON.stringify(entry)))].sort();
+    return JSON.stringify(members(a)) === JSON.stringify(members(b));
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
  * A list kept from a realm's row before its policies existed, with its
  * repeats dropped, first occurrence first: an earlier release copied an
  * environment value into the row as it was written, repeats included, which
@@ -467,6 +501,8 @@ interface EffectivePolicies {
   readonly unknown: Record<string, unknown>;
   /** The fields the stored document lacks, which took their seeds (a realm with policies only). */
   readonly missing: readonly string[];
+  /** The fields a fill kept from the realm's row (a realm with no policies only). */
+  readonly kept: readonly KeptFromRow[];
 }
 
 /**
@@ -498,21 +534,28 @@ export function createPolicyStore<Row, Tx>(
     const unknown = hasPolicies ? unknownMembersOf(layout, record.document) : {};
     const document: Record<string, unknown> = {};
     const missing: string[] = [];
+    const kept: KeptFromRow[] = [];
     for (const entry of layout.fields) {
       if (entry.field.secret) continue;
       if (hasAt(source, entry.segments)) {
         const value = structuredClone(valueAt(source, entry.segments));
-        setAt(
-          document,
-          entry.segments,
-          !hasPolicies && isSetDirection(entry.field.direction) ? withoutRepeats(value) : value
-        );
+        if (hasPolicies) {
+          setAt(document, entry.segments, value);
+          continue;
+        }
+        const set = isSetDirection(entry.field.direction);
+        const keptValue = set ? withoutRepeats(value) : value;
+        setAt(document, entry.segments, keptValue);
+        kept.push({
+          path: entry.path,
+          differsFromSeed: !sameValue(keptValue, valueAt(seeds, entry.segments), set),
+        });
         continue;
       }
       if (hasPolicies) missing.push(entry.path);
       setAt(document, entry.segments, structuredClone(valueAt(seeds, entry.segments)));
     }
-    return { document: registry.parse(document, 'document'), unknown, missing };
+    return { document: registry.parse(document, 'document'), unknown, missing, kept };
   }
 
   function snapshotOf(record: RealmPolicyRecord): RealmPolicySnapshot {
@@ -569,6 +612,14 @@ export function createPolicyStore<Row, Tx>(
     return { rest, writes };
   }
 
+  /** Whether `record` has its policies and every field of this release. */
+  function isComplete(record: RealmPolicyRecord): boolean {
+    return (
+      record.version > 0 &&
+      layout.fields.every((entry) => entry.field.secret || hasAt(record.document, entry.segments))
+    );
+  }
+
   async function conflictOrMissing(
     realmId: string,
     expectedVersion: number,
@@ -610,7 +661,9 @@ export function createPolicyStore<Row, Tx>(
       }
 
       return storage.transaction(async (inner) => {
-        const record = await storage.read(realmId, inner);
+        // Locked, as in `seedRealms`: the counter of a realm with no policies
+        // stays 0 through a plain write of its row.
+        const record = await storage.readLocked(realmId, inner);
         if (record === undefined) throw new RealmPolicyNotFoundError(realmId);
         if (record.version !== expectedVersion) {
           throw new PolicyVersionConflictError(realmId, expectedVersion, record.version);
@@ -643,18 +696,21 @@ export function createPolicyStore<Row, Tx>(
 
     async seedRealms(tx?: Tx): Promise<RealmPolicySeedReport> {
       return storage.transaction(async (inner) => {
-        const filled: SeededRealm[] = [];
+        const filled: (SeededRealm & { keptFromRow: readonly KeptFromRow[] })[] = [];
         const completed: (SeededRealm & { paths: readonly string[] })[] = [];
         const skipped: (SeededRealm & { schemaVersion: string | null })[] = [];
-        for (const record of await storage.list(inner)) {
+        for (const listed of await storage.list(inner)) {
           // A realm that has its policies and every field is not read further:
           // the environment only seeds, so nothing here changes it.
-          const complete =
-            record.version > 0 &&
-            layout.fields.every(
-              (entry) => entry.field.secret || hasAt(record.document, entry.segments)
-            );
-          if (complete) continue;
+          if (isComplete(listed)) continue;
+          // Read again with the row locked before computing what to write. A
+          // plain write of the row (a previous release's node during a rolling
+          // upgrade) leaves the counter of a realm with no policies at 0, so
+          // the counter compare alone would let the fill overwrite it: an
+          // operator's tightened ceiling would be lost. Locked, a write that
+          // committed first is in the fill, and one that comes later waits.
+          const record = await storage.readLocked(listed.realmId, inner);
+          if (record === undefined || isComplete(record)) continue;
           if (record.version > 0 && record.schemaVersion !== registry.version) {
             skipped.push({
               realmId: record.realmId,
@@ -685,7 +741,7 @@ export function createPolicyStore<Row, Tx>(
           // the realm's, and a field it lacks is completed at the next boot.
           if (written === undefined) continue;
           const realm = { realmId: record.realmId, realmName: record.realmName };
-          if (record.version === 0) filled.push(realm);
+          if (record.version === 0) filled.push({ ...realm, keptFromRow: policies.kept });
           else completed.push({ ...realm, paths: policies.missing });
         }
         return { filled, completed, skipped };

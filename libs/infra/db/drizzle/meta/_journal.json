@@ -330,6 +330,13 @@
       "when": 1793447512172,
       "tag": "0046_realm_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1793450937620,
+      "tag": "0047_oauth_client_verified_domain",
+      "breakpoints": true
     }
   ]
 }

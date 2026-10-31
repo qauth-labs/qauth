@@ -289,7 +289,10 @@ take `ACCESS_TOKEN_LIFESPAN` and `REFRESH_TOKEN_LIFESPAN`. The fill is an
 together, the first one writes and the others find the realm filled. So give
 every node the same environment for the first boot after the upgrade; the
 first node to boot decides the stored values. The log says
-`realm policies filled from the environment` for each realm it filled.
+`realm policies filled from the environment` for each realm it filled, and
+warns for each value a realm's row kept that differs from the environment's
+seed (`... kept its posture.maxEnvironmentLaxity from its row ...`), so a
+ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
@@ -299,17 +302,27 @@ flows move to the stored values one area at a time: the token lifetimes
 ([#529](https://github.com/qauth-labs/qauth/issues/529)) and CIMD
 ([#534](https://github.com/qauth-labs/qauth/issues/534)). The dynamic
 registration allowlist and the environment ceiling already come from the row:
-`/oauth/register` and the clients API no longer copy
-`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies, even
-when its list is empty. Until an area has moved, the server still applies its
+`/oauth/register` and the clients API no longer write
+`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm's list. A realm that has its
+policies is held to its own list, even an empty one; a realm with none yet, to
+the list its fill will hold, which the first boot stores. Until an area has moved, the server still applies its
 keys to every realm, so keep them set. At every boot the server names each seed
 key that is still set, once:
 
 - for a key whose policy the server reads from the row, a warning such as
   `DEFAULT_DYNAMIC_REGISTRATION_SCOPES only seeds new realms and is ignored`;
-- for any other key, an info line that the stored policies ignore it and that
+- for any other key, an info line that the stored policies ignore it, that
   the server still applies it to every realm until it reads that policy from
-  the row.
+  the row, and that the stored value applies from then on.
+
+**A key changed after this upgrade never reaches the stored policies.** The
+first boot stored the value each key had then. Change a key whose area has not
+moved yet, and the server applies the new value while it reads the area from
+the environment; the release that moves the area to the row applies the
+stored value instead, whatever the key says by then. A key tightened in the
+meantime, such as a shorter `REFRESH_TOKEN_LIFESPAN` or `CIMD_ENABLED=false`,
+would loosen again at that upgrade. So change the stored policy along with
+the key, not the key alone.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
@@ -330,7 +343,68 @@ secret store takes them once it ships
 ([#529](https://github.com/qauth-labs/qauth/issues/529)), and until then the
 server reads them from the environment. During a rolling upgrade a node of the
 previous release reads none of the new columns and runs on the environment as
-before.
+before. A realm such a node creates during the roll has no policies (counter 0)
+until a node of this release boots again, since only the boot fills them, so
+restart one node of this release once the roll is complete.
+
+### Redirect URIs the consent screen cannot show
+
+From this release the consent screen always says where the authorization code
+goes, by the host of the redirect URI, "this device" for a loopback address,
+or the app's own scheme
+([#593](https://github.com/qauth-labs/qauth/issues/593)). Every registration
+path refuses a redirect URI it cannot show: a host that is not a DNS name of
+valid labels (an underscore, an empty label, a label with a hyphen at either
+end), an IPv6 address that is not loopback, or a scheme longer than 64
+characters. A client stored before the upgrade with such a URI breaks:
+
+- **A CIMD client** whose document lists one no longer resolves once the
+  server fetches its document again: the consent screen refuses it, and so does
+  the token endpoint, where its next refresh answers `invalid_client`. Its
+  owner changes the document; nothing on the server side fixes it.
+- **A seed manifest** that names one is refused whole, so running
+  `db:seed-oauth-clients` again changes no client until the URI is fixed or
+  removed from the manifest.
+- **A client registered dynamically, through `/api/clients` or by the
+  manifest** keeps working for a user whose stored consent covers the
+  request, but the consent screen answers a new user, or one whose request
+  needs the screen, with `invalid_request` (400).
+
+Before you upgrade, find the redirect URIs that break with this query. It
+finds the usual cases (an underscore in the host, an IPv6 address that is not
+`[::1]`, a long scheme). A host with an empty label or an outer hyphen is
+rarer, and the consent screen refuses it with `invalid_request` and the
+description `redirect_uri cannot be shown`.
+
+```sql
+SELECT realm_id, client_id, u AS redirect_uri
+FROM oauth_clients, jsonb_array_elements_text(redirect_uris) AS u
+WHERE u ~* '^https?://[^/?#]*_'
+   OR (u ~* '^https?://\[' AND u !~* '^https?://\[::1\]')
+   OR length(split_part(u, ':', 1)) > 64;
+```
+
+Replace each URI with one the client can receive its code on, through the
+client's own registration path, the seed manifest or, for a CIMD client, its
+document.
+
+### Migration 0047 can meet a client registration in a deadlock
+
+Migration 0047 ([#593](https://github.com/qauth-labs/qauth/issues/593)) adds
+`oauth_clients.verified_domain`. The runner applies every pending migration in
+one transaction, so when 0046 is in the same run it already holds `realms`
+(0046 changes that table) when 0047 locks `oauth_clients`. A node of the
+previous release that stores a new client at that moment (dynamic
+registration, a CIMD client resolved for the first time, `/api/clients`, the
+seeder) takes the two tables in the other order: `oauth_clients` for its
+insert, then `realms` for the foreign key check. Postgres then aborts one of
+the two with `deadlock detected`. If it aborts the client's request, that one
+request fails and the client registers again. If it aborts the runner, the
+whole run rolls back, nothing is half-applied, and the runner exits with an
+error: run it again. A lock taken at the start of 0047 would not change the
+order, since `realms` is held by then. To avoid the retry, run the migration
+runner when no client is being registered, such as before the first node of
+the new release starts and with open registration quiet.
 
 ### The delivery role reads `realms.issuer`
 

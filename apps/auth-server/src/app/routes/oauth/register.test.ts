@@ -134,6 +134,12 @@ function createFastifyStub(
     passwordHasher: {
       hashPassword: vi.fn(async (v: string) => `argon2id$${v.slice(0, 8)}`),
     },
+    // A realm with no policies yet is capped with its fill's list (#516).
+    policyStore: {
+      ofRealm: vi.fn(() => ({
+        policies: { registration: { dynamicRegistrationAllowedScopes: ['openid', 'profile'] } },
+      })),
+    },
     log: {
       debug: vi.fn(),
       info: vi.fn(),
@@ -578,10 +584,16 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     expect(state.createdClients[0].dpopBoundAccessTokens).toBe(false);
   });
 
-  it('seeds the realm default allowlist on first use when empty', async () => {
-    const { fastify, ctx, state } = createFastifyStub({
+  it('caps a realm with no policies yet with the list of its fill, and writes nothing (#516)', async () => {
+    // The boot step stores the fill, the first node to boot winning: a
+    // request that wrote this node's list could overwrite it.
+    const { fastify, ctx } = createFastifyStub();
+    const current = testRealm({
+      id: 'realm-1',
       dynamicRegistrationAllowedScopes: [],
+      policiesVersion: 0,
     });
+    (fastify.repositories.realms.findById as unknown as Mock).mockResolvedValue(current);
     await registerRoute(fastify);
 
     const { reply } = createReply();
@@ -589,7 +601,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       {
         body: {
           redirect_uris: ['https://app.example/cb'],
-          scope: 'openid profile',
+          scope: 'openid profile email',
         },
         ip: '127.0.0.1',
         headers: {},
@@ -597,12 +609,9 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       reply
     )) as Record<string, unknown>;
 
-    // Scope accepted → default allowlist must have been seeded
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledWith(current);
     expect(result.scope).toBe('openid profile');
-    expect((fastify.repositories.realms.update as unknown as Mock).mock.calls[0][1]).toMatchObject({
-      dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
-    });
-    expect(state.realm.id).toBe('realm-1');
+    expect(fastify.repositories.realms.update).not.toHaveBeenCalled();
   });
 
   it('keeps the empty allowlist of a realm that has its policies: the environment only seeds (#516)', async () => {

@@ -162,10 +162,7 @@ before assuming a large deletion is safe.
 
 ## The two caching lessons
 
-Both are about Nx's cache, and both are re-breakable by an edit that looks like tidying. They
-weigh more since CI shares a remote cache (`nxCloudId` in `nx.json`): main writes it and every pull
-request reads it, so a target with an incomplete `inputs` list replays main's result on pull
-requests that should have re-run it.
+Both are about Nx's cache, and both are re-breakable by an edit that looks like tidying.
 
 ### #285 — `nx test` passed while running zero tests
 

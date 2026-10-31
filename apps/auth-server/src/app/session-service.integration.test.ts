@@ -37,6 +37,8 @@ import { metricsPlugin } from './plugins/metrics';
 
 const MINUTE = 60_000;
 const SID_UNKNOWN = '0199a000-0000-7000-8000-000000000999';
+/** The actor of the suite's revocations: the user signing out. */
+const USER = { type: 'user', id: 'test-user' } as const;
 
 interface NodeSettings {
   readonly databaseUrl: string;
@@ -290,10 +292,19 @@ describe('the session service on a real Postgres and Redis', () => {
     expect(await b.sessionService.get({ realmId, sid })).not.toBeNull();
     expect(await c.sessionService.get({ realmId, sid })).not.toBeNull();
 
-    const ended = await a.sessionService.revoke({ realmId, sid, reason: 'sign_out' });
+    const ended = await a.sessionService.revoke({
+      realmId,
+      userId,
+      sid,
+      reason: 'sign_out',
+      actor: USER,
+    });
     const revokedAt = Date.now();
 
-    expect(ended).toMatchObject({ id: sid, revokedReason: 'sign_out' });
+    expect(ended).toMatchObject({
+      outcome: 'ended',
+      session: { id: sid, revokedReason: 'sign_out' },
+    });
     expect(await a.sessionService.get({ realmId, sid })).toBeNull();
     // B shares A's Redis: the tombstone is there at once.
     expect(await b.sessionService.get({ realmId, sid })).toBeNull();
@@ -396,8 +407,14 @@ describe('the session service with Redis stopped', () => {
 
     // An end is still stored, and the next read sees it.
     expect(
-      await node.sessionService.revoke({ realmId, sid: after.sid, reason: 'sign_out' })
-    ).toMatchObject({ id: after.sid });
+      await node.sessionService.revoke({
+        realmId,
+        userId,
+        sid: after.sid,
+        reason: 'sign_out',
+        actor: USER,
+      })
+    ).toMatchObject({ outcome: 'ended', session: { id: after.sid } });
     expect(await node.sessionService.get({ realmId, sid: after.sid })).toBeNull();
 
     // Eight service calls, each giving up on Redis after 250 ms at most.
@@ -445,7 +462,13 @@ describe('the session service with Postgres stopped', () => {
       node.sessionService.create({ realmId, userId, authTime: Date.now() })
     ).rejects.toThrow();
     await expect(
-      node.sessionService.revoke({ realmId, sid: cached.sid, reason: 'sign_out' })
+      node.sessionService.revoke({
+        realmId,
+        userId,
+        sid: cached.sid,
+        reason: 'sign_out',
+        actor: USER,
+      })
     ).rejects.toThrow();
 
     // The cache alone vouches for a session no longer than the cache time.

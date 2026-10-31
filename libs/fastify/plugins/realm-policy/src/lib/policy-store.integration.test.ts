@@ -6,7 +6,8 @@
  *   also when the counter moved through a plain realm UPDATE (the trigger);
  * - a new realm gets `defaultsFromEnv`, and a realm with no policies gets its
  *   fill once, keeping the row values the server read before;
- * - two nodes filling a realm at once leave one consistent document;
+ * - two nodes filling a realm at once leave one consistent document, and a
+ *   fill never overwrites a plain UPDATE of the row it waited on;
  * - a secret never reaches `realms.policies`.
  *
  * Requires Docker; self-skips without it.
@@ -212,8 +213,13 @@ describe('policy store over the realms table (integration)', () => {
     const realm = await realms.create({ name: 'trigger' });
     const read = await store.get(realm.id);
 
-    // A writer from before the policies existed, such as /oauth/register's.
-    await realms.update(realm.id, { dynamicRegistrationAllowedScopes: ['openid'] });
+    // A writer from before the policies existed, such as /oauth/register's on
+    // a node of the previous release during a rolling upgrade. This release's
+    // repository writes no policy column (below).
+    await db().pool.query(
+      `UPDATE realms SET dynamic_registration_allowed_scopes = '["openid"]'::jsonb WHERE id = $1`,
+      [realm.id]
+    );
 
     await expect(
       store.update(realm.id, { password: { minScore: 4 } }, { expectedVersion: read?.version ?? 0 })
@@ -221,6 +227,40 @@ describe('policy store over the realms table (integration)', () => {
     expect(
       (await store.get(realm.id))?.policies.registration.dynamicRegistrationAllowedScopes
     ).toEqual(['openid']);
+  });
+
+  it("writes no policy column through the repository's plain update", async () => {
+    const realms = createRealmsRepository(db().db, {
+      seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
+    });
+    const realm = await realms.create({ name: 'plain-update' });
+    const before = await row(realm.id);
+
+    // A caller the types do not bind: every policy column is dropped, the
+    // rest is written.
+    await realms.update(realm.id, {
+      enabled: false,
+      accessTokenLifespan: 0,
+      refreshTokenLifespan: 0,
+      dynamicRegistrationAllowedScopes: ['openid', 'openid', 'a scope'],
+      maxEnvironmentLaxity: 'development',
+      policies: { password: { minScore: 0 } },
+      policySchemaVersion: '9',
+      policiesVersion: 0,
+    } as never);
+
+    const after = await row(realm.id);
+    expect(after).toMatchObject({
+      enabled: false,
+      access_token_lifespan: before.access_token_lifespan,
+      refresh_token_lifespan: before.refresh_token_lifespan,
+      dynamic_registration_allowed_scopes: before.dynamic_registration_allowed_scopes,
+      max_environment_laxity: before.max_environment_laxity,
+      policies: before.policies,
+      policy_schema_version: before.policy_schema_version,
+      policies_version: before.policies_version,
+    });
+    expect((await storeOn(db()).get(realm.id))?.version).toBe(1);
   });
 
   it('fills a realm with no policies once, keeping the row values the server read before', async () => {
@@ -232,6 +272,14 @@ describe('policy store over the realms table (integration)', () => {
     expect(report.filled.map((realm) => realm.realmName).sort()).toEqual([
       'empty-scopes',
       'master',
+    ]);
+    // What each row kept over the environment's seeds, which the boot warns about.
+    expect(report.filled.find((realm) => realm.realmId === kept)?.keptFromRow).toEqual([
+      { path: 'registration.dynamicRegistrationAllowedScopes', differsFromSeed: true },
+      { path: 'posture.maxEnvironmentLaxity', differsFromSeed: true },
+    ]);
+    expect(report.filled.find((realm) => realm.realmId === empty)?.keptFromRow).toEqual([
+      { path: 'posture.maxEnvironmentLaxity', differsFromSeed: true },
     ]);
     const master = await storeOn(db()).get(kept);
     expect(master).toMatchObject({ version: 1, hasPolicies: true });
@@ -313,11 +361,67 @@ describe('policy store over the realms table (integration)', () => {
       const { report: reportA, b } = await a;
       await b;
 
-      expect(reportA.filled).toEqual([{ realmId: id, realmName: 'race' }]);
+      expect(reportA.filled).toMatchObject([{ realmId: id, realmName: 'race' }]);
       expect(reportB).toEqual({ filled: [], completed: [], skipped: [] });
       const stored = await storeOn(db()).get(id);
       expect(stored?.version).toBe(1);
       expect(fillOf(stored?.policies)).toBe('A');
+    });
+
+    it('fills a realm as a plain UPDATE that held its row left it, not as the list read it', async () => {
+      if (!second) throw new Error('no second pool');
+      const id = await insertPreviousRealm('tightened');
+      // A previous release's node tightens the ceiling while the fill runs.
+      // The trigger keeps the counter at 0, so the counter compare alone would
+      // let the fill write the ceiling it read before.
+      const client = await db().pool.connect();
+      let fill: ReturnType<RealmPolicyStore<Realm, DbClient>['seedRealms']> | undefined;
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `UPDATE realms SET max_environment_laxity = 'production' WHERE id = $1`,
+          [id]
+        );
+        fill = storeOn(second).seedRealms();
+        await waitForLockWait();
+        await client.query('COMMIT');
+      } finally {
+        client.release();
+      }
+
+      expect((await fill)?.filled).toMatchObject([{ realmId: id, realmName: 'tightened' }]);
+      const stored = await storeOn(db()).get(id);
+      expect(stored).toMatchObject({ version: 1, hasPolicies: true });
+      expect(stored?.policies.posture.maxEnvironmentLaxity).toBe('production');
+    });
+
+    it('holds off writes of the row it locks, but not a row that references the realm', async () => {
+      if (!second) throw new Error('no second pool');
+      const id = await insertPreviousRealm('referenced');
+      const realms = createRealmsRepository(db().db);
+      const client = await second.pool.connect();
+      try {
+        await db().db.transaction(async (tx) => {
+          expect(await realms.lockPolicyRecord(id, tx)).toMatchObject({ realmId: id });
+          // A foreign key check takes FOR KEY SHARE on the realm row, which
+          // FOR NO KEY UPDATE does not conflict with: the insert goes through
+          // while the fill holds the row. FOR UPDATE would hold it off.
+          await client.query(`SET lock_timeout = '2s'`);
+          await client.query(
+            `INSERT INTO realm_hosts (host, realm_id, kind) VALUES ('referenced.example.com', $1, 'endpoint')`,
+            [id]
+          );
+          // A plain write of the realm row still waits for the lock.
+          await expect(
+            client.query(`UPDATE realms SET max_environment_laxity = 'production' WHERE id = $1`, [
+              id,
+            ])
+          ).rejects.toThrow(/lock timeout/);
+        });
+      } finally {
+        await client.query(`RESET lock_timeout`).catch(() => undefined);
+        client.release();
+      }
     });
 
     it('leaves one consistent document over many concurrent rounds', async () => {

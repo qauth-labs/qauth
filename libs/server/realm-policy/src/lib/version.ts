@@ -15,6 +15,11 @@
  * Registering a group ({@link PolicyRegistry.registerPolicyGroup}) does not
  * change the version: a group added in a minor release is an additive change,
  * and every field of it has a default.
+ *
+ * A bump ships with a converter, or a data migration, for the stored
+ * documents of the older version (#516): the policy store refuses to update a
+ * realm whose policies follow another version (`PolicySchemaVersionError`),
+ * the boot leaves them uncompleted, and a read may fail on them.
  */
 export const REALM_POLICY_SCHEMA_VERSION = '1-rc.0';
 

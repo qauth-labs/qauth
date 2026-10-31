@@ -10,6 +10,7 @@ import {
   registrationSchemaError,
   validateAndNormalize,
 } from '../../helpers/dynamic-client-registration';
+import { dynamicRegistrationScopesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
 import { requestRealm } from '../../helpers/request-realm';
@@ -81,42 +82,21 @@ export default async function (fastify: FastifyInstance) {
 
       const realm = requestRealm(request);
 
-      // Seed realm's allowlist on first use. We *only* do this when the
-      // realm has an empty list — never overwrite an operator's choice — and
-      // no policies yet (#516): once the realm row holds its policies, the
-      // boot step seeded the list from the environment, and an empty list is
-      // the realm's own policy, which the environment no longer changes.
-      // Defaults are intentionally tight (OIDC core scopes). The list is read
-      // from the database, not from the resolver's row, which can be up to its
-      // cache time old (#487): the seed must see a list an operator set since.
-      // A realm deleted within that cache time has no row. It is refused the
-      // way the resolver refuses a host no realm owns, before the secret hash:
-      // an empty allowlist would only narrow the scopes, and the insert would
-      // then fail on the realm foreign key.
+      // The realm's allowlist (#516): the list its row holds, or, for a realm
+      // with no policies yet, the list its fill will hold. Nothing is written:
+      // the boot step stores the fill, so a request cannot overwrite it with
+      // this node's environment. Defaults are intentionally tight (OIDC core
+      // scopes). The realm is read from the database, not from the resolver's
+      // row, which can be up to its cache time old (#487): a list an operator
+      // set since must apply. A realm deleted within that cache time has no
+      // row. It is refused the way the resolver refuses a host no realm owns,
+      // before the secret hash: an empty allowlist would only narrow the
+      // scopes, and the insert would then fail on the realm foreign key.
       const current = await fastify.repositories.realms.findById(realm.id);
       if (!current) {
         throw new MisdirectedRequestError({ reason: 'realm_deleted', realmId: realm.id });
       }
-      let allowedScopes = current.dynamicRegistrationAllowedScopes ?? [];
-      if (
-        allowedScopes.length === 0 &&
-        (current.policiesVersion ?? 0) === 0 &&
-        env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES.length > 0
-      ) {
-        allowedScopes = [...env.DEFAULT_DYNAMIC_REGISTRATION_SCOPES];
-        try {
-          await fastify.repositories.realms.update(realm.id, {
-            dynamicRegistrationAllowedScopes: allowedScopes,
-          });
-        } catch (err) {
-          // Best-effort: if the update races another request, we still have
-          // the allowedScopes list in memory for this request.
-          fastify.log.warn(
-            { err, realmId: realm.id },
-            'Failed to persist default dynamic_registration_allowed_scopes'
-          );
-        }
-      }
+      const allowedScopes = dynamicRegistrationScopesOf(fastify.policyStore, current);
 
       // Validate + normalize against realm policy. Throws the RFC 7591 §3.2.2
       // error classes on policy violations; the global error handler answers
@@ -223,6 +203,10 @@ export default async function (fastify: FastifyInstance) {
         // explicitly, like `environment`, so no change to the request schema
         // can ever make a self-registration trusted.
         provisionedByOperator: false,
+        // ADR-019 Decision 6 (#593): no verified domain. Only an admin sets
+        // one, on a client the operator provisioned; pinned like
+        // `provisionedByOperator`, and the request schema defines no such field.
+        verifiedDomain: null,
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.

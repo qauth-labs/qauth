@@ -518,6 +518,9 @@ importers:
       '@qauth-labs/shared-events':
         specifier: workspace:*
         version: link:../../libs/shared/events
+      '@qauth-labs/shared-interaction-client':
+        specifier: workspace:*
+        version: link:../../libs/shared/interaction-client
       '@qauth-labs/shared-interaction-contract':
         specifier: workspace:*
         version: link:../../libs/shared/interaction-contract
@@ -542,6 +545,9 @@ importers:
       prom-client:
         specifier: 'catalog:'
         version: 15.1.3
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.18
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -1701,6 +1707,9 @@ importers:
 
   libs/shared/validation:
     dependencies:
+      tldts:
+        specifier: 'catalog:'
+        version: 7.4.18
       tslib:
         specifier: 'catalog:'
         version: 2.8.1

@@ -110,8 +110,9 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  *      No session → redirect to /ui/login with a `return_to` pointing at
  *      `/ui/resume/<handle>`; the authorize URL itself is parked server-side
  *      (see helpers/pending-authorization.ts, #316). Session + no
- *      prior consent covering the requested scopes → redirect to the
- *      consent screen at /ui/consent. Otherwise issue a code directly.
+ *      prior consent covering the requested scopes, or an agent client
+ *      (ADR-015 Decision 11) → redirect to the consent screen at
+ *      /ui/consent. Otherwise issue a code directly.
  *   2. Legacy/machine: Authorization: Bearer <access_token>. Retained for
  *      backwards compatibility with first-party callers that have not yet
  *      migrated to the browser flow. It cannot show the consent screen, so
@@ -563,7 +564,8 @@ export default async function (fastify: FastifyInstance) {
     // resources (the same `canSkipConsent` question the browser flow asks
     // below, badge window included); anything else is refused (ADR-017
     // Decision 9: every path other than an operator-flagged first-party
-    // client requires consent).
+    // client requires consent). An agent client never skips the screen
+    // (ADR-015 Decision 11), so this path issues it no code.
     if (!browserSession && !canSkipConsent(existingConsent, client, scopes, resources)) {
       await emitUserEvent(
         request,
@@ -581,7 +583,8 @@ export default async function (fastify: FastifyInstance) {
     }
 
     // Browser-driven flow: show the consent screen unless a previous
-    // grant already covers the requested scopes.
+    // grant already covers the requested scopes. An agent client always sees
+    // it (ADR-015 Decision 11): `canSkipConsent` is false for an agent.
     if (browserSession) {
       // ADR-007 §2 (#185): step-up authentication before dangerous
       // operations / on elevation. A request that widens the granted scope
@@ -614,8 +617,10 @@ export default async function (fastify: FastifyInstance) {
       // it reports nothing when the scope set is empty (every CIMD client, or
       // any client that omits `scope`). The consent screen below is gated on
       // `canSkipConsent` as well, and `prompt=none` must answer the same
-      // question: no stored, unrevoked grant covering this request (or a
-      // dynamic client still in its badge window) means `consent_required`.
+      // question: no stored, unrevoked grant covering this request, a dynamic
+      // client still in its badge window, or an agent client, which never
+      // skips the screen (ADR-015 Decision 11), means `consent_required`.
+      // A fresh-login requirement still answers `login_required` first.
       // "Covering" includes the RFC 8707 resources: a grant remembered for
       // one resource server is no consent to tokens for another.
       if (prompt === 'none') {

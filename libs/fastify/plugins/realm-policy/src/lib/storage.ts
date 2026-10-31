@@ -15,7 +15,10 @@ import type { RealmPolicyStorage } from '@qauth-labs/server-realm-policy';
  */
 export function createRealmPolicyStorage(
   db: Pick<Database, 'transaction'>,
-  realms: Pick<RealmsRepository, 'findById' | 'listPolicyRecords' | 'writePolicies'>
+  realms: Pick<
+    RealmsRepository,
+    'findById' | 'listPolicyRecords' | 'lockPolicyRecord' | 'writePolicies'
+  >
 ): RealmPolicyStorage<Realm, DbClient> {
   return Object.freeze({
     recordOf: realmPolicyRecord,
@@ -24,6 +27,7 @@ export function createRealmPolicyStorage(
       return realm === undefined ? undefined : realmPolicyRecord(realm);
     },
     list: (tx?: DbClient) => realms.listPolicyRecords(tx),
+    readLocked: (realmId: string, tx: DbClient) => realms.lockPolicyRecord(realmId, tx),
     async write(
       realmId: string,
       write: Parameters<RealmsRepository['writePolicies']>[1],

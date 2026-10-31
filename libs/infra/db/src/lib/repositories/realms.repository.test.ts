@@ -149,30 +149,41 @@ describe('createRealmsRepository — sso_max_lifespan (#552)', () => {
 });
 
 describe('createRealmsRepository — dynamic registration allowlist (#507)', () => {
+  const id = '0192e000-0000-7000-8000-000000000001';
+
+  /**
+   * A whole policy document whose allowlist is `scopes`. Since #516 only the
+   * policy seed and `writePolicies` write the allowlist.
+   */
+  const documentWith = (scopes: string[]) => ({
+    tokens: { accessTokenLifespanSeconds: 900, refreshTokenLifespanSeconds: 604800 },
+    registration: { dynamicRegistrationAllowedScopes: scopes },
+    posture: { maxEnvironmentLaxity: 'production' },
+  });
+
   it.each([
     ['openid', 'qauth:admin:read'],
     ['qauth:admin:security'],
     ['openid', 'QAuth:Admin:Write'],
   ])('refuses %j before the database sees it', async (...scopes) => {
     const { db, queries } = createRecordingDb();
-    const realms = createRealmsRepository(db);
-    const id = '0192e000-0000-7000-8000-000000000001';
     const message =
       /^Realm dynamic_registration_allowed_scopes must not hold a scope in the "qauth:" namespace/;
+    const seeded = createRealmsRepository(db, {
+      seeds: { policies: { document: documentWith(scopes), schemaVersion: '1-rc.0' } },
+    });
 
-    await expect(realms.update(id, { dynamicRegistrationAllowedScopes: scopes })).rejects.toThrow(
-      BadRequestError
-    );
     await expect(
-      realms.create({ name: 'admin', dynamicRegistrationAllowedScopes: scopes })
-    ).rejects.toThrow(message);
+      createRealmsRepository(db).writePolicies(id, {
+        document: documentWith(scopes),
+        schemaVersion: '1-rc.0',
+        expectedVersion: 0,
+      })
+    ).rejects.toThrow(BadRequestError);
+    await expect(seeded.create({ name: 'admin' })).rejects.toThrow(message);
     await expect(
-      realms.createWithPrimaryHost(
-        {
-          name: 'admin',
-          issuer: 'https://admin.example.com',
-          dynamicRegistrationAllowedScopes: scopes,
-        },
+      seeded.createWithPrimaryHost(
+        { name: 'admin', issuer: 'https://admin.example.com' },
         'admin.example.com'
       )
     ).rejects.toThrow(message);
@@ -182,15 +193,15 @@ describe('createRealmsRepository — dynamic registration allowlist (#507)', () 
   // Other servers' admin: scopes are ordinary scopes.
   it('accepts admin: scopes and scopes that only contain "qauth"', async () => {
     const { db, queries } = createRecordingDb();
-    const realms = createRealmsRepository(db);
-    const id = '0192e000-0000-7000-8000-000000000001';
 
     // It passes the check and reaches the database, which has no such realm here.
     await expect(
-      realms.update(id, {
-        dynamicRegistrationAllowedScopes: ['openid', 'admin:read', 'admin:org', 'example:qauth'],
+      createRealmsRepository(db).writePolicies(id, {
+        document: documentWith(['openid', 'admin:read', 'admin:org', 'example:qauth']),
+        schemaVersion: '1-rc.0',
+        expectedVersion: 0,
       })
-    ).rejects.toThrow('not found');
+    ).resolves.toBeUndefined();
     expect(queries).toHaveLength(1);
   });
 });
@@ -225,5 +236,20 @@ describe('createRealmsRepository — sso_idle_timeout (#552)', () => {
     await expect(realms.update(id, { ssoIdleTimeout: 1800 })).rejects.toThrow('not found');
     await expect(realms.update(id, { ssoIdleTimeout: null })).rejects.toThrow('not found');
     expect(queries).toHaveLength(2);
+  });
+});
+
+describe('createRealmsRepository — the locked policy read (#516)', () => {
+  it('locks the row FOR NO KEY UPDATE, which a foreign key check does not wait for', async () => {
+    const { db, queries } = createRecordingDb();
+    const id = '0192e000-0000-7000-8000-000000000001';
+
+    expect(await createRealmsRepository(db).lockPolicyRecord(id, db)).toBeUndefined();
+
+    expect(queries).toHaveLength(1);
+    const text = queries[0].text.toLowerCase();
+    expect(text).toMatch(/ for no key update$/);
+    expect(text).not.toMatch(/ for update$/);
+    expect(queries[0].values).toEqual([id]);
   });
 });

@@ -248,11 +248,15 @@ describe('POST /auth/logout', () => {
         realmId: REALM.id,
         sid: 'sess-a',
         reason: 'sign_out_everywhere',
+        actor: { type: 'user', id: VALID_USER.id },
+        userId: VALID_USER.id,
       });
       expect(sessions.service.revoke).toHaveBeenCalledWith({
         realmId: REALM.id,
         sid: 'sess-b',
         reason: 'sign_out_everywhere',
+        actor: { type: 'user', id: VALID_USER.id },
+        userId: VALID_USER.id,
       });
       expect(sessions.service.sessions.size).toBe(0);
       // Their side records and the index go with them.

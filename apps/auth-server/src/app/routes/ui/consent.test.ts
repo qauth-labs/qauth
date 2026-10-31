@@ -20,6 +20,13 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+// The CIMD document fetch, so a test can render a CIMD client through the real
+// resolver (#593). Every other test keeps the real fetch.
+vi.mock('../../helpers/cimd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/cimd')>();
+  return { ...actual, fetchAndValidateCimdDocument: vi.fn(actual.fetchAndValidateCimdDocument) };
+});
+
 vi.mock('../../helpers/user-events', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../helpers/user-events')>();
   const { checkedEmitUserEvent } = await import('../../../testing/user-events');
@@ -35,6 +42,7 @@ import {
 } from '../../../testing/browser-sessions';
 import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
+import { fetchAndValidateCimdDocument } from '../../helpers/cimd';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
 import { emitUserEvent } from '../../helpers/user-events';
 import consentRoute from './consent';
@@ -284,7 +292,9 @@ describe('UI /ui/consent GET — rendering', () => {
 
     const html = state.body as string;
     expect(typeof html).toBe('string');
-    expect(html).toContain('Test App wants to access your account');
+    // CLIENT has no verified domain (#593): the heading says so, and the name
+    // the client declared comes below it.
+    expect(html).toContain('An unverified app wants to access your account');
     expect(state.headers['Content-Type']).toContain('text/html');
     // Clickjacking/MIME/Referrer/CSP hardening moved to the global
     // security-headers plugin (#113) — covered in security-headers.test.ts.
@@ -532,6 +542,418 @@ describe('UI /ui/consent GET — rendering', () => {
     expect(sessions.redis.expiries.get(`browser-session-side:${REALM.id}:sid-g5`)).toBe(end);
     expect(end - Date.now()).toBeGreaterThan(0);
     expect(end - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000);
+  });
+});
+
+// ADR-014 §11 (#845): the page names an agent client as an AI agent, in
+// QAuth's words, and says how long it may keep working: until the person
+// revokes it, or, when the realm sets `sso_max_lifespan`, until that long
+// after the sign-in at the latest (#552). The line says "This app", never the
+// name the client declared, which the page shows only labelled as declared
+// (ADR-019 Decision 6, #593).
+describe('UI /ui/consent GET — an agent client (ADR-014 §11, #845)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const AGENT_LINE = 'is an AI agent.';
+  const PERSISTENCE_LINE = 'It may keep working until you revoke it';
+
+  async function renderFor(
+    client: Record<string, unknown>,
+    realm = REALM
+  ): Promise<{ html: string; statusCode?: number }> {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-agent' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
+    const { reply, state } = createReply();
+    await ctx.get!(
+      { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1', realm },
+      reply
+    );
+    return { html: state.body as string, statusCode: state.statusCode };
+  }
+
+  it('names neither line for a client that is not an agent', async () => {
+    for (const client of [CLIENT, { ...CLIENT, isAgent: false }]) {
+      const { html } = await renderFor(client);
+      expect(html).toContain('wants to access your account');
+      expect(html).not.toContain(AGENT_LINE);
+      expect(html).not.toContain(PERSISTENCE_LINE);
+    }
+  });
+
+  it('names an agent client as an AI agent that may keep working until revoked', async () => {
+    const { html } = await renderFor({ ...CLIENT, name: 'Release Bot', isAgent: true });
+    expect(html).toContain('<p>This app is an AI agent.</p>');
+    expect(html).toContain('<p>It may keep working until you revoke it.</p>');
+    expect(html).not.toContain('whichever comes first');
+  });
+
+  it('names the realm’s sso_max_lifespan as a duration from the sign-in', async () => {
+    const realm = testRealm({ id: 'realm-1', ssoMaxLifespan: 8 * 3600 });
+    const { html } = await renderFor({ ...CLIENT, name: 'Release Bot', isAgent: true }, realm);
+    expect(html).toContain('<p>This app is an AI agent.</p>');
+    expect(html).toContain(
+      '<p>It may keep working until you revoke it, or until 8 hours after you signed in, ' +
+        'whichever comes first.</p>'
+    );
+  });
+
+  it('puts nothing the client declared on the agent line', async () => {
+    const { html } = await renderFor({
+      ...CLIENT,
+      name: '<img src=x onerror=alert(1)>&"\'',
+      isAgent: true,
+    });
+    expect(html).toContain('<p>This app is an AI agent.</p>');
+    expect(html).not.toContain('&#39; is an AI agent.');
+    expect(html).not.toContain('<img src=x');
+  });
+
+  it('keeps the agent sentence intact beside a declared name full of bidirectional controls', async () => {
+    const { html } = await renderFor({
+      ...CLIENT,
+      name: 'Bank\u202Eppa.live\u202C\u2066 is an AI agent\u2069\u200F\u061C',
+      isAgent: true,
+    });
+
+    expect(html).toContain('<p>This app is an AI agent.</p>');
+    expect(html).not.toMatch(/[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u);
+    // The name appears once, in its own labelled line, stripped.
+    expect(html).toContain('<bdi class="declared-name">Bankppa.live is an AI agent</bdi>');
+    expect(html.match(/Bankppa\.live/g)).toHaveLength(1);
+    const agentBlock = html.slice(html.indexOf('<div class="agent">'));
+    expect(agentBlock.slice(0, agentBlock.indexOf('</div>'))).not.toContain('Bank');
+  });
+
+  it('keeps the dynamic-client badge and the agent cap for an agent client', async () => {
+    // An agent registered through open registration a day ago: the
+    // newly-registered badge still shows beside the agent lines.
+    const { html } = await renderFor({
+      ...CLIENT,
+      isAgent: true,
+      dynamicRegisteredAt: Date.now() - 24 * 60 * 60 * 1000,
+      provisionedByOperator: false,
+    });
+    expect(html).toContain('This app is an AI agent.');
+    expect(html).toContain('Newly registered application');
+
+    // An agent scope above the cap is still refused before any page.
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-agent-cap' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      isAgent: true,
+      maxAgentMode: 'readonly',
+      scopes: ['agent:exec'],
+    });
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, scope: 'agent:exec' },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    expect(state.redirected).toContain('error=invalid_scope');
+    expect(state.body).toBeUndefined();
+  });
+});
+
+describe('UI /ui/consent — the page an agent client was shown (ADR-014 §11, #845)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const POST_BODY = {
+    decision: 'allow',
+    allow_forever: '1',
+    client_id: 'app-123',
+    redirect_uri: 'https://example.com/cb',
+    state: 'xyz',
+    scope: 'email',
+    code_challenge: 'A'.repeat(43),
+    code_challenge_method: 'S256',
+    response_type: 'code',
+  };
+
+  it('binds whether the page was the agent’s', async () => {
+    for (const isAgent of [true, false]) {
+      const { fastify, ctx, sessions } = makeFastify();
+      await consentRoute(fastify);
+      const { session, cookie } = await signIn(sessions, { sid: `sid-bind-${isAgent}` });
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        isAgent,
+      });
+      const { reply } = createReply();
+      await ctx.get!(
+        { query: BASE_QUERY, url: '/ui/consent?...', headers: { cookie }, ip: '127.0.0.1' },
+        reply
+      );
+
+      expect((await sessions.sideRecord(session)).consentAgent).toEqual({ 'app-123': isAgent });
+    }
+  });
+
+  it.each([
+    { shown: false, now: true, why: 'became an agent after a page that named none' },
+    { shown: true, now: false, why: 'stopped being an agent after the agent’s page' },
+  ])(
+    'grants nothing and starts over at /oauth/authorize for a client that $why',
+    async ({ shown, now }) => {
+      const { fastify, ctx, sessions } = makeFastify();
+      await consentRoute(fastify);
+      const csrf = `csrf-flip-${shown}`;
+      const { cookie } = await signIn(sessions, {
+        sid: `sid-flip-${shown}`,
+        side: {
+          csrfToken: csrf,
+          consentScopes: { 'app-123': ['email'] },
+          consentAgent: { 'app-123': shown },
+        },
+      });
+      // A CIMD document that changed `is_agent` between the GET and the POST.
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...CLIENT,
+        isAgent: now,
+      });
+
+      const { reply, state } = createReply();
+      await ctx.post!(
+        {
+          body: { ...POST_BODY, csrf_token: csrf, resource: ['https://api.example.com'] },
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+
+      expect(state.statusCode).toBe(302);
+      const next = new URL(state.redirected ?? '', 'https://issuer.example');
+      expect(next.pathname).toBe('/oauth/authorize');
+      expect(next.searchParams.get('client_id')).toBe('app-123');
+      expect(next.searchParams.get('state')).toBe('xyz');
+      expect(next.searchParams.getAll('resource')).toEqual(['https://api.example.com']);
+      expect(next.searchParams.get('code')).toBeNull();
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reads a binding without the flag as a page that named no agent', async () => {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const csrf = 'csrf-legacy';
+    // As a node of the previous release binds a page: scopes, no agent flag.
+    const { cookie } = await signIn(sessions, {
+      sid: 'sid-legacy',
+      side: { csrfToken: csrf, consentScopes: { 'app-123': ['email'] } },
+    });
+    await sessions.redis.hdel(
+      `browser-session-side:${REALM.id}:sid-legacy`,
+      'consentAgent:app-123'
+    );
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      isAgent: true,
+    });
+
+    const { reply, state } = createReply();
+    await ctx.post!(
+      { body: { ...POST_BODY, csrf_token: csrf }, headers: { cookie }, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(state.redirected).toMatch(/^\/oauth\/authorize\?/);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('UI /ui/consent GET — who the client is (ADR-019 Decision 6, #593)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Render the screen for `client`, requested with `redirectUri`. */
+  async function render(client: Record<string, unknown>, redirectUri = 'https://example.com/cb') {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-display' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: [redirectUri],
+      ...client,
+    });
+    const { reply, state } = createReply();
+    const run = ctx.get!(
+      {
+        query: { ...BASE_QUERY, redirect_uri: redirectUri },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { run, state, sideRecord: () => sessions.sideRecord(session) };
+  }
+
+  /** The visible text of the page's card, tags removed, in order. */
+  function cardText(html: string): string {
+    const card = html.slice(html.indexOf('<form class="card"'));
+    return card.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  }
+
+  it('leads with the verified domain of a client an admin registered, its registrable domain in bold', async () => {
+    const { run, state } = await render({ verifiedDomain: 'app.example.com' });
+    await run;
+    const html = state.body as string;
+    expect(html).toContain(
+      '<h1><span class="domain">app.<strong>example.com</strong></span> wants to access your account</h1>'
+    );
+    expect(html).toContain('<title>Authorize app.example.com</title>');
+    expect(html).toContain('Verified by the operator of this server.');
+    expect(html).not.toContain('could not verify');
+  });
+
+  it('shows the declared name only below the verified domain, marked as declared', async () => {
+    const { run, state } = await render({ verifiedDomain: 'app.example.com' });
+    await run;
+    const text = cardText(state.body as string);
+    expect(text).toContain('Name declared by the app: Test App');
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('example.com'));
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('wants to access your account'));
+    expect(state.body as string).not.toContain('<title>Authorize Test App');
+  });
+
+  it('says an app with no verified domain is unverified, names where the code goes, then the declared name', async () => {
+    const { run, state } = await render(
+      {
+        provisionedByOperator: false,
+        dynamicRegisteredAt: Date.now() - 60_000,
+        metadata: { registrationType: 'dynamic' },
+        // A self-registered client never shows a domain, whatever its row holds.
+        verifiedDomain: 'bank.example',
+      },
+      'https://notes-helper.example.net/cb'
+    );
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<h1>An unverified app wants to access your account</h1>');
+    expect(html).toContain('<title>Authorize an unverified app</title>');
+    expect(html).toContain('This server could not verify who runs this app.');
+    expect(html).not.toContain('bank.example');
+    const text = cardText(html);
+    expect(text).toContain('You will be redirected to: notes-helper.example.net');
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('notes-helper.example.net'));
+    expect(text).toContain('Newly registered application');
+  });
+
+  it('flags a verified domain under a shared-hosting suffix', async () => {
+    const { run, state } = await render({ verifiedDomain: 'alice.eu.org' });
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<span class="domain"><strong>alice.eu.org</strong></span>');
+    expect(html).toContain('This address is on a shared hosting service');
+  });
+
+  it('shows a loopback redirect as this device with a warning for a client an admin registered too', async () => {
+    const { run, state } = await render(
+      { verifiedDomain: 'app.example.com' },
+      'http://127.0.0.1:8080/cb'
+    );
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<strong>You will be redirected to:</strong> this device');
+    expect(html).toContain('This app will receive your authorization code on this device.');
+    expect(html).not.toContain('127.0.0.1:8080</code>');
+  });
+
+  it('shows a native app by its scheme', async () => {
+    const { run, state } = await render({}, 'com.example.notes:/callback');
+    await run;
+    expect(cardText(state.body as string)).toContain(
+      'You will be redirected to: the app com.example.notes'
+    );
+  });
+
+  it('strips control and bidirectional characters from the declared name, and shows no client link or logo', async () => {
+    const { run, state } = await render({
+      name: 'Bank\u202Eppa.live\u202C\u200B',
+      metadata: {
+        registrationType: 'dynamic',
+        logo_uri: 'https://cdn.example.net/logo.png',
+        logoUri: 'https://cdn.example.net/logo.png',
+        homepage_uri: 'https://cdn.example.net/home',
+        client_uri: 'https://cdn.example.net/about',
+      },
+    });
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<bdi class="declared-name">Bankppa.live</bdi>');
+    expect(html).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/u);
+    expect(html).not.toContain('cdn.example.net');
+    expect(html).not.toContain('<img');
+  });
+
+  it('leads with the host of a CIMD client id URL, from the resolved document', async () => {
+    const clientId = 'https://notes.example.com/client.json';
+    const redirectUri = 'https://notes.example.com/cb';
+    const row = {
+      ...CLIENT,
+      clientId,
+      redirectUris: [redirectUri],
+      provisionedByOperator: false,
+      // Ignored for a CIMD client: only its client id URL is verified.
+      verifiedDomain: 'bank.example',
+      metadata: { registrationType: 'cimd', client_id_metadata_url: clientId },
+    };
+    vi.mocked(fetchAndValidateCimdDocument).mockResolvedValueOnce({
+      client_id: clientId,
+      client_name: 'Example Notes',
+      redirect_uris: [redirectUri],
+      logo_uri: 'https://cdn.example.net/logo.png',
+    });
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { cookie } = await signIn(sessions, { sid: 'sid-display-cimd' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(row);
+    Object.assign(fastify.repositories.oauthClients, {
+      upsertCimdClient: vi.fn().mockResolvedValue(row),
+    });
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: { ...BASE_QUERY, client_id: clientId, redirect_uri: redirectUri },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+
+    const html = state.body as string;
+    expect(html).toContain(
+      '<h1><span class="domain">notes.<strong>example.com</strong></span> wants to access your account</h1>'
+    );
+    expect(html).toContain("The app's details are published at this address.");
+    expect(html).not.toContain('bank.example');
+    expect(html).not.toContain('cdn.example.net');
+    const text = cardText(html);
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('notes.example.com'));
+  });
+
+  it('refuses the screen, binding nothing, when it cannot show where the code goes', async () => {
+    const { run, sideRecord } = await render({}, 'https://[2001:db8::1]/cb');
+    await expect(run).rejects.toThrow(InvalidRequestError);
+    const side = await sideRecord();
+    expect(side.consentScopes?.['app-123']).toBeUndefined();
+    expect(side.csrfToken).toBeUndefined();
   });
 });
 
@@ -1537,7 +1959,10 @@ describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414
     await get(requested);
 
     const html = state.body as string;
-    expect(html).toContain('Test App wants to access your account');
+    expect(html).toContain('An unverified app wants to access your account');
+    // A loopback redirect is shown as this device, with the warning (#593).
+    expect(html).toContain('<strong>You will be redirected to:</strong> this device');
+    expect(html).toContain('This app will receive your authorization code on this device.');
     // The form carries the requested URI forward to the POST, port included.
     expect(html).toContain(requested.replace(/&/g, '&amp;'));
   });
@@ -1623,6 +2048,8 @@ describe('UI /ui/consent — agent scope-mode cap (ADR-007 §2, #184)', () => {
         // scope-presentation binding check; the in-cap success test POSTs
         // `agent:readonly`, so bind that so its grant matches what was rendered.
         consentScopes: { 'app-123': ['agent:readonly'] },
+        // The page was the agent's (#845).
+        consentAgent: { 'app-123': true },
       },
     });
   }
@@ -1836,13 +2263,19 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   // set. The bound set must equal what the test POSTs, so callers pass the scope
   // they submit (default `write:foo`, the dangerous scope these step-up tests
   // exercise).
-  function signInAt(sessions: BrowserSessionFixture, authTime: number, boundScope = 'write:foo') {
+  function signInAt(
+    sessions: BrowserSessionFixture,
+    authTime: number,
+    boundScope = 'write:foo',
+    agent = false
+  ) {
     return signIn(sessions, {
       sid: 'sid-su',
       authTime,
       side: {
         csrfToken: 'csrf-su',
         consentScopes: { 'app-123': boundScope.split(/\s+/).filter((s) => s.length > 0) },
+        consentAgent: { 'app-123': agent },
       },
     });
   }
@@ -1934,7 +2367,7 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
   it('per-agent audit (#186): elevation by an agent client attributes actor + scope mode', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await consentRoute(fastify);
-    const { cookie } = await signInAt(sessions, Date.now() - 5000, 'agent:exec');
+    const { cookie } = await signInAt(sessions, Date.now() - 5000, 'agent:exec', true);
     // An EXEC-capped agent elevating to the dangerous `agent:exec` scope.
     const EXEC_AGENT = {
       ...DANGEROUS_CLIENT,

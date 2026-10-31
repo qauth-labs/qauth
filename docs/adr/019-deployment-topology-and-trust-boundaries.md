@@ -168,6 +168,10 @@ users to sign in again, because of three separate gaps. ADR-001's status note re
 - **Not verified.** The server's own checks verify with the active key only. A retired key would be
   published but would not verify.
 
+Status 2026-10-31: all three gaps are closed. Each realm publishes its own keys and every token
+names its key (#491); the server verifies with the realm's active keys and its retired keys still
+inside their retention, picked by `(kid, alg)` (#492). ADR-001's status note has the details.
+
 ## Decision
 
 ### 1. Realm, host and issuer

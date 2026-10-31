@@ -62,6 +62,9 @@ export type UpdateOAuthClient = Partial<
     | 'idJagTargets'
     | 'webauthnAllowedOrigins'
     | 'dpopBoundAccessTokens'
+    // #593: the verified domain is admin state (`clients.update`, a security
+    // operation), so no owner or self-registration path may write it.
+    | 'verifiedDomain'
   >
 > & {
   updatedAt?: number;
@@ -981,13 +984,141 @@ export type Session = InferSelectModel<typeof sessions>;
 export type SessionClient = InferSelectModel<typeof sessionClients>;
 
 /**
- * What {@link SessionsRepository.revoke} returns: the ended row and the
- * `session_clients` rows it deleted with it (issue #549), the clients the
- * session served, which back-channel logout notifies.
+ * A `session_clients` row with the public identity of its client (issue
+ * #550): what a session list shows and what a revocation returns, so a caller
+ * names the client without reading `oauth_clients` again.
+ */
+export interface SessionClientDetail extends SessionClient {
+  /** The client's public `client_id`. */
+  clientId: string;
+  /** The client's display name (`oauth_clients.name`). */
+  clientName: string;
+}
+
+/**
+ * What the revocations of {@link SessionsRepository} return for each session
+ * they end: the ended row and the `session_clients` rows deleted with it
+ * (issue #549), the clients the session served, which back-channel logout
+ * notifies. A registry row whose client is gone by the time it is read is
+ * left out: there is no client to notify.
  */
 export interface RevokedSession {
   session: Session;
-  clients: SessionClient[];
+  clients: SessionClientDetail[];
+}
+
+/**
+ * A session as a list shows it (issue #550): the row, whatever its state, and
+ * the clients its registry holds, oldest first. An ended session holds none:
+ * its revocation deleted them.
+ */
+export interface ListedSession {
+  session: Session;
+  clients: SessionClientDetail[];
+}
+
+/**
+ * A place in a newest-first session list: the `created_at` and `id` of the
+ * last row a page showed. The next page starts after it.
+ */
+export interface SessionListPosition {
+  createdAt: number;
+  id: string;
+}
+
+/** One page of a session list. */
+export interface SessionListPage {
+  /** The most rows to return. */
+  limit: number;
+  /** Start after this row; from the newest when absent. */
+  after?: SessionListPosition;
+}
+
+/** Whose session {@link SessionsRepository.revoke} may end. */
+export interface RevokeSessionFilter {
+  /** End the session only when it is this user's. */
+  userId?: string;
+}
+
+/** Which of a user's sessions {@link SessionsRepository.revokeForUser} ends. */
+export interface RevokeUserSessionsFilter {
+  /** Keep this session: the one the request that signs out everywhere else came from. */
+  exceptId?: string;
+  /**
+   * End only the sessions created before this time, in epoch milliseconds: a
+   * password reset ends the sessions older than the new password.
+   */
+  createdBefore?: number;
+}
+
+/** One batch of {@link SessionsRepository.revokeRealmBatch}. */
+export interface RevokeRealmSessionsBatch {
+  /** Start after this session id; from the first when absent. */
+  after?: string;
+  /**
+   * End only sessions created at or before this time, in epoch milliseconds:
+   * the time the whole run started, so a sign-in during the run survives it.
+   */
+  createdThrough: number;
+  /**
+   * End only sessions used at or after this time (`last_seen_at`), in epoch
+   * milliseconds. Every live session when absent.
+   */
+  activeSince?: number;
+  /** The most sessions to end. */
+  limit: number;
+}
+
+/** One batch of {@link SessionsRepository.revokeLapsedBatch}. */
+export interface RevokeLapsedSessionsBatch {
+  /** The time to judge the ends at, in epoch milliseconds. */
+  now: number;
+  /**
+   * `SESSION_COOKIE_TTL` in milliseconds: the maximum lifespan of a session
+   * in a realm that sets no `sso_max_lifespan`, as the session service
+   * applies it.
+   */
+  defaultMaxLifespanMs: number;
+  /** Start after this session id; from the first when absent. */
+  after?: string;
+  /** The most sessions to end. */
+  limit: number;
+}
+
+/** What one batch of a bulk revocation did. */
+export interface RevokedSessionsBatch {
+  /** The sessions this batch ended, in id order. */
+  ended: RevokedSession[];
+  /**
+   * The id the next batch starts after: the last session this batch
+   * selected. `null` when it selected none, which ends the run.
+   */
+  last: string | null;
+  /** How many sessions the batch selected: fewer than its limit ends the run. */
+  selected: number;
+}
+
+/** One batch of {@link SessionsRepository.deleteEnded}. */
+export interface DeleteEndedSessionsBatch {
+  /**
+   * Delete the rows revoked before this time, in epoch milliseconds. A row
+   * past `expires_at` that was never marked ended is kept: its end has not
+   * reached the listeners yet.
+   */
+  before: number;
+  /** Start after this session id; from the first when absent. */
+  after?: string;
+  /** The most rows to delete. */
+  limit: number;
+}
+
+/** What one batch of {@link SessionsRepository.deleteEnded} did. */
+export interface DeletedSessionsBatch {
+  deleted: number;
+  /** The id the next batch starts after; `null` when the batch selected no row. */
+  last: string | null;
+  /** How many rows the batch selected: fewer than its limit ends the run. */
+  selected: number;
 }
 
 /**
@@ -1066,14 +1197,18 @@ export interface SessionsRepository {
    * `DELETE` reads the snapshot from before the `UPDATE` waited. A `tx` at
    * another level is refused with an error before anything is written.
    *
+   * With `filter.userId`, only that user's session is ended: a session of
+   * another user is left as it is, as if the realm held none.
+   *
    * @returns the ended row and the clients it served, or `undefined` when the
-   * realm holds no such session or it was already revoked. A second call
-   * changes nothing and keeps the first reason.
+   * realm holds no such session (of that user, with `filter.userId`) or it was
+   * already revoked. A second call changes nothing and keeps the first reason.
    */
   revoke(
     realmId: string,
     id: string,
     reason: SessionRevokedReason,
+    filter?: RevokeSessionFilter,
     tx?: DbClient
   ): Promise<RevokedSession | undefined>;
   /**
@@ -1130,6 +1265,83 @@ export interface SessionsRepository {
     oauthClientId: string,
     tx?: DbClient
   ): Promise<SessionClient[]>;
+  /**
+   * One page of a user's sessions in the realm, newest first (`created_at`,
+   * then `id`), whatever their state: live, past an end, or revoked, until
+   * {@link deleteEnded} removes them. Each comes with the clients its
+   * registry holds; a revoked one with none. Empty for a user of another
+   * realm.
+   */
+  listForUser(
+    realmId: string,
+    userId: string,
+    page: SessionListPage,
+    tx?: DbClient
+  ): Promise<ListedSession[]>;
+  /**
+   * One page of the realm's sessions that served a client (its
+   * `oauth_clients.id`), newest first, each with all the clients its
+   * registry holds. Only sessions not yet revoked are listed: a revocation
+   * deletes the registry rows, and one a previous release made during a
+   * rolling upgrade, which left them, does not count. Empty for a client of
+   * another realm.
+   */
+  listForClient(
+    realmId: string,
+    oauthClientId: string,
+    page: SessionListPage,
+    tx?: DbClient
+  ): Promise<ListedSession[]>;
+  /**
+   * End a user's sessions in the realm that are not yet revoked, with one
+   * reason, as {@link revoke} ends one: the rows are locked in id order,
+   * revoked, their registry rows deleted and returned, their unredeemed codes
+   * spent, all in one READ COMMITTED transaction. A session past an end that
+   * {@link revokeLapsedBatch} has not marked yet is ended with this reason
+   * too.
+   *
+   * A `tx` passed in must be READ COMMITTED, as for {@link revoke}.
+   *
+   * @returns the sessions this call ended, in id order; one another call
+   * ended first is not among them
+   */
+  revokeForUser(
+    realmId: string,
+    userId: string,
+    reason: SessionRevokedReason,
+    filter?: RevokeUserSessionsFilter,
+    tx?: DbClient
+  ): Promise<RevokedSession[]>;
+  /**
+   * End one batch of the realm's sessions not yet revoked, in id order after
+   * `batch.after`: one short READ COMMITTED transaction, as {@link revoke}
+   * ends one session. A caller ends a whole realm batch after batch, so no
+   * transaction holds more than `batch.limit` rows.
+   */
+  revokeRealmBatch(
+    realmId: string,
+    reason: SessionRevokedReason,
+    batch: RevokeRealmSessionsBatch
+  ): Promise<RevokedSessionsBatch>;
+  /**
+   * Mark one batch of sessions, of every realm, that are past an end but not
+   * yet revoked: past the absolute end (`expires_at`, or the realm's current
+   * `sso_max_lifespan` from creation, `SESSION_COOKIE_TTL` without one) as
+   * `expired`, past the realm's idle limit (`sso_idle_timeout` from
+   * `last_seen_at`) as `idle`, whichever came first. The rules are the
+   * session service's, so the rows marked are sessions it already treats as
+   * absent. `revoked_at` is `batch.now`, the time of the mark, so the
+   * retention of {@link deleteEnded} counts from it. Otherwise as
+   * {@link revokeRealmBatch}.
+   */
+  revokeLapsedBatch(batch: RevokeLapsedSessionsBatch): Promise<RevokedSessionsBatch>;
+  /**
+   * Delete one batch of rows, of every realm, that were revoked or passed
+   * `expires_at` before `batch.before`, in id order after `batch.after`. A
+   * live session is never deleted. The rows' registry rows go with them
+   * (cascade), and their codes lose the session (`ON DELETE SET NULL`).
+   */
+  deleteEnded(batch: DeleteEndedSessionsBatch): Promise<DeletedSessionsBatch>;
 }
 
 /** A stored `admin_audit_log` row (ADR-019 Decision 7, issue #448). */

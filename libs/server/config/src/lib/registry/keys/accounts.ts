@@ -154,6 +154,15 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: 'How long, in seconds, a browser sign-in ceremony and its flow cookie live, counted from the request that starts it (one whose first step nobody answers ends after 10 minutes); from 60 to 7200.',
   },
   {
+    name: 'SESSION_RETENTION_DAYS',
+    tier: 'advanced',
+    role: 'deployment',
+    owner: 'sessions',
+    default: '30',
+    since: '0.2.0',
+    docs: 'The days a browser session row is kept after it ended, or after the session expiry job marked it expired or idle, for the account and admin session lists, before the session purge job deletes it.',
+  },
+  {
     name: 'SESSION_COOKIE_SECURE',
     tier: 'advanced',
     role: 'deployment',

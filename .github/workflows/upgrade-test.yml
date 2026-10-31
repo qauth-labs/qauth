@@ -39,11 +39,6 @@ concurrency:
   group: upgrade-test-${{ github.ref }}
   cancel-in-progress: true
 
-# The script runs its Nx targets with --skip-nx-cache, so the remote cache has
-# nothing to give them.
-env:
-  NX_NO_CLOUD: 'true'
-
 jobs:
   # The matrix: one entry per line of upgrade-baselines.json, so a new baseline
   # needs no other change. Also decides what a failing rolling leg does:
