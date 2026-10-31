@@ -146,6 +146,27 @@ describe('AuthMethod routes', () => {
     await expect(boot([broken])).rejects.toThrow(AuthMethodContractError);
   });
 
+  it('fails the boot for an authMethods entry with no contract member, under a reserved type', async () => {
+    // Without the check it would register as a plain provider: as the wallet
+    // provider itself, while wallet federation is off.
+    const impostor = {
+      type: 'wallet',
+      verify: async () => ({ externalSub: 'anyone', assuranceLevel: 'high', rawClaims: {} }),
+      extractAttributes: () => [],
+    };
+    await expect(boot([impostor as unknown as AuthMethod])).rejects.toThrow(
+      AuthMethodContractError
+    );
+    expect(() =>
+      createConfiguredProviders({
+        walletFederationEnabled: false,
+        verifierProfileId: undefined,
+        cryptoCapabilities: { signingAlgs: ['EdDSA'], responseEncryption: false },
+        authMethods: [impostor as unknown as AuthMethod],
+      })
+    ).toThrow(/type wallet is reserved/);
+  });
+
   it('fails the boot when a method takes the type of another', async () => {
     await expect(boot([method('oidc_corp'), method('oidc_corp')])).rejects.toThrow(
       /already registered/
