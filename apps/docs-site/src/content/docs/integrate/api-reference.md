@@ -494,13 +494,43 @@ server is too busy to check the client secret (`temporarily_unavailable`; RFC
 ## Discovery
 
 Unauthenticated and cacheable. The discovery documents carry
-`Cache-Control: public, max-age=3600`; the JWKS carries `public, max-age=300`.
+`Cache-Control: public, max-age=3600`; the JWKS carries `public, max-age=300`,
+so a relying party keeps a key set for at most five minutes.
 
-| Endpoint                                      | Returns                                      |
-| --------------------------------------------- | -------------------------------------------- |
-| `GET /.well-known/oauth-authorization-server` | OAuth 2.0 AS metadata (RFC 8414)             |
-| `GET /.well-known/openid-configuration`       | OIDC Discovery 1.0 (superset of the above)   |
-| `GET /.well-known/jwks.json`                  | JWKS — active EdDSA public key(s) (RFC 7517) |
+| Endpoint                                      | Returns                                                    |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `GET /.well-known/oauth-authorization-server` | OAuth 2.0 AS metadata (RFC 8414)                           |
+| `GET /.well-known/openid-configuration`       | OIDC Discovery 1.0 (superset of the above)                 |
+| `GET /.well-known/jwks.json`                  | JWKS — the realm's published token signing keys (RFC 7517) |
+
+All three are the documents of the realm the request's host names
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
+Decision 1):
+
+- `issuer` is the realm's issuer, and every endpoint URL, `jwks_uri` included,
+  is built on it.
+- The JWKS lists the realm's published keys, each under its own `kid`: its
+  active keys, a next key from its publication, before it signs, and a retired
+  key until its retention ends. No other realm's key is in it.
+- `id_token_signing_alg_values_supported` lists the algorithms of the realm's
+  active keys: `["RS256","EdDSA"]` when it has an active RS256 key, else
+  `["EdDSA"]`.
+- The settings that add members, such as `CIMD_ENABLED`, `ID_JAG_ENABLED` and
+  `DPOP_ENABLED`, belong to the deployment: every realm advertises them alike.
+
+Every node of a deployment answers the same bytes for the same realm, whether
+or not it holds the signer. A host that names no realm gets `421` for all three,
+with no fallback to the default realm.
+
+An endpoint host (`DEFAULT_REALM_ENDPOINT_HOSTS`) gets its realm's documents
+unchanged: `issuer` and every URL name the realm's issuer, never the endpoint
+host, and no document lists endpoint hosts. RFC 8414 §3.3 and OpenID Connect
+Discovery §4.3 ask a client to check that `issuer` is the issuer whose
+well-known URL it fetched, which an endpoint host's URL is not. A server-side
+caller that reaches QAuth through an endpoint host must therefore configure the
+realm's issuer explicitly, check `issuer` and the tokens' `iss` against it, and
+use the endpoint host only as the address it connects to. A client library that
+takes the expected issuer from the URL it fetched refuses these documents.
 
 Prefer discovering endpoint URLs from these documents over hard-coding paths.
 The AS metadata advertises `resource_indicators_supported: true`,
