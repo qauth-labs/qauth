@@ -100,13 +100,34 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'PUT /ssf/stream',
 ];
 
-/** Every operation of {@link ROUTES_BEFORE_THE_MANIFEST}, with Fastify's `HEAD` routes. */
-const PINNED_OPERATIONS: ReadonlySet<string> = new Set([
-  ...ROUTES_BEFORE_THE_MANIFEST,
-  ...ROUTES_BEFORE_THE_MANIFEST.filter((operation) => operation.startsWith('GET ')).map(
-    (operation) => `HEAD ${operation.slice('GET '.length)}`
-  ),
-]);
+/**
+ * The routes added since the manifest replaced the autoload: the account and
+ * developer APIs under their versioned prefixes (#524).
+ */
+const ROUTES_ADDED_SINCE: readonly string[] = [
+  'DELETE /account/v1-rc.0/consents/:consentId',
+  'DELETE /developer/v1-rc.0/clients/:clientId',
+  'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
+  'DELETE /developer/v1-rc.0/consents/:consentId',
+  'GET /account/v1-rc.0/consents',
+  'GET /developer/v1-rc.0/clients',
+  'GET /developer/v1-rc.0/clients/:clientId',
+  'GET /developer/v1-rc.0/clients/:clientId/api-keys',
+  'GET /developer/v1-rc.0/consents',
+  'PATCH /developer/v1-rc.0/clients/:clientId',
+  'POST /developer/v1-rc.0/clients',
+  'POST /developer/v1-rc.0/clients/:clientId/api-keys',
+  'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',
+];
+
+/** Every operation of both lists, with Fastify's `HEAD` routes. */
+const PINNED_OPERATIONS: ReadonlySet<string> = new Set(
+  [...ROUTES_BEFORE_THE_MANIFEST, ...ROUTES_ADDED_SINCE].flatMap((operation) =>
+    operation.startsWith('GET ')
+      ? [operation, `HEAD ${operation.slice('GET '.length)}`]
+      : [operation]
+  )
+);
 
 /** The keys a boot sets or clears, restored after the file. */
 const BOOT_KEYS =

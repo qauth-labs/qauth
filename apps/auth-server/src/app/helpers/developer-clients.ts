@@ -551,11 +551,10 @@ export async function applyClientChange(
   if (fields.length === 0) {
     return { client: existing, fields };
   }
-  const { oauthClients } = fastify.repositories;
   const updated =
     tx === undefined
-      ? await oauthClients.update(existing.realmId, existing.id, changes)
-      : await oauthClients.update(existing.realmId, existing.id, changes, tx);
+      ? await fastify.repositories.oauthClients.update(existing.realmId, existing.id, changes)
+      : await fastify.repositories.oauthClients.update(existing.realmId, existing.id, changes, tx);
   return { client: updated, fields };
 }
 
