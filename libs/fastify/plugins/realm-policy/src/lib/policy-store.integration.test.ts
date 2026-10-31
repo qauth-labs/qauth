@@ -89,7 +89,7 @@ describe('policy store over the realms table (integration)', () => {
       seeds: { policies: { document: seeds, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
     });
     return createPolicyStore({
-      storage: createRealmPolicyStorage(instance.db, () => realms),
+      storage: createRealmPolicyStorage(instance.db, realms),
       seeds,
       ...(secrets === undefined ? {} : { secrets }),
     });

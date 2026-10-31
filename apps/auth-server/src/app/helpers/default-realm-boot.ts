@@ -2,6 +2,11 @@ import {
   assertRelyingPartyIdUnlockedOrSame,
   RelyingPartyIdLockedError,
 } from '@qauth-labs/fastify-plugin-federation';
+import {
+  RealmPolicySeedRefusedError,
+  type RealmPolicySeedReport,
+  type SetSeedKey,
+} from '@qauth-labs/fastify-plugin-realm-policy';
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import {
   InvalidRealmHostError,
@@ -32,16 +37,25 @@ import {
  * 2. when its issuer is NULL (a realm from before migration 0025), store the
  *    issuer and the primary host; when its issuer is set and differs, refuse to
  *    boot, because a realm's issuer host is permanent;
- * 3. when no realm is the operator realm yet, mark this one (simple mode);
- * 4. add each `DEFAULT_REALM_ENDPOINT_HOSTS` name the realm lacks as an
+ * 3. give every realm that has no policies yet its policies from the
+ *    environment, and every realm whose policies lack fields of this release
+ *    those fields' seeds (ADR-019 Decision 10, #516): a realm created before
+ *    migration 0045 gets its fill here once, the first node to boot winning,
+ *    and a realm that has its policies is not written, so changing an
+ *    environment key later changes no realm. A new realm got its policies
+ *    when step 1 created it;
+ * 4. when no realm is the operator realm yet, mark this one (simple mode);
+ * 5. add each `DEFAULT_REALM_ENDPOINT_HOSTS` name the realm lacks as an
  *    endpoint host, and remove none;
- * 5. resolve the passkey RP ID from the realm host and `WEBAUTHN_RP_ID`
+ * 6. resolve the passkey RP ID from the realm host and `WEBAUTHN_RP_ID`
  *    (ADR-019 Decision 2, #467), warn when it is a parent domain, and refuse to
  *    boot when the realm's passkeys are bound to another one. While no passkey
  *    has locked it, store it on the realm row (NULL for the realm host, #553),
  *    where `resolveRpId(realm)` reads it for every ceremony;
- * 6. log one line naming the realm, its issuer and host, the operator flag and
- *    the passkey RP ID.
+ * 7. log one line naming the realm, its issuer and host, the operator flag,
+ *    the passkey RP ID and its policy version, and, when the realm already had
+ *    its policies, one warning for each seed key the environment still sets:
+ *    the key only seeds new realms and is ignored.
  *
  * All of it runs in one transaction under the realm provisioning lock, so nodes
  * that start together do it one at a time: the first creates the realm, the
@@ -146,6 +160,15 @@ export function defaultRealmIssuerFrom(jwtIssuer: string): DefaultRealmIssuer {
   return { issuer: resolveIssuerIdentifier(jwtIssuer), host, warnings };
 }
 
+/**
+ * Logged once per boot for each seed key the environment sets while the
+ * default realm already has its policies (#516): the realm row owns the
+ * value, and the key only seeds a realm created from then on.
+ */
+export function seedKeyIgnoredWarning(key: string, realmName: string, path: string): string {
+  return `${key} only seeds new realms and is ignored: the realm "${realmName}" already has its policies, so its ${path} stays as stored, and changes through the admin API`;
+}
+
 /** The configuration the boot step reads. */
 export interface DefaultRealmBootSettings {
   /** `DEFAULT_REALM_NAME`. */
@@ -160,12 +183,22 @@ export interface DefaultRealmBootSettings {
    * `WEBAUTHN_ENABLED` says: the lock is a fact about enrolled passkeys.
    */
   readonly passkeys?: PasskeyRelyingPartySettings;
+  /**
+   * The seed keys of realm policies the environment sets (`seedKeysSetIn` of
+   * `process.env`, #516). Each one a realm that already has its policies
+   * ignores is logged once. Absent, none.
+   */
+  readonly seedKeysSet?: readonly SetSeedKey[];
 }
 
-/** What the boot step works through: `fastify.db`, `fastify.repositories.realms` and a logger. */
+/**
+ * What the boot step works through: `fastify.db`, `fastify.repositories.realms`,
+ * the realm policy store's boot fill (`fastify.policyStore`) and a logger.
+ */
 export interface DefaultRealmBootDependencies {
   readonly db: Pick<FastifyInstance['db'], 'transaction'>;
   readonly realms: FastifyInstance['repositories']['realms'];
+  readonly policies: Pick<FastifyInstance['policyStore'], 'seedRealms'>;
   readonly log: Pick<FastifyBaseLogger, 'info' | 'warn'>;
 }
 
@@ -178,6 +211,10 @@ export interface DefaultRealmBootResult {
   readonly endpointHostsAdded: readonly string[];
   /** The realm's passkey RP ID. */
   readonly relyingParty: RealmRelyingParty;
+  /** Whether this boot created the realm (step 1), which gave it its policies. */
+  readonly created: boolean;
+  /** What step 3 wrote, for every realm. */
+  readonly policySeeding: RealmPolicySeedReport;
 }
 
 /**
@@ -204,7 +241,13 @@ export async function bootDefaultRealm(
 
   const result = await deps.db.transaction(async (tx: ProvisioningTransaction) => {
     await deps.realms.lockProvisioning(tx);
-    let realm = await provisionIssuer(deps.realms, tx, settings, identity);
+    const provisioned = await provisionIssuer(deps.realms, tx, settings, identity);
+    let realm = provisioned.realm;
+
+    const policySeeding = await seedRealmPolicies(deps.policies, tx);
+    if (wrotePoliciesOf(policySeeding, realm.id)) {
+      realm = (await deps.realms.findById(realm.id, tx)) ?? realm;
+    }
 
     if (!realm.isOperator && !(await deps.realms.findOperator(tx))) {
       realm = await deps.realms.setOperator(realm.id, true, tx);
@@ -212,8 +255,34 @@ export async function bootDefaultRealm(
 
     const endpointHostsAdded = await addEndpointHosts(deps.realms, tx, realm, settings);
     realm = await storePasskeyRpId(deps.realms, tx, realm, relyingParty);
-    return { realm, host: identity.host, endpointHostsAdded, relyingParty };
+    return {
+      realm,
+      host: identity.host,
+      endpointHostsAdded,
+      relyingParty,
+      created: provisioned.created,
+      policySeeding,
+    };
   });
+
+  for (const filled of result.policySeeding.filled) {
+    deps.log.info(
+      { realm: filled.realmName, realmId: filled.realmId },
+      'realm policies filled from the environment: the realm row owns them from now on'
+    );
+  }
+  for (const completed of result.policySeeding.completed) {
+    deps.log.info(
+      { realm: completed.realmName, realmId: completed.realmId, policies: completed.paths },
+      'realm policies of this release filled from the environment'
+    );
+  }
+  for (const { key, path } of ignoredSeedKeys(result, settings.seedKeysSet ?? [])) {
+    deps.log.warn(
+      { variable: key, realm: result.realm.name, policy: path },
+      seedKeyIgnoredWarning(key, result.realm.name, path)
+    );
+  }
 
   deps.log.info(
     {
@@ -224,10 +293,57 @@ export async function bootDefaultRealm(
       endpointHostsAdded: result.endpointHostsAdded,
       passkeyRpId: result.relyingParty.rpId,
       passkeyRpIdLocked: result.realm.webauthnRpIdLockedAt !== null,
+      policiesVersion: result.realm.policiesVersion,
     },
     'default realm ready'
   );
   return result;
+}
+
+/** Whether step 3 wrote the policies of the realm `realmId`. */
+function wrotePoliciesOf(report: RealmPolicySeedReport, realmId: string): boolean {
+  return [...report.filled, ...report.completed].some((realm) => realm.realmId === realmId);
+}
+
+/**
+ * Step 3: fill and complete the realms' policies. A realm whose stored values
+ * the policy schema refuses stops the boot, naming the realm and the paths:
+ * guessing another value could loosen it.
+ */
+async function seedRealmPolicies(
+  policies: DefaultRealmBootDependencies['policies'],
+  tx: ProvisioningTransaction
+): Promise<RealmPolicySeedReport> {
+  try {
+    return await policies.seedRealms(tx);
+  } catch (error) {
+    if (!(error instanceof RealmPolicySeedRefusedError)) throw error;
+    throw new DefaultRealmBootError(
+      `${error.message}. Correct the stored values, or the environment keys that seed them, and start the server again.`,
+      { cause: error }
+    );
+  }
+}
+
+/**
+ * Step 7: the seed keys the environment sets that the default realm ignores.
+ * None when this boot created the realm or filled its policies, which used
+ * them; a key whose field this boot completed was used too.
+ */
+function ignoredSeedKeys(
+  result: Pick<DefaultRealmBootResult, 'realm' | 'created' | 'policySeeding'>,
+  seedKeysSet: readonly SetSeedKey[]
+): SetSeedKey[] {
+  const realmId = result.realm.id;
+  if (result.created || result.policySeeding.filled.some((realm) => realm.realmId === realmId)) {
+    return [];
+  }
+  const completed = new Set(
+    result.policySeeding.completed
+      .filter((realm) => realm.realmId === realmId)
+      .flatMap((realm) => realm.paths)
+  );
+  return seedKeysSet.filter(({ path }) => !completed.has(path));
 }
 
 /** Steps 1 and 2: find or create the realm, and give it its issuer and primary host. */
@@ -236,7 +352,7 @@ async function provisionIssuer(
   tx: ProvisioningTransaction,
   settings: DefaultRealmBootSettings,
   identity: DefaultRealmIssuer
-): Promise<RealmRow> {
+): Promise<{ realm: RealmRow; created: boolean }> {
   const existing = await realms.findByName(settings.realmName, tx);
 
   if (existing && existing.issuer !== null && existing.issuer !== identity.issuer) {
@@ -260,7 +376,7 @@ async function provisionIssuer(
           identity.host,
           tx
         );
-    return provisioned.realm;
+    return { realm: provisioned.realm, created: existing === undefined };
   } catch (error) {
     if (error instanceof BadRequestError) {
       throw new DefaultRealmBootError(
@@ -278,7 +394,7 @@ async function provisionIssuer(
   }
 }
 
-/** Step 4: add the endpoint hosts the realm lacks. A host of another realm stops the boot. */
+/** Step 5: add the endpoint hosts the realm lacks. A host of another realm stops the boot. */
 async function addEndpointHosts(
   realms: DefaultRealmBootDependencies['realms'],
   tx: ProvisioningTransaction,
@@ -303,7 +419,7 @@ async function addEndpointHosts(
   return added;
 }
 
-/** Step 5: the passkey RP ID, from the realm host and the operator's settings. */
+/** Step 6: the passkey RP ID, from the realm host and the operator's settings. */
 function defaultRealmRelyingParty(
   realmHost: string,
   settings: DefaultRealmBootSettings
@@ -317,7 +433,7 @@ function defaultRealmRelyingParty(
 }
 
 /**
- * Step 5: the realm row holds the RP ID (#553). While no passkey has locked
+ * Step 6: the realm row holds the RP ID (#553). While no passkey has locked
  * it, the configured one is written there: `null` for the realm host, the
  * parent domain otherwise. A locked realm keeps its RP ID, and the configured
  * one must be it.
@@ -347,7 +463,7 @@ async function storePasskeyRpId(
 }
 
 /**
- * Step 5: a realm whose first passkey is enrolled is locked to the RP ID it was
+ * Step 6: a realm whose first passkey is enrolled is locked to the RP ID it was
  * enrolled under. Another RP ID would orphan every passkey, so the boot stops
  * and says which value keeps them working.
  */

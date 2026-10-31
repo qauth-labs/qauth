@@ -408,7 +408,12 @@ export async function bootAuthServer(
       );
     defaultRealmReboots.set(server, async () => {
       await bootDefaultRealm(
-        { db: server.db, realms: server.repositories.realms, log: server.log },
+        {
+          db: server.db,
+          realms: server.repositories.realms,
+          policies: server.policyStore,
+          log: server.log,
+        },
         defaultRealmBootSettings()
       );
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);

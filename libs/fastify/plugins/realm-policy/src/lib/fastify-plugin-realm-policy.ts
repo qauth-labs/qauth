@@ -1,5 +1,5 @@
 import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
-import type { DbClient, Realm } from '@qauth-labs/infra-db';
+import type { DbClient, Realm, RealmsRepository } from '@qauth-labs/infra-db';
 import {
   createPolicyStore,
   type RealmPolicies,
@@ -38,13 +38,19 @@ export interface RealmPolicyPluginOptions {
    * plugin's `realmPolicySeeds.policies` gives a new realm the same document.
    */
   readonly seeds: RealmPolicies;
+  /**
+   * The realms repository the store reads and writes through: the database
+   * plugin's `fastify.repositories.realms`, which every service role builds.
+   */
+  readonly realms: Pick<RealmsRepository, 'findById' | 'listPolicyRecords' | 'writePolicies'>;
   /** Where secret fields are kept (#529). Absent, every write of a secret is refused. */
   readonly secrets?: RealmSecretStore<DbClient>;
 }
 
 /**
  * Decorate `fastify.policyStore`: the realm policy store over the realms
- * table. Registered after the database plugin.
+ * table. Registered after the database plugin, whose `fastify.db` it writes
+ * in.
  *
  * @throws PolicyValidationError at registration when the seeds are not a
  *   valid policy document
@@ -54,7 +60,7 @@ export const realmPolicyPlugin = fp(
     fastify.decorate(
       'policyStore',
       createPolicyStore({
-        storage: createRealmPolicyStorage(fastify.db, () => fastify.repositories.realms),
+        storage: createRealmPolicyStorage(fastify.db, options.realms),
         seeds: options.seeds,
         ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
       })
