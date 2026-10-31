@@ -79,8 +79,8 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
         }
       : {}),
   });
-  // A security operation whose route has no query or body schema: Fastify
-  // hands its handler the router's and the query parser's own objects.
+  // A security operation whose route has no query schema, so Fastify hands its
+  // handler the query parser's own object, and takes no body.
   const retire = operations.defineOperation({
     id: 'fixtureKeys.retire',
     class: 'security',
@@ -158,6 +158,10 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
             'x-qauth-errors': [400, 401, 403, 404],
             security: [{ bearerAuth: [] }],
             params: z.object({ realmId: z.uuid(), keyId: z.string().min(1).max(64) }),
+            // A POST carries a body: a security operation's route parses it,
+            // here as none at all. Fastify hands an empty body over as `null`,
+            // and an approval filed without one parses `undefined`.
+            body: z.null().optional(),
           },
         },
         async (request) => {
@@ -462,7 +466,7 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect(runs).toEqual(['fixtureKeys.rotate']);
   });
 
-  it('runs an operation whose route parses no query or body, the query as the URL carries it', async () => {
+  it('runs an operation whose route parses no query and takes no body, the query as the URL carries it', async () => {
     const realmId = await tenant('alpha');
     const requester = await adminWith(realmId, 'security-admin');
     const created = await post(approvals(realmId), requester.token, {

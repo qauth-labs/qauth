@@ -208,6 +208,7 @@ describe('the routes of security operations at boot (#512)', () => {
   }
 
   const path = '/admin/v1-rc.0/realms/:realmId/keys/rotate';
+  const body = z.strictObject({ retireAfterDays: z.int() });
 
   // Acceptance criterion: the boot fails for a security operation without a
   // renderer (also against the real listener, admin-listener.integration.test.ts).
@@ -228,12 +229,17 @@ describe('the routes of security operations at boot (#512)', () => {
         context = scope.adminApi;
         scope.post(
           path,
-          { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params } },
+          { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params, body } },
           async () => ({})
         );
       }
     );
-    expect(context?.routeOf('fixtureKeys.rotate')).toEqual({ method: 'POST', url: path, params });
+    expect(context?.routeOf('fixtureKeys.rotate')).toEqual({
+      method: 'POST',
+      url: path,
+      params,
+      body,
+    });
     expect(context?.routeOf('realms.get')).toBeUndefined();
   });
 
@@ -244,7 +250,7 @@ describe('the routes of security operations at boot (#512)', () => {
       bootSecurity(operation, (scope, schema) => {
         const options = {
           config: { operation: 'fixtureKeys.rotate' },
-          schema: { ...schema, params },
+          schema: { ...schema, params, body },
         };
         scope.post(path, options, async () => ({}));
         scope.put(path, options, async () => ({}));
@@ -291,6 +297,59 @@ describe('the routes of security operations at boot (#512)', () => {
     ).rejects.toThrow(/querystring schema of the security operation fixtureKeys.rotate/);
   });
 
+  it('refuses a security route whose params schema does not name every path parameter', async () => {
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    const keyPath = '/admin/v1-rc.0/realms/:realmId/keys/:keyId/rotate';
+    const route = (params: object) => (scope: FastifyInstance, schema: object) => {
+      scope.post(
+        keyPath,
+        { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params, body } },
+        async () => ({})
+      );
+    };
+    // The handler could read a key the approval never bound.
+    await expect(bootSecurity(operation, route(z.object({ realmId: z.uuid() })))).rejects.toThrow(
+      /not a Zod object naming every path parameter \(keyId\)/
+    );
+    await instance?.close();
+    await expect(bootSecurity(operation, route(z.record(z.string(), z.string())))).rejects.toThrow(
+      /not a Zod object naming every path parameter/
+    );
+    await instance?.close();
+    await expect(
+      bootSecurity(operation, route(z.object({ realmId: z.uuid(), keyId: z.string() })))
+    ).resolves.toBeDefined();
+  });
+
+  it('refuses a security route that carries a body without a body schema', async () => {
+    const operation = rotate(() => ({ title: 'Rotate' }));
+    const params = z.object({ realmId: z.uuid() });
+    for (const method of ['POST', 'PUT', 'PATCH', 'DELETE'] as const) {
+      await expect(
+        bootSecurity(operation, (scope, schema) => {
+          scope.route({
+            method,
+            url: path,
+            config: { operation: 'fixtureKeys.rotate' },
+            schema: { ...schema, params },
+            handler: async () => ({}),
+          });
+        })
+      ).rejects.toThrow(/fixtureKeys.rotate has no Zod body schema/);
+      await instance?.close();
+    }
+    // A method that carries no body needs none.
+    await expect(
+      bootSecurity(operation, (scope, schema) => {
+        scope.get(
+          path,
+          { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params } },
+          async () => ({})
+        );
+      })
+    ).resolves.toBeDefined();
+  });
+
   it("files a request against a route's `query` schema as its querystring", async () => {
     const params = z.object({ realmId: z.uuid() });
     const query = z.object({ dryRun: z.enum(['true', 'false']) });
@@ -301,7 +360,10 @@ describe('the routes of security operations at boot (#512)', () => {
         context = scope.adminApi;
         scope.post(
           path,
-          { config: { operation: 'fixtureKeys.rotate' }, schema: { ...schema, params, query } },
+          {
+            config: { operation: 'fixtureKeys.rotate' },
+            schema: { ...schema, params, query, body },
+          },
           async () => ({})
         );
       }
@@ -311,6 +373,7 @@ describe('the routes of security operations at boot (#512)', () => {
       url: path,
       params,
       querystring: query,
+      body,
     });
   });
 
@@ -326,7 +389,7 @@ describe('the routes of security operations at boot (#512)', () => {
           schema: { ...schema, params },
         };
         scope.route({ method: 'HEAD', url: path, ...options, handler: async () => ({}) });
-        scope.post(path, options, async () => ({}));
+        scope.post(path, { ...options, schema: { ...options.schema, body } }, async () => ({}));
       }
     );
     expect(context?.routeOf('fixtureKeys.rotate')).toMatchObject({ method: 'POST', url: path });

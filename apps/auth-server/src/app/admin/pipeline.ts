@@ -960,6 +960,25 @@ const isSchemaPart = (value: unknown): value is RouteSchemaPart =>
   value !== null &&
   typeof (value as { safeParse?: unknown }).safeParse === 'function';
 
+/** The methods Fastify reads no body for, and refuses a body schema on. Every other carries one. */
+const BODYLESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'TRACE']);
+
+/**
+ * The names of the path parameters in a route's URL: each `:name`, and `*`
+ * for a wildcard. `::` is a literal colon, not a parameter.
+ */
+function urlParameterNames(url: string): string[] {
+  const path = url.replaceAll('::', '');
+  const names = [...path.matchAll(/:([A-Za-z0-9_]+)/g)].map(([, name]) => name);
+  return path.includes('*') ? [...names, '*'] : names;
+}
+
+/** The keys a Zod object schema names, or `undefined` for a schema that is not an object. */
+function shapeKeys(schema: RouteSchemaPart): ReadonlySet<string> | undefined {
+  const shape = (schema as { shape?: unknown }).shape;
+  return typeof shape === 'object' && shape !== null ? new Set(Object.keys(shape)) : undefined;
+}
+
 /**
  * A route's schema part `name`. Fastify takes `query` for `querystring`, but
  * folds it in only after the `onRoute` hooks have run, so both are read.
@@ -976,8 +995,11 @@ function schemaPart(schema: Record<string, unknown>, name: (typeof FILED_PARTS)[
  * - A security operation, but the approval engine's own, needs what an
  *   approval of it needs: a renderer (`render`), so an approver sees what it
  *   approves; one method; and Zod schemas, so a filed request is parsed as
- *   the retried one is: one for its path parameters, which always hold the
- *   realm, and one for its query and its body where it has them.
+ *   the retried one is and the approval binds what the handler reads: an
+ *   object schema for its path parameters, which always hold the realm,
+ *   naming every parameter of its URL; one for its body under every method
+ *   that carries one (all but GET, HEAD and TRACE); and one for its query
+ *   where it has one.
  * - An operation is served by one route. A HEAD route, which Fastify adds
  *   beside a GET route on a listener that exposes them (the admin listener
  *   does not), is checked as any route but is never the operation's route:
@@ -1002,7 +1024,8 @@ function operationRouteProblem(
     if (methods.length !== 1) {
       return `${where} performs the security operation ${operation.id} under several methods; an approval binds one`;
     }
-    if (!isSchemaPart(schema['params'])) {
+    const params = schema['params'];
+    if (!isSchemaPart(params)) {
       return `${where}: the security operation ${operation.id} has no Zod params schema, so a filed request cannot be parsed as the route parses it`;
     }
     for (const part of FILED_PARTS) {
@@ -1010,6 +1033,14 @@ function operationRouteProblem(
       if (value !== undefined && !isSchemaPart(value)) {
         return `${where}: the ${part} schema of the security operation ${operation.id} is not a Zod schema, so a filed request cannot be parsed as the route parses it`;
       }
+    }
+    const named = shapeKeys(params);
+    const unnamed = urlParameterNames(route.url).filter((name) => !named?.has(name));
+    if (named === undefined || unnamed.length > 0) {
+      return `${where}: the params schema of the security operation ${operation.id} is not a Zod object naming every path parameter (${unnamed.join(', ') || 'none named'}), so an approval would not bind what its handler reads`;
+    }
+    if (!BODYLESS_METHODS.has(methods[0]) && schemaPart(schema, 'body') === undefined) {
+      return `${where}: the security operation ${operation.id} has no Zod body schema, so its handler would read a body no schema parsed`;
     }
   }
   if (methods.length === 1 && methods[0] === 'HEAD') return undefined;

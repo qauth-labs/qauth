@@ -270,7 +270,12 @@ async function fixtureAdminApi() {
       });
       scope.post(
         '/admin/v1-rc.0/realms/:realmId/fixture-keys/rotate',
-        { config: { operation: rotate.id }, schema: schemaOf(rotate) },
+        {
+          config: { operation: rotate.id },
+          // A security operation's route parses the body its method carries,
+          // here as none at all (#512): Fastify hands an empty one over as `null`.
+          schema: { ...schemaOf(rotate), body: z.null().optional() },
+        },
         async (request) => {
           runs.push(rotate.id);
           const realmId = requestAdminCaller(request).targetRealm.id;

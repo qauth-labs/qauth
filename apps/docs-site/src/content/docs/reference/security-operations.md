@@ -83,6 +83,13 @@ operation of the OpenAPI document as `x-qauth-effects`
   one. Filing an approval (`approvals.create`) and withdrawing one (`approvals.cancel`) need
   what the operation it is for needs, so they declare every effect and permission and decide per
   request; they are the only security operations that run without an approval.
+- The approval binds the request as its route parses it, so the route of a security operation
+  parses all of it, and the admin listener refuses to boot one that does not: it has one method, a
+  Zod object schema for its path parameters that names every parameter of its URL, a Zod body
+  schema under every method that carries a body (all but `GET`, `HEAD` and `TRACE`), and a
+  Zod query schema if it has one. Its handler reads only the parsed path parameters, query and
+  body, and those schemas are deterministic: no default a parse makes up anew, such as a random id
+  or the current time, since the filed request and its retry are parsed apart.
 
 These are not security operations:
 
