@@ -66,7 +66,12 @@ Decision 6):
 - A client whose `client_id` is a Client ID Metadata Document URL is shown by
   that URL's host, in its ASCII (`xn--`) form, with the registrable domain in
   bold. A host under a shared-hosting suffix (the private section of the Public
-  Suffix List) is flagged.
+  Suffix List) is flagged. The host is all the screen shows, and all the server
+  verified: with the default `CIMD_TRUST_POLICY=accept-any-https`, a document
+  anyone can publish on a host that serves anyone's files appears under that
+  host. A deployment that accepts third-party agents should use the
+  `allowlist` policy
+  ([CIMD](/operate/docker/#what-the-consent-screen-shows-for-a-cimd-client)).
 - A client the operator provisioned is shown by the domain the operator set on
   it: `verified_domain` in the `db:seed-oauth-clients` manifest.
 - Any other client, a dynamically registered or developer-portal one included,

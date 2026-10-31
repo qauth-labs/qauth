@@ -463,6 +463,20 @@ their deadlines. The mitigation is `CIMD_TRUST_POLICY=allowlist`: the server the
 ID Metadata Document only from the hosts in `CIMD_TRUSTED_DOMAINS`, so an unauthenticated caller
 can no longer pick the host.
 
+#### What the consent screen shows for a CIMD client
+
+The consent screen names a CIMD client by the host of its `client_id` URL and
+nothing else: that host is all the server verified, by fetching the document
+from it. Under `accept-any-https`, a host that serves anyone's files (a code
+hosting service, a shared static site, an object store bucket on a provider's
+domain) lets anyone publish a document there, and the screen shows that
+client under the provider's host. The registrable domain is in bold and a host
+under a shared-hosting suffix of the Public Suffix List is flagged, but a
+provider's own domain that is not on that list is not. A deployment that
+accepts third-party agents or MCP clients should set
+`CIMD_TRUST_POLICY=allowlist` and list in `CIMD_TRUSTED_DOMAINS` only hosts
+whose every document comes from the party the user expects.
+
 #### Granting scopes to a CIMD client
 
 A CIMD client starts with no scopes, so it is granted none of the scopes it asks for. Its document owns its name, redirect URIs and grant types; which scopes it may receive is the operator's decision, which a document cannot make. Grant them in the `cimd_clients` section of the seed manifest, and run `db:seed-oauth-clients` as for any other manifest:
