@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
-import { registerFamilyConsentRoutes } from '../../helpers/family-consents';
+import { registerAccountConsentRoutes } from './consents';
 
 /**
  * THE ACCOUNT API, `/account/v1-rc.0` (ADR-019 Decision 7, #524).
@@ -22,5 +22,5 @@ import { registerFamilyConsentRoutes } from '../../helpers/family-consents';
 export const autoPrefix = '/account/v1-rc.0';
 
 export default async function (fastify: FastifyInstance) {
-  registerFamilyConsentRoutes(fastify, 'account');
+  registerAccountConsentRoutes(fastify);
 }

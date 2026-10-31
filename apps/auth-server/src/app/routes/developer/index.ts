@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 
-import { registerFamilyConsentRoutes } from '../../helpers/family-consents';
 import { registerDeveloperApiKeyRoutes } from './api-keys';
 import { registerDeveloperClientRoutes } from './clients';
+import { registerDeveloperConsentRoutes } from './consents';
 
 /**
  * THE DEVELOPER API, `/developer/v1-rc.0` (ADR-019 Decision 7, #524).
@@ -31,5 +31,5 @@ export const autoPrefix = '/developer/v1-rc.0';
 export default async function (fastify: FastifyInstance) {
   registerDeveloperClientRoutes(fastify);
   registerDeveloperApiKeyRoutes(fastify);
-  registerFamilyConsentRoutes(fastify, 'developer');
+  registerDeveloperConsentRoutes(fastify);
 }
