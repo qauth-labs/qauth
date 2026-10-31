@@ -1,4 +1,8 @@
-import { type JsonSchema, stepNamed } from '@qauth-labs/shared-interaction-contract';
+import {
+  DISPLAY_SOURCES,
+  type JsonSchema,
+  stepNamed,
+} from '@qauth-labs/shared-interaction-contract';
 import { describe, expect, it } from 'vitest';
 
 import { createFipaMapper, FIPA_SERVES_ALL, type FipaRoundContext } from './fipa-mapper';
@@ -233,6 +237,59 @@ describe('the mappers’ output', () => {
       }
       for (const [urn, params] of Object.entries(body.qauth_interaction_params))
         checkParams(urn, params);
+    }
+  });
+});
+
+/** Check one step's personal data: every string is a bounded token or a display value under the display rule. */
+function checkPersonal(urn: string, data: unknown) {
+  const name = stepNameOfUrn(urn);
+  expect(name, urn).toBeDefined();
+  const schema = toJsonSchemaPart(grammarStep(name as StepName).personal);
+  const strings: { path: (string | number)[]; value: string }[] = [];
+  const members: string[] = [];
+  walk(data, [], strings, members);
+  for (const member of PROSE_MEMBERS) expect(members).not.toContain(member);
+  for (const string of strings) {
+    const node = schemaAt(schema, data, string.path);
+    const where = `${name} ${string.path.join('.')}`;
+    if (node['x-qauth-display'] !== undefined) {
+      expect(DISPLAY_SOURCES, where).toContain(node['x-qauth-display']);
+    }
+    const token =
+      node['const'] !== undefined ||
+      node['enum'] !== undefined ||
+      typeof node['pattern'] === 'string';
+    expect(token, `${where} is not a bounded token`).toBe(true);
+  }
+}
+
+describe('the personal data read', () => {
+  it('carries no prose: every string is a bounded token or a display value from the account, the realm or a declaration', () => {
+    for (const name of STEP_NAMES) {
+      const view = interaction.personalView(
+        { current: { step: name, params: offeredParams(name) }, alternatives: [] } as never,
+        stepNamed(name).example.personal ?? {}
+      );
+      expect(Object.keys(view).sort()).toEqual(['data', 'step']);
+      expect(view.step).toBe(STEP_URNS[name]);
+      for (const [urn, data] of Object.entries(view.data)) checkPersonal(urn, data);
+    }
+  });
+
+  it('refuses personal data with a sentence beside or inside it', () => {
+    const offer = { current: { step: 'password', params: {} }, alternatives: [] } as StepOffer;
+    for (const data of [
+      { identifier: 'alice@example.com', message: 'Signing in from a new device?' },
+      { identifier: 'alice@example.com\nYour account is locked. Call +1 555 0100.' },
+    ]) {
+      let caught: unknown;
+      try {
+        interaction.personalView(offer, data);
+      } catch (error) {
+        caught = error;
+      }
+      expect((caught as StepMappingError).code).toBe('invalid_personal_data');
     }
   });
 });

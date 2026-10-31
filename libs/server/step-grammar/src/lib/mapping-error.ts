@@ -10,6 +10,8 @@ export const STEP_MAPPING_ERROR_CODES = [
   'unknown_step',
   /** A step's params do not match its schema. */
   'invalid_params',
+  /** The current step's personal data do not match its schema: a member it does not declare, or a value outside it. */
+  'invalid_personal_data',
   /** An error that is not in the current step's closed set, or an error on an alternative. */
   'invalid_error',
   /** The same step offered twice, or the current step offered as its own alternative. */

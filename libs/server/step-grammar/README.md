@@ -88,6 +88,13 @@ createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] }).chall
   alternative: the pending step resumes after it, so no other answer may skip it (ADR-017
   Decision 4). `new_password` carries `reasons` exactly when its last answer was refused with
   `password_rejected`, and its `min_length` is not above its `max_length`.
+- **Personal data is parsed before it is served.** `personalView(offer, data)` on the Interaction
+  API mapper gives the personal data read (`PersonalData` in the contract): the current step's
+  personal data, parsed by its step's strict schema into a new object. A member the step does not
+  declare (a user row spread in whole) or a value outside its schema is refused with
+  `invalid_personal_data`, whose message names paths, never values. An alternative's personal data
+  is never served, and the FiPA mapper has no counterpart: personal data never goes to the FiPA
+  endpoint.
 - **What may be answered next** is what the output names: the step read's `step` and
   `alternatives`, or the FiPA body's `qauth_interaction_types_offered` (none after
   `redirect_to_web`). A transport accepts an answer only to one of those.
@@ -135,9 +142,9 @@ Schema's `contentSchema` only annotates.
 | `json-schema.test.ts`        | The generated step files equal the published ones; every INT-01 example validates; Zod and the published schema agree |
 | `offer.test.ts`              | The rules between members, the second check of mapper output, and frozen tables and lists                             |
 | `steps.test.ts`              | The names, URNs, transports, errors and `amr` equal the contract's                                                    |
-| `interaction-mapper.test.ts` | The step view of every example equals the contract's example step read                                                |
+| `interaction-mapper.test.ts` | The step view and personal data read of every example equal the contract's examples                                   |
 | `fipa-mapper.test.ts`        | ADR-017's wire examples; `redirect_to_web`; `interaction_type_required` is always a version-1 name                    |
-| `no-prose.test.ts`           | No output of either mapper carries prose; an offer that tries is refused                                              |
+| `no-prose.test.ts`           | No output of either mapper, personal data included, carries prose; an offer that tries is refused                     |
 | `zod-kit.test.ts`            | A value over its maximum length is refused before a pattern, a `format` or a JSON parse reads it                      |
 | `exhaustive.test.ts`         | Runs the TypeScript compiler: a step without a mapper fails the type check                                            |
 | `vectors.test.ts`            | The committed vectors are what the mappers give, and a reader recovers each step from them                            |

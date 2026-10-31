@@ -4,6 +4,7 @@ import type { AnyGrammarStep } from './grammar';
 import { StepMappingError } from './mapping-error';
 import { checkParams, readOffer, refuseUnknownMembers, type StepOffer } from './offer';
 import {
+  grammarStep,
   type GrammarStepUnion,
   isStepName,
   STEP_NAMES,
@@ -12,6 +13,7 @@ import {
   type StepName,
   type StepUrn,
 } from './steps';
+import { EMPTY_OBJECT } from './zod-kit';
 
 /**
  * The Interaction API's mapper: an offer as the step grammar's members of a
@@ -72,6 +74,14 @@ export interface InteractionStepView {
   readonly params: Readonly<Partial<Record<StepUrn, unknown>>>;
 }
 
+/** The personal data read (`PersonalData` in the OpenAPI document of #590). */
+export interface InteractionPersonalView {
+  /** The current step, whose personal data this is. */
+  readonly step: StepUrn;
+  /** The current step's personal data under its step name; empty for a step that has none. */
+  readonly data: Readonly<Partial<Record<StepUrn, unknown>>>;
+}
+
 /** Which steps a deployment's Interaction API serves. By default, every step. */
 export interface InteractionTransportConfig {
   readonly serves: readonly StepName[];
@@ -91,6 +101,16 @@ export interface InteractionMapper {
    * answer. Throws {@link StepMappingError} for an offer the grammar refuses.
    */
   stepView(offer: StepOffer): InteractionStepView;
+  /**
+   * The personal data read for `offer`: `data`, the current step's personal
+   * data, parsed by that step's strict schema into a new object. A member the
+   * schema does not declare (a user row spread in whole, a password hash, a
+   * flag) or a value outside it is refused, and the result shares nothing
+   * with `data`. Only the current step's personal data is served; an
+   * alternative's never is. The offer passes the same checks as in
+   * {@link stepView}. Throws {@link StepMappingError}.
+   */
+  personalView(offer: StepOffer, data: unknown): InteractionPersonalView;
 }
 
 /** Build the Interaction API's mapper for the steps `config` names. */
@@ -115,25 +135,44 @@ export function createInteractionMapper(
       'interaction mapper'
     );
 
+  const stepView = (offer: StepOffer): InteractionStepView => {
+    const read = readOffer(offer);
+    const { current } = read;
+    if (!serves.has(current.step)) throw new StepMappingError('not_served', current.step);
+    const alternatives = read.alternatives.filter((alternative) => serves.has(alternative.step));
+    if (alternatives.length > MAX_INTERACTION_ALTERNATIVES) {
+      throw new StepMappingError('too_many_alternatives', String(alternatives.length));
+    }
+    const offered = [current, ...alternatives];
+    return {
+      step: STEP_URNS[current.step],
+      ...(current.error === undefined ? {} : { error: current.error }),
+      alternatives: alternatives.map((alternative) => STEP_URNS[alternative.step]),
+      params: Object.fromEntries(
+        offered.map((step) => [STEP_URNS[step.step], mapParams(step.step, step.params)])
+      ),
+    };
+  };
+
+  const personalView = (offer: StepOffer, data: unknown): InteractionPersonalView => {
+    const { step: urn } = stepView(offer);
+    const name = offer.current.step;
+    const schema = grammarStep(name).personal;
+    const parsed = schema.safeParse(data);
+    if (!parsed.success) {
+      // Paths only: personal data never goes to the log.
+      const paths = parsed.error.issues.map((issue) => issue.path.join('.') || '(root)');
+      throw new StepMappingError(
+        'invalid_personal_data',
+        `${name}: ${[...new Set(paths)].join(', ')}`
+      );
+    }
+    return { step: urn, data: schema === EMPTY_OBJECT ? {} : { [urn]: parsed.data } };
+  };
+
   return {
     serves: Object.freeze(STEP_NAMES.filter((name) => serves.has(name))),
-    stepView(offer) {
-      const read = readOffer(offer);
-      const { current } = read;
-      if (!serves.has(current.step)) throw new StepMappingError('not_served', current.step);
-      const alternatives = read.alternatives.filter((alternative) => serves.has(alternative.step));
-      if (alternatives.length > MAX_INTERACTION_ALTERNATIVES) {
-        throw new StepMappingError('too_many_alternatives', String(alternatives.length));
-      }
-      const offered = [current, ...alternatives];
-      return {
-        step: STEP_URNS[current.step],
-        ...(current.error === undefined ? {} : { error: current.error }),
-        alternatives: alternatives.map((alternative) => STEP_URNS[alternative.step]),
-        params: Object.fromEntries(
-          offered.map((step) => [STEP_URNS[step.step], mapParams(step.step, step.params)])
-        ),
-      };
-    },
+    stepView,
+    personalView,
   };
 }

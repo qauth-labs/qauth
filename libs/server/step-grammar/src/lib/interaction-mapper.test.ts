@@ -1,5 +1,8 @@
 import { INTERACTION_OPENAPI, stepNamed } from '@qauth-labs/shared-interaction-contract';
-import { exampleInteraction } from '@qauth-labs/shared-interaction-contract/src/lib/openapi';
+import {
+  exampleInteraction,
+  examplePersonal,
+} from '@qauth-labs/shared-interaction-contract/src/lib/openapi';
 import {
   componentValidator,
   describeErrors,
@@ -237,6 +240,116 @@ describe('the Interaction API mapper', () => {
     expectRefusal(
       () => createInteractionMapper({ serves: [], strict: true } as never),
       'unknown_member'
+    );
+  });
+});
+
+describe('the Interaction API mapper’s personal data read', () => {
+  // The step's own example personal data, as the engine would hand it over.
+  const personalOf = (name: StepName) => stepNamed(name).example.personal ?? {};
+
+  it.each(STEP_NAMES)(
+    '%s: gives the contract’s example personal data read, which validates against PersonalData',
+    (name) => {
+      const view = mapper.personalView(exampleOffer(name), personalOf(name));
+      expect(view).toStrictEqual(examplePersonal(stepNamed(name)));
+      const read = validator.schema('PersonalData');
+      expect(read(view), describeErrors(read)).toBe(true);
+    }
+  );
+
+  it('serves a new object: nothing the caller keeps a reference to', () => {
+    const data = { identifier: 'alice@example.com' };
+    const view = mapper.personalView(
+      { current: { step: 'password', params: {} }, alternatives: [] },
+      data
+    );
+    const served = view.data[STEP_URNS.password];
+    expect(served).toStrictEqual(data);
+    expect(served).not.toBe(data);
+    data.identifier = 'mallory@example.com';
+    expect(served).toStrictEqual({ identifier: 'alice@example.com' });
+  });
+
+  it('refuses a user row spread into the personal data, and names no value', () => {
+    const user = {
+      id: '7c9e6679-7425-40de-944b-e07fc1f90ae7',
+      passwordHash: '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA',
+      emailVerified: false,
+      enabled: true,
+    };
+    let caught: unknown;
+    try {
+      mapper.personalView(
+        { current: { step: 'password', params: {} }, alternatives: [] },
+        { ...user, identifier: 'alice@example.com' }
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(StepMappingError);
+    expect((caught as StepMappingError).code).toBe('invalid_personal_data');
+    expect((caught as Error).message).not.toContain('argon2id');
+    expect((caught as Error).message).not.toContain('alice');
+  });
+
+  it('refuses personal data for a step that has none, and a value outside the schema', () => {
+    expectRefusal(
+      () =>
+        mapper.personalView(
+          { current: { step: 'identifier', params: {} }, alternatives: [] },
+          { identifier: 'alice@example.com' }
+        ),
+      'invalid_personal_data'
+    );
+    expectRefusal(
+      () =>
+        mapper.personalView(
+          { current: { step: 'totp_setup', params: paramsOf('totp_setup') }, alternatives: [] },
+          { ...(personalOf('totp_setup') as object), secret: 'not-base32' }
+        ),
+      'invalid_personal_data'
+    );
+  });
+
+  it('serves the current step’s personal data only, never an alternative’s', () => {
+    const view = mapper.personalView(
+      {
+        current: { step: 'password', params: {} },
+        alternatives: [{ step: 'recovery_code', params: {} }],
+      },
+      { identifier: 'alice@example.com' }
+    );
+    expect(Object.keys(view.data)).toEqual([STEP_URNS.password]);
+    // The recovery codes are the current step's alone: offered as the step
+    // read's current step, never through another step's read.
+    expectRefusal(
+      () =>
+        mapper.personalView(
+          { current: { step: 'password', params: {} }, alternatives: [] },
+          personalOf('recovery_codes')
+        ),
+      'invalid_personal_data'
+    );
+  });
+
+  it('refuses an offer the step read refuses', () => {
+    const narrow = createInteractionMapper({ serves: ['password'] });
+    expectRefusal(
+      () =>
+        narrow.personalView(
+          { current: { step: 'recovery_code', params: {} }, alternatives: [] },
+          {}
+        ),
+      'not_served'
+    );
+    expectRefusal(
+      () =>
+        mapper.personalView(
+          { current: { step: 'password', params: { note: 'x' } as never }, alternatives: [] },
+          {}
+        ),
+      'invalid_params'
     );
   });
 });

@@ -27,6 +27,7 @@ export {
   INTERACTION_STEP_MAPPERS,
   type InteractionMapper,
   type InteractionMapperTable,
+  type InteractionPersonalView,
   type InteractionStepMapper,
   type InteractionStepView,
   type InteractionTransportConfig,
