@@ -575,7 +575,7 @@ describe('answers (#592)', () => {
       amr: ['pwd'],
       step: CONSENT_STEP,
     });
-    expect(retry.statusCode).toBe(200);
+    expect(retry.json()).toMatchObject({ kind: 'step', view: { revision: 1 } });
     expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
   });
 
@@ -987,6 +987,17 @@ describe('bounds (#592)', () => {
       ['code', 'status', 'title', 'trace_id', 'type'].sort()
     );
     expect(decoded.body).not.toContain(id);
+
+    // A spelling no route serves: only its decoded path names the API.
+    const decodedMissing = await harness.app.inject({
+      method: 'GET',
+      url: `/%69nteraction/v1-rc%2E0/${id}/nowhere`,
+    });
+    expect(decodedMissing.statusCode).toBe(404);
+    expect(Object.keys(decodedMissing.json() as object).sort()).toEqual(
+      ['code', 'status', 'title', 'trace_id', 'type'].sort()
+    );
+    expect(decodedMissing.body).not.toContain(id);
   });
 
   it('names no client in an event when the client_id is longer than an event holds', async () => {
