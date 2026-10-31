@@ -413,14 +413,19 @@ export interface SessionService {
    * it. Safe to call twice: the second call changes nothing and answers
    * `already_ended`. Throws when Postgres cannot store the end.
    *
-   * Refresh-token families, Authority Trees and consents are not touched:
-   * the caller decides about them (ADR-014: trees survive sign-out).
+   * Only the session ends. Its refresh-token families and the access tokens
+   * already issued under it stay valid, Authority Trees and consents are not
+   * touched (ADR-014: trees survive sign-out), and no CAEP signal is sent.
+   * Every caller pairs it with the token revocation and the signal its case
+   * needs; a session revocation alone does not sign anyone out of a client.
    */
   revoke(input: RevokeSessionInput): Promise<RevokeSessionResult>;
   /**
    * End a user's sessions in the realm, but `exceptSid` and those created at
    * or after `createdBefore`, in one transaction, as {@link revoke} ends one.
    * Returns the sessions this call ended; a second call ends nothing more.
+   * Like {@link revoke}, it revokes no token and sends no signal: the caller
+   * pairs it with both.
    */
   revokeAllForUser(input: RevokeUserSessionsInput): Promise<RevokedSessions>;
   /**
@@ -428,9 +433,11 @@ export interface SessionService {
    * id order: key retirement and bulk revocation. A session created more
    * than `SESSION_CLOCK_SKEW_ALLOWANCE_MS` after the call began is left alone;
    * one created within it is ended, so a node whose clock runs ahead cannot
-   * stamp a session made before the call past the cut. Each batch's sessions reach the listeners as the
-   * batch commits; the call returns only counts, so a realm of any size fits
-   * in memory. Safe to repeat.
+   * stamp a session made before the call past the cut. Each batch's sessions
+   * reach the listeners as the batch commits; the call returns only counts,
+   * so a realm of any size fits in memory. Safe to repeat. Like
+   * {@link revoke}, it revokes no token and sends no signal: the caller pairs
+   * it with both.
    */
   revokeAllForRealm(input: RevokeRealmSessionsInput): Promise<RealmSessionsRevocation>;
   /**
@@ -458,9 +465,10 @@ export interface SessionService {
   listForUser(input: ListUserSessionsInput): Promise<SessionPage>;
   /**
    * One page of the realm's sessions that served a client, newest first, for
-   * an admin: each with ALL the clients the session served, its address and
-   * its user agent. A caller that answers the client's own developer must
-   * not pass those on. A revoked session no longer holds its clients, so
+   * an admin only: each with its user id, its IP address, its user agent and
+   * ALL the other clients the session served. Never expose it as is to the
+   * client's own developer, who must not learn who else its users sign in
+   * to, or from where. A revoked session no longer holds its clients, so
    * only sessions not yet revoked are listed. Throws as {@link listForUser}.
    */
   listForClient(input: ListClientSessionsInput): Promise<SessionPage>;
@@ -468,7 +476,9 @@ export interface SessionService {
    * Call `listener` after every revocation this process makes that ends
    * sessions, once per ended session: after Postgres committed the end and
    * the cache tombstones were written. Listeners run in the order they
-   * registered, one at a time, and the revocation waits for them. A listener
+   * registered, one at a time, and the revocation waits for them: they run
+   * inside the request or job that revoked, so a listener only enqueues work
+   * (a back-channel logout, a signal) and never does it inline. A listener
    * that throws is logged and the others still run; the revocation stands.
    *
    * At most once, and in this process only: a process that stops between
