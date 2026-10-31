@@ -57,6 +57,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { cimdDocumentSchema, toCimdClientInsert } from '../../helpers/cimd';
 import { validateAndNormalize } from '../../helpers/dynamic-client-registration';
@@ -274,6 +275,8 @@ function createTokenStub(persistedClient: {
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
       getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
     },
+    // The realm's token lifetimes (#527): read from the request's realm row.
+    policyStore: testPolicyStore(),
     pkceUtils: { verifyCodeChallenge: vi.fn() },
     redis: {
       get: vi.fn().mockResolvedValue(null),

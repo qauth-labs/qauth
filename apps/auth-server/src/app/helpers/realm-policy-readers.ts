@@ -1,4 +1,5 @@
 import type { RealmPolicyStoreOfRealms } from '@qauth-labs/fastify-plugin-realm-policy';
+import type { FastifyInstance } from 'fastify';
 
 import type { RealmRow } from './request-realm';
 
@@ -8,8 +9,8 @@ import type { RealmRow } from './request-realm';
  *
  * Since #516 every realm stores its policies, and the environment only
  * seeds a new realm. The flows move to the stored values one area at a time:
- * the token lifetimes (#527), the verified-account, password and brute-force
- * policy (#528), mail (#529) and CIMD (#534). Until an area has moved, the
+ * the token lifetimes (#527, moved), the verified-account, password and
+ * brute-force policy (#528), mail (#529) and CIMD (#534). Until an area has moved, the
  * server still reads its keys from the environment for every realm, so the
  * default realm's boot step says a set key is ignored only for a path listed
  * here; for any other it says the server still applies the key. The issue
@@ -22,6 +23,11 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   'registration.dynamicRegistrationAllowedScopes',
   // `resolveEnvironmentPolicy` (ADR-008): the realm's environment ceiling.
   'posture.maxEnvironmentLaxity',
+  // The token endpoint and the legacy `/auth/login` (`tokenLifetimesOf`,
+  // #527): access, ID and refresh token lifetimes.
+  'tokens.accessTokenLifespanSeconds',
+  'tokens.developmentAccessTokenLifespanSeconds',
+  'tokens.refreshTokenLifespanSeconds',
 ]);
 
 /**
@@ -45,4 +51,63 @@ export function dynamicRegistrationScopesOf(
 ): string[] {
   if (realm.policiesVersion !== 0) return [...(realm.dynamicRegistrationAllowedScopes ?? [])];
   return [...policies.ofRealm(realm).policies.registration.dynamicRegistrationAllowedScopes];
+}
+
+/** A realm's token lifetimes in seconds (#527): the `tokens` policies the token flows read. */
+export interface TokenLifetimes {
+  /**
+   * The access token lifetime of a staging or production client (the ADR-008
+   * `short` tier), and the lifetime of every ID token.
+   */
+  readonly accessTokenLifespanSeconds: number;
+  /** The access token lifetime of a development client (the ADR-008 `long` tier). */
+  readonly developmentAccessTokenLifespanSeconds: number;
+  /** How long a newly issued or rotated refresh token is valid, from its issue. */
+  readonly refreshTokenLifespanSeconds: number;
+}
+
+/**
+ * A realm's token lifetimes (ADR-019 Decision 10, #527), from the realm row
+ * the flow already loaded (the realm resolver's, which the environment
+ * policy reads too): no query. So two realms of one deployment can issue
+ * tokens with different lifetimes, and a change of a realm's policies
+ * reaches its next token once the row is read again (the resolver's cache
+ * time), without a restart.
+ *
+ * A realm that has its policies keeps the three lifetimes in them; the
+ * environment keys (`ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN`,
+ * `REFRESH_TOKEN_LIFESPAN`) only seeded them. One that has none yet (counter
+ * 0: created by a node of the previous release during a rolling upgrade,
+ * until a boot fills it) runs on the JWT plugin's lifespans, which the
+ * environment gave at registration, as every realm did before #527, and on
+ * the development lifetime its fill will store, the environment's seed. The
+ * fill moves the same values onto the row, so the lifetimes do not change
+ * when it lands.
+ *
+ * @throws PolicyValidationError when the realm's stored policies are not a
+ *   valid policy document
+ */
+export function tokenLifetimesOf(
+  sources: {
+    readonly policyStore: Pick<RealmPolicyStoreOfRealms, 'ofRealm'>;
+    readonly jwtUtils: Pick<
+      FastifyInstance['jwtUtils'],
+      'getAccessTokenLifespan' | 'getRefreshTokenLifespan'
+    >;
+  },
+  realm: RealmRow
+): TokenLifetimes {
+  const { tokens } = sources.policyStore.ofRealm(realm).policies;
+  if (realm.policiesVersion > 0) {
+    return Object.freeze({
+      accessTokenLifespanSeconds: tokens.accessTokenLifespanSeconds,
+      developmentAccessTokenLifespanSeconds: tokens.developmentAccessTokenLifespanSeconds,
+      refreshTokenLifespanSeconds: tokens.refreshTokenLifespanSeconds,
+    });
+  }
+  return Object.freeze({
+    accessTokenLifespanSeconds: sources.jwtUtils.getAccessTokenLifespan(),
+    developmentAccessTokenLifespanSeconds: tokens.developmentAccessTokenLifespanSeconds,
+    refreshTokenLifespanSeconds: sources.jwtUtils.getRefreshTokenLifespan(),
+  });
 }

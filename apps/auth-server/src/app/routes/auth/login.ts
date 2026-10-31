@@ -14,6 +14,7 @@ import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
+import { tokenLifetimesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { refreshFamilyEnd, refreshTokenExpiresAt } from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';
@@ -171,6 +172,12 @@ export default async function (fastify: FastifyInstance) {
         // Get or create system OAuth client
         const systemClient = await getOrCreateSystemClient(realm.id, fastify);
 
+        // The realm's token lifetimes (#527), from the resolver's row: no
+        // query. This first-party sign-in has no client environment, so its
+        // access token gets the `short` tier, the realm's access lifetime.
+        const tokenLifetimes = tokenLifetimesOf(fastify, realm);
+        const accessTokenExpiresIn = tokenLifetimes.accessTokenLifespanSeconds;
+
         // Generate access token (JWT) using JWT plugin. No `email` /
         // `email_verified`: an access token carries them only under the
         // `email` scope, and this first-party token is granted no scope
@@ -182,20 +189,22 @@ export default async function (fastify: FastifyInstance) {
           // Never the admin API's audience: this sign-in checks no admin
           // grant (#510), whatever the system client's row lists.
           aud: withoutAdminAudience(resolveAudience(systemClient), systemClient.clientId),
+          // Signed with the lifetime `expires_in` names.
+          expiresInOverride: accessTokenExpiresIn,
         });
 
         // Generate refresh token using JWT plugin
         const { token: refreshToken, tokenHash: refreshTokenHash } =
           fastify.jwtUtils.generateRefreshToken();
 
-        // Calculate expiration times. The realm's `sso_max_lifespan` caps
-        // the refresh-token family from its start (ADR-019 Decision 3, #552).
-        // No browser session backs this sign-in, so no session end caps it.
-        const accessTokenExpiresIn = fastify.jwtUtils.getAccessTokenLifespan();
+        // The refresh token's expiry: the realm's refresh lifetime, and its
+        // `sso_max_lifespan` caps the refresh-token family from its start
+        // (ADR-019 Decision 3, #552). No browser session backs this sign-in,
+        // so no session end caps it.
         const familyCreatedAt = issuedAt;
         const refreshExpiresAt = refreshTokenExpiresAt(
           familyCreatedAt,
-          fastify.jwtUtils.getRefreshTokenLifespan(),
+          tokenLifetimes.refreshTokenLifespanSeconds,
           refreshFamilyEnd(familyCreatedAt, realm.ssoMaxLifespan, null)
         );
 
