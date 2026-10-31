@@ -34,9 +34,18 @@ export const DEFAULT_PUBLISHED_KEY_CACHE_SIZE = 256;
  */
 export const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k', 'priv'] as const;
 
-/** Whether a published key is inside its publication window at `at`. */
+/**
+ * Whether a published key is inside its publication window at `at`.
+ *
+ * A retired key is inside it only until a set `unpublishAt`: one whose row
+ * names no end would stay in the JWKS and the verification set for good, so
+ * it fails closed and is out at once. Every step that retires a published key
+ * sets the end (#492). A `next` or `active` key's window stays open-ended.
+ */
 export function isPublishedAt(record: PublicKeyRecord, at: number): boolean {
-  return record.publishAt <= at && (record.unpublishAt === null || at < record.unpublishAt);
+  if (record.publishAt > at) return false;
+  if (record.unpublishAt === null) return record.status !== 'retired';
+  return at < record.unpublishAt;
 }
 
 /** A fixed order, so every node serves the same JWKS: purpose, then publication, then `kid`. */
@@ -76,7 +85,8 @@ function deepFreeze<T>(value: T): T {
 
 /**
  * The keys of `purpose` that may verify at `at`: published, inside their
- * window, and active or retired, in publication order.
+ * window (a retired key only until its set `unpublishAt`, see
+ * {@link isPublishedAt}), and active or retired, in publication order.
  */
 export function verificationKeysOf(
   records: readonly PublicKeyRecord[],
@@ -99,7 +109,11 @@ export function verificationKeysOf(
   return Object.freeze(keys);
 }
 
-/** The realm's JWKS at `at`: its published token keys inside their window, none compromised. */
+/**
+ * The realm's JWKS at `at`: its published token keys inside their window, none
+ * compromised. The window is {@link isPublishedAt}'s, as for the verification
+ * set, so a retired key leaves both together.
+ */
 export function realmJwksOf(records: readonly PublicKeyRecord[], at: number): RealmJwks {
   const keys = sortForPublication(records)
     .filter(

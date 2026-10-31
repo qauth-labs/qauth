@@ -36,8 +36,8 @@ function expectedKty(alg: string): string | undefined {
  * Fails CLOSED — returns `undefined` rather than guessing — when:
  * - no entry matches both `kid` and `alg`,
  * - more than one entry matches (an ambiguous JWKS must never silently pick
- *   one; the boot-time {@link assertDistinctJwksKeyIds} makes this
- *   unreachable for keys this server publishes),
+ *   one; for keys this server publishes the `realm_keys_realm_id_kid_unique`
+ *   constraint, one `kid` per realm, makes this unreachable),
  * - the matched entry's `kty` contradicts its `alg` (a malformed or tampered
  *   JWKS trying to steer an ML-DSA key into the Ed25519 path, or vice versa).
  *

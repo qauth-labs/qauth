@@ -2,6 +2,11 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { bootRealmKeysWithKekEnv } from '@qauth-labs/fastify-plugin-signer';
+import { rotateRealmTokenKeys } from '@qauth-labs/fastify-plugin-signer/src/testing/database-key-rotation';
+import type {
+  TokenKeyRotation,
+  TokenKeyRotationOptions,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
 import {
   applyQauthMigrations,
   type StartedPostgres,
@@ -119,6 +124,36 @@ export async function provisionRealmKeys(app: FastifyInstance, realmName: string
     throw new Error('provisionRealmKeys: the server was not booted by bootAuthServer');
   }
   await boot(realmName);
+}
+
+/** Per booted server: rotate a realm's token keys, by name, with the server's KEK and database. */
+const tokenKeyRotations = new WeakMap<
+  FastifyInstance,
+  (realmName: string, options: TokenKeyRotationOptions) => Promise<TokenKeyRotation>
+>();
+
+/**
+ * Rotate a realm's `token_signing` keys in the database of a server
+ * {@link bootAuthServer} booted (#492): a new key of the algorithm (with its
+ * ML-DSA-65 partner under hybrid signing) becomes active, and the active one
+ * moves to `retired`, published until its retention ends, 14 days unless
+ * `retiredRetentionMs` says otherwise. The wait between publishing the new key
+ * and activating it is skipped.
+ *
+ * The server's signer reads key lists at most once a minute, so it keeps
+ * signing and verifying with what it read before. Boot another server on the
+ * same containers to see the rotation, as a node that starts after it does.
+ */
+export async function rotateRealmKeys(
+  app: FastifyInstance,
+  realmName: string,
+  options: TokenKeyRotationOptions = {}
+): Promise<TokenKeyRotation> {
+  const rotate = tokenKeyRotations.get(app);
+  if (rotate === undefined) {
+    throw new Error('rotateRealmKeys: the server was not booted by bootAuthServer');
+  }
+  return rotate(realmName, options);
 }
 
 /**
@@ -420,6 +455,21 @@ export async function bootAuthServer(
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
+    tokenKeyRotations.set(server, async (realmName, rotation) => {
+      const realm = await server.repositories.realms.findByName(realmName);
+      if (realm === undefined) throw new Error(`rotateRealmKeys: no realm ${realmName}`);
+      return rotateRealmTokenKeys(
+        {
+          db: server.db,
+          kekEnv: bootEnvironment,
+          warn: () => undefined,
+          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+          hybridSigning: env.HYBRID_SIGNING_ENABLED,
+        },
+        realm.id,
+        rotation
+      );
+    });
   }
 
   return {

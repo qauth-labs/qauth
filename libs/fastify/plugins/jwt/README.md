@@ -72,10 +72,14 @@ The auth-server's source for each option is named in parentheses.
 - With `hybridSigningEnabled`, `signHybridAccessToken` adds a detached ML-DSA-65 signature with
   the realm's hybrid pair, naming the ML-DSA-65 key in `pqc_kid`. Registration fails unless
   `enabledSignatureAlgorithms` has `ML-DSA-65` in it.
-- Verification picks the realm's key by the token's `kid` among its `active` and still-published
-  `retired` keys. A token with no `kid`, from before tokens named their key, is tried only against
-  the realm's Ed25519 keys that `kidlessKeyIds` names: the auth-server names the key its key
-  variable holds, never a key the store generated. This path is removed in the next release.
+- Verification picks the realm's key by the token's `(kid, alg)` pair (`selectJwksKey`) among
+  its verification set: its `active` keys and its `retired` keys still inside their retention
+  (their publication window). `next` and `compromised` keys are never in it. So a token a retired
+  key signed keeps verifying after a rotation, and a `kid` that names a key of another algorithm
+  finds none. A hybrid token's ML-DSA-65 key is found the same way, by its signed `pqc_kid`.
+- A token with no `kid`, from before tokens named their key, is tried only against the keys of
+  the set that `kidlessKeyIds` names: the auth-server names the key its key variable holds, never
+  a key the store generated, active or retired since. This path is removed in the next release.
 - `getJwks(realm)` is the realm's JWKS as the signer serves it.
 - On a process without the `signer` role (#495), the auth-server's `signer` refuses every signature with 503 `temporarily_unavailable`, and reads each realm's verification keys and JWKS from its published public keys, without a KEK. The plugin passes the 503 on, and still verifies the realm's tokens.
 

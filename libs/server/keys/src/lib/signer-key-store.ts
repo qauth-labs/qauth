@@ -45,7 +45,10 @@ export interface PublicKeyRecord {
   readonly publicJwk: Readonly<Record<string, unknown>>;
   /** Epoch ms. The key appears in the JWKS from this moment. */
   readonly publishAt: number;
-  /** Epoch ms. The key leaves the JWKS at this moment; `null` while it stays. */
+  /**
+   * Epoch ms. The key leaves the JWKS at this moment; `null` while it stays.
+   * A retired key with none is out at once (`isPublishedAt`).
+   */
   readonly unpublishAt: number | null;
 }
 
