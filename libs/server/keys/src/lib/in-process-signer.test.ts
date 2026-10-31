@@ -934,6 +934,41 @@ describe('getCookieSecrets', () => {
     expect(asked.previous?.kid).toBe(first);
   });
 
+  it('reads the store again for a kid its list lacks even when the list was read a moment ago (#493)', async () => {
+    const { signer, keys, factory, store } = await setup();
+    const first = activeKid(keys, REALM_A, 'cookie_hmac', 'HS256');
+    await signer.getCookieSecrets('local', REALM_A);
+    // Another node rotates and signs a cookie before this one's clock moves.
+    const [second] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'cookie_hmac',
+      status: 'next',
+    });
+    store.update(REALM_A, first, { status: 'retired', retireAt: NOW + 1 });
+    store.update(REALM_A, second.kid, { status: 'active' });
+
+    const asked = await signer.getCookieSecrets('local', REALM_A, { kid: second.kid });
+
+    expect(asked.current.kid).toBe(second.kid);
+    expect(asked.previous?.kid).toBe(first);
+  });
+
+  it('reads the store at most once a second for cookie kids no key has', async () => {
+    const { signer, store, advance } = await setup();
+    await signer.getCookieSecrets('local', REALM_A);
+    store.calls.length = 0;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await signer.getCookieSecrets('local', REALM_A, { kid: `made-up-${attempt}` });
+    }
+    const listReads = () => store.calls.filter((call) => call === 'listKeys');
+    expect(listReads()).toHaveLength(1);
+
+    advance(1_000);
+    await signer.getCookieSecrets('local', REALM_A, { kid: 'made-up-again' });
+    expect(listReads()).toHaveLength(2);
+  });
+
   it('refuses options that are not an object with a string kid', async () => {
     const { signer } = await setup();
 
@@ -1124,6 +1159,30 @@ describe('encrypt and decrypt', () => {
     });
     const ciphertext = await other.encrypt('local', { realmId: REALM_A, plaintext });
     advance(1_000);
+
+    expect(await signer.decrypt('local', { realmId: REALM_A, ciphertext })).toEqual(plaintext);
+  });
+
+  it('finds a key created a moment after the key list was read', async () => {
+    const { signer, keys, factory, store } = await setup();
+    const oldKid = activeKid(keys, REALM_A, 'data_at_rest', 'A256GCM');
+    await signer.encrypt('local', { realmId: REALM_A, plaintext });
+    // Another node rotates and encrypts before this signer's clock moves.
+    const [next] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'data_at_rest',
+      status: 'next',
+    });
+    store.update(REALM_A, oldKid, { status: 'retired', retireAt: NOW });
+    store.update(REALM_A, next.kid, { status: 'active' });
+    const other = createInProcessSigner({
+      store,
+      kekProvider: localProvider({ KEK: KEK_A }),
+      enabledSignatureAlgorithms: ED25519_ONLY,
+      hybridSigning: false,
+      now: () => NOW,
+    });
+    const ciphertext = await other.encrypt('local', { realmId: REALM_A, plaintext });
 
     expect(await signer.decrypt('local', { realmId: REALM_A, ciphertext })).toEqual(plaintext);
   });

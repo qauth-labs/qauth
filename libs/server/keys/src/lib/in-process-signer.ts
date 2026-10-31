@@ -188,6 +188,11 @@ interface Timed<T> {
   readonly readAt: number;
 }
 
+/** A realm's key list, and whether a forced read (a miss on a named key) read it. */
+interface KeyList extends Timed<readonly SignerKeyRecord[]> {
+  readonly forced: boolean;
+}
+
 /** The fields each operation's request takes. Any other field is refused. */
 const REQUEST_FIELDS = {
   signJws: ['realmId', 'purpose', 'scopeId', 'typ', 'algorithm', 'claims'],
@@ -251,7 +256,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   // key.
   const keys = new BoundedCache<string, LoadedKey>(keyCacheSize);
   const pendingKeys = new Map<string, Promise<LoadedKey>>();
-  const keyLists = new BoundedCache<string, Timed<readonly SignerKeyRecord[]>>(keyCacheSize);
+  const keyLists = new BoundedCache<string, KeyList>(keyCacheSize);
   const publicLists = new BoundedCache<string, Timed<readonly PublicKeyRecord[]>>(keyCacheSize);
   // Raised each time a key-list read drops a realm's published keys, so a
   // published-key read already running cannot store its older answer. A plain
@@ -296,7 +301,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   /**
    * Every key of the realm's purpose and scope, read at most once per refresh
    * interval. `forceRead` reads again sooner, but not twice within
-   * {@link MIN_FORCED_READ_INTERVAL_MS}.
+   * {@link MIN_FORCED_READ_INTERVAL_MS}: only a list another forced read made
+   * is trusted for that long. A list any other read made, however young, may
+   * predate the key the caller names, so a forced read never takes it (#493).
    */
   async function listKeys(
     realmId: string,
@@ -308,9 +315,11 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     const cached = keyLists.get(slot);
     if (cached !== undefined) {
       const age = now() - cached.readAt;
-      const trusted = forceRead
-        ? Math.min(MIN_FORCED_READ_INTERVAL_MS, refreshIntervalMs)
-        : refreshIntervalMs;
+      const trusted = !forceRead
+        ? refreshIntervalMs
+        : cached.forced
+          ? Math.min(MIN_FORCED_READ_INTERVAL_MS, refreshIntervalMs)
+          : 0;
       if (age < trusted) {
         return cached.value;
       }
@@ -327,7 +336,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           publicLists.delete(realmId);
           publicGenerations.set(realmId, (publicGenerations.get(realmId) ?? 0) + 1);
         }
-        keyLists.set(slot, { value, readAt });
+        keyLists.set(slot, { value, readAt, forced: forceRead });
       }
       return value;
     });
@@ -772,7 +781,8 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
       let records = await listKeys(realmId, 'cookie_hmac', null);
       // A cookie names a key this list lacks: another node may sign with a key
-      // this one has not read yet (#493). Read again, at most once a second.
+      // this one has not read yet (#493). Read the store again, unless a read
+      // for a missing key already did within the last second.
       if (wanted !== undefined && !records.some((key) => key.kid === wanted)) {
         records = await listKeys(realmId, 'cookie_hmac', null, true);
       }
