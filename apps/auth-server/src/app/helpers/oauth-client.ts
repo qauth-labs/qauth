@@ -10,16 +10,38 @@ export function systemClientId(): string {
 }
 
 /**
- * Get or create system OAuth client
- * Helper function to get the system OAuth client for direct login operations
+ * A value for the NOT NULL `client_secret_hash` that no secret can match: a
+ * well-formed argon2id string of random bytes, as the CIMD sentinel is
+ * (`cimdSentinelSecretHash`). The system client authenticates with
+ * `private_key_jwt`, which every client-authentication path checks before a
+ * secret, so it has no secret at all.
+ */
+function unusableSecretHash(): string {
+  const salt = randomBytes(16).toString('base64').replace(/=+$/, '');
+  const digest = randomBytes(32).toString('base64').replace(/=+$/, '');
+  return `$argon2id$v=19$m=65536,t=3,p=4$${salt}$${digest}`;
+}
+
+/**
+ * Get or create the system client of a realm: the developer portal's client,
+ * the one `/auth/login` issues its tokens under and `assertManagementToken`
+ * pins.
  *
- * The row is read as it is and created with no `audience`, so the token
- * `/auth/login` mints carries the system client's `client_id` as its `aud`,
- * as before #509. This release only ACCEPTS the developer API's audience on a
- * system-client token (`assertManagementToken`, userinfo); a later release
- * mints it (#524). Expand, then contract (ADR-018 §5): a node of the previous
- * release keeps accepting every portal token a node of this one mints, so the
- * upgrade can roll.
+ * The operator provisions it (ADR-017 phase F0, #631): the migration runner
+ * (`SYSTEM_CLIENT_REDIRECT_URI` and the portal's keys) or the seed manifest's
+ * `system_client` section writes a `private_key_jwt` client with the
+ * `web_redirect` first-party profile and the portal's callback. An existing
+ * row is read as it is, whatever an earlier release or the operator wrote.
+ *
+ * When no row exists yet (a new deployment whose operator has not provisioned
+ * it), this creates a placeholder that holds no secret and no keys, so it can
+ * authenticate nowhere: `private_key_jwt` with no key set, no redirect URI and
+ * no first-party profile, which only an operator path sets. Until #631 this
+ * created a secret-based row with a random secret nobody held. The row is
+ * created with no `audience`, so the token `/auth/login` mints carries the
+ * system client's `client_id` as its `aud`, as before #509; this release only
+ * ACCEPTS the developer API's audience on a system-client token
+ * (`assertManagementToken`, userinfo), and a later release mints it (#524).
  */
 export async function getOrCreateSystemClient(realmId: string, fastify: FastifyInstance) {
   const clientId = systemClientId();
@@ -27,23 +49,19 @@ export async function getOrCreateSystemClient(realmId: string, fastify: FastifyI
   let client = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
 
   if (!client) {
-    // Generate random client secret (32 bytes = 64 hex characters)
-    const clientSecret = randomBytes(32).toString('hex');
-
-    // Hash the secret using password hasher
-    const clientSecretHash = await fastify.passwordHasher.hashPassword(clientSecret);
-
-    // Create system client with required configuration
     client = await fastify.repositories.oauthClients.create({
       realmId,
       clientId,
-      clientSecretHash,
+      clientSecretHash: unusableSecretHash(),
       name: 'System Client',
       redirectUris: [],
       grantTypes: ['refresh_token'],
-      requirePkce: false,
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      jwks: null,
+      jwksUri: null,
+      requirePkce: true,
       developerId: null,
-      // The server provisions this client itself, for its own first-party
+      // The server provisions this placeholder itself, for its own first-party
       // login (ANT-2026-O8U3P920). It registers no redirect URI, so the marker
       // never sends an error response anywhere; it is set so that every
       // server-written client carries it consistently.

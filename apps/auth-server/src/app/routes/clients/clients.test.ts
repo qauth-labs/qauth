@@ -449,6 +449,37 @@ describe('POST /api/clients (create) — #86', () => {
     expect(created.provisionedByOperator).toBe(false);
   });
 
+  it("never stores a first-party profile on a developer's client (ADR-017 Decision 2, #631)", async () => {
+    // A developer's client is never first party; the database refuses a
+    // profile on a row with a developer.
+    const { fastify, ctx } = makeFastify();
+    await clientsRoute(fastify);
+
+    (fastify.repositories.oauthClients.create as unknown as Mock).mockImplementation(
+      async (data: Record<string, unknown>) => makeClientRow({ ...data })
+    );
+
+    const request = authedRequest({
+      body: {
+        name: 'Ours, honestly',
+        redirectUris: ['https://app.example.com/cb'],
+        tokenEndpointAuthMethod: 'private_key_jwt',
+        firstPartyProfile: 'web_redirect',
+        firstPartyPolicy: { flows: ['login'] },
+        firstPartyReason: 'trust me',
+        first_party_profile: 'native_backend',
+      },
+    });
+    await route(ctx, 'POST /').handler(request, createReply().reply);
+
+    const created = (fastify.repositories.oauthClients.create as unknown as Mock).mock.calls[0][0];
+    expect(created).toMatchObject({
+      firstPartyProfile: null,
+      firstPartyPolicy: null,
+      firstPartyReason: null,
+    });
+  });
+
   it("never stores a developer's ID-JAG targets (ADR-011, #434 — seed manifest only)", async () => {
     const { fastify, ctx } = makeFastify();
     await clientsRoute(fastify);
@@ -1718,6 +1749,22 @@ describe('PATCH and the operator-provisioned marker (ANT-2026-O8U3P920)', () => 
     const updateArg = await patch(
       { provisionedByOperator: false },
       { name: 'Renamed', provisionedByOperator: true }
+    );
+    expect(updateArg).toEqual({ name: 'Renamed' });
+  });
+
+  // ADR-017 Decision 2 (#631): the developer API can never write a client's
+  // first-party profile, policy or reason.
+  it('never lets the owner set a first-party profile, policy or reason', async () => {
+    const updateArg = await patch(
+      {},
+      {
+        name: 'Renamed',
+        firstPartyProfile: 'web_redirect',
+        firstPartyPolicy: { flows: ['login'] },
+        firstPartyReason: 'trust me',
+        first_party_profile: 'native_backend',
+      }
     );
     expect(updateArg).toEqual({ name: 'Renamed' });
   });
