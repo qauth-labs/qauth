@@ -24,7 +24,7 @@ import {
 } from './constants';
 import { eventTypesFor } from './event-types';
 import { type SetClaims, setClaims, verificationSetClaims } from './set';
-import { ssfSubjectOf, type SubjectIdentifier } from './subjects';
+import { type EventSubject, ssfSubjectOf, type SubjectIdentifier } from './subjects';
 
 /** A stream as the route lists it for the fan-out. */
 export interface SsfRouteStream {
@@ -47,6 +47,11 @@ export interface SsfDeliveryStream {
   /** The receiver's `Authorization` header, encrypted with the realm's `data_at_rest` key. */
   readonly authorizationHeader: string | null;
   readonly status: 'enabled' | 'paused' | 'disabled';
+  /**
+   * The SSF events its receiver requests now: a delivery the fan-out wrote
+   * before the receiver dropped an event is not sent.
+   */
+  readonly eventsRequested: readonly string[];
   /** Its realm's switch is on, and its receiver is enabled and not suspended. */
   readonly active: boolean;
   /** The realm's issuer: the `iss` of a user's `iss_sub`; `null` when the realm has none. */
@@ -59,6 +64,12 @@ export interface SsfStreamSource {
   listDestinations(): Promise<readonly SsfRouteStream[]>;
   /** One stream, whatever its status, or `undefined` when it no longer exists. */
   findForDelivery(streamId: string): Promise<SsfDeliveryStream | undefined>;
+  /**
+   * Whether the stream's receiver has the event store subject on the stream
+   * now: a delivery the fan-out wrote before the receiver removed it is not
+   * sent.
+   */
+  hasSubject(streamId: string, subject: EventSubject): Promise<boolean>;
 }
 
 /** Options of {@link createSsfDeliveryRoute}. */
@@ -155,6 +166,27 @@ function subjectOf(
   }
 }
 
+/**
+ * The event store subject the fan-out matched a mapped event on, by the
+ * mapping's `subject` (`typeRuleOf`): the envelope's subject, or its client
+ * as a client subject. `null` for a key event, which every stream that
+ * requested it receives whatever its subjects; `undefined` when the event
+ * does not carry what the mapping names.
+ */
+function matchedSubjectOf(
+  mapping: SsfEventMapping,
+  event: EventEnvelope
+): EventSubject | null | undefined {
+  switch (mapping.subject ?? 'subject') {
+    case 'key':
+      return null;
+    case 'client':
+      return event.client === undefined ? undefined : { type: 'client', id: event.client.id };
+    default:
+      return event.subject;
+  }
+}
+
 /** A refusal no retry changes: the delivery ends `failed` at once. */
 const refused = (errorClass: string): DeliveryOutcome => ({ ok: false, errorClass, retry: false });
 
@@ -184,6 +216,11 @@ function setErrorCode(body: Buffer): string | undefined {
  *   type (#540): an event about a key reaches every stream that requested
  *   it, a client's credential event is matched on the client, and a type
  *   sent to its own client reaches only that client's stream.
+ * - **Checked again at send time.** A delivery waits in the queue, held
+ *   while its stream is paused or retried for hours: before each attempt the
+ *   route reads the stream as it is now, and does not send an event whose
+ *   SSF event the receiver no longer requests, or about a subject it has
+ *   removed (`event_not_offered`, final).
  * - **The SET of a mapped type** (#540). The event the type's mapping names,
  *   with its members, `event_timestamp` and `initiating_entity`; `sub_id` is
  *   the subject the mapping names, a user as `iss_sub` under the realm's
@@ -216,24 +253,43 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
     if (mapping !== undefined) mappings.set(definition.type, mapping);
   }
 
-  /** The SET claims for `event` on `stream`, or `undefined` when the stream cannot get it. */
-  function claimsFor(event: EventEnvelope, stream: SsfDeliveryStream): SetClaims | undefined {
+  /**
+   * The SET claims for `event` on `stream`, with the subject the stream must
+   * still have for it to be sent (`null` when none must be), or `undefined`
+   * when the stream cannot get it.
+   */
+  function claimsFor(
+    event: EventEnvelope,
+    stream: SsfDeliveryStream
+  ): { claims: SetClaims; requiredSubject: EventSubject | null } | undefined {
     if (event.type === ssfStreamVerificationRequested.type) {
       // Only the stream the event names: the verification endpoint wrote this
       // row for it, and a stream never gets another stream's verification.
       if (event.subject?.type !== 'ssf_stream' || event.subject.id !== stream.id) return undefined;
       const state = typeof event.data['state'] === 'string' ? event.data['state'] : undefined;
-      return verificationSetClaims(event, stream.audience, stream.id, state);
+      return {
+        claims: verificationSetClaims(event, stream.audience, stream.id, state),
+        requiredSubject: null,
+      };
     }
     const mapping = mappings.get(event.type);
     if (mapping === undefined) return undefined;
+    // The fan-out wrote this row when the receiver requested the event; it
+    // may have dropped it since, while the row was held or retried.
+    if (!stream.eventsRequested.includes(mapping.event)) return undefined;
     // The fan-out wrote this row only for the event's own client; checked
     // again, so a row written under other rules never reaches another one.
     if (mapping.clientOnly && event.client?.id !== stream.audience) return undefined;
+    const requiredSubject = matchedSubjectOf(mapping, event);
     const subject = subjectOf(mapping, event, stream.issuer);
     const members = ssfEventMembers(mapping, event);
-    if (subject === undefined || members === undefined) return undefined;
-    return setClaims(event, stream.audience, subject, { [mapping.event]: members });
+    if (requiredSubject === undefined || subject === undefined || members === undefined) {
+      return undefined;
+    }
+    return {
+      claims: setClaims(event, stream.audience, subject, { [mapping.event]: members }),
+      requiredSubject,
+    };
   }
 
   return {
@@ -271,8 +327,17 @@ export function createSsfDeliveryRoute(options: SsfDeliveryRouteOptions): Delive
       // out once it is enabled. A hold spends no attempt, however long.
       if (stream.status === 'paused') return { ok: false, hold: true };
 
-      const claims = claimsFor(event, stream);
-      if (claims === undefined) return refused('event_not_offered');
+      const offered = claimsFor(event, stream);
+      if (offered === undefined) return refused('event_not_offered');
+      // The fan-out matched the event on a subject the receiver had added; it
+      // may have removed it since, while the row was held or retried.
+      const { claims, requiredSubject } = offered;
+      if (
+        requiredSubject !== null &&
+        !(await options.streams.hasSubject(stream.id, requiredSubject))
+      ) {
+        return refused('event_not_offered');
+      }
 
       const headers: Record<string, string> = {
         'content-type': SECEVENT_MEDIA_TYPE,

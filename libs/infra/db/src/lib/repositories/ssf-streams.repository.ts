@@ -49,8 +49,9 @@ const isKeyValid = (key: SsfStreamKey) =>
  * {@link SsfStreamsRepository} for the guarantees.
  *
  * @param db - The server's database. The delivery route's reads
- *   (`listDestinations`, `findForDelivery`) also run as the delivery role's
- *   user, which `eventDeliveryGrantStatements` lets read these tables.
+ *   (`listDestinations`, `findForDelivery`, `hasSubject`) also run as the
+ *   delivery role's user, which `eventDeliveryGrantStatements` lets read
+ *   these tables.
  */
 export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
   return {
@@ -301,6 +302,23 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
       return row === undefined
         ? undefined
         : { ...row.stream, active: row.active, issuer: row.issuer };
+    },
+
+    async hasSubject(streamId, subject) {
+      if (!isUuid(streamId)) return false;
+      // Only the columns the delivery role may read (`EVENT_DELIVERY_COLUMNS`).
+      const [row] = await db
+        .select({ streamId: ssfStreamSubjects.streamId })
+        .from(ssfStreamSubjects)
+        .where(
+          and(
+            eq(ssfStreamSubjects.streamId, streamId),
+            eq(ssfStreamSubjects.eventSubjectType, subject.type),
+            eq(ssfStreamSubjects.eventSubjectId, subject.id)
+          )
+        )
+        .limit(1);
+      return row !== undefined;
     },
 
     async deliveryStatus(streamId, now): Promise<SsfStreamDeliveryStatus> {

@@ -265,6 +265,10 @@ Holding spends no attempt and records no failure: the delivery role looks at a h
 every 30 seconds, and sends it at the first look after the stream is `enabled` again. `disabled`
 holds nothing. Deleting the stream ends its pending deliveries without sending them.
 
+A held or retried delivery is sent as the stream is at that attempt, not as it was when the event
+was queued: an event the receiver no longer requests, or about a subject it has removed since,
+is not sent, and the delivery ends.
+
 A held delivery is pending, so it holds back [event retention](/operate/observability/) as any
 pending delivery does: no event of the realm from the oldest held one on is deleted. Disable or
 delete a stream rather than leave it paused for good.

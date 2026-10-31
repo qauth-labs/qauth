@@ -709,7 +709,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its client or a live refresh token it was issued; any other user is refused
   with `403`. The delivery role now reads `realms.issuer`, for the `iss_sub`
   subjects: a deployment that runs it as its own database user re-applies
-  `eventDeliveryGrantStatements` to that user. The docs site's
+  `eventDeliveryGrantStatements` to that user. Each delivery attempt reads the
+  stream as it is then: a held or retried delivery of an event the receiver no
+  longer requests, or about a subject it has removed, is not sent. The docs site's
   new **SSF events** page (`reference/ssf-events`) is generated from the
   registry, and a test fails when it differs.
 - **Schema**: migration 0039 adds `ssf_streams`, `ssf_stream_subjects`,

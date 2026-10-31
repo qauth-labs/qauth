@@ -633,6 +633,16 @@ describe('SSF streams integration (real Postgres)', () => {
       await expect(
         delivery?.query(`SELECT client_secret_hash FROM oauth_clients`)
       ).rejects.toMatchObject({ code: '42501' });
+      // Before each attempt the route asks whether the stream still has the
+      // event's subject, through the same grants.
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u1' })).toBe(true);
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u2' })).toBe(false);
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'client', id: 'u1' })).toBe(false);
+      expect(await deliveryStreams.hasSubject(randomUUID(), { type: 'user', id: 'u1' })).toBe(
+        false
+      );
+      await streams.removeSubject(stream.id, 'user');
+      expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u1' })).toBe(false);
     });
   });
 });

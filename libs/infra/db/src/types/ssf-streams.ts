@@ -114,8 +114,9 @@ export interface SsfStreamDeliveryStatus {
  *
  * Every read and write a receiver makes names its realm and its client row,
  * so a receiver reaches only its own stream: another receiver's stream id
- * answers as if it did not exist. `listDestinations`, `findForDelivery` and
- * `deliveryStatus` serve the delivery route and the status endpoint.
+ * answers as if it did not exist. `listDestinations`, `findForDelivery`,
+ * `hasSubject` and `deliveryStatus` serve the delivery route and the status
+ * endpoint.
  */
 export interface SsfStreamsRepository {
   /** Create a stream. `null` when the receiver already has one in the realm. */
@@ -174,6 +175,15 @@ export interface SsfStreamsRepository {
   listDestinations(): Promise<SsfStreamDestination[]>;
   /** One stream for a delivery attempt, whatever its status, or `undefined`. */
   findForDelivery(streamId: string): Promise<SsfStreamForDelivery | undefined>;
+  /**
+   * Whether the stream has a subject that stands for this event store
+   * subject, read before a delivery attempt: the receiver may have removed it
+   * since the fan-out. Reads only what the delivery role may read.
+   */
+  hasSubject(
+    streamId: string,
+    subject: { readonly type: string; readonly id: string }
+  ): Promise<boolean>;
   /**
    * The stream's pending deliveries and its latest failed attempt. A row an
    * attempt is running on at `now` (epoch milliseconds) is left out of the

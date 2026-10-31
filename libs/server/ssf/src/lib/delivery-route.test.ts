@@ -19,6 +19,7 @@ import {
   type SsfDeliveryStream,
   type SsfStreamSource,
 } from './delivery-route';
+import { ssfEventsSupported } from './event-types';
 
 const REALM = '0192a000-0000-7000-8000-000000000001';
 const OTHER_REALM = '0192a000-0000-7000-8000-000000000002';
@@ -43,6 +44,8 @@ function stream(overrides: Partial<SsfDeliveryStream> = {}): SsfDeliveryStream {
     endpointUrl: 'https://receiver.example/events',
     authorizationHeader: null,
     status: 'enabled',
+    // Every event QAuth sends: a test that drops one says so.
+    eventsRequested: ssfEventsSupported(),
     active: true,
     issuer: 'https://auth.example.com',
     ...overrides,
@@ -75,6 +78,8 @@ function setup(
   options: {
     stream?: SsfDeliveryStream | undefined;
     answer?: (request: EgressRequest) => { status: number; body?: string } | Error;
+    /** Whether the stream still has the subject an event is about; it has, by default. */
+    hasSubject?: boolean;
   } = {}
 ) {
   const requests: EgressRequest[] = [];
@@ -103,6 +108,7 @@ function setup(
       },
     ],
     findForDelivery: async () => ('stream' in options ? options.stream : stream()),
+    hasSubject: vi.fn(async () => options.hasSubject ?? true),
   };
   const signer = {
     signWebhook: vi.fn(async () => 'v1,x'),
@@ -111,7 +117,7 @@ function setup(
   };
   const route = createSsfDeliveryRoute({ streams, egress });
   const context = { signal: new AbortController().signal, signer };
-  return { route, requests, signer, context };
+  return { route, requests, signer, context, streams };
 }
 
 describe('createSsfDeliveryRoute', () => {
@@ -124,9 +130,15 @@ describe('createSsfDeliveryRoute', () => {
   });
 
   it('pushes a signed verification SET whose jti is the event id', async () => {
-    const { route, requests, signer, context } = setup();
+    // A stream gets its verification whatever events it requests and
+    // subjects it has (SSF 1.0 §8.1.4).
+    const { route, requests, signer, context, streams } = setup({
+      stream: stream({ eventsRequested: [] }),
+      hasSubject: false,
+    });
     const outcome = await route.deliver(delivery, verification(), context);
     expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    expect(streams.hasSubject).not.toHaveBeenCalled();
     expect(signer.signEventToken).toHaveBeenCalledWith({
       realmId: REALM,
       typ: 'secevent+jwt',
@@ -336,19 +348,25 @@ describe('the SETs of mapped event types (#540)', () => {
   /** Deliver `delivered` and return the claims the route asked the signer to sign. */
   async function signed(
     delivered: EventEnvelope,
-    streamOverrides: Partial<SsfDeliveryStream> = {}
+    streamOverrides: Partial<SsfDeliveryStream> = {},
+    options: { hasSubject?: boolean } = {}
   ) {
-    const { route, signer, context, requests } = setup({ stream: stream(streamOverrides) });
+    const { route, signer, context, requests, streams } = setup({
+      stream: stream(streamOverrides),
+      ...options,
+    });
     const outcome = await route.deliver(delivery, delivered, context);
     const claims = signer.signEventToken.mock.calls[0]?.[0].claims as
       | Record<string, unknown>
       | undefined;
-    return { outcome, claims, signer, requests };
+    return { outcome, claims, signer, requests, hasSubject: streams.hasSubject };
   }
 
   it('sends a sign-out as CAEP session-revoked about the user, iss_sub under the realm issuer', async () => {
-    const { outcome, claims } = await signed(SAMPLES[userSignedOut.type]);
+    const { outcome, claims, hasSubject } = await signed(SAMPLES[userSignedOut.type]);
     expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    // Sent once the stream was found to have the user still.
+    expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
     expect(claims).toEqual({
       jti: EVENT_ID,
       iat: SECONDS,
@@ -469,6 +487,53 @@ describe('the SETs of mapped event types (#540)', () => {
     });
   });
 
+  // A delivery waits in the queue: held while its stream is paused, retried
+  // for hours. It is sent as the stream is at the attempt, not as it was at
+  // the fan-out.
+  it('sends nothing the receiver stopped requesting since the fan-out', async () => {
+    const dropped = await signed(SAMPLES[userSignedOut.type], {
+      eventsRequested: [CAEP_CREDENTIAL_CHANGE],
+    });
+    expect(dropped.outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
+    expect(dropped.requests).toHaveLength(0);
+    expect(dropped.signer.signEventToken).not.toHaveBeenCalled();
+    // A stream that still requests the event gets it.
+    const kept = await signed(SAMPLES[userSignedOut.type], {
+      eventsRequested: [CAEP_SESSION_REVOKED],
+    });
+    expect(kept.outcome).toEqual({ ok: true, statusCode: 202 });
+  });
+
+  it('sends nothing about a subject the receiver removed since the fan-out', async () => {
+    for (const [type, subject] of [
+      [userSignedOut.type, { type: 'user', id: USER }],
+      [tokenRevoked.type, { type: 'user', id: USER }],
+      // A client's credential event was matched on its client.
+      [apiKeyRevoked.type, { type: 'client', id: 'receiver' }],
+      [clientSecretRotated.type, { type: 'client', id: 'receiver' }],
+    ] as const) {
+      const removed = await signed(SAMPLES[type], {}, { hasSubject: false });
+      expect(removed.outcome, type).toEqual({
+        ok: false,
+        errorClass: 'event_not_offered',
+        retry: false,
+      });
+      expect(removed.hasSubject, type).toHaveBeenCalledWith(STREAM, subject);
+      expect(removed.requests, type).toHaveLength(0);
+      expect(removed.signer.signEventToken, type).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sends a key event whatever subjects the stream has', async () => {
+    const { outcome, hasSubject } = await signed(
+      SAMPLES[keyEmergencyRetired.type],
+      {},
+      { hasSubject: false }
+    );
+    expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    expect(hasSubject).not.toHaveBeenCalled();
+  });
+
   it('sends nothing for an event without the subject its mapping names', async () => {
     const noSubject = await signed(
       event(tokenRevoked.type, { subject: undefined, client: { id: 'receiver' } })
@@ -495,6 +560,7 @@ describe('the SETs of mapped event types (#540)', () => {
         },
       ],
       findForDelivery: async () => stream(),
+      hasSubject: async () => true,
     };
     const route = createSsfDeliveryRoute({ streams, egress: { request: vi.fn() } });
     const [listed] = await route.destinations();

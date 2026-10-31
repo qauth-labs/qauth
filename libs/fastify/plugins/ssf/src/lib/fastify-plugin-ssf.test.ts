@@ -22,6 +22,7 @@ async function build(options: SsfPluginOptions): Promise<FastifyInstance> {
           ssfStreams: {
             listDestinations: vi.fn(async () => []),
             findForDelivery: vi.fn(async () => undefined),
+            hasSubject: vi.fn(async () => false),
           },
         } as never);
       },
