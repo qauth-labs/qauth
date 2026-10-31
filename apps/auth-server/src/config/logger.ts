@@ -52,7 +52,7 @@ export const LOG_REDACT_PATHS = [
  * Fastify's request log line carries `req.url` verbatim — path AND query
  * string — and pino's path-based `redact` works on object keys, so a bearer
  * secret that arrives as a query parameter would reach the sink in the clear
- * even though `LOG_REDACT_PATHS` names it. QAuth puts three such secrets in a
+ * even though `LOG_REDACT_PATHS` names it. QAuth puts these secrets in a
  * query string:
  *
  * - `code`: an upstream provider's authorization code, which the provider sends
@@ -60,6 +60,10 @@ export const LOG_REDACT_PATHS = [
  *   `/upstream/<type>/callback?code=…&state=…` (#599), and which a `form_post`
  *   bounce carries there too. With the transaction it redeems a sign-in at the
  *   provider until it is spent or expires.
+ * - `id_token` and `access_token`: tokens a provider may answer in a
+ *   `form_post` (a hybrid or implicit response). An AuthMethod's bounce route
+ *   chooses what it carries on to its `GET` callback, so either can land in a
+ *   callback URL; each is a bearer credential until it expires.
  * - `response_code`: the same-device Response Code the wallet's browser brings
  *   back to `/ui/wallet-login/return?response_code=…` (OID4VP 1.0 §8.2 and
  *   §14.2, #405, ADR-013). The code is single-use and short-lived, but a log
@@ -94,7 +98,13 @@ export const LOG_REDACT_PATHS = [
  * return route runs, so on that line the code is not even spent yet. So does
  * the unknown-route line (`helpers/request-bounds.ts`).
  */
-export const LOG_REDACTED_QUERY_PARAMETERS = ['code', 'response_code', 'token'] as const;
+export const LOG_REDACTED_QUERY_PARAMETERS = [
+  'code',
+  'id_token',
+  'access_token',
+  'response_code',
+  'token',
+] as const;
 
 /**
  * Query parameter names this module knows how to spell tolerantly: the RFC
