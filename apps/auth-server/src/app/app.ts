@@ -982,14 +982,6 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // Register before routes so /oauth/* receives decoded form bodies.
   await fastify.register(formbody);
 
-  // A PATCH body of the account and developer APIs is a JSON Merge Patch
-  // (RFC 7396, API conventions; #524), parsed as JSON is.
-  fastify.addContentTypeParser(
-    'application/merge-patch+json',
-    { parseAs: 'string' },
-    fastify.getDefaultJsonParser('error', 'error')
-  );
-
   // The routes of this process's roles (ADR-019 Decision 8, #495), from the
   // route manifest that replaced the folder autoload: each module is its own
   // encapsulated plugin, under the prefix the autoload gave it. A module the

@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 
+import { MERGE_PATCH_MEDIA_TYPE } from '../../api-conventions/conditional-requests';
 import { registerDeveloperApiKeyRoutes } from './api-keys';
 import { registerDeveloperClientRoutes } from './clients';
 import { registerDeveloperConsentRoutes } from './consents';
@@ -29,6 +30,14 @@ import { registerDeveloperConsentRoutes } from './consents';
 export const autoPrefix = '/developer/v1-rc.0';
 
 export default async function (fastify: FastifyInstance) {
+  // A PATCH body here is a JSON Merge Patch (RFC 7396), parsed as JSON is.
+  // Registered in this module only, so no route outside the families starts
+  // taking the media type.
+  fastify.addContentTypeParser(
+    MERGE_PATCH_MEDIA_TYPE,
+    { parseAs: 'string' },
+    fastify.getDefaultJsonParser('error', 'error')
+  );
   registerDeveloperClientRoutes(fastify);
   registerDeveloperApiKeyRoutes(fastify);
   registerDeveloperConsentRoutes(fastify);
