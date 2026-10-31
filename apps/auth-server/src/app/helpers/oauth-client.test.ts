@@ -8,7 +8,7 @@ import { giveSystemClientsTheDeveloperAudience } from './system-client-boot';
 
 const DEVELOPER_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
 
-function makeFastify(existing: unknown, realmIds: string[] = ['realm-1']) {
+function makeFastify(existing: unknown) {
   return {
     repositories: {
       oauthClients: {
@@ -19,9 +19,6 @@ function makeFastify(existing: unknown, realmIds: string[] = ['realm-1']) {
           id,
           ...data,
         })),
-      },
-      realms: {
-        listPolicyRecords: vi.fn(async () => realmIds.map((realmId) => ({ realmId }))),
       },
     },
     passwordHasher: { hashPassword: vi.fn(async () => 'argon2id$hash') },
@@ -83,29 +80,16 @@ describe('getOrCreateSystemClient', () => {
 });
 
 describe('giveSystemClientsTheDeveloperAudience (the boot step of #524)', () => {
-  it("updates every realm's system client that lacks the audience, and creates none", async () => {
-    const fastify = makeFastify({ id: 'row-0', clientId: 'system', audience: null }, [
-      'realm-1',
-      'realm-2',
-    ]);
+  it("sets the developer audience on the system client of every realm, in one statement", async () => {
+    const setAudienceInEveryRealm = vi.fn(async () => 2);
+    const fastify = {
+      repositories: { oauthClients: { setAudienceInEveryRealm } },
+    } as unknown as FastifyInstance;
 
     await expect(giveSystemClientsTheDeveloperAudience(fastify)).resolves.toBe(2);
 
-    const { oauthClients } = fastify.repositories;
-    expect(oauthClients.findByClientId).toHaveBeenCalledWith('realm-1', 'system');
-    expect(oauthClients.findByClientId).toHaveBeenCalledWith('realm-2', 'system');
-    expect(oauthClients.update).toHaveBeenCalledWith('realm-2', 'row-0', {
-      audience: [DEVELOPER_AUDIENCE],
-    });
-    expect(oauthClients.create).not.toHaveBeenCalled();
-  });
-
-  it('changes nothing in a realm without a system client, or one that has the audience', async () => {
-    for (const existing of [undefined, { id: 'row-0', audience: [DEVELOPER_AUDIENCE] }]) {
-      const fastify = makeFastify(existing);
-      await expect(giveSystemClientsTheDeveloperAudience(fastify)).resolves.toBe(0);
-      expect(fastify.repositories.oauthClients.update).not.toHaveBeenCalled();
-      expect(fastify.repositories.oauthClients.create).not.toHaveBeenCalled();
-    }
+    expect(setAudienceInEveryRealm).toHaveBeenCalledExactlyOnceWith('system', [
+      DEVELOPER_AUDIENCE,
+    ]);
   });
 });

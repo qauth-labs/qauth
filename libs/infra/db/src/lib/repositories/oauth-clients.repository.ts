@@ -205,6 +205,37 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
+     * Give the client named `clientId` in EVERY realm exactly `audience`,
+     * where its audience differs, in one statement (#524): the boot step that
+     * gives the system client the developer API's audience. Not realm-scoped
+     * on purpose, and never called with an id from a request: the system
+     * client has the same configured `client_id` in every realm.
+     *
+     * @param clientId - The configured client_id, the same in every realm
+     * @param audience - The audience the row must hold
+     * @param tx - Optional transaction client
+     * @returns How many rows changed
+     */
+    async setAudienceInEveryRealm(
+      clientId: string,
+      audience: readonly string[],
+      tx?: DbClient
+    ): Promise<number> {
+      const invoker = tx ?? defaultDb;
+      const changed = await invoker
+        .update(oauthClients)
+        .set({ audience: [...audience], updatedAt: Date.now() })
+        .where(
+          and(
+            eq(oauthClients.clientId, clientId),
+            sql`${oauthClients.audience} IS DISTINCT FROM ${JSON.stringify(audience)}::jsonb`
+          )
+        )
+        .returning({ id: oauthClients.id });
+      return changed.length;
+    },
+
+    /**
      * Count the OAuth clients owned by a developer, without loading them.
      *
      * Same filter as {@link listByDeveloper}. The per-developer client ceiling
