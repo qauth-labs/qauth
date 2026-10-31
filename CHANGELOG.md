@@ -584,17 +584,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state (`live`, `idle`, `expired` or `revoked`). It ends one session (a second
   call reports `already_ended` and changes nothing), a user's sessions (but one,
   or only those created before a time, for a password reset), and a realm's
-  sessions in batches of 500, each its own transaction, for key retirement and
-  bulk revocation. Every revocation names its actor, returns the ended sessions
-  with the clients they served, writes a cache tombstone for each, and then
-  tells the listeners registered with `onSessionsEnded`, once per session.
-  Refresh-token families and Authority Trees are left to the caller. A new
-  `session-purge` job runs hourly on the `web` role: it ends the sessions past
+  sessions in batches of 500 (at most 5,000), each its own transaction, for key
+  retirement and bulk revocation. Every revocation names its actor, returns the
+  ended sessions with the clients they served, writes a cache tombstone for
+  each, and then tells the listeners registered with `onSessionsEnded`, once
+  per session, in the process that revoked, after the commit. Refresh-token
+  families and Authority Trees are left to the caller. Two jobs run on the
+  `web` role. `session-expiry`, every five minutes, marks the sessions past
   their absolute end or their realm's idle limit (which no read accepted
-  already) as `expired` or `idle`, so their clients leave the registry, and
-  deletes the rows that ended more than `SESSION_RETENTION_DAYS` ago (a new
-  advanced key, 30 by default). No HTTP route is added; the account and admin
-  APIs will add them.
+  already) as `expired` or `idle`, so their clients leave the registry and the
+  listeners hear of the end. `session-purge`, hourly, deletes the rows that
+  ended or expired more than `SESSION_RETENTION_DAYS` ago (a new advanced key,
+  30 by default). The single revocation now passes on the clients the session
+  served, which the store adapter used to drop. No HTTP route is added; the
+  account and admin APIs will add them.
 
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after

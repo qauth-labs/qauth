@@ -98,15 +98,23 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
   waiting on Postgres do not answer the reads that start after the revocation.
 - **Revoke many.** `revokeAllForUser` ends a user's sessions in one transaction, but `exceptSid`
   and, with `createdBefore`, the sessions created since then (a password reset: ADR-017's session
-  epoch). `revokeAllForRealm` ends a realm's sessions in batches of 500 in id order, each batch its
-  own transaction, leaving a session created after the call began; it returns counts only, and the
-  sessions reach the listeners batch by batch. Every revocation locks its rows in id order, takes
-  their registry rows with it and spends their unredeemed codes, and is safe to repeat. Refresh-token
-  families and Authority Trees are the caller's (ADR-014: trees survive sign-out).
+  epoch). It ends the sessions Postgres holds when it runs: a sign-in that checked the old password
+  before the reset and stores its session after the call is not ended, unless the caller also checks
+  the reset time when a session is read. `revokeAllForRealm` ends a realm's sessions in batches of 500
+  (at most 5,000) in id order, each batch its own transaction, leaving a session created after the
+  call began; `activeSince` keeps the sessions not used since then, allowing for the last-seen write
+  interval. It returns counts only, and the sessions reach the listeners batch by batch. Every
+  revocation locks its rows in id order, takes their registry rows with it, spends their unredeemed
+  codes, binds the ids as one array (no parameter limit), and is safe to repeat; one Postgres aborts
+  as a deadlock runs again, up to three times. Refresh-token families and Authority Trees are the
+  caller's (ADR-014: trees survive sign-out).
 - **Listeners.** `onSessionsEnded(listener)` hears of every session a call ended, once, with its
   realm, reason, actor and the clients it served, after Postgres committed and the tombstones were
-  written. Listeners run one at a time; one that throws is logged, and the others and the
-  revocation stand. A process that stops between the commit and a listener loses that notice.
+  written. Listeners run one at a time and the revocation waits for them; one that throws is logged,
+  and the others and the revocation stand. At most once, in the process that revoked: a process that
+  stops between the commit and a listener loses that notice, and nothing repeats it. Work that must
+  not be lost (the session events, a queued back-channel logout, #624) belongs in the revocation's
+  transaction.
 - **Lists.** `listForUser` and `listForClient` read one page, newest first (`limit` up to 200, 50 by
   default, and the opaque `cursor`, which names its list and is refused for another with
   `InvalidSessionCursorError`). Each session carries its address, user agent, `auth_time`,
@@ -114,10 +122,14 @@ for tests. The real service runs on them as it runs on Postgres and Redis, and e
   user's list keeps ended sessions until the purge deletes them; a client's list holds only sessions
   not yet revoked, since a revocation takes the registry rows.
 - **Lapsed and purged.** `endLapsed` marks the sessions past their absolute end or their realm's idle
-  limit, which `get` already treats as absent, as `expired` or `idle`, at the time each ended, so
-  their registry rows go and the listeners hear of them. `purge` deletes the rows that ended (or
-  passed their stored `expires_at`) before a time. The auth-server's `session-purge` job runs both
-  hourly, keeping `SESSION_RETENTION_DAYS` (30 by default).
+  limit, which `get` already treats as absent, as `expired` or `idle`, so their registry rows go and
+  the listeners hear of them; `revokedAt` is the time of the mark, which retention counts from.
+  `purge` deletes the rows revoked (or past their stored `expires_at`) before a time. The
+  auth-server runs them as two jobs on the `web` role: `session-expiry` every five minutes and
+  `session-purge` hourly, keeping `SESSION_RETENTION_DAYS` (30 by default).
+- **A client's list is for admins.** `listForClient` gives each session with all the clients it
+  served, its address and its user agent. A caller that answers the client's own developer must not
+  pass those on.
 - **Not stored.** The CSRF values and the consent scopes are volatile per-flow values. They are not
   part of a session here and never reach Postgres; the session record keeps only its own columns,
   and the cache entry leaves out the address and the user agent too.

@@ -7,7 +7,7 @@ plugin's client, and decorates the instance with `fastify.sessionService`.
 
 > **Status:** the auth-server registers it. Since #488 the browser sign-in and the session lookup
 > run on it (`apps/auth-server/src/app/helpers/browser-session.ts`), and since #550 the
-> `session-purge` job on the `web` role (`apps/auth-server/src/app/jobs/session-purge.ts`).
+> `session-expiry` and `session-purge` jobs on the `web` role (`apps/auth-server/src/app/jobs/`).
 
 ## Usage
 
