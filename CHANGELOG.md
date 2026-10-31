@@ -702,7 +702,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   credential change reach only the stream of the client concerned. Two types are new: `token.family_revoked`, recorded
   beside `token.request_failed` when a code or refresh-token replay revokes
   refresh tokens, and `key.emergency_retired`, which emergency retirement will
-  emit for a published key only. `token.revoked` now names the user whose token was revoked. A receiver
+  emit for a published key only. `token.revoked` now names the user whose token was revoked,
+  and commits in the transaction that revokes a refresh token's family; a refresh token whose
+  family was revoked already names no one, so a second revocation sends no second SET. A receiver
   may add a user as a subject only when the user holds an active consent for
   its client or a live refresh token it was issued; any other user is refused
   with `403`. The delivery role now reads `realms.issuer`, for the `iss_sub`

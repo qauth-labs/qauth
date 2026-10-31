@@ -317,7 +317,7 @@ export const tokenRevoked = defineEventType({
     members: { token_type_hint: { data: 'typeHint' } },
   },
   ssfNote:
-    'Sent only when the revoked token was a user’s: the event’s subject. A revocation that matched no token of the client records the event without one, and no stream receives it.',
+    'Sent only when the revoked token was a user’s: the event’s subject. A revocation that matched no token of the client, or a refresh token whose family was revoked already, records the event without one, and no stream receives it.',
 });
 
 export const tokenRevocationFailed = defineEventType({

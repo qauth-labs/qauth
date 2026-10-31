@@ -10,7 +10,7 @@ import { tokenRealm } from '../../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { revokeJti } from '../../helpers/token-revocation';
-import { emitUserEvent, failureData } from '../../helpers/user-events';
+import { emitUserEvent, type EventTransaction, failureData } from '../../helpers/user-events';
 import { type RevokeRequest, revokeRequestSchema } from '../../schemas/oauth';
 
 /**
@@ -34,11 +34,13 @@ import { type RevokeRequest, revokeRequestSchema } from '../../schemas/oauth';
  * Revocation mechanics:
  * - Refresh token: looked up by hash; if owned by the authenticated client, the
  *   whole token family is revoked (consistent with the rotation/replay model in
- *   the token endpoint) so no descendant can be exchanged.
+ *   the token endpoint) so no descendant can be exchanged. The revocation and
+ *   its `token.revoked` event commit in one transaction (ADR-019 Decision 8).
  * - Access token (stateless JWT): verified, and if it was issued to the
  *   authenticated client its `jti` is added to the Redis denylist with a TTL of
  *   its remaining lifetime. The `requireJwt` preHandler and the introspection
- *   endpoint both consult that denylist.
+ *   endpoint both consult that denylist. The denylist is Redis, so the event
+ *   is recorded after it.
  */
 export default async function (fastify: FastifyInstance) {
   fastify.withTypeProvider<ZodTypeProvider>().post(
@@ -92,6 +94,26 @@ export default async function (fastify: FastifyInstance) {
         throw err;
       }
 
+      // No token material is recorded; only the (advisory) hint. The user
+      // whose token it was is the subject, so the SSF stream of this client
+      // that added the user learns of it (#540); a revocation that matched no
+      // token of the client, a family revoked already, or a client's own token
+      // names no one.
+      const record: RecordRevocation = async (userId, tx) => {
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:token.revoked:v1-rc.0',
+          token_type_hint === undefined ? {} : { typeHint: token_type_hint },
+          {
+            ...(tx === undefined ? {} : { tx }),
+            realmId: realm.id,
+            userId,
+            clientId: client.clientId,
+            actor: 'client',
+          }
+        );
+      };
+
       // RFC 7009 §2.1: the hint is advisory. It only picks which type is tried
       // first (refresh token by default); if the token is not found as that type
       // we still attempt the other. Either way the response is an empty 200.
@@ -99,28 +121,14 @@ export default async function (fastify: FastifyInstance) {
       if (token_type_hint === 'access_token') {
         revoked =
           (await tryRevokeAccessToken(fastify, realm, client.clientId, token)) ??
-          (await tryRevokeRefreshToken(fastify, realm, client.id, token));
+          (await tryRevokeRefreshToken(fastify, realm, client.id, token, record));
       } else {
         revoked =
-          (await tryRevokeRefreshToken(fastify, realm, client.id, token)) ??
+          (await tryRevokeRefreshToken(fastify, realm, client.id, token, record)) ??
           (await tryRevokeAccessToken(fastify, realm, client.clientId, token));
       }
-
-      // No token material is recorded; only the (advisory) hint. The user
-      // whose token it was is the subject, so the SSF stream of this client
-      // that added the user learns of it (#540); a revocation that matched no
-      // token of the client, or a client's own token, names no one.
-      await emitUserEvent(
-        request,
-        'urn:qauth:event:token.revoked:v1-rc.0',
-        token_type_hint === undefined ? {} : { typeHint: token_type_hint },
-        {
-          realmId: realm.id,
-          userId: revoked?.userId ?? null,
-          clientId: client.clientId,
-          actor: 'client',
-        }
-      );
+      // The refresh path recorded its event with the family's revocation.
+      if (revoked?.recorded !== true) await record(revoked?.userId ?? null);
 
       await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.INTROSPECT);
 
@@ -130,24 +138,37 @@ export default async function (fastify: FastifyInstance) {
   );
 }
 
-/** What a revocation found: the user whose token it was, or `null` for a client's own. */
+/**
+ * What a revocation found: the user whose token it was, or `null` for none;
+ * `recorded` when the revocation recorded its `token.revoked` event itself.
+ */
 interface Revoked {
   readonly userId: string | null;
+  readonly recorded: boolean;
 }
+
+/** Record the request's `token.revoked` event about `userId`, in `tx` when given. */
+type RecordRevocation = (userId: string | null, tx?: EventTransaction) => Promise<void>;
 
 /**
  * Revoke a refresh token (and its whole family) IFF it hashes to a stored row
- * owned by the authenticated client. Returns the token's user when a matching,
- * owned token was found (regardless of prior revoked state — re-revocation is
- * idempotent), `null` otherwise. A token owned by a DIFFERENT client is a
- * no-op (returns `null`) so cross-client revocation is impossible; so is a
- * token of another realm, which the realm-scoped lookup does not find (#489).
+ * owned by the authenticated client, and record the revocation in the same
+ * transaction (ADR-019 Decision 8): the family is never revoked without its
+ * event, so an SSF receiver is never left unaware of it. Returns `null` when
+ * no owned token was found. A token owned by a DIFFERENT client is a no-op
+ * (returns `null`) so cross-client revocation is impossible; so is a token of
+ * another realm, which the realm-scoped lookup does not find (#489).
+ *
+ * Re-revocation is idempotent (RFC 7009 §2.2): a family revoked already
+ * revokes nothing, and its event names no user, so a receiver gets no second
+ * SET for it.
  */
 async function tryRevokeRefreshToken(
   fastify: FastifyInstance,
   realm: RealmRow,
   clientRowId: string,
-  token: string
+  token: string,
+  record: RecordRevocation
 ): Promise<Revoked | null> {
   const hash = fastify.jwtUtils.hashRefreshToken(token);
   const stored = await fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked(
@@ -159,8 +180,17 @@ async function tryRevokeRefreshToken(
   if (stored.oauthClientId !== clientRowId) return null;
   // Revoke the entire family so no rotated descendant remains exchangeable
   // (consistent with the replay-revocation model in the token endpoint).
-  await fastify.repositories.refreshTokens.revokeFamily(stored.familyId, 'client_revocation');
-  return { userId: stored.userId };
+  const userId = await fastify.db.transaction(async (tx) => {
+    const revokedCount = await fastify.repositories.refreshTokens.revokeFamily(
+      stored.familyId,
+      'client_revocation',
+      tx
+    );
+    const revokedFor = revokedCount > 0 ? stored.userId : null;
+    await record(revokedFor, tx);
+    return revokedFor;
+  });
+  return { userId, recorded: true };
 }
 
 /**
@@ -190,11 +220,15 @@ async function tryRevokeAccessToken(
   // Ownership: only the client the token was issued for may revoke it.
   if (payload.clientId !== clientId) return null;
   if (!payload.jti || payload.exp === undefined) return null;
-  const remainingSeconds = payload.exp - Math.floor(Date.now() / 1000);
-  await revokeJti(fastify, payload.jti, remainingSeconds);
   // A client's own token (client_credentials) has the client as `sub`; any
   // other `sub` names a user, recorded only when it is one of the realm's.
-  if (!payload.sub || payload.sub === payload.clientId) return { userId: null };
-  const user = await fastify.repositories.users.findById(realm.id, payload.sub);
-  return { userId: user?.id ?? null };
+  // Looked up before the denylist: a lookup that fails then leaves the token
+  // as it was, rather than revoked with no event recorded.
+  const user =
+    !payload.sub || payload.sub === payload.clientId
+      ? undefined
+      : await fastify.repositories.users.findById(realm.id, payload.sub);
+  const remainingSeconds = payload.exp - Math.floor(Date.now() / 1000);
+  await revokeJti(fastify, payload.jti, remainingSeconds);
+  return { userId: user?.id ?? null, recorded: false };
 }
