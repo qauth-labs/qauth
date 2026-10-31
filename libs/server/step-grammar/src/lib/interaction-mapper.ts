@@ -97,8 +97,11 @@ export interface InteractionMapper {
    * The grammar's members of the step read for `offer`. The current step must
    * be one this transport serves, since the Interaction API is where every
    * other transport sends a step it cannot serve; an alternative it does not
-   * serve is left out. The steps the result names are the ones the page may
-   * answer. Throws {@link StepMappingError} for an offer the grammar refuses.
+   * serve is left out. One value is refused wherever it is offered, current
+   * step or alternative: an `email_code` with the FiPA endpoint's own purpose,
+   * `confirm_sign_in` (`not_served`). The steps the result names are the ones
+   * the page may answer. Throws {@link StepMappingError} for an offer the
+   * grammar refuses.
    */
   stepView(offer: StepOffer): InteractionStepView;
   /**

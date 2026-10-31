@@ -13,7 +13,7 @@ publishes cannot drift apart.
 
 ## What it holds
 
-| Module                      | What                                                                                           |
+| Module, under `src/`        | What                                                                                           |
 | --------------------------- | ---------------------------------------------------------------------------------------------- |
 | `lib/grammar.ts`            | `defineStep`, and what a step is: name, URN, transports, params, personal data, answer, errors |
 | `lib/zod-kit.ts`            | Zod builders, one per JSON Schema builder of the contract (display text, base64url, URIs, …)   |
