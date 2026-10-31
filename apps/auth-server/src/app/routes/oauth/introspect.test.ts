@@ -1213,7 +1213,10 @@ describe('POST /oauth/introspect route', () => {
     );
   });
 
-  it('returns 400 for missing or empty token', async () => {
+  // It builds and loads a Fastify instance of its own: well under a second
+  // alone, but past Vitest's 5 s default while every project's suite runs
+  // at once (`nx run-many -t test --all`).
+  it('returns 400 for missing or empty token', { timeout: 30_000 }, async () => {
     const app = Fastify({ logger: false }).withTypeProvider<ZodTypeProvider>();
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
