@@ -112,7 +112,10 @@ after the rotation by default, never less than the longest token lifetime). A
 token without a `kid` keeps verifying against the imported key after that key
 retires. Rotation through the store ships with #542 and #544; replacing a key
 through its variable (below) is not a rotation, and its old key leaves the JWKS
-at once. Relying parties cache the JWKS as the
+at once. A `next` key verifies nothing and every process reads a realm's key
+list again only every 60 seconds, so #542 has to order the activation so that
+every process that verifies tokens sees the new key before any signer uses it.
+Relying parties cache the JWKS as the
 [OAuth 2.1 flow](/integrate/oauth-flow/#caching-the-jwks) page describes.
 
 A key variable never holds a key another realm stores: the key boot step refuses

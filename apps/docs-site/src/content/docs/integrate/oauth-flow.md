@@ -311,8 +311,10 @@ verifies tokens locally follows three rules:
   once a minute.** A token whose `kid` is still unknown after that fetch is
   refused, not retried.
 - **Drop every key the JWKS no longer lists.** A key leaves the JWKS when its
-  retention ends, or at once when it is retired as compromised; a token it
-  signed must stop verifying then.
+  retention ends, or when it is retired as compromised; a token it signed must
+  stop verifying then. A compromised key is not gone everywhere at once: QAuth's
+  own servers stop using it within their 60-second key refresh, and your JWKS
+  cache adds its own lifetime before your verifier stops.
 
 Pick the key by `kid` and `alg` together, never by `kid` alone: the JWKS of a
 realm with hybrid signing holds an `OKP` and an `AKP` key, and retired keys sit
@@ -322,7 +324,12 @@ fetches.
 
 A rotation through QAuth's key store then changes nothing for users or relying
 parties: the new key is in the JWKS before it signs, and the old one stays in it, and keeps verifying at
-QAuth's own endpoints, until its retention ends ([Keys](/operate/keys/)).
+QAuth's own endpoints, until its retention ends ([Keys](/operate/keys/)). That
+holds only once rotation through the key store ships (#542 and #544). Until
+then a signing key is replaced through its variable, which is not a rotation:
+the new key is published only as it starts signing, and the old key leaves the
+JWKS at once, so the tokens it signed stop verifying
+([Replacing a signing key](/operate/keys/#replacing-a-signing-key)).
 
 ---
 
