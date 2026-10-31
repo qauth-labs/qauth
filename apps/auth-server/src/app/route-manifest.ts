@@ -181,7 +181,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'auth/logout',
     prefix: '/auth',
     roles: ['api'],
-    plugins: ['jwt', 'password', 'sessions'],
+    plugins: ['jwt', 'sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthClients', 'refreshTokens', 'users'],
     load: () => import('./routes/auth/logout'),
   },
@@ -243,7 +243,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'consents-api',
     prefix: '/api/consents',
     roles: ['api'],
-    plugins: ['jwt', 'password'],
+    plugins: ['jwt'],
     repositories: [
       'authorizationCodes',
       'events',
