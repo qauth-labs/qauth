@@ -40,7 +40,7 @@ const DOCKER_VERSION = /^v?\d+(\.\d+)*$/;
 /** A `uses` key, alone or as the first key of a list item; group 1 is the rest of the line. */
 const USES_KEY = /^\s*(?:-\s+)?uses\s*:(\s.*)?$/;
 /** A `uses` key anywhere else on a line: in a flow mapping, quoted, or after an anchor or tag. */
-const USES_ELSEWHERE = /(?:^|[\s{,?-])["']?uses["']?\s*:(?:\s|$)/;
+const USES_ELSEWHERE = /(?:^|[\s{,?])["']?uses["']?\s*:(?:\s|$)/;
 
 const PIN = 'pin a major tag (@v1) or a full commit SHA';
 const PIN_IMAGE = 'pin a version tag (:1.2.3) or a sha256 digest';
@@ -125,7 +125,8 @@ export function workflowReferences(text) {
   for (const [index, content] of text.split(/\r?\n/).entries()) {
     const match = USES_KEY.exec(content);
     if (match === null) {
-      if (!content.trimStart().startsWith('#') && USES_ELSEWHERE.test(content)) {
+      // Only the text before a comment: `name: Build # uses: x@main` has no key.
+      if (USES_ELSEWHERE.test(content.split(/(?:^|\s)#/, 1)[0])) {
         references.push({ line: index + 1, uses: content.trim(), problem: UNREADABLE });
       }
       continue;

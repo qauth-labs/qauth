@@ -92,7 +92,13 @@ describe('workflowReferences', () => {
   });
 
   it('skips keys that only end in uses, and comments', () => {
-    const text = ['reuses: some-org/some-action@main', 'upload-artifact: false', '# uses: x@main'];
+    const text = [
+      'reuses: some-org/some-action@main',
+      'pre-uses: some-org/some-action@main',
+      'upload-artifact: false',
+      '# uses: x@main',
+      '  - name: Build # uses: x@main',
+    ];
 
     expect(workflowReferences(text.join('\n'))).toEqual([]);
   });
