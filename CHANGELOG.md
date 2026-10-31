@@ -1215,10 +1215,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Operator-set first-party client profiles** ([#631], ADR-017 Decision 2).
   Migration 0048 adds `oauth_clients.first_party_profile` (`web_redirect`,
   `native_backend`), `first_party_policy` and `first_party_reason`, nullable
-  with no default, and four CHECKs: no profile on a dynamic, CIMD, agent or
+  with no default, and six CHECKs: no profile on a dynamic, CIMD, agent or
   developer-owned client; a profile only with `private_key_jwt`; a policy
   exactly on `native_backend`; `native_backend` only with the
-  `authorization_code` grant. `resolveFirstPartyProfile` in shared-validation
+  `authorization_code` grant; a written reason (at most 1000 characters)
+  exactly with a profile; a policy that is a JSON object. `resolveFirstPartyProfile` in shared-validation
   reads a row and fails closed on an unknown profile or a policy that does not
   parse; the strict policy is `flows` (default `login`),
   `email_code_after_password` (default `false`) and `pkce_required` (default

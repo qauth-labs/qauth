@@ -3,7 +3,7 @@
  * client profile (ADR-017 Decision 2, #631).
  *
  * The migration is forward-only: it adds an enum type, three nullable columns
- * and four CHECKs, and rewrites nothing. A client created before it comes out
+ * and six CHECKs, and rewrites nothing. A client created before it comes out
  * of it unchanged and not first party, and the previous release, which does
  * not know the columns, keeps creating and updating clients on the new schema
  * during a rolling upgrade. From then on each CHECK refuses its bad row, so no
@@ -117,7 +117,9 @@ describe('migration 0048 — oauth_clients first-party profile (seed-then-migrat
 
   /**
    * Insert a client with the given column values on top of an operator's
-   * `private_key_jwt` client, which every CHECK accepts with any profile.
+   * `private_key_jwt` client, which every CHECK accepts with any profile. A
+   * row given a profile and no `first_party_reason` gets one, so a case
+   * meets only the CHECK it is about.
    */
   async function insertClient(
     realmId: string,
@@ -133,6 +135,9 @@ describe('migration 0048 — oauth_clients first-party profile (seed-then-migrat
       token_endpoint_auth_method: 'private_key_jwt',
       grant_types: '["authorization_code","refresh_token"]',
       provisioned_by_operator: true,
+      ...('first_party_profile' in columns && !('first_party_reason' in columns)
+        ? { first_party_reason: 'Our own app.' }
+        : {}),
       ...columns,
     };
     const names = Object.keys(row);
@@ -276,9 +281,10 @@ describe('migration 0048 — oauth_clients first-party profile (seed-then-migrat
     );
     for (const { id } of plain) {
       await expectRefusedBy(
-        db().query(`UPDATE oauth_clients SET first_party_profile = 'web_redirect' WHERE id = $1`, [
-          id,
-        ]),
+        db().query(
+          `UPDATE oauth_clients SET first_party_profile = 'web_redirect', first_party_reason = 'Ours.' WHERE id = $1`,
+          [id]
+        ),
         'oauth_clients_first_party_operator_only',
         `update ${id}`
       );
@@ -366,10 +372,61 @@ describe('migration 0048 — oauth_clients first-party profile (seed-then-migrat
       'oauth_clients_first_party_policy_native',
       'dropping the profile and keeping the policy'
     );
-    // Removing both together is how an operator removes the profile.
+    // Removing all three together is how an operator removes the profile.
     await db().query(
-      `UPDATE oauth_clients SET first_party_profile = NULL, first_party_policy = NULL WHERE client_id = 'native'`
+      `UPDATE oauth_clients SET first_party_profile = NULL, first_party_policy = NULL, first_party_reason = NULL WHERE client_id = 'native'`
     );
+  });
+
+  it('holds a written reason exactly with a profile, not blank and at most 1000 characters (oauth_clients_first_party_reason)', async () => {
+    await migrate();
+    const realmId = await seedRealm();
+
+    const refused: Array<[string, Record<string, unknown>]> = [
+      [
+        'a profile with no reason',
+        { first_party_profile: 'web_redirect', first_party_reason: null },
+      ],
+      ['a blank reason', { first_party_profile: 'web_redirect', first_party_reason: '  \t ' }],
+      [
+        'a reason over 1000 characters',
+        { first_party_profile: 'web_redirect', first_party_reason: 'x'.repeat(1001) },
+      ],
+      ['a reason with no profile', { first_party_reason: 'Ours.' }],
+    ];
+    for (const [label, columns] of refused) {
+      await expectRefusedBy(
+        insertClient(realmId, `r-${label}`, columns),
+        'oauth_clients_first_party_reason',
+        label
+      );
+    }
+
+    await insertClient(realmId, 'portal', {
+      first_party_profile: 'web_redirect',
+      first_party_reason: 'x'.repeat(1000),
+    });
+    await expectRefusedBy(
+      db().query(`UPDATE oauth_clients SET first_party_profile = NULL WHERE client_id = 'portal'`),
+      'oauth_clients_first_party_reason',
+      'removing the profile and keeping its reason'
+    );
+  });
+
+  it('holds a policy to a JSON object (oauth_clients_first_party_policy_object)', async () => {
+    await migrate();
+    const realmId = await seedRealm();
+
+    for (const policy of ['null', '"login"', '["login"]', '1']) {
+      await expectRefusedBy(
+        insertClient(realmId, `p-${policy}`, {
+          first_party_profile: 'native_backend',
+          first_party_policy: policy,
+        }),
+        'oauth_clients_first_party_policy_object',
+        policy
+      );
+    }
   });
 
   it('holds native_backend to the authorization_code grant (oauth_clients_first_party_native_authorization_code)', async () => {

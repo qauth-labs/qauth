@@ -429,7 +429,7 @@ redirect flow needs the provisioned row.
 
 Migration 0048 adds `oauth_clients.first_party_profile`,
 `first_party_policy` and `first_party_reason`, nullable with no default, and
-four CHECKs that every existing row passes. The previous release keeps
+six CHECKs that every existing row passes. The previous release keeps
 creating and updating clients on the new schema.
 
 ### The delivery role reads `realms.issuer`

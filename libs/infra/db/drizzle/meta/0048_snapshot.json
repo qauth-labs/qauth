@@ -1,5 +1,5 @@
 {
-  "id": "33f66154-ccaf-46a1-94d5-34c0b52f52de",
+  "id": "f4860f1d-5bb0-4c51-a5bb-bd694b48331c",
   "prevId": "06cea761-f8fd-4721-bdbd-6053d5adce65",
   "version": "7",
   "dialect": "postgresql",
@@ -1782,6 +1782,14 @@
         "oauth_clients_first_party_native_authorization_code": {
           "name": "oauth_clients_first_party_native_authorization_code",
           "value": "\"oauth_clients\".\"first_party_profile\" IS DISTINCT FROM 'native_backend' OR \"oauth_clients\".\"grant_types\" ? 'authorization_code'"
+        },
+        "oauth_clients_first_party_reason": {
+          "name": "oauth_clients_first_party_reason",
+          "value": "(\"oauth_clients\".\"first_party_profile\" IS NULL) = (\"oauth_clients\".\"first_party_reason\" IS NULL) AND (\"oauth_clients\".\"first_party_reason\" IS NULL OR (char_length(\"oauth_clients\".\"first_party_reason\") <= 1000 AND btrim(\"oauth_clients\".\"first_party_reason\") <> ''))"
+        },
+        "oauth_clients_first_party_policy_object": {
+          "name": "oauth_clients_first_party_policy_object",
+          "value": "\"oauth_clients\".\"first_party_policy\" IS NULL OR jsonb_typeof(\"oauth_clients\".\"first_party_policy\") = 'object'"
         }
       },
       "isRLSEnabled": false

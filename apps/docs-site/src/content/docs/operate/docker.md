@@ -694,8 +694,9 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
   stays required on the redirect flow for every client.
 - The database holds the rules on every path: no profile on a dynamic, CIMD,
   agent or developer-owned client, a profile only with `private_key_jwt`, a
-  policy exactly on `native_backend`, and `native_backend` only with the
-  `authorization_code` grant. Dynamic registration, `POST /api/clients` and a
+  policy exactly on `native_backend`, `native_backend` only with the
+  `authorization_code` grant, and a written reason of at most 1000 characters
+  exactly with a profile. Dynamic registration, `POST /api/clients` and a
   CIMD document can never set one.
 - The seed skips a client that already exists. Changing or removing a profile
   goes through `--rotate`, which also issues a new secret. Removing it revokes

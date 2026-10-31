@@ -116,7 +116,8 @@ describe('first-party profile write paths and the provisioned system client (rea
     return app()
       .dbPool.query(
         `UPDATE oauth_clients
-            SET first_party_profile = 'web_redirect', token_endpoint_auth_method = 'private_key_jwt'
+            SET first_party_profile = 'web_redirect', first_party_reason = 'Ours.',
+                token_endpoint_auth_method = 'private_key_jwt'
           WHERE client_id = $1`,
         [clientId]
       )

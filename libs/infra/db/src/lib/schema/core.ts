@@ -680,7 +680,7 @@ export const oauthClients = pgTable(
      * shared-validation, which also fails closed on a policy that does not
      * parse.
      *
-     * OPERATOR-SET, NEVER SELF-ASSERTED, and held by four CHECKs below: a
+     * OPERATOR-SET, NEVER SELF-ASSERTED, and held by the four CHECKs below: a
      * profile only on a `private_key_jwt` client that no developer owns, that
      * is not an agent and that neither dynamic registration nor a CIMD
      * document created; a policy exactly on `native_backend`; and
@@ -697,14 +697,16 @@ export const oauthClients = pgTable(
      * object `{ flows, email_code_after_password, pkce_required }` of
      * `firstPartyPolicySchema` in shared-validation, stored with every member
      * filled in. NULL on every other row. A stored value that does not parse
-     * makes the client not first party.
+     * makes the client not first party; one that is not a JSON object is
+     * refused (CHECK `oauth_clients_first_party_policy_object`).
      */
     firstPartyPolicy: jsonb('first_party_policy').$type<Record<string, unknown> | null>(),
     /**
      * The operator's written reason for the profile (ADR-017 Decision 2):
      * why the entity that operates this server controls the app and users see
-     * it under that entity's brand. Required by every path that sets a
-     * profile, and recorded in the `client.first_party_changed` event.
+     * it under that entity's brand. Set exactly with a profile, not blank and
+     * at most 1000 characters (CHECK `oauth_clients_first_party_reason`), and
+     * recorded in the `client.first_party_changed` event.
      */
     firstPartyReason: text('first_party_reason'),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
@@ -762,6 +764,17 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_first_party_native_authorization_code',
       sql`${t.firstPartyProfile} IS DISTINCT FROM 'native_backend' OR ${t.grantTypes} ? 'authorization_code'`
+    ),
+    // And the stored forms the decision implies: a written reason exactly
+    // with a profile, not blank and no longer than the event that records it
+    // carries (1000 characters); a policy that is a JSON object.
+    check(
+      'oauth_clients_first_party_reason',
+      sql`(${t.firstPartyProfile} IS NULL) = (${t.firstPartyReason} IS NULL) AND (${t.firstPartyReason} IS NULL OR (char_length(${t.firstPartyReason}) <= 1000 AND btrim(${t.firstPartyReason}) <> ''))`
+    ),
+    check(
+      'oauth_clients_first_party_policy_object',
+      sql`${t.firstPartyPolicy} IS NULL OR jsonb_typeof(${t.firstPartyPolicy}) = 'object'`
     ),
   ]
 );
