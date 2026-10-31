@@ -426,9 +426,12 @@ export const authEnvSchema = z.object({
    * Scopes, separated by spaces or commas, that seed a realm's dynamic
    * registration allowlist (`registration.dynamicRegistrationAllowedScopes`,
    * #516): a new realm stores them, and the first boot after the upgrade
-   * stores them for a realm whose row holds no scope. `/oauth/register` and
-   * the clients API cap a client's scopes with the realm row's list, never
-   * with this key, so a later change leaves every existing realm as it is.
+   * stores them for a realm whose row holds no scope. Once the realm has its
+   * policies, `/oauth/register` and the clients API cap a client's scopes
+   * with the realm row's list, never with this key, so a later change leaves
+   * every such realm as it is. A realm with none yet (counter 0, such as one a
+   * node of the previous release created during a rolling upgrade) reads an
+   * empty list in its row as this node's key until a boot fills it.
    *
    * Intentionally tight: only OIDC core scopes. Admin / tenant-scoped
    * grants (e.g. `example:admin`, `tenant-a:*`) MUST be added explicitly by

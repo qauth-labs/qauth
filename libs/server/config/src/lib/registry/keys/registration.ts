@@ -14,7 +14,7 @@ export const REGISTRATION_KEYS = defineKeys([
     owner: 'client-registration',
     default: 'openid profile email offline_access',
     since: '0.1.0',
-    docs: "The scopes, separated by spaces or commas, that seed the dynamic registration allowlist of a new realm, and of a realm whose row held none at the first boot after the upgrade that put the policies on the row; the server caps a registration with the realm row's list, never with this key, so a later change leaves every existing realm as it is, and boot refuses a scope in the `qauth:` namespace, which is reserved for QAuth's own scopes.",
+    docs: "The scopes, separated by spaces or commas, that seed the dynamic registration allowlist of a new realm, and of a realm whose row held none at the first boot after the upgrade that put the policies on the row; once the realm has its policies, the server caps a registration with the realm row's list, never with this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade has none until a node of this release boots again, and until then an empty list in its row reads as this key), and boot refuses a scope in the `qauth:` namespace, which is reserved for QAuth's own scopes.",
   },
   {
     name: 'DYNAMIC_CLIENT_BADGE_DAYS',
