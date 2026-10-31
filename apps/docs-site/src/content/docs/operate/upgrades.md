@@ -264,6 +264,63 @@ once every node runs this release, run `db:disable-user` and then
 `db:disable-user --enable`: that records the time now and ends everything the
 account holds ([Accounts from before the upgrade](/operate/accounts/#accounts-from-before-the-upgrade)).
 
+### Realm policies move onto the realm row
+
+From this release a realm's policies live on its row in Postgres, and the
+environment only seeds a new realm
+([ADR-019 Decision 10](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
+[#516](https://github.com/qauth-labs/qauth/issues/516)): the token lifetimes,
+the verified-account requirement, the password and brute-force policy, client
+registration, the mail sender and the environment ceiling, the fields of
+[Realm policies](/reference/realm-policies/). Migration 0045 adds three columns
+to `realms` and writes no row, so every realm starts the upgrade with no
+policies.
+
+**The first boot fills them.** The default realm's boot step gives every realm
+that has no policies the values of the environment the server runs with: each
+key whose role is `realm-seed` on [Configuration](/operate/configuration/), or
+the field's default where the key is unset. Two settings the row already held
+are kept, because the server read them from the row before: the environment
+ceiling (`max_environment_laxity`), and the dynamic registration allowlist when
+it holds a scope (an empty one gets `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`, as
+`/oauth/register` used it). The token lifetime columns were never read, so they
+take `ACCESS_TOKEN_LIFESPAN` and `REFRESH_TOKEN_LIFESPAN`. The fill is an
+`UPDATE ... WHERE policies_version = 0` per realm: of nodes that start
+together, the first one writes and the others find the realm filled. So give
+every node the same environment for the first boot after the upgrade; the
+first node to boot decides the stored values. The log says
+`realm policies filled from the environment` for each realm it filled.
+
+**Later changes of the environment change no realm.** Once a realm has its
+policies, its row owns them: a seed key only seeds a realm created later. At
+every boot the server warns once for each seed key that is still set, such as
+`ACCESS_TOKEN_LIFESPAN only seeds new realms and is ignored`; remove the key, or
+keep it for the realms you create later. To change an existing realm's policy,
+use the admin API's realm policy update
+([#517](https://github.com/qauth-labs/qauth/issues/517)). The flows move to
+the stored values one area at a time: the token lifetimes
+([#527](https://github.com/qauth-labs/qauth/issues/527)), the sign-in policy
+([#528](https://github.com/qauth-labs/qauth/issues/528)), mail
+([#529](https://github.com/qauth-labs/qauth/issues/529)) and client
+registration ([#534](https://github.com/qauth-labs/qauth/issues/534)). Until an
+area has moved, the server still applies its keys to every realm.
+
+**A value the policy schema refuses stops the boot.** The schema is stricter
+than some keys were, so the server refuses to start, naming the key and never
+its value, when a seed key holds one it refuses: a `CIMD_TRUSTED_DOMAINS` entry
+that is a single label (`localhost`) or an IP address, an `EMAIL_FROM_NAME`
+longer than 100 characters, a `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` entry with a
+character a scope cannot have. Correct the value and start the server again. A
+value the row holds that the schema refuses, such as a scope written into the
+allowlist by hand, stops the boot too, naming the realm and the field.
+
+`SMTP_PASSWORD` and `RESEND_API_KEY` are never written to the row: the realm's
+secret store takes them once it ships
+([#529](https://github.com/qauth-labs/qauth/issues/529)), and until then the
+server reads them from the environment. During a rolling upgrade a node of the
+previous release reads none of the new columns and runs on the environment as
+before.
+
 ### The delivery role reads `realms.issuer`
 
 From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user

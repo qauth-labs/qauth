@@ -65,6 +65,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SMTP password appears only as `passwordSet`. The docs site's new **Realm
   policies** page (`reference/realm-policies`) is generated from the schema.
   Nothing reads the policies from the realm row yet.
+- **Realm policies on the realm row** ([#516], ADR-019 Decision 10, ADR-020
+  §2). Migration 0045 adds `realms.policies` (jsonb), `policy_schema_version`
+  and `policies_version`, the counter the admin API will use as `ETag` and
+  `If-Match`. Four existing columns stay the storage of their fields
+  (`access_token_lifespan`, `refresh_token_lifespan`,
+  `dynamic_registration_allowed_scopes`, `max_environment_laxity`); every other
+  field is in the document, and a secret field never is. A new realm stores
+  `defaultsFromEnv` of the environment the server runs with. At the first boot
+  after the upgrade the default realm's boot step fills each realm that has no
+  policies yet with the environment's values, keeping the environment ceiling
+  and a non-empty dynamic registration allowlist its row held, with an
+  `UPDATE ... WHERE policies_version = 0`, so the first node wins; from then on
+  an environment key changes no existing realm, and each boot warns once for
+  every seed key still set: "only seeds new realms and is ignored". The new
+  `fastify.policyStore` (`@qauth-labs/fastify-plugin-realm-policy`) reads a
+  realm's policies off its row with no query and updates them only with the
+  expected `policies_version`; the trigger `realms_policies_version` raises the
+  counter on every change of the policies, whoever writes them. The interface
+  `RealmSecretStore` names where secret fields go; the store itself comes with
+  [#529], and until then a write that sets a secret is refused. The flows still
+  read the environment until they move to the row ([#527], [#528], [#529],
+  [#534]). See **Realm policies move onto the realm row** in
+  `operate/upgrades`.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).
@@ -1828,10 +1851,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#512]: https://github.com/qauth-labs/qauth/issues/512
 [#513]: https://github.com/qauth-labs/qauth/issues/513
 [#514]: https://github.com/qauth-labs/qauth/issues/514
+[#516]: https://github.com/qauth-labs/qauth/issues/516
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
+[#527]: https://github.com/qauth-labs/qauth/issues/527
+[#528]: https://github.com/qauth-labs/qauth/issues/528
+[#529]: https://github.com/qauth-labs/qauth/issues/529
+[#534]: https://github.com/qauth-labs/qauth/issues/534
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
