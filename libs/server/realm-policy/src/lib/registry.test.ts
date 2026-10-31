@@ -132,6 +132,53 @@ describe('registerPolicyGroup', () => {
     expect(diff.effects).toEqual(['posture-loosening']);
   });
 
+  it('reads a getter once, at registration, so a direction cannot turn after it', () => {
+    const registry = createPolicyRegistry();
+    const flag = policyField(z.boolean(), {
+      seedEnv: null,
+      default: true,
+      direction: 'true-is-stricter',
+      securityWhen: 'loosening',
+      effects: ['credential-path'],
+      secret: false,
+      environmentBound: false,
+      doc: DOC,
+    });
+    let reads = 0;
+    // A copy whose direction is a getter, strict while it is checked.
+    const field = Object.defineProperty({ ...flag }, 'direction', {
+      enumerable: true,
+      get: () => (reads++ === 0 ? 'true-is-stricter' : 'false-is-stricter'),
+    });
+    registry.registerPolicyGroup('sessions', { required: field as never });
+    expect(reads).toBe(1);
+    // true to false loosens a true-is-stricter field, so it is a security change.
+    expect(registry.diffPolicies({}, { sessions: { required: false } }).changes).toEqual([
+      expect.objectContaining({ direction: 'loosening', class: 'security' }),
+    ]);
+  });
+
+  it('keeps a secret secret when the value given is turned into a plain field after registration', () => {
+    const registry = createPolicyRegistry();
+    const field: Record<string, unknown> = { ...secret() };
+    registry.registerPolicyGroup('sessions', { upstream: { clientSecret: field as never } });
+    Object.assign(field, { secret: false, securityWhen: 'never', effects: [] });
+    const diff = registry.diffPolicies(
+      {},
+      { sessions: { upstream: { clientSecret: 'upstream-secret-value' } } }
+    );
+    expect(diff.changes).toEqual([
+      expect.objectContaining({
+        path: 'sessions.upstream.clientSecret',
+        before: false,
+        after: true,
+        secret: true,
+        class: 'security',
+      }),
+    ]);
+    expect(JSON.stringify(diff)).not.toContain('upstream-secret-value');
+  });
+
   it('refuses a seed key that already seeds another field, and registers nothing of the group', () => {
     const registry = createPolicyRegistry();
     registry.registerPolicyGroup('first', { a: lifetime({ seedEnv: 'TEST_LIFETIME' }) });
