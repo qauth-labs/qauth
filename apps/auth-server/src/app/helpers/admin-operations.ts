@@ -916,51 +916,11 @@ export function operationStateVersion(operation: AdminOperation, state: unknown)
   return version;
 }
 
-/** Whether `code` is an `etagc` (RFC 9110 §8.8.3): `%x21 / %x23-7E / obs-text`. */
-function isEntityTagChar(code: number): boolean {
-  return code === 0x21 || (code >= 0x23 && code <= 0x7e) || (code >= 0x80 && code <= 0xff);
-}
-
-/** Whether `char` is optional whitespace (RFC 9110 §5.6.3). */
-function isOws(char: string | undefined): boolean {
-  return char === ' ' || char === '\t';
-}
-
 /**
- * Whether an `If-Match` field (RFC 9110 §13.1.1) lets a request act on the
- * state of version `stateVersion`: absent, `*`, or a list holding the strong
- * entity-tag `"stateVersion"`. A weak tag never matches (strong comparison),
- * empty list elements are skipped, and a field that does not parse matches
- * nothing.
- *
- * Parsed in one pass, without a regular expression: a pattern with repeated
- * whitespace and comma groups is polynomial on a long run of either.
+ * Whether an `If-Match` field lets a request act on the state of version
+ * `stateVersion`; shared with the account and developer APIs (#524).
  */
-export function ifMatchAllows(field: string | string[] | undefined, stateVersion: string): boolean {
-  if (field === undefined) return true;
-  const value = (Array.isArray(field) ? field.join(', ') : field).trim();
-  if (value === '*') return true;
-  if (value === '') return false;
-  let matched = false;
-  let i = 0;
-  while (i < value.length) {
-    // Optional whitespace and empty list elements before the next tag.
-    while (i < value.length && (isOws(value[i]) || value[i] === ',')) i++;
-    if (i >= value.length) break;
-    const weak = value.startsWith('W/', i);
-    if (weak) i += 2;
-    if (value[i] !== '"') return false;
-    const start = ++i;
-    while (i < value.length && isEntityTagChar(value.charCodeAt(i))) i++;
-    if (value[i] !== '"') return false;
-    const opaque = value.slice(start, i);
-    i++;
-    while (i < value.length && isOws(value[i])) i++;
-    if (i < value.length && value[i] !== ',') return false;
-    if (!weak && opaque === stateVersion) matched = true;
-  }
-  return matched;
-}
+export { ifMatchAllows } from '../api-conventions/conditional-requests';
 
 /**
  * What one request of `operation` needs.
