@@ -24,6 +24,10 @@
  * those seconds after the account was enabled again is refused too.
  */
 
+import { NOT_VALID_BEFORE_MARGIN_MS } from '@qauth-labs/shared-validation';
+
+export { NOT_VALID_BEFORE_MARGIN_MS };
+
 /** What these checks read of a `users` row. */
 export interface AccountState {
   readonly enabled: boolean;
@@ -33,14 +37,6 @@ export interface AccountState {
 
 /** Why an account no longer accepts a credential it was issued. */
 export type AccountCredentialRefusal = 'user_disabled' | 'issued_before_disablement';
-
-/**
- * How long after `not_valid_before`, in milliseconds, a credential may have
- * been issued and still count as issued before it. One second: the rounding
- * of a time kept to the second, and a small skew between the auth server's
- * clock and the database's.
- */
-export const NOT_VALID_BEFORE_MARGIN_MS = 1000;
 
 /**
  * Whether a credential issued at `issuedAtMs` (epoch ms) was issued before the

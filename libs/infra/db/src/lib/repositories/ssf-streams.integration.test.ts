@@ -20,6 +20,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { NOT_VALID_BEFORE_MARGIN_MS } from '@qauth-labs/shared-validation';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -484,6 +485,78 @@ describe('SSF streams integration (real Postgres)', () => {
     expect(await related(pastLimit)).toBe(true);
     expect(await related(pastSession)).toBe(true);
     expect(await related(disabled)).toBe(false);
+  });
+
+  it('relates a user enabled again by no refresh token issued before the disablement (#748)', async () => {
+    const realmId = await realm();
+    const receiver = await client(realmId);
+    // Disabled at DISABLED_AT and enabled again since. The trigger of
+    // migration 0044 sets the time on an UPDATE only, so the row is inserted
+    // with it.
+    const DISABLED_AT = NOW - 60_000;
+    const user = async (notValidBefore: number | null) =>
+      (
+        await pool().query<{ id: string }>(
+          `INSERT INTO users (realm_id, not_valid_before) VALUES ($1, $2) RETURNING id::text AS id`,
+          [realmId, notValidBefore]
+        )
+      ).rows[0].id;
+    const refresh = (userId: string, issued: { familyCreatedAt: number; createdAt: number }) =>
+      pool().query(
+        `INSERT INTO refresh_tokens (token_hash, user_id, oauth_client_id, family_created_at, created_at, expires_at, revoked)
+         VALUES ($1, $2, $3, $4, $5, $6, false)`,
+        [
+          randomUUID().replaceAll('-', '').padEnd(64, '0'),
+          userId,
+          receiver.id,
+          issued.familyCreatedAt,
+          issued.createdAt,
+          NOW + 60_000,
+        ]
+      );
+    const related = (userId: string) => streams.isRelatedUser(realmId, receiver.id, userId, NOW);
+
+    // Signed in again after the account was enabled: the token endpoint
+    // takes its token, so it relates the user.
+    const signedInAgain = await user(DISABLED_AT);
+    await refresh(signedInAgain, {
+      familyCreatedAt: DISABLED_AT + NOT_VALID_BEFORE_MARGIN_MS + 1,
+      createdAt: DISABLED_AT + 30_000,
+    });
+    // Never disabled: the time is null, and an old token still counts.
+    const neverDisabled = await user(null);
+    await refresh(neverDisabled, { familyCreatedAt: NOW - 600_000, createdAt: NOW - 600_000 });
+    // Issued before the disablement and unused while it lasted.
+    const heldBefore = await user(DISABLED_AT);
+    await refresh(heldBefore, {
+      familyCreatedAt: DISABLED_AT - 5_000,
+      createdAt: DISABLED_AT - 5_000,
+    });
+    // Issued within the margin after it.
+    const withinMargin = await user(DISABLED_AT);
+    await refresh(withinMargin, {
+      familyCreatedAt: DISABLED_AT + NOT_VALID_BEFORE_MARGIN_MS,
+      createdAt: DISABLED_AT + NOT_VALID_BEFORE_MARGIN_MS,
+    });
+    // Rotated after the account was enabled again, from a family that began
+    // before the disablement: the family's start counts.
+    const rotatedFromBefore = await user(DISABLED_AT);
+    await refresh(rotatedFromBefore, {
+      familyCreatedAt: DISABLED_AT - 5_000,
+      createdAt: DISABLED_AT + 30_000,
+    });
+
+    expect(await related(signedInAgain)).toBe(true);
+    expect(await related(neverDisabled)).toBe(true);
+    for (const userId of [heldBefore, withinMargin, rotatedFromBefore]) {
+      expect(await related(userId), userId).toBe(false);
+    }
+    // An active consent still relates the user: disabling withdraws none.
+    await pool().query(
+      `INSERT INTO oauth_consents (realm_id, user_id, oauth_client_id) VALUES ($1, $2, $3)`,
+      [realmId, heldBefore, receiver.id]
+    );
+    expect(await related(heldBefore)).toBe(true);
   });
 
   /** A client of `realmId` with `audience` (`null` for none); its row id and `client_id`. */
