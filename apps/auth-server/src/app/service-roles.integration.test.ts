@@ -79,6 +79,26 @@ const DEFAULT_ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'POST /ui/verify',
 ];
 
+/**
+ * The routes added since the manifest replaced the autoload: the account and
+ * developer APIs under their versioned prefixes (#524).
+ */
+const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
+  'DELETE /account/v1-rc.0/consents/:consentId',
+  'DELETE /developer/v1-rc.0/clients/:clientId',
+  'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
+  'DELETE /developer/v1-rc.0/consents/:consentId',
+  'GET /account/v1-rc.0/consents',
+  'GET /developer/v1-rc.0/clients',
+  'GET /developer/v1-rc.0/clients/:clientId',
+  'GET /developer/v1-rc.0/clients/:clientId/api-keys',
+  'GET /developer/v1-rc.0/consents',
+  'PATCH /developer/v1-rc.0/clients/:clientId',
+  'POST /developer/v1-rc.0/clients',
+  'POST /developer/v1-rc.0/clients/:clientId/api-keys',
+  'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',
+];
+
 const MACHINE_CLIENT_ID = 'roles-machine-client';
 const MACHINE_SECRET = 'roles-machine-secret-of-at-least-32-characters';
 const MACHINE_SCOPE = 'reports:read';
@@ -159,12 +179,13 @@ describe('service roles (#495)', () => {
 
   it("registers today's route set in a single process (SERVICE_ROLES=all)", async () => {
     const { routes } = await boot('all');
-    const expected = new Set([
-      ...DEFAULT_ROUTES_BEFORE_THE_MANIFEST,
-      ...DEFAULT_ROUTES_BEFORE_THE_MANIFEST.filter((operation) => operation.startsWith('GET ')).map(
-        (operation) => `HEAD ${operation.slice('GET '.length)}`
-      ),
-    ]);
+    const expected = new Set(
+      [...DEFAULT_ROUTES_BEFORE_THE_MANIFEST, ...DEFAULT_ROUTES_ADDED_SINCE].flatMap((operation) =>
+        operation.startsWith('GET ')
+          ? [operation, `HEAD ${operation.slice('GET '.length)}`]
+          : [operation]
+      )
+    );
     expect(operations(routes)).toEqual(expected);
     for (const route of routes) {
       expect(route.config?.serviceRoles, `${String(route.method)} ${route.url}`).toBeDefined();
