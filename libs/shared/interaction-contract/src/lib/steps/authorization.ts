@@ -1,5 +1,5 @@
 import {
-  absoluteUri,
+  absoluteUriWithoutFragment,
   closedEnum,
   closedObject,
   dateTime,
@@ -77,7 +77,7 @@ export const consent = defineStep({
         minItems: 0,
         maxItems: 16,
         items: declared(
-          absoluteUri(
+          absoluteUriWithoutFragment(
             2048,
             'One resource indicator, as the request named it. The request chose it, so the screen marks it as asked for by the app.'
           )

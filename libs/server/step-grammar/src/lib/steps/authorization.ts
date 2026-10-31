@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { defineStep } from '../grammar';
 import {
-  absoluteUri,
+  absoluteUriWithoutFragment,
   array,
   closedEnum,
   dateTime,
@@ -59,7 +59,7 @@ export const consent = defineStep({
     ),
     resources: array(
       declared(
-        absoluteUri(
+        absoluteUriWithoutFragment(
           2048,
           'One resource indicator, as the request named it. The request chose it, so the screen marks it as asked for by the app.'
         )

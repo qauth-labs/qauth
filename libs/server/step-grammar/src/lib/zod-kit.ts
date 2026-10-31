@@ -73,13 +73,23 @@ export function host(description: string) {
 /** Printable ASCII without space, `"`, `<`, `>` and `\`: the characters a URI may carry unescaped. */
 export const URI_CHARACTERS = '[!#-;=?-\\[\\]-~]';
 
+/** {@link URI_CHARACTERS} without `#`, so the URI has no fragment. */
+const URI_CHARACTERS_WITHOUT_FRAGMENT = '[!$-;=?-\\[\\]-~]';
+
 /** The schemes a browser runs or reads locally, which no absolute URI here may have. */
 const BROWSER_LOCAL_SCHEME = '^(?:javascript|data|vbscript|file|blob):';
 
-/** An absolute URI of any scheme except those a browser runs or reads locally. */
-export function absoluteUri(maxLength: number, description: string) {
+/**
+ * An absolute URI with no fragment (RFC 3986 §4.3 `absolute-URI`), of any
+ * scheme except those a browser runs or reads locally: a resource indicator,
+ * which RFC 8707 §2 says "MUST NOT include a fragment component".
+ */
+export function absoluteUriWithoutFragment(maxLength: number, description: string) {
   const browserLocal = new RegExp(BROWSER_LOCAL_SCHEME, 'u');
-  return matching(z.string().max(maxLength, STOP_AT_MAX), `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS}+$`)
+  return matching(
+    z.string().max(maxLength, STOP_AT_MAX),
+    `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS_WITHOUT_FRAGMENT}+$`
+  )
     .refine((value) => !browserLocal.test(value))
     .refine(isUri)
     .meta({

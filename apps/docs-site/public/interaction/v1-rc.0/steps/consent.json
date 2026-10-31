@@ -123,7 +123,7 @@
             "type": "string",
             "format": "uri",
             "maxLength": 2048,
-            "pattern": "^[a-z][a-z0-9+.-]*:[!#-;=?-\\[\\]-~]+$",
+            "pattern": "^[a-z][a-z0-9+.-]*:[!$-;=?-\\[\\]-~]+$",
             "not": {
               "type": "string",
               "pattern": "^(?:javascript|data|vbscript|file|blob):"

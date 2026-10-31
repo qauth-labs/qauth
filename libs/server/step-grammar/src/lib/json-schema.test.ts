@@ -266,6 +266,9 @@ describe('the Zod schemas and the published schema', () => {
         'https://[::1/',
         'https://a.example/#a#b',
         'https://a.example/{x}',
+        // RFC 8707 §2: a resource indicator "MUST NOT include a fragment component".
+        'https://notes.example.com/#notes',
+        'https://notes.example.com/v1?tenant=a#',
       ].map((resource): [StepName, 'params', unknown, boolean] => [
         'consent',
         'params',
@@ -291,6 +294,16 @@ describe('the Zod schemas and the published schema', () => {
         'personal',
         { secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP', otpauth_uri: 'otpauth://totp/a%zz' },
         false,
+      ],
+      // Only a resource indicator refuses a fragment; another URI may carry one.
+      [
+        'totp_setup',
+        'personal',
+        {
+          secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
+          otpauth_uri: 'otpauth://totp/Example:alice?secret=JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP#x',
+        },
+        true,
       ],
     ];
     for (const [name, part, value, valid] of cases) {
