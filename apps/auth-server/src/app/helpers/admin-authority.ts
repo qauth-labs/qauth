@@ -31,6 +31,7 @@ import { JWTInvalidError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
+import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { PERMISSION_REGISTRY, type PermissionRegistry } from './admin-permissions';
 import {
   BUILT_IN_ROLE_NAMES,
@@ -152,6 +153,11 @@ export interface AdminAuthorityRequest {
   readonly iss: string;
   /** The token's `sub`: the account. */
   readonly sub: string;
+  /**
+   * The token's `iat`, in seconds. A token with none, or one issued before the
+   * account was last disabled, names no active account (#748).
+   */
+  readonly iat?: number;
   /** The token's `scope` claim, space-delimited, or its scopes as a list. */
   readonly scopes: string | Iterable<string> | undefined;
   /** The realm the request acts on, as the request names it. */
@@ -162,7 +168,8 @@ export interface AdminAuthorityRequest {
  * Why {@link resolveAdminAuthority} refused:
  *
  * - `issuer_unknown`: the token's `iss` names no enabled realm here;
- * - `account_inactive`: the subject is not an enabled account of that realm;
+ * - `account_inactive`: the subject is not an enabled account of that realm,
+ *   or the token was issued before the account was last disabled (#748);
  * - `realm_not_found`: the requested realm is outside the caller's grants, or
  *   does not exist. The two are one answer, so it never confirms a realm
  *   exists to someone who may not manage it.
@@ -274,7 +281,11 @@ export async function resolveAdminAuthority(
   // Read in the issuer's realm (#489): an account of another realm is not
   // found, as an unknown one is not.
   const user = await fastify.repositories.users.findById(issuerRealm.id, request.sub);
-  if (!user || !user.enabled || user.realmId !== issuerRealm.id) {
+  if (
+    !user ||
+    accountCredentialRefusal(user, accessTokenIssuedAt(request)) !== null ||
+    user.realmId !== issuerRealm.id
+  ) {
     return { allowed: false, refusal: 'account_inactive' };
   }
 

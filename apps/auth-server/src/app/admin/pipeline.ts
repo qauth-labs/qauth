@@ -415,6 +415,7 @@ async function adminAuthorityStage(request: FastifyRequest): Promise<void> {
   const authority = await resolveAdminAuthority(request.server, {
     iss: claims.iss,
     sub: claims.sub,
+    iat: claims.iat,
     scopes: claims.scope,
     targetRealmId,
   });

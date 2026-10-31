@@ -10,6 +10,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { authenticateClient, extractClientCredentials } from '../../helpers/client-auth';
 import { getPqcSignature } from '../../helpers/hybrid-token';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -218,21 +219,26 @@ export default async function (fastify: FastifyInstance) {
         // A user's token is active only while the user exists and is enabled:
         // disabling an account must end the access it already holds at every
         // resource server that asks, as `/oauth/userinfo` and every grant
-        // refuse it. A `client_credentials` token carries `sub = client_id`,
-        // and a dynamically registered client's id is a random UUID, so the
-        // UUID shape alone does not mark a user subject.
+        // refuse it. A token minted before the account was last disabled stays
+        // inactive after it is enabled again (#748). A `client_credentials`
+        // token carries `sub = client_id`, and a dynamically registered
+        // client's id is a random UUID, so the UUID shape alone does not mark a
+        // user subject.
         const hasUserSubject = subIsUuid && payload.sub !== payload.clientId;
         if (hasUserSubject) {
           // Looked up in the request's realm (#489): another realm's user is
           // `subject_unknown` here, as a random id is.
           const user = await fastify.repositories.users.findById(realm.id, payload.sub as string);
-          if (!user || !user.enabled) {
+          const refusal = user
+            ? accountCredentialRefusal(user, accessTokenIssuedAt(payload))
+            : 'subject_unknown';
+          if (refusal !== null) {
             // Only a subject the lookup confirmed is the event's subject: an
             // unknown one names no user.
             await emitUserEvent(
               request,
               'urn:qauth:event:token.introspection_failed:v1-rc.0',
-              { error: 'invalid_token', reason: user ? 'user_disabled' : 'subject_unknown' },
+              { error: 'invalid_token', reason: refusal },
               { ...caller, userId: user ? user.id : null }
             );
 

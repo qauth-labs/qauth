@@ -4,6 +4,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 
 import { API_FAMILY_AUDIENCES, type ApiFamily } from '../api-conventions/families';
+import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
 import { isClientUsable } from './client-status';
 import { realmIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
@@ -171,9 +172,10 @@ async function assertSubjectOfRealm(
     throw inactiveSubjectError();
   }
   // Looked up in the request's realm (#489): a user of another realm is no
-  // user here, refused as an unknown one is.
+  // user here, refused as an unknown one is. A token minted before the
+  // account was last disabled is refused as a disabled account's is (#748).
   const user = await repositories.users.findById(realm.id, claims.sub);
-  if (!user || !user.enabled) {
+  if (!user || accountCredentialRefusal(user, accessTokenIssuedAt(claims)) !== null) {
     throw inactiveSubjectError();
   }
 }

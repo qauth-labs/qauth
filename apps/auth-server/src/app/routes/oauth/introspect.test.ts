@@ -309,7 +309,8 @@ describe('POST /oauth/introspect route', () => {
       fastify: FastifyInstance,
       ctx: TestContext,
       sub: string,
-      realm = REALM
+      realm = REALM,
+      iat = 1234567800
     ) {
       await introspectRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -320,7 +321,7 @@ describe('POST /oauth/introspect route', () => {
         sub,
         clientId: client.clientId,
         exp: 1234567890,
-        iat: 1234567800,
+        iat,
         iss: 'https://auth.example.com',
       });
       const handler = ctx.handler;
@@ -351,6 +352,54 @@ describe('POST /oauth/introspect route', () => {
         'urn:qauth:event:token.introspection_failed:v1-rc.0',
         { error: 'invalid_token', reason: 'user_disabled' },
         expect.objectContaining({ userId: userUuid, clientId: client.clientId })
+      );
+    });
+
+    // A token minted before the account was last disabled stays inactive
+    // after it is enabled again, answered as a disabled user's token is.
+    it('reports a token minted before its user was last disabled as inactive, as for a disabled user (#748)', async () => {
+      const notValidBefore = Date.now() - 60_000;
+      const iat = Math.floor((notValidBefore - 60_000) / 1000);
+      const answer = async (enabled: boolean) => {
+        const { fastify, ctx } = createFastifyStub();
+        (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+          id: userUuid,
+          enabled,
+          notValidBefore,
+        });
+        return introspect(fastify, ctx, userUuid, REALM, iat);
+      };
+
+      const disabled = await answer(false);
+      emitUserEventMock.mockClear();
+      const stale = await answer(true);
+
+      expect(stale).toEqual({ active: false });
+      expect(stale).toEqual(disabled);
+      expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+        expect.anything(),
+        'urn:qauth:event:token.introspection_failed:v1-rc.0',
+        { error: 'invalid_token', reason: 'issued_before_disablement' },
+        expect.objectContaining({ userId: userUuid, clientId: client.clientId })
+      );
+    });
+
+    it('reports a token minted after its user was last disabled and enabled again as active (#748)', async () => {
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+        id: userUuid,
+        enabled: true,
+        notValidBefore: Date.now() - 600_000,
+      });
+
+      await expect(
+        introspect(fastify, ctx, userUuid, REALM, Math.floor(Date.now() / 1000))
+      ).resolves.toMatchObject({ active: true, sub: userUuid });
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:token.introspected:v1-rc.0',
+        expect.anything(),
+        expect.objectContaining({ userId: userUuid })
       );
     });
 

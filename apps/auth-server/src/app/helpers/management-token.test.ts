@@ -109,6 +109,51 @@ describe('assertManagementToken', () => {
     expect(users.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
   });
 
+  it('rejects a token minted before its user was last disabled, as a disabled user’s token (#748)', async () => {
+    // Disabled a minute ago and enabled again since; the token is older.
+    const disabledAt = Date.now() - 60_000;
+    users.findById.mockResolvedValue({
+      id: USER_ID,
+      enabled: true,
+      notValidBefore: disabledAt,
+      realmId: REALM.id,
+    });
+    const issuedBefore = await refusal(
+      assertManagementToken(
+        fastify,
+        REALM,
+        portalClaims({ iat: Math.floor((disabledAt - 60_000) / 1000) })
+      )
+    );
+    expect(users.findById).toHaveBeenCalledWith(REALM.id, USER_ID);
+
+    users.findById.mockResolvedValue({ id: USER_ID, enabled: false, realmId: REALM.id });
+    const disabled = await refusal(assertManagementToken(fastify, REALM, portalClaims()));
+
+    // One answer: the caller cannot tell the two apart.
+    expect(issuedBefore).toEqual(disabled);
+    expect(issuedBefore).toEqual(await refusal(Promise.reject(inactiveSubjectError())));
+    expect(issuedBefore.statusCode).toBe(401);
+  });
+
+  it('accepts a token minted after its user was enabled again (#748)', async () => {
+    const disabledAt = Date.now() - 600_000;
+    users.findById.mockResolvedValue({
+      id: USER_ID,
+      enabled: true,
+      notValidBefore: disabledAt,
+      realmId: REALM.id,
+    });
+
+    await expect(
+      assertManagementToken(
+        fastify,
+        REALM,
+        portalClaims({ iat: Math.floor((disabledAt + 60_000) / 1000) })
+      )
+    ).resolves.toBeUndefined();
+  });
+
   it('rejects a token whose user no longer exists', async () => {
     users.findById.mockResolvedValue(undefined);
 

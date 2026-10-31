@@ -7,6 +7,7 @@ import { eventRequest } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
+import { accountCredentialRefusal } from './account-validity';
 import { requestRealm } from './request-realm';
 import {
   clearSessionCookie,
@@ -81,6 +82,9 @@ export async function createBrowserSession(
  *     realm: never created, revoked, past its absolute end or the realm's idle
  *     limit, or a session of another realm (ADR-019 Decision 1)
  *   - the session's user no longer exists or has been disabled
+ *   - the account was disabled after the session began, and enabled again
+ *     since (#748): a session nobody used while the account was disabled does
+ *     not come back with it
  *
  * The caller is responsible for deciding what to do with a null result —
  * e.g. redirect to the login page, or render an error. When the cookie
@@ -107,9 +111,10 @@ export async function resolveBrowserSession(
   }
 
   const user = await fastify.repositories.users.findById(session.realmId, session.userId);
-  if (!user || !user.enabled) {
-    // The account behind the session is gone or disabled — end the session
-    // so the cookie cannot keep using it, and treat it as no sign-in.
+  if (!user || accountCredentialRefusal(user, session.createdAt) !== null) {
+    // The account behind the session is gone or disabled, or was disabled
+    // after the session began (#748) — end the session so the cookie cannot
+    // keep using it, and treat it as no sign-in.
     await endBrowserSession(fastify, session.realmId, session.sid, 'admin');
     clearSessionCookie(reply);
     return null;

@@ -14,6 +14,7 @@ import {
   MINT_TRANSACTION,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
+import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
@@ -375,9 +376,10 @@ export default async function (fastify: FastifyInstance) {
         }
         // The token outlives the login that minted it; a user disabled in
         // between must not get a code from it, as the session path (via
-        // `resolveBrowserSession`) and every grant at `/oauth/token` refuse.
+        // `resolveBrowserSession`) and every grant at `/oauth/token` refuse,
+        // nor may a token minted before the account was last disabled (#748).
         const user = await fastify.repositories.users.findById(realm.id, payload.sub);
-        if (!user || !user.enabled) {
+        if (!user || accountCredentialRefusal(user, accessTokenIssuedAt(payload)) !== null) {
           throw inactiveSubjectError();
         }
         userId = payload.sub;

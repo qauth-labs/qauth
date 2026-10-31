@@ -38,6 +38,9 @@ const USER_ID = '11111111-1111-4111-8111-111111111111';
 const DISABLED_USER_ID = '22222222-2222-4222-8222-222222222222';
 const USER_OF_B_ID = '33333333-3333-4333-8333-333333333333';
 const UNKNOWN_USER_ID = '44444444-4444-4444-8444-444444444444';
+/** A user of realm A disabled five minutes before the tests run, and enabled again since (#748). */
+const REENABLED_USER_ID = '55555555-5555-4555-8555-555555555555';
+const REENABLED_USER_DISABLED_AT = Date.now() - 300_000;
 const REVOKED_JTI = 'revoked-jti';
 
 /**
@@ -57,6 +60,15 @@ const USERS = new Map([
   [USER_ID, { id: USER_ID, enabled: true, realmId: REALM_A.id }],
   [DISABLED_USER_ID, { id: DISABLED_USER_ID, enabled: false, realmId: REALM_A.id }],
   [USER_OF_B_ID, { id: USER_OF_B_ID, enabled: true, realmId: REALM_B.id }],
+  [
+    REENABLED_USER_ID,
+    {
+      id: REENABLED_USER_ID,
+      enabled: true,
+      notValidBefore: REENABLED_USER_DISABLED_AT,
+      realmId: REALM_A.id,
+    },
+  ],
 ]);
 
 /**
@@ -661,6 +673,44 @@ describe('requireFamilyToken (#509)', () => {
       }
       // A subject that is no UUID never reaches the users table.
       expect(findUserById).not.toHaveBeenCalledWith(expect.anything(), 'not-a-uuid');
+    });
+
+    it('refuses a token minted before its user was last disabled, as a disabled user’s token (#748)', async () => {
+      const claims = {
+        ...familyClaims('account'),
+        iat: Math.floor((REENABLED_USER_DISABLED_AT - 60_000) / 1000),
+      };
+      const issuedBefore = await call(
+        probePath('account'),
+        await signRaw({ typ: 'at+jwt' }, { ...claims, sub: REENABLED_USER_ID })
+      );
+      expect(findUserById).toHaveBeenCalledWith(REALM_A.id, REENABLED_USER_ID);
+      const disabled = await call(
+        probePath('account'),
+        await signRaw({ typ: 'at+jwt' }, { ...claims, sub: DISABLED_USER_ID })
+      );
+
+      expect(issuedBefore.statusCode).toBe(401);
+      expect(issuedBefore.json()).toMatchObject({
+        code: 'invalid_access_token',
+        detail: 'Access token subject is not an active user',
+      });
+      // One answer: the caller cannot tell the two apart. Only the trace id,
+      // the request's own, differs.
+      const { trace_id: _issuedBeforeTrace, ...issuedBeforeBody } = issuedBefore.json();
+      const { trace_id: _disabledTrace, ...disabledBody } = disabled.json();
+      expect(issuedBefore.statusCode).toBe(disabled.statusCode);
+      expect(issuedBeforeBody).toEqual(disabledBody);
+      expect(issuedBefore.headers['www-authenticate']).toBe(disabled.headers['www-authenticate']);
+    });
+
+    it('admits a token minted after its user was enabled again (#748)', async () => {
+      const response = await call(
+        probePath('account'),
+        await mint({ aud: account, sub: REENABLED_USER_ID })
+      );
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({ sub: REENABLED_USER_ID, aud: account });
     });
 
     it('resolves a client_credentials token as the client of the request realm', async () => {
