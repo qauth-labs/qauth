@@ -251,7 +251,17 @@ describe('the consent screen for an AI agent client (#845, real containers)', ()
     // ends an hour after the sign-in, and so does every family it backs.
     await setRealmLimit(app, 3600);
     const cookie = await signedInUser(app);
+    const {
+      rows: [session],
+    } = await app.dbPool.query<{ created_at: string }>(
+      'SELECT created_at FROM sessions ORDER BY created_at DESC LIMIT 1'
+    );
+    const signedInAt = Number(session.created_at);
 
+    // Half an hour after the sign-in the agent asks: an hour after the
+    // allowance would be half an hour later than an hour after the sign-in,
+    // so the two readings of the line part.
+    vi.setSystemTime(signedInAt + 30 * MINUTE);
     const limited = await consentScreen(app, cookie, AGENT_ID);
     expect(limited.body).toContain(
       '<p>It may keep working until you revoke it, or until 1 hour after you signed in, ' +
@@ -272,9 +282,9 @@ describe('the consent screen for an AI agent client (#845, real containers)', ()
     const refreshToken = (exchange.json() as { refresh_token?: string }).refresh_token;
     if (refreshToken === undefined) throw new Error('the exchange issued no refresh token');
 
-    // The family ends an hour after the sign-in, as the page said: the
-    // earlier of its start plus the limit and its session's end, which is the
-    // sign-in plus the limit.
+    // The family ends an hour after the sign-in, as the page said, not an hour
+    // after its own start: the earlier of its start plus the limit and its
+    // session's end, which is the sign-in plus the limit.
     const {
       rows: [family],
     } = await app.dbPool.query<{
@@ -295,12 +305,13 @@ describe('the consent screen for an AI agent client (#845, real containers)', ()
       familyCreatedAt + 60 * MINUTE,
       Number(family.family_session_expires_at)
     );
-    expect(Number(family.family_session_expires_at)).toBe(
-      Number(family.signed_in_at) + 60 * MINUTE
-    );
-    expect(familyEnd).toBe(Number(family.signed_in_at) + 60 * MINUTE);
+    expect(Number(family.signed_in_at)).toBe(signedInAt);
+    expect(familyCreatedAt).toBeGreaterThanOrEqual(signedInAt + 30 * MINUTE);
+    expect(Number(family.family_session_expires_at)).toBe(signedInAt + 60 * MINUTE);
+    expect(familyEnd).toBe(signedInAt + 60 * MINUTE);
 
-    // Before the end the agent refreshes; past it, invalid_grant.
+    // Before the end the agent refreshes; past it, invalid_grant, although
+    // the family is not an hour old yet.
     vi.setSystemTime(familyEnd - MINUTE);
     const before = await tokenRequest(app, {
       grant_type: 'refresh_token',
@@ -311,6 +322,7 @@ describe('the consent screen for an AI agent client (#845, real containers)', ()
     const current = (before.json() as { refresh_token: string }).refresh_token;
 
     vi.setSystemTime(familyEnd + MINUTE);
+    expect(familyEnd + MINUTE).toBeLessThan(familyCreatedAt + 60 * MINUTE);
     const after = await tokenRequest(app, {
       grant_type: 'refresh_token',
       refresh_token: current,
