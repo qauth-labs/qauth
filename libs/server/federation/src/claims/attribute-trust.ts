@@ -11,7 +11,10 @@ import { SELF_REPORTED_SOURCE } from '../providers/password.provider';
  * Design decisions (adjudicated, #229):
  *
  * - **Unknown sources rank 0 but stay ELIGIBLE** — `verified=true` is the real
- *   trust gate (set only by first-party code paths), so a verified attribute
+ *   trust gate (set by QAuth's own code paths, and by an AuthMethod (#599):
+ *   operator-installed code that runs in-process and that ADR-019 Decision 12
+ *   trusts, which may write attributes only under its own `type` as their
+ *   source, never `wallet` or `self_reported`), so a verified attribute
  *   from a source this ranking does not yet know loses every tie but is still
  *   emitted when it is the only verified value. Silent claim loss when a
  *   future provider (#231) forgets to extend the ranking would be the worse
