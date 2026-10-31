@@ -90,9 +90,13 @@ KEK=...
 ```
 
 > **Set a KEK.** At its first boot the server imports the JWT keys and
-> `SESSION_COOKIE_SECRET` into the realm's encrypted key store, wrapped with
-> `KEK`, and refuses to start without one. See
+> `SESSION_COOKIE_SECRET`, when set, into the realm's encrypted key store,
+> wrapped with `KEK`, and refuses to start without one. See
 > [the key store](/operate/keys/#the-key-store).
+>
+> **`SESSION_COOKIE_SECRET` is optional.** The session cookie is signed with
+> the realm's cookie key in the key store, which the first boot generates. Set
+> it only to keep the secret a deployment already signs with.
 
 > **The JWT keys are optional.** Tokens are signed with the realm's keys in
 > the key store. Set `JWT_PRIVATE_KEY` to keep the key a deployment already

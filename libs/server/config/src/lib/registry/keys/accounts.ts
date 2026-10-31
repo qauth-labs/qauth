@@ -118,13 +118,10 @@ export const ACCOUNT_KEYS = defineKeys([
     tier: 'advanced',
     role: 'deployment',
     owner: 'key-custody',
-    default: {
-      computed:
-        'a development-only value, refused when `NODE_ENV=production` on a process holding `web` or `api`',
-    },
+    default: { computed: "none; the key store holds the realm's cookie key" },
     since: '0.1.0',
     secret: true,
-    docs: 'The HMAC secret, at least 32 characters, that signs the `__Host-qauth_session` cookie.',
+    docs: "A session cookie secret of at least 32 characters, imported into the default realm's key store when it differs from the stored cookie key, which it then replaces; the cookies are signed with the stored key, and `NODE_ENV=production` refuses the development value `.env.example` ships.",
   },
   {
     name: 'SESSION_COOKIE_TTL',

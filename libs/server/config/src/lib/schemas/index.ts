@@ -65,7 +65,6 @@ export {
   isServiceRole,
   keyMaterialProblems,
   parseServiceRoles,
-  readsSessionCookie,
   SERVICE_ROLE_NAMES,
   type ServiceRole,
   ServiceRoleBootError,

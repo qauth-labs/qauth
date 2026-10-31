@@ -123,6 +123,14 @@ untouched, so an application that already holds tokens keeps working without
 the user. The old Redis session keys (`session:<id>`) are no longer read and
 expire on their own within `SESSION_COOKIE_TTL`; there is nothing to delete.
 
+The session cookie changes too: v0.2 signs it with the realm's cookie key from
+the key store, and the cookie names that key
+([#493](https://github.com/qauth-labs/qauth/issues/493)). A cookie an earlier
+version signed with `SESSION_COOKIE_SECRET` does not verify, and the new version
+clears it. `SESSION_COOKIE_SECRET` becomes optional: at the first boot the key
+store imports it as the realm's cookie key, and later a different value in it
+replaces that key. See [the key store](/operate/keys/#the-key-store).
+
 During a rolling upgrade, a sign-in served by a node of the old version is not
 seen by a node of the new version, so a user can be asked to sign in twice
 until the last old node is gone.

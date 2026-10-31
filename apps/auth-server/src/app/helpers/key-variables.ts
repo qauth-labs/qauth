@@ -28,7 +28,7 @@ export interface KeyVariableConfig {
   readonly JWT_MLDSA_PRIVATE_KEY?: string;
   readonly JWT_MLDSA_KID?: string;
   readonly HYBRID_SIGNING_ENABLED: boolean;
-  readonly SESSION_COOKIE_SECRET: string;
+  readonly SESSION_COOKIE_SECRET?: string;
 }
 
 /**
@@ -37,8 +37,9 @@ export interface KeyVariableConfig {
  * - The ML-DSA-65 seed only with hybrid signing on: the store keeps it only as
  *   the second key of a hybrid pair.
  * - `SESSION_COOKIE_SECRET` only when the operator set it, and never the
- *   development default the configuration falls back to: a fresh deployment
- *   generates its cookie key instead.
+ *   published development value `.env.example` ships: a development stack
+ *   generates its cookie key instead. A set value the store lacks replaces
+ *   the stored cookie key (#493).
  *
  * @param config - the parsed configuration (`env`)
  * @param raw - the environment it was parsed from (`process.env`)
@@ -98,8 +99,7 @@ export function keyVariableSettings(
     ...(mlDsa === undefined
       ? {}
       : { mlDsa: { seed: mlDsa, ...(mlDsaKid === undefined ? {} : { kid: mlDsaKid }) } }),
-    // Only a secret the operator set in the environment: the configuration
-    // fills an unset one with the development default.
+    // Only a secret the operator set in the environment, as for every key.
     ...(cookieSecret === undefined || cookieSecret.variables.length === 0 ? {} : { cookieSecret }),
   };
 }

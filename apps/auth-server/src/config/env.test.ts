@@ -7,6 +7,7 @@ import {
 } from '@qauth-labs/fastify-plugin-federation';
 import {
   assuranceEnvSchema,
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
   federationEnvSchema,
   keyAttestationEnvSchema,
 } from '@qauth-labs/server-config';
@@ -247,50 +248,67 @@ describe('service roles and key material (#495)', () => {
 });
 
 describe('SESSION_COOKIE_SECRET production guard (F-12)', () => {
-  it('rejects the dev default when NODE_ENV=production', async () => {
-    setEnv({ NODE_ENV: 'production', SESSION_COOKIE_SECRET: undefined });
-    await expect(import('./env')).rejects.toThrow(/SESSION_COOKIE_SECRET/);
-  });
-
-  it('accepts the dev default when NODE_ENV=development', async () => {
-    setEnv({ NODE_ENV: 'development', SESSION_COOKIE_SECRET: undefined });
-    const mod = await import('./env');
-    expect(mod.env.SESSION_COOKIE_SECRET.length).toBeGreaterThanOrEqual(32);
-  });
-
-  it('does not ask for it on a process whose roles never read the cookie (#495)', async () => {
-    setEnv({
-      NODE_ENV: 'production',
-      SESSION_COOKIE_SECRET: undefined,
-      SERVICE_ROLES: 'signer,delivery',
-    });
+  it('refuses the published development value when NODE_ENV=production, on every role', async () => {
     try {
-      const mod = await import('./env');
-      expect(mod.env.SERVICE_ROLES).toEqual(['signer', 'delivery']);
-    } catch (error) {
-      // Production asks other things of a bare test environment; the session
-      // secret must not be among them.
-      expect(String(error)).not.toMatch(/SESSION_COOKIE_SECRET/);
-    } finally {
-      setEnv({ SERVICE_ROLES: undefined });
-    }
-  });
-
-  it('still asks for it on a process holding web or api', async () => {
-    try {
-      for (const roles of ['web', 'api', 'delivery,api']) {
+      for (const roles of ['all', 'web', 'api', 'signer', 'signer,delivery']) {
         setEnv({
           NODE_ENV: 'production',
-          SESSION_COOKIE_SECRET: undefined,
+          SESSION_COOKIE_SECRET: DEV_SESSION_COOKIE_SECRET_DEFAULT,
           SERVICE_ROLES: roles,
-          // No signer here: its key would be refused first.
-          JWT_PRIVATE_KEY: undefined,
+          // A process without the signer refuses a key variable first.
+          JWT_PRIVATE_KEY:
+            roles.includes('signer') || roles === 'all' ? JWT_PRIVATE_KEY : undefined,
         });
         await expect(import('./env'), roles).rejects.toThrow(/SESSION_COOKIE_SECRET/);
       }
     } finally {
       setEnv({ SERVICE_ROLES: undefined });
     }
+  });
+
+  it('accepts the published development value outside production, where it is never imported', async () => {
+    setEnv({ NODE_ENV: 'development', SESSION_COOKIE_SECRET: DEV_SESSION_COOKIE_SECRET_DEFAULT });
+    const mod = await import('./env');
+    expect(mod.env.SESSION_COOKIE_SECRET).toBe(DEV_SESSION_COOKIE_SECRET_DEFAULT);
+  });
+
+  it('leaves it unset when unset or blank: the realm key store holds the cookie key (#493)', async () => {
+    for (const value of [undefined, '', '   ']) {
+      setEnv({ NODE_ENV: 'development', SESSION_COOKIE_SECRET: value });
+      const mod = await import('./env');
+      expect(mod.env.SESSION_COOKIE_SECRET, JSON.stringify(value)).toBeUndefined();
+    }
+  });
+
+  it('does not ask for it in production, on any role: the signer supplies the cookie key (#493)', async () => {
+    try {
+      for (const roles of ['all', 'web', 'api', 'web,signer', 'signer,delivery']) {
+        setEnv({
+          NODE_ENV: 'production',
+          SESSION_COOKIE_SECRET: undefined,
+          SERVICE_ROLES: roles,
+          // A process without the signer refuses a key variable first.
+          JWT_PRIVATE_KEY:
+            roles.includes('signer') || roles === 'all' ? JWT_PRIVATE_KEY : undefined,
+        });
+        try {
+          const mod = await import('./env');
+          expect(mod.env.SESSION_COOKIE_SECRET).toBeUndefined();
+        } catch (error) {
+          // Production asks other things of a bare test environment (a
+          // process without the signer needs SIGNER_URL); the session secret
+          // must not be among them.
+          expect(String(error), roles).not.toMatch(/SESSION_COOKIE_SECRET/);
+        }
+      }
+    } finally {
+      setEnv({ SERVICE_ROLES: undefined });
+    }
+  });
+
+  it('still refuses a secret shorter than 32 characters', async () => {
+    setEnv({ NODE_ENV: 'development', SESSION_COOKIE_SECRET: 'too-short' });
+    await expect(import('./env')).rejects.toThrow(/at least 32 characters/);
   });
 
   it('accepts a strong secret when NODE_ENV=production', async () => {
