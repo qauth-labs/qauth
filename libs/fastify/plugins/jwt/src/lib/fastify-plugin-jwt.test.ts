@@ -559,19 +559,43 @@ describe('verifying with the realm keys (#491)', () => {
     }
   });
 
-  it('refuses a token whose key the realm no longer lists for verification', async () => {
-    // The signer reads the store on every call, so the status change shows at once.
-    const realms = await createRealms({ refreshIntervalMs: 0 });
-    const app = await buildTestApp(realms);
-    try {
-      const token = await app.jwtUtils.signAccessToken(realms.a, {
-        sub: 'user-1',
-        clientId: 'client-1',
-      });
-      await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toBeDefined();
+  it.each(['compromised', 'next'] as const)(
+    'refuses a token whose kid names a %s key, which the realm does not list for verification',
+    async (status) => {
+      // The signer reads the store on every call, so the status change shows at once.
+      const realms = await createRealms({ refreshIntervalMs: 0 });
+      const app = await buildTestApp(realms);
+      try {
+        const token = await app.jwtUtils.signAccessToken(realms.a, {
+          sub: 'user-1',
+          clientId: 'client-1',
+        });
+        await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).resolves.toBeDefined();
 
-      const kid = await activeKid(realms, realms.a, 'EdDSA');
-      realms.signer.setKeyStatus(realms.a.id, kid, 'compromised');
+        // The key that made the signature, so only its status can refuse it.
+        const kid = await activeKid(realms, realms.a, 'EdDSA');
+        expect(header(token)['kid']).toBe(kid);
+        realms.signer.setKeyStatus(realms.a.id, kid, status);
+        await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).rejects.toThrow(
+          'no key of this realm verifies it'
+        );
+      } finally {
+        await app.close();
+      }
+    }
+  );
+
+  it("refuses a kid naming the realm's ML-DSA-65 key on an EdDSA token: (kid, alg) finds no key", async () => {
+    const realms = await createRealms({ hybridSigning: true });
+    const app = await buildTestApp(realms, {
+      hybridSigningEnabled: true,
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      const mlDsaKid = await activeKid(realms, realms.a, 'ML-DSA-65');
+      const token = await signWithPem(ed25519Pem(), { iss: ISSUER_A, kid: mlDsaKid });
+      expect(header(token)).toMatchObject({ alg: 'EdDSA', kid: mlDsaKid });
+      // Refused at key selection, before any signature is checked.
       await expect(app.jwtUtils.verifyAccessToken(realms.a, token)).rejects.toThrow(
         'no key of this realm verifies it'
       );
@@ -636,6 +660,141 @@ describe('verifying with the realm keys (#491)', () => {
       await expect(
         app.jwtUtils.verifyAccessToken(realms.a, token, { audience: 'client-2' })
       ).rejects.toThrow(JWTInvalidError);
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('verifying across a rotation (#492)', () => {
+  /** The `kid`s of the realm's JWKS. */
+  async function jwksKids(app: FastifyInstance, realm: TokenRealm): Promise<unknown[]> {
+    return (await app.jwtUtils.getJwks(realm)).keys.map((key) => key['kid']);
+  }
+
+  it('verifies a token the retired key signed at requireJwt, and signs new tokens with the new kid', async () => {
+    // The signer reads the store on every call, so the rotation shows at once.
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const before = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      const oldKid = header(before)['kid'];
+
+      const rotation = await realms.signer.rotateTokenKeys(realms.a.id);
+      expect(rotation.retired.map((key) => key.kid)).toEqual([oldKid]);
+      const [{ kid: newKid }] = rotation.activated;
+
+      const response = await app.inject({
+        method: 'GET',
+        url: '/protected',
+        headers: { authorization: `Bearer ${before}` },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({ sub: 'user-1', iss: ISSUER_A });
+
+      const after = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      expect(header(after)['kid']).toBe(newKid);
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, after)).resolves.toBeDefined();
+      expect(await jwksKids(app, realms.a)).toEqual(expect.arrayContaining([oldKid, newKid]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a token the retired key signed once its retention has ended', async () => {
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const before = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await realms.signer.rotateTokenKeys(realms.a.id, { retiredRetentionMs: 0 });
+
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, before)).rejects.toThrow(
+        'no key of this realm verifies it'
+      );
+      expect(await jwksKids(app, realms.a)).not.toContain(header(before)['kid']);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('verifies a token with no kid against the imported key after that key retired', async () => {
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A, aud: 'client-1' });
+      expect(header(legacy)).not.toHaveProperty('kid');
+      await realms.signer.rotateTokenKeys(realms.a.id);
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, legacy)).resolves.toMatchObject({
+        sub: 'user-1',
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses a token with no kid once the imported key's retention has ended", async () => {
+    const realms = await createRealms({ refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms);
+    try {
+      const legacy = await signWithPem(realms.realmAKey, { iss: ISSUER_A, aud: 'client-1' });
+      await realms.signer.rotateTokenKeys(realms.a.id, { retiredRetentionMs: 0 });
+      await expect(app.jwtUtils.verifyAccessToken(realms.a, legacy)).rejects.toThrow(
+        'no key of this realm verifies it'
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('verifies both halves of a hybrid token signed before a rotation of the pair', async () => {
+    const realms = await createRealms({ hybridSigning: true, refreshIntervalMs: 0 });
+    const app = await buildTestApp(realms, {
+      hybridSigningEnabled: true,
+      enabledSignatureAlgorithms: PQC_ENABLED,
+    });
+    try {
+      const before = await app.jwtUtils.signHybridAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      const rotation = await realms.signer.rotateTokenKeys(realms.a.id);
+      // Both keys of the pair rotate together (ADR-005).
+      expect(rotation.retired.map((key) => key.kid).sort()).toEqual(
+        [header(before.token)['kid'], header(before.token)['pqc_kid']].sort()
+      );
+      expect(rotation.activated.map((key) => key.algorithm)).toEqual(['EdDSA', 'ML-DSA-65']);
+
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken(realms.a, before, { requirePqc: true })
+      ).resolves.toMatchObject({ sub: 'user-1' });
+
+      const after = await app.jwtUtils.signHybridAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      expect(header(after.token)).toMatchObject({
+        kid: rotation.activated[0].kid,
+        pqc_kid: rotation.activated[1].kid,
+      });
+
+      // The ML-DSA half is checked with the key its signed pqc_kid names: the
+      // new pair's signature does not pass for the old token.
+      await expect(
+        app.jwtUtils.verifyHybridAccessToken(
+          realms.a,
+          { ...before, pqcSignature: after.pqcSignature },
+          { requirePqc: true }
+        )
+      ).rejects.toThrow();
     } finally {
       await app.close();
     }

@@ -17,6 +17,8 @@ import {
   generateRefreshToken,
   hashRefreshToken,
   ID_TOKEN_TYP,
+  type PublishedJwk,
+  selectJwksKey,
   verifyAccessToken,
   verifyHybridAccessToken,
 } from '@qauth-labs/server-jwt';
@@ -95,6 +97,34 @@ interface VerifyingKey {
 
 /** The algorithm every access token is signed with. */
 const ACCESS_TOKEN_ALGORITHM = 'EdDSA';
+
+/**
+ * The key of a realm's verification set that `(kid, alg)` names, or
+ * `undefined` (#492, #248 F9).
+ *
+ * The set is what the signer lists for verification: the realm's `active`
+ * keys, and its `retired` keys still inside their publication window, which
+ * is their retention. `next` and `compromised` keys are never in it. The key
+ * is resolved with `selectJwksKey` over the keys' public JWKs, so both the
+ * `kid` and the algorithm must match, and the JWK's key type must be the
+ * algorithm's; the stored algorithm must agree as well. A `kid` that names a
+ * key of another algorithm, such as the realm's ML-DSA-65 or RS256 key asked
+ * for as EdDSA, resolves to nothing, and the token fails.
+ */
+function verificationKeyFor(
+  keys: readonly VerificationKey[],
+  selector: { readonly kid: string; readonly alg: string }
+): VerificationKey | undefined {
+  // A published JWK always carries `kty`, `alg` and `kid` (`publicJwkOf`), the
+  // members `selectJwksKey` reads.
+  const jwk = selectJwksKey(
+    keys.map((key) => key.publicJwk as PublishedJwk),
+    selector
+  );
+  if (jwk === undefined) return undefined;
+  const key = keys.find((candidate) => candidate.publicJwk === jwk);
+  return key?.algorithm === selector.alg ? key : undefined;
+}
 
 /** The registered claims the plugin adds to a token's claims: `aud`, `iat` and `exp`. */
 function withLifetime(
@@ -186,15 +216,18 @@ export const jwtPlugin = fp<JwtPluginOptions>(
     }
 
     /**
-     * The realm's EdDSA keys that may have signed `token`: the one its `kid`
-     * names or, for a token issued before tokens named their key (#491), the
-     * realm's EdDSA verification keys that {@link JwtPluginOptions.kidlessKeyIds}
-     * names, the key imported from the key variable. The header is read
-     * unverified, only to pick the key; the signature check with that key
+     * The realm's EdDSA keys that may have signed `token`, from its
+     * verification set ({@link verificationKeyFor}), so a token a retired key
+     * signed still verifies until that key's retention ends (#492): the one
+     * key its `(kid, alg)` names or, for a token issued before tokens named
+     * their key (#491), the keys of the set that
+     * {@link JwtPluginOptions.kidlessKeyIds} names, the key imported from the
+     * key variable, whether it is still active or retired since. The header is
+     * read unverified, only to pick the key; the signature check with that key
      * comes next.
      *
      * @throws JWTInvalidError when the token is malformed, is not EdDSA, or
-     *   names a key the realm does not publish for verification
+     *   names a key the realm does not list for verification
      */
     async function accessTokenKeys(
       realm: Pick<TokenRealm, 'id'>,
@@ -213,11 +246,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         realm.id,
         'token_signing'
       );
-      const candidates = verificationKeys.filter(
-        (key) =>
-          key.algorithm === ACCESS_TOKEN_ALGORITHM &&
-          key.publicJwk.kty === 'OKP' &&
-          (kid === undefined ? kidlessKeyIds.has(key.kid) : key.kid === kid)
+      const namedKids =
+        kid === undefined
+          ? verificationKeys.map((key) => key.kid).filter((keyId) => kidlessKeyIds.has(keyId))
+          : [kid];
+      const candidates = namedKids.flatMap(
+        (keyId) =>
+          verificationKeyFor(verificationKeys, { kid: keyId, alg: ACCESS_TOKEN_ALGORITHM }) ?? []
       );
       if (candidates.length === 0) {
         throw new JWTInvalidError('Invalid JWT token: no key of this realm verifies it');
@@ -316,18 +351,27 @@ export const jwtPlugin = fp<JwtPluginOptions>(
           throw new JWTInvalidError('PQC verification is not configured on this server');
         }
         const { keys, verificationKeys } = await accessTokenKeys(realm, hybrid.token);
-        const mlDsaKeys = verificationKeys.filter((key) => key.algorithm === PQC_ALG_ML_DSA_65);
+        const mlDsaKeys = verificationKeys.filter(
+          (key) => key.algorithm === PQC_ALG_ML_DSA_65 && key.publicJwk.kty === 'AKP'
+        );
         // The ML-DSA key is resolved from the Ed25519-SIGNED `pqc_kid` (#248
-        // F5): a kid this realm does not publish resolves to nothing and
-        // verification fails closed. A token without one, from before the
-        // ML-DSA key had a configured kid, takes the realm's only ML-DSA key.
+        // F5) by `(pqc_kid, ML-DSA-65)` among the realm's verification keys,
+        // active and retired (#492), so the ML-DSA half of a token signed
+        // before a rotation of the pair verifies too. A kid the set does not
+        // hold, or one naming a key of another algorithm, resolves to nothing
+        // and verification fails closed. A token without one, from before the
+        // ML-DSA key had a configured kid, takes the realm's only ML-DSA key,
+        // and nothing once a rotation leaves two.
         const mlDsa = (signedPqcKid: string | undefined): MlDsaKey | undefined => {
           const key =
             signedPqcKid === undefined
               ? mlDsaKeys.length === 1
                 ? mlDsaKeys[0]
                 : undefined
-              : mlDsaKeys.find((candidate) => candidate.kid === signedPqcKid);
+              : verificationKeyFor(verificationKeys, {
+                  kid: signedPqcKid,
+                  alg: PQC_ALG_ML_DSA_65,
+                });
           const pub = key?.publicJwk['pub'];
           if (typeof pub !== 'string') return undefined;
           return getSignatureBackend(
