@@ -1770,19 +1770,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where they are used, but a browser session or a refresh token nobody used
   while the account was disabled worked again once it was enabled, so whoever
   held it came back without signing in. Migration 0044 adds
-  `users.not_valid_before`, which a trigger sets from the database's clock
-  whenever `enabled` turns false, by any `UPDATE`, and which nothing can clear
-  or move back. Every browser session, refresh token, authorization code and
-  access token of the user issued before it is refused: the hosted pages send
-  the browser to sign-in, the token endpoint answers `invalid_grant`,
-  introspection reports the token inactive, and userinfo, token exchange, the
-  developer API, the API families, the admin API and the `/oauth/authorize`
-  Bearer path refuse it as they refuse a disabled account's. The refusal
-  `reason` in events is `issued_before_disablement`. The new operator tool
-  `db:disable-user` disables an account or, with `--enable`, enables it again,
-  and writes the new admin events `user.disabled` and `user.enabled` in the
-  same transaction. The operator guide's new **Accounts** page
-  (`operate/accounts`) describes both.
+  `users.not_valid_before`: triggers set it from the database's clock whenever
+  `enabled` turns false, by any `UPDATE`, to the commit of that transaction,
+  and nothing can clear it or move it back. An account already disabled when
+  the migration runs gets the time of the migration. Every browser session,
+  refresh token, authorization code, access token and ID-JAG assertion of the
+  user issued before it is refused, a refresh token by the start of its family
+  and a code by the sign-in behind it: the hosted pages send the browser to
+  sign-in, the token endpoint answers `invalid_grant`, introspection reports
+  the token inactive, and userinfo, token exchange, the developer API, the API
+  families, the admin API and the `/oauth/authorize` Bearer path refuse it as
+  they refuse a disabled account's. Such a token cannot sign the owner out
+  either. The refusal `reason` in events is `issued_before_disablement`. The
+  new operator tool `db:disable-user` disables an account or, with `--enable`,
+  enables it again, and writes the new admin events `user.disabled` and
+  `user.enabled` in the same transaction. The operator guide's new
+  **Accounts** page (`operate/accounts`) describes both, and the upgrade guide
+  says why to enable an account disabled for a takeover only once every node
+  runs this release.
 - **The OpenAPI document no longer claims version 1.0.0.** `info.version` was
   a fixed `1.0.0` from the first Swagger UI (2026-02-28), which read as the 1.0
   stability promise QAuth has not made. A release image now carries its own

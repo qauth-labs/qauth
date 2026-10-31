@@ -240,6 +240,18 @@ each account that will use it a grant. During a rolling upgrade a node of the
 previous release still issues those scopes without the check, which reaches no
 route either.
 
+### Disabled accounts get the time of migration 0044
+
+Migration 0044 ([#748](https://github.com/qauth-labs/qauth/issues/748)) records
+when each account was last disabled, so that enabling it again brings back none
+of the sessions and tokens it held. An account that is disabled when the
+migration runs gets the time of the migration; every other account starts with
+none. The column starts empty and only disabled rows are written, so the
+migration is quick. During a rolling upgrade a node of the previous release
+still accepts the old sessions and access tokens of an account enabled again:
+enable an account that was disabled for a takeover only after every node runs
+this release ([Accounts](/operate/accounts/)).
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

@@ -30,16 +30,39 @@ Enabling an account lets its holder sign in again. It does not bring back what
 was issued before the account was disabled: every browser session, refresh
 token, authorization code and access token from before stays refused, whether
 or not anyone used it while the account was disabled. Whoever held one,
-the account's owner or someone who took it, must sign in.
+the account's owner or someone who took it, must sign in. A refresh token
+counts from the sign-in that started its family, so a rotation does not make
+it newer, and an authorization code from the sign-in behind it. An access
+token from before cannot sign the owner out of the sessions started since.
 
 The account records the time it was last disabled, `users.not_valid_before`
-(epoch milliseconds, from the database's clock). Disabling sets it; enabling
+(epoch milliseconds, from the database's clock). Disabling sets it to the
+time the disabling transaction commits: until then the account still reads as
+enabled, and what it is issued meanwhile counts as issued before. Enabling
 never clears it, and the database refuses an update that clears it or moves
 it back. A session or token issued up to one second after that time counts
-as issued before it, to allow for times kept to the second and for a small
-skew between the auth server's clock and the database's. Nothing is issued
-to a disabled account, so this only matters for an account enabled again
-within a second.
+as issued before it, and an access token, whose issue time is kept to the
+whole second, up to two seconds after. The margin allows for times kept to
+the second and for a skew between the auth server's clock and the database's
+of less than a second: keep both synchronised, for example with NTP. Nothing
+is issued to a disabled account, so the margin only matters for an account
+enabled again within those seconds.
+
+### Accounts disabled before the upgrade
+
+Migration 0044 adds the column. An account that is disabled when it runs was
+disabled at a time nothing recorded, so it gets the time of the migration:
+nothing is issued to a disabled account, so everything it holds is older, and
+stays refused once the account is enabled.
+
+During a rolling upgrade, a node of the previous release still checks only
+whether the account is enabled. Once the account is enabled again, such a node
+accepts its old browser sessions and access tokens, and may rotate its old
+refresh tokens and mint codes from its old sessions. Nodes of this release
+refuse those rotated tokens and codes, because they count from the sign-in
+behind them, but an access token such a node mints works at them until it
+expires. Enable an account that was disabled for a takeover only after every
+node runs this release.
 
 ## Disable or enable an account
 
