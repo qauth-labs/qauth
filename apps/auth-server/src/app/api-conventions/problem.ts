@@ -28,10 +28,20 @@ export const PROBLEM_MEDIA_TYPE = 'application/problem+json';
 export const PROBLEM_TYPE_BASE = 'https://docs.qauth.dev/reference/problem-types/#';
 
 /**
- * The Interaction API's paths (ADR-019 Decision 6, #592): `/interaction/v<N>`
- * or a release candidate of it, and everything under it.
+ * A path of the Interaction API (ADR-019 Decision 6, #592): a
+ * `/interaction/v<N>` segment pair, or a release candidate of it, anywhere in
+ * the path, so a path the router decodes or resolves to one counts too.
  */
-const INTERACTION_API_PATH = /^\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?(?:\/|$)/;
+const INTERACTION_API_PATH = /\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?(?:\/|$)/;
+
+/** `path` percent-decoded, or as it is when it is not valid percent-encoding. */
+function decodedPath(path: string): string {
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
 
 /**
  * Whether a problem document says nothing about the request beyond its code:
@@ -40,16 +50,22 @@ const INTERACTION_API_PATH = /^\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9
  * - Every document on the Interaction API's paths. Its contract allows no
  *   prose in an error (`libs/shared/interaction-contract`, `problems.ts`), and
  *   its paths hold the interaction id, a secret an `instance` or a "no route
- *   serves" `detail` would echo.
+ *   serves" `detail` would echo. A path counts as the client sent it and
+ *   percent-decoded, as the router reads it (`/%69nteraction/v1-rc%2E0/…`).
  * - `interaction_expired` wherever it is sent: an unknown, expired or finished
  *   interaction and a flow cookie that does not bind it get the same bytes.
  *
- * @param url - the raw request-target; its query is ignored
+ * @param urls - the raw request-target and, for a routed request, the route's
+ *   own path; a query is ignored
  */
-export function isBareProblem(code: string, url: string): boolean {
+export function isBareProblem(code: string, ...urls: readonly (string | undefined)[]): boolean {
   if (code === 'interaction_expired') return true;
-  const queryAt = url.indexOf('?');
-  return INTERACTION_API_PATH.test(queryAt === -1 ? url : url.slice(0, queryAt));
+  return urls.some((url) => {
+    if (url === undefined) return false;
+    const queryAt = url.indexOf('?');
+    const path = queryAt === -1 ? url : url.slice(0, queryAt);
+    return INTERACTION_API_PATH.test(path) || INTERACTION_API_PATH.test(decodedPath(path));
+  });
 }
 
 /**

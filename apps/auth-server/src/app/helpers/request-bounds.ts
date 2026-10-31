@@ -170,7 +170,11 @@ export function answerFrameworkError(
   request.log.info({ code: error.code, statusCode: status }, 'Request refused by the router');
   echoRequestId(request, reply);
   const { code, type, title } = describeProblem(codeForStatus(status));
-  const detail = status < 500 ? FRAMEWORK_ERROR_DETAILS[error.code] : undefined;
+  // On the Interaction API's paths the document carries no prose (`isBareProblem`).
+  const detail =
+    status < 500 && !isBareProblem(code, request.raw.url)
+      ? FRAMEWORK_ERROR_DETAILS[error.code]
+      : undefined;
   const document: ProblemDocument = {
     type,
     title,

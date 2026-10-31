@@ -1,7 +1,7 @@
 import { Writable } from 'node:stream';
 
-import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import { InvalidRequestError } from '@qauth-labs/shared-errors';
+import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -46,6 +46,7 @@ import {
   takeInteractionTurn,
   writeInteractionState,
 } from './interaction-record';
+import { answerRouteNotFound } from './request-bounds';
 import { SESSION_COOKIE_NAME, verifySignedSessionId } from './session-cookie';
 import { emitUserEvent } from './user-events';
 
@@ -92,7 +93,13 @@ const CONSENT_STEP: InteractionStep = { name: stepUrn('consent'), params: {}, al
 /** A decision as a test sends it in a request body. */
 type DecisionSpec =
   | { kind: 'step'; step: InteractionStep; amr?: string[] }
-  | { kind: 'authenticated'; userId: string; amr: string[]; step: InteractionStep }
+  | {
+      kind: 'authenticated';
+      userId: string;
+      amr: string[];
+      step: InteractionStep;
+      personal?: Record<string, unknown>;
+    }
   | { kind: 'finished' };
 
 interface Harness {
@@ -125,6 +132,7 @@ async function buildHarness(): Promise<Harness> {
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   await app.register(errorHandler);
+  app.setNotFoundHandler(answerRouteNotFound);
   supplyRequestRealm(app, REALM);
   const sessions = createBrowserSessionFixture();
   const redis = createMemoryInteractionRedis(sessions.redis);
@@ -176,6 +184,7 @@ async function buildHarness(): Promise<Harness> {
             kind: 'authenticated',
             signIn: { userId: decision.userId, amr: decision.amr, identifier: 'alice@example.com' },
             step: decision.step,
+            ...(decision.personal === undefined ? {} : { personal: decision.personal }),
           };
         }
         return decision;
@@ -541,11 +550,96 @@ describe('answers (#592)', () => {
     expect(harness.sessions.service.sessions.size).toBe(0);
   });
 
+  it('gives the turn back and ends the new session when the authenticated state cannot be written, even if the revoke fails', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    harness.app.log.level = 'fatal';
+    // The first revoke fails: the turn must come back all the same.
+    harness.sessions.service.revoke.mockRejectedValueOnce(new Error('session store down'));
+
+    const tooLarge = await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: SELECT_ACCOUNT_STEP,
+      personal: { accounts: ['a'.repeat(70 * 1024)] },
+    });
+
+    expect(tooLarge.statusCode).toBe(500);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    // Nothing was written, and the turn is back: the retry is processed.
+    const retry = await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+    expect(retry.statusCode).toBe(200);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the browser able to go on when ending a replaced session fails', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: PASSWORD_STEP,
+    });
+    harness.app.log.level = 'fatal';
+    harness.sessions.service.revoke.mockRejectedValueOnce(new Error('session store down'));
+
+    const stepUp = await owner.answer(id, 1, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['otp'],
+      step: CONSENT_STEP,
+    });
+
+    expect(stepUp.statusCode).toBe(200);
+    // The new flow secret reached the browser: it reads and answers on.
+    expect(
+      (await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`)).statusCode
+    ).toBe(200);
+    expect((await owner.answer(id, 2, { kind: 'finished' })).json()).toMatchObject({
+      kind: 'finished',
+    });
+  });
+
+  it('gives the turn back when a cancel cannot delete the interaction', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    harness.app.log.level = 'fatal';
+    // The connection drops on the delete's MULTI: Redis ran none of it.
+    const multi = harness.redis.multi;
+    harness.redis.multi = () => {
+      harness.redis.multi = multi;
+      const failing = {
+        del: () => failing,
+        zrem: () => failing,
+        exec: async () => {
+          throw new Error('redis down');
+        },
+      };
+      return failing as unknown as ReturnType<typeof multi>;
+    };
+
+    const failed = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`);
+    expect(failed.statusCode).toBe(500);
+
+    const again = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`);
+    expect(again.json()).toMatchObject({ kind: 'cancelled' });
+  });
+
   it('does not finish or cancel an interaction the expiry sweep claimed first', async () => {
     for (const finish of [
       (owner: Browser, id: string) => owner.answer(id, 0, { kind: 'finished' }),
       (owner: Browser, id: string) =>
         owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`),
+      (owner: Browser, id: string) =>
+        owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`),
     ]) {
       vi.mocked(emitUserEvent).mockClear();
       const owner = new Browser();
@@ -869,6 +963,30 @@ describe('bounds (#592)', () => {
       ['code', 'status', 'title', 'trace_id', 'type'].sort()
     );
     expect(response.body).not.toContain('D'.repeat(43));
+  });
+
+  it('answers a 404 on an Interaction API path, and a routed decoded spelling of one, without echoing the path', async () => {
+    const id = 'E'.repeat(43);
+    const missing = await harness.app.inject({
+      method: 'GET',
+      url: `${INTERACTION_API_PREFIX}/${id}/nowhere`,
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(Object.keys(missing.json() as object).sort()).toEqual(
+      ['code', 'status', 'title', 'trace_id', 'type'].sort()
+    );
+    expect(missing.body).not.toContain(id);
+
+    harness.app.log.level = 'fatal';
+    const decoded = await harness.app.inject({
+      method: 'POST',
+      url: `/%69nteraction/v1-rc%2E0/${id}/fail`,
+    });
+    expect([400, 404]).toContain(decoded.statusCode);
+    expect(Object.keys(decoded.json() as object).sort()).toEqual(
+      ['code', 'status', 'title', 'trace_id', 'type'].sort()
+    );
+    expect(decoded.body).not.toContain(id);
   });
 
   it('names no client in an event when the client_id is longer than an event holds', async () => {

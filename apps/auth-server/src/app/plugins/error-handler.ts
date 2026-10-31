@@ -328,7 +328,9 @@ export function problemDocument(
   const { code, type, title } = describeProblem(problemCodeOf(error, status));
   // The Interaction API's documents, and `interaction_expired` anywhere, name
   // nothing about the request: see `isBareProblem`.
-  if (isBareProblem(code, request.url)) return { type, title, status, code, trace_id: request.id };
+  if (isBareProblem(code, request.url, request.routeOptions?.url)) {
+    return { type, title, status, code, trace_id: request.id };
+  }
   const document: ProblemDocument = {
     type,
     title,

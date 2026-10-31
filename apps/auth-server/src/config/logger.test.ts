@@ -399,6 +399,16 @@ describe('redactLoggedUrl', () => {
     expect(redactLoggedUrl(`/x?r=%2finteraction%2fv1-rc.0%2f${id}`)).toBe(
       `/x?r=%2finteraction%2fv1-rc.0%2f${LOG_REDACT_CENSOR}`
     );
+    // Spellings the censor does not know: the whole URL is censored.
+    for (const url of [
+      `/%69nteraction/v1-rc.0/${id}/answer`,
+      `/interaction/v1-rc%2E0/${id}`,
+      `/interaction/v1-rc.0/%2E/${id}/personal`,
+      `/interaction/v1-rc.0/x/../${id}`,
+      `/interaction/v1-rc.0/${id}/nowhere`,
+    ]) {
+      expect(redactLoggedUrl(url), url).toBe(LOG_REDACT_CENSOR);
+    }
     // Empty and dot segments before the id.
     for (const spacer of ['/', './', '/./', '././/']) {
       const redacted = redactLoggedUrl(`/interaction/v1-rc.0/${spacer}${id}/personal`);

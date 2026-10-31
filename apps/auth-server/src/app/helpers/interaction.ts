@@ -446,14 +446,56 @@ export async function answerInteraction(
   try {
     return await settleAnswer(request, reply, bound, taken, decide, settled);
   } catch (error) {
+    // The turn first: it is what keeps the interaction answerable. Each step
+    // of the clean-up is on its own, so one that fails skips no other, and
+    // the answer fails with its own error.
+    if (!settled.done) await giveTurnBack(request, taken, bound.idHash);
     if (settled.session !== undefined) {
-      await endUnusedSession(request, settled.session);
-    }
-    if (!settled.done && taken.expiresAt > Date.now()) {
-      await returnInteractionTurn(request.server.redis, taken, bound.idHash, taken.revision);
+      await bestEffort(request, 'end the session of an answer that was not written', () =>
+        endUnusedSession(request, settled.session as { realmId: string; sid: string })
+      );
     }
     throw error;
   }
+}
+
+/**
+ * Run a clean-up step, and log rather than throw when it fails: the request
+ * is already failing, or has already done what it was for.
+ */
+async function bestEffort(
+  request: FastifyRequest,
+  what: string,
+  step: () => Promise<void>
+): Promise<void> {
+  try {
+    await step();
+  } catch (error) {
+    request.log.warn({ err: error }, `interaction clean-up failed: ${what}`);
+  }
+}
+
+/**
+ * Give the turn of `taken` back after a failure, so the interaction stays at
+ * its step and can be answered again. Only while the interaction is live and
+ * Redis still holds the state it was taken for: when a write whose reply was
+ * lost did land, the record has moved on and the turn of the new state is
+ * already there, so nothing is given back.
+ */
+async function giveTurnBack(
+  request: FastifyRequest,
+  taken: InteractionRecord,
+  idHash: string
+): Promise<void> {
+  if (taken.expiresAt <= Date.now()) return;
+  await bestEffort(request, 'give the turn back', async () => {
+    const { redis } = request.server;
+    const current = await readInteractionRecord(redis, request.log, taken.realmId, idHash);
+    if (current === null || current.ref !== taken.ref || current.revision !== taken.revision) {
+      return;
+    }
+    await returnInteractionTurn(redis, current, idHash, taken.revision);
+  });
 }
 
 /** How far {@link settleAnswer} got, for the clean-up of a failure. */
@@ -542,7 +584,8 @@ async function settleAnswer(
   const step = interactionStepSchema.parse(decision.step);
   if (taken.transaction.userId !== undefined && taken.transaction.userId !== signIn.userId) {
     // An engine bug, never a user's doing: the user switch starts a new
-    // interaction. Thrown before anything is written, so the interaction ends.
+    // interaction. Thrown before anything is written: the turn is given back
+    // and the interaction stays with the first user.
     throw new Error('an interaction has one subject; switch users with a new interaction');
   }
   const session = await createBrowserSession(request.server, request, {
@@ -571,19 +614,42 @@ async function settleAnswer(
   settled.done = true;
   if (!written) refuse(request, 'expired');
   settled.session = undefined;
+  // Both cookies together, before anything else can fail: the record is now
+  // bound to the new secret, and a browser without it could not go on.
   setSessionCookie(reply, session.sid);
-  // A second authentication in one interaction (step-up) replaces the session
-  // the first created: the browser's cookie no longer names it, so it ends.
-  if (taken.transaction.sid !== undefined && taken.transaction.sid !== session.sid) {
-    await endUnusedSession(request, { realmId: taken.realmId, sid: taken.transaction.sid });
-  }
   setFlowCookie(
     reply,
     nextFlowSecrets(bound.secrets, { remove: bound.secret, add: secret }),
     env.INTERACTION_TTL
   );
   await answered('authenticated', next);
+  // A second authentication in one interaction (step-up) replaces the session
+  // the first created: the browser's cookie no longer names it, so it ends.
+  const replaced = taken.transaction.sid;
+  if (replaced !== undefined && replaced !== session.sid) {
+    await bestEffort(request, 'end the session a later authentication replaced', () =>
+      endUnusedSession(request, { realmId: taken.realmId, sid: replaced })
+    );
+  }
   return { kind: 'step', view: viewOf(next) };
+}
+
+/**
+ * {@link deleteInteraction} for a cancel or a user switch that holds the
+ * turn. When the delete fails (Redis briefly down), the turn is given back,
+ * so the interaction is left as it was rather than live and unanswerable.
+ */
+async function deleteTaken(
+  request: FastifyRequest,
+  taken: InteractionRecord,
+  idHash: string
+): Promise<boolean> {
+  try {
+    return await deleteInteraction(request.server.redis, taken, idHash);
+  } catch (error) {
+    await giveTurnBack(request, taken, idHash);
+    throw error;
+  }
 }
 
 /**
@@ -602,9 +668,7 @@ export async function cancelInteraction(
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
   // The sweep claimed it first and reports it expired: it is not cancelled.
-  if (!(await deleteInteraction(request.server.redis, taken, bound.idHash))) {
-    refuse(request, 'expired');
-  }
+  if (!(await deleteTaken(request, taken, bound.idHash))) refuse(request, 'expired');
   setFlowCookie(
     reply,
     nextFlowSecrets(bound.secrets, { remove: bound.secret }),
@@ -643,9 +707,7 @@ export async function switchInteractionUser(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
-  if (!(await deleteInteraction(request.server.redis, taken, bound.idHash))) {
-    refuse(request, 'expired');
-  }
+  if (!(await deleteTaken(request, taken, bound.idHash))) refuse(request, 'expired');
   await emitInteractionEvent(request, taken, 'urn:qauth:event:interaction.cancelled:v1-rc.0', {
     interaction: taken.ref,
     step: taken.step.name,

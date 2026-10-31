@@ -198,9 +198,52 @@ const INTERACTION_ID_IN_PATH_PATTERN = new RegExp(
  * @param url - the raw request-target (`req.url`), path plus query string.
  */
 export function redactLoggedUrl(url: string): string {
-  return url
+  const redacted = url
     .replace(REDACTED_QUERY_VALUE_PATTERN, `$1${LOG_REDACT_CENSOR}`)
     .replace(INTERACTION_ID_IN_PATH_PATTERN, `$1${LOG_REDACT_CENSOR}`);
+  return keepsAnInteractionSegment(redacted) ? LOG_REDACT_CENSOR : redacted;
+}
+
+/** An Interaction API path prefix in a decoded URL, wherever it is. */
+const INTERACTION_PREFIX_ANYWHERE = /\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?\//g;
+
+/** The segments an Interaction API path may hold besides the censored id. */
+const NAMED_INTERACTION_SEGMENTS: ReadonlySet<string> = new Set([
+  '',
+  '.',
+  '..',
+  LOG_REDACT_CENSOR,
+  'personal',
+  'answer',
+  'cancel',
+]);
+
+/**
+ * Whether a URL the id censor has seen still names an Interaction API path
+ * with a segment it may not show: a spelling the censor does not know, such
+ * as a percent-encoded letter (`/%69nteraction/…`), an encoded dot segment
+ * (`/%2E/<id>`) or a `..` that leads to the id. The check reads the URL
+ * percent-decoded, as the router does. Such a URL is logged as
+ * `[Redacted]` whole: only a client that holds the id sends one, and the
+ * method and status still say what happened. The document path
+ * (`openapi.json`) and the reserved wallet prefix are not ids.
+ */
+function keepsAnInteractionSegment(url: string): boolean {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(url);
+  } catch {
+    decoded = url;
+  }
+  for (const match of decoded.matchAll(INTERACTION_PREFIX_ANYWHERE)) {
+    const rest = decoded.slice(match.index + match[0].length);
+    const end = rest.search(/[?#&\s]/);
+    const segments = (end === -1 ? rest : rest.slice(0, end)).split('/');
+    const first = segments.find((segment) => segment !== '' && segment !== '.');
+    if (first === 'openapi.json' || first === 'wallet') continue;
+    if (segments.some((segment) => !NAMED_INTERACTION_SEGMENTS.has(segment))) return true;
+  }
+  return false;
 }
 
 /**
