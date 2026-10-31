@@ -97,7 +97,7 @@ another. A token issued before the upgrade carries no `kid`; it still verifies,
 but only against the Ed25519 key that `JWT_PRIVATE_KEY` holds (or
 `JWT_PUBLIC_KEY`, on a process without the signer role), the key that signed it,
 never against a key the store generated. Keep that variable set until the
-tokens issued before the upgrade have expired (`ACCESS_TOKEN_LIFESPAN`): the
+tokens issued before the upgrade have expired (the access token lifetime): the
 next release removes this path, and refuses every token without a `kid`.
 
 The server verifies a token with the realm's verification set, picking the key

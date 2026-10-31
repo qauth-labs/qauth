@@ -60,7 +60,7 @@ scenarios:
           path: /auth/login
           json: { email: '{account.email}', password: '{account.password}' }
         save: { token: body.access_token }
-      - run: [sleep, '{accessTokenLifespan}'] # the shared binding: the server's ACCESS_TOKEN_LIFESPAN plus one second
+      - run: [sleep, '{accessTokenLifespan}'] # the shared binding: the realm's access token lifetime plus one second
 
   badSignature:
     # a token with a bad signature: the signed-in token with one character of its signature changed
