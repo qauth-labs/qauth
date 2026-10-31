@@ -37,7 +37,8 @@ import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
  * read, a write that creates an account in its realm, a write whose handler
  * fails after its change, and a security operation. No admin operation ships
  * yet (#517), so the registry is the suite's own, built from the server's
- * permission catalog. Each test acts on realms of its own: the audit log
+ * permission catalog with the approval operations (#512), whose routes every
+ * admin listener serves; their flow is `admin-approvals.integration.test.ts`'s. Each test acts on realms of its own: the audit log
  * refuses `TRUNCATE`, so rows stay, and are counted per realm.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
@@ -91,6 +92,7 @@ async function fixtureAdminApi() {
     effects: ['key-custody'],
     permissions: ['realms.policies.security'],
     description: 'A security operation (fixture).',
+    render: () => ({ title: "Rotate the realm's keys" }),
   });
   const send = operations.defineOperation({
     id: 'fixtureAccounts.send',
@@ -127,7 +129,7 @@ async function fixtureAdminApi() {
     permissions: ['realms.policies.write'],
     description: 'Create an account, then return a body its response schema refuses (fixture).',
   });
-  const registry = operations.createOperationRegistry(
+  const registry = operations.createAdminOperationRegistry(
     [read, create, fail, rotate, send, held, unwrapped, early, misanswer],
     { reserved: [] }
   );
@@ -495,6 +497,9 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(document.info.title).toBe('QAuth Admin API');
       expect(Object.keys(document.paths).sort()).toEqual([
         '/admin/v1-rc.0/realms/{realmId}',
+        '/admin/v1-rc.0/realms/{realmId}/approvals',
+        '/admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}',
+        '/admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}/cancel',
         '/admin/v1-rc.0/realms/{realmId}/fixture-accounts',
         '/admin/v1-rc.0/realms/{realmId}/fixture-early-answers',
         '/admin/v1-rc.0/realms/{realmId}/fixture-failures',
@@ -561,7 +566,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' })
       ).json();
       const report = checkApiConventions(document, { operations: registry });
-      expect(report.checkedOperations).toBe(8);
+      expect(report.checkedOperations).toBe(11);
       expect(report.violations).toEqual([]);
     });
   });
