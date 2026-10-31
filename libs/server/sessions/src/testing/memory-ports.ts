@@ -277,7 +277,7 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
         const idle = ends.idle ?? Number.POSITIVE_INFINITY;
         const at = Math.min(ends.absolute, idle);
         if (at > batch.now) continue;
-        lapsed.push({ row, reason: idle < ends.absolute ? 'idle' : 'expired', at });
+        lapsed.push({ row, reason: idle < ends.absolute ? 'idle' : 'expired', at: batch.now });
         if (lapsed.length === batch.limit) break;
       }
       const reasons = new Map(lapsed.map((item) => [item.row.id, item]));
@@ -302,7 +302,8 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
             row.realmId === realmId &&
             ('userId' in owner
               ? row.userId === owner.userId
-              : (registry.get(row.id) ?? []).some(
+              : row.revokedAt === null &&
+                (registry.get(row.id) ?? []).some(
                   (client) => client.oauthClientId === owner.oauthClientId
                 ))
         )
@@ -316,7 +317,10 @@ export function createMemorySessionStore(clock: { now(): number }): MemorySessio
         .slice(0, page.limit);
       return {
         lifetimes: { ...lifetimes },
-        sessions: selected.map((row) => ({ session: copyOf(row), clients: clientsOf(row.id) })),
+        sessions: selected.map((row) => ({
+          session: copyOf(row),
+          clients: row.revokedAt === null ? clientsOf(row.id) : [],
+        })),
       };
     },
 

@@ -170,7 +170,8 @@ export interface SessionActor {
   type: SessionActorType;
   /**
    * A user id, a client's `client_id`, or the operating-system user for
-   * `operator_cli`. Absent for `system`.
+   * `operator_cli`: required for those, at most 255 characters. Absent for
+   * `system`.
    */
   id?: string;
 }
@@ -281,7 +282,7 @@ export interface ListUserSessionsInput {
 /** Input of {@link SessionService.listForClient}. */
 export interface ListClientSessionsInput {
   realmId: string;
-  /** The client's row id (`oauth_clients.id`), as the developer API's paths name it. */
+  /** The client's row id (`oauth_clients.id`), as the API paths of this repository name a client. */
   oauthClientId: string;
   page?: SessionPageRequest;
 }
@@ -311,7 +312,13 @@ export interface RevokeUserSessionsInput {
   /**
    * End only the sessions created before this time, in epoch milliseconds: a
    * password reset ends the sessions older than the new password, which is
-   * ADR-017's session epoch.
+   * how #550 covers ADR-017's session epoch.
+   *
+   * It ends the sessions Postgres holds when the call runs. A sign-in that
+   * checked the old password before the reset committed, and stores its
+   * session only after this call, is not ended. A caller that must refuse
+   * that one too also checks the reset time when the session is read, as
+   * `not_valid_before` does for a disabled account (#748).
    */
   createdBefore?: number;
   reason: SessionRevokedReason;
@@ -328,13 +335,18 @@ export interface RevokedSessions {
 export interface RevokeRealmSessionsInput {
   realmId: string;
   /**
-   * End only the sessions used at or after this time (`last_seen_at`), in
-   * epoch milliseconds. Every session of the realm when absent.
+   * End only the sessions used at or after this time, in epoch milliseconds.
+   * `last_seen_at` lags use by up to `SESSION_LAST_SEEN_INTERVAL`, so a
+   * session stored as seen up to that long before this time is ended too.
+   * Every session of the realm when absent.
    */
   activeSince?: number;
   reason: SessionRevokedReason;
   actor: SessionActor;
-  /** Sessions per transaction; {@link DEFAULT_SESSION_REVOCATION_BATCH_SIZE} by default. */
+  /**
+   * Sessions per transaction; {@link DEFAULT_SESSION_REVOCATION_BATCH_SIZE}
+   * by default, at most {@link MAX_SESSION_BATCH_SIZE}.
+   */
   batchSize?: number;
 }
 
@@ -415,7 +427,8 @@ export interface SessionService {
    * Mark every session, of every realm, past its absolute end or its realm's
    * idle limit as `expired` or `idle`, as {@link get} already treats it, so
    * its registry rows go and the listeners hear of it, with the `system`
-   * actor. The session purge job runs it.
+   * actor. `revokedAt` is the time of the mark. The `session-expiry` job runs
+   * it every five minutes.
    */
   endLapsed(input?: EndLapsedSessionsInput): Promise<{ ended: number }>;
   /**
@@ -432,17 +445,26 @@ export interface SessionService {
    */
   listForUser(input: ListUserSessionsInput): Promise<SessionPage>;
   /**
-   * One page of the realm's sessions that served a client, newest first. A
-   * revoked session no longer holds its clients, so only sessions not yet
-   * revoked are listed. Throws as {@link listForUser}.
+   * One page of the realm's sessions that served a client, newest first, for
+   * an admin: each with ALL the clients the session served, its address and
+   * its user agent. A caller that answers the client's own developer must
+   * not pass those on. A revoked session no longer holds its clients, so
+   * only sessions not yet revoked are listed. Throws as {@link listForUser}.
    */
   listForClient(input: ListClientSessionsInput): Promise<SessionPage>;
   /**
-   * Call `listener` after every revocation that ends sessions, once per ended
-   * session: after Postgres committed the end and the cache tombstones were
-   * written. Back-channel logout and the session events register here. A
-   * listener that throws is logged and the others still run; the revocation
-   * stands. Listeners run in the order they registered, one at a time.
+   * Call `listener` after every revocation this process makes that ends
+   * sessions, once per ended session: after Postgres committed the end and
+   * the cache tombstones were written. Listeners run in the order they
+   * registered, one at a time, and the revocation waits for them. A listener
+   * that throws is logged and the others still run; the revocation stands.
+   *
+   * At most once, and in this process only: a process that stops between
+   * the commit and a listener loses that notice, and nothing repeats it (a
+   * second revocation of the session ends nothing). Work that must not be
+   * lost, such as the session events of the transactional outbox (ADR-019
+   * Decision 8) or the queued back-channel logout of #624, belongs in the
+   * revocation's transaction, not only here.
    *
    * @returns a function that removes the listener
    */

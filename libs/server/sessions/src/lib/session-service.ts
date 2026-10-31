@@ -62,6 +62,12 @@ export const DEFAULT_SESSION_REVOCATION_BATCH_SIZE = 500;
 /** Rows the purge deletes per statement, by default. */
 export const DEFAULT_SESSION_PURGE_BATCH_SIZE = 1000;
 
+/**
+ * The largest batch a caller may ask for: one transaction never locks or
+ * deletes more rows than this.
+ */
+export const MAX_SESSION_BATCH_SIZE = 5000;
+
 /** The settings of {@link createSessionService}. */
 export interface SessionServiceSettings {
   /**
@@ -130,14 +136,23 @@ function checkedReason(reason: SessionRevokedReason): SessionRevokedReason {
   return reason;
 }
 
+/**
+ * The actor as given, checked: a known type, and an id for every type but
+ * `system`, as an event's actor carries one, up to the 255 characters an
+ * event's actor id may have.
+ */
 function checkedActor(actor: SessionActor): SessionActor {
-  if (
-    typeof actor !== 'object' ||
-    actor === null ||
-    !(SESSION_ACTOR_TYPES as readonly string[]).includes(actor.type) ||
-    (actor.id !== undefined && (typeof actor.id !== 'string' || actor.id.length === 0))
-  ) {
-    throw new RangeError('A session revocation needs an actor: a known type and a non-empty id');
+  const valid =
+    typeof actor === 'object' &&
+    actor !== null &&
+    (SESSION_ACTOR_TYPES as readonly string[]).includes(actor.type) &&
+    (actor.type === 'system'
+      ? actor.id === undefined
+      : typeof actor.id === 'string' && actor.id.length > 0 && actor.id.length <= 255);
+  if (!valid) {
+    throw new RangeError(
+      'A session revocation needs an actor: a known type, with an id unless it is the system'
+    );
   }
   return actor.id === undefined ? { type: actor.type } : { type: actor.type, id: actor.id };
 }
@@ -152,8 +167,10 @@ function checkedTime(name: string, value: number | undefined): number | undefine
 
 function checkedBatchSize(value: number | undefined, fallback: number): number {
   const size = value ?? fallback;
-  if (!Number.isInteger(size) || size < 1) {
-    throw new RangeError(`A batch size must be a positive integer, got ${size}`);
+  if (!Number.isInteger(size) || size < 1 || size > MAX_SESSION_BATCH_SIZE) {
+    throw new RangeError(
+      `A batch size must be an integer from 1 to ${MAX_SESSION_BATCH_SIZE}, got ${size}`
+    );
   }
   return size;
 }
@@ -429,9 +446,10 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
   }
 
   /**
-   * What follows the end of `ended` in Postgres: reads already waiting on
-   * Postgres on this node no longer answer for them, a tombstone replaces
-   * each cache entry, then the listeners hear of them.
+   * Replace the cache entries of `ended` (sessions of any realm) with
+   * tombstones, all at once: reads already waiting on Postgres on this node
+   * no longer answer for them, and a read anywhere that sees a tombstone
+   * answers "absent".
    *
    * Each tombstone lasts twice the cache time, so it outlives any entry
    * filled from a read before the end, even one whose write reached the cache
@@ -439,17 +457,11 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
    * take leaves another node serving the session until its entry lapses,
    * within the cache time.
    */
-  async function afterEnded(
-    realmId: string,
-    reason: SessionRevokedReason,
-    actor: SessionActor,
-    ended: readonly EndedSession[]
-  ): Promise<void> {
-    if (ended.length === 0) return;
-    for (const { session } of ended) inFlight.delete(`${realmId}:${session.id}`);
+  async function tombstone(ended: readonly EndedSession[]): Promise<void> {
+    for (const { session } of ended) inFlight.delete(`${session.realmId}:${session.id}`);
     const written = await Promise.all(
       ended.map(({ session }) =>
-        bounded(cache.markRevoked(realmId, session.id, 2 * cacheTtlMs)).then(
+        bounded(cache.markRevoked(session.realmId, session.id, 2 * cacheTtlMs)).then(
           () => true,
           () => false
         )
@@ -458,10 +470,21 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     const failed = written.filter((ok) => !ok).length;
     if (failed > 0) {
       logger.warn(
-        { realmId, sessions: failed },
+        { realmId: ended[0]?.session.realmId, sessions: failed },
         'Session cache tombstone write failed; another node may serve the session until its cache entry lapses'
       );
     }
+  }
+
+  /** What follows the end of `ended` in Postgres: the tombstones, then the listeners. */
+  async function afterEnded(
+    realmId: string,
+    reason: SessionRevokedReason,
+    actor: SessionActor,
+    ended: readonly EndedSession[]
+  ): Promise<void> {
+    if (ended.length === 0) return;
+    await tombstone(ended);
     await notify({ realmId, reason, actor, sessions: ended });
   }
 
@@ -706,7 +729,11 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
     async revokeAllForRealm(input) {
       const reason = checkedReason(input.reason);
       const actor = checkedActor(input.actor);
-      const activeSince = checkedTime('activeSince', input.activeSince);
+      const since = checkedTime('activeSince', input.activeSince);
+      // `last_seen_at` is written at most once per interval, so a session
+      // used at `activeSince` may be stored as seen up to one interval
+      // earlier: those count as used since then too.
+      const activeSince = since === undefined ? undefined : since - lastSeenIntervalSeconds * 1000;
       const limit = checkedBatchSize(input.batchSize, DEFAULT_SESSION_REVOCATION_BATCH_SIZE);
       const realmId = idOf(input.realmId);
       if (realmId === undefined) return { ended: 0, batches: 0 };
@@ -750,7 +777,9 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         });
         if (batch.selected === 0) break;
         ended += batch.ended.length;
-        // A notice is one realm and one reason.
+        // Every tombstone of the batch at once, however many realms it
+        // spans; then one notice per realm and reason.
+        await tombstone(batch.ended);
         const groups = new Map<string, EndedSession[]>();
         for (const item of batch.ended) {
           const key = `${item.session.realmId} ${String(item.session.revokedReason)}`;
@@ -758,7 +787,12 @@ export function createSessionService(options: SessionServiceOptions): SessionSer
         }
         for (const group of groups.values()) {
           const { realmId, revokedReason } = group[0].session;
-          await afterEnded(realmId, revokedReason ?? 'expired', SYSTEM_ACTOR, group);
+          await notify({
+            realmId,
+            reason: revokedReason ?? 'expired',
+            actor: SYSTEM_ACTOR,
+            sessions: group,
+          });
         }
         if (batch.selected < limit || batch.last === null) break;
         after = batch.last;

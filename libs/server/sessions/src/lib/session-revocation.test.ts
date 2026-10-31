@@ -308,6 +308,19 @@ describe('listForClient', () => {
     ).toEqual([]);
   });
 
+  it('shows no client of a revoked session, even one whose registry rows were left behind', async () => {
+    const sid = await signInAt();
+    store.recordClient(sid, APP);
+    // As a previous release revokes during a rolling upgrade: the row only.
+    store.update(sid, { revokedAt: clock.now(), revokedReason: 'sign_out' });
+
+    expect(
+      (await service.listForClient({ realmId: REALM_A, oauthClientId: APP.oauthClientId })).items
+    ).toEqual([]);
+    const [item] = (await service.listForUser({ realmId: REALM_A, userId: ALICE })).items;
+    expect(item).toMatchObject({ sid, state: 'revoked', clients: [] });
+  });
+
   it('no longer lists a session once it ended', async () => {
     const sid = await signInAt();
     store.recordClient(sid, APP);
@@ -377,6 +390,9 @@ describe('revoke', () => {
       { reason: 'bored', actor: ALICE_ACTOR },
       { reason: 'sign_out', actor: { type: 'robot' } },
       { reason: 'sign_out', actor: { type: 'user', id: '' } },
+      { reason: 'sign_out', actor: { type: 'user' } },
+      { reason: 'sign_out', actor: { type: 'client', id: 'x'.repeat(256) } },
+      { reason: 'sign_out', actor: { type: 'system', id: 'cron' } },
       { reason: 'sign_out', actor: undefined },
     ];
     for (const input of bad) {
@@ -540,6 +556,43 @@ describe('revokeAllForRealm', () => {
     expect(store.row(stale)?.revokedAt).toBeNull();
   });
 
+  it('counts a session stored as seen up to one write interval before activeSince as used since then', async () => {
+    const since = clock.now() + HOUR;
+    const lagging = await signInAt();
+    const stale = await signInAt();
+    // Last-seen writes come once a minute (SESSION_LAST_SEEN_INTERVAL's
+    // default): one stored 30 s before `since` may have been used at it.
+    store.update(lagging, { lastSeenAt: since - 30 * SECOND });
+    store.update(stale, { lastSeenAt: since - 61 * SECOND });
+    clock.set(since + MINUTE);
+
+    await service.revokeAllForRealm({
+      realmId: REALM_A,
+      activeSince: since,
+      reason: 'admin',
+      actor: ADMIN_ACTOR,
+    });
+
+    expect(store.row(lagging)?.revokedAt).not.toBeNull();
+    expect(store.row(stale)?.revokedAt).toBeNull();
+  });
+
+  it('refuses a batch larger than one transaction may hold', async () => {
+    for (const batchSize of [0, 5001, 2.5]) {
+      await expect(
+        service.revokeAllForRealm({
+          realmId: REALM_A,
+          reason: 'admin',
+          actor: ADMIN_ACTOR,
+          batchSize,
+        })
+      ).rejects.toThrow(RangeError);
+    }
+    await expect(service.purge({ endedBefore: clock.now(), batchSize: 10_000 })).rejects.toThrow(
+      RangeError
+    );
+  });
+
   it('leaves a session created after the call began', async () => {
     for (let i = 0; i < 4; i++) await signInAt();
     let signedInDuring: string | undefined;
@@ -586,8 +639,12 @@ describe('endLapsed', () => {
 
     expect(await service.endLapsed()).toEqual({ ended: 2 });
 
-    expect(store.row(idleA)).toMatchObject({ revokedReason: 'idle' });
-    expect(store.row(expiredB)).toMatchObject({ revokedReason: 'expired' });
+    // Marked at the time of the run: retention counts from it.
+    expect(store.row(idleA)).toMatchObject({ revokedReason: 'idle', revokedAt: clock.now() });
+    expect(store.row(expiredB)).toMatchObject({
+      revokedReason: 'expired',
+      revokedAt: clock.now(),
+    });
     expect(store.row(liveA)?.revokedAt).toBeNull();
     expect(store.clientsOf(idleA)).toEqual([]);
     expect(
@@ -624,6 +681,25 @@ describe('endLapsed', () => {
     for (const sid of sids) {
       expect(store.row(sid)?.revokedAt !== null, sid).toBe(absentBefore.has(sid));
     }
+  });
+
+  it('writes every tombstone of a batch before it tells any listener, whatever realms it spans', async () => {
+    store.putRealm(REALM_A, { idleTimeoutSeconds: 60 });
+    store.putRealm(REALM_B, { idleTimeoutSeconds: 60 });
+    const sids: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      sids.push(await signInAt({ realmId: i % 2 === 0 ? REALM_A : REALM_B }));
+    }
+    clock.advance(HOUR);
+    const tombstonesAtFirstNotice: number[] = [];
+    service.onSessionsEnded(() => {
+      tombstonesAtFirstNotice.push(cache.calls.tombstones);
+    });
+
+    expect(await service.endLapsed()).toEqual({ ended: 6 });
+
+    expect(tombstonesAtFirstNotice[0]).toBe(6);
+    expect(notices.map((notice) => notice.realmId).sort()).toEqual([REALM_A, REALM_B]);
   });
 
   it('stops between batches when its signal is aborted', async () => {
