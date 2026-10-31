@@ -244,6 +244,10 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                        | user     | info     | v0.2.0 |
 | [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                              | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)          | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.created:v1-rc.0`](#interactioncreated-v1-rc0)                            | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.answered:v1-rc.0`](#interactionanswered-v1-rc0)                          | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.cancelled:v1-rc.0`](#interactioncancelled-v1-rc0)                        | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.expired:v1-rc.0`](#interactionexpired-v1-rc0)                            | user     | info     | v0.2.0 |
 | [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                        | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0) | user     | info     | v0.2.0 |
 | [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                        | admin    | critical | v0.2.0 |
@@ -742,6 +746,66 @@ The OpenID4VP response endpoint accepted a wallet presentation. This is not a si
 | ------------------- | ------- | -------- | ----------------------------------------------------------------------------------- |
 | `verifierProfile`   | string  | yes      | The verifier profile the wallet presentation was checked under, such as `haip-1.0`. |
 | `presentationCount` | integer | yes      | How many presentations the response held.                                           |
+
+### interaction.created v1-rc.0
+
+A browser ceremony began: the server created an interaction and bound it to the browser that started it with a flow cookie.
+
+- Identifier: `urn:qauth:event:interaction.created:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [interaction.created.v1-rc.0.json](/schemas/events/interaction.created.v1-rc.0.json)
+
+| Member        | Type                                     | Required | Meaning                                                                                                                                        |
+| ------------- | ---------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interaction` | UUID                                     | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds. |
+| `purpose`     | one of `authorization`, or a later value | yes      | `authorization`: an authorization request at the authorization endpoint. The set may grow in a minor release.                                  |
+| `step`        | string                                   | yes      | The first step the ceremony asks for.                                                                                                          |
+| `replaces`    | UUID                                     | no       | For an interaction that a user switch started: the interaction it replaces, which ended with it. Nothing proved in that one carries over.      |
+
+### interaction.answered v1-rc.0
+
+The engine processed an answer to the current step of an interaction. Of two answers to one step, only the one processed is recorded.
+
+- Identifier: `urn:qauth:event:interaction.answered:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [interaction.answered.v1-rc.0.json](/schemas/events/interaction.answered.v1-rc.0.json)
+
+| Member        | Type                                                              | Required | Meaning                                                                                                                                                                                                                                                                                                         |
+| ------------- | ----------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interaction` | UUID                                                              | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds.                                                                                                                                                                  |
+| `step`        | string                                                            | yes      | The step the answer was for.                                                                                                                                                                                                                                                                                    |
+| `outcome`     | one of `next_step`, `authenticated`, `finished`, or a later value | yes      | `next_step`: another step comes next, or the same one again after a refused answer. `authenticated`: the answer proved who the user is; the browser session and the flow cookie were replaced. `finished`: the interaction ended, and the request it was for is completed. The set may grow in a minor release. |
+
+### interaction.cancelled v1-rc.0
+
+An interaction ended before it finished, at the request of the browser that started it.
+
+- Identifier: `urn:qauth:event:interaction.cancelled:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [interaction.cancelled.v1-rc.0.json](/schemas/events/interaction.cancelled.v1-rc.0.json)
+
+| Member        | Type                                           | Required | Meaning                                                                                                                                                                           |
+| ------------- | ---------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interaction` | UUID                                           | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds.                                    |
+| `step`        | string                                         | yes      | The step the interaction was at.                                                                                                                                                  |
+| `reason`      | one of `user`, `user_switch`, or a later value | yes      | `user`: the person cancelled. `user_switch`: the person chose another account, and a new interaction for the same request replaced this one. The set may grow in a minor release. |
+
+### interaction.expired v1-rc.0
+
+An interaction reached its absolute expiry before it finished or was cancelled. It can no longer be read or answered.
+
+- Identifier: `urn:qauth:event:interaction.expired:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [interaction.expired.v1-rc.0.json](/schemas/events/interaction.expired.v1-rc.0.json)
+
+| Member        | Type   | Required | Meaning                                                                                                                                        |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interaction` | UUID   | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds. |
+| `step`        | string | no       | The step the interaction was at, when the server still had its record. Absent otherwise.                                                       |
 
 ### request.csrf_rejected v1-rc.0
 
