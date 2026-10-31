@@ -1,0 +1,25 @@
+{
+  "name": "server-realm-policy",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/realm-policy/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        { "json": "{workspaceRoot}/tsconfig.json", "fields": ["compilerOptions"] },
+        { "externalDependencies": ["vitest", "oxfmt"] },
+        { "env": "CI" },
+        { "dependentTasksOutputFiles": "**/*.js", "transitive": true },
+        "{workspaceRoot}/.oxfmtrc.json",
+        "{workspaceRoot}/apps/docs-site/src/content/docs/**/*.{md,mdx}"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. page.test.ts generates the docs page apps/docs-site/src/content/docs/reference/realm-policies.md from the schema (`pnpm nx test server-realm-policy -- -u` rewrites it, formatted with Oxfmt and the repo's `.oxfmtrc.json`), and the contract test checks that every field's docs link names a page of the docs site and a heading on it, so the docs pages, the formatter and its configuration are inputs too. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared, with `oxfmt` added to the external dependencies."
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project server-realm-policy --web"
+}

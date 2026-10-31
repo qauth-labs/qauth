@@ -33,3 +33,33 @@ describe('EMAIL_BASE_URL (#490)', () => {
     );
   });
 });
+
+describe('the keys that seed realm mail policies (#514)', () => {
+  it('read blank as unset, as a new realm seeded from them does', () => {
+    for (const blank of ['', '  ']) {
+      const parsed = emailEnvSchema.parse({
+        ...REQUIRED,
+        EMAIL_FROM_NAME: blank,
+        SMTP_HOST: blank,
+        SMTP_USER: blank,
+      });
+      expect(parsed.EMAIL_FROM_NAME).toBe('QAuth');
+      expect(parsed.SMTP_HOST).toBeUndefined();
+      expect(parsed.SMTP_USER).toBeUndefined();
+    }
+  });
+
+  it('still read a set value', () => {
+    const parsed = emailEnvSchema.parse({
+      ...REQUIRED,
+      EMAIL_FROM_NAME: 'Acme',
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_USER: 'mailer',
+    });
+    expect(parsed).toMatchObject({
+      EMAIL_FROM_NAME: 'Acme',
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_USER: 'mailer',
+    });
+  });
+});

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
+import { CAEP_SESSION_REVOKED } from '../ssf-mapping';
 import { FIRST_RELEASE, identifierHmac, reason, signInMethod, verifierProfile } from './fields';
 
 /**
@@ -52,6 +53,8 @@ export const userSignedOut = defineEventType({
   since: FIRST_RELEASE,
   subject: 'user',
   data: z.strictObject({}),
+  security: true,
+  ssf: { event: CAEP_SESSION_REVOKED },
 });
 
 export const userSignOutFailed = defineEventType({

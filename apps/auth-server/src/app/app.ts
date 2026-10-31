@@ -804,8 +804,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     ...(eventDeliveryRoutes ?? []),
   ];
 
-  // Background jobs (ADR-019 Decision 8): purge-expired on `api`, and event
-  // retention (#536) on `delivery`, which reads the delivery routes' enabled
+  // Background jobs (ADR-019 Decision 8): purge-expired and the SSF subject
+  // sweep (#540) on `api`, and event retention (#536) on `delivery`, which
+  // reads the delivery routes' enabled
   // destinations and falls back to the retention seeds for a realm whose row
   // is gone. A process builds and runs only the jobs of its roles (#495).
   // With the SSF transmitter off no node serves `ssf`, so an SSF position or

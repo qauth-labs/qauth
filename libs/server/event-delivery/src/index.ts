@@ -37,6 +37,7 @@ export type {
   DeliveryRoute,
   DeliverySigner,
   DeliveryStore,
+  DestinationTypeRule,
   EventSubjectRef,
   RouteDestination,
 } from './lib/types';

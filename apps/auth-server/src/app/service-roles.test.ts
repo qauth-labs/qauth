@@ -173,10 +173,11 @@ describe('what each role loads (the boot-time list)', () => {
 });
 
 describe('the jobs of each role', () => {
-  it('places purge-expired on api and event retention on delivery', () => {
+  it('places purge-expired and the SSF subject sweep on api, and event retention on delivery', () => {
     expect(Object.fromEntries(SERVER_JOBS.map((job) => [job.name, job.role]))).toEqual({
       'purge-expired': 'api',
       'event-retention': 'delivery',
+      'ssf-subject-sweep': 'api',
     });
   });
 
@@ -195,7 +196,10 @@ describe('the jobs of each role', () => {
       metrics: {},
     } as unknown as FastifyInstance;
     expect(serverJobs(fastify, {}, ['web', 'admin', 'signer'])).toEqual([]);
-    expect(serverJobs(fastify, {}, ['api']).map((job) => job.name)).toEqual(['purge-expired']);
+    expect(serverJobs(fastify, {}, ['api']).map((job) => job.name)).toEqual([
+      'purge-expired',
+      'ssf-subject-sweep',
+    ]);
     expect(() => serverJobs(fastify, {}, ['delivery'])).toThrow('read eventRetention');
   });
 });

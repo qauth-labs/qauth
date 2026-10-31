@@ -4,9 +4,9 @@ import { EVENT_TYPES, type EventTypeDefinition } from '@qauth-labs/shared-events
  * Which QAuth event types a stream can receive (issue #410).
  *
  * A registered type reaches SSF streams through its `ssf` slot: a type whose
- * slot names an SSF event URI is offered as that event. EVT-11 (#540) fills
- * the slots; until then no type has one, `events_supported` is empty and a
- * stream receives its verification events only.
+ * slot names an SSF event URI is offered as that event (#540). Several types
+ * may share one event, such as CAEP `session-revoked`; a stream that requests
+ * it receives each of them.
  */
 
 /** The SSF event URI of a registered type, or `undefined` when it has none. */

@@ -1,0 +1,422 @@
+import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+
+import { defineEventType, type EventTypeDefinition, type SsfEventMapping } from './definition';
+import { dataJsonSchema } from './json-schema';
+import { EVENT_TYPES, getEventType, validateRegistry } from './registry';
+import {
+  CAEP_CREDENTIAL_CHANGE,
+  CAEP_SESSION_REVOKED,
+  CAEP_TOKEN_CLAIMS_CHANGE,
+  initiatingEntityOf,
+  QAUTH_SECEVENT_PATTERN,
+  QAUTH_SSF_EVENTS,
+  QAUTH_TOKEN_REVOKED,
+  ssfEventMembers,
+  ssfMappingOf,
+  STANDARD_SSF_EVENTS,
+} from './ssf-mapping';
+
+const validate = (definitions: readonly EventTypeDefinition[]) =>
+  validateRegistry(definitions, dataJsonSchema);
+
+/** A security type of a test's own, with a user subject and two data members. */
+const securityType = (overrides: Partial<EventTypeDefinition> = {}): EventTypeDefinition => ({
+  ...defineEventType({
+    name: 'sample.changed',
+    version: 1,
+    rc: 0,
+    description: 'A sample security change.',
+    category: 'user',
+    severity: 'info',
+    since: 'v0.2.0',
+    subject: 'user',
+    data: z.strictObject({
+      rebound: z.boolean().describe('A flag.'),
+      note: z.string().optional().describe('An optional code.'),
+      outcome: z.enum(['code_replay', 'refresh_replay']).describe('A closed set.'),
+      label: z.string().describe('An open string.'),
+    }),
+    security: true,
+    ssf: { event: CAEP_SESSION_REVOKED },
+  }),
+  ...overrides,
+});
+
+const withMapping = (ssf: SsfEventMapping) => securityType({ ssf });
+
+describe('the SSF rule of the registry (#540)', () => {
+  // The unit acceptance criterion of #540: a security type that declares
+  // neither a mapping nor `ssf: 'none'` fails the registry test.
+  it('fails a security type that has neither a mapping nor ssf: none', () => {
+    expect(validate([securityType({ ssf: undefined })]).join('\n')).toContain(
+      "a security type must declare its SSF mapping, or ssf: 'none'"
+    );
+  });
+
+  it("accepts a security type with a mapping, and one with ssf: 'none'", () => {
+    expect(validate([securityType()])).toEqual([]);
+    expect(
+      validate([securityType({ ssf: 'none', ssfNote: 'No standard event says it.' })])
+    ).toEqual([]);
+  });
+
+  it("fails ssf: 'none' with no ssfNote saying why", () => {
+    expect(validate([securityType({ ssf: 'none' })]).join('\n')).toContain(
+      "ssf: 'none' needs an ssfNote"
+    );
+  });
+
+  it('fails a security flag that is not true', () => {
+    expect(validate([securityType({ security: false as never })]).join('\n')).toContain(
+      'security is true or absent'
+    );
+  });
+
+  it('fails an ssf that is neither a mapping nor none', () => {
+    expect(validate([securityType({ ssf: 'all' as never })]).join('\n')).toContain(
+      "ssf must be a mapping or 'none'"
+    );
+  });
+
+  it('fails a type that declares ssf without being a security type', () => {
+    expect(validate([securityType({ security: undefined })]).join('\n')).toContain(
+      'only a security type declares ssf'
+    );
+    expect(validate([securityType({ security: undefined, ssf: 'none' })]).join('\n')).toContain(
+      'only a security type declares ssf'
+    );
+  });
+
+  it('fails an ssfNote with no ssf', () => {
+    expect(
+      validate([securityType({ security: undefined, ssf: undefined, ssfNote: 'why' })]).join('\n')
+    ).toContain('ssfNote explains a mapping, so it needs ssf');
+  });
+
+  it.each([
+    [
+      'an event URI QAuth does not know',
+      { event: 'https://example.com/event-type/whatever' },
+      'ssf.event must be a CAEP 1.0 or RISC 1.0 event',
+    ],
+    [
+      'a QAuth-defined event that is not listed',
+      { event: 'urn:qauth:secevent:sample-changed:v1-rc.0' },
+      'is not a QAuth-defined SSF event',
+    ],
+    [
+      'a member the event does not define',
+      { event: CAEP_SESSION_REVOKED, members: { claims: { value: {} } } },
+      'session-revoked defines no such member',
+    ],
+    [
+      'no member the event requires',
+      { event: CAEP_CREDENTIAL_CHANGE, members: { credential_type: { value: 'password' } } },
+      'ssf.members.change_type: credential-change requires it',
+    ],
+    [
+      'a value outside the member’s closed set',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: { credential_type: { value: 'password' }, change_type: { value: 'rotate' } },
+      },
+      '"rotate" is not one of create, revoke, update, delete',
+    ],
+    [
+      'a required member from an optional data member',
+      { event: CAEP_TOKEN_CLAIMS_CHANGE, members: { claims: { data: 'note' } } },
+      'a required member cannot come from the optional data.note',
+    ],
+    [
+      'a required member through a map that misses a value',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: {
+          credential_type: { value: 'password' },
+          change_type: { data: 'rebound', map: { true: 'update' } },
+        },
+      },
+      'the map must list every value of data.rebound: false',
+    ],
+    [
+      'a data member the type does not have',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { data: 'missing' } } },
+      'data.missing is not a member',
+    ],
+    [
+      'a member QAuth computes',
+      { event: CAEP_SESSION_REVOKED, members: { event_timestamp: { value: 1 } } },
+      'QAuth sets event_timestamp from the envelope',
+    ],
+    [
+      'a key subject without data.keyId',
+      { event: CAEP_SESSION_REVOKED, subject: 'key' as const },
+      'ssf.subject "key" needs a required data.keyId',
+    ],
+    [
+      'an unknown initiating entity',
+      { event: CAEP_SESSION_REVOKED, initiatingEntity: 'robot' },
+      'ssf.initiatingEntity must be one of admin, user, policy, system',
+    ],
+    [
+      'a closed member taken from data whose values fall outside it',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: { credential_type: { value: 'password' }, change_type: { data: 'outcome' } },
+      },
+      'data.outcome may hold code_replay, refresh_replay, not one of create, revoke, update, delete',
+    ],
+    [
+      'a closed member taken from an open string',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: { credential_type: { value: 'password' }, change_type: { data: 'label' } },
+      },
+      'data.label may hold (an open set of values)',
+    ],
+    [
+      'an object member taken from a string',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { data: 'label' } } },
+      'data.label is not an object, as reason_admin is',
+    ],
+    [
+      'an object member given a string',
+      { event: CAEP_TOKEN_CLAIMS_CHANGE, members: { claims: { value: 'scope' } } },
+      '"scope" is not an object, as claims is',
+    ],
+    [
+      'a string member mapped to an object',
+      {
+        event: CAEP_CREDENTIAL_CHANGE,
+        members: {
+          credential_type: { value: 'password' },
+          change_type: { data: 'rebound', map: { true: { x: 1 }, false: 'create' } },
+        },
+      },
+      '{"x":1} is not a string, as change_type is',
+    ],
+    [
+      'a value that is not plain JSON',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { value: new Date(0) as never } } },
+      'a value must be plain JSON',
+    ],
+    [
+      'a member source of neither form',
+      { event: CAEP_SESSION_REVOKED, members: { reason_admin: { from: 'x' } as never } },
+      'a member source is { value } or { data, map? }',
+    ],
+    [
+      'an unknown subject source',
+      { event: CAEP_SESSION_REVOKED, subject: 'actor' as never },
+      'ssf.subject must be subject, client or key',
+    ],
+    [
+      'a clientOnly that is not true',
+      { event: CAEP_SESSION_REVOKED, clientOnly: false as never },
+      'ssf.clientOnly is true or absent',
+    ],
+  ])('fails %s', (_label, mapping, message) => {
+    expect(validate([withMapping(mapping as SsfEventMapping)]).join('\n')).toContain(message);
+  });
+
+  it('keeps a key subject to a type with no subject, and never to one client', () => {
+    const keyType = (ssf: SsfEventMapping) =>
+      securityType({
+        subject: undefined,
+        data: z.strictObject({ keyId: z.string().describe('A kid.') }),
+        ssf,
+      });
+    expect(validate([keyType({ event: CAEP_SESSION_REVOKED, subject: 'key' })])).toEqual([]);
+    expect(
+      validate([keyType({ event: CAEP_SESSION_REVOKED, subject: 'key', clientOnly: true })]).join(
+        '\n'
+      )
+    ).toContain('an event about a key goes to every stream of the realm');
+    // A user's type with a keyId member, such as a passkey's, cannot reach
+    // the whole realm by calling itself a key event.
+    expect(
+      validate([
+        securityType({
+          data: z.strictObject({ keyId: z.string().describe('A credential id.') }),
+          ssf: { event: CAEP_SESSION_REVOKED, subject: 'key' },
+        }),
+      ]).join('\n')
+    ).toContain('ssf.subject "key" is for a type with no subject');
+    // The SET names the key by a string: a keyId of any other kind would
+    // leave every event of the type unsent.
+    expect(
+      validate([
+        securityType({
+          subject: undefined,
+          data: z.strictObject({ keyId: z.int().describe('A number.') }),
+          ssf: { event: CAEP_SESSION_REVOKED, subject: 'key' },
+        }),
+      ]).join('\n')
+    ).toContain('ssf.subject "key" needs data.keyId to be a string');
+  });
+
+  // Any receiver may add any client of the realm as a subject, with no
+  // relation checked: an event about a client must reach that client alone.
+  it('keeps an event about a client to its own stream', () => {
+    const clientType = (ssf: SsfEventMapping) => securityType({ subject: 'client', ssf });
+    const apiKeyType = (ssf: SsfEventMapping) => securityType({ subject: 'api_key', ssf });
+    const message = 'an event about a client goes to its own stream only: set ssf.clientOnly';
+    expect(validate([clientType({ event: CAEP_SESSION_REVOKED })]).join('\n')).toContain(message);
+    expect(
+      validate([apiKeyType({ event: CAEP_SESSION_REVOKED, subject: 'client' })]).join('\n')
+    ).toContain(message);
+    // A user's type naming its client as the subject is about the client too.
+    expect(
+      validate([withMapping({ event: CAEP_SESSION_REVOKED, subject: 'client' })]).join('\n')
+    ).toContain(message);
+    expect(validate([clientType({ event: CAEP_SESSION_REVOKED, clientOnly: true })])).toEqual([]);
+    expect(
+      validate([apiKeyType({ event: CAEP_SESSION_REVOKED, subject: 'client', clientOnly: true })])
+    ).toEqual([]);
+    // An event about a user is limited by the user's relation instead.
+    expect(validate([withMapping({ event: CAEP_SESSION_REVOKED })])).toEqual([]);
+  });
+
+  it('fails a subject mapping for a type whose subject is not a user or a client', () => {
+    expect(validate([securityType({ subject: 'api_key' })]).join('\n')).toContain(
+      'ssf.subject "subject" needs a type whose subject is a user or a client'
+    );
+  });
+
+  it('passes every registered type', () => {
+    expect(validate(EVENT_TYPES)).toEqual([]);
+  });
+});
+
+describe('the mapping table of #540', () => {
+  const eventOf = (type: string) => ssfMappingOf(getEventType(type) as EventTypeDefinition)?.event;
+
+  it('maps sign-out to CAEP session-revoked', () => {
+    expect(eventOf('urn:qauth:event:user.signed_out:v1-rc.0')).toBe(CAEP_SESSION_REVOKED);
+  });
+
+  it('maps consent withdrawal to CAEP token-claims-change', () => {
+    expect(eventOf('urn:qauth:event:consent.revoked:v1-rc.0')).toBe(CAEP_TOKEN_CLAIMS_CHANGE);
+  });
+
+  it('maps client secret, API key and wallet credential changes to CAEP credential-change', () => {
+    for (const type of [
+      'urn:qauth:event:client.secret_rotated:v1-rc.0',
+      'urn:qauth:event:api_key.created:v1-rc.0',
+      'urn:qauth:event:api_key.revoked:v1-rc.0',
+      'urn:qauth:event:wallet.linked:v1-rc.0',
+    ]) {
+      expect(eventOf(type), type).toBe(CAEP_CREDENTIAL_CHANGE);
+    }
+  });
+
+  it('maps a replay that revokes a refresh family to CAEP session-revoked', () => {
+    expect(eventOf('urn:qauth:event:token.family_revoked:v1-rc.0')).toBe(CAEP_SESSION_REVOKED);
+  });
+
+  it('maps RFC 7009 revocation to a QAuth-defined, versioned event', () => {
+    expect(eventOf('urn:qauth:event:token.revoked:v1-rc.0')).toBe(QAUTH_TOKEN_REVOKED);
+    expect(QAUTH_TOKEN_REVOKED).toMatch(/^urn:qauth:[a-z:-]+:v[1-9][0-9]*(-rc\.(0|[1-9][0-9]*))?$/);
+  });
+
+  it('names the kid of an emergency key retirement', () => {
+    const mapping = ssfMappingOf(
+      getEventType('urn:qauth:event:key.emergency_retired:v1-rc.0') as EventTypeDefinition
+    );
+    expect(mapping).toMatchObject({ subject: 'key', members: { kid: { data: 'keyId' } } });
+  });
+
+  // Nothing about a QAuth-defined identifier is promised before QAuth 1.0.0
+  // (ADR-018 §5). The release that ships 1.0.0 drops the suffix, and this test.
+  it('keeps every QAuth-defined SSF event a release candidate until QAuth 1.0.0', () => {
+    for (const event of QAUTH_SSF_EVENTS) {
+      expect(event.uri).toMatch(QAUTH_SECEVENT_PATTERN);
+      expect(QAUTH_SECEVENT_PATTERN.exec(event.uri)?.[3], event.uri).toBeDefined();
+    }
+  });
+
+  it('maps only to events that are listed, and lists every QAuth-defined one in use', () => {
+    const listed = new Set([...STANDARD_SSF_EVENTS, ...QAUTH_SSF_EVENTS].map((e) => e.uri));
+    const used = EVENT_TYPES.flatMap((definition) => {
+      const mapping = ssfMappingOf(definition);
+      return mapping === undefined ? [] : [mapping.event];
+    });
+    for (const uri of used) expect(listed).toContain(uri);
+    for (const event of QAUTH_SSF_EVENTS) expect(used).toContain(event.uri);
+  });
+});
+
+describe('ssfEventMembers', () => {
+  const event = (overrides: Record<string, unknown> = {}) => ({
+    time: '2026-10-30T09:30:00.900Z',
+    category: 'user' as const,
+    actor: { type: 'user' as const, id: 'u-1' },
+    data: {},
+    ...overrides,
+  });
+
+  it('adds event_timestamp, the event time in whole seconds, and initiating_entity', () => {
+    expect(ssfEventMembers({ event: CAEP_SESSION_REVOKED }, event())).toEqual({
+      event_timestamp: Math.floor(Date.parse('2026-10-30T09:30:00.900Z') / 1000),
+      initiating_entity: 'user',
+    });
+  });
+
+  it('fills fixed members and members from data, through a map', () => {
+    const mapping: SsfEventMapping = {
+      event: CAEP_CREDENTIAL_CHANGE,
+      members: {
+        credential_type: { value: 'verifiable-credential' },
+        change_type: { data: 'rebound', map: { true: 'update', false: 'create' } },
+      },
+    };
+    expect(ssfEventMembers(mapping, event({ data: { rebound: true } }))).toMatchObject({
+      credential_type: 'verifiable-credential',
+      change_type: 'update',
+    });
+    expect(ssfEventMembers(mapping, event({ data: { rebound: false } }))).toMatchObject({
+      change_type: 'create',
+    });
+  });
+
+  it('leaves out a member whose data member is absent', () => {
+    const members = ssfEventMembers(
+      { event: QAUTH_TOKEN_REVOKED, members: { token_type_hint: { data: 'typeHint' } } },
+      event()
+    );
+    expect(members).not.toHaveProperty('token_type_hint');
+  });
+
+  it('answers undefined when a required member cannot be filled', () => {
+    expect(
+      ssfEventMembers(
+        {
+          event: CAEP_CREDENTIAL_CHANGE,
+          members: {
+            credential_type: { value: 'password' },
+            change_type: { data: 'missing' },
+          },
+        },
+        event()
+      )
+    ).toBeUndefined();
+  });
+
+  it('lets a mapping fix initiating_entity', () => {
+    expect(
+      ssfEventMembers({ event: CAEP_SESSION_REVOKED, initiatingEntity: 'policy' }, event())
+    ).toMatchObject({ initiating_entity: 'policy' });
+  });
+
+  it('reads initiating_entity from the actor (CAEP 1.0 §2)', () => {
+    expect(initiatingEntityOf({ category: 'user', actor: { type: 'user' } })).toBe('user');
+    expect(initiatingEntityOf({ category: 'admin', actor: { type: 'user' } })).toBe('admin');
+    expect(initiatingEntityOf({ category: 'admin', actor: { type: 'operator_cli' } })).toBe(
+      'admin'
+    );
+    expect(initiatingEntityOf({ category: 'user', actor: { type: 'system' } })).toBe('system');
+    expect(initiatingEntityOf({ category: 'user', actor: { type: 'client' } })).toBeUndefined();
+    expect(initiatingEntityOf({ category: 'user' })).toBeUndefined();
+  });
+});

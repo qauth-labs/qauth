@@ -11,8 +11,10 @@ import {
   parseEventType,
 } from './identifier';
 import { type PayloadFinding, scanJsonSchema, scanPayload, scanValues } from './payload-rules';
+import { validateSsfMapping } from './ssf-mapping';
 import { ADMIN_EVENT_TYPES } from './types/admin';
 import { CLIENT_EVENT_TYPES } from './types/client';
+import { KEY_EVENT_TYPES } from './types/key';
 import { OAUTH_EVENT_TYPES } from './types/oauth';
 import { REQUEST_EVENT_TYPES } from './types/request';
 import { SSF_EVENT_TYPES } from './types/ssf';
@@ -30,6 +32,7 @@ export const EVENT_TYPES = [
   ...WALLET_EVENT_TYPES,
   ...REQUEST_EVENT_TYPES,
   ...SSF_EVENT_TYPES,
+  ...KEY_EVENT_TYPES,
   ...ADMIN_EVENT_TYPES,
 ] as const;
 
@@ -201,6 +204,19 @@ export function validateRegistry(
     ) {
       problems.push(`${at}: the subject must be one of ${SUBJECT_TYPES.join(', ')}`);
     }
+    // Shared Signals (#540): a security type declares how it reaches SSF
+    // streams, a mapping or 'none', so no area adds one and forgets SSF; and
+    // only a security type declares it, so a mapping always means one.
+    if (definition.security !== undefined && definition.security !== true) {
+      problems.push(`${at}: security is true or absent`);
+    }
+    if (definition.security === true && definition.ssf === undefined) {
+      problems.push(`${at}: a security type must declare its SSF mapping, or ssf: 'none'`);
+    }
+    if (definition.security !== true && definition.ssf !== undefined) {
+      problems.push(`${at}: only a security type declares ssf`);
+    }
+    problems.push(...validateSsfMapping(definition).map((problem) => `${at}: ${problem}`));
     if (definition.diff !== undefined) {
       if (definition.category !== 'admin') {
         problems.push(`${at}: only an admin type carries a diff`);

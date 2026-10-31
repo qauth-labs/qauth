@@ -1,3 +1,4 @@
+import { dataJsonSchema, getEventType } from '@qauth-labs/shared-events';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -165,6 +166,25 @@ describe('KEY_PURPOSES', () => {
     expect(KEY_PURPOSES.oid4vp_response_encryption.algorithms).toEqual(['ECDH-ES']);
     expect(KEY_PURPOSES.token_signing.defaultAlgorithm).toBe('EdDSA');
     expect(KEY_PURPOSES.token_signing.algorithms).toContain('RS256');
+  });
+});
+
+// `key.emergency_retired` (#540) names the retired key's purpose, one of the
+// purposes whose keys QAuth publishes: a verifier outside QAuth holds only
+// those. The event contract lists them by hand, since the shared layer cannot
+// import this table; this keeps the two lists equal.
+describe('the purposes key.emergency_retired names', () => {
+  it('are exactly the published purposes', () => {
+    const definition = getEventType('urn:qauth:event:key.emergency_retired:v1-rc.0');
+    if (definition === undefined) throw new Error('key.emergency_retired is not registered');
+    const purpose = (dataJsonSchema(definition)['properties'] as Record<string, unknown>)[
+      'purpose'
+    ] as Record<string, unknown>;
+    const published = Object.entries(KEY_PURPOSES)
+      .filter(([, rule]) => rule.published)
+      .map(([name]) => name);
+    expect(published.length).toBeGreaterThan(0);
+    expect([...(purpose['x-extensible-enum'] as string[])].sort()).toEqual(published.sort());
   });
 });
 

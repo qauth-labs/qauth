@@ -18,11 +18,17 @@ import {
   PURGE_EXPIRED_REPOSITORIES,
   PURGE_EXPIRED_ROLE,
 } from './purge-expired';
+import {
+  createSsfSubjectSweepJob,
+  SSF_SUBJECT_SWEEP_JOB_NAME,
+  SSF_SUBJECT_SWEEP_ROLE,
+} from './ssf-subject-sweep';
 
 export * from './advisory-lock';
 export * from './event-retention';
 export * from './job-runner';
 export * from './purge-expired';
+export * from './ssf-subject-sweep';
 
 /** What the server's jobs need beside the Fastify instance. */
 export interface ServerJobSettings {
@@ -76,6 +82,13 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
         fallback: settings.eventRetentionFallback ?? DEFAULT_EVENT_RETENTION_POLICY,
         deleted: fastify.metrics.eventsRetentionDeleted,
       }),
+  },
+  {
+    // The SSF user subjects whose relation has ended (#540).
+    name: SSF_SUBJECT_SWEEP_JOB_NAME,
+    role: SSF_SUBJECT_SWEEP_ROLE,
+    repositories: ['ssfStreams'],
+    create: (fastify) => createSsfSubjectSweepJob(fastify.repositories),
   },
 ];
 

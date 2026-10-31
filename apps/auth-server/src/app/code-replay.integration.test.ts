@@ -249,6 +249,17 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     return rows.map((row) => row.data);
   }
 
+  /**
+   * The `data` of every `token.family_revoked` event (#540), in the order they
+   * were recorded.
+   */
+  async function familyRevocations(app: FastifyInstance): Promise<Record<string, unknown>[]> {
+    const { rows } = await app.dbPool.query<{ data: Record<string, unknown> }>(
+      `SELECT data FROM events WHERE type = 'urn:qauth:event:token.family_revoked:v1-rc.0' ORDER BY seq`
+    );
+    return rows.map((row) => row.data);
+  }
+
   /** The `reason` of every `token.request_failed` event, in the order they were recorded. */
   async function tokenFailureReasons(app: FastifyInstance): Promise<unknown[]> {
     return (await tokenFailures(app)).map((data) => data['reason']);
@@ -352,6 +363,10 @@ describe('authorization code replay revokes its refresh family (#627, real conta
           revokedRefreshCount: 1,
         },
       ]);
+      // The security event of the revocation, sent to SSF streams (#540).
+      expect(await familyRevocations(app)).toEqual([
+        { reason: 'code_replay', refreshFamilyId: familyId, revokedRefreshCount: 1 },
+      ]);
 
       // Every access token issued from the code is revoked (OAuth 2.1 §4.1.3
       // "all access tokens"): the redemption's and the rotation's.
@@ -430,6 +445,9 @@ describe('authorization code replay revokes its refresh family (#627, real conta
         revokedRefreshCount: 1,
       },
     ]);
+    expect(await familyRevocations(app)).toEqual([
+      { reason: 'refresh_replay', refreshFamilyId: familyId, revokedRefreshCount: 1 },
+    ]);
     expect(await accessTokenWorks(app, first.access_token)).toEqual({
       userinfo: 401,
       active: false,
@@ -506,6 +524,7 @@ describe('authorization code replay revokes its refresh family (#627, real conta
     expect(replay.json()).toMatchObject({ error: 'invalid_grant' });
     expect((await familyOf(app, code)).map((row) => row.revoked)).toEqual([false]);
     expect(await tokenFailureReasons(app)).toEqual(['pkce_mismatch']);
+    expect(await familyRevocations(app)).toEqual([]);
     expect((await refresh(app, refreshToken)).statusCode).toBe(200);
   }, 60_000);
 

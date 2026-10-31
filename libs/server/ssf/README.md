@@ -14,8 +14,9 @@ share. It holds no key and opens no connection of its own.
   `assertTransmitterMembers`): a receiver's requests and the configuration QAuth returns.
   `events_delivered` is the requested events the transmitter supports; transmitter-supplied members
   in an update must match. The `authorization_header` is never returned.
-- **Subjects** (`subjectIdentifierSchema`, `ssfSubjectOf`, `eventSubjectOf`): RFC 9493 identifiers
-  and the mapping onto event store subjects. A user is `iss_sub` with the realm's issuer; a client
+- **Subjects** (`subjectIdentifierSchema`, `ssfSubjectOf`, `eventSubjectOf`, `canonicalSubject`):
+  RFC 9493 identifiers and the mapping onto event store subjects. A user is `iss_sub` with the
+  realm's issuer, its UUID kept in lower case; a client
   is `uri` when its `client_id` is an absolute URI, `opaque` otherwise; a stream is `opaque`.
 - **SETs** (`setClaims`, `verificationSetClaims`): `jti` is the event id and `iat` the event's
   time, so a retry repeats both. The signer adds `iss` and the header.
@@ -23,10 +24,16 @@ share. It holds no key and opens no connection of its own.
   `@qauth-labs/server-event-delivery`. It lists every stream it may deliver to with the event types
   and subjects it takes, signs each SET through the delivery role's signer handle
   (`event_signing`), and POSTs it through the egress client, which checks the endpoint's addresses
-  again at every attempt. A paused stream's deliveries are held, spending no attempt. A `400` ends
+  again at every attempt. A paused stream's deliveries are held, spending no attempt. Each attempt
+  reads the stream as it is then: an event it no longer requests, or about a subject its receiver
+  removed (`hasSubject`), is not sent. A `400` ends
   a delivery only with a known RFC 8935 `err`. `receiverErrorClass` gives the coarser class a
   receiver reads on its stream status.
 
 Which QAuth event types a stream can receive comes from the registry's `ssf` slot
-(`ssfEventsSupported`, `eventTypesFor`). EVT-11 (#540) fills it; until then a stream receives its
-verification events only.
+(`ssfEventsSupported`, `eventTypesFor`), and so does each SET (#540): the CAEP, RISC or
+QAuth-defined event a type is sent as, its subject (`ssfSubjectOf`) and its members
+(`ssfEventMembers` of `@qauth-labs/shared-events`). The route gives the fan-out a rule per type
+where a mapping needs one: a client's credential event is matched on the client, an event about a
+key reaches every stream that requested it, and a type sent to its own client reaches only that
+client's stream. The docs page `reference/ssf-events` lists the mapping.

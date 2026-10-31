@@ -4,7 +4,7 @@ import { z } from 'zod';
  * Subject identifiers (RFC 9493, SSF 1.0 §3) and how QAuth's event subjects
  * map onto them (issue #410).
  *
- * The mapping, which EVT-11 (#540) uses for every SET's `sub_id`:
+ * The mapping, which every SET's `sub_id` follows (#540):
  *
  * - a user is `iss_sub`: the realm's issuer and the user's id;
  * - a client is `uri` when its `client_id` is an absolute URI (a Client ID
@@ -90,8 +90,54 @@ export const subjectIdentifierSchema = z.union([
 
 export type SubjectIdentifier = z.infer<typeof subjectIdentifierSchema>;
 
+type SimpleSubjectIdentifier = z.infer<typeof simpleSubjectSchema>;
+
 /** The longest canonical form a subject may have: `ssf_stream_subjects.subject_key`. */
 export const SUBJECT_KEY_MAX = 2048;
+
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * A user id as the event store holds it: a UUID in lower case. Postgres
+ * compares UUIDs in any case, but the event store and the fan-out compare a
+ * subject's id as text.
+ */
+function canonicalUserId(sub: string): string {
+  return UUID_SHAPE.test(sub) ? sub.toLowerCase() : sub;
+}
+
+/**
+ * A receiver's subject in the form QAuth stores and compares it: the `sub` of
+ * an `iss_sub` with the realm's issuer, a user id, in lower case when it is a
+ * UUID, also inside `aliases` and `complex` subjects. Without it a user added
+ * with an upper-case id would match none of the user's events, and the two
+ * spellings would be two subjects. Any other identifier is kept as given: a
+ * `sub` of another issuer, and a `client_id`, are compared as they are.
+ *
+ * @param issuer - The realm's issuer, the `iss` of its users' `iss_sub`.
+ */
+export function canonicalSubject(subject: SubjectIdentifier, issuer: string): SubjectIdentifier {
+  const simple = <Subject extends SimpleSubjectIdentifier>(one: Subject): Subject =>
+    one.format === 'iss_sub' && one.iss === issuer
+      ? { ...one, sub: canonicalUserId(one.sub) }
+      : one;
+  switch (subject.format) {
+    case 'aliases':
+      return { ...subject, identifiers: subject.identifiers.map(simple) };
+    case 'complex': {
+      // The schema's members are built from a list, so the inferred type
+      // names none of them.
+      const members: Record<string, unknown> = { ...subject };
+      for (const name of COMPLEX_SUBJECT_MEMBERS) {
+        const member = members[name] as SimpleSubjectIdentifier | undefined;
+        if (member !== undefined) members[name] = simple(member);
+      }
+      return members as SubjectIdentifier;
+    }
+    default:
+      return simple(subject);
+  }
+}
 
 /**
  * A subject's canonical form: JSON with every object's members sorted and no
@@ -152,6 +198,8 @@ export function ssfSubjectOf(subject: EventSubject, issuer: string): SubjectIden
  * {@link ssfSubjectOf} read backwards, or `null` when QAuth cannot place it.
  * An `opaque` identifier names a client, never a user or a stream: users are
  * named by `iss_sub`, and a stream's own events reach it without a subject.
+ * A user's id is in lower case when it is a UUID, as the event store holds it
+ * (see {@link canonicalSubject}).
  *
  * @param issuer - The realm's issuer: an `iss_sub` of another issuer is not
  *   one of this realm's users.
@@ -160,7 +208,7 @@ export function eventSubjectOf(subject: SubjectIdentifier, issuer: string): Even
   const placed = ((): EventSubject | null => {
     switch (subject.format) {
       case 'iss_sub':
-        return subject.iss === issuer ? { type: 'user', id: subject.sub } : null;
+        return subject.iss === issuer ? { type: 'user', id: canonicalUserId(subject.sub) } : null;
       case 'uri':
         return { type: 'client', id: subject.uri };
       case 'opaque':

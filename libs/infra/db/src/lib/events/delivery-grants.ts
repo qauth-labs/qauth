@@ -24,7 +24,8 @@ import { quoteRoleName, type TablePrivilege } from '../role-grants';
  * - `realms` and `oauth_clients`: `SELECT` on the columns that say whether a
  *   stream may receive events (`EVENT_DELIVERY_COLUMNS`): the realm's SSF
  *   switch, and whether its receiver is enabled, not suspended and still
- *   holds the `ssf:stream` scope.
+ *   holds the `ssf:stream` scope; and the realm's issuer, the `iss` of the
+ *   `iss_sub` subject identifier a SET names a user by (#540).
  *
  * Nothing else: no key table, no session or token table. The role holds no
  * private key (ADR-019 Decision 9); it asks the signer to sign.
@@ -42,7 +43,7 @@ export const EVENT_DELIVERY_GRANTS: Readonly<Record<string, readonly TablePrivil
 
 /** The columns the delivery role may read of tables it reads only in part, by table. */
 export const EVENT_DELIVERY_COLUMNS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  realms: Object.freeze(['id', 'ssf_transmitter_enabled']),
+  realms: Object.freeze(['id', 'ssf_transmitter_enabled', 'issuer']),
   oauth_clients: Object.freeze(['id', 'enabled', 'suspended', 'scopes']),
   ssf_stream_subjects: Object.freeze(['stream_id', 'event_subject_type', 'event_subject_id']),
 });

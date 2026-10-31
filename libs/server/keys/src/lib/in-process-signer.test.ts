@@ -355,6 +355,38 @@ describe('signJws', () => {
     expect(decodeProtectedHeader(token).kid).toBe(activeKid(keys, REALM_B, 'token_signing'));
   });
 
+  // What the delivery role's handle asks for every SET (#540): the claims the
+  // SSF route built, which carry no iss, signed with event_signing.
+  it('RFC 8417 §2.2 — adds the realm issuer as iss to a SET the delivery role signs, and keeps its claims', async () => {
+    const { signer, keys } = await setup();
+    const set = {
+      jti: '0192a000-0000-7000-8000-0000000000ee',
+      iat: 1_800_000_000,
+      aud: 'receiver',
+      sub_id: { format: 'iss_sub', iss: ISSUER_A, sub: 'user-1' },
+      events: {
+        'https://schemas.openid.net/secevent/caep/event-type/session-revoked': {
+          event_timestamp: 1_800_000_000,
+        },
+      },
+    };
+
+    const token = await signer.signJws('delivery', {
+      realmId: REALM_A,
+      purpose: 'event_signing',
+      typ: 'secevent+jwt',
+      claims: set,
+    });
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+
+    expect(payload).toEqual({ iss: ISSUER_A, ...set });
+    expect(decodeProtectedHeader(token)).toEqual({
+      alg: 'EdDSA',
+      kid: activeKid(keys, REALM_A, 'event_signing'),
+      typ: 'secevent+jwt',
+    });
+  });
+
   it('accepts the realm id in any case', async () => {
     const { signer } = await setup();
 

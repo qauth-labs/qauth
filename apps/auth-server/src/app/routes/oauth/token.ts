@@ -95,6 +95,7 @@ import {
 const TOKEN_ISSUED = 'urn:qauth:event:token.issued:v1-rc.0';
 /** The event of a refused token request. */
 const TOKEN_REQUEST_FAILED = 'urn:qauth:event:token.request_failed:v1-rc.0';
+const TOKEN_FAMILY_REVOKED = 'urn:qauth:event:token.family_revoked:v1-rc.0';
 
 /**
  * RFC 6749 §5.2: a `grant_type` the endpoint does not serve is answered
@@ -592,6 +593,33 @@ interface ReplayRevocation {
 }
 
 /**
+ * Record that a replay revoked a refresh family (`token.family_revoked`,
+ * #540), in the transaction of the revocation: a security event, which SSF
+ * streams receive as CAEP `session-revoked`. Only when the replay revoked
+ * refresh tokens; the `token.request_failed` of the refusal is recorded
+ * either way.
+ */
+async function emitFamilyRevoked(
+  ctx: HandlerContext<{ grant_type: string }>,
+  reason: 'code_replay' | 'refresh_replay',
+  userId: string,
+  revocation: { readonly familyId: string | null; readonly revokedCount: number },
+  tx: EventTransaction
+): Promise<void> {
+  if (revocation.familyId === null || revocation.revokedCount < 1) return;
+  await emitUserEvent(
+    ctx.request,
+    TOKEN_FAMILY_REVOKED,
+    {
+      reason,
+      refreshFamilyId: revocation.familyId,
+      revokedRefreshCount: revocation.revokedCount,
+    },
+    { tx, realmId: ctx.realmId, userId, clientId: ctx.client.clientId, actor: 'client' }
+  );
+}
+
+/**
  * Record a refused token request (`token.request_failed`) for a grant
  * handler: the dispatch's realm, the authenticated client as the actor, the
  * request's `grant_type`, and the end user when the grant names one.
@@ -685,7 +713,8 @@ async function spendGrant(spend: () => Promise<unknown>): Promise<boolean> {
  * Both are the same event. A code a logout or a consent revocation spent
  * issued nothing, so nothing is revoked for it.
  *
- * The family's revocation and the `token.request_failed` event commit in one
+ * The family's revocation, the `token.request_failed` event and, when it
+ * revoked refresh tokens, the `token.family_revoked` event commit in one
  * transaction (ADR-019 Decision 8). The access tokens go on the denylist, in
  * Redis, after that commit.
  */
@@ -707,6 +736,7 @@ async function rejectCodeReplay(
         revokedRefreshCount: revoked.revokedCount,
       },
     });
+    await emitFamilyRevoked(ctx, 'code_replay', authCode.userId, revoked, tx);
     return revoked.familyId;
   });
   await revokeGrantAccessTokens(fastify, {
@@ -1286,7 +1316,8 @@ async function handleClientCredentials(
  * between the read and this request's compare-and-set — and both are the same
  * event.
  *
- * The family's revocation and the `token.request_failed` event commit in one
+ * The family's revocation, the `token.request_failed` event and, when it
+ * revoked refresh tokens, the `token.family_revoked` event commit in one
  * transaction (ADR-019 Decision 8). The access tokens go on the denylist, in
  * Redis, after that commit.
  */
@@ -1305,6 +1336,13 @@ async function rejectRefreshTokenReplay(
       tx,
       revocation: { refreshFamilyId: storedToken.familyId, revokedRefreshCount },
     });
+    await emitFamilyRevoked(
+      ctx,
+      'refresh_replay',
+      storedToken.userId,
+      { familyId: storedToken.familyId, revokedCount: revokedRefreshCount },
+      tx
+    );
   });
   await revokeGrantAccessTokens(fastify, { refreshFamilyId: storedToken.familyId });
   throw new InvalidGrantError(UNUSABLE_REFRESH_TOKEN);

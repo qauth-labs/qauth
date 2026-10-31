@@ -411,7 +411,15 @@ describe('the SSF transmitter (real containers)', () => {
         stream_id: streamId,
         iss: ISSUER,
         aud: who.clientId,
-        events_supported: [],
+        // The SSF events the registry maps (#540); the verification event is
+        // never among them.
+        events_supported: [
+          'https://schemas.openid.net/secevent/caep/event-type/credential-change',
+          'https://schemas.openid.net/secevent/caep/event-type/session-revoked',
+          'https://schemas.openid.net/secevent/caep/event-type/token-claims-change',
+          'urn:qauth:secevent:key-emergency-retired:v1-rc.0',
+          'urn:qauth:secevent:token-revoked:v1-rc.0',
+        ],
         events_requested: [VERIFICATION],
         events_delivered: [],
         delivery: { method: PUSH, endpoint_url: 'https://receiver.egress.test/events' },
@@ -425,9 +433,10 @@ describe('the SSF transmitter (real containers)', () => {
       );
       expect(stored.rows[0].authorization_header).toMatch(/^v1\./);
 
+      // A client subject: a user must be related to the receiver (#540).
       const added = await call(app, who, 'POST', '/ssf/subjects/add', {
         stream_id: streamId,
-        subject: { format: 'iss_sub', iss: ISSUER, sub: randomUUID() },
+        subject: { format: 'opaque', id: who.clientId },
       });
       expect(added.statusCode, added.body).toBe(200);
       expect(added.body).toBe('');

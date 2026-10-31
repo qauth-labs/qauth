@@ -254,6 +254,25 @@ enabled again, and can start new refresh families from its old sessions: enable
 an account that was disabled for a takeover only after every node runs this
 release ([Accounts](/operate/accounts/)).
 
+### The delivery role reads `realms.issuer`
+
+From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user
+in its SETs under the realm's issuer, so the delivery role reads
+`realms.issuer` ([#540](https://github.com/qauth-labs/qauth/issues/540)). A
+deployment whose delivery role connects as the server's own database user needs
+nothing. One that runs it as a database user of its own, with the grants of
+`eventDeliveryGrantStatements` from `@qauth-labs/infra-db`, gives that user the
+new column before the new version starts, by applying those statements again
+or with the one statement they add:
+
+```sql
+GRANT SELECT ("issuer") ON TABLE "realms" TO <delivery_role>;
+```
+
+Nothing checks the grants at boot. Without this one, every SSF delivery
+attempt fails with `permission denied for table realms` and is retried until
+its attempts run out; the delivery role logs `a delivery route threw`.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
