@@ -300,8 +300,10 @@ describe('fetch processes (integration: real processes, local TLS servers)', PRO
     const fetches = pool();
     const started = performance.now();
     let stalledAnswered = false;
+    // Long enough that the other host's fresh process starts and answers
+    // before it ends, on a machine as busy as a coverage run makes it.
     const stalled = fetches
-      .exchange(stallJob('slow.stall.test', { connectTimeoutMs: 3_000 }), within(CALL_MS))
+      .exchange(stallJob('slow.stall.test', { connectTimeoutMs: 8_000 }), within(CALL_MS))
       .finally(() => {
         stalledAnswered = true;
       });
@@ -325,7 +327,7 @@ describe('fetch processes (integration: real processes, local TLS servers)', PRO
     });
     // The pool's deadline ended it, not the process's own timer, which runs a
     // second longer and would have answered without a kill.
-    expect(elapsed).toBeGreaterThanOrEqual(2_990);
+    expect(elapsed).toBeGreaterThanOrEqual(7_990);
     expect(fetches.stats().deadlineKills).toBe(1);
     // The connection closes with the process that held it.
     await until(() => stallClosed === 1);
