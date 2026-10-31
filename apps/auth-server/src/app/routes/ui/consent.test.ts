@@ -284,7 +284,9 @@ describe('UI /ui/consent GET — rendering', () => {
 
     const html = state.body as string;
     expect(typeof html).toBe('string');
-    expect(html).toContain('Test App wants to access your account');
+    // CLIENT has no verified domain (#593): the heading says so, and the name
+    // the client declared comes below it.
+    expect(html).toContain('An unverified app wants to access your account');
     expect(state.headers['Content-Type']).toContain('text/html');
     // Clickjacking/MIME/Referrer/CSP hardening moved to the global
     // security-headers plugin (#113) — covered in security-headers.test.ts.
@@ -532,6 +534,141 @@ describe('UI /ui/consent GET — rendering', () => {
     expect(sessions.redis.expiries.get(`browser-session-side:${REALM.id}:sid-g5`)).toBe(end);
     expect(end - Date.now()).toBeGreaterThan(0);
     expect(end - Date.now()).toBeLessThanOrEqual(15 * 60 * 1000);
+  });
+});
+
+describe('UI /ui/consent GET — who the client is (ADR-019 Decision 6, #593)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Render the screen for `client`, requested with `redirectUri`. */
+  async function render(client: Record<string, unknown>, redirectUri = 'https://example.com/cb') {
+    const { fastify, ctx, sessions } = makeFastify();
+    await consentRoute(fastify);
+    const { session, cookie } = await signIn(sessions, { sid: 'sid-display' });
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      redirectUris: [redirectUri],
+      ...client,
+    });
+    const { reply, state } = createReply();
+    const run = ctx.get!(
+      {
+        query: { ...BASE_QUERY, redirect_uri: redirectUri },
+        url: '/ui/consent?...',
+        headers: { cookie },
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return { run, state, sideRecord: () => sessions.sideRecord(session) };
+  }
+
+  /** The visible text of the page's card, tags removed, in order. */
+  function cardText(html: string): string {
+    const card = html.slice(html.indexOf('<form class="card"'));
+    return card.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  }
+
+  it('leads with the verified domain of a client an admin registered, its registrable domain in bold', async () => {
+    const { run, state } = await render({ verifiedDomain: 'app.example.com' });
+    await run;
+    const html = state.body as string;
+    expect(html).toContain(
+      '<h1><span class="domain">app.<strong>example.com</strong></span> wants to access your account</h1>'
+    );
+    expect(html).toContain('<title>Authorize app.example.com</title>');
+    expect(html).toContain('Verified by the operator of this server.');
+    expect(html).not.toContain('could not verify');
+  });
+
+  it('shows the declared name only below the verified domain, marked as declared', async () => {
+    const { run, state } = await render({ verifiedDomain: 'app.example.com' });
+    await run;
+    const text = cardText(state.body as string);
+    expect(text).toContain('Name declared by the app: Test App');
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('example.com'));
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('wants to access your account'));
+    expect(state.body as string).not.toContain('<title>Authorize Test App');
+  });
+
+  it('says an app with no verified domain is unverified, names where the code goes, then the declared name', async () => {
+    const { run, state } = await render(
+      {
+        provisionedByOperator: false,
+        dynamicRegisteredAt: Date.now() - 60_000,
+        metadata: { registrationType: 'dynamic' },
+        // A self-registered client never shows a domain, whatever its row holds.
+        verifiedDomain: 'bank.example',
+      },
+      'https://notes-helper.example.net/cb'
+    );
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<h1>An unverified app wants to access your account</h1>');
+    expect(html).toContain('<title>Authorize an unverified app</title>');
+    expect(html).toContain('This server could not verify who runs this app.');
+    expect(html).not.toContain('bank.example');
+    const text = cardText(html);
+    expect(text).toContain('You will be redirected to: notes-helper.example.net');
+    expect(text.indexOf('Test App')).toBeGreaterThan(text.indexOf('notes-helper.example.net'));
+    expect(text).toContain('Newly registered application');
+  });
+
+  it('flags a verified domain under a shared-hosting suffix', async () => {
+    const { run, state } = await render({ verifiedDomain: 'alice.eu.org' });
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<span class="domain"><strong>alice.eu.org</strong></span>');
+    expect(html).toContain('This address is on a shared hosting service');
+  });
+
+  it('shows a loopback redirect as this device with a warning for a client an admin registered too', async () => {
+    const { run, state } = await render(
+      { verifiedDomain: 'app.example.com' },
+      'http://127.0.0.1:8080/cb'
+    );
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<strong>You will be redirected to:</strong> this device');
+    expect(html).toContain('This app will receive your authorization code on this device.');
+    expect(html).not.toContain('127.0.0.1:8080</code>');
+  });
+
+  it('shows a native app by its scheme', async () => {
+    const { run, state } = await render({}, 'com.example.notes:/callback');
+    await run;
+    expect(cardText(state.body as string)).toContain(
+      'You will be redirected to: the app com.example.notes'
+    );
+  });
+
+  it('strips control and bidirectional characters from the declared name, and shows no client link or logo', async () => {
+    const { run, state } = await render({
+      name: 'Bank\u202Eppa.live\u202C\u200B',
+      metadata: {
+        registrationType: 'dynamic',
+        logo_uri: 'https://cdn.example.net/logo.png',
+        logoUri: 'https://cdn.example.net/logo.png',
+        homepage_uri: 'https://cdn.example.net/home',
+        client_uri: 'https://cdn.example.net/about',
+      },
+    });
+    await run;
+    const html = state.body as string;
+    expect(html).toContain('<span class="declared-name">Bankppa.live</span>');
+    expect(html).not.toMatch(/[\u202A-\u202E\u2066-\u2069\u200B]/u);
+    expect(html).not.toContain('cdn.example.net');
+    expect(html).not.toContain('<img');
+  });
+
+  it('refuses the screen, binding nothing, when it cannot show where the code goes', async () => {
+    const { run, sideRecord } = await render({}, 'https://[2001:db8::1]/cb');
+    await expect(run).rejects.toThrow(InvalidRequestError);
+    const side = await sideRecord();
+    expect(side.consentScopes?.['app-123']).toBeUndefined();
+    expect(side.csrfToken).toBeUndefined();
   });
 });
 
@@ -1537,7 +1674,10 @@ describe('UI /ui/consent — loopback redirect on any port (RFC 8252 §7.3, #414
     await get(requested);
 
     const html = state.body as string;
-    expect(html).toContain('Test App wants to access your account');
+    expect(html).toContain('An unverified app wants to access your account');
+    // A loopback redirect is shown as this device, with the warning (#593).
+    expect(html).toContain('<strong>You will be redirected to:</strong> this device');
+    expect(html).toContain('This app will receive your authorization code on this device.');
     // The form carries the requested URI forward to the POST, port included.
     expect(html).toContain(requested.replace(/&/g, '&amp;'));
   });

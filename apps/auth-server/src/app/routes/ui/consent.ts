@@ -1,4 +1,5 @@
 import { InvalidCsrfTokenError } from '@qauth-labs/shared-errors';
+import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -13,23 +14,17 @@ import {
   findExceedingAgentScopesForClient,
   unlistedReservedAudiences,
 } from '../../helpers/client-auth';
+import { clientDisplay } from '../../helpers/client-display';
 import {
   isAgentClient,
   resolveClient,
   unresolvedClientError,
 } from '../../helpers/client-resolution';
 import { isClientUsable, unusableClientError } from '../../helpers/client-status';
-import {
-  canSkipConsent,
-  describeScope,
-  filterRequestedScopes,
-  isDynamicClientWithinBadgeWindow,
-  isLoopbackRedirect,
-  redirectHost,
-} from '../../helpers/consent';
+import { canSkipConsent, describeScope, filterRequestedScopes } from '../../helpers/consent';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
-import { html, render, safe, safeUrl } from '../../helpers/html';
+import { html, render, safe } from '../../helpers/html';
 import {
   buildRedirectUrl,
   isRedirectUriAllowedForPolicy,
@@ -112,12 +107,93 @@ function buildAuthorizeUrl(query: Record<string, string | string[] | number | un
   return `${u.pathname}?${u.searchParams.toString()}`;
 }
 
+/**
+ * The heading's subject: the verified host with its registrable domain in
+ * bold, or "An unverified app". Never the name the client declared
+ * (ADR-019 Decision 6, #593).
+ */
+function clientSubject(client: ClientDisplay) {
+  const verified = client.verifiedDomain;
+  if (!verified) return html`An unverified app`;
+  const { host, registrableDomain } = verified;
+  const prefix = host.endsWith(registrableDomain)
+    ? host.slice(0, host.length - registrableDomain.length)
+    : '';
+  const highlighted = prefix === '' ? host : registrableDomain;
+  return html`<span class="domain">${prefix}<strong>${highlighted}</strong></span>`;
+}
+
+/** The page title: the verified host, or a plain statement that there is none. */
+function clientTitle(client: ClientDisplay): string {
+  return client.verifiedDomain
+    ? `Authorize ${client.verifiedDomain.host}`
+    : 'Authorize an unverified app';
+}
+
+/**
+ * Who the client is, in the order of ADR-019 Decision 6: what the server
+ * verified (or that it verified nothing), a shared-hosting flag, where the
+ * code goes with the "this device" warning, and only then the name the client
+ * declared, marked as declared. Every value comes from `clientDisplay`; this
+ * page computes none of it.
+ */
+function clientBlock(client: ClientDisplay) {
+  const verifiedLine =
+    client.kind === 'cimd'
+      ? html`<p class="verified">Verified: the app publishes its details at this address.</p>`
+      : client.kind === 'admin_registered'
+        ? html`<p class="verified">Verified by the operator of this server.</p>`
+        : html`<div class="badge">
+            This server could not verify who runs this app. Continue only if you trust where it
+            sends you.
+          </div>`;
+
+  const sharedHosting = client.verifiedDomain?.sharedHosting
+    ? html`<div class="warn">
+        This address is on a shared hosting service, where anyone can publish an app. Make sure the
+        whole address is the one you expect.
+      </div>`
+    : safe('');
+
+  const redirect = client.redirect;
+  const redirectBlock =
+    redirect === undefined
+      ? safe('')
+      : redirect.target === 'this_device'
+        ? html`<p class="redirect"><strong>You will be redirected to:</strong> this device</p>
+            <div class="warn">
+              This app will receive your authorization code on this device. Only continue if you
+              started this sign-in yourself.
+            </div>`
+        : redirect.target === 'app'
+          ? html`<p class="redirect">
+              <strong>You will be redirected to:</strong> the app
+              <code>${redirect.scheme ?? ''}</code>
+            </p>`
+          : html`<p class="redirect">
+              <strong>You will be redirected to:</strong> <code>${redirect.host ?? ''}</code>
+            </p>`;
+
+  const declaredName = client.declaredName
+    ? html`<p class="declared">
+        Name declared by the app: <span class="declared-name">${client.declaredName}</span>
+      </p>`
+    : safe('');
+
+  const badge = client.newClient
+    ? html`<div class="badge">
+        Newly registered application — double-check the address before approving.
+      </div>`
+    : safe('');
+
+  return html`${verifiedLine} ${sharedHosting} ${redirectBlock} ${declaredName} ${badge}`;
+}
+
 function consentPage(opts: {
-  clientName: string;
-  clientHomepage?: string;
+  /** Who the client is (`helpers/client-display.ts`). */
+  client: ClientDisplay;
   audience: string[];
   scopes: string[];
-  badgeDynamic: boolean;
   csrfToken: string;
   /** Per-request CSP nonce (issue #113) stamped onto the inline <style> tag. */
   cspNonce: string;
@@ -125,12 +201,6 @@ function consentPage(opts: {
   /** RFC 8707 resource indicators — emitted as one hidden input per URI. */
   resources: string[];
   userIdentifier: string;
-  /** Host portion of the redirect_uri, shown so the user can sanity-check the destination. */
-  redirectHost: string;
-  /** True when the redirect targets loopback/localhost (CIMD §6 impersonation warning). */
-  redirectIsLoopback: boolean;
-  /** True for CIMD-resolved clients (no operator pre-registration). */
-  isCimd: boolean;
 }): string {
   const scopeRows = opts.scopes.length
     ? opts.scopes.map((s) => html`<li><code>${s}</code> — ${describeScope(s)}</li>`)
@@ -147,39 +217,6 @@ function consentPage(opts: {
     ? html`<p><strong>Tokens will be valid for:</strong> ${opts.audience.join(', ')}</p>`
     : safe('');
 
-  // CIMD §6: always show where the authorization code will be sent, and warn
-  // when that destination is the user's own machine (localhost) for a client
-  // the operator never pre-registered.
-  const redirectBlock = html`<p class="redirect">
-    <strong>You will be redirected to:</strong> <code>${opts.redirectHost}</code>
-  </p>`;
-
-  const loopbackWarning =
-    opts.redirectIsLoopback && opts.isCimd
-      ? html`<div class="warn">
-          This app will receive your authorization code on <code>${opts.redirectHost}</code>
-          (your own device). Only continue if you started this sign-in yourself.
-        </div>`
-      : safe('');
-
-  const badge = opts.badgeDynamic
-    ? html`<div class="badge">
-        Newly registered application — double-check the name and URL before approving.
-      </div>`
-    : safe('');
-
-  // #112: an OAuth client's homepage_uri is attacker-controlled (especially for
-  // CIMD/dynamically registered clients). HTML-escaping alone does not stop a
-  // `javascript:` URL from executing on click, so the href is gated through
-  // safeUrl(): only http(s)/mailto links are rendered clickable. The visible
-  // text is still escaped by the `html` tag so a rejected URL shows harmlessly.
-  const safeHomepage = safeUrl(opts.clientHomepage);
-  const homepage = safeHomepage
-    ? html`<p class="homepage">
-        <a href="${safeHomepage}" rel="noopener noreferrer" target="_blank">${safeHomepage}</a>
-      </p>`
-    : safe('');
-
   return render(
     html`<!doctype html>
       <html lang="en">
@@ -187,7 +224,7 @@ function consentPage(opts: {
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
-          <title>Authorize ${opts.clientName}</title>
+          <title>${clientTitle(opts.client)}</title>
           <style nonce="${opts.cspNonce}">
             body {
               font-family:
@@ -216,9 +253,21 @@ function consentPage(opts: {
               margin: 0 0 8px;
               font-size: 20px;
             }
-            .homepage a {
-              color: #2a5bd7;
+            .domain {
+              overflow-wrap: anywhere;
+            }
+            .verified {
+              color: #1d6b3a;
               font-size: 13px;
+              margin-top: 0;
+            }
+            .declared {
+              color: #6b7280;
+              font-size: 13px;
+            }
+            .declared-name {
+              color: #1a1a1a;
+              overflow-wrap: anywhere;
             }
             ul.scopes {
               padding-left: 20px;
@@ -292,15 +341,14 @@ function consentPage(opts: {
         </head>
         <body>
           <form class="card" method="post" action="/ui/consent">
-            <h1>${opts.clientName} wants to access your account</h1>
-            ${homepage}
+            <h1>${clientSubject(opts.client)} wants to access your account</h1>
+            ${clientBlock(opts.client)}
             <p class="as-user">Signed in as ${opts.userIdentifier}</p>
-            ${badge} ${loopbackWarning}
             <p><strong>Requested access:</strong></p>
             <ul class="scopes">
               ${scopeRows}
             </ul>
-            ${audienceBlock} ${redirectBlock}
+            ${audienceBlock}
             <label class="forever">
               <input type="checkbox" name="allow_forever" value="1" checked />
               Remember this decision
@@ -414,8 +462,10 @@ export default async function (fastify: FastifyInstance) {
         });
       }
 
-      const isCimd =
-        (client.metadata as Record<string, unknown> | null)?.registrationType === 'cimd';
+      // ADR-019 Decision 6 (#593): who the client is, verified domain first,
+      // from the server's own records. Computed before anything is bound to
+      // the session, since a redirect it cannot show refuses the screen.
+      const display = clientDisplay(client, { redirectUri: query.redirect_uri });
 
       const scopes = filterRequestedScopes(query.scope, client);
 
@@ -496,16 +546,12 @@ export default async function (fastify: FastifyInstance) {
 
       return reply.send(
         consentPage({
-          clientName: client.name,
-          clientHomepage: (client.metadata as Record<string, unknown> | null)?.homepage_uri as
-            | string
-            | undefined,
+          client: display,
           // The precedence `resolveAudience` applies to the token's `aud`: the
           // requested `resource` overrides the client's configured audience,
           // so the screen names the resource server the token will be for.
           audience: resources.length > 0 ? resources : (client.audience ?? []),
           scopes,
-          badgeDynamic: isDynamicClientWithinBadgeWindow(client),
           csrfToken,
           cspNonce: reply.cspNonce.style,
           authorizeParams: {
@@ -539,9 +585,6 @@ export default async function (fastify: FastifyInstance) {
           // A sign-in without one, or a lost side record, shows the stable
           // subject id instead.
           userIdentifier: side.identifier ?? session.userId,
-          redirectHost: redirectHost(query.redirect_uri),
-          redirectIsLoopback: isLoopbackRedirect(query.redirect_uri),
-          isCimd,
         })
       );
     }
