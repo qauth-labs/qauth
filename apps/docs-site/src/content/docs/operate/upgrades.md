@@ -388,6 +388,24 @@ Replace each URI with one the client can receive its code on, through the
 client's own registration path, the seed manifest or, for a CIMD client, its
 document.
 
+### Migration 0047 can meet a client registration in a deadlock
+
+Migration 0047 ([#593](https://github.com/qauth-labs/qauth/issues/593)) adds
+`oauth_clients.verified_domain`. The runner applies every pending migration in
+one transaction, so when 0046 is in the same run it already holds `realms`
+(0046 changes that table) when 0047 locks `oauth_clients`. A node of the
+previous release that stores a new client at that moment (dynamic
+registration, a CIMD client resolved for the first time, `/api/clients`, the
+seeder) takes the two tables in the other order: `oauth_clients` for its
+insert, then `realms` for the foreign key check. Postgres then aborts one of
+the two with `deadlock detected`. If it aborts the client's request, that one
+request fails and the client registers again. If it aborts the runner, the
+whole run rolls back, nothing is half-applied, and the runner exits with an
+error: run it again. A lock taken at the start of 0047 would not change the
+order, since `realms` is held by then. To avoid the retry, run the migration
+runner when no client is being registered, such as before the first node of
+the new release starts and with open registration quiet.
+
 ### The delivery role reads `realms.issuer`
 
 From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user
