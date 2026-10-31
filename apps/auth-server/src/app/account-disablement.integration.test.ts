@@ -361,6 +361,11 @@ describe('an account enabled again does not bring back what it held before (#748
         ).rows[0].count
       ).toBe('1');
       await operator.query('COMMIT');
+    } catch (error) {
+      // Released with its transaction open, the client would keep the row
+      // lock in the pool and stall the tests after this one.
+      await operator.query('ROLLBACK');
+      throw error;
     } finally {
       operator.release();
     }
