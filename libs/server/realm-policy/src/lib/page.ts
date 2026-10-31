@@ -21,7 +21,24 @@ export const REALM_POLICIES_PAGE_LAST_VERIFIED = '2026-10-31';
 /** Where the schema lives, as the page names it. */
 const SOURCE_PATH = 'libs/server/realm-policy';
 
-const code = (value: string) => `\`${value}\``;
+/**
+ * An inline code span. Its fence is longer than any run of backticks in the
+ * value, so none can close it early, and a value that starts or ends with a
+ * backtick or a space is padded, which the span strips again.
+ */
+function code(value: string): string {
+  const longest = Math.max(0, ...(value.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longest + 1);
+  const padded = /^[\s`]|[\s`]$/.test(value) ? ` ${value} ` : value;
+  return `${fence}${padded}${fence}`;
+}
+
+/**
+ * A value as a code span in a table cell: a pipe is escaped, which a GFM
+ * table unescapes inside code too. A backslash is not, since code shows it as
+ * it is.
+ */
+const valueCode = (value: string) => code(value.replace(/\|/g, '\\|'));
 
 /**
  * A table cell: backslashes and pipes escaped, newlines flattened. The
@@ -38,9 +55,9 @@ export function describePolicyDefault(field: PolicyField): string {
   const value: unknown = field.default;
   if (value === null) return 'none';
   if (Array.isArray(value)) {
-    return value.length === 0 ? 'empty' : value.map((entry) => code(String(entry))).join(', ');
+    return value.length === 0 ? 'empty' : value.map((entry) => valueCode(String(entry))).join(', ');
   }
-  return code(String(value));
+  return valueCode(String(value));
 }
 
 /** "Stricter when", in words. */
@@ -63,7 +80,7 @@ export function describeStricterWhen(field: PolicyField): string {
       return 'not ordered';
     default: {
       const order = typeof direction === 'string' ? [] : direction.order;
-      return `closer to ${code(order[order.length - 1])} (${order.map(code).join(' < ')})`;
+      return `closer to ${valueCode(order[order.length - 1])} (${order.map(valueCode).join(' < ')})`;
     }
   }
 }

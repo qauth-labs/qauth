@@ -3,7 +3,9 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 
 import { beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
+import { ordered, policyField } from './field';
 import {
   describeClass,
   describePolicyDefault,
@@ -12,6 +14,7 @@ import {
   renderRealmPoliciesPage,
 } from './page';
 import { REALM_POLICY_REGISTRY } from './realm-policies';
+import { createPolicyRegistry } from './registry';
 
 /**
  * The docs page `reference/realm-policies.md` is generated from the schema
@@ -99,6 +102,37 @@ describe('the realm policies page (#514)', () => {
       );
       for (const { field } of fields) expect(page).toContain(field.doc.summary);
     }
+  });
+
+  it('keeps a default or an order value with a pipe or a backtick in its cell and its code span', () => {
+    const annotations = {
+      seedEnv: null,
+      secret: false,
+      environmentBound: false,
+      doc: { summary: 'A setting for this test.', link: 'https://docs.qauth.dev/reference/' },
+    } as const;
+    const registry = createPolicyRegistry();
+    registry.registerPolicyGroup('odd', {
+      name: policyField(z.string(), {
+        ...annotations,
+        default: 'a|b`c',
+        direction: 'opaque',
+        securityWhen: 'never',
+        effects: [],
+      }),
+      level: policyField(z.enum(['lo|w', '`high`']), {
+        ...annotations,
+        default: 'lo|w',
+        direction: ordered(['lo|w', '`high`']),
+        securityWhen: 'never',
+        effects: [],
+      }),
+    });
+    const rows = tableRows(sectionOf(renderRealmPoliciesPage(registry), '`odd`'));
+    expect(rows.map((cells) => cells.length)).toEqual([6, 6]);
+    expect(rows[0][1]).toBe('``a\\|b`c``');
+    expect(rows[1][1]).toBe('`lo\\|w`');
+    expect(rows[1][3]).toBe('closer to `` `high` `` (`lo\\|w` < `` `high` ``)');
   });
 
   it('names the schema version', () => {
