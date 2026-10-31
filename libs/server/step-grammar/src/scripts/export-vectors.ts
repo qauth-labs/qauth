@@ -7,13 +7,11 @@
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-
-import { findRepositoryRoot } from '@qauth-labs/shared-test-vectors';
+import { dirname, join, resolve } from 'node:path';
 
 import { STEP_VECTORS_PATH, stepVectorFile } from '../lib/vectors';
 
-const root = findRepositoryRoot();
+const root = resolve(__dirname, '..', '..', '..', '..', '..');
 const path = join(root, STEP_VECTORS_PATH);
 const file = stepVectorFile();
 mkdirSync(dirname(path), { recursive: true });
