@@ -101,6 +101,13 @@ export interface ResolvedClient {
    * (`helpers/authorization-error.ts`). Always false for a CIMD row.
    */
   provisionedByOperator: boolean;
+  /**
+   * `oauth_clients.verified_domain` (#593): the domain an admin set on the
+   * client, which the screens show first while `provisionedByOperator` holds
+   * (`helpers/client-display.ts`). Optional so a partially shaped object
+   * type-checks; absent reads as none.
+   */
+  verifiedDomain?: string | null;
   metadata: Record<string, unknown> | null;
 }
 

@@ -80,6 +80,9 @@ function buildPendingCimdRow(
     // The redirect URIs will be the document's, not the operator's, so this
     // row does not receive authorization errors by redirect (ADR-012).
     provisionedByOperator: false,
+    // ADR-019 Decision 6 (#593): a CIMD client's verified domain is the host
+    // of its client id URL, never an operator-set one.
+    verifiedDomain: null,
     isAgent: false,
     scopes: spec.scopes,
     audience: spec.audience ?? null,

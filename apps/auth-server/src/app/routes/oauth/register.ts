@@ -203,6 +203,10 @@ export default async function (fastify: FastifyInstance) {
         // explicitly, like `environment`, so no change to the request schema
         // can ever make a self-registration trusted.
         provisionedByOperator: false,
+        // ADR-019 Decision 6 (#593): no verified domain. Only an admin sets
+        // one, on a client the operator provisioned; pinned like
+        // `provisionedByOperator`, and the request schema defines no such field.
+        verifiedDomain: null,
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.

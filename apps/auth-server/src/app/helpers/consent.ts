@@ -141,7 +141,9 @@ export function canSkipConsent(
  * `dynamicRegisteredAt` — first-party / hand-provisioned clients are
  * never flagged as new.
  */
-export function isDynamicClientWithinBadgeWindow(client: OAuthClientLike): boolean {
+export function isDynamicClientWithinBadgeWindow(
+  client: Pick<OAuthClientLike, 'dynamicRegisteredAt'>
+): boolean {
   if (!client.dynamicRegisteredAt) return false;
   if (env.DYNAMIC_CLIENT_BADGE_DAYS <= 0) return false;
   const ageMs = Date.now() - client.dynamicRegisteredAt;
@@ -221,59 +223,18 @@ export function agentPersistenceLine(ssoMaxLifespanSeconds: number | null): stri
 }
 
 /**
- * Non-IPv4 loopback host literals, matched after stripping any IPv6 brackets
- * (Node's `URL.hostname` returns `[::1]` *with* brackets). The full IPv4
- * `127.0.0.0/8` range is matched separately — see below.
- */
-const LOOPBACK_HOSTS = new Set(['::1', 'localhost']);
-
-/**
- * True when `host` is anywhere in the IPv4 loopback block `127.0.0.0/8`
- * (RFC 1122 §3.2.1.3). The whole /8 — not just `127.0.0.1` — loops back, so
- * `127.0.0.2`, `127.1.2.3`, etc. must all be treated as loopback; matching
- * only `127.0.0.1` let a malicious client dodge the consent-screen warning.
- */
-function isIpv4Loopback(host: string): boolean {
-  const octets = host.split('.');
-  if (octets.length !== 4) return false;
-  for (const o of octets) {
-    if (!/^\d{1,3}$/.test(o)) return false;
-    const n = Number(o);
-    if (n < 0 || n > 255) return false;
-  }
-  return Number(octets[0]) === 127;
-}
-
-/**
- * Extract the hostname of a redirect_uri for display at the consent screen.
- * CIMD §6 calls out localhost-redirect impersonation: a malicious client can
- * present a `client_id` document whose redirect_uri points at the user's own
- * machine to intercept the code. Surfacing the destination host lets the
- * user notice an unexpected target. Returns the raw value if it can't be
- * parsed (so the screen still shows *something* rather than hiding it).
+ * Extract the host (with its port) of a redirect URI, for the issuer page an
+ * authorization error is shown on instead of a redirect
+ * (`helpers/authorization-error.ts`), so the user sees where the link goes.
+ * Returns the raw value if it can't be parsed (so the page still shows
+ * *something* rather than hiding it). The consent screen does not use it: it
+ * shows where the code goes from `clientDisplay` (`helpers/client-display.ts`,
+ * #593), which also tells a loopback redirect apart as "this device".
  */
 export function redirectHost(redirectUri: string): string {
   try {
     return new URL(redirectUri).host || redirectUri;
   } catch {
     return redirectUri;
-  }
-}
-
-/**
- * True when the redirect_uri targets a loopback / localhost address. The
- * consent screen warns on these because, for a client the AS never
- * pre-registered (CIMD), a localhost redirect means the authorization code
- * is delivered to whatever is listening on the user's own machine — a known
- * impersonation vector (CIMD §6, "localhost-redirect impersonation").
- */
-export function isLoopbackRedirect(redirectUri: string): boolean {
-  try {
-    // URL.hostname keeps the brackets on IPv6 literals (`[::1]`); strip them
-    // so both bracketed and bare forms match.
-    const host = new URL(redirectUri).hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    return LOOPBACK_HOSTS.has(host) || isIpv4Loopback(host);
-  } catch {
-    return false;
   }
 }

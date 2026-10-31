@@ -224,12 +224,14 @@ describe('the consent screen for an AI agent client (#845, real containers)', ()
     const cookie = await signedInUser(app);
 
     const agent = await consentScreen(app, cookie, AGENT_ID);
-    expect(agent.body).toContain('Release Bot wants to access your account');
-    expect(agent.body).toContain('<p>Release Bot is an AI agent.</p>');
+    // The line names no data the client declared: the declared name stays
+    // in its own labelled line (ADR-019 Decision 6, #593).
+    expect(agent.body).toContain('<bdi class="declared-name">Release Bot</bdi>');
+    expect(agent.body).toContain('<p>This app is an AI agent.</p>');
     expect(agent.body).toContain(`<p>${PERSISTENCE_LINE}.</p>`);
 
     const app2 = await consentScreen(app, cookie, APP_ID);
-    expect(app2.body).toContain('Notes App wants to access your account');
+    expect(app2.body).toContain('<bdi class="declared-name">Notes App</bdi>');
     expect(app2.body).not.toContain(AGENT_LINE);
     expect(app2.body).not.toContain(PERSISTENCE_LINE);
   });
@@ -373,15 +375,14 @@ describe('the consent screen for an AI agent client (#845, real containers)', ()
     ).not.toBeNull();
   });
 
-  it('escapes markup in the client name on the agent line', async () => {
+  it('puts nothing the client declared on the agent line', async () => {
     const app = server();
     await setRealmLimit(app, null);
     const cookie = await signedInUser(app, { agentName: '<script>alert(1)</script> & "Bot"' });
 
     const { body } = await consentScreen(app, cookie, AGENT_ID);
-    expect(body).toContain(
-      '<p>&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;Bot&quot; is an AI agent.</p>'
-    );
+    expect(body).toContain('<p>This app is an AI agent.</p>');
+    expect(body).not.toContain('Bot&quot; is an AI agent.');
     expect(body).not.toContain('<script>alert(1)');
   });
 });

@@ -5,10 +5,13 @@
  * it, like `client-suspension.ts`.
  */
 import {
+  InvalidVerifiedDomainError,
   InvalidWebAuthnOriginError,
   isReservedAudience,
   isReservedQauthScope,
+  normaliseVerifiedDomain,
   normaliseWebAuthnOrigin,
+  redirectTarget,
 } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
@@ -59,6 +62,20 @@ const webauthnOriginZ = z.string().transform((value, ctx) => {
   }
 });
 
+/**
+ * The domain the operator verified for the client (#593), stored in the form
+ * the screens show it: lower case, `xn--` labels for an internationalised name.
+ */
+const verifiedDomainZ = z.string().transform((value, ctx) => {
+  try {
+    return normaliseVerifiedDomain(value);
+  } catch (error) {
+    if (!(error instanceof InvalidVerifiedDomainError)) throw error;
+    ctx.addIssue({ code: 'custom', message: `"${value}": ${error.message}` });
+    return z.NEVER;
+  }
+});
+
 export const clientSpecSchema = z
   .object({
     client_id: z.string().min(1).max(255),
@@ -68,7 +85,16 @@ export const clientSpecSchema = z
     response_types: z.array(responseTypeZ).optional(),
     scopes: z.array(z.string().min(1)).optional(),
     audience: z.array(z.string().min(1)).nullable().optional(),
-    redirect_uris: z.array(z.url()).optional(),
+    // Each one a URI the consent screen can show where the code goes to
+    // (ADR-019 Decision 6, #593), as every registration path requires.
+    redirect_uris: z
+      .array(
+        z.url().refine((uri) => redirectTarget(uri) !== undefined, {
+          error: (issue) =>
+            `"${String(issue.input)}": the consent screen cannot show where this redirect URI goes: name a DNS host of valid labels, an IPv4 address or a loopback address, or a scheme of at most 64 characters`,
+        })
+      )
+      .optional(),
     require_pkce: z.boolean().optional(),
     token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
     // ADR-007 §2: classify a seeded client as an autonomous AI agent.
@@ -104,6 +130,13 @@ export const clientSpecSchema = z
     // refused while DPOP_ENABLED is on. Operator-set only, like
     // `max_agent_mode`: no registration path accepts it. Omitted ⇒ false.
     dpop_bound_access_tokens: z.boolean().optional(),
+    // ADR-019 Decision 6 (#593): the domain consent, device-code entry, logout
+    // and the account console show first for this client, above the name it
+    // declares. Admin-set only: setting it is a security operation of the
+    // admin API (`clients.update`), and until that ships this manifest is the
+    // only path. No registration path accepts it. Omitted ⇒ NULL ⇒ the
+    // screens say the app is unverified.
+    verified_domain: verifiedDomainZ.optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be

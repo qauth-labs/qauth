@@ -58,6 +58,30 @@ consent, which lets later requests for the same scopes skip the screen and lists
 the client under `/consents`. Unticked, the approval is one-time: nothing is
 stored, and `/oauth/token` returns no `refresh_token` for that code.
 
+The screen names the client by what the server verified about it, never by the
+name the client gives itself
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)
+Decision 6):
+
+- A client whose `client_id` is a Client ID Metadata Document URL is shown by
+  that URL's host, in its ASCII (`xn--`) form, with the registrable domain in
+  bold. A host under a shared-hosting suffix (the private section of the Public
+  Suffix List) is flagged.
+- A client the operator provisioned is shown by the domain the operator set on
+  it: `verified_domain` in the `db:seed-oauth-clients` manifest.
+- Any other client, a dynamically registered or developer-portal one included,
+  is shown as an unverified app, with the host that receives the code.
+
+A redirect to a loopback address is shown as "this device", with a warning. The
+name the client declared comes after all of this, labelled as declared, cut to
+64 characters and stripped of control and bidirectional characters. No logo or
+link the client supplied is shown.
+
+Since the screen always says where the code goes, registration refuses a
+redirect URI it could not show: a host that is not a DNS name of valid labels
+(an underscore, an empty label), an IPv6 address other than loopback, or a
+private-use scheme longer than 64 characters.
+
 ### An AI agent client
 
 For an agent client (one with `is_agent`, see
@@ -65,8 +89,8 @@ For an agent client (one with `is_agent`, see
 the screen adds two lines after the "Signed in as" line. They are QAuth's own
 text, never anything the client declared:
 
-- **"&lt;client name&gt; is an AI agent."** The name is escaped like the
-  heading's.
+- **"This app is an AI agent."** The name the client declared stays in its
+  own line, labelled as declared.
 - **How long the agent may keep working.** In a realm without
   `sso_max_lifespan`: "It may keep working until you revoke it." In a realm
   that sets one: "It may keep working until you revoke it, or until &lt;the

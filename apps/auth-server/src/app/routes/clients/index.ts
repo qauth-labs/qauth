@@ -544,6 +544,10 @@ export default async function (fastify: FastifyInstance) {
         // RFC 9449 §5.2 (#480): DPoP-bound access tokens are operator state
         // too, pinned here and excluded from `UpdateOAuthClient`.
         dpopBoundAccessTokens: false,
+        // ADR-019 Decision 6 (#593): a developer cannot verify their own
+        // client's domain. Admin state, pinned here and excluded from
+        // `UpdateOAuthClient`.
+        verifiedDomain: null,
       });
 
       // Best-effort: the client (and its secret hash) is already committed, so

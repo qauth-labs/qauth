@@ -60,6 +60,36 @@ describe('validateRedirectUri', () => {
     expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(InvalidRedirectUriError);
   });
 
+  // ADR-019 Decision 6 (#593): the consent screen shows where the code goes,
+  // so a URI it cannot describe is refused here, not after the user signed in.
+  it.each([
+    'https://my_app.example.com/cb',
+    'https://a..b.example/cb',
+    'https://-app.example.com/cb',
+    'https://app-.example.com/cb',
+    `https://${'a'.repeat(64)}.example/cb`,
+    'https://[2001:db8::1]/cb',
+    `com.example.${'a'.repeat(60)}:/cb`,
+  ])('refuses the redirect URI %s (the consent screen cannot show it)', (uri) => {
+    expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES)).toThrow(
+      expect.objectContaining({
+        name: InvalidRedirectUriError.name,
+        errorDescription: expect.stringContaining('must name a DNS host of valid labels'),
+      })
+    );
+  });
+
+  it('accepts what the consent screen shows: a host, an IPv4 address, a loopback address, an app scheme', () => {
+    for (const uri of [
+      'https://xn--bcher-kva.example/cb',
+      'https://192.0.2.10/cb',
+      'http://[::1]/cb',
+      `com.example.${'a'.repeat(52)}:/cb`,
+    ]) {
+      expect(() => validateRedirectUri(uri, NO_CUSTOM_SCHEMES), uri).not.toThrow();
+    }
+  });
+
   describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
     const cursorCallback = 'cursor://anysphere.cursor-mcp/oauth/callback';
 

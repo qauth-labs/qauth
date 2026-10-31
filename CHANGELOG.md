@@ -1159,6 +1159,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+- **Client display data and the verified domain** ([#593], ADR-019 Decision 6).
+  One function in the auth server says who a client is from the server's own
+  records, as the Interaction API's `ClientDisplay`: the host of a CIMD client's
+  client id URL in its `xn--` form, or the domain an admin set on a client the
+  operator provisioned, each with its registrable domain and a flag for a host
+  under a shared-hosting suffix (the Public Suffix List's private section);
+  any other client is unverified. A loopback redirect is "this device". The
+  name a client declares is capped at 64 characters and stripped of control,
+  bidirectional, zero-width and markup characters and of stacked combining
+  marks; a client-supplied logo or link is never returned. Migration 0045 adds
+  the nullable `oauth_clients.verified_domain`, which only the
+  `db:seed-oauth-clients` manifest (`verified_domain`) writes until the admin
+  API's `clients.update` does, as a security operation.
 
 - **Approvals for security operations, bound to the exact request** ([#512],
   ADR-019 Decision 7). The admin pipeline's approval gate, which refused every
@@ -1202,6 +1215,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The consent screen leads with what the server verified about the client**
+  ([#593]). Its heading and title name the verified domain, or say "An
+  unverified app", never the client's own name, which now appears below,
+  labelled as declared by the app. Every client an operator provisioned shows
+  as unverified until its `verified_domain` is set. A loopback redirect warns
+  for every client, not only CIMD ones. Dynamic registration, `/api/clients`,
+  CIMD documents and the seed manifest refuse a redirect URI the screen cannot
+  show (a host that is not a DNS name of valid labels, an IPv6 address that is
+  not loopback, a scheme over 64 characters) with `invalid_redirect_uri`; an
+  existing client that holds one gets `invalid_request` at the consent screen.
 - **A process binds a second port only once the admin listener is turned
   on** ([#511]). An existing deployment binds nothing new: the listener is off
   by default. A process with `ADMIN_API_ENABLED=true` and the `admin` role
@@ -1971,6 +1994,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#590]: https://github.com/qauth-labs/qauth/issues/590
 [#591]: https://github.com/qauth-labs/qauth/issues/591
 [#592]: https://github.com/qauth-labs/qauth/issues/592
+[#593]: https://github.com/qauth-labs/qauth/issues/593
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#616]: https://github.com/qauth-labs/qauth/issues/616

@@ -343,11 +343,16 @@ catalog:
   # The Public Suffix List, for the passkey RP ID rules (ADR-019 Decision 2,
   # #553): a parent-domain RP ID must not be a public suffix (`co.uk`, or a
   # private-section entry where unrelated parties own the names under it),
-  # which no hand-written rule can tell from a registrable domain. tldts ships
-  # the list compiled in, with no network access and no runtime dependency but
-  # its own tldts-core; it is already in the tree through tough-cookie. No
-  # advisory names tldts or tldts-core (GHSA advisory database, checked
-  # 2026-10-24). Caret, so a lockfile refresh picks up a newer list.
+  # which no hand-written rule can tell from a registrable domain. The auth
+  # server's client display data uses it too (ADR-019 Decision 6, #593): a
+  # screen highlights the registrable domain of a client's verified host and
+  # flags a host under a private-section (shared-hosting) entry, where anyone
+  # can get a name next to the real app's; and a domain an admin verifies for
+  # a client must not itself be a public suffix. tldts ships the list compiled in,
+  # with no network access and no runtime dependency but its own tldts-core;
+  # it is already in the tree through tough-cookie. No advisory names tldts or
+  # tldts-core (GHSA advisory database, checked 2026-10-24 and again
+  # 2026-10-31). Caret, so a lockfile refresh picks up a newer list.
   tldts: '^7.4.18'
   '@swc-node/register': '~1.12.1'
   '@swc/core': '~1.16.18'
