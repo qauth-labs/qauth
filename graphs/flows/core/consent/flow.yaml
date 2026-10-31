@@ -535,13 +535,14 @@ states:
   renderedForAgent:
     title: Show the consent page for an AI agent
     description: >-
-      ADR-014 §11 (#845). The page of rendered, field for field, with two lines under the heading, in QAuth's words
+      ADR-014 §11 (#845). The same page as rendered, with two lines after the signed-in identifier, in QAuth's words
       and never the client's: the client named as an AI agent, its name escaped like the heading's, and how long it may
       keep working once allowed. That is the end of its refresh-token family (#552): with no sso_max_lifespan on the
       realm, until the user revokes the consent; with one, no later than the family's start plus the limit and the end
       of the browser session behind the code, which ends the limit after the sign-in. The realm's limit is read from
-      the request's realm row as the page renders. /oauth/authorize sends an agent here even when a stored consent
-      covers the request (ADR-015 Decision 11).
+      the request's realm row as the page renders. An access token already issued is not cut short by either end, and
+      the family needs a stored consent (out of view: /oauth/token). /oauth/authorize sends an agent here even when a
+      stored consent covers the request (ADR-015 Decision 11).
     source: apps/auth-server/src/app/routes/ui/consent.ts:176
     response:
       status: 200
@@ -555,7 +556,7 @@ states:
           "It may keep working until you revoke it." when the realm sets no sso_max_lifespan; when it sets one, "It may
           keep working until you revoke it, or until <the limit, an exact duration such as 1 hour or 1 day and 12
           hours> after you signed in, whichever comes first."
-        form: 'the form of rendered, field for field'
+        form: 'the same form as rendered'
     on:
       SUBMIT:
         target: submitResolvingRealm

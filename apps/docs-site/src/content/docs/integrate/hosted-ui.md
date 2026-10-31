@@ -62,8 +62,8 @@ stored, and `/oauth/token` returns no `refresh_token` for that code.
 
 For an agent client (one with `is_agent`, see
 [Agent Authorization](/integrate/agent-authorization/#1-agent-client-type-is_agent)),
-the screen adds two lines under the heading. They are QAuth's own text, never
-anything the client declared:
+the screen adds two lines after the "Signed in as" line. They are QAuth's own
+text, never anything the client declared:
 
 - **"&lt;client name&gt; is an AI agent."** The name is escaped like the
   heading's.
@@ -79,12 +79,24 @@ limit each refresh moves the family's end forward, until the user revokes the
 consent under `/consents`. With one, the family ends no later than its start
 plus the limit and the end of the browser session behind the code, and that
 session ends the limit after the sign-in
-([Refresh Token](/integrate/oauth-flow/#refresh-token-rotation)). The line
-describes an approval with **Remember this decision** ticked; unticked, no
-refresh token is issued and the agent stops when its access token expires.
-The page reads the realm's limit when it renders, so a change an operator
-makes afterwards applies from the agent's next refresh, not from what the page
-said.
+([Refresh Token](/integrate/oauth-flow/#refresh-token-rotation)). Three things
+the line leaves to this page:
+
+- **The family needs a stored consent.** The code exchange issues a refresh
+  token only under one: the approval with **Remember this decision** ticked,
+  or a consent the user remembered on an earlier visit, which unticking the
+  box later does not remove (revoke it under `/consents`). With neither, no
+  refresh token is issued and the agent stops when its access token expires.
+- **An access token outlives both ends.** Revoking the consent and the
+  family's end stop refreshes; an access token already issued works until it
+  expires, `ACCESS_TOKEN_LIFESPAN` (15 minutes by default) or, for a
+  `development` client, `DEV_ACCESS_TOKEN_LIFESPAN`.
+- **The limit is the one the page read.** The page states the realm's limit
+  as it is when the page renders. A limit the operator changes later applies
+  to the family as the Refresh Token section describes, not as the page said.
+  For about a minute after a change, a browser session that was signed in
+  before it can still carry the old limit as its end (the session cache), and
+  a family started in that window keeps that end.
 
 A stored consent never skips the screen for an agent client (ADR-015
 Decision 11): every authorization request from an agent shows it, `prompt=none`
