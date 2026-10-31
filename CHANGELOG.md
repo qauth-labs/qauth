@@ -1044,9 +1044,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
   the caller's grants and scopes, the classification and permission check, an
   approval gate, the handler inside one database transaction, and the audit
-  row. Until approvals ship ([#512]) the gate fails closed: every request
-  classified `security` answers the new `approval_required` problem code (403)
-  and never runs. A call that reaches a realm within the caller's grants writes
+  row. A request classified `security` that carries no approval bound to it
+  ([#512]) answers the new `approval_required` problem code (403) and never
+  runs. A call that reaches a realm within the caller's grants writes
   exactly one admin audit row, reads included: `succeeded` in the handler's
   transaction, or `denied` or `failed` in a new one with no diff (a `denied`
   or `failed` row that cannot be written is logged instead). A realm
@@ -1065,6 +1065,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+
+- **Approvals for security operations, bound to the exact request** ([#512],
+  ADR-019 Decision 7). The admin pipeline's approval gate, which refused every
+  security operation, now lets one run with the approval its `QAuth-Approval`
+  header names. The client files the approval with
+  `POST /admin/v1-rc.0/realms/{realmId}/approvals` (the operation's id, path
+  parameters, query and body, and an optional reason), reads it with
+  `GET …/approvals/{approvalId}` and may withdraw it with
+  `POST …/approvals/{approvalId}/cancel` (`If-Match` on the version its `ETag`
+  gave). Migration 0045 adds `admin_approvals`. The server keeps the canonical
+  request (operation id, method, path parameters, query, body, realm and
+  requester, RFC 8785): `request_hash` without the server's nonce, which the
+  gate recomputes from the retried call, and `op_hash` with it, which an
+  approver's factor signs a challenge derived from. The retry consumes the
+  approval with one conditional update in its own transaction, so it runs once,
+  and an operation that rolls back leaves the approval usable until it expires,
+  five minutes after it was filed. Filing and withdrawing take the
+  classification of the operation they name, reading needs `approvals.read`,
+  and anyone but the requester and an eligible approver gets 404. A human
+  requester's own fresh step-up is the first approval; a service account's
+  comes from a human admin, and a required second approval from a different
+  human admin who holds `approvals.approve`. Approving happens through a factor
+  (the `ApprovalFactor` interface), never through an admin route: only a
+  test-only factor exists, which refuses to be built under
+  `NODE_ENV=production`, so no deployment can approve yet; the passkey factor
+  and the approval page come later. The answer carries `approvalUrl`, built
+  from the requester realm's row. Every security operation registers a
+  renderer, and the admin listener refuses to boot one without it: the
+  approver sees typed display data rendered from the stored request, every
+  string length-capped with its control, bidirectional and invisible
+  characters shown escaped, and the requester's reason apart, as quoted text.
+  Filing, approving, declining, withdrawing and consuming each write the admin
+  audit log; the operation's own row lists the approvals it ran on.
 
 ### Changed
 
