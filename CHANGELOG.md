@@ -646,9 +646,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
   on a fresh deployment), and gives a fresh realm an RS256 signing key too.
   It is one transaction, so two nodes that boot together import once. A
-  warning at every boot names each key variable that is still set ([#491]
-  changes what it says for the token keys, above); the session cookie keeps
-  using its variable until it moves onto the signer. Until rotation through the store ships, a signing
+  warning at every boot names each key variable that is still set ([#491] and
+  [#493] change what it says, above). Until rotation through the store ships, a signing
   variable that holds a new key replaces the stored key of its algorithm, as
   changing the variable replaced the key before: the stored key is retired and
   leaves the JWKS at once, and the boot warns with both `kid`s.
@@ -1329,6 +1328,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the previous release refuse the new tokens and the new nodes refuse the
   access tokens the old ones issued, until they expire
   (`ACCESS_TOKEN_LIFESPAN`): upgrade such a deployment all at once.
+- **BREAKING (browser sessions): the browser cookies are signed with the realm
+  cookie key** ([#493], ADR-019 Decisions 3 and 9). The session, login-CSRF and
+  wallet-flow cookies are no longer signed with `SESSION_COOKIE_SECRET` but with
+  the realm's `cookie_hmac` key, which the signer hands the browser-facing role;
+  each process keeps a realm's current and previous cookie keys in memory and
+  reads them again every 60 seconds. Each value is `<kid>.<payload>.<mac>`: it
+  names the key that signed it, so after a rotation a cookie of the previous key
+  keeps verifying while it is the previous key, and its HMAC-SHA256 covers
+  the cookie's name and the realm id, so a value never passes for another
+  cookie or for a cookie of another realm. The session payload lists the
+  session ids and the active one (`{ s: [sid], a: sid }`). The MAC is compared
+  in constant time, and a cookie that does not verify is now cleared, as one
+  whose session is gone already was. The session cookie's `Max-Age` is the time
+  left until the session's absolute end (the realm's `sso_max_lifespan`, or
+  `SESSION_COOKIE_TTL` without one) instead of `SESSION_COOKIE_TTL`. A cookie an
+  earlier release signed does not verify, so every user signed in to the hosted
+  pages signs in once more after the upgrade (sessions are not moved anyway).
+  `SESSION_COOKIE_SECRET` is now optional: the key boot step imports it into
+  the default realm's store, and a value that differs from the stored cookie key
+  (compared in constant time, after opening the stored key with the KEK)
+  replaces it. The replaced key stays the realm's previous cookie key, so
+  nobody is signed out, until the next replacement: a time limit comes with
+  rotation through the store ([#542]), so a leaked secret is cut off by
+  replacing it twice. A value that matches a retired key changes nothing.
+  `NODE_ENV=production` refuses the values QAuth's examples published (the
+  `.env.example` development value and the old `.env.docker.example` one) on
+  every process, and no longer refuses an unset one. A process without the
+  signer role answers `503` on the browser routes that read or set a signed
+  cookie until it can call the signer service ([#497]): a split deployment
+  keeps `web` with the signer for now, and `/auth/logout` there still ends
+  everything but leaves the cookie for the next page to clear.
 - ID tokens are signed with RS256 when the realm's key store holds an RS256
   key, and discovery's `id_token_signing_alg_values_supported` lists what each
   realm holds: `["RS256","EdDSA"]` or `["EdDSA"]`. A fresh deployment generates
@@ -2050,6 +2080,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#493]: https://github.com/qauth-labs/qauth/issues/493
 [#494]: https://github.com/qauth-labs/qauth/issues/494
 [#495]: https://github.com/qauth-labs/qauth/issues/495
+[#497]: https://github.com/qauth-labs/qauth/issues/497
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
@@ -2071,6 +2102,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#542]: https://github.com/qauth-labs/qauth/issues/542
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549
 [#550]: https://github.com/qauth-labs/qauth/issues/550

@@ -1,6 +1,9 @@
 import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 
-import { DEV_SESSION_COOKIE_SECRET_DEFAULT } from '@qauth-labs/server-config';
+import {
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
+  PUBLISHED_SESSION_COOKIE_SECRETS,
+} from '@qauth-labs/server-config';
 import { calculateJwkThumbprint } from 'jose';
 import { describe, expect, it } from 'vitest';
 
@@ -65,12 +68,20 @@ describe('keyVariableSettings', () => {
     });
   });
 
-  it('passes SESSION_COOKIE_SECRET only when the operator set it', () => {
+  it('passes SESSION_COOKIE_SECRET only when the operator set it, and never a published value', () => {
     expect(keyVariableSettings(BASE, {}).cookieSecret).toBeUndefined();
     expect(
-      keyVariableSettings(BASE, { SESSION_COOKIE_SECRET: DEV_SESSION_COOKIE_SECRET_DEFAULT })
+      keyVariableSettings({ HYBRID_SIGNING_ENABLED: false }, { SESSION_COOKIE_SECRET: '' })
         .cookieSecret
     ).toBeUndefined();
+    for (const published of PUBLISHED_SESSION_COOKIE_SECRETS) {
+      expect(
+        keyVariableSettings(
+          { ...BASE, SESSION_COOKIE_SECRET: published },
+          { SESSION_COOKIE_SECRET: published }
+        ).cookieSecret
+      ).toBeUndefined();
+    }
     expect(
       keyVariableSettings(
         { ...BASE, SESSION_COOKIE_SECRET: SECRET },

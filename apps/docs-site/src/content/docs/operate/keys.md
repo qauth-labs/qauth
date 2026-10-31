@@ -52,8 +52,9 @@ together do it once:
    RS256 one, `JWT_MLDSA_PRIVATE_KEY` (with `HYBRID_SIGNING_ENABLED` on) as the
    ML-DSA-65 key of the hybrid pair, and `SESSION_COOKIE_SECRET`, when you set
    it, as the cookie key. A `_PATH` variable counts as its variable. A signing
-   key the store lacks replaces the store's active key of its algorithm (see
-   "Replacing a signing key" below).
+   key or a cookie secret the store lacks replaces the store's active key of
+   its kind (see "Replacing a signing key" and "Replacing the cookie key"
+   below).
 2. It creates the keys the realm still lacks: the event-signing and
    data-at-rest keys, and the cookie key when `SESSION_COOKIE_SECRET` is unset.
    A realm that neither holds nor imports a signing key gets an Ed25519 and an
@@ -129,13 +130,64 @@ such a deployment all at once rather than node by node: in a mixed fleet each
 release refuses the other's access tokens until they expire. A relying party
 that compares `iss` with the slashed form must drop the slash.
 
-The token key variables are read only by the key step above: once the store
-holds a key, the variable no longer signs anything, and a new key in it is how
-you replace the stored one (below). The server boots without them. Remove them
+The key variables are read only by the key step above: once the store holds a
+key, the variable no longer signs anything, and a new key in it is how you
+replace the stored one (below). The server boots without them. Remove them
 once you no longer need to roll back to a release that signs with them; each
-boot warns about every one still set. The session cookie is still signed with
-`SESSION_COOKIE_SECRET` until #493, so keep that one set. The upgrade guide
-(#501) says when to remove it.
+boot warns about every one still set. That includes `SESSION_COOKIE_SECRET`:
+since #493 the browser cookies are signed with the realm's cookie key from the
+store, and the variable is optional. Production refuses every value QAuth's
+examples published (below).
+
+### The browser cookies
+
+The session cookie, the login-CSRF cookie and the wallet-flow cookie are signed
+with the realm's `cookie_hmac` key, which the signer hands the browser-facing
+role (ADR-019 Decision 9). Each value is `<kid>.<payload>.<mac>`: it names the
+key that signed it, and its HMAC-SHA256 covers the cookie's name, the realm id,
+the `kid` and the payload, so a value never passes for another cookie or for a
+cookie of another realm, even if two realms held the same key. A new cookie is
+signed with the realm's current key; a cookie of the previous key, the one the
+last rotation retired, still verifies while it is the previous key: until the
+next replacement, as no retention limit applies before rotation through the
+store ships (#542). A cookie that does not verify is cleared; one that names a
+key the process has not read yet is left for the next request.
+
+Each process reads a realm's cookie keys from the signer at most once a minute,
+and once more, at most every five seconds, when a cookie names a key it has not
+read yet. The session cookie's `Max-Age` is the time left until the session's
+absolute end. A cookie an earlier release signed with `SESSION_COOKIE_SECRET`
+does not verify: its user signs in again (see the upgrade guide).
+
+A process without the signer role gets the cookie keys from the signer service,
+which this release cannot call yet (#497): until it can, its browser routes that
+read or set a signed cookie answer 503, and `/auth/logout` there ends the
+sessions and tokens but leaves the cookie for the next page to clear.
+
+### Replacing the cookie key
+
+Until rotation through the key store ships, you replace the cookie key through
+`SESSION_COOKIE_SECRET`, as for a signing key: set a new secret, at least 32
+characters, and restart. At boot, each stored cookie key is opened with the KEK
+and compared with the variable in constant time. A secret the store lacks
+becomes the active cookie key, and the one it replaces is retired: unlike a
+replaced signing key, it stays the realm's previous cookie key and keeps
+verifying the cookies it signed until the next replacement, so nobody is signed
+out. The node that replaces it logs a warning with the new and the retired
+`kid`. A variable that holds a cookie key the store retired changes nothing, and
+each boot warns about it, so a node that still has the old value during a
+rolling restart boots.
+
+To cut off a leaked cookie secret at once, replace it twice, restarting after
+each new secret: the second replacement drops the leaked key from the previous
+slot, and every cookie it signed stops verifying. Emergency retirement (#551)
+will do this in one step.
+
+If `SESSION_COOKIE_SECRET` holds a value from QAuth's own examples
+(`.env.example`, or the `.env.docker.example` of earlier releases), anyone can
+sign cookies with it: production refuses to start with it. Set a new secret
+first, so the boot step replaces the stored key, and only then remove the
+variable; removing it alone leaves the stored key as it is.
 
 ### Replacing a signing key
 

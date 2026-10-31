@@ -99,7 +99,7 @@ states:
         css: 'form[action="/ui/login"] input[name="csrf_token"]'
         attribute: value
       csrfCookie:
-        # <value>.<signature>; absent from a response that reused the request's cookie, which the jar then still holds
+        # <kid>.<value>.<mac>; absent from a response that reused the request's cookie, which the jar then still holds
         from: cookie
         name: __Host-qauth_login_csrf
   redirectedToResume:

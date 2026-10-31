@@ -15,7 +15,7 @@ import {
   clearSessionCookie,
   readCookie,
   SESSION_COOKIE_NAME,
-  verifySignedSessionId,
+  verifySessionCookie,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
 import { inactiveSubjectError } from '../../helpers/token-subject';
@@ -147,7 +147,23 @@ export default async function (fastify: FastifyInstance) {
         // found through the per-user index, not a cookie; the request's own
         // cookie is cleared when it names one of them.
         const endedSessions = await endBrowserSessions(fastify, user.realmId, userId);
-        const requestSessionId = verifySignedSessionId(readCookie(request, SESSION_COOKIE_NAME));
+        // Best effort (#493): the cookie verifies only with the realm's cookie
+        // keys, and a process that cannot read them (no signer role, a signer
+        // outage) must still end everything below. The cookie then names an
+        // ended session, and the next page that reads it clears it.
+        let requestSessionId: string | null = null;
+        try {
+          requestSessionId = await verifySessionCookie(
+            fastify,
+            user.realmId,
+            readCookie(request, SESSION_COOKIE_NAME)
+          );
+        } catch (error) {
+          request.log.warn(
+            { reason: error instanceof Error ? error.name : 'unknown_error' },
+            'the session cookie could not be checked at logout; the next page that reads it clears it'
+          );
+        }
         if (requestSessionId && endedSessions.includes(requestSessionId)) {
           clearSessionCookie(reply);
         }

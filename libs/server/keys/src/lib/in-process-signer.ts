@@ -39,6 +39,7 @@ import {
 import type {
   CookieSecret,
   CookieSecrets,
+  CookieSecretsOptions,
   DecryptRequest,
   EncryptRequest,
   JwsKeyAlgorithm,
@@ -757,10 +758,24 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       );
     },
 
-    async getCookieSecrets(caller: SignerCaller, realmIdInput: string): Promise<CookieSecrets> {
+    async getCookieSecrets(
+      caller: SignerCaller,
+      realmIdInput: string,
+      options?: CookieSecretsOptions
+    ): Promise<CookieSecrets> {
+      const fields = options === undefined ? {} : readRequest(options, ['kid']);
       authorize(caller, 'getCookieSecrets');
       const realmId = resolveRealmId(realmIdInput);
-      const records = await listKeys(realmId, 'cookie_hmac', null);
+      const wanted = fields['kid'];
+      if (wanted !== undefined && typeof wanted !== 'string') {
+        throw new SignerRequestRefusedError('INVALID_KID', 'A cookie key id is a string');
+      }
+      let records = await listKeys(realmId, 'cookie_hmac', null);
+      // A cookie names a key this list lacks: another node may sign with a key
+      // this one has not read yet (#493). Read again, at most once a second.
+      if (wanted !== undefined && !records.some((key) => key.kid === wanted)) {
+        records = await listKeys(realmId, 'cookie_hmac', null, true);
+      }
       const current = records.filter((key) => key.status === 'active' && key.algorithm === 'HS256');
       if (current.length !== 1) {
         throw new SignerKeyNotFoundError(realmId, 'cookie_hmac', { algorithm: 'HS256' });

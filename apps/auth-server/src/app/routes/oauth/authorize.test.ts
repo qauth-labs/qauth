@@ -174,6 +174,7 @@ function makeFastify() {
       verifyAccessToken: vi.fn(),
     },
     sessionService: sessions.service,
+    signer: sessions.signer,
     sessionUtils: {
       getSession: vi.fn(),
       // #316 follow-up: the login bounce parks the pending authorize URL here
@@ -503,15 +504,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       reply
     );
 
-    expect(sessions.service.get).toHaveBeenCalledWith({
-      realmId: REALM.id,
-      sid: 'sid-other-realm',
-    });
+    // The cookie's MAC names its realm (#493): it does not verify here, so no
+    // session is even looked up.
+    expect(sessions.service.get).not.toHaveBeenCalled();
     expect(state.redirected).toContain('/ui/login?return_to=');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
-    // The cookie is cleared as a stale one; the session itself is left to its
-    // own realm.
+    // The cookie is cleared as one that does not verify; the session itself
+    // is left to its own realm.
     expect(state.headers['Set-Cookie']).toContain('Max-Age=0');
     expect(sessions.service.revoke).not.toHaveBeenCalled();
     expect(sessions.service.sessions.has('sid-other-realm')).toBe(true);

@@ -910,6 +910,41 @@ describe('getCookieSecrets', () => {
     expect(current.secret.buffer.byteLength).toBe(current.secret.length);
   });
 
+  it('reads the store again for a kid its list lacks, as a cookie of another node names (#493)', async () => {
+    const { signer, keys, factory, store, advance } = await setup();
+    const first = activeKid(keys, REALM_A, 'cookie_hmac', 'HS256');
+    await signer.getCookieSecrets('local', REALM_A);
+    // Another node rotates; this one's list is a second old, well inside its interval.
+    const [second] = await factory.createKey({
+      realmId: REALM_A,
+      purpose: 'cookie_hmac',
+      status: 'next',
+    });
+    store.update(REALM_A, first, { status: 'retired', retireAt: NOW + 1 });
+    store.update(REALM_A, second.kid, { status: 'active' });
+    advance(1_000);
+
+    const cached = await signer.getCookieSecrets('local', REALM_A);
+    const known = await signer.getCookieSecrets('local', REALM_A, { kid: first });
+    const asked = await signer.getCookieSecrets('local', REALM_A, { kid: second.kid });
+
+    expect(cached.current.kid).toBe(first);
+    expect(known.current.kid).toBe(first);
+    expect(asked.current.kid).toBe(second.kid);
+    expect(asked.previous?.kid).toBe(first);
+  });
+
+  it('refuses options that are not an object with a string kid', async () => {
+    const { signer } = await setup();
+
+    for (const options of [null, 'kid', { kid: 7 }, { kid: 'k', refresh: true }]) {
+      await expect(
+        signer.getCookieSecrets('local', REALM_A, options as never),
+        JSON.stringify(options)
+      ).rejects.toBeInstanceOf(SignerRequestRefusedError);
+    }
+  });
+
   it('gives a typed error for a realm with no cookie key', async () => {
     const { signer } = await setup();
 

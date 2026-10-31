@@ -5,18 +5,29 @@ import { parseRealmEndpointHosts } from './realm-endpoint-hosts';
 import { parseRedirectUriCustomSchemes } from './redirect-uri-schemes';
 
 /**
- * The development-only default for {@link SESSION_COOKIE_SECRET}.
+ * The published development value of {@link SESSION_COOKIE_SECRET}: its
+ * default until the session cookie moved onto the realm cookie keys (#493),
+ * and the value `.env.example` still ships.
  *
- * Exported so downstream apps (e.g. the auth-server) can reference the
- * SAME constant in a production-rejection `superRefine` rather than
- * hand-copying the literal — if this default ever changes, every guard
- * stays in sync automatically. Production deployments MUST set
- * `SESSION_COOKIE_SECRET` to a strong, unique secret; relying on this
- * default in production is insecure and the auth-server's env schema
- * actively rejects it when `NODE_ENV='production'`.
+ * Exported so the auth server refuses the SAME constant rather than a
+ * hand-copied literal: its env schema rejects it when `NODE_ENV='production'`,
+ * and its key boot step never imports it into a realm's key store, so a
+ * development stack generates a random cookie key instead.
  */
 export const DEV_SESSION_COOKIE_SECRET_DEFAULT =
   'dev-only-session-secret-change-me-1234567890abcdef';
+
+/**
+ * Every {@link SESSION_COOKIE_SECRET} value QAuth's examples published: the
+ * development value above, and the one `.env.docker.example` shipped before
+ * the cookie moved onto the realm keys (#493). Anyone can sign cookies with
+ * them, so the auth server refuses each in production, and its key boot step
+ * never imports one into a key store.
+ */
+export const PUBLISHED_SESSION_COOKIE_SECRETS: readonly string[] = Object.freeze([
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
+  'change-me-to-a-strong-secret-at-least-32-characters',
+]);
 
 /**
  * A `'true'` / `'false'` flag. Unset and blank both take `defaultValue`.
@@ -251,21 +262,26 @@ export const authEnvSchema = z.object({
   USERINFO_RATE_WINDOW: z.coerce.number().int().min(1).default(60),
 
   /**
-   * HMAC secret used to sign the `__Host-qauth_session` cookie (issue #150).
-   * Minimum 32 characters. In production this MUST be set explicitly —
-   * the default value is test-only and is rejected in NODE_ENV=production
-   * by downstream consumers if needed.
+   * The session cookie secret of a deployment from before the realm key
+   * store, at least 32 characters. The cookies are signed with the realm's
+   * `cookie_hmac` key from the signer (#493); this value is read only by the
+   * key boot step, which imports it into the default realm's store, or
+   * replaces the stored cookie key with it when the two differ. Optional:
+   * without it the store keeps, or generates, its own key. Blank is unset,
+   * as `docker-compose.yml` forwards it in the `${VAR:-}` form. The auth
+   * server refuses {@link DEV_SESSION_COOKIE_SECRET_DEFAULT} in production.
    */
-  SESSION_COOKIE_SECRET: z
-    .string()
-    .min(32, 'SESSION_COOKIE_SECRET must be at least 32 characters')
-    .default(DEV_SESSION_COOKIE_SECRET_DEFAULT),
+  SESSION_COOKIE_SECRET: z.preprocess(
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.string().min(32, 'SESSION_COOKIE_SECRET must be at least 32 characters').optional()
+  ),
 
   /**
    * Browser session lifetime in seconds (default 86400 = 24 hours, per issue
-   * #150). Absolute, counted from sign-in: it is the cookie's `Max-Age` and
-   * the server refuses an older session, so using the hosted pages does not
-   * extend it.
+   * #150). Absolute, counted from sign-in, for a realm that sets no maximum
+   * lifespan: the server refuses an older session, so using the hosted pages
+   * does not extend it, and the cookie's `Max-Age` counts down to the
+   * session's end (#493).
    */
   SESSION_COOKIE_TTL: z.coerce
     .number()

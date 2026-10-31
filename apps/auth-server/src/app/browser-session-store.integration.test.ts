@@ -16,10 +16,12 @@ import {
   generateJwtPem,
   type PemKeyPair,
   pkcePair,
+  provisionRealmKeys,
   registerPasswordAccount,
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { sessionIdOfCookie } from '../testing/session-cookie-value';
 import type { RealmRow } from './helpers/request-realm';
 
 /**
@@ -138,11 +140,11 @@ describe('browser sessions on the session service (#488, real containers)', () =
     return jar;
   }
 
-  /** The `sid` the jar's session cookie carries (`<sid>.<hmac>`). */
+  /** The active `sid` the jar's session cookie carries (`<kid>.<payload>.<mac>`, #493). */
   function sidOf(jar: CookieJar): string {
     const value = jar.get(SESSION_COOKIE_NAME);
     if (value === undefined) throw new Error('the jar holds no session cookie');
-    return value.slice(0, value.lastIndexOf('.'));
+    return sessionIdOfCookie(value);
   }
 
   async function sessionRows(app: FastifyInstance): Promise<SessionRow[]> {
@@ -318,12 +320,16 @@ describe('browser sessions on the session service (#488, real containers)', () =
   }, 60_000);
 
   it('a cookie from realm A at realm B resolves to no session', async () => {
-    const { app, realm } = await boot();
+    const { app } = await boot();
     await app.repositories.realms.createWithPrimaryHost(
       { name: 'beta', issuer: `https://${HOST_B}`, enabled: true },
       HOST_B
     );
+    // Realm B has its own keys, a cookie key among them, as a realm created
+    // with its keys does.
+    await provisionRealmKeys(app, 'beta');
     const jar = await signIn(app);
+    expect(sidOf(jar)).toBeTruthy();
     const lookups = vi.spyOn(app.sessionService, 'get');
 
     const atB = await app.inject({
@@ -333,11 +339,10 @@ describe('browser sessions on the session service (#488, real containers)', () =
     });
     expect(atB.statusCode).toBe(401);
     expect(atB.json()).toMatchObject({ status: 401, code: 'unauthorized' });
-    // The lookup named realm B, which holds no session with that sid, and the
-    // stale cookie is cleared there.
-    expect(lookups).toHaveBeenCalledWith(
-      expect.objectContaining({ sid: sidOf(jar), realmId: expect.not.stringMatching(realm.id) })
-    );
+    // The cookie names realm A's cookie key, which realm B does not hold, and
+    // its MAC names realm A (#493): it does not verify at B, so no session is
+    // even looked up there, and the cookie is cleared.
+    expect(lookups).not.toHaveBeenCalled();
     expect(String(atB.headers['set-cookie'])).toContain(`${SESSION_COOKIE_NAME}=;`);
 
     // The same cookie at its own realm's host still names the session.

@@ -197,10 +197,16 @@ describe('service roles (#495)', () => {
     });
     expect(token.statusCode).toBe(404);
 
-    // A browser page renders with the plugins and repositories web loads.
+    // A browser route runs with the plugins and repositories web loads.
+    const consents = await app.inject({ method: 'GET', url: '/consents' });
+    expect(consents.statusCode).toBe(401);
+    // A page that sets a signed cookie needs the realm's cookie key (#493),
+    // which a process without the signer gets from the signer service, not
+    // built yet (#497): it fails closed, and sets no cookie signed with
+    // anything else.
     const login = await app.inject({ method: 'GET', url: '/ui/login' });
-    expect(login.statusCode).toBe(200);
-    expect(login.headers['content-type']).toMatch(/^text\/html/);
+    expect(login.statusCode).toBe(503);
+    expect(login.headers['set-cookie']).toBeUndefined();
   });
 
   it.each(['all', ...SERVICE_ROLE_NAMES])(

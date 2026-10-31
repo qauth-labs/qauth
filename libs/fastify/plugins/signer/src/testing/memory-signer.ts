@@ -115,6 +115,26 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
   const issuers = new Map<string, string>();
   const storeReads: string[] = [];
 
+  /** A row with its sealed material, as `realm_keys` holds it. */
+  function wrappedKey(realmId: string, kid: string): WrappedSignerKey | undefined {
+    const row = rows.find(({ key }) => key.realmId === realmId && key.kid === kid);
+    if (row === undefined) return undefined;
+    const { key } = row;
+    return {
+      realmId: key.realmId,
+      purpose: key.purpose,
+      scopeId: key.scopeId,
+      kid: key.kid,
+      algorithm: key.algorithm,
+      status: key.status,
+      ciphertext: key.ciphertext,
+      iv: key.iv,
+      wrappedDek: key.wrappedDek,
+      kekRef: key.kekRef,
+      aadVersion: key.aadVersion,
+    };
+  }
+
   const keyStore: RealmKeyBootStore<null> = {
     transaction: async (work) => {
       const snapshot = rows.map((row) => ({ ...row }));
@@ -162,6 +182,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     deleteByScope: async () => [],
     lockRealm: async () => undefined,
+    getWrappedKey: async (realmId, kid) => wrappedKey(realmId, kid),
     anotherRealmPublishes: async (realmId, identity) =>
       rows.some(
         ({ key, publicJwk }) =>
@@ -204,22 +225,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     async getWrappedKey(realmId, kid): Promise<WrappedSignerKey | undefined> {
       storeReads.push('getWrappedKey');
-      const row = rows.find(({ key }) => key.realmId === realmId && key.kid === kid);
-      if (row === undefined) return undefined;
-      const { key } = row;
-      return {
-        realmId: key.realmId,
-        purpose: key.purpose,
-        scopeId: key.scopeId,
-        kid: key.kid,
-        algorithm: key.algorithm,
-        status: key.status,
-        ciphertext: key.ciphertext,
-        iv: key.iv,
-        wrappedDek: key.wrappedDek,
-        kekRef: key.kekRef,
-        aadVersion: key.aadVersion,
-      };
+      return wrappedKey(realmId, kid);
     },
     async listPublicKeys(realmId): Promise<readonly PublicKeyRecord[]> {
       storeReads.push('listPublicKeys');

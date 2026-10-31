@@ -107,6 +107,7 @@ function makeFastify() {
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };

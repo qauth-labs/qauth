@@ -369,6 +369,8 @@ export async function bootAuthServer(
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
       key.startsWith('JWT_') ||
+      // A key variable too (#493): a boot that leaves it out boots without it.
+      key === 'SESSION_COOKIE_SECRET' ||
       key.startsWith('PQC_') ||
       key === 'HYBRID_SIGNING_ENABLED' ||
       key === 'SIGNING_ALGORITHM_MODE' ||

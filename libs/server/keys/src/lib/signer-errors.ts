@@ -99,7 +99,9 @@ export type SignerRefusalReason =
   /** The plaintext is not bytes. */
   | 'INVALID_PLAINTEXT'
   /** The context is not a well-formed string of at most `MAX_DATA_CONTEXT_LENGTH` characters. */
-  | 'INVALID_CONTEXT';
+  | 'INVALID_CONTEXT'
+  /** The cookie key id `getCookieSecrets` was asked for is not a string. */
+  | 'INVALID_KID';
 
 /** A request the signer does not run. Nothing was signed, encrypted or read. */
 export class SignerRequestRefusedError extends SignerError {

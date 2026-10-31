@@ -241,10 +241,14 @@ export default async function (fastify: FastifyInstance) {
       // Login CSRF defence (signed double-submit). Reuse an already-valid CSRF
       // cookie if the browser sent one (keeps a refreshed/multi-tab login page
       // consistent with its cookie); otherwise mint a fresh token and set it.
-      const existing = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const existing = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       const csrfToken = existing ?? generateCsrfToken();
       if (!existing) {
-        setLoginCsrfCookie(reply, csrfToken);
+        await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, csrfToken);
       }
 
       reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -289,7 +293,11 @@ export default async function (fastify: FastifyInstance) {
       // A forged cross-site POST cannot present a matching pair because the
       // attacker can neither read the victim's cookie nor sign one. Checked
       // BEFORE any credential work so a CSRF probe never reaches the DB.
-      const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const cookieCsrf = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
         await emitUserEvent(
           request,
@@ -299,7 +307,7 @@ export default async function (fastify: FastifyInstance) {
         );
         // Re-render with a fresh token so the user can retry legitimately.
         const freshCsrf = generateCsrfToken();
-        setLoginCsrfCookie(reply, freshCsrf);
+        await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, freshCsrf);
         reply.header('Content-Type', 'text/html; charset=utf-8');
         reply.header('Cache-Control', 'no-store');
         reply.code(403);
@@ -438,7 +446,7 @@ export default async function (fastify: FastifyInstance) {
         { realmId: realm.id, userId: user.id, actor: 'user' }
       );
 
-      setSessionCookie(reply, session.sid);
+      await setSessionCookie(fastify, reply, session);
       // Burn the login-CSRF cookie now that authentication succeeded. Fastify
       // accumulates multiple Set-Cookie headers into an array, so this does not
       // clobber the session cookie set just above.

@@ -195,6 +195,7 @@ function makeFastify() {
       getIssuer: () => ISSUER,
     },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: sessions.redis,
     // Only the pending-authorization stash (`pending-authz:` keys, #316
     // follow-up) that a redirect to /ui/login writes still goes through
