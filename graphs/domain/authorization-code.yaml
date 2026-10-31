@@ -24,7 +24,7 @@ actions:
   AuthorizationCode.mint:
     # internal: invoked by core.consent and by the consent skip of /oauth/authorize (not graphed yet), with no route
     # and no actor policy; mintAuthorizationCode is the one place every code is minted (ADR-017 Decision 10)
-    source: apps/auth-server/src/app/helpers/authorization-code.ts:102
+    source: apps/auth-server/src/app/helpers/authorization-code.ts:103
     body:
       type: object
       # every binding is required, null where the request has none, so no mint site can drop one

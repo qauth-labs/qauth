@@ -175,7 +175,11 @@ export const createClientFn = createServerFn({ method: 'POST' })
 // Update (PATCH)
 // ---------------------------------------------------------------------------
 
-export function normalizeUpdateInput(data: unknown): { id: string; patch: UpdateClientInput } {
+export function normalizeUpdateInput(data: unknown): {
+  id: string;
+  patch: UpdateClientInput;
+  ifMatch?: string;
+} {
   if (
     typeof data !== 'object' ||
     data === null ||
@@ -214,7 +218,13 @@ export function normalizeUpdateInput(data: unknown): { id: string; patch: Update
     patch.tokenEndpointAuthMethod = validateAuthMethod(d['tokenEndpointAuthMethod']);
   }
   if (typeof d['enabled'] === 'boolean') patch.enabled = d['enabled'];
-  return { id: d['id'] as string, patch };
+  // The client's ETag as the edit form read it (#524): the update names it in
+  // If-Match, so a client changed since is refused, not overwritten.
+  const ifMatch =
+    typeof d['ifMatch'] === 'string' && d['ifMatch'].length > 0 && d['ifMatch'].length <= 256
+      ? d['ifMatch']
+      : undefined;
+  return { id: d['id'] as string, patch, ...(ifMatch === undefined ? {} : { ifMatch }) };
 }
 
 export const updateClientFn = createServerFn({ method: 'POST' })

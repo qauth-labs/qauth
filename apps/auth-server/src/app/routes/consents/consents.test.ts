@@ -80,6 +80,8 @@ function makeFastify() {
   const ctx: TestContext = { urls: [] };
   const sessions = createBrowserSessionFixture();
   const fastify: any = {
+    // The module's own hooks: the deprecation headers since #524.
+    addHook: vi.fn(),
     withTypeProvider: () => ({
       get: (u: string, _o: unknown, h: any) => {
         ctx.urls.push({ method: 'GET', url: u });

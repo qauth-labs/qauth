@@ -1,10 +1,4 @@
-import { refuseBoundTokenAsBearer } from '@qauth-labs/fastify-plugin-jwt';
-import {
-  JWTExpiredError,
-  JWTInvalidError,
-  UnauthorizedClientError,
-} from '@qauth-labs/shared-errors';
-import { isReservedAudience } from '@qauth-labs/shared-validation';
+import { UnauthorizedClientError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -14,14 +8,12 @@ import {
   MINT_TRANSACTION,
   STEP_UP_FRESH_AUTH_WINDOW_MS,
 } from '../../constants';
-import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import {
   findExceedingAgentScopesForClient,
-  resolveAudience,
   unlistedReservedAudiences,
 } from '../../helpers/client-auth';
 import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
@@ -29,7 +21,6 @@ import { isClientUsable, unusableClientError } from '../../helpers/client-status
 import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
 import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
-import { assertManagementToken } from '../../helpers/management-token';
 import {
   buildRedirectUrl,
   isAllowedRedirectUriScheme,
@@ -41,16 +32,9 @@ import {
 } from '../../helpers/oauth-redirect';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
-import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
+import { realmIssuer } from '../../helpers/realm-url';
 import { requestRealm } from '../../helpers/request-realm';
-import {
-  evaluateStepUp,
-  isDangerousScope,
-  parsePromptMode,
-  stepUpErrorForPromptNone,
-} from '../../helpers/step-up';
-import { isJtiRevoked } from '../../helpers/token-revocation';
-import { inactiveSubjectError } from '../../helpers/token-subject';
+import { evaluateStepUp, parsePromptMode, stepUpErrorForPromptNone } from '../../helpers/step-up';
 import { emitUserEvent, type UserEventOptions } from '../../helpers/user-events';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
@@ -105,20 +89,18 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  * GET /oauth/authorize
  * OAuth 2.1 Authorization Code Flow with PKCE.
  *
- * Accepts two user-auth mechanisms:
- *   1. Browser-driven (issue #150): signed __Host-qauth_session cookie.
- *      No session → redirect to /ui/login with a `return_to` pointing at
- *      `/ui/resume/<handle>`; the authorize URL itself is parked server-side
- *      (see helpers/pending-authorization.ts, #316). Session + no
- *      prior consent covering the requested scopes, or an agent client
- *      (ADR-015 Decision 11) → redirect to the consent screen at
- *      /ui/consent. Otherwise issue a code directly.
- *   2. Legacy/machine: Authorization: Bearer <access_token>. Retained for
- *      backwards compatibility with first-party callers that have not yet
- *      migrated to the browser flow. It cannot show the consent screen, so
- *      it issues a code ONLY under a stored consent that already covers the
- *      request (the same `canSkipConsent` gate as the browser flow); any
- *      other request is refused with `access_denied`.
+ * The user authenticates with the browser session (issue #150): the signed
+ * __Host-qauth_session cookie. No session → redirect to /ui/login with a
+ * `return_to` pointing at `/ui/resume/<handle>`; the authorize URL itself is
+ * parked server-side (see helpers/pending-authorization.ts, #316). Session +
+ * no prior consent covering the requested scopes, or an agent client
+ * (ADR-015 Decision 11) → redirect to the consent screen at /ui/consent.
+ * Otherwise issue a code directly.
+ *
+ * The legacy Bearer path, which authenticated the user from the developer
+ * portal's access token with no sign-in and no consent screen, is retired
+ * (#524): an `Authorization` header authenticates no one here, and a request
+ * with only that header is treated as one without a session.
  */
 export default async function (fastify: FastifyInstance) {
   // OIDC Core §3.1.2.1: the authorization endpoint MUST support BOTH GET (params
@@ -296,15 +278,13 @@ export default async function (fastify: FastifyInstance) {
     }
 
     // -----------------------------------------------------------------
-    // User authentication. Prefer the session cookie; fall back to
-    // Bearer for backwards compat. When both are absent we kick to the
-    // login page with a return_to URL so the user can establish a
-    // session and come back.
+    // User authentication: the browser session cookie. The legacy Bearer
+    // path is retired (#524), so an `Authorization` header counts for
+    // nothing: without a session the user signs in first.
     // -----------------------------------------------------------------
     const browserSession = await resolveBrowserSession(fastify, request, reply);
-    const bearer = fastify.jwtUtils.extractFromHeader(request.headers.authorization);
 
-    if (!browserSession && !bearer) {
+    if (!browserSession) {
       // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI, so an
       // unauthenticated silent-renewal request MUST come back as
       // `error=login_required` on the client's redirect_uri rather than as a
@@ -348,78 +328,7 @@ export default async function (fastify: FastifyInstance) {
       return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
     }
 
-    let userId: string;
-    if (browserSession) {
-      userId = browserSession.userId;
-    } else {
-      // bearer path
-      try {
-        // RFC 9700 mix-up defence: only accept a token this realm issued,
-        // under its keys and its issuer (#491).
-        const payload = await fastify.jwtUtils.verifyAccessToken(
-          tokenRealm(realm),
-          bearer as string
-        );
-        // Only the first-party login token: the system client's `client_id`,
-        // its audience (or, for a token minted before #509, its `client_id`
-        // as audience) and no delegation, exactly as the management API pins
-        // them. Audience alone would not do: any code whose bound `resource`
-        // resolves to the system audience mints a user token that carries it.
-        await assertManagementToken(fastify, realm, payload);
-        // RFC 9449 §7.2 (#480): this path reads a Bearer token, and a
-        // DPoP-bound token is never one.
-        refuseBoundTokenAsBearer(payload);
-        // RFC 7009: `requireJwt` and token exchange consult the per-`jti`
-        // denylist; this path issues codes from the same token, so it must
-        // too. A Redis failure throws into the catch below (fails closed).
-        if (await isJtiRevoked(fastify, payload.jti)) {
-          throw new JWTInvalidError('Access token has been revoked');
-        }
-        // The token outlives the login that minted it; a user disabled in
-        // between must not get a code from it, as the session path (via
-        // `resolveBrowserSession`) and every grant at `/oauth/token` refuse,
-        // nor may a token minted before the account was last disabled (#748).
-        const user = await fastify.repositories.users.findById(realm.id, payload.sub);
-        if (!user || accountCredentialRefusal(user, accessTokenIssuedAt(payload)) !== null) {
-          throw inactiveSubjectError();
-        }
-        userId = payload.sub;
-      } catch (error) {
-        // Only a refused token is the client's `access_denied`. Anything else
-        // (the key store or the denylist unreachable) is the server's, never
-        // a bad token (#491): the client and its redirect URI are validated by
-        // now, so it hears `temporarily_unavailable` there (RFC 6749
-        // §4.1.2.1), with `state` and `iss` as every authorization error
-        // carries them, and no code is issued.
-        if (!(error instanceof JWTInvalidError || error instanceof JWTExpiredError)) {
-          fastify.log.error({ err: error }, 'authorize: the Bearer token could not be checked');
-          await emitUserEvent(
-            request,
-            'urn:qauth:event:authorization.failed:v1-rc.0',
-            { error: 'temporarily_unavailable' },
-            clientEvent
-          );
-          return sendAuthorizationError(reply, client, redirectUri, {
-            error: 'temporarily_unavailable',
-            error_description: 'The authorization server cannot check the token right now',
-            state: state ?? undefined,
-            iss,
-          });
-        }
-        await emitUserEvent(
-          request,
-          'urn:qauth:event:authorization.failed:v1-rc.0',
-          { error: 'access_denied' },
-          clientEvent
-        );
-        return sendAuthorizationError(reply, client, redirectUri, {
-          error: 'access_denied',
-          error_description: 'Invalid or expired token',
-          state: state ?? undefined,
-          iss,
-        });
-      }
-    }
+    const userId = browserSession.userId;
 
     // ADR-007 §2 (#184): deny-by-default agent scope-mode cap. A reserved
     // agent-mode scope (`agent:readonly|admin|exec`) is permitted ONLY for a
@@ -489,218 +398,129 @@ export default async function (fastify: FastifyInstance) {
       });
     }
 
-    // The legacy Bearer path (#509) authenticates the user from the developer
-    // portal's token, with no sign-in and no consent screen. It must never
-    // turn that token into a token for an API family: a request on it that
-    // names a QAuth API audience, or a client whose default audience holds
-    // one, is refused. #524 retires the path.
-    if (
-      !browserSession &&
-      [...resources, ...[resolveAudience(client)].flat()].some(isReservedAudience)
-    ) {
-      await emitUserEvent(
-        request,
-        'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: 'access_denied', reason: 'bearer_path_reserved_audience' },
-        userEvent
-      );
-      return sendAuthorizationError(reply, client, redirectUri, {
-        error: 'access_denied',
-        error_description: 'a QAuth API audience is not issued on the Bearer path',
-        state: state ?? undefined,
-        iss,
-      });
-    }
-
-    // ADR-007 §2 (#185): step-up on the legacy Bearer path. The Bearer path
-    // authenticates the user from an existing access token and CANNOT run an
-    // interactive step-up (no login / consent screen for a machine caller),
-    // so it must not be a back door that mints a dangerous-scope code with no
-    // fresh authentication. Default-deny: a Bearer authorize request carrying
-    // any dangerous scope (write:* / agent:admin / agent:exec) is refused
-    // with `access_denied` and the client is told to use the interactive
-    // browser flow (which enforces the dangerous-op re-auth gate).
-    // ADR-008 §5 (#197): the automatic dangerous-scope refusal is gated by the
-    // environment policy. Staging/production (and the fail-safe default) keep
-    // it; a `development` client relaxes it so local Bearer-path iteration
-    // with dangerous scopes is not forced through the browser flow. This only
-    // relaxes the SERVER-inferred dangerous gate — every other Bearer check
-    // (token validity, scope allowlist, agent cap) still applies.
-    if (!browserSession && policy.agentStepUpEnforced) {
-      const bearerDangerous = scopes.filter(isDangerousScope);
-      if (bearerDangerous.length > 0) {
-        await emitUserEvent(
-          request,
-          'urn:qauth:event:step_up.required:v1-rc.0',
-          {
-            reason: 'bearer_path_dangerous_scope_requires_interactive_stepup',
-            error: 'access_denied',
-            dangerousScopes: bearerDangerous,
-          },
-          userEvent
-        );
-        return sendAuthorizationError(reply, client, redirectUri, {
-          error: 'access_denied',
-          error_description:
-            'dangerous scopes require interactive step-up; use the browser authorization flow',
-          state: state ?? undefined,
-          iss,
-        });
-      }
-    }
-
     const existingConsent = await fastify.repositories.oauthConsents.findActive(
       realm.id,
       userId,
       client.id
     );
 
-    // The consent decision does not depend on HOW the user authenticated.
-    // Any client that resolved above can be named on the Bearer path too —
-    // one registered a moment ago through open Dynamic Client Registration, a
-    // CIMD client, another developer's public client. The Bearer path cannot
-    // show the consent screen, so it issues a code only under a stored,
-    // unrevoked grant that already covers this request, scopes and RFC 8707
-    // resources (the same `canSkipConsent` question the browser flow asks
-    // below, badge window included); anything else is refused (ADR-017
-    // Decision 9: every path other than an operator-flagged first-party
-    // client requires consent). An agent client never skips the screen
-    // (ADR-015 Decision 11), so this path issues it no code.
-    if (!browserSession && !canSkipConsent(existingConsent, client, scopes, resources)) {
-      await emitUserEvent(
-        request,
-        'urn:qauth:event:authorization.failed:v1-rc.0',
-        { error: 'access_denied', reason: 'bearer_path_no_covering_consent' },
-        userEvent
-      );
-      return sendAuthorizationError(reply, client, redirectUri, {
-        error: 'access_denied',
-        error_description:
-          'no stored consent covers this request; use the browser authorization flow',
-        state: state ?? undefined,
-        iss,
-      });
-    }
+    // Show the consent screen unless a previous grant already covers the
+    // requested scopes. An agent client always sees it (ADR-015 Decision
+    // 11): `canSkipConsent` is false for an agent.
+    // ADR-007 §2 (#185): step-up authentication before dangerous
+    // operations / on elevation. A request that widens the granted scope
+    // set (incremental consent, MCP 2025-11-25), or that asks for a
+    // dangerous scope (write:* / agent:admin / agent:exec), or that sends
+    // `prompt`/`max_age`, must NOT be served from the existing session +
+    // prior consent silently. We re-authenticate and/or re-consent. The
+    // decision is default-deny: a dangerous elevation forces a fresh login
+    // with no client opt-in required.
+    const prompt = parsePromptMode(query.prompt);
+    const stepUp = evaluateStepUp({
+      requestedScopes: scopes,
+      priorConsentScopes:
+        existingConsent && existingConsent.revokedAt === null ? existingConsent.scopes : [],
+      prompt,
+      maxAgeSeconds: query.max_age ?? null,
+      authTimeMs: browserSession.authTime,
+      nowMs: Date.now(),
+      freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
+      // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login
+      // for a development client; explicit prompt/max_age still enforced.
+      enforceDangerousStepUp: policy.agentStepUpEnforced,
+    });
 
-    // Browser-driven flow: show the consent screen unless a previous
-    // grant already covers the requested scopes. An agent client always sees
-    // it (ADR-015 Decision 11): `canSkipConsent` is false for an agent.
-    if (browserSession) {
-      // ADR-007 §2 (#185): step-up authentication before dangerous
-      // operations / on elevation. A request that widens the granted scope
-      // set (incremental consent, MCP 2025-11-25), or that asks for a
-      // dangerous scope (write:* / agent:admin / agent:exec), or that sends
-      // `prompt`/`max_age`, must NOT be served from the existing session +
-      // prior consent silently. We re-authenticate and/or re-consent. The
-      // decision is default-deny: a dangerous elevation forces a fresh login
-      // with no client opt-in required.
-      const prompt = parsePromptMode(query.prompt);
-      const stepUp = evaluateStepUp({
-        requestedScopes: scopes,
-        priorConsentScopes:
-          existingConsent && existingConsent.revokedAt === null ? existingConsent.scopes : [],
-        prompt,
-        maxAgeSeconds: query.max_age ?? null,
-        authTimeMs: browserSession.authTime,
-        nowMs: Date.now(),
-        freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
-        // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login
-        // for a development client; explicit prompt/max_age still enforced.
-        enforceDangerousStepUp: policy.agentStepUpEnforced,
-      });
-
-      // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI. If
-      // step-up would otherwise show the login or consent screen, return the
-      // matching bare OIDC error to the client instead of redirecting to UI.
-      //
-      // Step-up only compares the requested scopes against a prior grant, so
-      // it reports nothing when the scope set is empty (every CIMD client, or
-      // any client that omits `scope`). The consent screen below is gated on
-      // `canSkipConsent` as well, and `prompt=none` must answer the same
-      // question: no stored, unrevoked grant covering this request, a dynamic
-      // client still in its badge window, or an agent client, which never
-      // skips the screen (ADR-015 Decision 11), means `consent_required`.
-      // A fresh-login requirement still answers `login_required` first.
-      // "Covering" includes the RFC 8707 resources: a grant remembered for
-      // one resource server is no consent to tokens for another.
-      if (prompt === 'none') {
-        const oidcError =
-          stepUpErrorForPromptNone(stepUp) ??
-          (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required');
-        if (oidcError) {
-          await emitUserEvent(
-            request,
-            'urn:qauth:event:step_up.required:v1-rc.0',
-            {
-              reason: 'prompt_none_interaction_required',
-              error: oidcError,
-              elevatedScopes: stepUp.elevated,
-              dangerousScopes: stepUp.dangerous,
-            },
-            userEvent
-          );
-          return sendAuthorizationError(reply, client, redirectUri, {
-            error: oidcError,
-            error_description: 'user interaction is required but prompt=none was requested',
-            state: state ?? undefined,
-            iss,
-          });
-        }
-        // No interaction required → fall through to ordinary issuance.
-      }
-
-      if (prompt !== 'none' && stepUp.requiresFreshLogin) {
-        // Force a fresh end-user authentication: bounce through /ui/login,
-        // which always mints a brand-new session (session-fixation defense),
-        // resetting auth_time so the elevation is granted only right after
-        // the user proves presence. The full authorize URL (incl. prompt /
-        // max_age / scope / PKCE) is preserved so the round-trip is lossless —
-        // stashed server-side under a handle, same as the no-session branch
-        // above (#316 follow-up), so this path cannot regrow the header either.
+    // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI. If
+    // step-up would otherwise show the login or consent screen, return the
+    // matching bare OIDC error to the client instead of redirecting to UI.
+    //
+    // Step-up only compares the requested scopes against a prior grant, so
+    // it reports nothing when the scope set is empty (every CIMD client, or
+    // any client that omits `scope`). The consent screen below is gated on
+    // `canSkipConsent` as well, and `prompt=none` must answer the same
+    // question: no stored, unrevoked grant covering this request, a dynamic
+    // client still in its badge window, or an agent client, which never
+    // skips the screen (ADR-015 Decision 11), means `consent_required`.
+    // A fresh-login requirement still answers `login_required` first.
+    // "Covering" includes the RFC 8707 resources: a grant remembered for
+    // one resource server is no consent to tokens for another.
+    if (prompt === 'none') {
+      const oidcError =
+        stepUpErrorForPromptNone(stepUp) ??
+        (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required');
+      if (oidcError) {
         await emitUserEvent(
           request,
           'urn:qauth:event:step_up.required:v1-rc.0',
           {
-            reason: 'fresh_authentication_required',
+            reason: 'prompt_none_interaction_required',
+            error: oidcError,
             elevatedScopes: stepUp.elevated,
             dangerousScopes: stepUp.dangerous,
-            ...(prompt === null ? {} : { prompt }),
-            ...(query.max_age === undefined ? {} : { maxAge: query.max_age }),
           },
           userEvent
         );
-        return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
+        return sendAuthorizationError(reply, client, redirectUri, {
+          error: oidcError,
+          error_description: 'user interaction is required but prompt=none was requested',
+          state: state ?? undefined,
+          iss,
+        });
       }
+      // No interaction required → fall through to ordinary issuance.
+    }
 
-      // Re-consent when the request elevates scope or explicitly asks for it,
-      // even if a prior grant would otherwise let us skip the screen — a
-      // wider scope set must be explicitly re-affirmed, never auto-widened.
-      // The same holds for a `resource` the grant does not cover.
-      // (`prompt=none` already returned consent_required above if needed.)
-      if (
-        prompt !== 'none' &&
-        (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes, resources))
-      ) {
-        if (stepUp.elevated.length > 0) {
-          await emitUserEvent(
-            request,
-            'urn:qauth:event:step_up.required:v1-rc.0',
-            {
-              reason: 'incremental_consent_required',
-              elevatedScopes: stepUp.elevated,
-              dangerousScopes: stepUp.dangerous,
-            },
-            userEvent
-          );
-        }
-        // Carry the authorize params to the consent screen. Guard the `?`
-        // index: `buildAuthorizeUrlWithParams` can return a query-less path
-        // (empty reconstructed POST body), and `slice(-1)` would yield a
-        // corrupt `/ui/consent<lastchar>`.
-        const qIndex = requestUrlWithParams.indexOf('?');
-        const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
-        return reply.redirect(`/ui/consent${returnQuery}`, 302);
+    if (prompt !== 'none' && stepUp.requiresFreshLogin) {
+      // Force a fresh end-user authentication: bounce through /ui/login,
+      // which always mints a brand-new session (session-fixation defense),
+      // resetting auth_time so the elevation is granted only right after
+      // the user proves presence. The full authorize URL (incl. prompt /
+      // max_age / scope / PKCE) is preserved so the round-trip is lossless —
+      // stashed server-side under a handle, same as the no-session branch
+      // above (#316 follow-up), so this path cannot regrow the header either.
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:step_up.required:v1-rc.0',
+        {
+          reason: 'fresh_authentication_required',
+          elevatedScopes: stepUp.elevated,
+          dangerousScopes: stepUp.dangerous,
+          ...(prompt === null ? {} : { prompt }),
+          ...(query.max_age === undefined ? {} : { maxAge: query.max_age }),
+        },
+        userEvent
+      );
+      return redirectToLoginWithPendingAuthorization(fastify, reply, requestUrlWithParams);
+    }
+
+    // Re-consent when the request elevates scope or explicitly asks for it,
+    // even if a prior grant would otherwise let us skip the screen — a
+    // wider scope set must be explicitly re-affirmed, never auto-widened.
+    // The same holds for a `resource` the grant does not cover.
+    // (`prompt=none` already returned consent_required above if needed.)
+    if (
+      prompt !== 'none' &&
+      (stepUp.requiresConsent || !canSkipConsent(existingConsent, client, scopes, resources))
+    ) {
+      if (stepUp.elevated.length > 0) {
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          {
+            reason: 'incremental_consent_required',
+            elevatedScopes: stepUp.elevated,
+            dangerousScopes: stepUp.dangerous,
+          },
+          userEvent
+        );
       }
+      // Carry the authorize params to the consent screen. Guard the `?`
+      // index: `buildAuthorizeUrlWithParams` can return a query-less path
+      // (empty reconstructed POST body), and `slice(-1)` would yield a
+      // corrupt `/ui/consent<lastchar>`.
+      const qIndex = requestUrlWithParams.indexOf('?');
+      const returnQuery = qIndex >= 0 ? requestUrlWithParams.slice(qIndex) : '';
+      return reply.redirect(`/ui/consent${returnQuery}`, 302);
     }
 
     // Every path that reaches this point skipped the consent screen on the
@@ -741,25 +561,18 @@ export default async function (fastify: FastifyInstance) {
           // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
           // time (the browser session's `auth_time`, epoch MS) — never the code-mint
           // time — so /oauth/token can assert it in the ID token and a `max_age`
-          // check evaluates the actual session age. Null on the legacy Bearer
-          // path (no interactive session) → the claim is simply omitted there.
-          authTime: browserSession?.authTime ?? null,
+          // check evaluates the actual session age.
+          authTime: browserSession.authTime,
           // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
           // code so /oauth/token can assert `acr` in the ID token. NULL on the
-          // password path (`'low'`, no claim) and on the legacy Bearer path (no
-          // interactive session), which is the same "omit the claim" outcome.
-          assuranceLevel: toStoredAssuranceLevel(browserSession?.assuranceLevel),
+          // password path (`'low'`, no claim), the "omit the claim" outcome.
+          assuranceLevel: toStoredAssuranceLevel(browserSession.assuranceLevel),
           // ADR-019 Decision 3 (#552): the session's absolute end, so the
-          // refresh family this code starts never outlives the session. Null
-          // on the legacy Bearer path (no interactive session).
-          sessionExpiresAt: browserSession?.expiresAt ?? null,
+          // refresh family this code starts never outlives the session.
+          sessionExpiresAt: browserSession.expiresAt,
           // ADR-019 Decisions 3 and 4 (#549): the session whose `sid` the code
           // exchange puts in the ID token, and which records this client.
-          // Null on the legacy Bearer path (no interactive session), whose ID
-          // token has no `sid` and which records no client.
-          session: browserSession
-            ? { realmId: browserSession.realmId, sid: browserSession.sid }
-            : null,
+          session: { realmId: browserSession.realmId, sid: browserSession.sid },
           scopes,
           // RFC 8707: bind the resource indicator(s) to the authorization
           // code so /oauth/token can set the access token's `aud` claim to
@@ -809,27 +622,14 @@ export default async function (fastify: FastifyInstance) {
     if (outcome === 'consent_withdrawn') {
       // The consent went away under this request. Fail closed, once — never
       // by re-running the handler — with the answer a request arriving after
-      // the revocation gets: `access_denied` on the Bearer path (no screen
-      // to show), `consent_required` under `prompt=none`, else the consent
-      // screen (whose POST runs its own step-up gate).
+      // the revocation gets: `consent_required` under `prompt=none`, else the
+      // consent screen (whose POST runs its own step-up gate).
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.failed:v1-rc.0',
-        {
-          error: browserSession ? 'consent_required' : 'access_denied',
-          reason: 'consent_withdrawn_during_authorization',
-        },
+        { error: 'consent_required', reason: 'consent_withdrawn_during_authorization' },
         userEvent
       );
-      if (!browserSession) {
-        return sendAuthorizationError(reply, client, redirectUri, {
-          error: 'access_denied',
-          error_description:
-            'no stored consent covers this request; use the browser authorization flow',
-          state: state ?? undefined,
-          iss,
-        });
-      }
       if (parsePromptMode(query.prompt) === 'none') {
         return sendAuthorizationError(reply, client, redirectUri, {
           error: 'consent_required',

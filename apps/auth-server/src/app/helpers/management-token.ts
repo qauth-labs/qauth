@@ -4,7 +4,6 @@ import { z } from 'zod';
 
 import { API_FAMILY_AUDIENCES } from '../api-conventions/families';
 import { accessTokenIssuedAt, accountCredentialRefusal } from './account-validity';
-import { resolveAudience } from './client-auth';
 import { getOrCreateSystemClient } from './oauth-client';
 import { type RealmRow, requestRealm } from './request-realm';
 import { inactiveSubjectError } from './token-subject';
@@ -36,13 +35,13 @@ const uuidSubjectSchema = z.uuid();
  * portal's own token, so this pins all three claims that identify it:
  *
  * - `client_id` is the system client's id.
- * - `aud` carries every audience the system client resolves to (its
- *   `client_id` while it lists none), or the developer API's audience (#509).
- *   This release accepts the developer audience and does not mint it; #524
- *   mints it. Expand, then contract (ADR-018 §5): a node of the previous
- *   release accepts every portal token this one mints, and a node of this one
- *   accepts every portal token the next one mints. The `/oauth/authorize`
- *   Bearer path and `/auth/logout` rely on the same rule.
+ * - `aud` holds exactly the developer API's audience,
+ *   `urn:qauth:aud:developer:v1-rc.0`, the system client's since #524. The
+ *   release of #509 accepted it and minted the system client's `client_id`;
+ *   this one mints it and no longer accepts the `client_id` (expand, then
+ *   contract: ADR-018 §5). So a portal token minted before the upgrade is
+ *   refused here, expired or not, and its developer signs in again.
+ *   `/auth/logout` relies on the same rule.
  * - No `act` claim: a delegated token acts for an agent, never the developer.
  * - `sub` names a user that still exists and is enabled. The token outlives
  *   the login that minted it by up to its lifetime, and an account disabled
@@ -85,16 +84,11 @@ export async function assertManagementToken(
     throw new JWTInvalidError('A delegated access token cannot use the management API');
   }
 
+  // Exactly the developer API's audience, as the developer family's guard
+  // reads it (#524): one value. The system client's `client_id`, which a
+  // portal token carried before #524, is no longer accepted.
   const presented = claims.aud === undefined ? [] : [claims.aud].flat();
-  const carriesAll = (expected: string[]) =>
-    expected.every((audience) => presented.includes(audience));
-  // The system client's audience, or the developer API's (#509): accepted
-  // here before any node mints it (#524), so the upgrade that starts minting
-  // it can roll. The developer family's guard accepts only the second.
-  if (
-    !carriesAll([resolveAudience(systemClient)].flat()) &&
-    !carriesAll([API_FAMILY_AUDIENCES.developer])
-  ) {
+  if (presented.length !== 1 || presented[0] !== API_FAMILY_AUDIENCES.developer) {
     throw new JWTInvalidError('Access token audience does not match the management API');
   }
 

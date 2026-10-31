@@ -90,7 +90,7 @@ write `fastify.providerRegistry.resolve('password')`.
 
 `createConfiguredProviders`
 (`libs/fastify/plugins/federation/src/lib/configured-providers.ts:302`) is where "which upstreams
-exist" is decided, and `apps/auth-server/src/app/app.ts:128` is the only place that calls it.
+exist" is decided, and `apps/auth-server/src/app/app.ts:130` is the only place that calls it.
 
 Two properties make it worth understanding before you extend it:
 

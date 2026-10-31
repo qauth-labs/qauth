@@ -447,7 +447,29 @@ describe('authServerClient.userinfo', () => {
   });
 });
 
+/** A client as the developer API answers it (#524): RFC 7591 names, RFC 3339 times. */
 const sampleClient = {
+  id: 'row-1',
+  client_id: 'client-uuid',
+  client_name: 'My App',
+  description: null,
+  redirect_uris: ['https://app.example.com/cb'],
+  scopes: ['openid'],
+  grant_types: ['authorization_code', 'refresh_token'],
+  response_types: ['code'],
+  token_endpoint_auth_method: 'client_secret_post',
+  enabled: true,
+  suspended: false,
+  requirePkce: true,
+  environment: 'development',
+  staticApiKeysAllowed: true,
+  createdAt: '2025-06-15T15:06:40.000Z',
+  updatedAt: '2025-06-15T15:06:40.000Z',
+  lastUsedAt: null,
+};
+
+/** The same client as the portal's pages read it. */
+const sampleView = {
   id: 'row-1',
   clientId: 'client-uuid',
   name: 'My App',
@@ -458,18 +480,72 @@ const sampleClient = {
   responseTypes: ['code'],
   tokenEndpointAuthMethod: 'client_secret_post',
   enabled: true,
+  suspended: false,
   requirePkce: true,
+  environment: 'development',
+  staticApiKeysAllowed: true,
   createdAt: 1_750_000_000_000,
   updatedAt: 1_750_000_000_000,
   lastUsedAt: null,
 };
 
+/** Answer each fetch in turn, with the headers given. */
+function mockFetches(
+  ...answers: Array<{ status: number; body: unknown; headers?: Record<string, string> }>
+) {
+  const fetchMock = vi.fn();
+  for (const answer of answers) {
+    fetchMock.mockResolvedValueOnce(
+      new Response(answer.body === null ? null : JSON.stringify(answer.body), {
+        status: answer.status,
+        headers: { 'content-type': 'application/json', ...answer.headers },
+      })
+    );
+  }
+  global.fetch = fetchMock;
+  return fetchMock;
+}
+
+/** The URL and init of the n-th fetch. */
+function fetchCall(n = 0): [string, RequestInit] {
+  return (global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[n] as [
+    string,
+    RequestInit,
+  ];
+}
+
 describe('authServerClient.listClients', () => {
-  it('returns the clients array on 200', async () => {
-    mockFetch(200, { clients: [sampleClient] });
+  it('reads the developer API, one page at a time, and maps each client', async () => {
+    const fetchMock = mockFetches(
+      { status: 200, body: { items: [sampleClient], nextCursor: 'page-2' } },
+      { status: 200, body: { items: [{ ...sampleClient, id: 'row-2' }], nextCursor: null } }
+    );
+
     const result = await authServerClient.listClients('at');
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.clients).toHaveLength(1);
+
+    expect(result).toEqual({
+      ok: true,
+      data: { clients: [sampleView, { ...sampleView, id: 'row-2' }] },
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchCall(0)[0]).toBe('http://auth-server:3001/developer/v1-rc.0/clients?limit=200');
+    expect(fetchCall(1)[0]).toBe(
+      'http://auth-server:3001/developer/v1-rc.0/clients?limit=200&cursor=page-2'
+    );
+    expect(fetchCall(0)[1].headers).toMatchObject({ Authorization: 'Bearer at' });
+  });
+
+  it('stops at a list that never ends rather than following it forever', async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ items: [], nextCursor: 'again' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+    );
+    const result = await authServerClient.listClients('at');
+    expect(result.ok).toBe(false);
+    expect((global.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(50);
   });
 
   it('maps 401 to UNAUTHENTICATED', async () => {
@@ -496,6 +572,13 @@ describe('authServerClient.listClients', () => {
     if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
   });
 
+  it('maps a cursor the list did not issue to VALIDATION_ERROR', async () => {
+    mockProblem(400, 'invalid_cursor');
+    const result = await authServerClient.listClients('at');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+  });
+
   it('classifies a body that is not JSON by the status', async () => {
     mockText(401, '<html>401 Authorization Required</html>');
     const result = await authServerClient.listClients('bad');
@@ -518,11 +601,11 @@ describe('authServerClient.listClients', () => {
 });
 
 describe('authServerClient.getClient', () => {
-  it('returns the client on 200', async () => {
-    mockFetch(200, sampleClient);
+  it('returns the client with its ETag on 200', async () => {
+    mockFetches({ status: 200, body: sampleClient, headers: { etag: '"v1"' } });
     const result = await authServerClient.getClient('at', 'row-1');
-    expect(result.ok).toBe(true);
-    if (result.ok) expect(result.data.clientId).toBe('client-uuid');
+    expect(result).toEqual({ ok: true, data: { ...sampleView, etag: '"v1"' } });
+    expect(fetchCall()[0]).toBe('http://auth-server:3001/developer/v1-rc.0/clients/row-1');
   });
 
   it('maps 404 to NOT_FOUND (not owned / missing)', async () => {
@@ -534,11 +617,23 @@ describe('authServerClient.getClient', () => {
 });
 
 describe('authServerClient.createClient', () => {
-  it('returns the client with a one-time secret on 201', async () => {
-    mockFetch(201, { ...sampleClient, clientSecret: 'a'.repeat(64) });
-    const result = await authServerClient.createClient('at', { name: 'My App' });
+  it('sends the developer API names and returns the client with a one-time secret on 201', async () => {
+    mockFetches({ status: 201, body: { ...sampleClient, client_secret: 'a'.repeat(64) } });
+    const result = await authServerClient.createClient('at', {
+      name: 'My App',
+      redirectUris: ['https://app.example.com/cb'],
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.clientSecret).toHaveLength(64);
+    const [url, init] = fetchCall();
+    expect(url).toBe('http://auth-server:3001/developer/v1-rc.0/clients');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({
+      client_name: 'My App',
+      redirect_uris: ['https://app.example.com/cb'],
+      token_endpoint_auth_method: 'client_secret_post',
+    });
   });
 
   it('maps a bad_request to VALIDATION_ERROR', async () => {
@@ -570,13 +665,51 @@ describe('authServerClient.createClient', () => {
 });
 
 describe('authServerClient.updateClient', () => {
-  it('returns the updated client on 200 (no secret)', async () => {
-    mockFetch(200, { ...sampleClient, name: 'Renamed' });
-    const result = await authServerClient.updateClient('at', 'row-1', { name: 'Renamed' });
+  it('sends a JSON Merge Patch with the If-Match it was given', async () => {
+    mockFetches({
+      status: 200,
+      body: { ...sampleClient, client_name: 'Renamed' },
+      headers: { etag: '"v2"' },
+    });
+    const result = await authServerClient.updateClient(
+      'at',
+      'row-1',
+      { name: 'Renamed', description: null },
+      '"v1"'
+    );
+    expect(result).toEqual({
+      ok: true,
+      data: { ...sampleView, name: 'Renamed', etag: '"v2"' },
+    });
+    const [url, init] = fetchCall();
+    expect(url).toBe('http://auth-server:3001/developer/v1-rc.0/clients/row-1');
+    expect(init.method).toBe('PATCH');
+    expect(init.headers).toMatchObject({
+      'Content-Type': 'application/merge-patch+json',
+      'If-Match': '"v1"',
+    });
+    expect(JSON.parse(init.body as string)).toEqual({ client_name: 'Renamed', description: null });
+  });
+
+  it('reads the current version first when it was given none', async () => {
+    const fetchMock = mockFetches(
+      { status: 200, body: sampleClient, headers: { etag: '"v7"' } },
+      { status: 200, body: { ...sampleClient, enabled: false }, headers: { etag: '"v8"' } }
+    );
+    const result = await authServerClient.updateClient('at', 'row-1', { enabled: false });
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.data.name).toBe('Renamed');
-      expect((result.data as { clientSecret?: string }).clientSecret).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchCall(0)[1].method).toBe('GET');
+    expect(fetchCall(1)[1].headers).toMatchObject({ 'If-Match': '"v7"' });
+  });
+
+  it('maps a client changed since it was read (412) to CONFLICT', async () => {
+    mockProblem(412, 'precondition_failed');
+    const result = await authServerClient.updateClient('at', 'row-1', { name: 'x' }, '"old"');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('CONFLICT');
+      expect(result.error.status).toBe(412);
     }
   });
 });
@@ -591,6 +724,7 @@ describe('authServerClient.deleteClient', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data).toBeNull();
     expect(jsonSpy).not.toHaveBeenCalled();
+    expect(fetchCall()[0]).toBe('http://auth-server:3001/developer/v1-rc.0/clients/row-1');
   });
 
   it('maps 404 to NOT_FOUND', async () => {
@@ -623,10 +757,13 @@ describe('authServerClient.deleteClient', () => {
 
 describe('authServerClient.regenerateClientSecret', () => {
   it('returns the new one-time secret on 200', async () => {
-    mockFetch(200, { ...sampleClient, clientSecret: 'b'.repeat(64) });
+    mockFetches({ status: 200, body: { ...sampleClient, client_secret: 'b'.repeat(64) } });
     const result = await authServerClient.regenerateClientSecret('at', 'row-1');
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.data.clientSecret).toBe('b'.repeat(64));
+    expect(fetchCall()[0]).toBe(
+      'http://auth-server:3001/developer/v1-rc.0/clients/row-1/regenerate-secret'
+    );
   });
 
   it('maps a public-client 400 to VALIDATION_ERROR', async () => {
@@ -634,6 +771,89 @@ describe('authServerClient.regenerateClientSecret', () => {
     const result = await authServerClient.regenerateClientSecret('at', 'row-1');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('VALIDATION_ERROR');
+  });
+});
+
+describe('authServerClient consents (#524)', () => {
+  it('lists the developer API consents and maps them', async () => {
+    mockFetches({
+      status: 200,
+      body: {
+        items: [
+          {
+            id: 'c-1',
+            client_id: 'https://agent.example.com/client.json',
+            client_name: 'Agent',
+            scopes: ['openid'],
+            grantedAt: '2025-06-15T15:06:40.000Z',
+          },
+        ],
+        nextCursor: null,
+      },
+    });
+    const result = await authServerClient.listConsents('at');
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        consents: [
+          {
+            id: 'c-1',
+            clientId: 'https://agent.example.com/client.json',
+            clientName: 'Agent',
+            scopes: ['openid'],
+            grantedAt: 1_750_000_000_000,
+          },
+        ],
+      },
+    });
+    expect(fetchCall()[0]).toBe('http://auth-server:3001/developer/v1-rc.0/consents?limit=200');
+  });
+
+  it('revokes one at its developer API path', async () => {
+    mockFetches({ status: 204, body: null });
+    const result = await authServerClient.revokeConsent('at', 'c-1');
+    expect(result.ok).toBe(true);
+    expect(fetchCall()[0]).toBe('http://auth-server:3001/developer/v1-rc.0/consents/c-1');
+    expect(fetchCall()[1].method).toBe('DELETE');
+  });
+});
+
+describe('authServerClient API keys (#524)', () => {
+  const wireKey = {
+    id: 'key-1',
+    clientId: 'row-1',
+    name: 'ci',
+    prefix: 'qauth_abc',
+    last4: 'wxyz',
+    createdAt: '2025-06-15T15:06:40.000Z',
+    lastUsedAt: null,
+    revokedAt: '2025-06-15T15:06:40.000Z',
+  };
+
+  it('lists, mints and revokes under the client, mapping the times', async () => {
+    mockFetches({ status: 200, body: { items: [wireKey], nextCursor: null } });
+    const listed = await authServerClient.listApiKeys('at', 'row-1');
+    expect(listed).toEqual({
+      ok: true,
+      data: {
+        apiKeys: [{ ...wireKey, createdAt: 1_750_000_000_000, revokedAt: 1_750_000_000_000 }],
+      },
+    });
+    expect(fetchCall()[0]).toBe(
+      'http://auth-server:3001/developer/v1-rc.0/clients/row-1/api-keys?limit=200'
+    );
+
+    mockFetches({ status: 201, body: { ...wireKey, revokedAt: null, key: 'qauth_abc_secret' } });
+    const minted = await authServerClient.createApiKey('at', 'row-1', { name: 'ci' });
+    expect(minted.ok).toBe(true);
+    if (minted.ok) expect(minted.data.key).toBe('qauth_abc_secret');
+
+    mockFetches({ status: 200, body: wireKey });
+    const revoked = await authServerClient.revokeApiKey('at', 'row-1', 'key-1');
+    expect(revoked.ok).toBe(true);
+    expect(fetchCall()[0]).toBe(
+      'http://auth-server:3001/developer/v1-rc.0/clients/row-1/api-keys/key-1'
+    );
   });
 });
 

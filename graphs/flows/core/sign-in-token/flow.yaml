@@ -196,7 +196,7 @@ states:
       - guard: inputInvalid
         target: validation_error.body
         say: 'the body does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
+        source: apps/auth-server/src/app/plugins/error-handler.ts:264
       - target: checkingLockout
         say: 'the body matches the schema'
         source: apps/auth-server/src/app/schemas/auth.ts:108
@@ -461,7 +461,7 @@ states:
     type: final
     title: Refuse a body that does not match the login schema
     description: Nothing is counted against the lockout.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
+    source: apps/auth-server/src/app/plugins/error-handler.ts:339
     response:
       status: 400
       body:
@@ -518,7 +518,7 @@ states:
       user.sign_in_failed is recorded with the reason internal_error and the answer waits out the floor first. The
       steps before the failing one stay done: a refresh token stored before a later failure stays, though the caller
       never receives it. The body says nothing of the failure, in any NODE_ENV; its trace_id finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    source: apps/auth-server/src/app/plugins/error-handler.ts:604
     response:
       status: 500
       body:

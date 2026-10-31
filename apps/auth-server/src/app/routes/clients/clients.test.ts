@@ -131,6 +131,8 @@ function makeFastify() {
     delete: register('DELETE'),
   };
   const fastify: any = {
+    // The module's own hooks: the deprecation headers since #524.
+    addHook: vi.fn(),
     withTypeProvider: () => chain,
     requireJwt: vi.fn(),
     passwordHasher: {

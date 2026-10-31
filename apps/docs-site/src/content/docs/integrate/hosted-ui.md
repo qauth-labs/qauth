@@ -131,10 +131,8 @@ the line leaves to this page:
   session's own end, which the old limit set.
 
 A stored consent never skips the screen for an agent client (ADR-015
-Decision 11): every authorization request from an agent shows it, `prompt=none`
-from an agent answers `consent_required` with no code, and the legacy Bearer
-path of `/oauth/authorize`, which cannot show the screen, issues an agent no
-code.
+Decision 11): every authorization request from an agent shows it, and
+`prompt=none` from an agent answers `consent_required` with no code.
 
 The decision is taken for the page the user saw. A client whose `is_agent`
 changes between the page and the decision (a Client ID Metadata Document can
@@ -220,7 +218,7 @@ it in the redirect:
 
 Redis was already on that path before #319, and not marginally: the
 Redis-backed `@fastify/rate-limit` plugin is registered app-wide
-(`apps/auth-server/src/app/app.ts:258`) ahead of both route sweeps (lines 294
+(`apps/auth-server/src/app/app.ts:260`) ahead of both route sweeps (lines 294
 and 301), against the same `fastify.redis` client
 (`apps/auth-server/src/app/plugins/rate-limit.ts:28`); `RATE_LIMIT_ENABLED`
 defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);

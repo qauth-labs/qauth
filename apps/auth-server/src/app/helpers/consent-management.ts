@@ -1,13 +1,15 @@
 import { BadRequestError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 
-import { emitUserEvent } from './user-events';
+import { readPage } from '../api-conventions/cursor';
+import type { Page } from '../api-conventions/paging';
+import { emitUserEvent, type UserEventOptions } from './user-events';
 
 /**
  * Consent listing and revocation, shared by the two surfaces that expose it
  * (issue #150, issue #366).
  *
- * There are two, and they authenticate differently on purpose:
+ * There are four since #524, and they authenticate differently on purpose:
  *
  *   - `routes/consents` — the auth-server's OWN hosted UI. Authenticated by the
  *     `__Host-qauth_session` browser cookie, which is ambient credentials, so it
@@ -16,6 +18,10 @@ import { emitUserEvent } from './user-events';
  *     its TanStack Start server functions. Authenticated by a developer Bearer
  *     access token, exactly like `/api/clients`. A Bearer token is not ambient,
  *     so there is no CSRF token to check and none is required.
+ *   - `/developer/v1-rc.0/consents` and `/account/v1-rc.0/consents` (#524),
+ *     which replace the two above: a token for the developer or the account
+ *     API family, and the API conventions' representation and paging. The
+ *     first two are deprecated aliases until their callers have moved.
  *
  * What must NOT differ between them is the authorization: a caller may only
  * ever see and revoke consents whose `user_id` is their own, and every
@@ -56,6 +62,42 @@ export async function listConsentsForUser(
   }));
 }
 
+/** One active consent with its client, as the repository reads it. */
+export type ConsentWithClient = Awaited<
+  ReturnType<FastifyInstance['repositories']['oauthConsents']['listActiveForUserWithClient']>
+>[number];
+
+/**
+ * One page of the active consents of `userId` in the realm (#524), by when
+ * each was first given, newest first: by id, a UUIDv7 the row keeps, since a
+ * re-grant rewrites `grantedAt`. `list` names the list in its cursors, so a
+ * cursor of another list is refused (`invalid_cursor`).
+ */
+export async function pageConsentsForUser<Item>(
+  fastify: FastifyInstance,
+  realmId: string,
+  userId: string,
+  page: {
+    readonly list: string;
+    readonly limit: number;
+    readonly cursor: string | undefined;
+    readonly item: (row: ConsentWithClient) => Item;
+  }
+): Promise<Page<Item>> {
+  return readPage(
+    {
+      list: page.list,
+      limit: page.limit,
+      cursor: page.cursor,
+      // The repository keys on the id alone; the time rides along unread.
+      position: (row) => ({ at: row.grantedAt, id: row.id }),
+      item: page.item,
+    },
+    (keyset) =>
+      fastify.repositories.oauthConsents.pageActiveForUserWithClient(realmId, userId, keyset)
+  );
+}
+
 /**
  * Revoke one consent row on behalf of `userId`, with the ownership check and
  * the event both surfaces owe. Every unredeemed authorization code and every
@@ -77,7 +119,8 @@ export async function revokeConsentForUser(
   request: FastifyRequest,
   realmId: string,
   userId: string,
-  consentId: string
+  consentId: string,
+  options: Pick<UserEventOptions, 'act'> = {}
 ): Promise<void> {
   // Joined to the client in the same query: the event names the client by its
   // public `client_id`.
@@ -135,6 +178,10 @@ export async function revokeConsentForUser(
         userId,
         clientId: owned.clientClientId,
         actor: 'user',
+        // An agent revoking for the user through the account API (a delegated
+        // token, RFC 8693): the event names the agent as its actor, with the
+        // whole chain (#524).
+        ...(options.act === undefined ? {} : { act: options.act }),
       }
     );
   });

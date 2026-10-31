@@ -19,7 +19,10 @@ vi.mock('../../../config/env', () => ({
 }));
 
 vi.mock('../../helpers/oauth-client', () => ({
-  getOrCreateSystemClient: vi.fn(async () => ({ clientId: 'system', audience: null })),
+  getOrCreateSystemClient: vi.fn(async () => ({
+    clientId: 'system',
+    audience: ['urn:qauth:aud:developer:v1-rc.0'],
+  })),
 }));
 
 import {
@@ -80,9 +83,14 @@ const VALID_USER = {
   enabled: true,
 };
 
-/** The claims `/auth/login` puts on the first-party token. */
+/** The claims `/auth/login` puts on the first-party token since #524. */
 function loginClaims(overrides: Record<string, unknown> = {}) {
-  return { sub: VALID_USER.id, clientId: 'system', aud: 'system', ...overrides };
+  return {
+    sub: VALID_USER.id,
+    clientId: 'system',
+    aud: 'urn:qauth:aud:developer:v1-rc.0',
+    ...overrides,
+  };
 }
 
 /** The per-user index of hosted browser sessions that logout ends. */
@@ -548,6 +556,7 @@ describe('POST /auth/logout', () => {
     ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
     ['bound to another audience', { aud: 'https://mcp.example.com' }],
     ['delegated to an agent', { act: { sub: 'agent-1' } }],
+    ["minted before #524, with the system client's id as audience", { aud: 'system' }],
   ])('throws (401) and does NOT revoke for a valid token %s', async (_name, overrides) => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');
@@ -569,6 +578,9 @@ describe('POST /auth/logout', () => {
     ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
     ['bound to another audience', { aud: 'https://mcp.example.com' }],
     ['delegated to an agent', { act: { sub: 'agent-1' } }],
+    // #524 retired the system client id as a portal token's audience, which
+    // logout kept accepting for an expired token with no end date.
+    ["minted before #524, with the system client's id as audience", { aud: 'system' }],
   ])('throws (401) and does NOT revoke for an EXPIRED token %s', async (_name, overrides) => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');

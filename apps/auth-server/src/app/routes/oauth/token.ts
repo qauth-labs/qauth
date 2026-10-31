@@ -1023,8 +1023,9 @@ async function handleAuthorizationCode(
   // revocation reaches the refresh tokens through one. So a refresh token is
   // minted only under a stored consent that covers the code's scopes. An
   // approval given with "Remember this decision" unticked, a consent revoked
-  // since the code was issued, and the legacy Bearer authorize path (which
-  // stores no consent) yield the access token (and ID token) alone; the client
+  // since the code was issued, and a code of the legacy Bearer authorize path
+  // (retired by #524; it stored no consent) yield the access token (and ID
+  // token) alone; the client
   // returns through /oauth/authorize when it expires.
   const consent = await fastify.repositories.oauthConsents.findActive(
     ctx.realmId,
@@ -1181,8 +1182,8 @@ async function handleAuthorizationCode(
           // ADR-019 Decisions 3 and 4 (#549): the browser session behind the
           // code, as back-channel logout will name it. The only place an ID
           // token gets `sid` (`id-token-sid.test.ts`). A code from the legacy
-          // Bearer path has none, and neither does one minted before
-          // migration 0042: the claim is then absent. Never on the access
+          // Bearer path (retired by #524) has none, and neither does one
+          // minted before migration 0042: the claim is then absent. Never on the access
           // token, the introspection response or the refresh row.
           sid: authCode.sessionId ?? undefined,
           // The realm's access token lifetime (#527), the `short` tier's

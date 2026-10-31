@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { sendDeprecationHeaders } from '../../api-conventions/deprecation';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
 import { csrfTokensEqual, generateCsrfToken } from '../../helpers/session-cookie';
@@ -13,6 +14,11 @@ import { emitUserEvent } from '../../helpers/user-events';
 
 /**
  * Consent management JSON API (issue #150).
+ *
+ * DEPRECATED since #524, a deprecated alias kept working until the account
+ * console (v0.3) moves to the account API's `/account/v1-rc.0/consents`,
+ * which a Bearer or DPoP token from the console's backend reaches. Every
+ * response carries the `Deprecation` header (RFC 9745).
  *
  * Both endpoints require a valid `__Host-qauth_session` cookie; there is
  * no Bearer-token path here because consent is inherently a user-centric
@@ -77,6 +83,9 @@ async function ensureApiCsrfToken(
 }
 
 export default async function (fastify: FastifyInstance) {
+  // Deprecated since #524: every response says so (RFC 9745).
+  sendDeprecationHeaders(fastify);
+
   // Paths are relative to this module's directory. The route manifest
   // (`route-manifest.ts`) registers it under its directory's name, so the
   // `consents/` directory already contributes the `/consents` prefix — the same way
@@ -91,6 +100,7 @@ export default async function (fastify: FastifyInstance) {
           'List the active OAuth consents for the currently signed-in user. Drives the developer portal revocation screen (issue #150). The response also carries a per-session CSRF token that the caller MUST echo back as the `X-CSRF-Token` header on `DELETE /consents/:id`.',
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
+        deprecated: true,
         'x-qauth-errors': [401],
         response: { 200: listResponseSchema },
       },
@@ -114,6 +124,7 @@ export default async function (fastify: FastifyInstance) {
           'Revoke an OAuth consent row owned by the currently signed-in user. Requires a valid `X-CSRF-Token` header whose value matches the session CSRF token returned by `GET /consents`.',
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
+        deprecated: true,
         'x-qauth-errors': [400, 401, 404],
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null() },

@@ -160,8 +160,8 @@ function makeFastify() {
       sessions: {
         recordClient: vi.fn().mockResolvedValue(true),
       },
-      // Both the session path and the Bearer fallback accept only a user who is
-      // still enabled, looked up in the request's realm (#489).
+      // The session path accepts only a user who is still enabled, looked up
+      // in the request's realm (#489).
       users: {
         findById: vi.fn(async (realmId: string, id: string) => ({ id, enabled: true, realmId })),
       },
@@ -193,7 +193,7 @@ function makeFastify() {
   return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
 
-/** A Bearer token's `sub` must be a user id (UUID): the first-party pin looks it up. */
+/** The `sub` of the portal token a test presents as a Bearer token: a user id. */
 const BEARER_USER = '0190a5c8-0000-7000-8000-000000000001';
 
 const CLIENT = {
@@ -1797,57 +1797,29 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
   });
 });
 
-describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () => {
-  // The Bearer (legacy first-party) path cannot run interactive step-up, so a
-  // dangerous scope on it is refused rather than minted with no fresh auth.
-  const DANGEROUS_CLIENT = {
-    ...CLIENT,
-    clientId: 'app-bearer',
-    scopes: ['read:foo', 'write:foo', 'email'],
-  };
-
-  async function runBearer(
-    scope: string,
-    payload: Record<string, unknown> = {},
-    opts: {
-      client?: Record<string, unknown>;
-      /** The stored consent row; a covering, unrevoked grant unless overridden. */
-      consent?: Record<string, unknown> | null;
-      /** RFC 8707 resource indicators on the request. */
-      resource?: string[];
-      /** Why verification fails, when it does. */
-      verifyError?: Error;
-    } = {}
-  ) {
+describe('GET /oauth/authorize — the retired Bearer path (#524)', () => {
+  // The legacy Bearer path authenticated the user from the developer portal's
+  // token, with no sign-in and no consent screen. It is gone: a request that
+  // carries only an `Authorization` header is a request without a session.
+  async function runWithOnlyABearerToken(query: Record<string, unknown> = {}) {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
-    // `findByClientId` answers every lookup with this client, so it is also
-    // the "system" client the Bearer path pins the token's `client_id` to.
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      opts.client ?? DANGEROUS_CLIENT
-    );
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
-      opts.consent === undefined
-        ? { scopes: ['read:foo', 'email'], revokedAt: null }
-        : (opts.consent ?? undefined)
-    );
-    // No browser session; a valid Bearer token resolves the user.
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      scopes: ['openid', 'email'],
+      revokedAt: null,
+    });
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    if (opts.verifyError === undefined) {
-      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-        sub: BEARER_USER,
-        clientId: DANGEROUS_CLIENT.clientId,
-        aud: DANGEROUS_CLIENT.clientId,
-        ...payload,
-      });
-    } else {
-      (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(opts.verifyError);
-    }
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
+      sub: BEARER_USER,
+      clientId: 'system',
+      aud: 'urn:qauth:aud:developer:v1-rc.0',
+    });
     const { reply, state } = createReply();
     await ctx.handler!(
       {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope, resource: opts.resource },
-        url: `/oauth/authorize?response_type=code&client_id=app-bearer&scope=${encodeURIComponent(scope)}`,
+        query: { ...BASE_QUERY, scope: 'openid email', ...query },
+        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=openid%20email',
         headers: { authorization: 'Bearer bearer.token' },
         ip: '127.0.0.1',
       },
@@ -1856,314 +1828,27 @@ describe('GET /oauth/authorize — Bearer path step-up (ADR-007 §2, #185)', () 
     return { fastify, state };
   }
 
-  it('answers a refused token with access_denied, and a key store failure with temporarily_unavailable (#491)', async () => {
-    for (const refused of [new JWTInvalidError('bad'), new JWTExpiredError('old')]) {
-      const { fastify, state } = await runBearer('email', {}, { verifyError: refused });
-      expect(state.redirected).toContain('error=access_denied');
-      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    }
-    // RFC 6749 §4.1.2.1: the redirect URI is validated by now, so the client
-    // hears it there, never as a bad token, and no code is issued.
-    const { fastify, state } = await runBearer(
-      'email',
-      {},
-      { verifyError: new Error('the key store is unreachable') }
-    );
+  it('sends a request with only a Bearer token to sign in, and reads no token', async () => {
+    const { fastify, state } = await runWithOnlyABearerToken();
+
+    expect(state.redirected).toMatch(/^\/ui\/login\?/);
+    expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('answers prompt=none with only a Bearer token with login_required, as without a session', async () => {
+    const { fastify, state } = await runWithOnlyABearerToken({ prompt: 'none' });
+
     const location = new URL(state.redirected as string);
-    expect(location.searchParams.get('error')).toBe('temporarily_unavailable');
-    expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
-    expect(location.searchParams.get('iss')).not.toBeNull();
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(fastify.log.error).toHaveBeenCalled();
-  });
-
-  it('refuses a dangerous scope on the Bearer path with access_denied (no interactive step-up)', async () => {
-    const { fastify, state } = await runBearer('write:foo');
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(emitUserEventMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'urn:qauth:event:step_up.required:v1-rc.0',
-      {
-        reason: 'bearer_path_dangerous_scope_requires_interactive_stepup',
-        error: 'access_denied',
-        dangerousScopes: ['write:foo'],
-      },
-      expect.objectContaining({ userId: BEARER_USER, clientId: 'app-bearer', actor: 'user' })
-    );
-  });
-
-  it('still mints a code for a non-dangerous scope on the Bearer path when a stored consent covers it', async () => {
-    const { fastify, state } = await runBearer('email');
-    expect(state.redirected).toContain('code=');
-    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
-    expect(fastify.repositories.oauthConsents.findActive).toHaveBeenCalledWith(
-      REALM.id,
-      BEARER_USER,
-      DANGEROUS_CLIENT.id
-    );
-  });
-
-  // ADR-015 Decision 11 (#845): the Bearer path can show no screen, and an
-  // agent never skips it, so the path issues an agent no code at all.
-  it('refuses an agent client on the Bearer path even under a covering stored consent', async () => {
-    const { fastify, state } = await runBearer(
-      'email',
-      {},
-      { client: { ...DANGEROUS_CLIENT, isAgent: true } }
-    );
-    expect(state.redirected).toContain('error=access_denied');
-    expect(state.redirected).not.toContain('code=');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('gives a Bearer-path code no session and records no client (#549)', async () => {
-    const { fastify, state } = await runBearer('email');
-    expect(state.redirected).toContain('code=');
-    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ sessionId: null, userId: BEARER_USER }),
-      expect.anything()
-    );
-    expect(fastify.repositories.sessions.recordClient).not.toHaveBeenCalled();
-  });
-
-  // The Bearer path cannot show a consent screen, so it must never stand in
-  // for one: a code is issued only under a stored, unrevoked grant that
-  // already covers the request — the same `canSkipConsent` question the
-  // browser flow asks. Any client that resolves can be named here, including
-  // one registered a moment ago through open Dynamic Client Registration.
-  it.each([
-    ['no consent exists', 'email', null],
-    [
-      'the stored consent does not cover the requested scopes',
-      'email read:foo',
-      { scopes: ['email'], revokedAt: null },
-    ],
-    ['the stored consent is revoked', 'email', { scopes: ['email'], revokedAt: Date.now() - 1000 }],
-  ])('refuses the Bearer path with access_denied when %s', async (_label, scope, consent) => {
-    const { fastify, state } = await runBearer(scope, {}, { consent });
-    expect(state.redirected).toContain('https://example.com/cb');
-    expect(state.redirected).toContain('error=access_denied');
-    expect(state.redirected).toContain('state=xyz');
-    expect(state.redirected).not.toContain('code=');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(emitUserEventMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'urn:qauth:event:authorization.failed:v1-rc.0',
-      { error: 'access_denied', reason: 'bearer_path_no_covering_consent' },
-      expect.objectContaining({ userId: BEARER_USER, actor: 'user' })
-    );
-  });
-
-  it('refuses the Bearer path for a dynamic client still in its badge window, even over a covering consent', async () => {
-    const { fastify, state } = await runBearer(
-      'email',
-      {},
-      {
-        client: {
-          ...DANGEROUS_CLIENT,
-          provisionedByOperator: false,
-          dynamicRegisteredAt: Date.now() - 60 * 1000,
-        },
-      }
-    );
-    // Refused; as a self-registered client, shown rather than redirected.
-    expect(state.statusCode).toBe(400);
-    expect(state.body as string).toContain('<code>access_denied</code>');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('issues no code on the Bearer path when the consent is revoked before the code insert', async () => {
-    const { fastify, ctx } = makeFastify();
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      DANGEROUS_CLIENT
-    );
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
-      scopes: ['email'],
-      revokedAt: null,
-    });
-    (fastify.repositories.oauthConsents.findActiveForShare as unknown as Mock).mockResolvedValue(
-      undefined
-    );
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      clientId: DANGEROUS_CLIENT.clientId,
-      aud: DANGEROUS_CLIENT.clientId,
-    });
-    const { reply, state } = createReply();
-    await ctx.handler!(
-      {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
-        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
-        headers: { authorization: 'Bearer bearer.token' },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  // RFC 8707: the `resource` is the token's `aud`, so the covering consent
-  // must cover it too, exactly as on the browser path.
-  it('refuses the Bearer path for a resource the stored consent does not cover', async () => {
-    const { fastify, state } = await runBearer(
-      'email',
-      {},
-      {
-        consent: {
-          scopes: ['email'],
-          resourceScopes: { 'https://api.example.com/v1': ['email'] },
-          revokedAt: null,
-        },
-        resource: ['https://payroll.example.com/v1'],
-      }
-    );
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('mints on the Bearer path for a resource the stored consent covers, and binds it', async () => {
-    const { fastify, state } = await runBearer(
-      'email',
-      {},
-      {
-        consent: {
-          scopes: ['email'],
-          resourceScopes: { 'https://api.example.com/v1': ['email'] },
-          revokedAt: null,
-        },
-        resource: ['https://api.example.com/v1'],
-      }
-    );
-    expect(state.redirected).toContain('code=');
-    const createArg = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
-      .calls[0][0];
-    expect(createArg.resource).toEqual(['https://api.example.com/v1']);
-  });
-
-  // #509: the portal's token must never become a token for an API family on
-  // the Bearer path, which has no sign-in and no consent screen.
-  it.each([
-    [
-      'the request names a family audience the client lists',
-      { audience: ['urn:qauth:aud:account:v1-rc.0'] },
-      ['urn:qauth:aud:account:v1-rc.0'],
-    ],
-    [
-      "the client's default audience holds one",
-      { audience: ['https://api.example.com', 'urn:qauth:aud:developer:v1-rc.0'] },
-      undefined,
-    ],
-  ])('refuses the Bearer path with access_denied when %s', async (_label, client, resource) => {
-    // The mock answers the system client lookup with this client too, so the
-    // token carries its audience to pass the portal-token check.
-    const { fastify, state } = await runBearer(
-      'email',
-      { aud: client.audience },
-      {
-        client: { ...DANGEROUS_CLIENT, ...client },
-        consent: {
-          scopes: ['email'],
-          resourceScopes: { 'urn:qauth:aud:account:v1-rc.0': ['email'] },
-          revokedAt: null,
-        },
-        resource,
-      }
-    );
-    expect(state.redirected).toContain('https://example.com/cb');
-    expect(state.redirected).toContain('error=access_denied');
-    expect(state.redirected).not.toContain('code=');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(emitUserEventMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'urn:qauth:event:authorization.failed:v1-rc.0',
-      { error: 'access_denied', reason: 'bearer_path_reserved_audience' },
-      expect.objectContaining({ userId: BEARER_USER, actor: 'user' })
-    );
-  });
-
-  it('refuses a Bearer token issued to another client, even with the system audience', async () => {
-    // A third-party client's user token whose `aud` was bound to `system`
-    // through RFC 8707 `resource` is not the first-party login token: the
-    // Bearer path must pin `client_id` like the management API does.
-    const { fastify, state } = await runBearer('email', { clientId: 'third-party-app' });
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses a delegated (RFC 8693 `act`) Bearer token', async () => {
-    const { fastify, state } = await runBearer('email', { act: { sub: 'agent-1' } });
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses a revoked Bearer token (per-jti denylist)', async () => {
-    const { fastify, ctx } = makeFastify();
-    (fastify.redis.exists as unknown as Mock).mockResolvedValue(1);
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      DANGEROUS_CLIENT
-    );
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      jti: 'revoked-jti',
-      clientId: DANGEROUS_CLIENT.clientId,
-      aud: DANGEROUS_CLIENT.clientId,
-    });
-    const { reply, state } = createReply();
-    await ctx.handler!(
-      {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
-        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
-        headers: { authorization: 'Bearer bearer.token' },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-    expect(fastify.redis.exists).toHaveBeenCalledWith(expect.stringContaining('revoked-jti'));
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('fails closed when the denylist cannot be read: temporarily_unavailable, no code (#491)', async () => {
-    const { fastify, ctx } = makeFastify();
-    const redisDown = new Error('redis down');
-    (fastify.redis.exists as unknown as Mock).mockRejectedValue(redisDown);
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      DANGEROUS_CLIENT
-    );
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      jti: 'some-jti',
-      clientId: DANGEROUS_CLIENT.clientId,
-      aud: DANGEROUS_CLIENT.clientId,
-    });
-    const { reply, state } = createReply();
-    await ctx.handler!(
-      {
-        query: { ...BASE_QUERY, client_id: 'app-bearer', scope: 'email' },
-        url: '/oauth/authorize?response_type=code&client_id=app-bearer&scope=email',
-        headers: { authorization: 'Bearer bearer.token' },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-    expect(state.redirected).toContain('error=temporarily_unavailable');
-    expect(fastify.log.error).toHaveBeenCalledWith({ err: redisDown }, expect.any(String));
+    expect(location.searchParams.get('error')).toBe('login_required');
+    expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
 
 describe('GET /oauth/authorize — disabled user', () => {
-  // A session or a Bearer token established before the account was disabled
-  // must not yield a code: the session is ended and the login page shown; the
-  // Bearer path answers access_denied like an expired token.
+  // A session established before the account was disabled must not yield a
+  // code: the session is ended and the login page shown.
   it('sends a session whose user has been disabled back to /ui/login', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
@@ -2203,136 +1888,6 @@ describe('GET /oauth/authorize — disabled user', () => {
     expect(sessions.service.sessions.has('sid-1')).toBe(false);
     expect(state.headers['Set-Cookie']).toContain('Max-Age=0');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('refuses a Bearer token whose user has been disabled with access_denied', async () => {
-    const { fastify, ctx } = makeFastify();
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
-      id: 'consent-1',
-      scopes: ['email'],
-    });
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      clientId: CLIENT.clientId,
-      aud: CLIENT.clientId,
-    });
-    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
-      id: BEARER_USER,
-      enabled: false,
-      realmId: REALM.id,
-    });
-
-    const handler = ctx.handler;
-    if (!handler) throw new Error('Handler missing');
-    const { reply, state } = createReply();
-    await handler(
-      {
-        query: BASE_QUERY,
-        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { authorization: 'Bearer bearer.token' },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-
-    expect(state.redirected).toContain('error=access_denied');
-    // Looked up in the request's realm (#489).
-    expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, BEARER_USER);
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  /**
-   * The Bearer path for the portal token of {@link BEARER_USER}, with `claims`
-   * on it, when the users table holds `user` for it.
-   */
-  async function bearerAuthorize(
-    user: Record<string, unknown>,
-    claims: Record<string, unknown> = {}
-  ) {
-    const { fastify, ctx } = makeFastify();
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
-      id: 'consent-1',
-      scopes: ['email'],
-      revokedAt: null,
-    });
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-      sub: BEARER_USER,
-      clientId: CLIENT.clientId,
-      aud: CLIENT.clientId,
-      ...claims,
-    });
-    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(user);
-
-    const handler = ctx.handler;
-    if (!handler) throw new Error('Handler missing');
-    const { reply, state } = createReply();
-    await handler(
-      {
-        query: BASE_QUERY,
-        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { authorization: 'Bearer bearer.token' },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-    return { fastify, state };
-  }
-
-  /** The events emitted so far, by type and payload. */
-  function emittedEvents() {
-    return emitUserEventMock.mock.calls.map(([, type, payload]) => [type, payload]);
-  }
-
-  it('refuses a Bearer token minted before its user was last disabled, as a disabled user’s token (#748)', async () => {
-    // Disabled a minute ago and enabled again since; the token is older.
-    const disabledAt = Date.now() - 60_000;
-    const iat = Math.floor((disabledAt - 60_000) / 1000);
-    const issuedBefore = await bearerAuthorize(
-      { id: BEARER_USER, enabled: true, notValidBefore: disabledAt, realmId: REALM.id },
-      { iat }
-    );
-    expect(issuedBefore.state.redirected).toContain('https://example.com/cb');
-    expect(issuedBefore.state.redirected).toContain('error=access_denied');
-    expect(issuedBefore.state.redirected).not.toContain('code=');
-    expect(issuedBefore.fastify.repositories.users.findById).toHaveBeenCalledWith(
-      REALM.id,
-      BEARER_USER
-    );
-    expect(issuedBefore.fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    const issuedBeforeEvents = emittedEvents();
-    expect(issuedBeforeEvents).toEqual([
-      ['urn:qauth:event:authorization.failed:v1-rc.0', { error: 'access_denied' }],
-    ]);
-
-    emitUserEventMock.mockClear();
-    const disabled = await bearerAuthorize(
-      { id: BEARER_USER, enabled: false, realmId: REALM.id },
-      { iat }
-    );
-
-    // One answer: the client cannot tell the two apart.
-    expect(issuedBefore.state.statusCode).toBe(disabled.state.statusCode);
-    expect(issuedBefore.state.redirected).toBe(disabled.state.redirected);
-    expect(issuedBeforeEvents).toEqual(emittedEvents());
-  });
-
-  it('issues a code from a Bearer token minted after its user was enabled again (#748)', async () => {
-    const disabledAt = Date.now() - 600_000;
-    const { fastify, state } = await bearerAuthorize(
-      { id: BEARER_USER, enabled: true, notValidBefore: disabledAt, realmId: REALM.id },
-      { iat: Math.floor(Date.now() / 1000) }
-    );
-
-    expect(state.redirected).toContain('https://example.com/cb');
-    expect(state.redirected).toContain('code=');
-    expect(state.redirected).not.toContain('error=');
-    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -2538,8 +2093,6 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     session?: { authTime?: number } | null;
     /** Prior consent used to reach the consent-skip / code-issuance path. */
     consent?: Record<string, unknown> | null;
-    /** Present a Bearer token instead of a cookie; `false` makes verification fail. */
-    bearer?: 'valid' | 'invalid';
     /**
      * The issuer of the request's realm, to prove `iss` tracks the realm row
      * verbatim (#490).
@@ -2558,30 +2111,13 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     );
 
     const headers: Record<string, string> = {};
-    if (opts.bearer) {
-      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('bearer.token');
-      if (opts.bearer === 'valid') {
-        (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue({
-          sub: BEARER_USER,
-          clientId: (opts.client ?? CLIENT).clientId,
-          aud: (opts.client ?? CLIENT).clientId,
-        });
-      } else {
-        (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockRejectedValue(
-          new JWTExpiredError('expired')
-        );
-      }
-      headers['authorization'] = 'Bearer bearer.token';
-    } else {
-      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-      if (opts.session !== null) {
-        const { cookie } = await sessions.signIn({
-          realmId: REALM.id,
-          userId: 'user-1',
-          ...opts.session,
-        });
-        headers['cookie'] = cookie;
-      }
+    if (opts.session !== null) {
+      const { cookie } = await sessions.signIn({
+        realmId: REALM.id,
+        userId: 'user-1',
+        ...opts.session,
+      });
+      headers['cookie'] = cookie;
     }
 
     const query = { ...BASE_QUERY, ...opts.query };
@@ -2635,23 +2171,6 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
     }
   });
 
-  it('access_denied (invalid/expired Bearer token) carries `iss`', async () => {
-    const { fastify, state } = await run({ bearer: 'invalid' });
-    expect(state.redirected).toContain('error=access_denied');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
-  it('access_denied (Bearer path dangerous-scope step-up refusal) carries `iss`', async () => {
-    const { state } = await run({
-      client: { ...CLIENT, clientId: 'app-bearer', scopes: ['read:foo', 'write:foo', 'email'] },
-      query: { client_id: 'app-bearer', scope: 'write:foo' },
-      bearer: 'valid',
-    });
-    expect(state.redirected).toContain('error=access_denied');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
   it('invalid_scope (agent scope-mode cap exceeded) carries `iss`', async () => {
     const { state } = await run({
       client: {
@@ -2698,17 +2217,6 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
   it("emits the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
     const { state } = await run({ realmIssuer: 'https://b.example.com' });
     expect(state.redirected).toContain('code=');
-    expect(issOf(state.redirected)).toBe('https://b.example.com');
-  });
-
-  it("pins a Bearer token to the request realm's issuer (ADR-019 Decision 1, #490)", async () => {
-    const { fastify, state } = await run({ bearer: 'valid', realmIssuer: 'https://b.example.com' });
-    // The audience is assertManagementToken's to check (#509), so the
-    // verification pins only the realm: its keys and its issuer (#491).
-    expect(fastify.jwtUtils.verifyAccessToken).toHaveBeenCalledWith(
-      { id: REALM.id, issuer: 'https://b.example.com' },
-      'bearer.token'
-    );
     expect(issOf(state.redirected)).toBe('https://b.example.com');
   });
 

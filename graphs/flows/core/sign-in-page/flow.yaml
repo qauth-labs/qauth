@@ -279,7 +279,7 @@ states:
       - guard: inputInvalid
         target: validation_error.query
         say: 'the query does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
+        source: apps/auth-server/src/app/plugins/error-handler.ts:264
       - target: showReadingCsrfCookie
         say: 'the query matches the schema'
         source: apps/auth-server/src/app/routes/ui/login.ts:239
@@ -380,7 +380,7 @@ states:
       - guard: inputInvalid
         target: validation_error.form
         say: 'the form does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
+        source: apps/auth-server/src/app/plugins/error-handler.ts:264
       - target: readingCsrfCookie
         say: 'the form matches the schema'
         source: apps/auth-server/src/app/schemas/auth.ts:129
@@ -461,7 +461,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   checkingVerified:
     title: Apply the verified-account gate
@@ -496,7 +496,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   clearingFailures:
     title: Settle the counted attempt
@@ -529,7 +529,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   updatingLastLogin:
     title: Record the time of the sign-in on the user
@@ -543,7 +543,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   recordingSignIn:
     title: Record the sign-in
@@ -571,7 +571,7 @@ states:
       FAIL.server:
         target: server_error.store
         say: 'the event store fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+        source: apps/auth-server/src/app/plugins/error-handler.ts:604
 
   redirectedToResume:
     title: Send the signed-in browser back to its authorization request
@@ -801,7 +801,7 @@ states:
   validation_error.query:
     type: final
     title: Refuse a query that does not match the page's schema
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
+    source: apps/auth-server/src/app/plugins/error-handler.ts:339
     response:
       status: 400
       body:
@@ -820,7 +820,7 @@ states:
     type: final
     title: Refuse a form that does not match the login form schema
     description: The error handler's problem document, not the page; nothing is counted against the lockout.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
+    source: apps/auth-server/src/app/plugins/error-handler.ts:339
     response:
       status: 400
       body:
@@ -897,7 +897,7 @@ states:
     description: >-
       The URIError reaches the error handler as an unknown error, logged at error level. The body says nothing of the
       failure, in any NODE_ENV; its trace_id finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    source: apps/auth-server/src/app/plugins/error-handler.ts:604
     response:
       status: 500
       body:
@@ -915,7 +915,7 @@ states:
       The steps before the failing one stay done: a session created before a later failure stays, though the browser
       never receives its cookie. The body says nothing of the failure, in any NODE_ENV; its trace_id finds the log
       line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+    source: apps/auth-server/src/app/plugins/error-handler.ts:604
     response:
       status: 500
       body:

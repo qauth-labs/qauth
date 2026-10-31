@@ -67,7 +67,6 @@ const REFUSING_MODULES: Readonly<
   'routes/auth/logout.ts': 'inactiveSubjectError',
   'helpers/management-token.ts': 'inactiveSubjectError',
   'helpers/family-token.ts': 'inactiveSubjectError',
-  'routes/oauth/authorize.ts': 'inactiveSubjectError',
   'routes/oauth/token.ts': 'inactiveSubjectTokenError',
 };
 
@@ -78,7 +77,12 @@ const fastify = { repositories: { users } } as unknown as FastifyInstance;
 
 /** The claims `/auth/login` puts on the developer-portal token. */
 function portalClaims(overrides: Record<string, unknown> = {}) {
-  return { sub: USER_ID, clientId: 'system', aud: 'system', ...overrides };
+  return {
+    sub: USER_ID,
+    clientId: 'system',
+    aud: 'urn:qauth:aud:developer:v1-rc.0',
+    ...overrides,
+  };
 }
 
 beforeEach(() => {

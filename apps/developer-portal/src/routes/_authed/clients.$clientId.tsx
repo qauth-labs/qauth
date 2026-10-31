@@ -75,6 +75,9 @@ function ClientDetailsPage() {
     const result = await updateClientFn({
       data: {
         id: clientId,
+        // The version the form was filled from: a client changed since is
+        // refused (412) instead of overwritten.
+        ...(load.status === 'ready' && load.client.etag ? { ifMatch: load.client.etag } : {}),
         name: values.name,
         description: values.description || null,
         redirectUris: values.redirectUris,

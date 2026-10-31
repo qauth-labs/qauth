@@ -67,8 +67,9 @@ export interface AuthorizationCodeGrant {
    * ADR-019 Decisions 3 and 4 (#549): the browser session the code is issued
    * under. Its `sid` is stored on the code, and the code exchange puts it in
    * the ID token; the client is recorded against the session
-   * (`session_clients`, what back-channel logout reads). Null on the legacy
-   * Bearer path (no interactive session): no `sid`, no client recorded.
+   * (`session_clients`, what back-channel logout reads). Null for a code no
+   * interactive session backs, as on the legacy Bearer path #524 retired: no
+   * `sid`, no client recorded.
    */
   readonly session: AuthorizationCodeSession | null;
 }

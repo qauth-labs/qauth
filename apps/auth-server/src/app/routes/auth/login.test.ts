@@ -129,6 +129,13 @@ function createFastifyStub() {
       oauthClients: {
         findByClientId: vi.fn(),
         create: vi.fn(),
+        // A system client without the developer audience is given it on read
+        // (#524).
+        update: vi.fn(async (_realmId: string, id: string, data: Record<string, unknown>) => ({
+          id,
+          clientId: 'system',
+          ...data,
+        })),
       },
       refreshTokens: {
         create: vi.fn().mockResolvedValue(undefined),
@@ -250,12 +257,14 @@ function userFixture(overrides: Record<string, unknown> = {}) {
 
 describe('POST /auth/login', () => {
   // #510: this sign-in checks no admin grant, so its token never names the
-  // admin API, whatever the system client's row lists.
-  it("leaves the admin API's audience out of the token", async () => {
-    for (const [audience, aud] of [
-      [['urn:qauth:aud:admin:v1-rc.0', 'https://auth.example.com'], 'https://auth.example.com'],
-      [['urn:qauth:aud:admin:v1-rc.0'], 'system'],
+  // admin API, whatever the system client's row lists. Since #524 the row is
+  // given exactly the developer API's audience, which the token carries.
+  it("mints the developer API's audience, never the admin API's, whatever the row lists", async () => {
+    for (const audience of [
+      ['urn:qauth:aud:admin:v1-rc.0', 'https://auth.example.com'],
+      ['urn:qauth:aud:admin:v1-rc.0'],
     ] as const) {
+      const aud = 'urn:qauth:aud:developer:v1-rc.0';
       const { fastify, ctx } = createFastifyStub();
       await loginRoute(fastify);
       (
@@ -296,7 +305,7 @@ describe('POST /auth/login', () => {
     const systemClient = {
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['https://auth.example.com'],
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
     };
 
     (
@@ -320,14 +329,15 @@ describe('POST /auth/login', () => {
 
     const result = await handler(request, reply);
 
-    // aud comes from the system client's audience (single-item array → string);
+    // aud comes from the system client's audience, the developer API's since
+    // #524 (single-item array → string);
     // the token is signed in the request's realm (#491)
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'realm-1' }),
       expect.objectContaining({
         sub: user.id,
         clientId: 'system',
-        aud: 'https://auth.example.com',
+        aud: 'urn:qauth:aud:developer:v1-rc.0',
       })
     );
 
@@ -368,7 +378,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['https://auth.example.com'],
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -407,7 +417,7 @@ describe('POST /auth/login', () => {
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
         id: 'sc-uuid',
         clientId: 'system',
-        audience: ['https://auth.example.com'],
+        audience: ['urn:qauth:aud:developer:v1-rc.0'],
       });
       (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -497,7 +507,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['https://auth.example.com'],
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -569,7 +579,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['https://auth.example.com'],
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -591,7 +601,7 @@ describe('POST /auth/login', () => {
       {
         sub: 'user-1',
         clientId: 'system',
-        aud: 'https://auth.example.com',
+        aud: 'urn:qauth:aud:developer:v1-rc.0',
         expiresInOverride: 900,
       }
     );
@@ -615,7 +625,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: ['https://auth.example.com'],
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -960,7 +970,7 @@ describe('POST /auth/login', () => {
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
         id: 'sc-uuid',
         clientId: 'system',
-        audience: ['https://auth.example.com'],
+        audience: ['urn:qauth:aud:developer:v1-rc.0'],
       });
       (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 
@@ -1128,7 +1138,7 @@ describe('POST /auth/login', () => {
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
       id: 'sc-uuid',
       clientId: 'system',
-      audience: null,
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
     });
     (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
 

@@ -3,12 +3,19 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { sendDeprecationHeaders } from '../../api-conventions/deprecation';
 import { listConsentsForUser, revokeConsentForUser } from '../../helpers/consent-management';
 import { createRequireManagementJwt } from '../../helpers/management-token';
 import { requestRealm } from '../../helpers/request-realm';
 
 /**
  * Consent management for the developer portal (issue #366).
+ *
+ * DEPRECATED since #524: the developer API serves the same consents at
+ * `/developer/v1-rc.0/consents` (`routes/developer`), in the API conventions'
+ * representation, and the account API at `/account/v1-rc.0/consents`. These
+ * paths keep their response shape until the release-candidate cleanup
+ * removes them; every response carries the `Deprecation` header.
  *
  * WHY THIS EXISTS ALONGSIDE `routes/consents`.
  *
@@ -68,6 +75,8 @@ function requireUserId(request: FastifyRequest): string {
 
 export default async function (fastify: FastifyInstance) {
   const requireManagementJwt = createRequireManagementJwt(fastify);
+  // Deprecated since #524: every response says so (RFC 9745).
+  sendDeprecationHeaders(fastify);
 
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/',
@@ -78,6 +87,7 @@ export default async function (fastify: FastifyInstance) {
           'List the active OAuth consents belonging to the authenticated user. Requires a developer Bearer access token. Drives the developer portal revocation screen (issue #366).',
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
+        deprecated: true,
         'x-qauth-errors': [401],
         response: { 200: listResponseSchema },
       },
@@ -105,6 +115,7 @@ export default async function (fastify: FastifyInstance) {
           "Revoke one of the authenticated user's OAuth consents. Returns 404 if the consent does not exist or belongs to another user, so the API never reveals that another user's consent id exists. Requires a developer Bearer access token.",
         tags: ['Consents'],
         'x-qauth-stability': 'stable',
+        deprecated: true,
         'x-qauth-errors': [400, 401, 404],
         params: z.object({ id: z.string().uuid() }),
         response: { 204: z.null() },
