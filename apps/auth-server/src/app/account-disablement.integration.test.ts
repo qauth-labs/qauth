@@ -6,6 +6,7 @@ import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
+  type CookieJar,
   E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
@@ -212,14 +213,23 @@ describe('an account enabled again does not bring back what it held before (#748
 
   /**
    * Wait until a credential issued now counts as issued after the
-   * disablement: past `not_valid_before` and the margin the check allows for
-   * the clocks of its issue times.
+   * disablement: past `not_valid_before`, the margin the check allows for the
+   * clocks of its issue times, and the second an access token's `iat` drops.
    */
   async function waitPastDisablement(app: FastifyInstance, userId: string): Promise<void> {
     const disabledAt = await notValidBefore(app, userId);
     if (disabledAt === null) throw new Error('the account was never disabled');
-    const wait = disabledAt + NOT_VALID_BEFORE_MARGIN_MS + 50 - Date.now();
+    const wait = disabledAt + NOT_VALID_BEFORE_MARGIN_MS + 1000 + 50 - Date.now();
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+
+  /**
+   * Wait out the check's margin, so a credential issued before this call
+   * counts as issued before a disablement after it only because it was, not
+   * because it falls within the margin.
+   */
+  async function waitPastMargin(): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, NOT_VALID_BEFORE_MARGIN_MS + 100));
   }
 
   /** `POST /oauth/introspect` by the resource server: the `active` member. */
@@ -251,6 +261,7 @@ describe('an account enabled again does not bring back what it held before (#748
     const app = server();
     const userId = await seed(app);
     const held = await signInAndObtainTokens(app);
+    await waitPastMargin();
 
     // Disabled and enabled again, with nothing used in between.
     await setEnabled(app, userId, false);
@@ -309,6 +320,7 @@ describe('an account enabled again does not bring back what it held before (#748
     const userId = await seed(app);
     const held = await signInAndObtainTokens(app);
     expect(await introspect(app, held.accessToken)).toBe(true);
+    await waitPastMargin();
 
     await setEnabled(app, userId, false);
     await setEnabled(app, userId, true);
@@ -323,6 +335,41 @@ describe('an account enabled again does not bring back what it held before (#748
       headers: { authorization: `Bearer ${held.accessToken}` },
     });
     expect(userinfo.statusCode).toBe(401);
+  }, 60_000);
+
+  it('refuses a session started while the disabling transaction was still open', async () => {
+    const app = server();
+    const userId = await seed(app);
+    const operator = await app.dbPool.connect();
+    let signedIn: Promise<CookieJar> | undefined;
+    try {
+      await operator.query('BEGIN');
+      await operator.query('UPDATE users SET enabled = false WHERE id = $1', [userId]);
+      // Until the commit every other transaction reads the account as
+      // enabled: the sign-in passes its checks and creates its session, past
+      // the margin of the time the row changed, then waits for the row lock
+      // to record the sign-in time on the account.
+      await waitPastMargin();
+      signedIn = signInWithPassword(app, EMAIL);
+      await waitPastMargin();
+      expect(
+        (
+          await app.dbPool.query<{ count: string }>(
+            'SELECT count(*) FROM sessions WHERE user_id = $1',
+            [userId]
+          )
+        ).rows[0].count
+      ).toBe('1');
+      await operator.query('COMMIT');
+    } finally {
+      operator.release();
+    }
+    const jar = await signedIn;
+    await setEnabled(app, userId, true);
+
+    const { response } = await authorize(app, jar.header() as string);
+    expect(response.statusCode).toBe(302);
+    expect(response.headers['location']).toMatch(/^\/ui\/login\?/);
   }, 60_000);
 
   it('leaves an account that was never disabled as it was', async () => {
