@@ -15,6 +15,8 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { createFakeCookieSigner } from '../../../testing/cookie-keys';
+import { testRealm } from '../../../testing/request-realm';
 import { PENDING_AUTHORIZATION_MAX_URL_BYTES, PENDING_AUTHORIZATION_TTL_MS } from '../../constants';
 import {
   consumePendingAuthorization,
@@ -96,6 +98,8 @@ function makeFastify() {
         store.delete(id);
       }),
     },
+    // The login page signs its CSRF cookie with the realm's cookie key (#493).
+    signer: createFakeCookieSigner(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx, store };
@@ -413,7 +417,10 @@ describe('login round-trip', () => {
     const loginFastify = makeFastify();
     await loginRoute(loginFastify.fastify);
     const { reply, state } = createReply();
-    await loginFastify.ctx.get!({ query: { return_to: returnTo }, headers: {} }, reply);
+    await loginFastify.ctx.get!(
+      { query: { return_to: returnTo }, headers: {}, realm: testRealm({ id: 'realm-1' }) },
+      reply
+    );
     expect(String(state.body)).toContain(`name="return_to" value="${returnTo}"`);
   });
 

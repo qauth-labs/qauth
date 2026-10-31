@@ -136,6 +136,7 @@ function createFastifyStub() {
       decodeTokenUnsafe: vi.fn(),
     },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: {
       ...sessions.redis,
       setex: vi.fn().mockResolvedValue('OK'),

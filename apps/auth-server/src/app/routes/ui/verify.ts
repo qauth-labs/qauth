@@ -99,11 +99,15 @@ export default async function (fastify: FastifyInstance) {
 
       // Signed double-submit CSRF, as POST /ui/login checks it: the cookie's
       // signature, then a timing-safe comparison with the submitted field.
-      const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const cookieCsrf = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
         // Re-render with a fresh token so the person can retry legitimately.
         const freshCsrf = generateCsrfToken();
-        setLoginCsrfCookie(reply, freshCsrf);
+        await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, freshCsrf);
         return sendVerifyEmailPage(reply, 403, {
           kind: 'form',
           token: body.token,

@@ -213,6 +213,7 @@ function makeFastify(realm: RealmRow = REALM) {
     },
     sessionUtils,
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -274,7 +275,7 @@ async function startLink(
     getReply.reply
   );
   const csrfCookie = cookieValue(getReply.state.setCookies, '__Host-qauth_login_csrf');
-  const csrfToken = csrfCookie.split('.')[0];
+  const csrfToken = csrfCookie.split('.')[1];
 
   const cookies = [sessionCookie, `__Host-qauth_login_csrf=${csrfCookie}`];
   if (opts.walletFlowCookie !== undefined) {
@@ -920,7 +921,7 @@ describe('wallet-link UI — the return leg (#405)', () => {
         {
           body: {
             identifier: 'user@example.com',
-            csrf_token: loginCsrfCookie.split('.')[0],
+            csrf_token: loginCsrfCookie.split('.')[1],
             device: 'this',
           },
           headers: { cookie: `__Host-qauth_login_csrf=${loginCsrfCookie}` },

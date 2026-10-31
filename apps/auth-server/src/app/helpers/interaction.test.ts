@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../../config/env', () => ({
   env: {
     NODE_ENV: 'test',
-    SESSION_COOKIE_SECRET: 'test-secret-at-least-32-characters-long-padding',
     SESSION_COOKIE_TTL: 3600,
     SESSION_COOKIE_SECURE: true,
     INTERACTION_TTL: 1800,
@@ -52,7 +51,7 @@ import {
   writeInteractionState,
 } from './interaction-record';
 import { answerRouteNotFound } from './request-bounds';
-import { SESSION_COOKIE_NAME, verifySignedSessionId } from './session-cookie';
+import { SESSION_COOKIE_NAME, verifySessionCookie } from './session-cookie';
 import { emitUserEvent } from './user-events';
 
 /**
@@ -143,6 +142,8 @@ async function buildHarness(): Promise<Harness> {
   const redis = createMemoryInteractionRedis(sessions.redis);
   app.decorate('redis', redis as unknown as FastifyInstance['redis']);
   app.decorate('sessionService', sessions.service);
+  // The session cookie is signed with the realm's cookie key (#493).
+  app.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
   const decided: InteractionState[] = [];
   const duringDecide: Harness['duringDecide'] = {};
 
@@ -710,7 +711,10 @@ describe('authentication (#592)', () => {
       realmId: REALM.id,
       userId: USER_B,
     });
-    owner.cookies.set(SESSION_COOKIE_NAME, sessionCookie(before.sid).split('=')[1]);
+    owner.cookies.set(
+      SESSION_COOKIE_NAME,
+      (await sessionCookie(harness.app, before)).split('=')[1]
+    );
     const id = await owner.start();
     const flowBefore = owner.cookies.get(FLOW_COOKIE);
     const beforeCookies = owner.header;
@@ -723,7 +727,11 @@ describe('authentication (#592)', () => {
     });
 
     expect(answered.statusCode).toBe(200);
-    const sidAfter = verifySignedSessionId(owner.cookies.get(SESSION_COOKIE_NAME));
+    const sidAfter = await verifySessionCookie(
+      harness.app,
+      REALM.id,
+      owner.cookies.get(SESSION_COOKIE_NAME)
+    );
     expect(sidAfter).not.toBeNull();
     expect(sidAfter).not.toBe(before.sid);
     expect(harness.sessions.service.create).toHaveBeenCalledWith(
@@ -795,7 +803,11 @@ describe('authentication (#592)', () => {
       amr: ['pwd'],
       step: PASSWORD_STEP,
     });
-    const first = verifySignedSessionId(owner.cookies.get(SESSION_COOKIE_NAME));
+    const first = await verifySessionCookie(
+      harness.app,
+      REALM.id,
+      owner.cookies.get(SESSION_COOKIE_NAME)
+    );
 
     await owner.answer(id, 1, {
       kind: 'authenticated',
@@ -804,7 +816,11 @@ describe('authentication (#592)', () => {
       step: CONSENT_STEP,
     });
 
-    const second = verifySignedSessionId(owner.cookies.get(SESSION_COOKIE_NAME));
+    const second = await verifySessionCookie(
+      harness.app,
+      REALM.id,
+      owner.cookies.get(SESSION_COOKIE_NAME)
+    );
     expect(second).not.toBe(first);
     expect([...harness.sessions.service.sessions.keys()]).toEqual([second]);
     await owner.answer(id, 2, { kind: 'finished' });

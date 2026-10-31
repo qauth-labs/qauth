@@ -1,9 +1,9 @@
+import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../config/env', () => ({
   env: {
-    SESSION_COOKIE_SECRET: 'test-secret-at-least-32-characters-long-padding',
     SESSION_COOKIE_TTL: 3600,
     SESSION_COOKIE_SECURE: false,
   },
@@ -14,6 +14,7 @@ import {
   createBrowserSessionFixture,
   sessionCookie,
 } from '../../testing/browser-sessions';
+import { createFakeCookieSigner } from '../../testing/cookie-keys';
 import { testRealm } from '../../testing/request-realm';
 import { createBrowserSession, endBrowserSessions, resolveBrowserSession } from './browser-session';
 import { SESSION_COOKIE_NAME } from './session-cookie';
@@ -51,6 +52,7 @@ beforeEach(() => {
   fastify = {
     repositories: { users },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: sessions.redis,
   } as unknown as FastifyInstance;
   users.findById.mockResolvedValue({ id: USER_ID, enabled: true });
@@ -181,22 +183,60 @@ describe('resolveBrowserSession', () => {
     expect(headers['Set-Cookie']).toBeUndefined();
   });
 
-  it('returns null without a cookie or with a bad signature', async () => {
-    const { reply } = makeReply();
+  it('returns null without a cookie, and sets none', async () => {
+    const { reply, headers } = makeReply();
 
     await expect(resolveBrowserSession(fastify, makeRequest(), reply)).resolves.toBeNull();
-    await expect(
-      resolveBrowserSession(fastify, makeRequest(`${SESSION_COOKIE_NAME}=sess-1.bad`), reply)
-    ).resolves.toBeNull();
     expect(sessions.service.get).not.toHaveBeenCalled();
+    expect(headers['Set-Cookie']).toBeUndefined();
+  });
+
+  it('clears a cookie that does not verify, without looking a session up (#493)', async () => {
+    const { session, cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+    const value = cookie.slice(cookie.indexOf('=') + 1);
+    const [kid, payload, mac] = value.split('.');
+
+    for (const bad of [
+      'sess-1.bad',
+      // The format before the realm cookie keys: `<sid>.<hmac>`.
+      `${session.sid}.${mac}`,
+      `${kid}.${payload}.${mac.startsWith('A') ? 'B' : 'A'}${mac.slice(1)}`,
+      `unknown-kid.${payload}.${mac}`,
+    ]) {
+      const { reply, headers } = makeReply();
+      await expect(
+        resolveBrowserSession(fastify, makeRequest(`${SESSION_COOKIE_NAME}=${bad}`), reply)
+      ).resolves.toBeNull();
+      expect(headers['Set-Cookie'], bad).toBe(
+        `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+      );
+    }
+    expect(sessions.service.get).not.toHaveBeenCalled();
+  });
+
+  it('fails, and keeps the cookie, when the signer cannot answer', async () => {
+    const { cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+    const down = createFakeCookieSigner();
+    down.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+    const { reply, headers } = makeReply();
+
+    await expect(
+      resolveBrowserSession({ ...fastify, signer: down } as never, makeRequest(cookie), reply)
+    ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+    expect(headers['Set-Cookie']).toBeUndefined();
   });
 
   it('clears a stale cookie whose session the service does not hold', async () => {
     const { reply, headers } = makeReply();
 
     await expect(
-      resolveBrowserSession(fastify, makeRequest(sessionCookie('gone')), reply)
+      resolveBrowserSession(
+        fastify,
+        makeRequest(await sessionCookie(fastify, { sid: 'gone', realmId: REALM.id })),
+        reply
+      )
     ).resolves.toBeNull();
+    expect(sessions.service.get).toHaveBeenCalledWith({ realmId: REALM.id, sid: 'gone' });
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
     expect(users.findById).not.toHaveBeenCalled();
   });
@@ -208,6 +248,9 @@ describe('resolveBrowserSession', () => {
     await expect(
       resolveBrowserSession(fastify, makeRequest(cookie, REALM), reply)
     ).resolves.toBeNull();
+    // The cookie's MAC names its realm (#493): it does not verify here, so no
+    // session is even looked up.
+    expect(sessions.service.get).not.toHaveBeenCalled();
     expect(headers['Set-Cookie']).toContain('Max-Age=0');
     expect(users.findById).not.toHaveBeenCalled();
   });

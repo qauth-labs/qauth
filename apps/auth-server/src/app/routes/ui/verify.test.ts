@@ -240,7 +240,7 @@ describe('POST /ui/verify (the form of the emailed link)', () => {
       expect(hiddenField(res.body, 'token')).toBe(TOKEN);
       const fresh = hiddenField(res.body, 'csrf_token');
       expect(cookieHeader(res.headers['set-cookie'])).toMatch(
-        new RegExp(`^${LOGIN_CSRF_COOKIE_NAME}=${fresh}\\.`)
+        new RegExp(`^${LOGIN_CSRF_COOKIE_NAME}=[^.]+\\.${fresh}\\.`)
       );
       expect(stubs.hashToken).not.toHaveBeenCalled();
       expect(stubs.findByTokenHash).not.toHaveBeenCalled();

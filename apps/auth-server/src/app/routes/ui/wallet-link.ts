@@ -12,6 +12,7 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
+import { requestRealm } from '../../helpers/request-realm';
 import {
   clearLoginCsrfCookie,
   csrfTokensEqual,
@@ -326,9 +327,13 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      const existing = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const existing = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       const csrfToken = existing ?? generateCsrfToken();
-      if (!existing) setLoginCsrfCookie(reply, csrfToken);
+      if (!existing) await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, csrfToken);
 
       return sendHtml(reply, confirmPage({ cspNonce: reply.cspNonce.style, csrfToken }));
     }
@@ -365,7 +370,11 @@ export default async function (fastify: FastifyInstance) {
       // Login CSRF, checked BEFORE anything else so a forged cross-site POST
       // cannot mint presentation requests (each of which is a DB row) against a
       // signed-in user's session.
-      const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const cookieCsrf = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
         await emitUserEvent(
           request,
@@ -374,7 +383,7 @@ export default async function (fastify: FastifyInstance) {
           { userId: session.userId, actor: 'user' }
         );
         const freshCsrf = generateCsrfToken();
-        setLoginCsrfCookie(reply, freshCsrf);
+        await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, freshCsrf);
         return sendHtml(
           reply,
           confirmPage({

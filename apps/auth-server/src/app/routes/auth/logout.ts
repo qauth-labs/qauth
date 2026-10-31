@@ -15,7 +15,7 @@ import {
   clearSessionCookie,
   readCookie,
   SESSION_COOKIE_NAME,
-  verifySignedSessionId,
+  verifySessionCookie,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
 import { inactiveSubjectError } from '../../helpers/token-subject';
@@ -147,7 +147,11 @@ export default async function (fastify: FastifyInstance) {
         // found through the per-user index, not a cookie; the request's own
         // cookie is cleared when it names one of them.
         const endedSessions = await endBrowserSessions(fastify, user.realmId, userId);
-        const requestSessionId = verifySignedSessionId(readCookie(request, SESSION_COOKIE_NAME));
+        const requestSessionId = await verifySessionCookie(
+          fastify,
+          user.realmId,
+          readCookie(request, SESSION_COOKIE_NAME)
+        );
         if (requestSessionId && endedSessions.includes(requestSessionId)) {
           clearSessionCookie(reply);
         }

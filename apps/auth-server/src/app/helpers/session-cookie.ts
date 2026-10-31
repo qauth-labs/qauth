@@ -3,9 +3,124 @@ import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
+import { type CookieKey, type CookieKeyHolder, cookieKeyRing } from './cookie-keys';
+import { requestRealm } from './request-realm';
 
 /**
- * Cookie name used to carry the browser session id (issue #150).
+ * The auth server's signed cookies (ADR-019 Decision 3 and Decision 9, issue
+ * #493): the session cookie, the login-CSRF cookie and the wallet-flow cookie.
+ *
+ * ## Format
+ *
+ * Every signed cookie value is `<kid>.<payload>.<mac>`:
+ *
+ * - `kid` names the realm cookie key that signed it, so a rotation (#542)
+ *   leaves the cookies the previous key signed verifiable for its retention;
+ * - `payload` is the cookie's own content, which never holds a `.`;
+ * - `mac` is the base64url HMAC-SHA256, under that key, of
+ *   {@link COOKIE_MAC_LABEL}, the cookie's name, the realm id, the `kid` and
+ *   the payload, NUL-separated.
+ *
+ * The keys are the realm's `cookie_hmac` keys, which the signer hands this
+ * role (`getCookieSecrets`; see `cookie-keys.ts`). A new cookie is signed with
+ * the realm's current key; one presented is verified with the key its `kid`
+ * names, the current or the previous one, and the MAC is compared in constant
+ * time. The cookie's name in the MAC keeps one cookie from passing for
+ * another, and the realm id keeps a value from moving to another realm even
+ * if two realms shared a key by mistake: each realm's host already holds its
+ * own `__Host-` cookies, so this is the second wall.
+ *
+ * Every cookie here carries `Path=/`, `HttpOnly`, `SameSite=Lax`, no
+ * `Domain` and, unless `SESSION_COOKIE_SECURE` is off for a plain-HTTP
+ * development stack, `Secure`; the `__Host-` prefix makes a browser insist on
+ * all but the first two.
+ */
+
+/**
+ * Separates the parts of the MAC input. None of them can hold it: the realm id
+ * is a UUID, a `kid` is matched against the realm's own keys, and a payload
+ * comes from a cookie value.
+ */
+const MAC_SEPARATOR = '\u0000';
+
+/** The format of the MAC input, first in it, so another use of the key cannot collide. */
+export const COOKIE_MAC_LABEL = 'qauth-cookie/1-rc.0';
+
+/** The characters of a `kid` the format carries: base64url, which every generated and imported cookie key uses. */
+const KID_PATTERN = /^[A-Za-z0-9_-]{1,255}$/;
+
+/** A base64url HMAC-SHA256: 32 bytes, 43 characters without padding. */
+const MAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+const SEPARATOR = '.';
+
+function mac(key: CookieKey, cookieName: string, realmId: string, payload: string): Buffer {
+  return createHmac('sha256', key.key)
+    .update([COOKIE_MAC_LABEL, cookieName, realmId, key.kid, payload].join(MAC_SEPARATOR))
+    .digest();
+}
+
+/**
+ * Sign `payload` for the cookie `cookieName` of the realm, with the realm's
+ * current cookie key.
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
+ * @throws Error when the payload holds a `.`, or the current key's `kid` is
+ *   one the format cannot carry
+ */
+async function signCookieValue(
+  fastify: CookieKeyHolder,
+  cookieName: string,
+  realmId: string,
+  payload: string
+): Promise<string> {
+  if (payload.includes(SEPARATOR)) {
+    throw new Error(`A ${cookieName} payload never holds "${SEPARATOR}"`);
+  }
+  const { current } = await cookieKeyRing(fastify).keys(realmId);
+  if (!KID_PATTERN.test(current.kid)) {
+    throw new Error("The realm's cookie key has a kid the cookie format cannot carry");
+  }
+  const signature = mac(current, cookieName, realmId, payload).toString('base64url');
+  return [current.kid, payload, signature].join(SEPARATOR);
+}
+
+/**
+ * Verify a `<kid>.<payload>.<mac>` value of the cookie `cookieName` for the
+ * realm and return its payload, or `null`: absent, malformed, signed by a key
+ * the realm does not hold (or no longer holds), signed for another realm or
+ * another cookie, or tampered with. The MAC is compared in constant time.
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read: an
+ *   unreachable signer is not an invalid cookie
+ */
+async function verifyCookieValue(
+  fastify: CookieKeyHolder,
+  cookieName: string,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<string | null> {
+  if (!cookieValue) return null;
+  const parts = cookieValue.split(SEPARATOR);
+  if (parts.length !== 3) return null;
+  const [kid, payload, provided] = parts;
+  if (!KID_PATTERN.test(kid) || payload.length === 0 || !MAC_PATTERN.test(provided)) return null;
+
+  const key = await cookieKeyRing(fastify).find(realmId, kid);
+  if (key === null) return null;
+  const expected = mac(key, cookieName, realmId, payload);
+  const presented = Buffer.from(provided, 'base64url');
+  // The last of 43 characters carries two unused bits: only the canonical
+  // spelling of a MAC is accepted, so a signed value has one form. This says
+  // nothing about the key; the bytes are compared in constant time below.
+  if (presented.toString('base64url') !== provided) return null;
+  // Both are 32 bytes here: the pattern above fixes the presented length.
+  if (presented.length !== expected.length) return null;
+  return timingSafeEqual(presented, expected) ? payload : null;
+}
+
+/**
+ * Cookie name used to carry the browser session (issue #150).
  *
  * The `__Host-` prefix binds the cookie to the current origin with strict
  * requirements enforced by browsers:
@@ -15,45 +130,112 @@ import { env } from '../../config/env';
  * This gives us free CSRF-ish isolation across subdomains and prevents a
  * sibling origin from overwriting the session.
  *
- * The cookie carries only the session's `sid` and its HMAC, never the user
- * id: the session itself is the session service's (#488), looked up by `sid`
- * in the request's realm, so revoking it there ends the cookie too.
+ * The cookie carries only session ids, never the user id: the session itself
+ * is the session service's (#488), looked up by `sid` in the request's realm,
+ * so revoking it there ends the cookie too.
  */
 export const SESSION_COOKIE_NAME = '__Host-qauth_session';
 
-const SEPARATOR = '.';
+/**
+ * The most sessions one session cookie may list. ADR-019 Decision 3 lets one
+ * browser hold sessions of several accounts of a realm; the cookie lists them,
+ * and this bounds what a value can hold.
+ */
+export const SESSION_COOKIE_MAX_SESSIONS = 8;
 
-function hmac(value: string): string {
-  return createHmac('sha256', env.SESSION_COOKIE_SECRET).update(value).digest('base64url');
+/** The longest session id a session cookie carries. */
+const MAX_SESSION_ID_LENGTH = 128;
+
+/** What a session cookie says: the sessions this browser holds in the realm, and the active one. */
+export interface SessionCookieContents {
+  /** Every session id the cookie lists, the active one among them. */
+  readonly sessionIds: readonly string[];
+  /** The session the browser acts as. */
+  readonly activeSessionId: string;
+}
+
+/** The session a session cookie is set for: what the cookie names, and when it ends. */
+export interface SessionCookieSession {
+  readonly sid: string;
+  /** The realm the session belongs to, which the cookie's MAC is bound to. */
+  readonly realmId: string;
+  /** The session's absolute end, in epoch ms: the cookie's `Max-Age` counts down to it. */
+  readonly expiresAt: number;
 }
 
 /**
- * Sign the given session id, returning a cookie value of the form
- * `<sessionId>.<hmac>`. Verification is timing-safe.
+ * The session cookie's payload: `{ s: [sid], a: sid }` as base64url JSON, the
+ * listed session ids and the active one.
  */
-export function signSessionId(sessionId: string): string {
-  return `${sessionId}${SEPARATOR}${hmac(sessionId)}`;
+function encodeSessionPayload(contents: SessionCookieContents): string {
+  return Buffer.from(
+    JSON.stringify({ s: contents.sessionIds, a: contents.activeSessionId }),
+    'utf8'
+  ).toString('base64url');
+}
+
+/** The contents of a verified session payload, or `null` when it is not one this module writes. */
+function decodeSessionPayload(payload: string): SessionCookieContents | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const { s, a, ...rest } = parsed as Record<string, unknown>;
+  if (Object.keys(rest).length > 0) return null;
+  if (!Array.isArray(s) || s.length === 0 || s.length > SESSION_COOKIE_MAX_SESSIONS) return null;
+  if (!s.every(isSessionId) || new Set(s).size !== s.length) return null;
+  if (typeof a !== 'string' || !s.includes(a)) return null;
+  return Object.freeze({ sessionIds: Object.freeze([...s]), activeSessionId: a });
+}
+
+function isSessionId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_SESSION_ID_LENGTH;
 }
 
 /**
- * Verify a signed cookie value and return the session id if the signature
- * is valid, otherwise null. Never throws — callers treat null as "no
- * authenticated session".
+ * Verify a session cookie value for the realm and return what it lists, or
+ * `null` when it does not verify (see {@link verifyCookieValue}).
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
  */
-export function verifySignedSessionId(cookieValue: string | undefined | null): string | null {
-  if (!cookieValue) return null;
-  const idx = cookieValue.lastIndexOf(SEPARATOR);
-  if (idx <= 0 || idx === cookieValue.length - 1) return null;
+export async function readSessionCookie(
+  fastify: CookieKeyHolder,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<SessionCookieContents | null> {
+  const payload = await verifyCookieValue(fastify, SESSION_COOKIE_NAME, realmId, cookieValue);
+  return payload === null ? null : decodeSessionPayload(payload);
+}
 
-  const sessionId = cookieValue.slice(0, idx);
-  const providedSig = cookieValue.slice(idx + 1);
-  const expectedSig = hmac(sessionId);
+/**
+ * Verify a session cookie value for the realm and return the active session
+ * id, or `null`. Never `null` for a signer it cannot reach: that throws.
+ */
+export async function verifySessionCookie(
+  fastify: CookieKeyHolder,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<string | null> {
+  return (await readSessionCookie(fastify, realmId, cookieValue))?.activeSessionId ?? null;
+}
 
-  const providedBuf = Buffer.from(providedSig, 'base64url');
-  const expectedBuf = Buffer.from(expectedSig, 'base64url');
-  if (providedBuf.length !== expectedBuf.length) return null;
-  if (!timingSafeEqual(providedBuf, expectedBuf)) return null;
-  return sessionId;
+/**
+ * The signed value of a session cookie that names `session` alone, signed
+ * with the current cookie key of the session's realm.
+ */
+export function signSessionCookie(
+  fastify: CookieKeyHolder,
+  session: Pick<SessionCookieSession, 'sid' | 'realmId'>
+): Promise<string> {
+  return signCookieValue(
+    fastify,
+    SESSION_COOKIE_NAME,
+    session.realmId,
+    encodeSessionPayload({ sessionIds: [session.sid], activeSessionId: session.sid })
+  );
 }
 
 /**
@@ -118,40 +300,76 @@ function resolveCookieSecure(secureOverride?: boolean): boolean {
   return env.SESSION_COOKIE_SECURE;
 }
 
-/**
- * Emit a Set-Cookie header for the signed session. Attributes match the
- * issue #150 spec: __Host-, Secure (configurable for local dev),
- * HttpOnly, SameSite=Lax, Path=/.
- *
- * @param secureOverride see {@link resolveCookieSecure} — a client-scoped
- *   development relaxation of the `Secure` attribute (defaults to strict).
- */
-export function setSessionCookie(
-  reply: FastifyReply,
-  sessionId: string,
-  secureOverride?: boolean
-): void {
+/** The attributes every cookie of this module carries, `Max-Age` and `Secure` aside. */
+function cookieHeader(name: string, value: string, maxAgeSeconds: number, secure: boolean): string {
   const attrs = [
-    `${SESSION_COOKIE_NAME}=${signSessionId(sessionId)}`,
+    `${name}=${value}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax',
-    `Max-Age=${env.SESSION_COOKIE_TTL}`,
+    `Max-Age=${maxAgeSeconds}`,
   ];
-  // __Host- prefix requires Secure. Tests may turn this off for in-process
-  // assertions but production must have it set.
-  if (resolveCookieSecure(secureOverride)) attrs.push('Secure');
-  reply.header('Set-Cookie', attrs.join('; '));
+  if (secure) attrs.push('Secure');
+  return attrs.join('; ');
 }
 
 /**
- * Clear the session cookie. Used on logout and when a session id resolves to
- * no live session (stale cookie).
+ * The seconds left until `expiresAt` (epoch ms), rounded down so the cookie
+ * never outlives what it names: `0`, which deletes the cookie, once it is
+ * past.
+ */
+function secondsUntil(expiresAt: number): number {
+  return Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+}
+
+/**
+ * The `Set-Cookie` header for the signed session cookie of `session`:
+ * `__Host-`, `Path=/`, `HttpOnly`, `SameSite=Lax`, no `Domain`, `Secure`
+ * unless turned off for local development, and a `Max-Age` of the time left
+ * until the session's absolute end, so the cookie lasts as long as the
+ * session it names.
+ *
+ * Computed before the reply is touched, so a caller that must set it together
+ * with other state can read the realm's key first and fail before anything is
+ * written.
+ *
+ * @param secureOverride see {@link resolveCookieSecure} — a client-scoped
+ *   development relaxation of the `Secure` attribute (defaults to strict).
+ * @throws the signer's error when the realm's cookie keys cannot be read
+ */
+export async function sessionCookieHeader(
+  fastify: CookieKeyHolder,
+  session: SessionCookieSession,
+  secureOverride?: boolean
+): Promise<string> {
+  return cookieHeader(
+    SESSION_COOKIE_NAME,
+    await signSessionCookie(fastify, session),
+    secondsUntil(session.expiresAt),
+    resolveCookieSecure(secureOverride)
+  );
+}
+
+/**
+ * Set the signed session cookie for `session` ({@link sessionCookieHeader}).
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
+ */
+export async function setSessionCookie(
+  fastify: CookieKeyHolder,
+  reply: FastifyReply,
+  session: SessionCookieSession,
+  secureOverride?: boolean
+): Promise<void> {
+  reply.header('Set-Cookie', await sessionCookieHeader(fastify, session, secureOverride));
+}
+
+/**
+ * Clear the session cookie. Used on logout, and when a cookie does not verify
+ * or names no live session (a stale cookie).
  */
 export function clearSessionCookie(reply: FastifyReply): void {
-  const attrs = [`${SESSION_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
-  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
-  reply.header('Set-Cookie', attrs.join('; '));
+  reply.header('Set-Cookie', cookieHeader(SESSION_COOKIE_NAME, '', 0, env.SESSION_COOKIE_SECURE));
 }
 
 /**
@@ -190,30 +408,35 @@ export function csrfTokensEqual(a: string | undefined, b: string | undefined): b
 export const LOGIN_CSRF_COOKIE_NAME = '__Host-qauth_login_csrf';
 
 /**
- * Emit the signed login-CSRF cookie. `Secure` follows the same global default
- * as the session cookie (`env.SESSION_COOKIE_SECURE`); `__Host-` requires it in
- * production. SameSite=Lax + HttpOnly mirror the session cookie. The value is
- * `<token>.<hmac>` using the same secret/scheme as the session id.
+ * Emit the signed login-CSRF cookie for the realm. `Secure` follows the same
+ * global default as the session cookie (`env.SESSION_COOKIE_SECURE`);
+ * `__Host-` requires it in production. SameSite=Lax + HttpOnly mirror the
+ * session cookie. The value is `<kid>.<token>.<mac>`, signed with the realm's
+ * cookie key as the session cookie is.
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
  */
-export function setLoginCsrfCookie(reply: FastifyReply, token: string): void {
-  const attrs = [
-    `${LOGIN_CSRF_COOKIE_NAME}=${token}${SEPARATOR}${hmac(token)}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    `Max-Age=${env.SESSION_COOKIE_TTL}`,
-  ];
-  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
-  reply.header('Set-Cookie', attrs.join('; '));
+export async function setLoginCsrfCookie(
+  fastify: CookieKeyHolder,
+  reply: FastifyReply,
+  realmId: string,
+  token: string
+): Promise<void> {
+  const value = await signCookieValue(fastify, LOGIN_CSRF_COOKIE_NAME, realmId, token);
+  reply.header(
+    'Set-Cookie',
+    cookieHeader(LOGIN_CSRF_COOKIE_NAME, value, env.SESSION_COOKIE_TTL, env.SESSION_COOKIE_SECURE)
+  );
 }
 
 /**
  * Clear the login-CSRF cookie (burned after a successful login POST).
  */
 export function clearLoginCsrfCookie(reply: FastifyReply): void {
-  const attrs = [`${LOGIN_CSRF_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
-  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
-  reply.header('Set-Cookie', attrs.join('; '));
+  reply.header(
+    'Set-Cookie',
+    cookieHeader(LOGIN_CSRF_COOKIE_NAME, '', 0, env.SESSION_COOKIE_SECURE)
+  );
 }
 
 /**
@@ -292,15 +515,19 @@ function pruneWalletFlowBindings(bindings: readonly WalletFlowBinding[]): Wallet
 }
 
 /**
- * Emit the signed wallet-flow binder cookie carrying `bindings`, or clear it
- * when none of them are still live. Attributes mirror the login-CSRF cookie;
- * `Max-Age` is the longest remaining flow lifetime rather than the session TTL,
- * so the cookie cannot outlive every flow it binds.
+ * Emit the signed wallet-flow binder cookie of the realm carrying `bindings`,
+ * or clear it when none of them are still live. Attributes mirror the
+ * login-CSRF cookie; `Max-Age` is the longest remaining flow lifetime rather
+ * than the session TTL, so the cookie cannot outlive every flow it binds.
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
  */
-export function setWalletFlowCookie(
+export async function setWalletFlowCookie(
+  fastify: CookieKeyHolder,
   reply: FastifyReply,
+  realmId: string,
   bindings: readonly WalletFlowBinding[]
-): void {
+): Promise<void> {
   const live = pruneWalletFlowBindings(bindings);
   if (live.length === 0) {
     clearWalletFlowCookie(reply);
@@ -316,38 +543,39 @@ export function setWalletFlowCookie(
     1,
     Math.ceil((live[live.length - 1].expiresAt - Date.now()) / 1000)
   );
-  const attrs = [
-    `${WALLET_FLOW_COOKIE_NAME}=${payload}${SEPARATOR}${hmac(payload)}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    `Max-Age=${maxAgeSeconds}`,
-  ];
-  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
-  reply.header('Set-Cookie', attrs.join('; '));
+  const value = await signCookieValue(fastify, WALLET_FLOW_COOKIE_NAME, realmId, payload);
+  reply.header(
+    'Set-Cookie',
+    cookieHeader(WALLET_FLOW_COOKIE_NAME, value, maxAgeSeconds, env.SESSION_COOKIE_SECURE)
+  );
 }
 
 /** Clear the wallet-flow binder cookie (burned when the last flow terminates). */
 export function clearWalletFlowCookie(reply: FastifyReply): void {
-  const attrs = [`${WALLET_FLOW_COOKIE_NAME}=`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=0'];
-  if (env.SESSION_COOKIE_SECURE) attrs.push('Secure');
-  reply.header('Set-Cookie', attrs.join('; '));
+  reply.header(
+    'Set-Cookie',
+    cookieHeader(WALLET_FLOW_COOKIE_NAME, '', 0, env.SESSION_COOKIE_SECURE)
+  );
 }
 
 /**
- * Verify the signed wallet-flow cookie and return the bindings it carries. Same
- * `<value>.<hmac>` scheme + timing-safe verification as
- * {@link verifyLoginCsrfCookie}, applied to the whole payload — so a binding
- * cannot be added, edited or reordered without the signing secret.
+ * Verify the signed wallet-flow cookie for the realm and return the bindings
+ * it carries. Same `<kid>.<payload>.<mac>` scheme and timing-safe verification
+ * as {@link verifyLoginCsrfCookie}, applied to the whole payload — so a
+ * binding cannot be added, edited or reordered without the realm's cookie key.
  *
  * An absent, unsigned or tampered cookie yields an EMPTY list rather than a
  * throw: the caller reports "expired" for a handle it holds no binding for,
  * which is the answer every other unbindable state gets.
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
  */
-export function readWalletFlowBindings(
+export async function readWalletFlowBindings(
+  fastify: CookieKeyHolder,
+  realmId: string,
   cookieValue: string | undefined | null
-): WalletFlowBinding[] {
-  const payload = verifySignedValue(cookieValue);
+): Promise<WalletFlowBinding[]> {
+  const payload = await verifyCookieValue(fastify, WALLET_FLOW_COOKIE_NAME, realmId, cookieValue);
   if (payload === null) return [];
   const bindings: WalletFlowBinding[] = [];
   for (const entry of payload.split(WALLET_FLOW_BINDING_SEPARATOR)) {
@@ -367,62 +595,57 @@ export function readWalletFlowBindings(
  * the URL and is not the secret. The BINDER this returns is the secret, and the
  * caller still compares it with {@link csrfTokensEqual}.
  */
-export function findWalletFlowBinder(
+export async function findWalletFlowBinder(
+  fastify: CookieKeyHolder,
+  realmId: string,
   cookieValue: string | undefined | null,
   handle: string
-): string | null {
-  const match = readWalletFlowBindings(cookieValue).find((binding) => binding.handle === handle);
+): Promise<string | null> {
+  const match = (await readWalletFlowBindings(fastify, realmId, cookieValue)).find(
+    (binding) => binding.handle === handle
+  );
   return match ? match.binder : null;
 }
 
 /**
  * Burn ONE flow's binding, leaving any other flow this browser has in progress
- * bound. Clears the cookie outright when nothing else was in it.
+ * bound. Clears the cookie outright when nothing else was in it. The cookie is
+ * the request's realm's.
+ *
+ * @throws the signer's error when the realm's cookie keys cannot be read
  */
-export function dropWalletFlowBinding(
+export async function dropWalletFlowBinding(
+  fastify: CookieKeyHolder,
   request: FastifyRequest,
   reply: FastifyReply,
   handle: string
-): void {
-  setWalletFlowCookie(
+): Promise<void> {
+  const realmId = requestRealm(request).id;
+  const bindings = await readWalletFlowBindings(
+    fastify,
+    realmId,
+    readCookie(request, WALLET_FLOW_COOKIE_NAME)
+  );
+  await setWalletFlowCookie(
+    fastify,
     reply,
-    readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME)).filter(
-      (binding) => binding.handle !== handle
-    )
+    realmId,
+    bindings.filter((binding) => binding.handle !== handle)
   );
 }
 
 /**
- * Verify the signed login-CSRF cookie value and return the embedded token if
- * the signature is valid, otherwise null. Same `<token>.<hmac>` scheme +
- * timing-safe verification as {@link verifySignedSessionId}.
- */
-export function verifyLoginCsrfCookie(cookieValue: string | undefined | null): string | null {
-  return verifySignedValue(cookieValue);
-}
-
-/**
- * Verify a `<value>.<hmac>` cookie and return the value, or null.
+ * Verify the signed login-CSRF cookie value for the realm and return the
+ * embedded token if the signature is valid, otherwise null. Same
+ * `<kid>.<payload>.<mac>` scheme and timing-safe verification as the session
+ * cookie ({@link readSessionCookie}).
  *
- * The shared implementation behind {@link verifyLoginCsrfCookie} and
- * {@link readWalletFlowBindings}: both are pre-authentication, browser-bound
- * markers signed with the session secret, and neither may ever short-circuit its
- * comparison. Kept private so the two cookies stay separately NAMED — they have
- * different lifetimes and different clearing rules — while sharing one
- * timing-safe verification.
+ * @throws the signer's error when the realm's cookie keys cannot be read
  */
-function verifySignedValue(cookieValue: string | undefined | null): string | null {
-  if (!cookieValue) return null;
-  const idx = cookieValue.lastIndexOf(SEPARATOR);
-  if (idx <= 0 || idx === cookieValue.length - 1) return null;
-
-  const token = cookieValue.slice(0, idx);
-  const providedSig = cookieValue.slice(idx + 1);
-  const expectedSig = hmac(token);
-
-  const providedBuf = Buffer.from(providedSig, 'base64url');
-  const expectedBuf = Buffer.from(expectedSig, 'base64url');
-  if (providedBuf.length !== expectedBuf.length) return null;
-  if (!timingSafeEqual(providedBuf, expectedBuf)) return null;
-  return token;
+export function verifyLoginCsrfCookie(
+  fastify: CookieKeyHolder,
+  realmId: string,
+  cookieValue: string | undefined | null
+): Promise<string | null> {
+  return verifyCookieValue(fastify, LOGIN_CSRF_COOKIE_NAME, realmId, cookieValue);
 }
