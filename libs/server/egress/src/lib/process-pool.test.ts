@@ -27,17 +27,25 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { explicitCurveCertificate, serverFirstFlight } from '../testing/hostile-handshake';
 import { createTestCertificate } from '../testing/test-certificate';
 import {
+  createFrameReader,
   dialPinned,
+  encodeOutcome,
+  encodeSecured,
   exchange,
   type ExchangeJob,
   type ExchangeOutcome,
   FETCH_PROCESS_TAG,
+  FRAME,
+  FRAME_HEADER_BYTES,
+  MAX_FAILURE_PAYLOAD_BYTES,
+  MAX_RESPONSE_FIELDS_BYTES,
 } from './exchange';
 import {
   createProcessPool,
   egressPoolStats,
+  fetchProcessFrameLimit,
   opensslSetup,
-  parseFetchProcessMessage,
+  parseFetchProcessFrame,
   type ProcessPool,
   sharedProcessPool,
 } from './process-pool';
@@ -592,12 +600,9 @@ describe.skipIf(!LINUX)(
         expect(text(await fetches.exchange(okJob(), within(CALL_MS)))).toBe('ok');
         const [pid] = fetchProcessPids();
         const environ = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').filter(Boolean);
-        // Only the two variables Node adds for the IPC channel, which the
-        // process removes from process.env at start.
-        expect(environ.map((entry) => entry.slice(0, entry.indexOf('='))).sort()).toEqual([
-          'NODE_CHANNEL_FD',
-          'NODE_CHANNEL_SERIALIZATION_MODE',
-        ]);
+        // Nothing at all: the channel is a plain socket, not Node's IPC
+        // channel, which added two variables of its own.
+        expect(environ).toEqual([]);
         expect(environ.join('\n')).not.toContain('must-not-leak');
         expect(Object.keys(process.env).length).toBeGreaterThan(2);
         // Nor the flags this process runs with.
@@ -636,7 +641,7 @@ describe.skipIf(!LINUX)(
             mine.has(target) && target !== '/dev/null' && !target.startsWith('anon_inode:')
         );
         expect(shared).toEqual([]);
-        // One socket: the IPC channel (the exchange's own connection is closed).
+        // One socket: the channel (the exchange's own connection is closed).
         expect([...theirs.values()].filter((target) => target.startsWith('socket:'))).toHaveLength(
           1
         );
@@ -720,81 +725,380 @@ describe('opensslSetup', () => {
   });
 });
 
-describe('parseFetchProcessMessage', () => {
-  const sent = job('api.egress.test', 443, { maxResponseBytes: 10 });
-  const response = (outcome: Record<string, unknown>) => ({
-    type: 'outcome',
-    id: 7,
-    outcome: { kind: 'response', status: 200, headers: {}, body: new Uint8Array(2), ...outcome },
+describe('the channel from a fetch process', () => {
+  describe('createFrameReader', () => {
+    /** A frame of `type` announcing `length` bytes, with `payload` after its header. */
+    const frame = (type: number, payload: Buffer, length = payload.length): Buffer => {
+      const header = Buffer.alloc(FRAME_HEADER_BYTES);
+      header.writeUInt8(type, 0);
+      header.writeUInt32BE(length, 1);
+      return Buffer.concat([header, payload]);
+    };
+
+    /** A reader that records what it is given, with `limit` as its caps. */
+    const recorder = (limit: (type: number) => number | undefined) => {
+      const frames: [number, string][] = [];
+      const refused: [number, number, boolean][] = [];
+      const push = createFrameReader({
+        limit,
+        frame: (type, payload) => {
+          frames.push([type, payload.toString()]);
+          return true;
+        },
+        refuse: (type, length, oversized) => refused.push([type, length, oversized]),
+      });
+      return { push, frames, refused };
+    };
+
+    it('reads frames split anywhere, empty ones included', () => {
+      const { push, frames, refused } = recorder(() => 100);
+      const bytes = Buffer.concat([
+        frame(1, Buffer.from('hello')),
+        frame(2, Buffer.alloc(0)),
+        frame(3, Buffer.from('x'.repeat(100))),
+      ]);
+      for (const byte of bytes) expect(push(Buffer.from([byte]))).toBe(true);
+      expect(frames).toEqual([
+        [1, 'hello'],
+        [2, ''],
+        [3, 'x'.repeat(100)],
+      ]);
+      expect(refused).toEqual([]);
+    });
+
+    it('refuses a frame above its cap from the header, before any payload arrives', () => {
+      const { push, frames, refused } = recorder((type) => (type === 5 ? 10 : undefined));
+      // The header alone: the payload has not been sent, and is not waited for.
+      expect(push(frame(5, Buffer.alloc(0), 11))).toBe(false);
+      expect(refused).toEqual([[5, 11, true]]);
+      // Nothing after it is taken.
+      expect(push(Buffer.alloc(11))).toBe(false);
+      expect(push(frame(5, Buffer.from('ok')))).toBe(false);
+      expect(frames).toEqual([]);
+      expect(refused).toHaveLength(1);
+    });
+
+    it('refuses a frame of a type that may not come now, with its payload in the same chunk', () => {
+      const { push, frames, refused } = recorder((type) => (type === 5 ? 10 : undefined));
+      expect(push(Buffer.concat([frame(5, Buffer.from('a')), frame(6, Buffer.from('b'))]))).toBe(
+        false
+      );
+      expect(frames).toEqual([[5, 'a']]);
+      expect(refused).toEqual([[6, 1, false]]);
+    });
+
+    it('asks for the cap once the frame before has been handled', () => {
+      let secured = false;
+      const frames: number[] = [];
+      const push = createFrameReader({
+        limit: (type) => (type === 5 && !secured ? undefined : 4),
+        frame: (type) => {
+          frames.push(type);
+          if (type === 4) secured = true;
+          return true;
+        },
+        refuse: () => undefined,
+      });
+      expect(push(Buffer.concat([frame(4, Buffer.alloc(4)), frame(5, Buffer.alloc(4))]))).toBe(
+        true
+      );
+      expect(frames).toEqual([4, 5]);
+    });
+
+    it('stops when a frame is not taken', () => {
+      const frames: number[] = [];
+      const push = createFrameReader({
+        limit: () => 4,
+        frame: (type) => {
+          frames.push(type);
+          return false;
+        },
+        refuse: () => undefined,
+      });
+      expect(push(Buffer.concat([frame(1, Buffer.alloc(1)), frame(2, Buffer.alloc(1))]))).toBe(
+        false
+      );
+      expect(frames).toEqual([1]);
+    });
   });
 
-  it('accepts the messages a process sends', () => {
-    expect(parseFetchProcessMessage({ type: 'secured', id: 7 }, 7, sent)).toEqual({
-      type: 'secured',
-      id: 7,
+  describe('fetchProcessFrameLimit', () => {
+    const running = job('api.egress.test', 443, { maxResponseBytes: 1000 });
+    const types = [FRAME.ready, FRAME.secured, FRAME.response, FRAME.failure, FRAME.init, 0, 255];
+    const limits = (state: Parameters<typeof fetchProcessFrameLimit>[1]) =>
+      types.map((type) => fetchProcessFrameLimit(type, state));
+
+    it('takes an empty ready frame only from a process that has not said it is ready', () => {
+      expect(limits({ ready: false, job: undefined, secured: false })).toEqual([
+        0,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(limits({ ready: false, job: running, secured: false })[0]).toBe(0);
     });
-    expect(parseFetchProcessMessage(response({ headers: { a: 'b' } }), 7, sent)).toMatchObject({
-      outcome: { kind: 'response', status: 200, headers: { a: 'b' }, location: undefined },
+
+    it('takes nothing from an idle process', () => {
+      expect(limits({ ready: true, job: undefined, secured: false })).toEqual(
+        types.map(() => undefined)
+      );
     });
-    const failure = {
-      kind: 'failed',
-      reason: 'network',
-      message: 'egress to api.egress.test failed: certificate has expired',
+
+    it('caps each frame of an exchange by its type, a response by the job’s body cap', () => {
+      // Before the TLS handshake: the id, or a failure; no response yet.
+      expect(limits({ ready: true, job: running, secured: false })).toEqual([
+        undefined,
+        4,
+        undefined,
+        MAX_FAILURE_PAYLOAD_BYTES,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      // After it: no second `secured`, and a response of the body cap at most.
+      expect(limits({ ready: true, job: running, secured: true })).toEqual([
+        undefined,
+        undefined,
+        MAX_RESPONSE_FIELDS_BYTES + 1000,
+        MAX_FAILURE_PAYLOAD_BYTES,
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      expect(MAX_FAILURE_PAYLOAD_BYTES).toBe(4 + 1 + 2 + 2048);
+      expect(MAX_RESPONSE_FIELDS_BYTES).toBe(4 + 2 + 2 + 100 * 4 + 16 * 1024 + 1 + 2 + 8 * 1024);
+    });
+  });
+
+  describe('parseFetchProcessFrame', () => {
+    const sent = job('api.egress.test', 443, { maxResponseBytes: 10 });
+
+    interface Frame {
+      readonly type: number;
+      readonly payload: Buffer;
+    }
+
+    /** A frame as a fetch process encodes it, without its header. */
+    const encoded = (parts: readonly Uint8Array[]): Frame => {
+      const bytes = Buffer.concat(parts);
+      return { type: bytes.readUInt8(0), payload: bytes.subarray(FRAME_HEADER_BYTES) };
     };
-    expect(parseFetchProcessMessage({ type: 'outcome', id: 7, outcome: failure }, 7, sent)).toEqual(
-      {
+    const parse = ({ type, payload }: Frame) => parseFetchProcessFrame(type, payload, 7, sent);
+
+    const u16 = (value: number): Buffer => {
+      const bytes = Buffer.alloc(2);
+      bytes.writeUInt16BE(value);
+      return bytes;
+    };
+    const u32 = (value: number): Buffer => {
+      const bytes = Buffer.alloc(4);
+      bytes.writeUInt32BE(value);
+      return bytes;
+    };
+
+    /** A response frame laid out by hand, so that it can break any rule. */
+    const response = ({
+      id = 7,
+      status = 200,
+      headers = [],
+      count = headers.length,
+      locationFlag,
+      location,
+      body = Buffer.alloc(2),
+    }: {
+      id?: number;
+      status?: number;
+      headers?: readonly (readonly [string, string])[];
+      count?: number;
+      locationFlag?: number;
+      location?: string;
+      body?: Buffer;
+    } = {}): Frame => {
+      const parts = [u32(id), u16(status), u16(count)];
+      for (const [name, value] of headers) {
+        parts.push(u16(name.length), Buffer.from(name, 'latin1'));
+        parts.push(u16(value.length), Buffer.from(value, 'latin1'));
+      }
+      parts.push(Buffer.from([locationFlag ?? (location === undefined ? 0 : 1)]));
+      if (location !== undefined) parts.push(u16(location.length), Buffer.from(location, 'latin1'));
+      parts.push(body);
+      return { type: FRAME.response, payload: Buffer.concat(parts) };
+    };
+
+    /** A failure frame laid out by hand. */
+    const failure = ({
+      code = 1,
+      message = Buffer.from('egress to api.egress.test failed: x'),
+      length = message.length,
+    }: {
+      code?: number;
+      message?: Buffer;
+      length?: number;
+    } = {}): Frame => ({
+      type: FRAME.failure,
+      payload: Buffer.concat([u32(7), Buffer.from([code]), u16(length), message]),
+    });
+
+    /** `count` headers of `size` bytes each, names and values together. */
+    const headersOf = (count: number, size = 2): [string, string][] =>
+      Array.from({ length: count }, (_, i) => {
+        const name = `h${i}`;
+        return [name, 'v'.repeat(Math.max(1, size - name.length))];
+      });
+
+    it('accepts the frames a process sends', () => {
+      expect(parse(encoded(encodeSecured(7)))).toEqual({ type: 'secured', id: 7 });
+      const answered: ExchangeOutcome = {
+        kind: 'response',
+        status: 200,
+        headers: { a: 'b', 'content-type': 'text/plain; charset=é' },
+        body: Buffer.from('ok'),
+        location: undefined,
+      };
+      expect(parse(encoded(encodeOutcome(7, answered)))).toEqual({
         type: 'outcome',
         id: 7,
-        outcome: failure,
-      }
-    );
-  });
+        outcome: answered,
+      });
+      const redirected: ExchangeOutcome = {
+        kind: 'response',
+        status: 302,
+        headers: { location: '/next' },
+        body: Buffer.alloc(0),
+        location: '/next',
+      };
+      expect(parse(encoded(encodeOutcome(7, redirected)))).toEqual({
+        type: 'outcome',
+        id: 7,
+        outcome: redirected,
+      });
+      const failed: ExchangeOutcome = {
+        kind: 'failed',
+        reason: 'network',
+        message: 'egress to api.egress.test failed: certificate has expired',
+      };
+      expect(parse(encoded(encodeOutcome(7, failed)))).toEqual({
+        type: 'outcome',
+        id: 7,
+        outcome: failed,
+      });
+    });
 
-  it.each([
-    ['not an object', 'secured'],
-    ['another exchange', { type: 'secured', id: 6 }],
-    ['an unknown type', { type: 'hello', id: 7 }],
-    ['no outcome', { type: 'outcome', id: 7 }],
-    ['a status that is not an integer', response({ status: 200.5 })],
-    ['a status out of range', response({ status: 42 })],
-    ['a body that is not bytes', response({ body: 'ok' })],
-    ['a body above the cap', response({ body: new Uint8Array(11) })],
-    ['a header value that is not a string', response({ headers: { a: ['b'] } })],
-    ['a header name that is not a token', response({ headers: { 'a b': 'c' } })],
-    ['a header name in upper case', response({ headers: { A: 'b' } })],
-    ['a header value with a line break', response({ headers: { a: 'b\r\nx-forged: 1' } })],
-    ['a location that is not a string', response({ location: 1 })],
-    [
-      'a reason only the pool gives',
-      { type: 'outcome', id: 7, outcome: { kind: 'failed', reason: 'busy', message: 'x' } },
-    ],
-    ['an unknown outcome', { type: 'outcome', id: 7, outcome: { kind: 'other' } }],
-  ])('refuses %s', (_case, raw) => {
-    expect(parseFetchProcessMessage(raw, 7, sent)).toBeUndefined();
-  });
+    it.each([
+      // Each bound at its cap.
+      ['100 headers', response({ headers: headersOf(100) })],
+      ['a header name of 256 bytes', response({ headers: [['n'.repeat(256), 'v']] })],
+      ['a header value of 8 KiB', response({ headers: [['v', 'v'.repeat(8192)]] })],
+      [
+        'headers of 16 KiB together',
+        response({
+          headers: [
+            ['a', 'v'.repeat(8191)],
+            ['b', 'v'.repeat(8191)],
+          ],
+        }),
+      ],
+      ['a location of 8 KiB', response({ location: `/${'l'.repeat(8191)}` })],
+      ['a body of the job’s cap', response({ body: Buffer.alloc(10) })],
+      [
+        'a failure message of 2 KiB',
+        failure({ message: Buffer.from(`egress to api.egress.test failed: ${'x'.repeat(2014)}`) }),
+      ],
+    ])('accepts %s', (_case, frame) => {
+      expect(parse(frame)).toMatchObject({ type: 'outcome', id: 7 });
+    });
 
-  it('keeps a failure message on one line and within its length', () => {
-    const message = (text: string): string | undefined => {
-      const parsed = parseFetchProcessMessage(
-        { type: 'outcome', id: 7, outcome: { kind: 'failed', reason: 'network', message: text } },
-        7,
-        sent
+    it.each([
+      ['a frame of an unknown type', { type: 99, payload: u32(7) }],
+      ['a ready frame during an exchange', { type: FRAME.ready, payload: Buffer.alloc(0) }],
+      ['another exchange', encoded(encodeSecured(6))],
+      ['a secured frame with more than the id', { type: FRAME.secured, payload: u32(7 << 8) }],
+      [
+        'a secured frame with bytes after the id',
+        { type: FRAME.secured, payload: Buffer.concat([u32(7), Buffer.from([0])]) },
+      ],
+      [
+        'a response cut short',
+        { type: FRAME.response, payload: Buffer.concat([u32(7), u16(200)]) },
+      ],
+      ['a status below the range', response({ status: 42 })],
+      ['a status above the range', response({ status: 1000 })],
+      ['more headers than it holds', response({ headers: headersOf(1), count: 2 })],
+      ['a body above the cap', response({ body: Buffer.alloc(11) })],
+      ['a header name that is not a token', response({ headers: [['a b', 'c']] })],
+      ['an empty header name', response({ headers: [['', 'c']] })],
+      ['a header name in upper case', response({ headers: [['A', 'b']] })],
+      ['a header value with a line break', response({ headers: [['a', 'b\r\nx-forged: 1']] })],
+      [
+        'a header given twice',
+        response({
+          headers: [
+            ['a', 'b'],
+            ['a', 'c'],
+          ],
+        }),
+      ],
+      ['a location with a line break', response({ location: '/a\r\nx-forged: 1' })],
+      ['a location flag that is neither 0 nor 1', response({ locationFlag: 2 })],
+      // Every bound, each one past its cap.
+      ['more than 100 headers', response({ headers: headersOf(101) })],
+      ['a header name above 256 bytes', response({ headers: [['n'.repeat(257), 'v']] })],
+      ['a header value above 8 KiB', response({ headers: [['v', 'v'.repeat(8193)]] })],
+      [
+        // Each value within its own cap.
+        'headers above 16 KiB together',
+        response({
+          headers: [
+            ['a', 'v'.repeat(8192)],
+            ['b', 'v'.repeat(8191)],
+          ],
+        }),
+      ],
+      ['a location above 8 KiB', response({ location: `/${'l'.repeat(8192)}` })],
+      [
+        // Line breaks the cleaning would turn into one space: the length is
+        // checked before the cleaning runs, on what the process sent.
+        'a failure message above 2 KiB',
+        failure({
+          message: Buffer.from(`egress to api.egress.test failed: ${'\n'.repeat(2015)}`),
+        }),
+      ],
+      ['a failure message longer than it says', failure({ length: 3 })],
+      ['a failure message that is not UTF-8', failure({ message: Buffer.from([0xff, 0xfe]) })],
+      ['a reason only the pool gives', failure({ code: 3 })],
+      ['an unknown reason', failure({ code: 255 })],
+    ])('refuses %s', (_case, frame) => {
+      expect(parse(frame)).toBeUndefined();
+    });
+
+    it('keeps a failure message on one line and within its length', () => {
+      const message = (text: string): string | undefined => {
+        const parsed = parse(
+          encoded(encodeOutcome(7, { kind: 'failed', reason: 'network', message: text }))
+        );
+        return parsed?.type === 'outcome' && parsed.outcome.kind === 'failed'
+          ? parsed.outcome.message
+          : undefined;
+      };
+      expect(message('egress to api.egress.test failed: x\r\nforged log line\n')).toBe(
+        'egress to api.egress.test failed: x forged log line'
       );
-      return parsed?.type === 'outcome' && parsed.outcome.kind === 'failed'
-        ? parsed.outcome.message
-        : undefined;
-    };
-    expect(message('egress to api.egress.test failed: x\r\nforged log line\n')).toBe(
-      'egress to api.egress.test failed: x forged log line'
-    );
-    expect(message('egress to api.egress.test failed: a\u2028b\u202ec')).toBe(
-      'egress to api.egress.test failed: a b c'
-    );
-    const long = message(`egress to api.egress.test failed: ${'x'.repeat(600)}`);
-    expect(long).toMatch(/^egress to api\.egress\.test failed: x+$/);
-    expect(long).toHaveLength(512);
-    expect(message('egress to evil.test failed: x')).toBe(
-      'egress to api.egress.test failed: the fetch process gave no reason'
-    );
+      expect(message('egress to api.egress.test failed: a b‮c')).toBe(
+        'egress to api.egress.test failed: a b c'
+      );
+      const long = message(`egress to api.egress.test failed: ${'x'.repeat(600)}`);
+      expect(long).toMatch(/^egress to api\.egress\.test failed: x+$/);
+      expect(long).toHaveLength(512);
+      expect(message('egress to evil.test failed: x')).toBe(
+        'egress to api.egress.test failed: the fetch process gave no reason'
+      );
+      // The process cuts a longer message to the cap, between characters.
+      const euros = message(`egress to api.egress.test failed: ${'€'.repeat(1000)}`);
+      expect(euros).toMatch(/^egress to api\.egress\.test failed: €+$/);
+      expect(euros).toHaveLength(512);
+    });
   });
 });

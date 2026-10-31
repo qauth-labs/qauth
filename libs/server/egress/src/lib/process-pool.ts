@@ -1,17 +1,32 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { fstatSync, readdirSync, readFileSync } from 'node:fs';
 import { validateHeaderName, validateHeaderValue } from 'node:http';
+import { Socket } from 'node:net';
 import { join } from 'node:path';
 import tls from 'node:tls';
 
 import {
+  createFrameReader,
+  encodeExchange,
+  encodeInit,
   type ExchangeFailureReason,
   type ExchangeJob,
   type ExchangeOutcome,
   FETCH_PROCESS_CHANNEL_FD,
+  FETCH_PROCESS_FAILURE_REASONS,
   FETCH_PROCESS_TAG,
+  FRAME,
   type FromFetchProcess,
-  type ToFetchProcess,
+  MAX_FAILURE_MESSAGE_BYTES,
+  MAX_FAILURE_PAYLOAD_BYTES,
+  MAX_FRAME_PAYLOAD_BYTES,
+  MAX_HEADER_BYTES,
+  MAX_HEADER_NAME_BYTES,
+  MAX_HEADER_VALUE_BYTES,
+  MAX_LOCATION_BYTES,
+  MAX_RESPONSE_FIELDS_BYTES,
+  MAX_RESPONSE_HEADERS,
+  SECURED_PAYLOAD_BYTES,
 } from './exchange';
 import { hostFamily } from './host-family';
 
@@ -22,8 +37,15 @@ import { hostFamily } from './host-family';
  *
  * A fetch process is a Node process of its own. It starts with an empty
  * environment, with `/dev/null` as its standard streams and with no file
- * descriptor of the server's but the IPC channel the pool talks to it on. It
- * runs one exchange at a time and holds nothing between them.
+ * descriptor of the server's but the socket the pool talks to it on, in
+ * frames (`exchange.ts`). It runs one exchange at a time and holds nothing
+ * between them.
+ *
+ * The pool trusts nothing a fetch process sends: a host may have taken the
+ * process over. Each frame's header is checked against what the process may
+ * send at that moment before its payload is read, and each field of the
+ * payload against its own bound before it is decoded. A process that sends
+ * anything else is killed, and its call fails.
  *
  * The deadlines stay here, in the server's process, where their timers always
  * fire: the connect time, until the process reports the end of the TLS
@@ -207,10 +229,11 @@ export function opensslSetup(
   };
 }
 
-/** The longest failure message taken from a fetch process. */
-const MAX_MESSAGE_LENGTH = 512;
+/** The largest exchange id: an id is four bytes on the channel. */
+const MAX_EXCHANGE_ID = 0xffff_ffff;
 
-const CHILD_FAILURE_REASONS: readonly ExchangeFailureReason[] = ['timeout', 'network', 'size'];
+/** The longest failure message taken from a fetch process, once on one line. */
+const MAX_MESSAGE_LENGTH = 512;
 
 const failed = (
   job: ExchangeJob,
@@ -225,61 +248,108 @@ const failed = (
 /** What a fetch process sends about the exchange it runs. */
 export type ExchangeMessage = Exclude<FromFetchProcess, { readonly type: 'ready' }>;
 
+/** Where a fetch process is, as the pool sees it: what it may send next follows from it. */
+export interface FetchProcessState {
+  /** It has said it is ready. */
+  readonly ready: boolean;
+  /** The job of the exchange it runs, if any. */
+  readonly job: ExchangeJob | undefined;
+  /** It has reported the end of that exchange's TLS handshake. */
+  readonly secured: boolean;
+}
+
 /**
- * Check a message from the fetch process running `job` as exchange `id`,
- * trusting nothing about its shape. `undefined` for anything that is not a
- * message the process may send now.
+ * The largest payload a frame of `type` from a fetch process may carry now, or
+ * `undefined` when the process may not send a frame of that type now. The
+ * pool refuses a frame from its header with this, before reading its payload:
+ *
+ * - until it is ready, `ready` only, empty;
+ * - while it runs no exchange, nothing;
+ * - while it runs one: `secured` once, the id only; `failure`, with a message
+ *   of {@link MAX_FAILURE_MESSAGE_BYTES} at most; and, once it is secured,
+ *   `response`, whose body may be as long as the job's `maxResponseBytes`.
  *
  * @internal exported for its tests
  */
-export function parseFetchProcessMessage(
-  raw: unknown,
-  id: number,
-  job: ExchangeJob
-): ExchangeMessage | undefined {
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const message = raw as Record<string, unknown>;
-  if (message['id'] !== id) return undefined;
-  if (message['type'] === 'secured') return { type: 'secured', id };
-  if (message['type'] !== 'outcome') return undefined;
-  const outcome = message['outcome'];
-  if (typeof outcome !== 'object' || outcome === null) return undefined;
-  const o = outcome as Record<string, unknown>;
-
-  if (o['kind'] === 'failed') {
-    const reason = o['reason'] as ExchangeFailureReason;
-    const text = o['message'];
-    if (!CHILD_FAILURE_REASONS.includes(reason) || typeof text !== 'string') return undefined;
-    // The message reaches errors and logs: it must be the exchange's own,
-    // naming the host, on one line and without format characters. OpenSSL's
-    // end with a line break.
-    const prefix = `egress to ${job.hostname} failed: `;
-    const line = text
-      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ')
-      .trimEnd()
-      .slice(0, MAX_MESSAGE_LENGTH);
-    return {
-      type: 'outcome',
-      id,
-      outcome: {
-        kind: 'failed',
-        reason,
-        message: text.startsWith(prefix) ? line : `${prefix}the fetch process gave no reason`,
-      },
-    };
+export function fetchProcessFrameLimit(type: number, state: FetchProcessState): number | undefined {
+  if (!state.ready) return type === FRAME.ready ? 0 : undefined;
+  if (state.job === undefined) return undefined;
+  switch (type) {
+    case FRAME.secured:
+      return state.secured ? undefined : SECURED_PAYLOAD_BYTES;
+    case FRAME.failure:
+      return MAX_FAILURE_PAYLOAD_BYTES;
+    case FRAME.response:
+      return state.secured
+        ? Math.min(MAX_RESPONSE_FIELDS_BYTES + state.job.maxResponseBytes, MAX_FRAME_PAYLOAD_BYTES)
+        : undefined;
+    default:
+      return undefined;
   }
+}
 
-  if (o['kind'] !== 'response') return undefined;
-  const { status, headers, body, location } = o;
-  if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 999) {
+/** Strict UTF-8: a failure message that is not valid UTF-8 is refused, not repaired. */
+const UTF8 = new TextDecoder('utf-8', { fatal: true });
+
+function parseFailure(payload: Buffer, id: number, job: ExchangeJob): ExchangeMessage | undefined {
+  if (payload.length < 7) return undefined;
+  const code = payload.readUInt8(4);
+  const length = payload.readUInt16BE(5);
+  if (code >= FETCH_PROCESS_FAILURE_REASONS.length) return undefined;
+  if (length > MAX_FAILURE_MESSAGE_BYTES || payload.length !== 7 + length) return undefined;
+  let text: string;
+  try {
+    text = UTF8.decode(payload.subarray(7));
+  } catch {
     return undefined;
   }
-  if (!(body instanceof Uint8Array) || body.byteLength > job.maxResponseBytes) return undefined;
-  if (location !== undefined && typeof location !== 'string') return undefined;
-  if (typeof headers !== 'object' || headers === null) return undefined;
-  const copied: Record<string, string> = {};
-  for (const [name, value] of Object.entries(headers)) {
-    if (typeof value !== 'string' || name !== name.toLowerCase()) return undefined;
+  // The message reaches errors and logs: it must be the exchange's own,
+  // naming the host, on one line and without format characters. OpenSSL's
+  // end with a line break. Its length is bounded above, before this runs.
+  const prefix = `egress to ${job.hostname} failed: `;
+  const line = text
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]+/gu, ' ')
+    .trimEnd()
+    .slice(0, MAX_MESSAGE_LENGTH);
+  return {
+    type: 'outcome',
+    id,
+    outcome: {
+      kind: 'failed',
+      reason: FETCH_PROCESS_FAILURE_REASONS[code],
+      message: text.startsWith(prefix) ? line : `${prefix}the fetch process gave no reason`,
+    },
+  };
+}
+
+function parseResponse(payload: Buffer, id: number, job: ExchangeJob): ExchangeMessage | undefined {
+  let at = 4;
+  /** Whether `n` more bytes are there to read. */
+  const has = (n: number): boolean => payload.length - at >= n;
+
+  if (!has(4)) return undefined;
+  const status = payload.readUInt16BE(at);
+  const count = payload.readUInt16BE(at + 2);
+  at += 4;
+  if (status < 100 || status > 999 || count > MAX_RESPONSE_HEADERS) return undefined;
+
+  const headers: Record<string, string> = {};
+  let headerBytes = 0;
+  for (let i = 0; i < count; i += 1) {
+    if (!has(2)) return undefined;
+    const nameLength = payload.readUInt16BE(at);
+    at += 2;
+    if (nameLength > MAX_HEADER_NAME_BYTES || !has(nameLength + 2)) return undefined;
+    const name = payload.toString('latin1', at, at + nameLength);
+    at += nameLength;
+    const valueLength = payload.readUInt16BE(at);
+    at += 2;
+    if (valueLength > MAX_HEADER_VALUE_BYTES || !has(valueLength)) return undefined;
+    headerBytes += nameLength + valueLength;
+    if (headerBytes > MAX_HEADER_BYTES) return undefined;
+    const value = payload.toString('latin1', at, at + valueLength);
+    at += valueLength;
+    if (name !== name.toLowerCase() || Object.hasOwn(headers, name)) return undefined;
     try {
       // What Node's HTTP parser let through, checked again on this side.
       validateHeaderName(name);
@@ -287,13 +357,64 @@ export function parseFetchProcessMessage(
     } catch {
       return undefined;
     }
-    copied[name] = value;
+    headers[name] = value;
   }
+
+  if (!has(1)) return undefined;
+  const hasLocation = payload.readUInt8(at);
+  at += 1;
+  let location: string | undefined;
+  if (hasLocation === 1) {
+    if (!has(2)) return undefined;
+    const length = payload.readUInt16BE(at);
+    at += 2;
+    if (length > MAX_LOCATION_BYTES || !has(length)) return undefined;
+    location = payload.toString('latin1', at, at + length);
+    at += length;
+    try {
+      validateHeaderValue('location', location);
+    } catch {
+      return undefined;
+    }
+  } else if (hasLocation !== 0) {
+    return undefined;
+  }
+
+  // The rest is the body.
+  if (payload.length - at > job.maxResponseBytes) return undefined;
   return {
     type: 'outcome',
     id,
-    outcome: { kind: 'response', status, headers: copied, body, location },
+    outcome: { kind: 'response', status, headers, body: payload.subarray(at), location },
   };
+}
+
+/**
+ * Check a frame from the fetch process running `job` as exchange `id`,
+ * trusting nothing in it: the id, the type, the status range, each header's
+ * name and value, the failure reason and every length against its bound.
+ * `undefined` for anything that is not a message the process may send.
+ * The frame's length has passed {@link fetchProcessFrameLimit} already.
+ *
+ * @internal exported for its tests
+ */
+export function parseFetchProcessFrame(
+  type: number,
+  payload: Buffer,
+  id: number,
+  job: ExchangeJob
+): ExchangeMessage | undefined {
+  if (payload.length < 4 || payload.readUInt32BE(0) !== id) return undefined;
+  switch (type) {
+    case FRAME.secured:
+      return payload.length === SECURED_PAYLOAD_BYTES ? { type: 'secured', id } : undefined;
+    case FRAME.failure:
+      return parseFailure(payload, id, job);
+    case FRAME.response:
+      return parseResponse(payload, id, job);
+    default:
+      return undefined;
+  }
 }
 
 /** A call the pool has not answered yet. */
@@ -310,6 +431,8 @@ interface Call {
 /** One fetch process. */
 interface FetchProcess {
   readonly child: ChildProcess;
+  /** The pool's end of its channel; `undefined` when it never started. */
+  readonly channel: Socket | undefined;
   /** The call it runs. */
   call: Call | undefined;
   /** The id of the exchange it runs. */
@@ -386,7 +509,8 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
   };
 
   /**
-   * Kill `proc` at once. Its call, if it still runs one, ends with `outcome`.
+   * Kill `proc` at once, and read nothing more from it. Its call, if it still
+   * runs one, ends with `outcome`; without one, when the process has exited.
    * Its family slot and its place in the pool are held until it has exited.
    */
   const kill = (
@@ -397,6 +521,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     if (atDeadline) deadlineKills += 1;
     proc.ending = true;
     leaveIdle(proc);
+    proc.channel?.destroy();
     proc.child.kill('SIGKILL');
     if (outcome !== undefined) endCall(proc, outcome);
   };
@@ -412,7 +537,8 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     drain();
   };
 
-  const send = (proc: FetchProcess, message: ToFetchProcess): void => {
+  /** Write the frame `encode` makes to `proc`. */
+  const send = (proc: FetchProcess, encode: () => readonly Uint8Array[]): void => {
     const unreachable = (): void => {
       if (proc.ending) return;
       kill(
@@ -421,13 +547,23 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
         false
       );
     };
-    try {
-      proc.child.send(message, (err: Error | null) => {
-        if (err !== null) unreachable();
-      });
-    } catch {
-      // A message that cannot be serialized throws here.
+    const { channel } = proc;
+    if (channel === undefined || channel.destroyed) {
       unreachable();
+      return;
+    }
+    let parts: readonly Uint8Array[];
+    try {
+      parts = encode();
+    } catch {
+      // A job that cannot be framed (a body beyond what a frame can carry).
+      unreachable();
+      return;
+    }
+    for (const part of parts) {
+      channel.write(part, (err?: Error | null) => {
+        if (err) unreachable();
+      });
     }
   };
 
@@ -443,14 +579,21 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     );
   };
 
-  const onMessage = (proc: FetchProcess, raw: unknown): void => {
-    if (!proc.ready && (raw as { type?: unknown } | null)?.type === 'ready') {
+  /** Kill `proc` for a frame it should not have sent; its call fails with `what`. */
+  const refuse = (proc: FetchProcess, what: string): void => {
+    if (proc.ending) return;
+    kill(proc, proc.call && failed(proc.call.job, 'network', what), false);
+  };
+
+  /** A whole frame from `proc`, of a type it may send now and within its cap. `false` stops the reading. */
+  const onFrame = (proc: FetchProcess, type: number, payload: Buffer): boolean => {
+    if (type === FRAME.ready) {
       proc.ready = true;
       if (proc.call !== undefined) startConnectTimer(proc, proc.call);
-      return;
+      return true;
     }
     const { call } = proc;
-    const message = call && parseFetchProcessMessage(raw, proc.id, call.job);
+    const message = call && parseFetchProcessFrame(type, payload, proc.id, call.job);
     if (
       call === undefined ||
       message === undefined ||
@@ -458,18 +601,14 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     ) {
       // Nothing is asked of an idle process, and a process that answers out
       // of turn or out of shape is not given another call.
-      kill(
-        proc,
-        call && failed(call.job, 'network', 'the fetch process sent an invalid answer'),
-        false
-      );
-      return;
+      refuse(proc, 'the fetch process sent an invalid answer');
+      return false;
     }
     if (message.type === 'secured') {
       proc.secured = true;
       clearTimeout(proc.connectTimer);
       proc.connectTimer = undefined;
-      return;
+      return true;
     }
     endCall(proc, message.outcome);
     releaseFamily(proc);
@@ -478,13 +617,48 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
       proc.idleTimer = setTimeout(() => {
         // Not killed at a deadline: it simply has nothing to do. SIGKILL all
         // the same: a process that ignored SIGTERM would hold its place.
-        proc.ending = true;
-        leaveIdle(proc);
-        proc.child.kill('SIGKILL');
+        kill(proc, undefined, false);
       }, limits.idleTimeoutMs);
       proc.idleTimer.unref();
     }
     drain();
+    return true;
+  };
+
+  /** Read the frames of `proc` from its channel, each checked before it is taken. */
+  const readFrames = (proc: FetchProcess, channel: Socket): void => {
+    const read = createFrameReader({
+      limit: (type) =>
+        fetchProcessFrameLimit(type, {
+          ready: proc.ready,
+          job: proc.call?.job,
+          secured: proc.secured,
+        }),
+      frame: (type, payload) => onFrame(proc, type, payload),
+      refuse: (_type, _length, oversized) =>
+        refuse(
+          proc,
+          oversized
+            ? 'the fetch process sent a frame above its size cap'
+            : 'the fetch process sent an invalid answer'
+        ),
+    });
+    channel.on('data', (chunk: Buffer) => {
+      if (proc.ending) return;
+      try {
+        read(chunk);
+      } catch {
+        // Nothing a process sends may throw in the server's process.
+        refuse(proc, 'the fetch process sent an invalid answer');
+      }
+    });
+    // The process closed its end, or the channel failed: it can answer no
+    // more. Its call ends when it has exited.
+    const lost = (): void => {
+      if (!proc.ending) kill(proc, undefined, false);
+    };
+    channel.on('error', lost);
+    channel.on('close', lost);
   };
 
   const spawnProcess = (): FetchProcess => {
@@ -506,21 +680,21 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
       ],
       {
         // Nothing of the server's environment (database URL, key material,
-        // proxy settings, NODE_OPTIONS) is the fetch's business. Node adds the
-        // channel's two variables, which the process removes at start.
+        // proxy settings, NODE_OPTIONS) is the fetch's business. Without
+        // Node's IPC channel, Node adds nothing to it either.
         env: {},
-        // `/dev/null` for the standard streams and the IPC channel as `stdio[3]`
-        // (FETCH_PROCESS_CHANNEL_FD). Any other descriptor the exec keeps, the
-        // process closes before it reads a message.
-        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-        // Bodies cross as bytes, not as JSON arrays of numbers.
-        serialization: 'advanced',
+        // `/dev/null` for the standard streams and the channel, a socket, as
+        // `stdio[3]` (FETCH_PROCESS_CHANNEL_FD). Any other descriptor the exec
+        // keeps, the process closes before it reads a frame.
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
         windowsHide: true,
       }
     );
+    const channel = child.stdio[FETCH_PROCESS_CHANNEL_FD];
     let markExited: () => void = () => undefined;
     const proc: FetchProcess = {
       child,
+      channel: channel instanceof Socket ? channel : undefined,
       call: undefined,
       id: 0,
       family: undefined,
@@ -538,9 +712,12 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     // An idle process never keeps the server's process alive; a call's own
     // timers do that for as long as the caller waits.
     child.unref();
-    child.channel?.unref();
-    child.on('message', (raw: unknown) => onMessage(proc, raw));
+    if (proc.channel !== undefined) {
+      proc.channel.unref();
+      readFrames(proc, proc.channel);
+    }
     child.once('exit', () => {
+      proc.channel?.destroy();
       onExit(proc);
       markExited();
     });
@@ -562,16 +739,17 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     // system store when Node uses it, or OpenSSL's store. And its TLS
     // defaults, which flags such as --tls-min-v1.3 set and the empty
     // environment would drop.
-    send(proc, {
-      type: 'init',
-      ca: openssl.opensslStore ? [] : tls.getCACertificates('default'),
-      opensslStore: { certFile: openssl.certFile, certDir: openssl.certDir },
-      tls: {
-        ciphers: tls.DEFAULT_CIPHERS,
-        minVersion: tls.DEFAULT_MIN_VERSION,
-        maxVersion: tls.DEFAULT_MAX_VERSION,
-      },
-    });
+    send(proc, () =>
+      encodeInit({
+        ca: openssl.opensslStore ? [] : tls.getCACertificates('default'),
+        opensslStore: { certFile: openssl.certFile, certDir: openssl.certDir },
+        tls: {
+          ciphers: tls.DEFAULT_CIPHERS,
+          minVersion: tls.DEFAULT_MIN_VERSION,
+          maxVersion: tls.DEFAULT_MAX_VERSION,
+        },
+      })
+    );
     return proc;
   };
 
@@ -587,7 +765,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     }
     const running = proc;
     leaveIdle(running);
-    nextId += 1;
+    nextId = nextId >= MAX_EXCHANGE_ID ? 1 : nextId + 1;
     running.id = nextId;
     running.call = call;
     running.secured = false;
@@ -597,7 +775,7 @@ export function createProcessPool(overrides: Partial<ProcessPoolLimits> = {}): P
     running.onCallAbort = () =>
       kill(running, failed(call.job, 'timeout', 'the call timed out'), true);
     call.signal.addEventListener('abort', running.onCallAbort, { once: true });
-    send(running, { type: 'exchange', id: running.id, job: call.job });
+    send(running, () => encodeExchange(running.id, call.job));
   };
 
   /** Start every waiting call that may start now, in the order they came. */
