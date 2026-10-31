@@ -658,6 +658,79 @@ describe('serializeErrorForLog', () => {
     expect(serializeErrorForLog(wrapped)['original']).toMatchObject({ query });
   });
 
+  describe('a Redis error (#592)', () => {
+    // The shapes ioredis 5 builds: every error a command replies with gets
+    // `command = { name, args }` (DataHandler#returnError), and the
+    // `EXECABORT` of a MULTI gets `previousErrors`, the errors of the
+    // commands that failed to queue (transaction.js).
+    class ReplyError extends Error {
+      override name = 'ReplyError';
+    }
+    const record = JSON.stringify({
+      personal: { accounts: ['alice@example.com'] },
+      request: { login_hint: 'alice@example.com', state: 'af0ifjsldkj', nonce: 'n-0S6_WzA2Mj' },
+      transaction: { sid: '44444444-4444-4444-8444-444444444444' },
+    });
+    const key = 'interaction:22222222-2222-4222-8222-222222222222:abc';
+
+    function failedSet(): ReplyError & { command: { name: string; args: unknown[] } } {
+      return Object.assign(
+        new ReplyError('OOM command not allowed when used memory > maxmemory.'),
+        { command: { name: 'set', args: [key, record, 'PXAT', 1_900_000_000_000, 'XX'] } }
+      );
+    }
+
+    it('keeps the name of the failed command and drops its arguments', async () => {
+      const serialized = await logThroughFastify(failedSet());
+
+      expect(serialized).not.toContain('alice@example.com');
+      expect(serialized).not.toContain('af0ifjsldkj');
+      expect(serialized).not.toContain(key);
+      expect(serializeErrorForLog(failedSet())).toEqual({
+        type: 'ReplyError',
+        message: 'OOM command not allowed when used memory > maxmemory.',
+        stack: expect.stringContaining('ReplyError: OOM command not allowed'),
+        name: 'ReplyError',
+        command: { name: 'set' },
+      });
+    });
+
+    it('serializes the previous errors of an EXECABORT the same way', async () => {
+      const execAbort = Object.assign(
+        new ReplyError('EXECABORT Transaction discarded because of previous errors.'),
+        { command: { name: 'exec', args: [] }, previousErrors: [failedSet(), failedSet()] }
+      );
+
+      const serialized = await logThroughFastify(execAbort);
+
+      expect(serialized).not.toContain('alice@example.com');
+      expect(serialized).not.toContain('n-0S6_WzA2Mj');
+      expect(serialized).not.toContain('44444444-4444-4444-8444-444444444444');
+      const parsed = JSON.parse(serialized) as { err: Record<string, unknown> };
+      expect(parsed.err).toMatchObject({
+        type: 'ReplyError',
+        message: 'EXECABORT Transaction discarded because of previous errors.',
+        command: { name: 'exec' },
+        previousErrors: [
+          { type: 'ReplyError', command: { name: 'set' }, message: expect.stringContaining('OOM') },
+          { type: 'ReplyError', command: { name: 'set' }, message: expect.stringContaining('OOM') },
+        ],
+      });
+    });
+
+    it('leaves out a command of any other shape, and keeps a list of plain values', () => {
+      const serialized = serializeErrorForLog(
+        Object.assign(new Error('spawn failed'), {
+          command: `redis-cli SET ${key} ${record}`,
+          hosts: ['redis-1', 'redis-2'],
+        })
+      );
+
+      expect(serialized).not.toHaveProperty('command');
+      expect(serialized['hosts']).toEqual(['redis-1', 'redis-2']);
+    });
+  });
+
   it('ends a cycle through error-valued fields', () => {
     const a = Object.assign(new Error('a'), { peer: undefined as unknown });
     const b = Object.assign(new Error('b'), { peer: a });

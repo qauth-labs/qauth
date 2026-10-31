@@ -391,6 +391,11 @@ interface SerializedErrorForLog {
  * included. Copied as an own field, a malformed request would put the
  * caller's session cookie or access token in the log.
  *
+ * A Redis error's `command` keeps its name only, for the same reason: ioredis
+ * puts the arguments of the failed command there, and those are the values
+ * written, such as a whole interaction record (#592). The `previousErrors`
+ * of a failed `MULTI` are serialized the same way, one by one.
+ *
  * A duplicate registration was the everyday case: every second
  * `POST /auth/register` for an address fails inside the credential insert,
  * AFTER the password was hashed — and when it is the account holder retrying,
@@ -412,12 +417,44 @@ export function serializeErrorForLog(err: Error): SerializedErrorForLog {
 }
 
 /**
+ * What an error's `command` field may show: the command's name and nothing
+ * else.
+ *
+ * ioredis attaches `command = { name, args }` to every error a command
+ * replies with or is aborted by, and `args` are the values sent: the key and
+ * the whole value of a `SET`, which for an interaction record is its personal
+ * data, `login_hint`, `id_token_hint`, `state`, `nonce` and the browser
+ * session's `sid`. Any other shape (a command line as a string, say) is left
+ * out, since it may carry its arguments the same way.
+ */
+function loggableCommand(command: unknown): { name: string } | undefined {
+  if (typeof command !== 'object' || command === null) return undefined;
+  const { name } = command as { name?: unknown };
+  return typeof name === 'string' ? { name } : undefined;
+}
+
+/**
+ * A list of errors as it may be logged: each error-like entry serialized as
+ * {@link serializeErrorLike} serializes the error it hangs from, anything else
+ * as it is. An entry already serialized on this call is `[Circular]` rather
+ * than copied out raw.
+ */
+function serializeErrorList(entries: readonly unknown[], visited: Set<object>): unknown[] {
+  return entries.map((entry) => {
+    if (!isErrorLike(entry)) return entry;
+    return visited.has(entry) ? '[Circular]' : serializeErrorLike(entry, visited);
+  });
+}
+
+/**
  * {@link serializeErrorForLog} for one error. Mirrors pino-std-serializers'
  * `err`: it serializes `AggregateError#errors` into `aggregateErrors` and
  * error-valued fields recursively, so a failed query nested in either place
- * loses its parameters too, instead of being copied out raw. `visited`
- * (errors already serialized on this call) ends cycles, as pino's `seen` tag
- * does.
+ * loses its parameters too, instead of being copied out raw. So are the
+ * errors in any other list-valued field, such as the `previousErrors` that
+ * ioredis gives the `EXECABORT` of a `MULTI` (one per command that failed to
+ * queue, each with its own `command`). `visited` (errors already serialized
+ * on this call) ends cycles, as pino's `seen` tag does.
  */
 function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErrorForLog {
   visited.add(err);
@@ -435,9 +472,7 @@ function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErr
   const errors = (err as { errors?: unknown }).errors;
   const fields: Record<string, unknown> = {};
   if (Array.isArray(errors)) {
-    fields['aggregateErrors'] = errors.map((entry) =>
-      isErrorLike(entry) && !visited.has(entry) ? serializeErrorLike(entry, visited) : entry
-    );
+    fields['aggregateErrors'] = serializeErrorList(errors, visited);
   }
   for (const [key, value] of Object.entries(err)) {
     // `cause` is already folded into `message` and `stack`; `errors` into
@@ -451,13 +486,19 @@ function serializeErrorLike(err: ErrorLike, visited: Set<object>): SerializedErr
     ) {
       continue;
     }
+    // A Redis command's arguments are the values it wrote.
+    if (key === 'command') {
+      const command = loggableCommand(value);
+      if (command !== undefined) fields[key] = command;
+      continue;
+    }
     if (isErrorLike(value)) {
       if (!visited.has(value)) {
         fields[key] = serializeErrorLike(value, visited);
       }
       continue;
     }
-    fields[key] = value;
+    fields[key] = Array.isArray(value) ? serializeErrorList(value, visited) : value;
   }
 
   return {
