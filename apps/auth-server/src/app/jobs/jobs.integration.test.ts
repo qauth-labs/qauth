@@ -406,8 +406,14 @@ describe('job runner on a real Postgres', () => {
         config: { connectionString: postgres.connectionString },
       });
       await app.register(metricsPlugin);
-      // The server's own job list and lock: only the clock is injected.
-      await app.register(jobsPlugin, { clock, random: () => 0 });
+      // The server's own job list and lock: only the clock is injected. Every
+      // role but `web`, whose session jobs need the session service and
+      // Redis (`session-revocation.integration.test.ts` boots those).
+      await app.register(jobsPlugin, {
+        clock,
+        random: () => 0,
+        roles: ['api', 'admin', 'signer', 'delivery'],
+      });
       await app.ready();
       nodes.push({ app, lines });
 

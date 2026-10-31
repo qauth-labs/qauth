@@ -297,11 +297,32 @@ describe('the reserved qauth: scope namespace (real containers)', () => {
       return rows[0].id;
     }
 
-    it('cannot hold a qauth: scope through the repository', async () => {
+    it('cannot hold a qauth: scope through the policy store or the repository', async () => {
       const realmId = await defaultRealmId();
+      const current = await app().policyStore.get(realmId);
+      if (current === undefined) throw new Error('the default realm has no row');
+      const scopes = ['openid', 'qauth:admin:read'];
+
+      // The policy store, the allowlist's only writer since #516, and the
+      // repository write under it each refuse the scope.
       await expect(
-        app().repositories.realms.update(realmId, {
-          dynamicRegistrationAllowedScopes: ['openid', 'qauth:admin:read'],
+        app().policyStore.update(
+          realmId,
+          { registration: { dynamicRegistrationAllowedScopes: scopes } },
+          { expectedVersion: current.version }
+        )
+      ).rejects.toMatchObject({ name: 'PolicyValidationError' });
+      await expect(
+        app().repositories.realms.writePolicies(realmId, {
+          document: {
+            ...structuredClone(current.policies),
+            registration: {
+              ...structuredClone(current.policies.registration),
+              dynamicRegistrationAllowedScopes: scopes,
+            },
+          },
+          schemaVersion: current.schemaVersion,
+          expectedVersion: current.version,
         })
       ).rejects.toMatchObject({ name: 'BadRequestError' });
     });

@@ -1,11 +1,40 @@
 import type {
   CachedSession,
+  EndedSession,
   NewSessionRecord,
   RealmSessionLifetimes,
+  SessionClientRecord,
   SessionRecord,
   SessionRevokedReason,
   StoredSession,
 } from './types';
+
+/** Whose sessions a list reads: a user's, or those that served a client. */
+export type SessionListOwner = { userId: string } | { oauthClientId: string };
+
+/** The last row a page showed: the next page starts after it. */
+export interface SessionListPosition {
+  createdAt: number;
+  sid: string;
+}
+
+/** What {@link SessionStore.list} reads. */
+export interface StoredSessionList {
+  /** The realm's current lifetimes, to judge each session's state. */
+  lifetimes: RealmSessionLifetimes;
+  /** Newest first (`createdAt`, then `sid`). */
+  sessions: Array<{ session: SessionRecord; clients: SessionClientRecord[] }>;
+}
+
+/** What one batch of a bulk revocation did. */
+export interface SessionRevocationBatch {
+  /** The sessions it ended. */
+  ended: EndedSession[];
+  /** The id the next batch starts after; `null` when it selected none. */
+  last: string | null;
+  /** How many sessions it selected: fewer than its limit ends the run. */
+  selected: number;
+}
 
 /**
  * The Postgres port: where sessions are true. The auth-server implements it
@@ -35,16 +64,69 @@ export interface SessionStore {
    */
   touchLastSeen(realmId: string, sid: string, minIntervalMs: number): Promise<boolean>;
   /**
-   * Set `revoked_at` and `revoked_reason` on a row not yet revoked.
+   * Set `revoked_at` and `revoked_reason` on a row not yet revoked, and take
+   * its registry rows with it, in one transaction.
    *
-   * @returns the ended row, or `undefined` when the realm holds no such
-   * session or it was already revoked
+   * @returns the ended row and the clients it served, or `undefined` when the
+   * realm holds no such session or it was already revoked
    */
   revoke(
     realmId: string,
     sid: string,
     reason: SessionRevokedReason
-  ): Promise<SessionRecord | undefined>;
+  ): Promise<EndedSession | undefined>;
+  /**
+   * End a user's sessions not yet revoked, but `exceptSid` and those created
+   * at or after `createdBefore`, in one transaction, as {@link revoke}.
+   *
+   * @returns the sessions this call ended
+   */
+  revokeForUser(
+    realmId: string,
+    userId: string,
+    reason: SessionRevokedReason,
+    filter: { exceptSid?: string; createdBefore?: number }
+  ): Promise<EndedSession[]>;
+  /**
+   * End one batch of the realm's sessions not yet revoked, in id order after
+   * `batch.after`, created by `batch.createdThrough` and, with
+   * `batch.activeSince`, last seen since then: one transaction per call.
+   */
+  revokeRealmBatch(
+    realmId: string,
+    reason: SessionRevokedReason,
+    batch: { after: string | null; createdThrough: number; activeSince?: number; limit: number }
+  ): Promise<SessionRevocationBatch>;
+  /**
+   * Mark one batch of sessions, of every realm, past their absolute end or
+   * their realm's idle limit at `batch.now`, under the rules of
+   * `sessionEnds`, as `expired` or `idle`, with the time each one ended.
+   */
+  revokeLapsedBatch(batch: {
+    now: number;
+    defaultMaxLifespanSeconds: number;
+    after: string | null;
+    limit: number;
+  }): Promise<SessionRevocationBatch>;
+  /**
+   * One page of sessions of the realm, newest first, after `page.after`.
+   *
+   * @returns `undefined` when there is no such realm
+   */
+  list(
+    realmId: string,
+    owner: SessionListOwner,
+    page: { limit: number; after?: SessionListPosition }
+  ): Promise<StoredSessionList | undefined>;
+  /**
+   * Delete one batch of rows, of every realm, revoked or past their stored
+   * `expires_at` before `batch.before`, in id order after `batch.after`.
+   */
+  deleteEnded(batch: {
+    before: number;
+    after: string | null;
+    limit: number;
+  }): Promise<{ deleted: number; last: string | null; selected: number }>;
 }
 
 /** What the cache holds for a session. */

@@ -289,7 +289,10 @@ take `ACCESS_TOKEN_LIFESPAN` and `REFRESH_TOKEN_LIFESPAN`. The fill is an
 together, the first one writes and the others find the realm filled. So give
 every node the same environment for the first boot after the upgrade; the
 first node to boot decides the stored values. The log says
-`realm policies filled from the environment` for each realm it filled.
+`realm policies filled from the environment` for each realm it filled, and
+warns for each value a realm's row kept that differs from the environment's
+seed (`... kept its posture.maxEnvironmentLaxity from its row ...`), so a
+ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
@@ -299,17 +302,27 @@ flows move to the stored values one area at a time: the token lifetimes
 ([#529](https://github.com/qauth-labs/qauth/issues/529)) and CIMD
 ([#534](https://github.com/qauth-labs/qauth/issues/534)). The dynamic
 registration allowlist and the environment ceiling already come from the row:
-`/oauth/register` and the clients API no longer copy
-`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies, even
-when its list is empty. Until an area has moved, the server still applies its
+`/oauth/register` and the clients API no longer write
+`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm's list. A realm that has its
+policies is held to its own list, even an empty one; a realm with none yet, to
+the list its fill will hold, which the first boot stores. Until an area has moved, the server still applies its
 keys to every realm, so keep them set. At every boot the server names each seed
 key that is still set, once:
 
 - for a key whose policy the server reads from the row, a warning such as
   `DEFAULT_DYNAMIC_REGISTRATION_SCOPES only seeds new realms and is ignored`;
-- for any other key, an info line that the stored policies ignore it and that
+- for any other key, an info line that the stored policies ignore it, that
   the server still applies it to every realm until it reads that policy from
-  the row.
+  the row, and that the stored value applies from then on.
+
+**A key changed after this upgrade never reaches the stored policies.** The
+first boot stored the value each key had then. Change a key whose area has not
+moved yet, and the server applies the new value while it reads the area from
+the environment; the release that moves the area to the row applies the
+stored value instead, whatever the key says by then. A key tightened in the
+meantime, such as a shorter `REFRESH_TOKEN_LIFESPAN` or `CIMD_ENABLED=false`,
+would loosen again at that upgrade. So change the stored policy along with
+the key, not the key alone.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
@@ -330,7 +343,9 @@ secret store takes them once it ships
 ([#529](https://github.com/qauth-labs/qauth/issues/529)), and until then the
 server reads them from the environment. During a rolling upgrade a node of the
 previous release reads none of the new columns and runs on the environment as
-before.
+before. A realm such a node creates during the roll has no policies (counter 0)
+until a node of this release boots again, since only the boot fills them, so
+restart one node of this release once the roll is complete.
 
 ### The delivery role reads `realms.issuer`
 

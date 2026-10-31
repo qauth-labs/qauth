@@ -331,3 +331,30 @@ describe('authEnvSchema ID-JAG issuer key cache', () => {
     }
   );
 });
+
+/**
+ * SESSION_RETENTION_DAYS (ADR-019 Decision 3, issue #550): how long an ended
+ * or expired browser session row is kept before the session purge job
+ * deletes it.
+ */
+describe('authEnvSchema SESSION_RETENTION_DAYS', () => {
+  const parse = (raw?: string) =>
+    authEnvSchema.parse(raw === undefined ? {} : { SESSION_RETENTION_DAYS: raw })
+      .SESSION_RETENTION_DAYS;
+
+  it('defaults to 30 days', () => {
+    expect(parse()).toBe(30);
+  });
+
+  it('accepts whole days from 1 to ten years', () => {
+    expect(parse('1')).toBe(1);
+    expect(parse('90')).toBe(90);
+    expect(parse('3650')).toBe(3650);
+  });
+
+  it('refuses zero, a negative, a fraction, more than ten years or a non-number', () => {
+    for (const raw of ['0', '-1', '1.5', '3651', 'month']) {
+      expect(() => parse(raw), raw).toThrow();
+    }
+  });
+});

@@ -64,6 +64,13 @@ states:
         from: body
         css: 'form[action="/ui/consent"] input[name="csrf_token"]'
         attribute: value
+  renderedForAgent:
+    # the same form on an agent's page
+    save:
+      csrfToken:
+        from: body
+        css: 'form[action="/ui/consent"] input[name="csrf_token"]'
+        attribute: value
 
 scenarios:
   # The main story first, then one scenario for each guard of flow.yaml, in the order the server checks them.
@@ -76,6 +83,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -95,6 +103,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -115,6 +124,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -132,6 +142,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -149,6 +160,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -171,6 +183,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -194,6 +207,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -211,6 +225,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -228,6 +243,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -244,6 +260,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -266,6 +283,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -297,6 +315,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -321,6 +340,7 @@ scenarios:
       params: unknownClient
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -352,6 +372,7 @@ scenarios:
       params: unusableClient
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -396,6 +417,7 @@ scenarios:
       params: unregisteredRedirect
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -429,6 +451,7 @@ scenarios:
       params: unpermittedRedirect
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -468,6 +491,7 @@ scenarios:
       params: malformedDpopJkt
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -491,6 +515,38 @@ scenarios:
         save: { csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value } }
     request: { query: { dpop_jkt: not-a-thumbprint }, form: { dpop_jkt: not-a-thumbprint } }
 
+  agentPage:
+    # agentClient: consent-agent is an agent, and the request stays within its readonly cap. The shared binding's realm
+    # sets no sso_max_lifespan, so the page says only "until you revoke it"; the wording under a realm limit is not
+    # replayed (no replay step sets a realm column the realm resolver caches), and agent-consent.integration.test.ts
+    # covers it.
+    given:
+      gate: open
+      returnUrl: fits
+      params: valid
+      agentScope: withinCap
+      audience: listed
+      clientIsAgent: true
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: none
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+    request:
+      query:
+        client_id: consent-agent
+        redirect_uri: https://consent-agent.example/callback
+        scope: openid agent:readonly
+      form:
+        client_id: consent-agent
+        redirect_uri: https://consent-agent.example/callback
+        scope: openid agent:readonly
+
   agentOverCap:
     # overAgentCap: consent-agent is capped at readonly, and the request asks for agent:exec. The setup renders a page
     # within the cap, so the POST carries a live CSRF value and a tampered scope field.
@@ -500,6 +556,7 @@ scenarios:
       params: valid
       agentScope: overCap
       audience: listed
+      clientIsAgent: true
       environment: production
       csrf: matches
       decision: allow
@@ -539,6 +596,7 @@ scenarios:
       params: valid
       agentScope: overCapSelfService
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -573,6 +631,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: unlisted
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -593,6 +652,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: unlistedSelfService
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -628,6 +688,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: wrong
       decision: allow
@@ -648,6 +709,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: wrong
       decision: allow
@@ -691,6 +753,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: deny
@@ -711,6 +774,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -732,6 +796,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -767,6 +832,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -787,6 +853,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -808,6 +875,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -829,6 +897,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow
@@ -850,6 +919,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: development
       csrf: matches
       decision: allow
@@ -895,6 +965,7 @@ scenarios:
       params: valid
       agentScope: withinCap
       audience: listed
+      clientIsAgent: false
       environment: production
       csrf: matches
       decision: allow

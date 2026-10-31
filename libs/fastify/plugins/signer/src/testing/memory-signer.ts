@@ -16,6 +16,12 @@ import {
   type WrappedSignerKey,
 } from '@qauth-labs/server-keys/custody';
 
+import {
+  rotateTokenKeys,
+  type TokenKeyRotation,
+  type TokenKeyRotationOptions,
+} from './key-rotation';
+
 /**
  * The real in-process signer over keys held in memory, for unit tests that
  * sign and verify tokens without a database: the JWT plugin's own and the
@@ -58,8 +64,19 @@ export interface TestSigner {
   readonly signer: Signer;
   /** Create a realm with the standard keys (and RS256 when asked); returns its id. */
   addRealm(realm: TestRealmKeys): Promise<string>;
-  /** Change the status of a realm's key, as a rotation or a retirement would. */
+  /**
+   * Change the status of a realm's key, as a rotation or a retirement would.
+   * It sets no `unpublishAt`, so a key it retires neither verifies nor is
+   * published; `rotateTokenKeys` retires a key that does.
+   */
   setKeyStatus(realmId: string, kid: string, status: StoredKeyStatus): void;
+  /**
+   * Rotate the realm's `token_signing` keys of one algorithm (#492): a new
+   * key becomes active and the old one retired, published until its
+   * retention ends. See `rotateTokenKeys`. A signer whose refresh interval is
+   * not `0` sees it only after that interval.
+   */
+  rotateTokenKeys(realmId: string, options?: TokenKeyRotationOptions): Promise<TokenKeyRotation>;
   /** Every store read the signer made, by method name, in order. */
   readonly storeReads: string[];
 }
@@ -67,6 +84,8 @@ export interface TestSigner {
 interface MemoryRow {
   key: Omit<NewStoredKeyRow, 'status'> & { status: StoredKeyStatus };
   publicJwk?: Record<string, unknown>;
+  /** Epoch ms. When a retired key leaves its JWKS; a retired key with `null` is out at once. */
+  unpublishAt: number | null;
 }
 
 /** The signer of `options`, with no realm yet. */
@@ -109,10 +128,25 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
       rows.push({
         key: { ...input.key },
         ...(input.publicJwk ? { publicJwk: input.publicJwk } : {}),
+        unpublishAt: null,
       });
       return input.key;
     },
-    updateStatus: async () => undefined,
+    // As the repository does: only a key in the status the step starts from moves.
+    updateStatus: async (realmId, kid, change) => {
+      const from = change.status === 'active' ? 'next' : 'active';
+      const row = rows.find(
+        ({ key }) => key.realmId === realmId && key.kid === kid && key.status === from
+      );
+      if (row === undefined) return undefined;
+      if (change.status === 'active') {
+        row.key = { ...row.key, status: 'active', activateAt: change.activateAt };
+      } else {
+        row.key = { ...row.key, status: 'retired' };
+        row.unpublishAt = change.unpublishAt;
+      }
+      return row.key;
+    },
     deleteByScope: async () => [],
     lockRealm: async () => undefined,
     anotherRealmPublishes: async (realmId, identity) =>
@@ -176,7 +210,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     async listPublicKeys(realmId): Promise<readonly PublicKeyRecord[]> {
       storeReads.push('listPublicKeys');
-      return rows.flatMap(({ key, publicJwk }) =>
+      return rows.flatMap(({ key, publicJwk, unpublishAt }) =>
         key.realmId === realmId && publicJwk !== undefined && key.publishAt !== null
           ? [
               {
@@ -186,7 +220,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
                 status: key.status,
                 publicJwk,
                 publishAt: key.publishAt,
-                unpublishAt: null,
+                unpublishAt,
               },
             ]
           : []
@@ -240,6 +274,9 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
       const row = rows.find(({ key }) => key.realmId === realmId && key.kid === kid);
       if (row === undefined) throw new Error(`No key ${kid} in realm ${realmId}`);
       row.key = { ...row.key, status };
+    },
+    rotateTokenKeys(realmId, rotation) {
+      return rotateTokenKeys(keyStore, factory, realmId, rotation);
     },
     storeReads,
   };

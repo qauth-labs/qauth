@@ -3,8 +3,11 @@ import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
 import {
   createRedisSessionCache,
   createSessionService,
+  type EndedSession,
   type RealmSessionLifetimes,
+  type SessionClientRecord,
   type SessionMetrics,
+  type SessionRevocationBatch,
   type SessionService,
   type SessionServiceSettings,
   type SessionStore,
@@ -41,6 +44,27 @@ export const SESSION_SERVICE_PLUGIN_NAME = packageJson.name;
 
 type Repositories = FastifyInstance['repositories'];
 type RealmRow = NonNullable<Awaited<ReturnType<Repositories['realms']['findById']>>>;
+type SessionsRepository = Repositories['sessions'];
+type RevokedRow = NonNullable<Awaited<ReturnType<SessionsRepository['revoke']>>>;
+type RevokedBatch = Awaited<ReturnType<SessionsRepository['revokeRealmBatch']>>;
+type ClientRow = RevokedRow['clients'][number];
+
+function clientOf(row: ClientRow): SessionClientRecord {
+  return {
+    oauthClientId: row.oauthClientId,
+    clientId: row.clientId,
+    name: row.clientName,
+    firstSeenAt: row.firstSeenAt,
+  };
+}
+
+function endedOf(row: RevokedRow): EndedSession {
+  return { session: row.session, clients: row.clients.map(clientOf) };
+}
+
+function batchOf(batch: RevokedBatch): SessionRevocationBatch {
+  return { ended: batch.ended.map(endedOf), last: batch.last, selected: batch.selected };
+}
 
 function lifetimesOf(realm: RealmRow): RealmSessionLifetimes {
   return {
@@ -73,10 +97,67 @@ export function repositorySessionStore(
     },
     touchLastSeen: (realmId, sid, minIntervalMs) =>
       repositories.sessions.updateLastSeen(realmId, sid, { minIntervalMs }),
-    // The repository also returns the clients the session served (#549). The
-    // service has no use for them yet: back-channel logout will read them.
-    revoke: async (realmId, sid, reason) =>
-      (await repositories.sessions.revoke(realmId, sid, reason))?.session,
+    // With the clients the session served (#549), which the revocation
+    // deleted: the service hands them to its listeners (#550).
+    async revoke(realmId, sid, reason) {
+      const ended = await repositories.sessions.revoke(realmId, sid, reason);
+      return ended === undefined ? undefined : endedOf(ended);
+    },
+    async revokeForUser(realmId, userId, reason, filter) {
+      const ended = await repositories.sessions.revokeForUser(realmId, userId, reason, {
+        ...(filter.exceptSid === undefined ? {} : { exceptId: filter.exceptSid }),
+        ...(filter.createdBefore === undefined ? {} : { createdBefore: filter.createdBefore }),
+      });
+      return ended.map(endedOf);
+    },
+    async revokeRealmBatch(realmId, reason, batch) {
+      return batchOf(
+        await repositories.sessions.revokeRealmBatch(realmId, reason, {
+          ...(batch.after === null ? {} : { after: batch.after }),
+          createdThrough: batch.createdThrough,
+          ...(batch.activeSince === undefined ? {} : { activeSince: batch.activeSince }),
+          limit: batch.limit,
+        })
+      );
+    },
+    async revokeLapsedBatch(batch) {
+      return batchOf(
+        await repositories.sessions.revokeLapsedBatch({
+          now: batch.now,
+          defaultMaxLifespanMs: batch.defaultMaxLifespanSeconds * 1000,
+          ...(batch.after === null ? {} : { after: batch.after }),
+          limit: batch.limit,
+        })
+      );
+    },
+    async list(realmId, owner, page) {
+      const repositoryPage = {
+        limit: page.limit,
+        ...(page.after === undefined
+          ? {}
+          : { after: { createdAt: page.after.createdAt, id: page.after.sid } }),
+      };
+      const [realm, rows] = await Promise.all([
+        repositories.realms.findById(realmId),
+        'userId' in owner
+          ? repositories.sessions.listForUser(realmId, owner.userId, repositoryPage)
+          : repositories.sessions.listForClient(realmId, owner.oauthClientId, repositoryPage),
+      ]);
+      if (realm === undefined) return undefined;
+      return {
+        lifetimes: lifetimesOf(realm),
+        sessions: rows.map((row) => ({
+          session: row.session,
+          clients: row.clients.map(clientOf),
+        })),
+      };
+    },
+    deleteEnded: (batch) =>
+      repositories.sessions.deleteEnded({
+        before: batch.before,
+        ...(batch.after === null ? {} : { after: batch.after }),
+        limit: batch.limit,
+      }),
   };
 }
 

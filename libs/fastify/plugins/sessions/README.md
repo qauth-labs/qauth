@@ -6,7 +6,8 @@ the service's Postgres port over the database plugin's repositories and its Redi
 plugin's client, and decorates the instance with `fastify.sessionService`.
 
 > **Status:** the auth-server registers it. Since #488 the browser sign-in and the session lookup
-> run on it (`apps/auth-server/src/app/helpers/browser-session.ts`).
+> run on it (`apps/auth-server/src/app/helpers/browser-session.ts`), and since #550 the
+> `session-expiry` and `session-purge` jobs on the `web` role (`apps/auth-server/src/app/jobs/`).
 
 ## Usage
 
@@ -34,7 +35,10 @@ The plugin only builds the service: nothing reaches Postgres or Redis until a se
 read, so a boot with no reachable database still boots.
 
 `repositorySessionStore(fastify.repositories)` is the Postgres port on its own. On a cache miss it
-reads the session and its realm's row (`sso_max_lifespan`, `sso_idle_timeout`) together.
+reads the session and its realm's row (`sso_max_lifespan`, `sso_idle_timeout`) together. Its
+revocations pass on the clients each ended session served, with their `client_id` and name, which
+the repository deleted from `session_clients` in the same transaction; a list reads the realm's row
+beside the page, to judge each session's state.
 
 The auth-server may not import `@qauth-labs/server-sessions` itself, so this package re-exports the
 types it works with (`SessionService`, `BrowserSession`, …) and the Redis key helpers.

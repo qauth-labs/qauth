@@ -80,9 +80,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an environment key changes no existing realm. Each boot names every seed key
   still set, once: a warning ("only seeds new realms and is ignored") for a
   policy the server reads from the row (the dynamic registration allowlist, the
-  environment ceiling), and an info line that the server still applies the key
-  for any other. `/oauth/register` and the clients API no longer copy
-  `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies. The new
+  environment ceiling), and an info line for any other: the server still
+  applies the key, a change of it never reaches the stored value, and the
+  stored value applies once that area reads the row. `/oauth/register` and the
+  clients API no longer write `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a
+  realm's allowlist: they read the realm's list, or for a realm with no
+  policies yet the list its fill will hold. A plain realm create or update
+  writes no policy, the four column-backed fields included. The new
   `fastify.policyStore` (`@qauth-labs/fastify-plugin-realm-policy`) reads a
   realm's policies off its row with no query and updates them only with the
   expected `policies_version`; the trigger `realms_policies_version` raises the
@@ -604,6 +608,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guide). During a rolling upgrade the previous release writes codes without a
   session, and a session it revokes keeps its registry rows, which the lookups
   skip, and its codes unspent.
+- **Session lists and revocations** ([#550], ADR-019 Decisions 3 and 4). The
+  session service lists a user's sessions, or the sessions that served a
+  client, newest first in cursor pages (a cursor of another list is refused),
+  each with its clients, address, user agent, `auth_time`, `last_seen_at` and
+  state (`live`, `idle`, `expired` or `revoked`). It ends one session (a second
+  call reports `already_ended` and changes nothing), a user's sessions (but one,
+  or only those created before a time, for a password reset), and a realm's
+  sessions in batches of 500 (at most 5,000), each its own transaction, for key
+  retirement and bulk revocation. Every revocation names its actor, returns the
+  ended sessions with the clients they served, writes a cache tombstone for
+  each, and then tells the listeners registered with `onSessionsEnded`, once
+  per session, in the process that revoked, after the commit. Refresh-token
+  families and Authority Trees are left to the caller. Two jobs run on the
+  `web` role. `session-expiry`, every five minutes, marks the sessions past
+  their absolute end or their realm's idle limit (which no read accepted
+  already) as `expired` or `idle`, so their clients leave the registry and the
+  listeners hear of the end. `session-purge`, hourly, deletes the rows that
+  ended or expired more than `SESSION_RETENTION_DAYS` ago (a new advanced key,
+  30 by default). The single revocation now passes on the clients the session
+  served, which the store adapter used to drop. No HTTP route is added; the
+  account and admin APIs will add them.
 
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
@@ -1875,20 +1900,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the workspace's TypeScript 6.0 or at TypeScript 7: TypeScript 5 rejects
   `"bundler"` with the libraries' `module: commonjs` (TS5095).
 
-- Nx tasks use a remote cache (Nx Cloud, `nxCloudId` in `nx.json`). CI's
-  `affected` legs write to it only on a push to main, with a read-write token
-  that only main can reach; every other run reads at most, so a pull request
-  replays what main already built and checked and never stores its own
-  results. A run with no token, such as a fork's pull request or a local run,
-  is anonymous and never stores. Jobs whose Nx targets are not cacheable, the
-  image builds and the dev containers set `NX_NO_CLOUD=true`.
-
-  **Action for contributors**: nothing is required. Nx contacts the cache
-  service on every task run; offline, or to keep a run local, set
-  `NX_NO_CLOUD=true`. Without it, a network that drops packets delays each
-  `nx` command by up to about 50 seconds before Nx falls back to the local
-  cache.
-
 [#359]: https://github.com/qauth-labs/qauth/issues/359
 [#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
@@ -1952,6 +1963,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549
+[#550]: https://github.com/qauth-labs/qauth/issues/550
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577
@@ -1967,6 +1979,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 
 ### Fixed
+
+- **A token signed by a retired key keeps verifying until the key's retention
+  ends** ([#492], ADR-019 Decision 9, ADR-001). The server picks a token's key
+  by its `kid` and `alg` together (`selectJwksKey`) among the realm's
+  verification set: its active keys and its retired keys still inside their
+  retention. A `kid` that names a key of another algorithm, a `next` key or a
+  `compromised` key finds none, and the token is refused. A hybrid token's
+  ML-DSA-65 key is found the same way, by its signed `pqc_kid`, among the active
+  and retired keys. A token without a `kid`, from before the upgrade, keeps
+  verifying against the imported key after that key retires. Every check of the
+  server uses the set: `requireJwt`, userinfo, introspection, revocation,
+  `/auth/logout` and the token-exchange subject and actor tokens. So a rotation
+  through the key store (scheduled #542, manual #544) will not make anyone sign
+  in again; replacing a key through its variable still unpublishes the old key
+  at once. ADR-001's and ADR-019's notes on the three retired-key gaps now say
+  they are closed. The OAuth 2.1 flow page states the JWKS cache rule for
+  relying parties: cache it for at most 5 minutes, fetch it again for an unknown
+  `kid` at most once a minute, and drop the keys it no longer lists.
 
 - **Enabling an account again no longer brings back what it held before it
   was disabled** ([#748], the case [GHSA-vw34-9q55-2vg3](https://github.com/qauth-labs/qauth/security/advisories/GHSA-vw34-9q55-2vg3)
@@ -2046,6 +2076,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#638]) and the hosted account verification UI ([#644]) replace link
   verification.
 
+[#492]: https://github.com/qauth-labs/qauth/issues/492
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748

@@ -39,9 +39,7 @@ ENV VITE_AUTH_SERVER_URL=$VITE_AUTH_SERVER_URL
 
 # Build the TanStack Start app. Output (server/ with its deps bundled,
 # public/) lands in dist/apps/developer-portal.
-# No remote cache inside an image build: the image is built from its own
-# sources, never from a result replayed off the network.
-RUN NX_NO_CLOUD=true pnpm nx build developer-portal
+RUN pnpm nx build developer-portal
 
 # Stage 2: Runner.
 FROM node:26-alpine AS runner
