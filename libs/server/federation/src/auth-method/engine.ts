@@ -130,20 +130,56 @@ export async function startUpstreamStep<TConfig, TTransaction>(
 }
 
 /**
+ * The lowest assurance level, the ceiling of a method's identity when the
+ * caller names none.
+ *
+ * @experimental
+ */
+export const DEFAULT_UPSTREAM_MAX_ASSURANCE: AssuranceLevel = ASSURANCE_LEVELS[0];
+
+/**
+ * Options of {@link completeUpstreamStep}.
+ *
+ * @experimental
+ */
+export interface UpstreamStepCompletionOptions {
+  /**
+   * The highest assurance level the identity may carry: a method that
+   * resolves a higher one is lowered to it. Default
+   * {@link DEFAULT_UPSTREAM_MAX_ASSURANCE} (`low`).
+   *
+   * The assurance level reaches `acr` and step-up, so a method does not get
+   * to set it alone. The owner's decision of 23 Oct 2026 ranks an upstream
+   * sign-in with a password, so by default it counts as `low` whatever the
+   * method claims; an operator raises the ceiling for a configured provider
+   * it trusts more (the plugin runtime and the upstream sign-in flow, #600
+   * and #639, pass it).
+   */
+  readonly maxAssurance?: AssuranceLevel;
+}
+
+/**
  * Turn what a method's callback handed back into the end of the upstream
  * step. A `result` goes to `method.verify()`; the identity it resolves is
- * checked, then `method.extractAttributes()` gives its attributes, which are
- * checked too.
+ * checked and its assurance level lowered to `options.maxAssurance`, then
+ * `method.extractAttributes()` gives its attributes, which are checked too.
  *
  * @param outcome - what the callback route's handler returned, unchecked
+ * @param options - the assurance ceiling
  * @throws AuthMethodFaultError when the outcome is outside the closed set, or
  *   the identity or an attribute fails a check
+ * @throws TypeError when `options.maxAssurance` is not an assurance level
  * @experimental
  */
 export async function completeUpstreamStep(
   method: AuthMethod,
-  outcome: unknown
+  outcome: unknown,
+  options: UpstreamStepCompletionOptions = {}
 ): Promise<UpstreamStepCompletion> {
+  const maxAssurance = options.maxAssurance ?? DEFAULT_UPSTREAM_MAX_ASSURANCE;
+  if (!ASSURANCE_LEVELS.includes(maxAssurance)) {
+    throw new TypeError(`maxAssurance must be one of ${ASSURANCE_LEVELS.join(', ')}`);
+  }
   if (typeof outcome !== 'object' || outcome === null) {
     throw new AuthMethodFaultError(method.type, 'the callback did not answer an outcome');
   }
@@ -172,7 +208,7 @@ export async function completeUpstreamStep(
   } catch (cause) {
     return Object.freeze({ kind: 'failed', reason: 'verification_refused', cause } as const);
   }
-  const checked = checkedIdentity(method.type, identity);
+  const checked = checkedIdentity(method.type, identity, maxAssurance);
 
   let attributes: unknown;
   try {
@@ -249,7 +285,11 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function checkedIdentity(type: string, identity: unknown): VerifiedIdentity {
+function checkedIdentity(
+  type: string,
+  identity: unknown,
+  maxAssurance: AssuranceLevel
+): VerifiedIdentity {
   const fault = (problem: string) => new AuthMethodFaultError(type, `verify() resolved ${problem}`);
   if (typeof identity !== 'object' || identity === null) throw fault('something not an object');
   const { externalSub, assuranceLevel, rawClaims } = identity as Record<string, unknown>;
@@ -257,10 +297,11 @@ function checkedIdentity(type: string, identity: unknown): VerifiedIdentity {
     typeof externalSub !== 'string' ||
     externalSub.length === 0 ||
     externalSub.length > MAX_AUTH_METHOD_EXTERNAL_SUB_LENGTH ||
-    CONTROL_CHARACTER.test(externalSub)
+    CONTROL_CHARACTER.test(externalSub) ||
+    !isWellFormed(externalSub)
   ) {
     throw fault(
-      `an externalSub that is not 1 to ${MAX_AUTH_METHOD_EXTERNAL_SUB_LENGTH} characters with no control character`
+      `an externalSub that is not 1 to ${MAX_AUTH_METHOD_EXTERNAL_SUB_LENGTH} characters of well-formed text with no control character`
     );
   }
   if (!(ASSURANCE_LEVELS as readonly unknown[]).includes(assuranceLevel)) {
@@ -277,58 +318,104 @@ function checkedIdentity(type: string, identity: unknown): VerifiedIdentity {
   }
   return Object.freeze({
     externalSub,
-    assuranceLevel: assuranceLevel as AssuranceLevel,
+    assuranceLevel: lowerAssurance(assuranceLevel as AssuranceLevel, maxAssurance),
     rawClaims: claims as Record<string, unknown>,
   });
+}
+
+/** The lower of two assurance levels. */
+function lowerAssurance(level: AssuranceLevel, ceiling: AssuranceLevel): AssuranceLevel {
+  return ASSURANCE_LEVELS.indexOf(level) <= ASSURANCE_LEVELS.indexOf(ceiling) ? level : ceiling;
 }
 
 function checkedAttributes(type: string, attributes: unknown): readonly UserAttribute[] {
   const fault = (problem: string) =>
     new AuthMethodFaultError(type, `extractAttributes() returned ${problem}`);
   if (!Array.isArray(attributes)) throw fault('something not a list');
-  return Object.freeze(
-    attributes.map((attribute: unknown, index): UserAttribute => {
-      if (typeof attribute !== 'object' || attribute === null) {
-        throw fault(`an attribute [${index}] that is not an object`);
-      }
-      const { source, attrKey, attrValue, verified, expiresAt } = attribute as Record<
-        string,
-        unknown
-      >;
-      // The source must be the method's own type: a method cannot write
-      // attributes under another source, such as `wallet`, which outranks
-      // every other in claim resolution.
-      if (source !== type) throw fault(`an attribute [${index}] whose source is not ${type}`);
-      if (typeof attrKey !== 'string' || !AUTH_METHOD_ATTRIBUTE_KEY_PATTERN.test(attrKey)) {
-        throw fault(
-          `an attribute [${index}] whose key does not match ${AUTH_METHOD_ATTRIBUTE_KEY_PATTERN.source}`
-        );
-      }
-      if (
-        typeof attrValue !== 'string' ||
-        attrValue.length > MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH ||
-        VALUE_CONTROL_CHARACTER.test(attrValue)
-      ) {
-        throw fault(
-          `an attribute [${index}] whose value is not a string of at most ${MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH} characters without control characters other than tab and line breaks`
-        );
-      }
-      if (typeof verified !== 'boolean') {
-        throw fault(`an attribute [${index}] whose verified flag is not a boolean`);
-      }
-      if (
-        expiresAt !== undefined &&
-        (!(expiresAt instanceof Date) || Number.isNaN(expiresAt.getTime()))
-      ) {
-        throw fault(`an attribute [${index}] whose expiresAt is not a valid Date`);
-      }
-      return Object.freeze({
-        source,
-        attrKey,
-        attrValue,
-        verified,
-        ...(expiresAt === undefined ? {} : { expiresAt }),
-      });
-    })
+  // An index loop into a fresh array, with the length read once: `map` would
+  // build its result through `attributes.constructor[Symbol.species]`, which
+  // the method controls, so a list whose species hands back other objects
+  // (an attribute under `wallet`, say) would skip every check below.
+  const length: unknown = attributes.length;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) {
+    throw fault('a list whose length is not a count');
+  }
+  const checked: UserAttribute[] = [];
+  for (let index = 0; index < length; index += 1) {
+    checked[index] = checkedAttribute(type, attributes[index] as unknown, index, fault);
+  }
+  return Object.freeze(checked);
+}
+
+function checkedAttribute(
+  type: string,
+  attribute: unknown,
+  index: number,
+  fault: (problem: string) => AuthMethodFaultError
+): UserAttribute {
+  if (typeof attribute !== 'object' || attribute === null) {
+    throw fault(`an attribute [${index}] that is not an object`);
+  }
+  const { source, attrKey, attrValue, verified, expiresAt } = attribute as Record<string, unknown>;
+  // The source must be the method's own type: a method cannot write
+  // attributes under another source, such as `wallet`, which outranks every
+  // other in claim resolution.
+  if (source !== type) throw fault(`an attribute [${index}] whose source is not ${type}`);
+  if (typeof attrKey !== 'string' || !AUTH_METHOD_ATTRIBUTE_KEY_PATTERN.test(attrKey)) {
+    throw fault(
+      `an attribute [${index}] whose key does not match ${AUTH_METHOD_ATTRIBUTE_KEY_PATTERN.source}`
+    );
+  }
+  if (
+    typeof attrValue !== 'string' ||
+    attrValue.length > MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH ||
+    VALUE_CONTROL_CHARACTER.test(attrValue) ||
+    !isWellFormed(attrValue)
+  ) {
+    throw fault(
+      `an attribute [${index}] whose value is not well-formed text of at most ${MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH} characters without control characters other than tab and line breaks`
+    );
+  }
+  if (typeof verified !== 'boolean') {
+    throw fault(`an attribute [${index}] whose verified flag is not a boolean`);
+  }
+  // A copy of the time, never the method's Date: a Date stays mutable when
+  // the attribute holding it is frozen.
+  const expiry = expiresAt === undefined ? undefined : dateTime(expiresAt);
+  if (expiry !== undefined && Number.isNaN(expiry)) {
+    throw fault(`an attribute [${index}] whose expiresAt is not a valid Date`);
+  }
+  return Object.freeze({
+    source,
+    attrKey,
+    attrValue,
+    verified,
+    ...(expiry === undefined ? {} : { expiresAt: new Date(expiry) }),
+  });
+}
+
+/**
+ * The time a Date holds, read from the Date itself rather than through a
+ * `getTime` a subclass may override; `NaN` for anything that is not a Date.
+ */
+function dateTime(value: unknown): number {
+  if (!(value instanceof Date)) return Number.NaN;
+  try {
+    return Date.prototype.getTime.call(value);
+  } catch {
+    // A proxy around a Date passes `instanceof` but holds no time.
+    return Number.NaN;
+  }
+}
+
+/**
+ * Whether `value` is well-formed UTF-16, with no lone surrogate:
+ * `String.prototype.isWellFormed` (ES2024; the workspace's TypeScript lib is
+ * ES2022). Postgres stores a lone surrogate as U+FFFD, so two different
+ * ill-formed strings could be stored as one: two subjects, one account.
+ */
+function isWellFormed(value: string): boolean {
+  return (String.prototype as unknown as { isWellFormed(this: string): boolean }).isWellFormed.call(
+    value
   );
 }

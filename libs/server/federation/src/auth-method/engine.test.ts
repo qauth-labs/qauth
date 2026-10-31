@@ -256,6 +256,140 @@ describe('completeUpstreamStep', () => {
     );
   });
 
+  it('builds the checked list itself, so a species cannot add unchecked attributes', async () => {
+    const method = createSampleAuthMethod();
+    const smuggled = {
+      source: 'wallet',
+      attrKey: 'email',
+      attrValue: 'x@example.com',
+      verified: true,
+    };
+    // `map` builds its result through `constructor[Symbol.species]` and then
+    // writes only the indexes it mapped: a species that hands back a longer
+    // list slips its extra members past every check.
+    class Smuggling extends Array<unknown> {
+      static override get [Symbol.species]() {
+        return function () {
+          return [undefined, smuggled];
+        };
+      }
+    }
+    const broken = withMembers({
+      verify: method.verify.bind(method),
+      extractAttributes: () =>
+        Smuggling.from([
+          { source: 'oidc_sample', attrKey: 'email', attrValue: 'p@example.com', verified: true },
+        ]),
+    });
+    const completion = await completeUpstreamStep(broken, await signedIn(method));
+    const attributes = (completion as { attributes: readonly unknown[] }).attributes;
+    expect(Object.getPrototypeOf(attributes)).toBe(Array.prototype);
+    expect(Object.isFrozen(attributes)).toBe(true);
+    expect(attributes).toEqual([
+      { source: 'oidc_sample', attrKey: 'email', attrValue: 'p@example.com', verified: true },
+    ]);
+  });
+
+  it("keeps a copy of an attribute's expiry, never the method's Date", async () => {
+    const method = createSampleAuthMethod();
+    const expiresAt = new Date('2030-01-01T00:00:00Z');
+    const extract = method.extractAttributes.bind(method);
+    const dated = withMembers({
+      verify: method.verify.bind(method),
+      extractAttributes: (identity: Parameters<typeof extract>[0]) =>
+        extract(identity).map((attribute) => ({ ...attribute, expiresAt })),
+    });
+    const completion = await completeUpstreamStep(dated, await signedIn(method));
+    const [attribute] = (completion as { attributes: readonly { expiresAt?: Date }[] }).attributes;
+    expect(attribute.expiresAt).not.toBe(expiresAt);
+    expiresAt.setUTCFullYear(2100);
+    expect(attribute.expiresAt?.toISOString()).toBe('2030-01-01T00:00:00.000Z');
+  });
+
+  it.each([
+    ['an externalSub', { externalSub: 'sub-\uD800', assuranceLevel: 'low', rawClaims: {} }],
+    ['an externalSub', { externalSub: '\uDC00-sub', assuranceLevel: 'low', rawClaims: {} }],
+  ])(
+    'refuses %s with a lone surrogate, which Postgres would store as U+FFFD',
+    async (_l, identity) => {
+      const method = withMembers({ verify: async () => identity });
+      await expect(completeUpstreamStep(method, { kind: 'result', result: {} })).rejects.toThrow(
+        AuthMethodFaultError
+      );
+    }
+  );
+
+  it('refuses an attribute value with a lone surrogate, and keeps one with a surrogate pair', async () => {
+    const method = createSampleAuthMethod();
+    const extract = method.extractAttributes.bind(method);
+    const withValue = (attrValue: string) =>
+      withMembers({
+        verify: method.verify.bind(method),
+        extractAttributes: (identity: Parameters<typeof extract>[0]) =>
+          extract(identity).map((attribute) => ({ ...attribute, attrValue })),
+      });
+    await expect(
+      completeUpstreamStep(withValue('Name \uD83D'), await signedIn(method))
+    ).rejects.toThrow(AuthMethodFaultError);
+    await expect(
+      completeUpstreamStep(withValue('Name \uD83D\uDE00'), await signedIn(method))
+    ).resolves.toMatchObject({ kind: 'identity' });
+  });
+
+  describe('the assurance ceiling', () => {
+    /** The sample, with verify() resolving `level` for its own results. */
+    function claiming(sample: ReturnType<typeof createSampleAuthMethod>, level: string) {
+      return withMembers({
+        verify: async (input: unknown) => ({
+          ...(await sample.verify(input)),
+          assuranceLevel: level,
+        }),
+        extractAttributes: sample.extractAttributes.bind(sample),
+      });
+    }
+    const levelOf = (completion: unknown) =>
+      (completion as { identity: { assuranceLevel: string } }).identity.assuranceLevel;
+
+    it('lowers a method that claims high to low when the caller names no ceiling', async () => {
+      const sample = createSampleAuthMethod();
+      const completion = await completeUpstreamStep(
+        claiming(sample, 'high'),
+        await signedIn(sample)
+      );
+      expect(levelOf(completion)).toBe('low');
+    });
+
+    it.each([
+      ['high', 'substantial', 'substantial'],
+      ['high', 'high', 'high'],
+      ['substantial', 'high', 'substantial'],
+      ['low', 'high', 'low'],
+    ] as const)(
+      'resolves a claimed %s under the ceiling %s as %s',
+      async (claimed, maxAssurance, expected) => {
+        const sample = createSampleAuthMethod();
+        const completion = await completeUpstreamStep(
+          claiming(sample, claimed),
+          await signedIn(sample),
+          { maxAssurance }
+        );
+        expect(levelOf(completion)).toBe(expected);
+      }
+    );
+
+    it('refuses a ceiling that is not an assurance level', async () => {
+      await expect(
+        completeUpstreamStep(
+          createSampleAuthMethod(),
+          { kind: 'declined' },
+          {
+            maxAssurance: 'maximal' as never,
+          }
+        )
+      ).rejects.toThrow(TypeError);
+    });
+  });
+
   it('treats a throwing extractAttributes() as a fault', async () => {
     const method = createSampleAuthMethod();
     const broken = withMembers({
