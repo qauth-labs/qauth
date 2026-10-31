@@ -324,18 +324,31 @@ export function policyField<S extends z.ZodType, Secret extends boolean>(
 
 /**
  * Check a value that carries the field brand as {@link policyField} checks a
- * definition. The registry runs it on every field it registers, so a field
- * from another copy of this library, or an object that only carries the
- * brand, is held to the same rules.
+ * definition, so a field from another copy of this library, or an object
+ * that only carries the brand, is held to the same rules.
  *
  * @throws PolicyDefinitionError when it breaks one
  */
 export function assertPolicyField(value: unknown): asserts value is PolicyField {
+  copyPolicyField(value);
+}
+
+/**
+ * A frozen copy of a value that carries the field brand, checked as
+ * {@link assertPolicyField} checks it. The registry keeps this copy, never
+ * the value it was given: a field from another copy of this library, or one
+ * spread into a new object, need not be frozen, and changing it after
+ * registration must not change how a change of the field is classified.
+ *
+ * @throws PolicyDefinitionError when it breaks a rule
+ */
+export function copyPolicyField(value: unknown): PolicyField {
   if (!isPolicyField(value)) {
     throw new PolicyDefinitionError('not a field made by policyField');
   }
+  // Each member is read once, so the copy is the value that was checked.
   const { schema, ...annotations } = value as unknown as Record<string, unknown>;
-  checkDefinition(schema as z.ZodType, annotations);
+  return policyField(schema as z.ZodType, annotations as never);
 }
 
 /** The rules of {@link policyField}, over a type and its annotations. */

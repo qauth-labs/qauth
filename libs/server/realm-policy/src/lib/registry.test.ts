@@ -117,6 +117,21 @@ describe('registerPolicyGroup', () => {
     expect(registry.field('sessions.maxSeconds')?.field.default).toBe(60);
   });
 
+  it('keeps a frozen copy of each field, so changing the value given later changes no class', () => {
+    const registry = createPolicyRegistry();
+    // A copy, as from another copy of the library: branded, but not frozen.
+    const field: Record<string, unknown> = { ...lifetime() };
+    registry.registerPolicyGroup('sessions', { maxSeconds: field as never });
+    field['securityWhen'] = 'never';
+    field['effects'] = [];
+    const registered = registry.field('sessions.maxSeconds')?.field;
+    expect(Object.isFrozen(registered)).toBe(true);
+    expect(registered?.securityWhen).toBe('loosening');
+    const diff = registry.diffPolicies({}, { sessions: { maxSeconds: 120 } });
+    expect(diff.class).toBe('security');
+    expect(diff.effects).toEqual(['posture-loosening']);
+  });
+
   it('refuses a seed key that already seeds another field, and registers nothing of the group', () => {
     const registry = createPolicyRegistry();
     registry.registerPolicyGroup('first', { a: lifetime({ seedEnv: 'TEST_LIFETIME' }) });

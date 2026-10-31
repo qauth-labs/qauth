@@ -4,6 +4,7 @@ import { z } from 'zod';
 import {
   ANNOTATION_KEYS,
   assertPolicyField,
+  copyPolicyField,
   isPolicyField,
   ordered,
   PolicyDefinitionError,
@@ -238,5 +239,18 @@ describe('assertPolicyField', () => {
       /"extra" is not an annotation/
     );
     expect(() => assertPolicyField({ ...field, default: 'five' })).toThrow(/value of the type/);
+  });
+});
+
+describe('copyPolicyField', () => {
+  it('returns a frozen copy that a later change of the value does not reach', () => {
+    const value: Record<string, unknown> = { ...policyField(z.number().int(), NUMBER) };
+    const copy = copyPolicyField(value);
+    value['securityWhen'] = 'never';
+    expect(isPolicyField(copy)).toBe(true);
+    expect(Object.isFrozen(copy)).toBe(true);
+    expect(copy.securityWhen).toBe('loosening');
+    expect(copy.effects).toEqual(['credential-path']);
+    expect(() => copyPolicyField(value)).toThrow(/has no effects/);
   });
 });

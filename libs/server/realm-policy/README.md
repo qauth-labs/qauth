@@ -35,9 +35,12 @@ const minScore = policyField(z.number().int().min(0).max(4), {
 ```
 
 `policyField` refuses a definition that leaves out an annotation, names an unknown direction, rule
-or effect, has a default its type refuses, or is a secret that is not `opaque`, `any-change` and
-default `null`. The registry checks every field it registers the same way (`assertPolicyField`),
-so a field from another copy of the library, or a forged one, meets the same rules.
+or effect, has a default its type refuses or that is not plain JSON, has a type with no JSON Schema
+or, when not secret, one that accepts `undefined`, is `ordered` over a type that accepts a value
+outside the order, or is a secret that is not `opaque`, `any-change` and default `null`. The
+registry checks every field it registers the same way and keeps a frozen copy (`copyPolicyField`),
+so a field from another copy of the library, or a forged one, meets the same rules and cannot
+change once registered.
 
 The directions are `lower-is-stricter`, `higher-is-stricter`, `true-is-stricter`,
 `false-is-stricter`, `ordered([...])` (from the loosest value to the strictest),

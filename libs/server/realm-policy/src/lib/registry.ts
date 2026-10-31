@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { type ChangeDirection, compareDirection, sameEntries } from './direction';
 import {
-  assertPolicyField,
+  copyPolicyField,
   directionKind,
   isPolicyField,
   isSetDirection,
@@ -368,15 +368,18 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
       const segments = [...prefix, name];
       if (isPolicyField(value)) {
         // A field from another copy of this library, or an object that only
-        // carries the brand, is held to policyField's rules.
+        // carries the brand, is held to policyField's rules, and the registry
+        // keeps a frozen copy of it, so changing the value later changes
+        // nothing here.
+        let field: PolicyField;
         try {
-          assertPolicyField(value);
+          field = copyPolicyField(value);
         } catch (error) {
           throw new PolicyDefinitionError(
             `${segments.join('.')}: ${error instanceof Error ? error.message : 'not a valid field'}`
           );
         }
-        if (value.secret && folded.has(setFlagName(name).toLowerCase())) {
+        if (field.secret && folded.has(setFlagName(name).toLowerCase())) {
           throw new PolicyDefinitionError(
             `${segments.join('.')}: the representation shows this secret as ${setFlagName(name)}, which another member already is`
           );
@@ -384,7 +387,7 @@ export function createPolicyRegistry(options: { readonly version?: string } = {}
         const entry: RegisteredPolicyField = Object.freeze({
           path: segments.join('.'),
           segments: Object.freeze(segments),
-          field: value,
+          field,
         });
         collected.push(entry);
         members.set(name, { kind: 'field', entry });
