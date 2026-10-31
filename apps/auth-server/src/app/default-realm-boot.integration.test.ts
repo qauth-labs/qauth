@@ -1,4 +1,9 @@
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import {
+  defaultsFromEnv,
+  REALM_POLICY_SCHEMA_VERSION,
+  realmPolicyPlugin,
+} from '@qauth-labs/fastify-plugin-realm-policy';
 import { requireDockerOrSkip, truncateDomainTablesStatement } from '@qauth-labs/shared-testing';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -103,8 +108,17 @@ describe('default realm boot step on a real Postgres', () => {
     });
     const node = { app, lines };
     nodes.push(node);
+    // The realm policies as the app seeds them (#516).
+    const seeds = defaultsFromEnv({});
     await app.register(databasePlugin, {
       config: { connectionString: infra.postgres.connectionString, pool: { max: 2, min: 0 } },
+      realmPolicySeeds: {
+        policies: { document: seeds, schemaVersion: REALM_POLICY_SCHEMA_VERSION },
+      },
+    });
+    await app.register(realmPolicyPlugin, {
+      seeds,
+      realms: app.repositories.realms,
     });
     await app.register(defaultRealmPlugin, {
       realmName: 'master',

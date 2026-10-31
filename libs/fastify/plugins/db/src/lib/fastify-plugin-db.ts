@@ -1,9 +1,11 @@
 import {
+  type AdminApprovalsRepository,
   type AdminAuditLogRepository,
   type AdminGrantsRepository,
   type AdminRolesRepository,
   type ApiKeysRepository,
   type AuthorizationCodesRepository,
+  createAdminApprovalsRepository,
   createAdminAuditLogRepository,
   createAdminGrantsRepository,
   createAdminRolesRepository,
@@ -124,6 +126,13 @@ declare module 'fastify' {
        */
       adminAuditLog: AdminAuditLogRepository;
       /**
+       * Approval requests for security operations (ADR-019 Decision 7,
+       * #512): the admin API files, reads and cancels them, the approval
+       * engine records each approval, and the admin pipeline consumes one in
+       * the transaction of the operation it approves.
+       */
+      adminApprovals: AdminApprovalsRepository;
+      /**
        * The published keys of each realm (`realm_public_keys`, #491): public
        * material every service role reads. A process without the signer
        * verifies a realm's tokens and serves its JWKS with them (#495).
@@ -162,6 +171,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   adminRoles: true,
   adminGrants: true,
   adminAuditLog: true,
+  adminApprovals: true,
   realmPublicKeys: true,
 };
 
@@ -254,6 +264,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       adminGrants: () =>
         createAdminGrantsRepository(database.db, { catalog: options.adminRoleCatalog }),
       adminAuditLog: () => createAdminAuditLogRepository(database.db),
+      adminApprovals: () => createAdminApprovalsRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};

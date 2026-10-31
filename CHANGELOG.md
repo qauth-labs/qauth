@@ -65,6 +65,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SMTP password appears only as `passwordSet`. The docs site's new **Realm
   policies** page (`reference/realm-policies`) is generated from the schema.
   Nothing reads the policies from the realm row yet.
+- **Realm policies on the realm row** ([#516], ADR-019 Decision 10, ADR-020
+  §2). Migration 0046 adds `realms.policies` (jsonb), `policy_schema_version`
+  and `policies_version`, the counter the admin API will use as `ETag` and
+  `If-Match`. Four existing columns stay the storage of their fields
+  (`access_token_lifespan`, `refresh_token_lifespan`,
+  `dynamic_registration_allowed_scopes`, `max_environment_laxity`); every other
+  field is in the document, and a secret field never is. A new realm stores
+  `defaultsFromEnv` of the environment the server runs with. At the first boot
+  after the upgrade the default realm's boot step fills each realm that has no
+  policies yet with the environment's values, keeping the environment ceiling
+  and a non-empty dynamic registration allowlist its row held, with an
+  `UPDATE ... WHERE policies_version = 0`, so the first node wins; from then on
+  an environment key changes no existing realm. Each boot names every seed key
+  still set, once: a warning ("only seeds new realms and is ignored") for a
+  policy the server reads from the row (the dynamic registration allowlist, the
+  environment ceiling), and an info line that the server still applies the key
+  for any other. `/oauth/register` and the clients API no longer copy
+  `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm that has its policies. The new
+  `fastify.policyStore` (`@qauth-labs/fastify-plugin-realm-policy`) reads a
+  realm's policies off its row with no query and updates them only with the
+  expected `policies_version`; the trigger `realms_policies_version` raises the
+  counter on every change of the policies, whoever writes them. The interface
+  `RealmSecretStore` names where secret fields go; the store itself comes with
+  [#529], and until then a write that sets a secret is refused. The flows still
+  read the environment until they move to the row ([#527], [#528], [#529],
+  [#534]). See **Realm policies move onto the realm row** in
+  `operate/upgrades`.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).
@@ -1086,9 +1113,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
   the caller's grants and scopes, the classification and permission check, an
   approval gate, the handler inside one database transaction, and the audit
-  row. Until approvals ship ([#512]) the gate fails closed: every request
-  classified `security` answers the new `approval_required` problem code (403)
-  and never runs. A call that reaches a realm within the caller's grants writes
+  row. A request classified `security` that carries no approval bound to it
+  ([#512]) answers the new `approval_required` problem code (403) and never
+  runs. A call that reaches a realm within the caller's grants writes
   exactly one admin audit row, reads included: `succeeded` in the handler's
   transaction, or `denied` or `failed` in a new one with no diff (a `denied`
   or `failed` row that cannot be written is logged instead). A realm
@@ -1107,6 +1134,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+
+- **Approvals for security operations, bound to the exact request** ([#512],
+  ADR-019 Decision 7). The admin pipeline's approval gate, which refused every
+  security operation, now lets one run with the approval its `QAuth-Approval`
+  header names. The client files the approval with
+  `POST /admin/v1-rc.0/realms/{realmId}/approvals` (the operation's id, path
+  parameters, query and body, and an optional reason), reads it with
+  `GET …/approvals/{approvalId}` and may withdraw it with
+  `POST …/approvals/{approvalId}/cancel` (`If-Match` on the version its `ETag`
+  gave). Migration 0045 adds `admin_approvals`. The server keeps the canonical
+  request (operation id, method, path parameters, query, body, realm and
+  requester, RFC 8785): `request_hash` without the server's nonce, which the
+  gate recomputes from the retried call, and `op_hash` with it, which an
+  approver's factor signs a challenge derived from. The retry consumes the
+  approval with one conditional update in its own transaction, so it runs once,
+  and an operation that rolls back leaves the approval usable until it expires,
+  five minutes after it was filed. Filing and withdrawing take the
+  classification of the operation they name, reading needs `approvals.read`,
+  and anyone but the requester and an eligible approver gets 404. A human
+  requester's own fresh step-up is the one approval an operation needs today;
+  the engine counts a required second approval only from a different account
+  that holds `approvals.approve`, which the two-admin rule ([#521]) will
+  require where a realm asks, with ADR-019's other eligibility rules. Approving
+  happens through a factor (the `ApprovalFactor` interface), never through an
+  admin route. Neither the passkey factor nor the approval page has shipped,
+  so no code a deployment runs gives an approval; the one factor that exists is
+  for tests and is built only in a test run, never under
+  `NODE_ENV=production`. The answer
+  carries `approvalUrl`, `/approvals/{realmId}/{approvalId}` on the requester
+  realm's issuer, built from its row. Every security
+  operation registers a renderer, and the admin listener refuses to boot one
+  without it: the approver sees typed display data rendered from the stored
+  request, every string length-capped with its control, bidirectional, format
+  and other default-ignorable characters, private-use and unassigned code
+  points and spaces other than U+0020 shown escaped and its backslashes
+  doubled, and the requester's reason apart, as quoted text. A consumed,
+  cancelled or denied approval drops the operation's body, which may hold a
+  secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
+  Filing, approving, declining, withdrawing and consuming each write the admin
+  audit log; the operation's own row lists the approvals it ran on.
 
 ### Changed
 
@@ -1870,10 +1937,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#512]: https://github.com/qauth-labs/qauth/issues/512
 [#513]: https://github.com/qauth-labs/qauth/issues/513
 [#514]: https://github.com/qauth-labs/qauth/issues/514
+[#516]: https://github.com/qauth-labs/qauth/issues/516
 [#517]: https://github.com/qauth-labs/qauth/issues/517
 [#520]: https://github.com/qauth-labs/qauth/issues/520
+[#521]: https://github.com/qauth-labs/qauth/issues/521
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
+[#527]: https://github.com/qauth-labs/qauth/issues/527
+[#528]: https://github.com/qauth-labs/qauth/issues/528
+[#529]: https://github.com/qauth-labs/qauth/issues/529
+[#534]: https://github.com/qauth-labs/qauth/issues/534
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541

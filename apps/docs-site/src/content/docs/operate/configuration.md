@@ -23,7 +23,7 @@ Every key has a tier, which says how it may change ([ADR-018 §5](/reference/rec
 Every key has a role, which says who owns its value ([ADR-019 Decision 10](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
 
 - **deployment**: the environment owns the value, for the whole deployment.
-- **realm-seed**: a realm policy. Once realm policies live on the realm row, the key only seeds a new realm's default, and the realm row owns the value from then on. Until then the server reads the key for every realm, unless its description says it already seeds the realm row. The Role column names the policy the key seeds.
+- **realm-seed**: a realm policy, which the realm row owns. The key seeds a new realm, and a realm that had no policies at its first boot after the upgrade that put them on the row; a later change of the key changes no existing realm. Until the server reads the policy from the realm row, it still applies the key to every realm, unless its description says it reads the realm row. The Role column names the policy the key seeds.
 
 A key marked **Secret** holds a credential. This page never shows its value, not even as a default, and neither does the boot log.
 

@@ -18,10 +18,14 @@ export const DEFAULT_REALM_PLUGIN_NAME = '@qauth-labs/default-realm';
  */
 export const defaultRealmPlugin = fp<DefaultRealmPluginOptions>(
   async (fastify: FastifyInstance, options: DefaultRealmPluginOptions) => {
-    for (const decorator of ['db', 'repositories']) {
+    for (const [decorator, plugin] of [
+      ['db', 'database'],
+      ['repositories', 'database'],
+      ['policyStore', 'realm policy'],
+    ]) {
       if (!fastify.hasDecorator(decorator)) {
         throw new Error(
-          `The default realm plugin needs \`fastify.${decorator}\`: register the database plugin first`
+          `The default realm plugin needs \`fastify.${decorator}\`: register the ${plugin} plugin first`
         );
       }
     }
@@ -31,10 +35,16 @@ export const defaultRealmPlugin = fp<DefaultRealmPluginOptions>(
       jwtIssuer: options.jwtIssuer,
       endpointHosts: options.endpointHosts,
       ...(options.passkeys === undefined ? {} : { passkeys: options.passkeys }),
+      ...(options.seedKeysSet === undefined ? {} : { seedKeysSet: options.seedKeysSet }),
     };
     fastify.addHook('onReady', async () => {
       await bootDefaultRealm(
-        { db: fastify.db, realms: fastify.repositories.realms, log: fastify.log },
+        {
+          db: fastify.db,
+          realms: fastify.repositories.realms,
+          policies: fastify.policyStore,
+          log: fastify.log,
+        },
         settings
       );
     });

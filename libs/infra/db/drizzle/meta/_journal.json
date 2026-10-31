@@ -316,6 +316,20 @@
       "when": 1793410342861,
       "tag": "0044_users_not_valid_before",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1793428465238,
+      "tag": "0045_admin_approvals",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1793447512172,
+      "tag": "0046_realm_policies",
+      "breakpoints": true
     }
   ]
 }

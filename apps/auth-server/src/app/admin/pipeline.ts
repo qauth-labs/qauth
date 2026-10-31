@@ -1,4 +1,5 @@
 import rateLimit from '@fastify/rate-limit';
+import type { AdminApproval } from '@qauth-labs/fastify-plugin-db';
 import {
   ForbiddenError,
   JWTExpiredError,
@@ -36,6 +37,16 @@ import {
   requestClassification,
 } from '../plugins/admin-operations';
 import { intendedStatusCode } from '../plugins/error-handler';
+import { canonicalRequest, requestHashOf } from './approvals/canonical-request';
+import { auditApproval } from './approvals/engine';
+import {
+  APPROVAL_HEADER,
+  approvalIdOf,
+  type ApprovalRefusal,
+  approvalRefusal,
+} from './approvals/gate';
+import { isApprovalEngineOperation } from './approvals/operations';
+import { callerAccount } from './approvals/standing';
 import { adminRealmRouteProblem } from './route-placement';
 
 /**
@@ -62,12 +73,17 @@ import { adminRealmRouteProblem } from './route-placement';
  *    does not exist; the call is logged and NOT written to that realm's audit
  *    chain, so a stranger cannot add rows to it.
  * 6. Classification and permission check (#508, `adminOperationsPlugin`).
- * 7. Approval gate: a security operation needs an approval bound to it
- *    (#512). Until approvals ship the gate fails closed: every request
- *    classified `security` answers `approval_required` and never runs.
+ * 7. Approval gate: a request classified `security` runs only with the
+ *    approval its `QAuth-Approval` header names, filed for exactly this
+ *    request by this caller, approved and unexpired (#512, `./approvals`);
+ *    every other one answers `approval_required` and never runs. Filing and
+ *    withdrawing an approval, the engine's own security operations, pass.
  * 8. Handler, inside one database transaction (`adminTransaction`), its
- *    answer serialized before the commit. A route's own preHandler hooks run
- *    before it, after stage 7, and refuse by throwing, never by answering.
+ *    answer serialized before the commit. The transaction first consumes the
+ *    approval stage 7 checked, with one conditional update: a call that
+ *    finds it used meanwhile is refused there, and an operation that rolls
+ *    back leaves it approved. A route's own preHandler hooks run before the
+ *    handler, after stage 7, and refuse by throwing, never by answering.
  * 9. Audit append (#448): one row in the target realm's chain, in the
  *    handler's transaction, reads included.
  * 10. Error mapping to problem+json: the listener's error handler.
@@ -106,6 +122,12 @@ export type AdminChange = NonNullable<AdminAuditEntry['diff']>;
 /** The caller and the realm it acts on, as the authority stage resolved them. */
 export type AdminCaller = Extract<AdminAuthority, { allowed: true }>;
 
+/** The approval stage 7 found for a call, which its transaction consumes. */
+interface GatedApproval {
+  readonly id: string;
+  readonly requestHash: Buffer;
+}
+
 /** What the pipeline knows of one request, stage by stage. */
 export interface AdminPipelineState {
   /** Set by the authority stage: from here on the call has an audit row. */
@@ -114,6 +136,10 @@ export interface AdminPipelineState {
   transaction?: AdminTransaction;
   /** The change the handler recorded, for the `succeeded` row. */
   change?: AdminChange;
+  /** The approval the approval gate let the call through on (#512). */
+  approval?: GatedApproval;
+  /** That approval as the call's transaction consumed it, for the `succeeded` row. */
+  consumedApproval?: AdminApproval;
   /**
    * Whether stage 8 started, from the opening of the handler's transaction:
    * a later failure is `failed`, an earlier refusal `denied`.
@@ -165,7 +191,43 @@ export class AdminCallsInFlight {
   }
 }
 
+/**
+ * A schema part of a route, as fastify-type-provider-zod keeps it: a Zod
+ * schema, which the approval routes parse a filed request with as the route
+ * parses the retried one.
+ */
+export interface RouteSchemaPart {
+  safeParse(value: unknown): { success: true; data: unknown } | { success: false };
+}
+
+/** The route of an admin operation, as the approval routes file a request of it. */
+export interface AdminOperationRoute {
+  /** Its one method, upper case. */
+  readonly method: string;
+  readonly url: string;
+  readonly params?: RouteSchemaPart;
+  readonly querystring?: RouteSchemaPart;
+  readonly body?: RouteSchemaPart;
+}
+
+/** What the routes behind the pipeline know of it. */
+export interface AdminApiContext {
+  /** The registry the pipeline classifies against. */
+  readonly registry: OperationRegistry;
+  /** The route that performs `operationId` on this listener, once the routes are registered. */
+  routeOf(operationId: string): AdminOperationRoute | undefined;
+}
+
 declare module 'fastify' {
+  interface FastifyInstance {
+    /**
+     * The admin pipeline's registry and route table (#512), inside the
+     * pipeline's scope only: the approval routes file a request of an
+     * operation against them.
+     */
+    adminApi: AdminApiContext;
+  }
+
   interface FastifyRequest {
     /**
      * The admin pipeline's state for this request (#511): `null` until its
@@ -473,14 +535,91 @@ function authorizeAdminRequest(
 }
 
 /**
- * Stage 7, the approval gate. A request classified `security` needs a fresh
- * approval bound to it (ADR-019 Decision 7). Approvals arrive with #512;
- * until then the gate fails closed, and no security operation ever runs.
+ * Whether `request` is a call of the approval engine's own `approvals.create`
+ * or `approvals.cancel` on the very route that performs it
+ * ({@link AdminApiContext.routeOf}): another route that names one of them,
+ * such as a HEAD route, is gated as any security operation.
  */
-async function adminApprovalGate(request: FastifyRequest): Promise<void> {
-  if (requestClassification(request).class === 'security') {
-    throw new ApprovalRequiredError();
-  }
+function isApprovalEngineRoute(
+  request: FastifyRequest,
+  registry: OperationRegistry,
+  operationId: string
+): boolean {
+  if (!isApprovalEngineOperation(registry.get(operationId))) return false;
+  const route = request.server.adminApi.routeOf(operationId);
+  return (
+    route !== undefined &&
+    route.method === request.method.toUpperCase() &&
+    route.url === request.routeOptions.url
+  );
+}
+
+/** What a call whose `QAuth-Approval` names no approval of this call is told. */
+const APPROVAL_REFUSED =
+  'The approval named in QAuth-Approval does not approve this call: it is not approved yet, was used, cancelled or denied, has expired, or was filed for another request';
+
+/** The refusal of the approval a call names, logged with its reason. */
+function refusedApproval(
+  request: FastifyRequest,
+  operationId: string,
+  approvalId: string | null,
+  reason: ApprovalRefusal
+): ApprovalRequiredError {
+  request.log.info(
+    { operation: operationId, approvalId, reason },
+    'The approval gate refused the approval a security operation named'
+  );
+  return new ApprovalRequiredError(APPROVAL_REFUSED);
+}
+
+/**
+ * Stage 7, the approval gate (ADR-019 Decision 7, #512). A request classified
+ * `security` runs only with a fresh approval bound to it: the one its
+ * `QAuth-Approval` header names, in the realm it acts on, whose
+ * `request_hash` is the one this call's canonical request hashes to (the
+ * same operation, method, path parameters, query, body, realm and
+ * requester), approved and unexpired. Any other answers `approval_required`.
+ * The operation's transaction then consumes it ({@link inTransaction}).
+ *
+ * `approvals.create` and `approvals.cancel` are classified `security` by the
+ * operation they name, and pass: an approval is not needed to ask for one.
+ */
+function approvalGate(registry: OperationRegistry) {
+  return async function adminApprovalGate(request: FastifyRequest): Promise<void> {
+    const classification = requestClassification(request);
+    if (classification.class !== 'security') return;
+    if (isApprovalEngineRoute(request, registry, classification.operationId)) return;
+    const header = request.headers[APPROVAL_HEADER];
+    if (header === undefined) throw new ApprovalRequiredError();
+
+    const { operationId } = classification;
+    const approvalId = approvalIdOf(header);
+    if (approvalId === null) throw refusedApproval(request, operationId, null, 'malformed-header');
+    const caller = requestAdminCaller(request);
+    let requestHash: Buffer;
+    try {
+      requestHash = requestHashOf(
+        canonicalRequest({
+          operationId,
+          method: request.method,
+          params: request.params,
+          query: request.query,
+          body: request.body,
+          realmId: caller.targetRealm.id,
+          requester: callerAccount(caller),
+        })
+      );
+    } catch {
+      throw refusedApproval(request, operationId, approvalId, 'uncanonical-request');
+    }
+    const approval = await request.server.repositories.adminApprovals.findById(
+      caller.targetRealm.id,
+      approvalId
+    );
+    const refusal = approvalRefusal(approval, requestHash, Date.now());
+    if (refusal !== null) throw refusedApproval(request, operationId, approvalId, refusal);
+    pipelineState(request).approval = { id: approvalId, requestHash };
+  };
 }
 
 /** The operation a row records: the request's classification, or the route's operation as declared. */
@@ -504,6 +643,22 @@ function auditedOperation(
   return { operationId: operation.id, operationClass: operation.class, effects: operation.effects };
 }
 
+/**
+ * What a `succeeded` row records of the approval its call consumed (#512):
+ * the approvals the operation ran on, and the approval's `op_hash`, the
+ * digest its factor's challenges were bound to. Nothing for any other row.
+ */
+function auditedApproval(
+  request: FastifyRequest,
+  outcome: AdminAuditEntry['outcome']
+): Pick<AdminAuditEntry, 'approvals' | 'requestDigest'> {
+  const consumed = request.adminPipeline?.consumedApproval;
+  if (outcome !== 'succeeded' || consumed === undefined) {
+    return { approvals: [], requestDigest: null };
+  }
+  return { approvals: consumed.approvals.map(auditApproval), requestDigest: consumed.opHash };
+}
+
 /** The audit row of `request`, with `outcome`. */
 function auditEntry(
   request: FastifyRequest,
@@ -524,10 +679,7 @@ function auditEntry(
     ...auditedOperation(request, registry),
     outcome,
     diff: change ?? null,
-    // The approvals the operation ran on, and the digest they bind, arrive
-    // with #512.
-    approvals: [],
-    requestDigest: null,
+    ...auditedApproval(request, outcome),
     traceId: request.id,
   };
 }
@@ -653,12 +805,34 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
   ): Promise<unknown> {
     const state = pipelineState(request);
     const caller = requestAdminCaller(request);
-    // From here on a failure is the server's, the transaction's opening
-    // included: the call was authorized and approved.
-    state.handlerStarted = true;
     let answer: { readonly serialized: string } | { readonly body: unknown };
     try {
       answer = await request.server.db.transaction(async (tx) => {
+        // The approval stage 7 checked, consumed in the operation's own
+        // transaction: the call that finds it used or withdrawn meanwhile is
+        // refused, and an operation that rolls back leaves it approved.
+        const gated = state.approval;
+        if (gated !== undefined) {
+          const consumed = await request.server.repositories.adminApprovals.consume(
+            caller.targetRealm.id,
+            gated.id,
+            { requestHash: gated.requestHash, now: Date.now() },
+            tx
+          );
+          if (consumed === undefined) {
+            throw refusedApproval(
+              request,
+              requestClassification(request).operationId,
+              gated.id,
+              'used-meanwhile'
+            );
+          }
+          state.consumedApproval = consumed;
+        }
+        // From here on a failure is the server's: the call was authorized
+        // and approved. One that fails before, the transaction's opening
+        // included, fails on the server too (5xx) or is refused.
+        state.handlerStarted = true;
         state.transaction = tx;
         refuseAnswering(reply);
         let result: unknown;
@@ -778,6 +952,116 @@ function refuseEarlyScopeHooks(scope: FastifyInstance): void {
   });
 }
 
+/** The schema parts of a route the approval routes parse a filed request with. */
+const FILED_PARTS = ['params', 'querystring', 'body'] as const;
+
+const isSchemaPart = (value: unknown): value is RouteSchemaPart =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as { safeParse?: unknown }).safeParse === 'function';
+
+/** The methods Fastify reads no body for, and refuses a body schema on. Every other carries one. */
+const BODYLESS_METHODS: ReadonlySet<string> = new Set(['GET', 'HEAD', 'TRACE']);
+
+/**
+ * The names of the path parameters in a route's URL: each `:name`, and `*`
+ * for a wildcard. `::` is a literal colon, not a parameter.
+ */
+function urlParameterNames(url: string): string[] {
+  const path = url.replaceAll('::', '');
+  const names = [...path.matchAll(/:([A-Za-z0-9_]+)/g)].map(([, name]) => name);
+  return path.includes('*') ? [...names, '*'] : names;
+}
+
+/** The keys a Zod object schema names, or `undefined` for a schema that is not an object. */
+function shapeKeys(schema: RouteSchemaPart): ReadonlySet<string> | undefined {
+  const shape = (schema as { shape?: unknown }).shape;
+  return typeof shape === 'object' && shape !== null ? new Set(Object.keys(shape)) : undefined;
+}
+
+/**
+ * A route's schema part `name`. Fastify takes `query` for `querystring`, but
+ * folds it in only after the `onRoute` hooks have run, so both are read.
+ */
+function schemaPart(schema: Record<string, unknown>, name: (typeof FILED_PARTS)[number]): unknown {
+  return name === 'querystring' ? (schema['querystring'] ?? schema['query']) : schema[name];
+}
+
+/**
+ * Why `route` cannot serve its operation, or `undefined`, recording it in
+ * `routes` when it can. A route that names no registered operation is the
+ * classification stage's to refuse.
+ *
+ * - A security operation, but the approval engine's own, needs what an
+ *   approval of it needs: a renderer (`render`), so an approver sees what it
+ *   approves; one method; and Zod schemas, so a filed request is parsed as
+ *   the retried one is and the approval binds what the handler reads: an
+ *   object schema for its path parameters, which always hold the realm,
+ *   naming every parameter of its URL; one for its body under every method
+ *   that carries one (all but GET, HEAD and TRACE); and one for its query
+ *   where it has one.
+ * - An operation is served by one route. A HEAD route, which Fastify adds
+ *   beside a GET route on a listener that exposes them (the admin listener
+ *   does not), is checked as any route but is never the operation's route:
+ *   no approval is filed against it, and the approval gate lets the engine's
+ *   own operations through only on their own routes.
+ */
+function operationRouteProblem(
+  route: RouteOptions,
+  registry: OperationRegistry,
+  routes: Map<string, AdminOperationRoute>
+): string | undefined {
+  const id = route.config?.operation;
+  const operation = typeof id === 'string' ? registry.get(id) : undefined;
+  if (operation === undefined) return undefined;
+  const methods = [route.method].flat().map((method) => String(method).toUpperCase());
+  const where = `${methods.join(',')} ${route.url}`;
+  const schema = (route.schema ?? {}) as Record<string, unknown>;
+  if (operation.class === 'security' && !isApprovalEngineOperation(operation)) {
+    if (operation.render === undefined) {
+      return `${where} performs the security operation ${operation.id}, which has no renderer (render): an approver must see the operation it approves (#512)`;
+    }
+    if (methods.length !== 1) {
+      return `${where} performs the security operation ${operation.id} under several methods; an approval binds one`;
+    }
+    const params = schema['params'];
+    if (!isSchemaPart(params)) {
+      return `${where}: the security operation ${operation.id} has no Zod params schema, so a filed request cannot be parsed as the route parses it`;
+    }
+    for (const part of FILED_PARTS) {
+      const value = schemaPart(schema, part);
+      if (value !== undefined && !isSchemaPart(value)) {
+        return `${where}: the ${part} schema of the security operation ${operation.id} is not a Zod schema, so a filed request cannot be parsed as the route parses it`;
+      }
+    }
+    const named = shapeKeys(params);
+    const unnamed = urlParameterNames(route.url).filter((name) => !named?.has(name));
+    if (named === undefined || unnamed.length > 0) {
+      return `${where}: the params schema of the security operation ${operation.id} is not a Zod object naming every path parameter (${unnamed.join(', ') || 'none named'}), so an approval would not bind what its handler reads`;
+    }
+    if (!BODYLESS_METHODS.has(methods[0]) && schemaPart(schema, 'body') === undefined) {
+      return `${where}: the security operation ${operation.id} has no Zod body schema, so its handler would read a body no schema parsed`;
+    }
+  }
+  if (methods.length === 1 && methods[0] === 'HEAD') return undefined;
+  const taken = routes.get(operation.id);
+  if (taken !== undefined) {
+    return `${where} performs ${operation.id}, which ${taken.method} ${taken.url} already performs: an operation has one route`;
+  }
+  const part = (name: (typeof FILED_PARTS)[number]) => {
+    const value = schemaPart(schema, name);
+    return isSchemaPart(value) ? { [name]: value } : {};
+  };
+  routes.set(operation.id, {
+    method: methods[0],
+    url: route.url,
+    ...part('params'),
+    ...part('querystring'),
+    ...part('body'),
+  });
+  return undefined;
+}
+
 /** `hooks`, each a route preHandler the pipeline made ({@link refusingPreHandler}), in place. */
 function wrapPreHandlers(hooks: unknown[]): unknown[] {
   hooks.forEach((hook, index) => {
@@ -844,11 +1128,21 @@ export async function adminPipeline(
 
   fastify.decorateRequest('adminPipeline', null);
 
+  const operationRoutes = new Map<string, AdminOperationRoute>();
+  fastify.decorate('adminApi', {
+    registry,
+    routeOf: (operationId: string) => operationRoutes.get(operationId),
+  } satisfies AdminApiContext);
+
   // At boot: every route acts on a realm named in its path, runs its
   // handler in the pipeline's transaction, and its own preHandlers so that
-  // they refuse by throwing.
+  // they refuse by throwing. A security operation's route renders it for its
+  // approver, and is the one route of its operation.
   fastify.addHook('onRoute', (route) => {
-    const problem = adminRealmRouteProblem(route) ?? earlyRouteHookProblem(route);
+    const problem =
+      adminRealmRouteProblem(route) ??
+      earlyRouteHookProblem(route) ??
+      operationRouteProblem(route, registry, operationRoutes);
     if (problem !== undefined) throw new Error(problem);
     keepWrapped(route, registry);
   });
@@ -926,7 +1220,7 @@ export async function adminPipeline(
   });
 
   // Stage 7, after stage 6's `preHandler`.
-  fastify.addHook('preHandler', adminApprovalGate);
+  fastify.addHook('preHandler', approvalGate(registry));
 
   // The stages are in place: no route module may add a hook that would run
   // before stages 6 and 7.

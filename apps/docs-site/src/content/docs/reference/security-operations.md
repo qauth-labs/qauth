@@ -3,7 +3,7 @@ title: Security operations
 description: What makes an admin operation a security operation, the effect tags, every admin operation with its class and effects, and the reserved operation ids, generated from the registry in apps/auth-server.
 sidebar:
   order: 7
-lastVerified: '2026-10-26'
+lastVerified: '2026-10-31'
 ---
 
 <!-- Generated from apps/auth-server/src/app/helpers/admin-operations.ts by its tests. Do not edit by hand: change the registry and run `pnpm nx test auth-server -- -u`. -->
@@ -13,9 +13,6 @@ the screen it sits on ([ADR-019](/reference/records/adr/019-deployment-topology-
 Decision 7). Each admin operation is defined once, in the registry in `apps/auth-server/src/app/helpers/admin-operations.ts`, with
 its class, the effects that make it a security operation and the
 [permissions](/reference/admin-permissions/) it needs. This page is generated from that registry.
-
-No admin operation is registered yet, so no admin route can pass the boot check below: the
-rules are in place for the operations to come.
 
 ## Effects
 
@@ -79,6 +76,28 @@ operation of the OpenAPI document as `x-qauth-effects`
   `x-qauth-two-admin` differs from the registry. The classification stage is registered before
   every route, and checks each route again on its first request. In CI, the API conventions check
   fails when an admin operation of the OpenAPI document disagrees with the registry.
+- Every admin operation, of any class, is served by exactly one route: the admin listener refuses
+  to boot a second route that names an operation another route already serves. A `HEAD` route
+  beside it is checked as any route, but is never the operation's route.
+- A security operation runs only with a fresh approval bound to that exact request
+  ([API conventions](/reference/api-conventions/#approvals)). So each one an admin route performs
+  registers a renderer (`render`): what its approver is shown of one request, typed display data
+  built from the stored request alone. The admin listener refuses to boot such a route without
+  one. Filing an approval (`approvals.create`) and withdrawing one (`approvals.cancel`) need
+  what the operation it is for needs, so they declare every effect and permission and decide per
+  request; they are the only security operations that run without an approval.
+- The approval binds the request as its route parses it, so the route of a security operation
+  parses all of it, and the admin listener refuses to boot one that does not: it has one method, a
+  Zod object schema for its path parameters that names every parameter of its URL, a Zod body
+  schema under every method that carries a body (all but `GET`, `HEAD` and `TRACE`), and a
+  Zod query schema if it has one. Its handler reads only the parsed path parameters, query and
+  body, and those schemas are deterministic: no default a parse makes up anew, such as a random id
+  or the current time, since the filed request and its retry are parsed apart.
+- A security operation's handler makes an effect outside the database, such as a KMS or KEK call,
+  a mail or an outbound request, only through a record its transaction writes and that is acted
+  on after the commit (an outbox), or after the commit itself. An operation that rolls back leaves
+  its approval `approved`, so a retry may run it again: an effect made before the rollback
+  would be made twice, or once with no change and no audit row to show for it.
 
 These are not security operations:
 
@@ -91,7 +110,11 @@ These are not security operations:
 
 ## Operations
 
-No admin operation is registered yet.
+| Operation          | Class    | Effects                                                                                                                                                                                                    | Permissions                                                                                                                                      | Description                                                                                                                |
+| ------------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `approvals.create` | security | `credential-path`, `token-content`, `issue-for-other`, `administration`, `import`, `federation-operator`, `key-custody`, `realm-lifecycle`, `authority-tree-power`, `posture-loosening`, `bulk-revocation` | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `realms.policies.security`, `approvals.read`, `approvals.approve` | File an approval request for one request of a security operation: it needs what that operation needs. Decided per request. |
+| `approvals.get`    | read     | none                                                                                                                                                                                                       | `approvals.read`                                                                                                                                 | Read an approval request: its requester, an approver of it, or an admin who may approve it.                                |
+| `approvals.cancel` | security | `credential-path`, `token-content`, `issue-for-other`, `administration`, `import`, `federation-operator`, `key-custody`, `realm-lifecycle`, `authority-tree-power`, `posture-loosening`, `bulk-revocation` | `realms.read`, `realms.export`, `realms.import.plan`, `realms.policies.write`, `realms.policies.security`, `approvals.read`, `approvals.approve` | Withdraw an approval request the caller filed: it needs what the operation it is for needs. Decided per request.           |
 
 ## Reserved operations
 

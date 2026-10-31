@@ -30,6 +30,7 @@ import { DEFAULT_ADMIN_RATE_LIMIT } from '../plugins/admin-operations';
 import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
+import { approvalRoutes } from './approvals/routes';
 import { AdminCallsInFlight, adminPipeline } from './pipeline';
 
 /**
@@ -57,11 +58,13 @@ import { AdminCallsInFlight, adminPipeline } from './pipeline';
 export const ADMIN_OPENAPI_PATH = `${API_FAMILY_PREFIXES.admin}/openapi.json`;
 
 /**
- * The route modules of the admin API, each registered behind the pipeline.
- * None ships yet: the first operations, reading a realm and updating its
- * policies, arrive with #517.
+ * The route modules of the admin API, each registered behind the pipeline:
+ * the approval routes (#512), which every registry built with
+ * `createAdminOperationRegistry` holds the operations of. The first
+ * operations of a realm, reading it and updating its policies, arrive with
+ * #517.
  */
-export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([]);
+export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze([approvalRoutes]);
 
 /**
  * The OpenAPI options of the admin listener: the server's own (#347), so the
@@ -204,8 +207,9 @@ export async function closeAdminServer(
 /** Options for {@link installAdminApi}. */
 export interface AdminApiOptions {
   /**
-   * TEST SUPPORT — the operation registry the pipeline classifies against.
-   * The server's own when unset, which `main.ts` never sets.
+   * TEST SUPPORT — the operation registry the pipeline classifies against,
+   * built with `createAdminOperationRegistry` so it holds the approval
+   * operations. The server's own when unset, which `main.ts` never sets.
    */
   readonly registry?: OperationRegistry;
   /**

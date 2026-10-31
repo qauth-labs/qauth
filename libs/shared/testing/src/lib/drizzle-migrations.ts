@@ -129,6 +129,7 @@ export function appendQauthMigration(migrationsFolder: string, tag: string, sql:
  * leads a `CASCADE` there. A suite that writes them uses a realm id of its own.
  */
 export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
+  'admin_approvals',
   'admin_grants',
   'admin_roles',
   'api_keys',
