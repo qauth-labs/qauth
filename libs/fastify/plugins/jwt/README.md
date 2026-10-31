@@ -52,8 +52,8 @@ The auth-server's source for each option is named in parentheses.
 | ---------------------------- | ------------------------------- | -------- | ------------------------------------------------------------------------------------------------- |
 | `signer`                     | `TokenSigner`                   | yes      | Signs every token and lists each realm's verification keys and JWKS (`fastify.signer`)            |
 | `requestRealm`               | `(request) => TokenRealm`       | yes      | The realm (`id`, `issuer`) a request belongs to, for `requireJwt` (`request.realm`)               |
-| `accessTokenLifespan`        | `number`                        | yes      | Access and ID token TTL in seconds (`ACCESS_TOKEN_LIFESPAN`)                                      |
-| `refreshTokenLifespan`       | `number`                        | yes      | Refresh token TTL in seconds (`REFRESH_TOKEN_LIFESPAN`)                                           |
+| `accessTokenLifespan`        | `number`                        | yes      | Access and ID token TTL in seconds when the caller passes no `expiresInOverride`                  |
+| `refreshTokenLifespan`       | `number`                        | yes      | Refresh token TTL in seconds, read back by `getRefreshTokenLifespan()`                            |
 | `requireAccessTokenTyp`      | `boolean`                       | no       | Also refuse access tokens without `typ: at+jwt` (default `false`; not set by the auth-server)     |
 | `kidlessKeyIds`              | `readonly string[]`             | no       | `kid`s a token without a `kid` may verify with (the key variable's thumbprint); transitional      |
 | `hybridSigningEnabled`       | `boolean`                       | no       | Issue hybrid access tokens with the realm's pair (`HYBRID_SIGNING_ENABLED`, default `false`)      |
@@ -94,8 +94,8 @@ With `verifyDpopProof` set, `requireJwt` also accepts `Authorization: DPoP <toke
 
 ### `fastify.jwtUtils`
 
-- `signAccessToken(realm, payload)` - Sign an EdDSA access token; `expiresInOverride` can shorten its lifetime
-- `signIdToken(realm, payload)` - Sign an ID token with RS256 when the realm has an RS256 key, otherwise EdDSA
+- `signAccessToken(realm, payload)` - Sign an EdDSA access token; `expiresInOverride` sets its lifetime in place of `accessTokenLifespan`
+- `signIdToken(realm, payload)` - Sign an ID token with RS256 when the realm has an RS256 key, otherwise EdDSA; `expiresInOverride` as for access tokens
 - `isHybridSigningEnabled()` - Whether hybrid issuance is on
 - `signHybridAccessToken(realm, payload)` - Sign a hybrid access token; throws when hybrid signing is off
 - `verifyHybridAccessToken(realm, hybrid, options)` - Verify both signatures; throws `JWTInvalidError` without ML-DSA-65 enabled

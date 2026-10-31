@@ -3,7 +3,8 @@
  * (ADR-019 Decision 3, issue #552).
  *
  * A family is every refresh token descended from one code exchange or sign-in.
- * Each rotation gives the new token `REFRESH_TOKEN_LIFESPAN` from now, so
+ * Each rotation gives the new token the realm's refresh lifetime
+ * (`tokens.refreshTokenLifespanSeconds`, #527) from now, so
  * without a limit a client that keeps refreshing keeps the family alive for
  * ever. When the realm sets `sso_max_lifespan`, the family ends that many
  * seconds after its start (`refresh_tokens.family_created_at`), and no token of
@@ -49,7 +50,7 @@ export function refreshFamilyEnd(
  * `now`, but never later than the end of its family.
  *
  * @param now - when the token is issued, in epoch milliseconds
- * @param lifespanSeconds - `REFRESH_TOKEN_LIFESPAN`
+ * @param lifespanSeconds - the realm's refresh lifetime (`tokenLifetimesOf`, #527)
  * @param familyEnd - from {@link refreshFamilyEnd}
  */
 export function refreshTokenExpiresAt(

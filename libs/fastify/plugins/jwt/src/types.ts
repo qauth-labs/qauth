@@ -46,9 +46,18 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * and only when its `iss` is that realm's issuer.
    */
   requestRealm: (request: FastifyRequest) => TokenRealm;
-  /** Access token expiration in seconds */
+  /**
+   * Access and ID token expiration in seconds: the fallback for a token
+   * signed without `expiresInOverride`. The token endpoint passes the
+   * lifetime of the token's realm (#527), and falls back to this value for a
+   * realm that has no policies yet.
+   */
   accessTokenLifespan: number;
-  /** Refresh token expiration in seconds */
+  /**
+   * Refresh token expiration in seconds, read back through
+   * `getRefreshTokenLifespan()`: the fallback for a realm that has no
+   * policies yet (#527).
+   */
   refreshTokenLifespan: number;
   /**
    * Require the RFC 9068 `typ: at+jwt` protected header on every access token
@@ -60,10 +69,12 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * before #283 carries a `typ` at all. Only the "`typ` must be PRESENT" half
    * is breaking: enabling it in the same deploy that begins stamping would
    * reject every access token minted by the previous build that is still inside
-   * {@link accessTokenLifespan} (default 900s).
+   * its lifetime (the realm's, #527: 900 s by default, 8 h for a development
+   * client).
    *
-   * Turn this on in a LATER deploy, at least one `ACCESS_TOKEN_LIFESPAN` after
-   * the build that introduced stamping has fully rolled out.
+   * Turn this on in a LATER deploy, at least the longest access token lifetime
+   * of any realm, the development lifetime included, after the build that
+   * introduced stamping has fully rolled out.
    */
   requireAccessTokenTyp?: boolean;
   /**
@@ -200,10 +211,11 @@ export interface JwtUtils {
       /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
       cnf?: ConfirmationClaim;
       /**
-       * Override the access-token lifespan (seconds). Intended to SHORTEN a token
-       * below the configured default — the token-exchange grant clamps the
-       * delegated token so it never outlives the subject token. Omitted for
-       * normal grants (uses the configured lifespan).
+       * The access-token lifespan in seconds, in place of the configured one:
+       * the lifetime of the token's realm (#527), or a shorter value the
+       * caller computed (the token-exchange grant clamps the delegated token
+       * so it never outlives the subject token). Omitted, the configured
+       * lifespan applies.
        */
       expiresInOverride?: number;
     }
@@ -239,7 +251,7 @@ export interface JwtUtils {
       act?: ActClaim;
       /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
       cnf?: ConfirmationClaim;
-      /** Narrow the lifespan below the configured default (never widens). */
+      /** The lifespan in seconds, in place of the configured one, as for {@link signAccessToken}. */
       expiresInOverride?: number;
     }
   ): Promise<HybridSignedToken>;
@@ -266,7 +278,8 @@ export interface JwtUtils {
    * Issued by the token endpoint when the granted scope includes `openid`.
    * Signed with the realm's active RS256 `token_signing` key when it has one
    * (#309, what OIDC Basic/Config certification requires), otherwise with its
-   * EdDSA key, and with the lifespan of access tokens; `aud` is the client
+   * EdDSA key, and with the lifespan of access tokens (`expiresInOverride`,
+   * else the configured one); `aud` is the client
    * identifier, `nonce` is echoed when the client supplied one in the
    * authorization request. Identity claims (`email`, `email_verified`,
    * `name`) are included when the caller passes them; the token route passes
@@ -305,6 +318,13 @@ export interface JwtUtils {
        * otherwise.
        */
       sid?: string;
+      /**
+       * The ID token's lifespan in seconds, in place of the configured access
+       * token lifespan: the token endpoint passes the access token lifetime
+       * of the token's realm (#527). Not a claim, so not part of
+       * `SignIdTokenPayload` in `@qauth-labs/server-jwt`.
+       */
+      expiresInOverride?: number;
     }
   ): Promise<string>;
   /**

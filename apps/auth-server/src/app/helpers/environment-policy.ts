@@ -269,9 +269,10 @@ export function resolveEnvironmentPolicy(
 
 /**
  * Concrete access-token lifespans (seconds) the two tiers map to. Both numbers
- * come from configuration — the resolver only SELECTS between them by tier:
- *   - `short` — the production/staging baseline (`ACCESS_TOKEN_LIFESPAN`).
- *   - `long`  — the `development` convenience (`DEV_ACCESS_TOKEN_LIFESPAN`).
+ * come from the client's realm (its policies, #527; the environment keys
+ * only seed them) — the resolver only SELECTS between them by tier:
+ *   - `short` — the production/staging baseline (`tokens.accessTokenLifespanSeconds`).
+ *   - `long`  — the `development` convenience (`tokens.developmentAccessTokenLifespanSeconds`).
  */
 export interface AccessTokenLifespanConfig {
   /** The `short` tier value in seconds (production/staging baseline). */

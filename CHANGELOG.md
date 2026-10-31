@@ -94,8 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RealmSecretStore` names where secret fields go; the store itself comes with
   [#529], and until then a write that sets a secret is refused. The flows still
   read the environment until they move to the row ([#527], [#528], [#529],
-  [#534]). See **Realm policies move onto the realm row** in
-  `operate/upgrades`.
+  [#534]); the token lifetimes moved with [#527] (below). See **Realm policies move
+  onto the realm row** in `operate/upgrades`.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).
@@ -1215,6 +1215,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
+  ADR-008 §5). The access, development access and refresh token lifetimes are
+  each realm's `tokens` policies, so two realms of one deployment can issue
+  tokens that live differently long. The token endpoint reads them off the
+  realm row it already loads for the environment policy, with no query of its
+  own; the ADR-008 tiers are unchanged (`short` is the realm's
+  `tokens.accessTokenLifespanSeconds`, `long` its
+  `tokens.developmentAccessTokenLifespanSeconds`), an ID token gets the
+  realm's access lifetime, and a new or rotated refresh token its
+  `tokens.refreshTokenLifespanSeconds`. The legacy `POST /auth/login` signs
+  with the realm's access lifetime, which its `expires_in` names, and gives
+  its refresh token the realm's refresh lifetime. `ACCESS_TOKEN_LIFESPAN`,
+  `DEV_ACCESS_TOKEN_LIFESPAN` and `REFRESH_TOKEN_LIFESPAN` now only seed a new
+  realm, and a realm that had no policies at the first boot after the upgrade
+  ([#516]): a later change of them leaves an existing realm's tokens as they
+  are, and the boot warns that each one set is ignored. A realm a node of the
+  previous release created during a rolling upgrade runs on the keys until a
+  node of this release boots again and fills it. A realm policy change reaches
+  the realm's next token once the realm resolver reads the row again (its
+  cache time, 30 s), without a restart; until the admin API's realm policy
+  update ([#517]) ships, no route changes them. `signIdToken` of
+  `@qauth-labs/fastify-plugin-jwt` takes an `expiresInOverride`, as
+  `signAccessToken` does; the plugin's `accessTokenLifespan` and
+  `refreshTokenLifespan` stay the fallback.
 - **An agent client always sees the consent screen** ([#845], ADR-015
   Decision 11, ADR-014 §11). A stored consent that covers the request no
   longer skips `/ui/consent` for a client with `is_agent`: every browser

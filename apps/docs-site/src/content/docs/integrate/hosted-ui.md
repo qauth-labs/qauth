@@ -118,8 +118,9 @@ the line leaves to this page:
   refresh token is issued and the agent stops when its access token expires.
 - **An access token outlives both ends.** Revoking the consent and the
   family's end stop refreshes; an access token already issued works until it
-  expires, `ACCESS_TOKEN_LIFESPAN` (15 minutes by default) or, for a
-  `development` client, `DEV_ACCESS_TOKEN_LIFESPAN`.
+  expires, after the realm's access token lifetime
+  (`tokens.accessTokenLifespanSeconds`, 15 minutes by default) or, for a
+  `development` client, its `tokens.developmentAccessTokenLifespanSeconds`.
 - **The limit is the one the page read.** The page states the realm's limit
   as it is when the page renders. A limit the operator changes later applies
   to the family as the Refresh Token section describes, not as the page said.

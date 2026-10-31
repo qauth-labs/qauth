@@ -106,6 +106,7 @@ vi.mock('../../helpers/egress-get', () => ({ egressGet }));
 
 import { createFakeSessionService } from '../../../testing/browser-sessions';
 import { blockedEgress } from '../../../testing/egress';
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { recordGrantAccessToken, revokeGrantAccessTokens } from '../../helpers/grant-access-tokens';
 import { emitUserEvent, userEventFor } from '../../helpers/user-events';
@@ -294,6 +295,8 @@ function createFastifyStub() {
       getAccessTokenLifespan: vi.fn().mockReturnValue(900),
       getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
     },
+    // The realm's token lifetimes (#527): read from the request's realm row.
+    policyStore: testPolicyStore(),
     pkceUtils: {
       verifyCodeChallenge: vi.fn(),
     },
@@ -329,7 +332,94 @@ function createFastifyStub() {
   return { fastify: fastify as FastifyInstance, ctx, redisStore, sessionService };
 }
 
+/** A realm with its policies: a token flow reads its lifetimes from the row (#527). */
+const REALM_WITH_POLICIES = testRealm({ id: REALM.id, name: 'default', policiesVersion: 3 });
+
+/** That realm's token lifetimes, unlike the JWT plugin's (900 s and a week in the stub). */
+const REALM_LIFETIMES = Object.freeze({
+  accessTokenLifespanSeconds: 300,
+  developmentAccessTokenLifespanSeconds: 3_600,
+  refreshTokenLifespanSeconds: 7_200,
+});
+
+/**
+ * Give the stub server {@link REALM_LIFETIMES} as its realm's policies, and
+ * count every call of the realms repository and of `policyStore.get`: a token
+ * request reads the realm's lifetimes from the row the resolver gave it (#527),
+ * so the count stays empty.
+ *
+ * @returns the names of the realm reads, in call order
+ */
+function withRealmLifetimes(fastify: FastifyInstance): string[] {
+  const reads: string[] = [];
+  const store = testPolicyStore(REALM_LIFETIMES);
+  store.get.mockImplementation(async () => {
+    reads.push('policyStore.get');
+    return undefined as never;
+  });
+  const stub = fastify as unknown as {
+    policyStore: unknown;
+    repositories: { realms: unknown };
+  };
+  stub.policyStore = store;
+  stub.repositories.realms = new Proxy(
+    {},
+    {
+      get: (_target, name) => {
+        if (typeof name !== 'string' || name === 'then') return undefined;
+        return async () => {
+          reads.push(`realms.${name}`);
+          return undefined;
+        };
+      },
+    }
+  );
+  return reads;
+}
+
 describe('POST /oauth/token route — client_credentials grant', () => {
+  it("signs with the realm's access lifetime and answers it as expires_in, without a realm query (#527)", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    const realmReads = withRealmLifetimes(fastify);
+    await tokenRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'client-uuid-1',
+      clientId: 'test-client-1',
+      clientSecretHash: 'hash',
+      enabled: true,
+      grantTypes: ['client_credentials'],
+      scopes: ['read:foo'],
+      audience: null,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('signed.jwt.token');
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const result = await ctx.handler(
+      {
+        realm: REALM_WITH_POLICIES,
+        body: {
+          grant_type: 'client_credentials',
+          client_id: 'test-client-1',
+          client_secret: 'secret',
+          scope: 'read:foo',
+        },
+        ip: '127.0.0.1',
+        headers: { 'user-agent': 'vitest' },
+      },
+      createReply()
+    );
+
+    expect(result).toMatchObject({ expires_in: 300 });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+    expect(fastify.jwtUtils.getAccessTokenLifespan).not.toHaveBeenCalled();
+  });
+
   it('issues an access token for a valid client_credentials request (client_secret_post)', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
@@ -1487,6 +1577,45 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       headers: { 'user-agent': 'vitest' },
     };
   }
+
+  it("signs the access, ID and refresh tokens with the realm's lifetimes, from the row it already has (#527)", async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const realmReads = withRealmLifetimes(fastify);
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, scopes: ['openid', 'read:foo'] });
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      scopes: ['openid', 'read:foo'],
+      revokedAt: null,
+    });
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const result = await ctx.handler(
+      { ...baseRequest(), realm: REALM_WITH_POLICIES },
+      createReply()
+    );
+
+    // `expires_in` is the lifetime the access token was signed with.
+    expect(result).toMatchObject({ expires_in: 300, id_token: 'signed.id.token' });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+    const stored = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0][0] as { familyCreatedAt: number; expiresAt: number };
+    expect(stored.expiresAt).toBe(stored.familyCreatedAt + 7_200_000);
+    // One read of the row the resolver gave the request; no realm query.
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+    expect(fastify.jwtUtils.getAccessTokenLifespan).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.getRefreshTokenLifespan).not.toHaveBeenCalled();
+  });
 
   it('issues access + refresh tokens on a valid authorization_code exchange', async () => {
     const { fastify, ctx, client, user } = setupAuthCodeStub();
@@ -3769,6 +3898,38 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     expect('email_verified' in accessClaims).toBe(false);
   });
 
+  it("rotates with the realm's lifetimes, from the row it already has, without a realm query (#527)", async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    const realmReads = withRealmLifetimes(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      confidentialClient
+    );
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue(storedToken);
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const before = Date.now();
+    const result = await ctx.handler(
+      { ...refreshRequest(), realm: REALM_WITH_POLICIES },
+      createReply()
+    );
+
+    expect(result).toMatchObject({ expires_in: 300 });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+    // The new token gets the realm's refresh lifetime from now.
+    const rotated = (fastify.repositories.refreshTokens.create as unknown as Mock).mock
+      .calls[0][0] as { expiresAt: number };
+    expect(rotated.expiresAt).toBeGreaterThanOrEqual(before + 7_200_000);
+    expect(rotated.expiresAt).toBeLessThanOrEqual(Date.now() + 7_200_000);
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+  });
+
   it('returns expires_in from the configured access-token lifespan on rotation', async () => {
     const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -3785,8 +3946,9 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     const reply = createReply();
     const result = await handler(refreshRequest(), reply);
 
-    // expires_in mirrors getAccessTokenLifespan() (900s in the stub), not the
-    // refresh-token lifespan.
+    // expires_in mirrors getAccessTokenLifespan() (900s in the stub), the
+    // fallback of a realm with no policies yet (#527), not the refresh-token
+    // lifespan.
     expect(fastify.jwtUtils.getAccessTokenLifespan).toHaveBeenCalled();
     expect(result).toMatchObject({ expires_in: 900 });
   });
@@ -5348,6 +5510,26 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(signArg.expiresInOverride).toBe(900);
   });
 
+  it("caps the delegated token at the realm's access lifetime, from the row it already has (#527)", async () => {
+    // The subject lives far longer than the realm's 300 s, and the JWT
+    // plugin's 900 s is only the fallback of a realm with no policies.
+    const exp = Math.floor(Date.now() / 1000) + 10000;
+    const { fastify, ctx } = setupExchangeStub({ subjectExp: exp });
+    const realmReads = withRealmLifetimes(fastify);
+
+    const result = await invoke(fastify, ctx, {
+      ...exchangeRequest(),
+      realm: REALM_WITH_POLICIES,
+    });
+
+    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1];
+    expect(signArg.expiresInOverride).toBe(300);
+    expect((result as { expires_in: number }).expires_in).toBe(300);
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+    expect(fastify.jwtUtils.getAccessTokenLifespan).not.toHaveBeenCalled();
+  });
+
   it('emits the bare `invalid_request` error code via InvalidRequestError (RFC 6749 §5.2)', async () => {
     // The wire `error` field must be the bare token; detail goes in
     // error_description. InvalidRequestError.message is exactly "invalid_request".
@@ -5629,6 +5811,27 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     // `issued_token_type`.
     expect(result).not.toHaveProperty('refresh_token');
     expect(result).not.toHaveProperty('issued_token_type');
+  });
+
+  it("signs with the realm's access lifetime and answers it as expires_in, without a realm query (#527)", async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const realmReads = withRealmLifetimes(fastify);
+
+    const result = (await invoke(fastify, ctx, {
+      ...bearerRequest(await signIdJag(idpKey, { scope: 'chat.read chat.history' })),
+      realm: REALM_WITH_POLICIES,
+    })) as Record<string, unknown>;
+
+    expect(result['expires_in']).toBe(300);
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+    expect(fastify.jwtUtils.getAccessTokenLifespan).not.toHaveBeenCalled();
   });
 
   // #510: an admin token comes only from a sign-in at QAuth itself, never

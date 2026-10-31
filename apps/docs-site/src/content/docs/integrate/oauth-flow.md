@@ -352,7 +352,8 @@ curl -s -X POST http://localhost:3000/oauth/token \
 ```
 
 - The response contains a **new** `refresh_token` — store it and discard the old.
-- Each new refresh token is good for `REFRESH_TOKEN_LIFESPAN` from the refresh.
+- Each new refresh token is good for the realm's refresh token lifetime
+  (`tokens.refreshTokenLifespanSeconds`, a week by default) from the refresh.
   When the realm sets `sso_max_lifespan`, the family also ends that long after
   it starts. A family starts at the code exchange or at `POST /auth/login`. A
   family started by a code exchange also ends no later than the user's browser
@@ -687,8 +688,8 @@ Every way of ending a grant stops new tokens being minted from it:
 | `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
 
 **Otherwise, access tokens already issued under the grant are not reached.**
-They are stateless JWTs and stay valid until `exp` (`ACCESS_TOKEN_LIFESPAN`,
-900 s by default) wherever they are accepted: at resource servers that verify
+They are stateless JWTs and stay valid until `exp` (the realm's
+`tokens.accessTokenLifespanSeconds`, 900 s by default) wherever they are accepted: at resource servers that verify
 them locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
 `subject_token`. Only an access token revoked by value, at `/oauth/revoke` or
 as the token presented to `/auth/logout`, or by a replay of the grant it came
