@@ -1,8 +1,9 @@
 /**
  * Migration 0048 adds the operator-set first-party client profile (ADR-017
- * Decision 2, #631): an enum type, three nullable columns with no default, the
- * four CHECKs of the decision and two on the stored forms. Its behaviour against a real Postgres is
- * held by `migration-0048.integration.test.ts`.
+ * Decision 2, #631): an enum type, then one ALTER TABLE with three nullable
+ * columns with no default, the four CHECKs of the decision and two on the
+ * stored forms. Its behaviour against a real Postgres is held by
+ * `migration-0048.integration.test.ts`.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -55,21 +56,29 @@ describe('migration 0048 (oauth_clients first-party profile)', () => {
     );
   });
 
-  it('only adds: three nullable columns with no default and six CHECKs, and rewrites no row', () => {
-    expect(statements.slice(1)).toEqual([
-      'ALTER TABLE "oauth_clients" ADD COLUMN "first_party_profile" "first_party_profile";',
-      'ALTER TABLE "oauth_clients" ADD COLUMN "first_party_policy" jsonb;',
-      'ALTER TABLE "oauth_clients" ADD COLUMN "first_party_reason" text;',
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_operator_only" CHECK ("oauth_clients"."first_party_profile" IS NULL OR ("oauth_clients"."dynamic_registered_at" IS NULL AND "oauth_clients"."developer_id" IS NULL AND "oauth_clients"."is_agent" = false AND coalesce("oauth_clients"."metadata"->>'registrationType', '') NOT IN ('dynamic', 'cimd')));`,
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_private_key_jwt" CHECK ("oauth_clients"."first_party_profile" IS NULL OR "oauth_clients"."token_endpoint_auth_method" = 'private_key_jwt');`,
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_policy_native" CHECK (("oauth_clients"."first_party_profile" IS NOT DISTINCT FROM 'native_backend') = ("oauth_clients"."first_party_policy" IS NOT NULL));`,
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_native_authorization_code" CHECK ("oauth_clients"."first_party_profile" IS DISTINCT FROM 'native_backend' OR "oauth_clients"."grant_types" ? 'authorization_code');`,
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_reason" CHECK (("oauth_clients"."first_party_profile" IS NULL) = ("oauth_clients"."first_party_reason" IS NULL) AND ("oauth_clients"."first_party_reason" IS NULL OR (char_length("oauth_clients"."first_party_reason") <= 1000 AND "oauth_clients"."first_party_reason" ~ '\\S')));`,
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_first_party_policy_object" CHECK ("oauth_clients"."first_party_policy" IS NULL OR jsonb_typeof("oauth_clients"."first_party_policy") = 'object');`,
+  it('only adds, in one ALTER TABLE (one lock, one scan): three nullable columns with no default and six CHECKs, and rewrites no row', () => {
+    expect(statements).toHaveLength(2);
+    const [alter] = statements.slice(1);
+    expect(alter.startsWith('ALTER TABLE "oauth_clients"\n')).toBe(true);
+    expect(alter.endsWith(';')).toBe(true);
+    const clauses = alter
+      .slice('ALTER TABLE "oauth_clients"\n'.length, -1)
+      .split(',\n')
+      .map((clause) => clause.trim());
+    expect(clauses).toEqual([
+      'ADD COLUMN "first_party_profile" "first_party_profile"',
+      'ADD COLUMN "first_party_policy" jsonb',
+      'ADD COLUMN "first_party_reason" text',
+      `ADD CONSTRAINT "oauth_clients_first_party_operator_only" CHECK ("oauth_clients"."first_party_profile" IS NULL OR ("oauth_clients"."dynamic_registered_at" IS NULL AND "oauth_clients"."developer_id" IS NULL AND "oauth_clients"."is_agent" = false AND coalesce("oauth_clients"."metadata"->>'registrationType', '') NOT IN ('dynamic', 'cimd')))`,
+      `ADD CONSTRAINT "oauth_clients_first_party_private_key_jwt" CHECK ("oauth_clients"."first_party_profile" IS NULL OR "oauth_clients"."token_endpoint_auth_method" = 'private_key_jwt')`,
+      `ADD CONSTRAINT "oauth_clients_first_party_policy_native" CHECK (("oauth_clients"."first_party_profile" IS NOT DISTINCT FROM 'native_backend') = ("oauth_clients"."first_party_policy" IS NOT NULL))`,
+      `ADD CONSTRAINT "oauth_clients_first_party_native_authorization_code" CHECK ("oauth_clients"."first_party_profile" IS DISTINCT FROM 'native_backend' OR "oauth_clients"."grant_types" ? 'authorization_code')`,
+      `ADD CONSTRAINT "oauth_clients_first_party_reason" CHECK (("oauth_clients"."first_party_profile" IS NULL) = ("oauth_clients"."first_party_reason" IS NULL) AND ("oauth_clients"."first_party_reason" IS NULL OR (char_length("oauth_clients"."first_party_reason") <= 1000 AND "oauth_clients"."first_party_reason" ~ '\\S')))`,
+      `ADD CONSTRAINT "oauth_clients_first_party_policy_object" CHECK ("oauth_clients"."first_party_policy" IS NULL OR jsonb_typeof("oauth_clients"."first_party_policy") = 'object')`,
     ]);
     expect(statements.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|RENAME|DEFAULT)\b/);
-    for (const statement of statements.filter((s) => s.includes('ADD COLUMN'))) {
-      expect(statement).not.toMatch(/\bNOT NULL\b/);
+    for (const clause of clauses.filter((c) => c.startsWith('ADD COLUMN'))) {
+      expect(clause).not.toMatch(/\bNOT NULL\b/);
     }
   });
 });
