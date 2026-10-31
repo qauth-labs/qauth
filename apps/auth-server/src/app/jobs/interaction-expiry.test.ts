@@ -9,7 +9,9 @@ import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { CHECKED_EVENT_ID } from '../../testing/user-events';
 import { REDIS_KEYS } from '../constants';
 import {
+  claimExpiredInteraction,
   deleteInteraction,
+  expiredInteractionEntries,
   insertInteraction,
   interactionIdHash,
   type InteractionRecord,
@@ -58,6 +60,52 @@ function record(overrides: Partial<InteractionRecord> = {}): InteractionRecord {
   };
 }
 
+/**
+ * `redis` as a client whose connection drops at round trip `at` (1-based):
+ * that command, or that whole `MULTI`, never reaches the server, as when the
+ * connection closes before it is written.
+ */
+function droppingAt<Client extends object>(redis: Client, at: number): Client {
+  let trips = 0;
+  const trip = () => {
+    trips += 1;
+    if (trips === at) throw new Error('Connection is closed.');
+  };
+  const client: Client = new Proxy(redis, {
+    get(target, name) {
+      const value = Reflect.get(target, name) as unknown;
+      if (typeof value !== 'function') return value;
+      if (name === 'multi') {
+        return () => {
+          const block = (value as () => Record<string, (...args: unknown[]) => unknown>).call(
+            target
+          );
+          const queued: Record<string, unknown> = new Proxy(block, {
+            get(_block, command) {
+              if (command === 'exec') {
+                return async () => {
+                  trip();
+                  return block['exec']();
+                };
+              }
+              return (...args: unknown[]) => {
+                block[String(command)](...args);
+                return queued;
+              };
+            },
+          });
+          return queued;
+        };
+      }
+      return async (...args: unknown[]) => {
+        trip();
+        return (value as (...args: unknown[]) => Promise<unknown>).apply(target, args);
+      };
+    },
+  });
+  return client;
+}
+
 /** The sweep's world: an in-memory Redis and an event store that checks each event. */
 function world() {
   const redis = createMemoryInteractionRedis();
@@ -83,7 +131,7 @@ function world() {
 }
 
 function context(now = NOW + 1) {
-  const log = { info: vi.fn(), warn: vi.fn() };
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return {
     signal: new AbortController().signal,
     now: () => now,
@@ -196,6 +244,92 @@ describe('interaction-expiry (#592)', () => {
     expect(emitted[0]).toMatchObject({
       data: { interaction: value.ref, step: stepUrn('password') },
     });
+  });
+
+  it('claims an expired interaction whole: its index member, its turn and its record', async () => {
+    const { redis } = world();
+    const value = record();
+    const { idHash } = await insert(redis, value);
+    const client = redis as unknown as FastifyInstance['redis'];
+    const log = context().log;
+
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW + 1 });
+    try {
+      const [entry] = await expiredInteractionEntries(client, NOW + 1, 10);
+      const claimed = await claimExpiredInteraction(client, log, entry);
+      // A second claim of the same entry, as a second sweep would make it.
+      const again = await claimExpiredInteraction(client, log, entry);
+
+      expect(claimed).toMatchObject({
+        realmId: REALM_ID,
+        ref: value.ref,
+        idHash,
+        record: { ref: value.ref, step: value.step, revision: 0 },
+      });
+      expect(again).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(redis.strings.size).toBe(0);
+    expect(redis.sortedSets.size).toBe(0);
+  });
+
+  it('never loses an expiry to a connection that drops in the middle of a run', async () => {
+    // Round trips of one run: the index read, the claim, then the next index
+    // read. Wherever the connection drops, the next run reports the expiry,
+    // with its step, exactly once.
+    for (let at = 1; at <= 3; at += 1) {
+      const { redis, events, emitted } = world();
+      const value = record();
+      await insert(redis, value);
+      const flaky = createInteractionExpiryJob({
+        redis: droppingAt(redis, at) as unknown as FastifyInstance['redis'],
+        events: events as unknown as FastifyInstance['repositories']['events'],
+      });
+      const healthy = createInteractionExpiryJob({
+        redis: redis as unknown as FastifyInstance['redis'],
+        events: events as unknown as FastifyInstance['repositories']['events'],
+      });
+
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW + 1 });
+      try {
+        await flaky.run(context()).catch(() => undefined);
+        await healthy.run(context());
+        await healthy.run(context());
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(emitted, `dropped at round trip ${at}`).toEqual([
+        expect.objectContaining({ data: { interaction: value.ref, step: stepUrn('password') } }),
+      ]);
+      expect(redis.sortedSets.size, `dropped at round trip ${at}`).toBe(0);
+    }
+  });
+
+  it('logs an expiry by reference when neither its event nor its relist can be written', async () => {
+    const { redis, events } = world();
+    const value = record();
+    await insert(redis, value);
+    events.emitInOwnTransaction.mockRejectedValueOnce(new Error('event store down'));
+    // The claim is the second round trip, the relist the third.
+    const job = createInteractionExpiryJob({
+      redis: droppingAt(redis, 3) as unknown as FastifyInstance['redis'],
+      events: events as unknown as FastifyInstance['repositories']['events'],
+    });
+    const ctx = context();
+
+    vi.useFakeTimers({ toFake: ['Date'], now: NOW + 1 });
+    try {
+      await expect(job.run(ctx)).rejects.toThrow('event store down');
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(ctx.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ interaction: value.ref, err: expect.any(Error) }),
+      'interaction expiry could not be audited or listed again; lost'
+    );
   });
 
   it('works through more expired interactions than one batch', async () => {

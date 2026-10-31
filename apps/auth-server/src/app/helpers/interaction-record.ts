@@ -427,13 +427,20 @@ export async function expiredInteractionEntries(
 
 /**
  * Claim one expired interaction for the sweep: take its member out of the
- * expiry index with `ZREM`, then its turn and its record out of Redis.
+ * expiry index (`ZREM`), its turn (`DEL`) and its record (`GETDEL`) in one
+ * `MULTI`, so the three go together or not at all. A connection that fails
+ * mid-claim can never leave the member gone from the index with the record
+ * still there and no event written: the claim either happened whole, and the
+ * caller writes the event, or did not happen, and the next run claims it.
  *
  * Only the caller whose `ZREM` removed the member claims it, so of two sweeps
  * (or a sweep and an interaction that finishes, which removes the member
- * itself) only one reports it. The turn goes first, so no answer can start on
- * the record any more; the record is present when the interaction was still
- * waiting, and absent when Redis already dropped it or the engine failed on it.
+ * itself in its own `MULTI`) only one reports it. Whoever removed the member
+ * removed the turn and the record with it, so a `MULTI` that lost the race
+ * finds neither and takes nothing that is not its own. Once the turn is gone
+ * no answer can start on the record any more; the record is present when the
+ * interaction was still waiting, and absent when Redis already dropped it or
+ * the engine failed on it.
  *
  * @returns `null` when someone else claimed the member, or it is not one this
  *   module writes (then it is dropped)
@@ -443,42 +450,54 @@ export async function claimExpiredInteraction(
   log: FastifyBaseLogger,
   entry: ExpiryIndexEntry
 ): Promise<ExpiredInteraction | null> {
-  if ((await redis.zrem(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), entry.member)) !== 1) return null;
+  const index = REDIS_KEYS.INTERACTION_EXPIRY_INDEX();
   const parts = parseIndexMember(entry.member);
   if (parts === null) {
-    log.warn('interaction expiry index held a member it cannot read; removed');
+    if ((await redis.zrem(index, entry.member)) === 1) {
+      log.warn('interaction expiry index held a member it cannot read; removed');
+    }
     return null;
   }
-  await redis.del(turnKey(parts.realmId, parts.idHash));
-  // A record that does not parse is logged with its key, which holds the
-  // realm and the id's hash, never the id.
-  const record = await takeValue(
-    redis,
-    recordKey(parts.realmId, parts.idHash),
-    log,
-    interactionRecordSchema
+  const [unlisted, , raw] = assertExecuted(
+    await redis
+      .multi()
+      .zrem(index, entry.member)
+      .del(turnKey(parts.realmId, parts.idHash))
+      .getdel(recordKey(parts.realmId, parts.idHash))
+      .exec()
   );
-  return { ...entry, ...parts, record };
+  if (unlisted !== 1) return null;
+  // A record that does not parse reads as absent: the expiry is still
+  // reported, without its step.
+  return { ...entry, ...parts, record: parseRecord(raw as string | null, log) };
 }
 
 /**
  * Undo {@link claimExpiredInteraction} when its audit could not be written:
  * the member goes back into the index and the record back into Redis (with no
- * turn: it can never be answered), so the next run claims it again. The record
- * is past its expiry, so no request can use it meanwhile.
+ * turn: it can never be answered), in one `MULTI`, so the next run claims it
+ * again with its step. The record is past its expiry, so no request can use it
+ * meanwhile.
+ *
+ * The record goes back as it was read rather than through the size checks of
+ * a write: it was within them when it was written, and a relist that refused
+ * it would leave the member out of the index too.
  */
 export async function relistExpiredInteraction(
   redis: Redis,
   expired: ExpiredInteraction
 ): Promise<void> {
-  await redis.zadd(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), expired.expiresAt, expired.member);
+  const transaction = redis
+    .multi()
+    .zadd(REDIS_KEYS.INTERACTION_EXPIRY_INDEX(), expired.expiresAt, expired.member);
   if (expired.record !== null) {
-    await redis.set(
+    transaction.set(
       recordKey(expired.realmId, expired.idHash),
-      serialize(expired.record),
+      JSON.stringify(expired.record),
       'PXAT',
       redisDeadline(expired.record),
       'NX'
     );
   }
+  assertExecuted(await transaction.exec());
 }

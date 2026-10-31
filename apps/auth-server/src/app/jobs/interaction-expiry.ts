@@ -69,14 +69,17 @@ function isEventValidationError(error: unknown): error is EventValidationError {
  *
  * An interaction that expires is refused on every read from that moment
  * (`helpers/interaction.ts`); Redis keeps its record a short grace longer.
- * The sweep claims each expired member of the expiry index (`ZREM`, so it is
- * reported once), takes the record that is left, and writes
- * `interaction.expired` with the step the ceremony ended at. An interaction
- * that finished or was cancelled left the index then, and is not reported.
+ * The sweep claims each expired member of the expiry index together with the
+ * record that is left (one `MULTI`; the `ZREM` decides who reports it, so it
+ * is reported once), and writes `interaction.expired` with the step the
+ * ceremony ended at. An interaction that finished or was cancelled left the
+ * index then, and is not reported. A claim that fails (Redis unreachable)
+ * changes nothing, so the next run claims it again.
  *
  * When an event cannot be written, the claimed interaction is put back in the
  * index and the run fails, so the next run reports it: no expiry goes
- * unaudited because the event store was briefly down. An event the contract
+ * unaudited because the event store was briefly down. If Redis cannot take it
+ * back either, the expiry is logged with its reference. An event the contract
  * refuses (`EventValidationError`) would be refused on every run, so it is
  * logged and dropped instead, and the sweep goes on: one bad record never
  * holds back the rest. Repeating the sweep reports nothing twice.
@@ -111,7 +114,16 @@ export function createInteractionExpiryJob(deps: InteractionExpiryDependencies):
               dropped += 1;
               continue;
             }
-            await relistExpiredInteraction(deps.redis, claimed);
+            try {
+              await relistExpiredInteraction(deps.redis, claimed);
+            } catch (relistError) {
+              // Neither audited nor listed again: the log line is all that
+              // is left of this expiry, so it names the interaction.
+              log.error(
+                { interaction: claimed.ref, err: relistError },
+                'interaction expiry could not be audited or listed again; lost'
+              );
+            }
             throw error;
           }
           expired += 1;
