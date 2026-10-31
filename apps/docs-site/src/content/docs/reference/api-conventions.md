@@ -130,6 +130,86 @@ admin route accepts: `RealmIssuerDirectory` maps an issuer to its realm, and `Is
 verifies a token with that realm's keys, and both know only the deployment's issuer and today's
 signing key.
 
+### The admin listener
+
+The admin API runs on its own internal listener, never on the public one
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/), Decisions 7 and
+8). A process that holds the `admin` service role serves it on `ADMIN_API_HOST` and
+`ADMIN_API_PORT`, `127.0.0.1`, port `3002`, by default, while `ADMIN_API_ENABLED` is on
+([Configuration](/operate/configuration/)). It is off by default until the first admin operations
+(#517) and DPoP-bound admin tokens (#520) ship, and until #520 a production process refuses an
+`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The public listener
+answers 404 `not_found` for every admin path, except a CORS preflight (`OPTIONS`), which it
+answers as on any other path, naming nothing of the admin API. The admin OpenAPI document is
+served on the admin listener only, at `/admin/v1-rc.0/openapi.json`, without a token: it
+describes the operations and holds no realm data.
+
+The listener grants nothing for a caller's network position: every other call, from loopback too,
+needs an admin token. It never routes by host either. Every admin path names the realm it acts on,
+`/admin/v1-rc.0/realms/{realmId}/...`, and the listener refuses to boot a route that does not.
+
+Every admin route runs behind the same stages, in this order
+(`apps/auth-server/src/app/admin/pipeline.ts`):
+
+1. The request id, which the server makes for every call, never takes from the caller, echoes in
+   the response and carries as `trace_id`.
+2. The token guard ([Family tokens](#family-tokens)). The realm whose keys verify the token is
+   the one its `iss` names. A call without a valid admin token gets 401 here, before any realm
+   is read, and every such refusal reads the same, so the answer says nothing about realms.
+3. The DPoP check, which requiring DPoP-bound admin tokens will fill (#520). Until then the
+   listener takes only the `Bearer` scheme, and answers the `DPoP` scheme as no credential.
+4. The realm, from the path.
+5. The authority from grants and scopes ([Admin authority](#admin-authority)). A realm outside
+   the caller's grants answers 404 `not_found`.
+6. The classification and the permission check ([Security operations](/reference/security-operations/)).
+   A caller without a permission the request needs gets 403 `forbidden`, with an
+   `insufficient_scope` challenge when the token's scopes, not the caller's roles, are what is
+   missing.
+7. The approval gate. A request classified `security` needs a fresh approval bound to it. Until
+   approvals ship (#512), every such request answers 403 `approval_required` and never runs.
+8. The handler, inside one database transaction. It answers by returning its body: a handler
+   that sends or hijacks the reply itself fails, so no answer leaves before its change commits.
+   The body is serialized inside the transaction, so one its response schema refuses fails the
+   call and its change rolls back.
+9. The audit row, in the admin audit log of the realm the request acts on.
+10. The error, as a problem document.
+
+A route's own `onRequest`, `preParsing` and `preValidation` hooks would run before stages 6 and
+7, so the listener refuses to boot an admin route that has one, in its options or added by its
+module: use a `preHandler` hook or the handler. A `preHandler` refuses by throwing, never by
+sending the reply; one that sends or hijacks it fails the call.
+
+The listener also has request ceilings of its own, 100 calls a minute each, whatever
+`RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW` say for the public listener, and answers 429
+`too_many_requests` beyond them. `RATE_LIMIT_ENABLED` only chooses where the counts live: in
+Redis, or in memory while it is off.
+
+- Per client address, the calls the token guard refuses. Past that count, a call from the address
+  that presents no token is refused before the token guard, and one whose token the guard refuses
+  answers 429. A call that presents a `Bearer` token always reaches the token guard, so a valid
+  token is never held back by the refusals of others from the same address.
+- Per token subject, every call, right after the token guard.
+- Per client address, every call to the OpenAPI document, which needs no token, in a count of its
+  own.
+
+The address is the TCP peer: the listener trusts no proxy, whatever `TRUST_PROXY` names for the
+public listener. When the server shuts down, the listener takes no new call, lets each call in
+flight finish for up to 8 seconds, closes the connections still open, waits up to 1.5 seconds
+more for the audit rows of their calls, and closes before the database.
+
+**Audit rows.** Every call that reaches a realm within the caller's grants writes exactly one row
+to that realm's chain, reads included. A call that succeeds writes `succeeded` in the
+handler's transaction, with the change the handler recorded, its secret fields masked: the row
+and the change commit together, or neither does, and the answer is serialized before they do, so
+the answer and the row always agree. A call refused after that point, such as one
+without the permission or the approval, or whose body does not parse, writes `denied`; one that
+fails on the server, its handler or commit included, writes `failed`. Both are written in a new
+transaction, with no diff. A `denied` or `failed` row that cannot be written is logged, not
+retried, and the call has no row; its answer is the same refusal or failure. A
+call refused before it reaches a realm within its grants writes no row: one without a valid
+token, one over a request limit, and one that names a realm outside its grants, which is logged
+with the caller instead, so a stranger cannot add rows to another realm's chain.
+
 ### Issuing a family audience
 
 - A client gets a family audience only when an operator lists it in the client's `audience`. The

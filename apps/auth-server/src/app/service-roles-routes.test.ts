@@ -13,10 +13,13 @@
  * - Each other role registers exactly its share: `web` the `browser` routes,
  *   `api` the `api` and `meta` routes, and every role `/health`, `/metrics`
  *   and @fastify/cors's `OPTIONS *`.
+ * - A route under `/admin` refuses the boot, a plugin's as well as a route
+ *   module's (#511): it registers only on the admin listener.
  */
 import { generateKeyPairSync } from 'node:crypto';
 
-import Fastify, { type FastifyInstance, type RouteOptions } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyPluginAsync, type RouteOptions } from 'fastify';
+import fp from 'fastify-plugin';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -182,13 +185,19 @@ async function bootRoles(serviceRoles: string): Promise<BootedRoles> {
   const server = Fastify({ logger: false, routerOptions: { ignoreTrailingSlash: true } });
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
-  await server.register(async (scope) => {
-    scope.addHook('onRoute', (route) => {
-      routes.push(route);
+  try {
+    await server.register(async (scope) => {
+      scope.addHook('onRoute', (route) => {
+        routes.push(route);
+      });
+      await app(scope, { defaultRealmBoot: false, realmLookup: async () => undefined });
     });
-    await app(scope, { defaultRealmBoot: false, realmLookup: async () => undefined });
-  });
-  await server.ready();
+    await server.ready();
+  } catch (error) {
+    // A boot the app refused leaves nothing open behind it.
+    await server.close().catch(() => undefined);
+    throw error;
+  }
   return { routes, server };
 }
 
@@ -321,5 +330,34 @@ describe("the issue's route criteria (#495)", () => {
     const server = bootOf('web').server;
     expect(server.hasRoute({ method: 'POST', url: '/oauth/token' })).toBe(false);
     expect(server.hasRoute({ method: 'GET', url: '/oauth/authorize' })).toBe(true);
+  });
+});
+
+describe('an admin route on the public listener (#511)', () => {
+  it('refuses to boot when a plugin of the app registers one, whatever roles it names', async () => {
+    // The security headers plugin, registered in the app's own scope, with a
+    // route under /admin beside it that names its roles itself.
+    vi.doMock('./plugins/security-headers', async (importOriginal) => {
+      const original = await importOriginal<{ securityHeadersPlugin: FastifyPluginAsync }>();
+      const withAdminRoute = fp(
+        async (fastify: FastifyInstance) => {
+          await fastify.register(original.securityHeadersPlugin);
+          fastify.get(
+            '/admin/v1-rc.0/realms/:realmId',
+            { config: { surface: 'api', serviceRoles: ['api'] } },
+            async () => ({})
+          );
+        },
+        { name: 'admin-route-fixture' }
+      );
+      return { ...original, securityHeadersPlugin: withAdminRoute, default: withAdminRoute };
+    });
+    try {
+      await expect(bootRoles('api')).rejects.toThrow(
+        'GET /admin/v1-rc.0/realms/:realmId is an admin API route'
+      );
+    } finally {
+      vi.doUnmock('./plugins/security-headers');
+    }
   });
 });

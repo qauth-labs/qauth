@@ -198,6 +198,13 @@ export const PROBLEM_CODES = {
     title: 'Email address not verified',
     description: 'The account must verify its email address first.',
   },
+  approval_required: {
+    status: 403,
+    type: 'approval-required',
+    title: 'Approval required',
+    description:
+      'The admin operation is a security operation and runs only with a fresh approval bound to it. The request did not run.',
+  },
   not_found: {
     status: 404,
     type: 'not-found',

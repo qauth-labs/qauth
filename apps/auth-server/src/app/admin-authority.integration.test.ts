@@ -27,11 +27,13 @@ import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
  * ADMIN ROLES AND GRANTS WITH THE ISSUER-BOUND REALM RULE (#510, ADR-019
  * Decision 7), against a real Postgres and Redis.
  *
- * No admin route ships yet (#511 adds the listener and its pipeline), so the
- * suite adds a probe route under the admin prefix, beside the real app: the
- * admin family's guard with the admin issuer rule, then
- * `resolveAdminAuthority` for the realm in the path. It answers the effective
- * permissions. Grants and roles are written through the booted app's own
+ * No admin operation ships yet (#517), so the suite adds a probe route under
+ * the admin prefix, beside the real app: the admin family's guard with the
+ * admin issuer rule, then `resolveAdminAuthority` for the realm in the path.
+ * It answers the effective permissions. A test route, outside the route
+ * manifest, which refuses an admin path on the public listener (#511); the
+ * admin listener's own pipeline, which runs the same two checks before every
+ * admin route, is `admin-listener.integration.test.ts`'s. Grants and roles are written through the booted app's own
  * repositories, which carry the app's permission catalog.
  *
  * - An operator-realm admin acts on the realms of its grants, and on every

@@ -169,6 +169,12 @@ The caller is authenticated but may not perform the operation.
 
 The account must verify its email address first.
 
+## `approval-required`
+
+**Code** `approval_required` · **Status** 403 · **Title** Approval required
+
+The admin operation is a security operation and runs only with a fresh approval bound to it. The request did not run.
+
 ## `not-found`
 
 **Code** `not_found` · **Status** 404 · **Title** Not found

@@ -12,6 +12,17 @@ import {
   type ProblemDocument,
 } from '../api-conventions/problem';
 
+declare module 'fastify' {
+  interface FastifyInstance {
+    /**
+     * The header a server that sets no `requestIdHeader` echoes the request id
+     * in: the admin listener (#511), which reads the caller's id itself
+     * (`adminRequestId`) to bound it, and so leaves Fastify's option unset.
+     */
+    requestIdEchoHeader?: string;
+  }
+}
+
 /** Node's default `headersTimeout`: the deadline for a request's headers. */
 const NODE_HEADERS_TIMEOUT_MS = 60_000;
 
@@ -115,9 +126,12 @@ const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 /**
  * The header the request id travels in, when the server names one that is a
  * valid header name: {@link answerClientError} writes it to the socket raw.
+ * Fastify's `requestIdHeader`, or the server's `requestIdEchoHeader` when it
+ * reads the id itself.
  */
 function requestIdHeaderOf(server: FastifyInstance): string | undefined {
-  const header = server.initialConfig.requestIdHeader;
+  const configured = server.initialConfig.requestIdHeader;
+  const header = typeof configured === 'string' ? configured : server.requestIdEchoHeader;
   return typeof header === 'string' && HEADER_NAME.test(header) ? header : undefined;
 }
 

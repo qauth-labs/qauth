@@ -1,0 +1,1376 @@
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type LightMyRequestResponse,
+} from 'fastify';
+import { exportJWK, importPKCS8, importSPKI, SignJWT } from 'jose';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+
+import {
+  baseEnvironment,
+  bootAuthServer,
+  type BootedAuthServer,
+  E2E_REALM_NAME,
+  type E2eInfrastructure,
+  generateJwtPem,
+  type PemKeyPair,
+  provisionRealmKeys,
+  resetE2eState,
+  startE2eInfrastructure,
+} from '../testing/e2e-harness';
+import { API_FAMILY_AUDIENCES } from './api-conventions/families';
+import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
+
+/**
+ * THE ADMIN LISTENER AND ITS PIPELINE (#511, ADR-019 Decisions 7 and 8),
+ * against a real Postgres and Redis.
+ *
+ * The suite boots the real app with the admin listener beside it, as
+ * `main.ts` does, and puts fixture operations behind the real pipeline: a
+ * read, a write that creates an account in its realm, a write whose handler
+ * fails after its change, and a security operation. No admin operation ships
+ * yet (#517), so the registry is the suite's own, built from the server's
+ * permission catalog. Each test acts on realms of its own: the audit log
+ * refuses `TRUNCATE`, so rows stay, and are counted per realm.
+ *
+ * Locally the suite skips when no Docker daemon is reachable; on CI it fails
+ * (`requireDockerOrSkip`).
+ */
+
+const ADMIN = API_FAMILY_AUDIENCES.admin;
+const ALL_ADMIN_SCOPES = ADMIN_SCOPE_LIST.join(' ');
+
+/** What the fixture handlers saw, for the assertions. */
+const runs: string[] = [];
+const handlerTransactions: unknown[] = [];
+
+/** A request the fixture holds open until the test lets it go. */
+const hold: { entered?: () => void; release?: Promise<void> } = {};
+
+function realmPath(realmId: string, suffix = ''): string {
+  return `/admin/v1-rc.0/realms/${realmId}${suffix}`;
+}
+
+/** The fixture operations and their routes, imported once the boot reset the modules. */
+async function fixtureAdminApi() {
+  const operations = await import('./helpers/admin-operations');
+  const { adminTransaction, recordAdminChange, requestAdminCaller } =
+    await import('./admin/pipeline');
+
+  const read = operations.defineOperation({
+    id: 'realms.get',
+    class: 'read',
+    effects: [],
+    permissions: ['realms.read'],
+    description: 'Read a realm (fixture).',
+  });
+  const create = operations.defineOperation({
+    id: 'fixtureAccounts.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account in the realm (fixture).',
+  });
+  const fail = operations.defineOperation({
+    id: 'fixtureAccounts.fail',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then fail (fixture).',
+  });
+  const rotate = operations.defineOperation({
+    id: 'fixtureKeys.rotate',
+    class: 'security',
+    effects: ['key-custody'],
+    permissions: ['realms.policies.security'],
+    description: 'A security operation (fixture).',
+  });
+  const send = operations.defineOperation({
+    id: 'fixtureAccounts.send',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then send the reply itself (fixture).',
+  });
+  const held = operations.defineOperation({
+    id: 'fixtureHolds.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account once the test lets the request go (fixture).',
+  });
+  const unwrapped = operations.defineOperation({
+    id: 'fixtureUnwrapped.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, from a handler a later onRoute hook put back (fixture).',
+  });
+  const early = operations.defineOperation({
+    id: 'fixtureEarly.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'A route whose own preHandler sends the reply itself (fixture).',
+  });
+  const misanswer = operations.defineOperation({
+    id: 'fixtureMisanswers.create',
+    class: 'write',
+    effects: [],
+    permissions: ['realms.policies.write'],
+    description: 'Create an account, then return a body its response schema refuses (fixture).',
+  });
+  const registry = operations.createOperationRegistry(
+    [read, create, fail, rotate, send, held, unwrapped, early, misanswer],
+    { reserved: [] }
+  );
+
+  const params = z.object({ realmId: z.uuid() });
+  const schemaOf = (operation: typeof read) => ({
+    ...operations.operationSchemaExtensions(operation),
+    'x-qauth-stability': 'experimental' as const,
+    'x-qauth-errors': [401, 403, 404],
+    security: [{ bearerAuth: [] }],
+    params,
+  });
+
+  return {
+    registry,
+    routes: (scope: FastifyInstance) => {
+      scope.get(
+        '/admin/v1-rc.0/realms/:realmId',
+        { config: { operation: read.id }, schema: schemaOf(read) },
+        async (request) => {
+          runs.push(read.id);
+          handlerTransactions.push(adminTransaction(request));
+          const caller = requestAdminCaller(request);
+          return {
+            realm: caller.targetRealm.id,
+            operator: caller.operator,
+            requestRealm: request.realm?.id,
+          };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-accounts',
+        { config: { operation: create.id }, schema: schemaOf(create) },
+        async (request) => {
+          runs.push(create.id);
+          const tx = adminTransaction(request);
+          handlerTransactions.push(tx);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          const account = await request.server.repositories.users.create({ realmId }, tx);
+          recordAdminChange(request, {
+            change: { before: null, after: { id: account.id, recoveryCode: 'never-stored' } },
+            annotations: { recoveryCode: 'secret' },
+          });
+          return { id: account.id };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-failures',
+        { config: { operation: fail.id }, schema: schemaOf(fail) },
+        async (request) => {
+          runs.push(fail.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          throw new Error('the fixture handler failed after its change');
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-sends',
+        { config: { operation: send.id }, schema: schemaOf(send) },
+        async (request, reply) => {
+          runs.push(send.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          return reply.send({ sent: true });
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-holds',
+        { config: { operation: held.id }, schema: schemaOf(held) },
+        async (request) => {
+          runs.push(held.id);
+          hold.entered?.();
+          await hold.release;
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          const account = await request.server.repositories.users.create(
+            { realmId },
+            adminTransaction(request)
+          );
+          return { id: account.id };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-early-answers',
+        {
+          config: { operation: early.id },
+          schema: schemaOf(early),
+          preHandler: [
+            async (_request, reply) => {
+              runs.push(`${early.id}:preHandler`);
+              return reply.send({ early: true });
+            },
+          ],
+        },
+        async () => {
+          runs.push(early.id);
+          return { early: false };
+        }
+      );
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-misanswers',
+        {
+          config: { operation: misanswer.id },
+          // Hidden from the document: its response schema is the fixture's
+          // point, not one the document's conventions are checked against.
+          schema: {
+            ...schemaOf(misanswer),
+            hide: true,
+            response: { 200: z.object({ id: z.uuid() }) },
+          },
+        },
+        async (request) => {
+          runs.push(misanswer.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          return { id: 'not-a-uuid' };
+        }
+      );
+      // A module whose own `onRoute` hook, which runs after the pipeline's,
+      // puts the route's own handler back: the pipeline wraps it again.
+      // `adminTransaction` throws outside the pipeline's transaction.
+      const unwrappedHandler = async (request: FastifyRequest) => {
+        runs.push(unwrapped.id);
+        const tx = adminTransaction(request);
+        handlerTransactions.push(tx);
+        const realmId = requestAdminCaller(request).targetRealm.id;
+        const account = await request.server.repositories.users.create({ realmId }, tx);
+        return { id: account.id };
+      };
+      void scope.register(async (module) => {
+        module.addHook('onRoute', (route) => {
+          route.handler = unwrappedHandler;
+        });
+        module.post(
+          '/admin/v1-rc.0/realms/:realmId/fixture-unwrapped',
+          { config: { operation: unwrapped.id }, schema: schemaOf(unwrapped) },
+          unwrappedHandler
+        );
+      });
+      scope.post(
+        '/admin/v1-rc.0/realms/:realmId/fixture-keys/rotate',
+        { config: { operation: rotate.id }, schema: schemaOf(rotate) },
+        async (request) => {
+          runs.push(rotate.id);
+          const realmId = requestAdminCaller(request).targetRealm.id;
+          await request.server.repositories.users.create({ realmId }, adminTransaction(request));
+          return { rotated: true };
+        }
+      );
+    },
+  };
+}
+
+interface AuditRow {
+  realm_id: string;
+  seq: string;
+  actor_kind: string;
+  actor_id: string;
+  actor_realm_id: string | null;
+  operation_id: string;
+  operation_class: string;
+  effects: string[];
+  outcome: string;
+  masked_diff: unknown;
+  trace_id: string | null;
+  xmin: string;
+}
+
+/** The containers every server of this file runs on: one Postgres, one Redis. */
+let infra: E2eInfrastructure | undefined;
+let jwt: PemKeyPair | undefined;
+let dockerUp = false;
+
+beforeAll(async () => {
+  dockerUp = await requireDockerOrSkip();
+  if (!dockerUp) return;
+  infra = await startE2eInfrastructure();
+  jwt = await generateJwtPem();
+}, 240_000);
+
+afterAll(async () => {
+  await infra?.teardown();
+});
+
+/** Boot the app with the fixture admin API on its admin listener, under `environment` too. */
+function bootWithAdminListener(
+  environment: Record<string, string> = {},
+  logLines?: string[]
+): Promise<BootedAuthServer> {
+  if (!infra || !jwt) throw new Error('no infrastructure');
+  return bootAuthServer(
+    // The listener is off by default until #517 and #520 ship.
+    { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true', ...environment },
+    {
+      ...(logLines === undefined
+        ? {}
+        : { logStream: { write: (line: string) => logLines.push(line) } }),
+      adminListener: fixtureAdminApi,
+    }
+  );
+}
+
+describe('the admin listener and its pipeline (#511, real containers)', () => {
+  let booted: BootedAuthServer | undefined;
+  const logLines: string[] = [];
+
+  beforeAll(async () => {
+    if (!dockerUp) return;
+    booted = await bootWithAdminListener({}, logLines);
+  }, 240_000);
+
+  afterAll(async () => {
+    await booted?.close();
+  });
+
+  beforeEach(async (ctx) => {
+    if (!dockerUp || !booted) {
+      ctx.skip();
+      return;
+    }
+    await resetE2eState(booted.app);
+    runs.length = 0;
+    handlerTransactions.length = 0;
+    logLines.length = 0;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function app(): FastifyInstance {
+    if (!booted) throw new Error('server not booted');
+    return booted.app;
+  }
+
+  function admin(): FastifyInstance {
+    if (!booted?.admin) throw new Error('admin listener not booted');
+    return booted.admin;
+  }
+
+  async function defaultRealm(): Promise<{ id: string; issuer: string }> {
+    const realm = await app().repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm?.issuer) throw new Error('default realm missing');
+    return { id: realm.id, issuer: realm.issuer };
+  }
+
+  async function tenant(name: string): Promise<string> {
+    const host = `${name}.example.com`;
+    const { realm } = await app().repositories.realms.createWithPrimaryHost(
+      { name, issuer: `https://${host}`, enabled: true },
+      host
+    );
+    return realm.id;
+  }
+
+  /** An operator-realm admin with `role` on `realmId`, and its token. */
+  async function adminWith(
+    realmId: string,
+    role: 'viewer' | 'editor' | 'security-admin',
+    scope = ALL_ADMIN_SCOPES
+  ): Promise<{ userId: string; token: string }> {
+    const operator = await defaultRealm();
+    const userId = (await app().repositories.users.create({ realmId: operator.id })).id;
+    await app().repositories.adminGrants.create({
+      userId,
+      role: { kind: 'built-in', name: role },
+      targetRealmId: realmId,
+      createdBy: null,
+    });
+    const token = await app().jwtUtils.signAccessToken(operator, {
+      sub: userId,
+      clientId: 'admin-console',
+      aud: ADMIN,
+      scope,
+    });
+    return { userId, token };
+  }
+
+  function call(
+    method: 'GET' | 'POST',
+    url: string,
+    token?: string,
+    extra: { remoteAddress?: string } = {}
+  ): Promise<LightMyRequestResponse> {
+    return admin().inject({
+      method,
+      url,
+      ...(token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }),
+      ...extra,
+    });
+  }
+
+  async function auditRows(realmId: string): Promise<AuditRow[]> {
+    const { rows } = await app().dbPool.query<AuditRow>(
+      `SELECT realm_id, seq::text AS seq, actor_kind, actor_id, actor_realm_id, operation_id,
+              operation_class, effects, outcome, masked_diff, trace_id, xmin::text AS xmin
+         FROM admin_audit_log WHERE realm_id = $1 ORDER BY admin_audit_log.seq`,
+      [realmId]
+    );
+    return rows;
+  }
+
+  async function accountsIn(realmId: string): Promise<number> {
+    const { rows } = await app().dbPool.query<{ count: string }>(
+      'SELECT count(*) FROM users WHERE realm_id = $1',
+      [realmId]
+    );
+    return Number(rows[0].count);
+  }
+
+  describe('two listeners', () => {
+    it('answers 404 for an admin path on the public listener, which the admin listener serves', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'viewer');
+
+      const onPublic = await app().inject({
+        method: 'GET',
+        url: realmPath(realmId),
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(onPublic.statusCode).toBe(404);
+      expect(onPublic.json()).toMatchObject({ code: 'not_found' });
+
+      const onAdmin = await call('GET', realmPath(realmId), token);
+      expect(onAdmin.statusCode).toBe(200);
+      expect(onAdmin.json()).toEqual({ realm: realmId, operator: true, requestRealm: realmId });
+      // The public listener ran nothing and wrote nothing.
+      expect(runs).toEqual(['realms.get']);
+      expect(await auditRows(realmId)).toHaveLength(1);
+    });
+
+    it('answers a CORS preflight under /admin on the public listener as on any path, naming nothing of the admin API', async () => {
+      const realmId = await tenant('alpha');
+      const preflight = (url: string) =>
+        app().inject({
+          method: 'OPTIONS',
+          url,
+          headers: {
+            origin: 'https://console.example.com',
+            'access-control-request-method': 'POST',
+          },
+        });
+      const comparable = (response: LightMyRequestResponse) => {
+        const headers: Record<string, unknown> = { ...response.headers };
+        delete headers['date'];
+        delete headers['x-request-id'];
+        // Every answer draws its own CSP nonces; the policy is compared without them.
+        headers['content-security-policy'] = String(
+          headers['content-security-policy'] ?? ''
+        ).replace(/'nonce-[^']*'/g, "'nonce-…'");
+        return { status: response.statusCode, headers, body: response.body };
+      };
+
+      const underAdmin = comparable(await preflight(realmPath(realmId)));
+      const elsewhere = comparable(await preflight(`/elsewhere/v1-rc.0/realms/${realmId}`));
+      expect(underAdmin).toEqual(elsewhere);
+      expect(JSON.stringify(underAdmin)).not.toMatch(/admin/i);
+      expect(runs).toEqual([]);
+      expect(await auditRows(realmId)).toEqual([]);
+    });
+
+    it('serves the admin OpenAPI document on the admin listener only', async () => {
+      const onAdmin = await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' });
+      expect(onAdmin.statusCode).toBe(200);
+      const document = onAdmin.json<{ info: { title: string }; paths: Record<string, unknown> }>();
+      expect(document.info.title).toBe('QAuth Admin API');
+      expect(Object.keys(document.paths).sort()).toEqual([
+        '/admin/v1-rc.0/realms/{realmId}',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-accounts',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-early-answers',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-failures',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-holds',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-keys/rotate',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-sends',
+        '/admin/v1-rc.0/realms/{realmId}/fixture-unwrapped',
+      ]);
+
+      const onPublic = await app().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' });
+      expect(onPublic.statusCode).toBe(404);
+      // The public documents, as published: the harness serves no /docs.
+      for (const file of ['stable-surface/openapi.json', 'apps/docs-site/public/openapi.json']) {
+        const document = JSON.parse(readFileSync(join(__dirname, '../../../..', file), 'utf8')) as {
+          paths: Record<string, unknown>;
+        };
+        const paths = Object.keys(document.paths);
+        expect(paths.length).toBeGreaterThan(0);
+        expect(paths.filter((path) => /^\/admin(?:\/|$)/.test(path))).toEqual([]);
+      }
+    });
+
+    it('answers what no route serves with problem documents, before any stage', async () => {
+      const unknown = await admin().inject({ method: 'POST', url: '/nowhere', payload: '{' });
+      expect(unknown.statusCode).toBe(404);
+      expect(unknown.headers['content-type']).toContain('application/problem+json');
+      expect(unknown.json()).toMatchObject({ code: 'not_found', instance: '/nowhere' });
+      expect(unknown.headers['x-request-id']).toBe(unknown.json<{ trace_id: string }>().trace_id);
+
+      // The router's own refusal: a path that is not valid percent-encoding.
+      const malformed = await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/realms/%zz' });
+      expect(malformed.statusCode).toBe(400);
+      expect(malformed.json()).toMatchObject({ code: 'bad_request' });
+
+      // No HEAD route stands beside a GET route.
+      const realmId = await tenant('alpha');
+      const head = await admin().inject({ method: 'HEAD', url: realmPath(realmId) });
+      expect(head.statusCode).toBe(404);
+      expect(runs).toEqual([]);
+    });
+
+    it('makes every request id itself, which the audit row records, whatever the caller sends', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'viewer');
+      const ids: string[] = [];
+      for (const sent of ['trace-chosen-by-caller', 'x'.repeat(129)]) {
+        const response = await admin().inject({
+          method: 'GET',
+          url: realmPath(realmId),
+          headers: { authorization: `Bearer ${token}`, 'x-request-id': sent },
+        });
+        expect(response.statusCode).toBe(200);
+        const id = response.headers['x-request-id'];
+        expect(id).toMatch(/^[0-9a-f-]{36}$/);
+        ids.push(String(id));
+      }
+      expect((await auditRows(realmId)).map((row) => row.trace_id)).toEqual(ids);
+    });
+
+    it('passes the API conventions check against the registry it was built with', async () => {
+      const { checkApiConventions } = await import('./api-conventions/openapi-conventions');
+      const { registry } = await fixtureAdminApi();
+      const document = (
+        await admin().inject({ method: 'GET', url: '/admin/v1-rc.0/openapi.json' })
+      ).json();
+      const report = checkApiConventions(document, { operations: registry });
+      expect(report.checkedOperations).toBe(8);
+      expect(report.violations).toEqual([]);
+    });
+  });
+
+  describe('authentication comes first', () => {
+    it('refuses a call without a token with 401 and the same answer whether the realm exists or not', async () => {
+      const realmId = await tenant('alpha');
+      const missing = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
+      const comparable = (response: LightMyRequestResponse) => {
+        const body = { ...response.json<Record<string, unknown>>() };
+        delete body['trace_id'];
+        delete body['instance'];
+        return {
+          status: response.statusCode,
+          challenge: response.headers['www-authenticate'],
+          body,
+        };
+      };
+
+      const realmReads = vi.spyOn(app().repositories.realms, 'findById');
+      const grantReads = vi.spyOn(app().repositories.adminGrants, 'listLive');
+      const existing = await call('GET', realmPath(realmId));
+      expect(existing.statusCode).toBe(401);
+      expect(realmReads).not.toHaveBeenCalled();
+      expect(grantReads).not.toHaveBeenCalled();
+      expect(existing.json()).toMatchObject({ code: 'unauthorized' });
+      expect(existing.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+      expect(comparable(existing)).toEqual(comparable(await call('GET', realmPath(missing))));
+      expect(JSON.stringify(existing.json())).not.toContain('alpha');
+      expect(runs).toEqual([]);
+      expect(await auditRows(realmId)).toEqual([]);
+    });
+
+    it('refuses a call from loopback without a token: the network position grants nothing', async () => {
+      const realmId = await tenant('alpha');
+      for (const remoteAddress of ['127.0.0.1', '::1']) {
+        const response = await call('GET', realmPath(realmId), undefined, { remoteAddress });
+        expect(response.statusCode).toBe(401);
+      }
+
+      // Over a real socket, from loopback to the listener's loopback address.
+      const address = await admin().listen({ host: '127.0.0.1', port: 0 });
+      try {
+        const response = await fetch(`${address}${realmPath(realmId)}`);
+        expect(response.status).toBe(401);
+        expect(await response.json()).toMatchObject({ code: 'unauthorized' });
+      } finally {
+        await admin().server.close();
+      }
+      expect(runs).toEqual([]);
+    });
+
+    it('refuses a token that is not an admin token before it reads the realm', async () => {
+      const realmId = await tenant('alpha');
+      const operator = await defaultRealm();
+      const { userId } = await adminWith(realmId, 'security-admin');
+      const sign = (claims: Record<string, unknown>) =>
+        app().jwtUtils.signAccessToken(operator, {
+          sub: userId,
+          clientId: 'admin-console',
+          aud: ADMIN,
+          scope: ALL_ADMIN_SCOPES,
+          ...claims,
+        });
+      const realmReads = vi.spyOn(app().repositories.realms, 'findById');
+      const grantReads = vi.spyOn(app().repositories.adminGrants, 'listLive');
+      const refusals = [
+        // Another family's audience.
+        await sign({ aud: API_FAMILY_AUDIENCES.account }),
+        // A delegated token.
+        await sign({ act: { sub: 'agent' } }),
+        // Not a token at all.
+        'not-a-token',
+      ];
+      for (const token of refusals) {
+        const response = await call('GET', realmPath(realmId), token);
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
+      }
+      expect(realmReads).not.toHaveBeenCalled();
+      expect(grantReads).not.toHaveBeenCalled();
+      expect(runs).toEqual([]);
+      expect(await auditRows(realmId)).toEqual([]);
+    });
+  });
+
+  describe('tokens of other realms', () => {
+    /** A realm with its own issuer and keys, and an enabled account in it. */
+    async function signingTenant(name: string): Promise<{ id: string; issuer: string }> {
+      const id = await tenant(name);
+      await provisionRealmKeys(app(), name);
+      return { id, issuer: `https://${name}.example.com` };
+    }
+
+    /**
+     * An admin access token for `sub` naming `issuer`, signed with the
+     * operator realm's Ed25519 key, the one the key boot step imported from
+     * the suite's JWT_PRIVATE_KEY, under that key's `kid`. The signer itself
+     * refuses claims that set `iss`.
+     */
+    async function signedWithOperatorKey(issuer: string, sub: string): Promise<string> {
+      if (!jwt) throw new Error('no key pair');
+      const operator = await defaultRealm();
+      const publicJwk = await exportJWK(await importSPKI(jwt.publicKey, 'EdDSA'));
+      const { keys } = (await app().jwtUtils.getJwks(operator)) as {
+        keys: { kid?: string; x?: string }[];
+      };
+      const kid = keys.find((key) => key.x === publicJwk.x)?.kid;
+      if (kid === undefined) throw new Error('the imported key is not in the realm JWKS');
+      const now = Math.floor(Date.now() / 1000);
+      return new SignJWT({ client_id: 'admin-console', scope: ALL_ADMIN_SCOPES })
+        .setProtectedHeader({ alg: 'EdDSA', typ: 'at+jwt', kid })
+        .setIssuer(issuer)
+        .setSubject(sub)
+        .setAudience(ADMIN)
+        .setJti(randomUUID())
+        .setIssuedAt(now)
+        .setExpirationTime(now + 300)
+        .sign(await importPKCS8(jwt.privateKey, 'EdDSA'));
+    }
+
+    it("serves a realm-local admin on its own realm, with its own realm's token, and nowhere else", async () => {
+      const alpha = await signingTenant('alpha');
+      const operator = await defaultRealm();
+      const userId = (await app().repositories.users.create({ realmId: alpha.id })).id;
+      await app().repositories.adminGrants.create({
+        userId,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: alpha.id,
+        createdBy: null,
+      });
+      const token = await app().jwtUtils.signAccessToken(
+        { id: alpha.id },
+        { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+      );
+
+      const own = await call('GET', realmPath(alpha.id), token);
+      expect(own.statusCode).toBe(200);
+      expect(own.json()).toEqual({ realm: alpha.id, operator: false, requestRealm: alpha.id });
+      expect(await auditRows(alpha.id)).toMatchObject([
+        { actor_id: userId, actor_realm_id: alpha.id, outcome: 'succeeded' },
+      ]);
+      expect((await call('GET', realmPath(operator.id), token)).statusCode).toBe(404);
+      expect(await auditRows(operator.id)).toEqual([]);
+    });
+
+    it("refuses a token that names one realm's issuer but carries another realm's signature", async () => {
+      const alpha = await signingTenant('alpha');
+      const operator = await defaultRealm();
+      const ofAlpha = (await app().repositories.users.create({ realmId: alpha.id })).id;
+      await app().repositories.adminGrants.create({
+        userId: ofAlpha,
+        role: { kind: 'built-in', name: 'viewer' },
+        targetRealmId: alpha.id,
+        createdBy: null,
+      });
+      const { userId: ofOperator } = await adminWith(alpha.id, 'viewer');
+
+      // Signed with the operator realm's key, naming realm alpha's issuer.
+      const forged = await signedWithOperatorKey(alpha.issuer, ofAlpha);
+      const refused = await call('GET', realmPath(alpha.id), forged);
+      expect(refused.statusCode).toBe(401);
+      expect(refused.json()).toMatchObject({ code: 'invalid_access_token' });
+
+      // An issuer no realm has is refused in the same words: the answer does
+      // not tell which issuers name a realm.
+      const nowhere = await call(
+        'GET',
+        realmPath(alpha.id),
+        await signedWithOperatorKey('https://nowhere.example.com', ofAlpha)
+      );
+      const comparable = (response: LightMyRequestResponse) => {
+        const body = { ...response.json<Record<string, unknown>>() };
+        delete body['trace_id'];
+        return {
+          status: response.statusCode,
+          challenge: response.headers['www-authenticate'],
+          body,
+        };
+      };
+      expect(comparable(nowhere)).toEqual(comparable(refused));
+
+      // The same key and claims naming the operator realm's own issuer pass:
+      // only the realm the issuer names decided which keys verify.
+      const genuine = await signedWithOperatorKey(operator.issuer, ofOperator);
+      expect((await call('GET', realmPath(alpha.id), genuine)).statusCode).toBe(200);
+      expect(runs).toEqual(['realms.get']);
+    });
+  });
+
+  describe('a realm outside the grants', () => {
+    it('answers 404, is logged, and adds no row to that realm', async () => {
+      const granted = await tenant('alpha');
+      const stranger = await tenant('beta');
+      const { userId, token } = await adminWith(granted, 'security-admin');
+
+      const response = await call('GET', realmPath(stranger), token);
+      expect(response.statusCode).toBe(404);
+      expect(response.json()).toMatchObject({ code: 'not_found' });
+      expect(await auditRows(stranger)).toEqual([]);
+      expect(runs).toEqual([]);
+      const logged = logLines
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((line) => String(line['msg']).startsWith('An admin call named a realm outside'));
+      expect(logged).toMatchObject({ realmId: stranger, adminCaller: { subject: userId } });
+    });
+  });
+
+  describe('the audit row', () => {
+    it('is written once for a successful read, in the transaction the handler ran in', async () => {
+      const realmId = await tenant('alpha');
+      const { userId, token } = await adminWith(realmId, 'viewer');
+      const operator = await defaultRealm();
+      const append = vi.spyOn(app().repositories.adminAuditLog, 'appendAdminAudit');
+
+      const response = await admin().inject({
+        method: 'GET',
+        url: realmPath(realmId),
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(response.statusCode).toBe(200);
+
+      expect(append).toHaveBeenCalledTimes(1);
+      expect(append.mock.calls[0][0]).toBe(handlerTransactions[0]);
+      const rows = await auditRows(realmId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        actor_kind: 'human_admin',
+        actor_id: userId,
+        actor_realm_id: operator.id,
+        operation_id: 'realms.get',
+        operation_class: 'read',
+        effects: [],
+        outcome: 'succeeded',
+        masked_diff: null,
+        trace_id: response.headers['x-request-id'],
+      });
+    });
+
+    it('is written once for a successful write, in the same transaction as the change, with the diff masked', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(200);
+      const { id } = response.json<{ id: string }>();
+
+      const rows = await auditRows(realmId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        operation_id: 'fixtureAccounts.create',
+        operation_class: 'write',
+        outcome: 'succeeded',
+      });
+      expect(JSON.stringify(rows[0].masked_diff)).not.toContain('never-stored');
+      expect(rows[0].masked_diff).toMatchObject({ before: null, after: { id } });
+      // One transaction wrote both rows: they carry the same xmin.
+      const { rows: account } = await app().dbPool.query<{ xmin: string }>(
+        'SELECT xmin::text AS xmin FROM users WHERE id = $1',
+        [id]
+      );
+      expect(account[0].xmin).toBe(rows[0].xmin);
+    });
+
+    it('rolls back with the change when it cannot be written, and the call fails', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+      vi.spyOn(app().repositories.adminAuditLog, 'appendAdminAudit').mockRejectedValue(
+        new Error('the audit log is down')
+      );
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(500);
+      expect(await accountsIn(realmId)).toBe(0);
+    });
+
+    it('chains every row of the realm, and the chain verifies', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+      await call('GET', realmPath(realmId), token);
+      await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      await call('POST', realmPath(realmId, '/fixture-failures'), token);
+      await call('POST', realmPath(realmId, '/fixture-keys/rotate'), token);
+
+      expect((await auditRows(realmId)).map((row) => row.outcome)).toEqual([
+        'succeeded',
+        'succeeded',
+        'failed',
+        'denied',
+      ]);
+      await expect(
+        app().repositories.adminAuditLog.verifyAdminAuditChain(realmId)
+      ).resolves.toMatchObject({ ok: true, rowsChecked: 4 });
+    });
+  });
+
+  describe('a refused or failed call', () => {
+    it('refuses a caller without the permission with 403, and writes one denied row', async () => {
+      const realmId = await tenant('alpha');
+      // A viewer's role holds no write permission, whatever its token's scopes.
+      const { userId, token } = await adminWith(realmId, 'viewer');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ code: 'forbidden' });
+      // No scope would lift it: the challenge names none.
+      expect(response.headers['www-authenticate']).not.toContain('insufficient_scope');
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      const rows = await auditRows(realmId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        actor_id: userId,
+        operation_id: 'fixtureAccounts.create',
+        operation_class: 'write',
+        outcome: 'denied',
+        masked_diff: null,
+      });
+    });
+
+    it("names the scope when the role holds the permission but the token's scopes do not", async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor', 'qauth:admin:read');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(403);
+      expect(response.headers['www-authenticate']).toContain('error="insufficient_scope"');
+      expect(response.headers['www-authenticate']).toContain('scope="qauth:admin:write"');
+      expect((await auditRows(realmId)).map((row) => row.outcome)).toEqual(['denied']);
+    });
+
+    it('names no scope when the role lacks the permission, whatever the token lacks too', async () => {
+      const realmId = await tenant('alpha');
+      // A viewer's token without the write scope: a wider token would not pass.
+      const { token } = await adminWith(realmId, 'viewer', 'qauth:admin:read');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toMatchObject({ code: 'forbidden' });
+      expect(response.headers['www-authenticate']).not.toContain('insufficient_scope');
+    });
+
+    it('answers approval_required for a security operation and never runs it', async () => {
+      const realmId = await tenant('alpha');
+      // A security admin holds the permission and the scope: only the
+      // missing approval stops it.
+      const { token } = await adminWith(realmId, 'security-admin');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-keys/rotate'), token);
+      expect(response.statusCode).toBe(403);
+      expect(response.headers['content-type']).toContain('application/problem+json');
+      expect(response.json()).toMatchObject({
+        code: 'approval_required',
+        type: 'https://docs.qauth.dev/reference/problem-types/#approval-required',
+      });
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      const rows = await auditRows(realmId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        operation_id: 'fixtureKeys.rotate',
+        operation_class: 'security',
+        effects: ['key-custody'],
+        outcome: 'denied',
+      });
+    });
+
+    it('leaves no change when the handler fails, and writes one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-failures'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureAccounts.fail']);
+      expect(await accountsIn(realmId)).toBe(0);
+      const rows = await auditRows(realmId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        operation_id: 'fixtureAccounts.fail',
+        outcome: 'failed',
+        masked_diff: null,
+      });
+    });
+
+    it('refuses a handler that sends its own reply: no change, a 500, and one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-sends'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureAccounts.send']);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureAccounts.send', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('runs a handler a later onRoute hook put back in its transaction, with one succeeded row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-unwrapped'), token);
+      expect(response.statusCode).toBe(200);
+      expect(runs).toEqual(['fixtureUnwrapped.create']);
+      expect(handlerTransactions).toHaveLength(1);
+      expect(await accountsIn(realmId)).toBe(1);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureUnwrapped.create', outcome: 'succeeded' },
+      ]);
+    });
+
+    it('fails a route whose own preHandler sends the reply, before its handler, with one failed row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-early-answers'), token);
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: 'internal_error' });
+      expect(runs).toEqual(['fixtureEarly.create:preHandler']);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureEarly.create', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('fails a call whose body its response schema refuses: no change, one failed row, no succeeded row', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      const response = await call('POST', realmPath(realmId, '/fixture-misanswers'), token);
+      expect(response.statusCode).toBe(500);
+      expect(runs).toEqual(['fixtureMisanswers.create']);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureMisanswers.create', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('writes a failed row when the server fails after authorization, before the handler runs', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+      // The handler's transaction cannot open; the row's own, after it, can.
+      vi.spyOn(app().db, 'transaction').mockRejectedValueOnce(new Error('the pool is exhausted'));
+
+      const response = await call('POST', realmPath(realmId, '/fixture-accounts'), token);
+      expect(response.statusCode).toBe(500);
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toMatchObject([
+        { operation_id: 'fixtureAccounts.create', outcome: 'failed', masked_diff: null },
+      ]);
+    });
+
+    it('writes a denied row for a request refused after authorization, before its handler', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+
+      // The body is read after the authority stage: one that does not parse
+      // is refused there, and the handler never runs.
+      const response = await admin().inject({
+        method: 'POST',
+        url: realmPath(realmId, '/fixture-accounts'),
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        payload: '{',
+      });
+      expect(response.statusCode).toBe(400);
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect((await auditRows(realmId)).map((row) => row.outcome)).toEqual(['denied']);
+    });
+  });
+});
+
+/** The admin listener's own ceiling: each of its counts allows this many calls a minute. */
+async function adminLimit(): Promise<number> {
+  const { DEFAULT_ADMIN_RATE_LIMIT } = await import('./plugins/admin-operations');
+  return DEFAULT_ADMIN_RATE_LIMIT.max;
+}
+
+/** A realm of its own named `name`, and the token of an operator-realm viewer on it. */
+async function viewerOn(
+  app: FastifyInstance,
+  name: string
+): Promise<{ realmId: string; token: string }> {
+  const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
+  if (!operator) throw new Error('default realm missing');
+  const { realm } = await app.repositories.realms.createWithPrimaryHost(
+    { name, issuer: `https://${name}.example.com`, enabled: true },
+    `${name}.example.com`
+  );
+  const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+  await app.repositories.adminGrants.create({
+    userId,
+    role: { kind: 'built-in', name: 'viewer' },
+    targetRealmId: realm.id,
+    createdBy: null,
+  });
+  const token = await app.jwtUtils.signAccessToken(
+    { id: operator.id },
+    { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+  );
+  return { realmId: realm.id, token };
+}
+
+/** A realm id no realm has: a token-less call to it is refused at the token guard. */
+const NO_REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
+
+/** `count` calls to `url` on `admin`, and their statuses. */
+async function statusesOf(
+  admin: FastifyInstance,
+  count: number,
+  request: (attempt: number) => {
+    url: string;
+    remoteAddress: string;
+    headers?: Record<string, string>;
+  }
+): Promise<number[]> {
+  const statuses: number[] = [];
+  for (let attempt = 0; attempt < count; attempt += 1) {
+    statuses.push((await admin.inject({ method: 'GET', ...request(attempt) })).statusCode);
+  }
+  return statuses;
+}
+
+/** A new address per attempt, from 198.18.0.0/15. */
+const addressOf = (attempt: number) => `198.18.${Math.floor(attempt / 250)}.${(attempt % 250) + 1}`;
+
+describe('the request ceilings of the admin listener (#511, real containers)', () => {
+  let booted: BootedAuthServer | undefined;
+
+  beforeAll(async () => {
+    if (!dockerUp) return;
+    // The public listener allows two calls a minute and trusts a loopback
+    // proxy; the admin listener keeps its own ceiling and trusts no proxy.
+    booted = await bootWithAdminListener({
+      RATE_LIMIT_MAX: '2',
+      RATE_LIMIT_WINDOW: '60',
+      TRUST_PROXY: 'loopback',
+    });
+  }, 240_000);
+
+  afterAll(async () => {
+    await booted?.close();
+  });
+
+  beforeEach(async (ctx) => {
+    if (!dockerUp || !booted) {
+      ctx.skip();
+      return;
+    }
+    await resetE2eState(booted.app);
+    runs.length = 0;
+  });
+
+  function servers(): { app: FastifyInstance; admin: FastifyInstance } {
+    if (!booted?.admin) throw new Error('admin listener not booted');
+    return { app: booted.app, admin: booted.admin };
+  }
+
+  it('refuses an address past its own count of refusals before the token guard, whatever RATE_LIMIT_MAX says', async () => {
+    const { admin } = servers();
+    const limit = await adminLimit();
+    const statuses = await statusesOf(admin, limit, () => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.7',
+    }));
+    expect(statuses.every((status) => status === 401)).toBe(true);
+
+    const refused = await admin.inject({
+      method: 'GET',
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.7',
+    });
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json()).toMatchObject({ code: 'too_many_requests' });
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0);
+    // Another address has its own count.
+    const other = await admin.inject({
+      method: 'GET',
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.8',
+    });
+    expect(other.statusCode).toBe(401);
+  });
+
+  it('never holds back a valid token at an address past its count, but refuses a bad one', async () => {
+    const { app, admin } = servers();
+    const limit = await adminLimit();
+    const { realmId, token } = await viewerOn(app, 'alpha');
+    await statusesOf(admin, limit, () => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.9',
+    }));
+
+    const call = (headers: Record<string, string> = {}) =>
+      admin.inject({
+        method: 'GET',
+        url: realmPath(realmId),
+        remoteAddress: '198.51.100.9',
+        headers,
+      });
+    expect((await call()).statusCode).toBe(429);
+    expect((await call({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
+    // A token the guard refuses goes on to the guard, and is answered 429.
+    expect((await call({ authorization: 'Bearer not-a-token' })).statusCode).toBe(429);
+    expect(runs).toEqual(['realms.get']);
+  });
+
+  it('counts the TCP peer, whatever X-Forwarded-For says, even from a proxy the public listener trusts', async () => {
+    const { admin } = servers();
+    const limit = await adminLimit();
+    const statuses = await statusesOf(admin, limit + 1, (attempt) => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '127.0.0.1',
+      headers: { 'x-forwarded-for': addressOf(attempt) },
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 401)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+  });
+
+  it('limits calls per token subject from any address, before the realm, writing no row', async () => {
+    const { app, admin } = servers();
+    const limit = await adminLimit();
+    const { realmId, token } = await viewerOn(app, 'alpha');
+
+    // A new address for every call, so only the subject's count can refuse.
+    const statuses = await statusesOf(admin, limit + 1, (attempt) => ({
+      url: realmPath(realmId),
+      remoteAddress: addressOf(attempt),
+      headers: { authorization: `Bearer ${token}` },
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+    expect(runs).toHaveLength(limit);
+    const { rows } = await app.dbPool.query<{ count: string }>(
+      'SELECT count(*) FROM admin_audit_log WHERE realm_id = $1',
+      [realmId]
+    );
+    expect(Number(rows[0].count)).toBe(limit);
+  });
+
+  it('limits every call to the OpenAPI document per address, in a count of its own', async () => {
+    const { admin } = servers();
+    const limit = await adminLimit();
+    const statuses = await statusesOf(admin, limit + 1, () => ({
+      url: '/admin/v1-rc.0/openapi.json',
+      remoteAddress: '198.51.100.30',
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+    // The document's calls are not refusals of the token guard.
+    const call = await admin.inject({
+      method: 'GET',
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.30',
+    });
+    expect(call.statusCode).toBe(401);
+  });
+});
+
+describe('the request ceilings with RATE_LIMIT_ENABLED=false (#511, real containers)', () => {
+  let booted: BootedAuthServer | undefined;
+
+  beforeAll(async () => {
+    if (!dockerUp) return;
+    booted = await bootWithAdminListener({ RATE_LIMIT_ENABLED: 'false' });
+  }, 240_000);
+
+  afterAll(async () => {
+    await booted?.close();
+  });
+
+  it('keeps the count of refusals per address, in memory, at the same ceiling', async (ctx) => {
+    if (!booted?.admin) {
+      ctx.skip();
+      return;
+    }
+    const limit = await adminLimit();
+    const statuses = await statusesOf(booted.admin, limit + 1, () => ({
+      url: realmPath(NO_REALM),
+      remoteAddress: '198.51.100.20',
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 401)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+  });
+
+  it('keeps the ceiling per token subject, in memory, at the same ceiling, from any address', async (ctx) => {
+    if (!booted?.admin) {
+      ctx.skip();
+      return;
+    }
+    const limit = await adminLimit();
+    const { realmId, token } = await viewerOn(booted.app, 'gamma');
+
+    // A new address for every call, so only the subject's count can refuse.
+    const statuses = await statusesOf(booted.admin, limit + 1, (attempt) => ({
+      url: realmPath(realmId),
+      remoteAddress: addressOf(attempt),
+      headers: { authorization: `Bearer ${token}` },
+    }));
+    expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
+    expect(statuses[limit]).toBe(429);
+  });
+});
+
+describe('the admin listener closes with the server (#511, real containers)', () => {
+  it('stops listening when the server closes', async (ctx) => {
+    if (!dockerUp || !infra || !jwt) {
+      ctx.skip();
+      return;
+    }
+    const booted = await bootAuthServer(
+      { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true' },
+      { adminListener: () => ({}) }
+    );
+    const admin = booted.admin;
+    if (admin === undefined) throw new Error('admin listener not booted');
+    const address = await admin.listen({ host: '127.0.0.1', port: 0 });
+    expect((await fetch(`${address}/admin/v1-rc.0/openapi.json`)).status).toBe(200);
+
+    await booted.close();
+
+    expect(admin.server.listening).toBe(false);
+    await expect(fetch(`${address}/admin/v1-rc.0/openapi.json`)).rejects.toThrow();
+  }, 240_000);
+
+  it('lets a call in flight finish, its change and audit row committed, before the database closes', async (ctx) => {
+    if (!dockerUp || !infra) {
+      ctx.skip();
+      return;
+    }
+    // A pool of its own, which the server's close leaves open, and which
+    // reads only committed rows.
+    const observer = Fastify({ logger: false });
+    await observer.register(databasePlugin, {
+      config: { connectionString: infra.postgres.connectionString, pool: { max: 1, min: 0 } },
+    });
+    await observer.ready();
+    const committed = async (realmId: string) => {
+      const {
+        rows: [counts],
+      } = await observer.dbPool.query<{ accounts: string; rows: string }>(
+        `SELECT (SELECT count(*) FROM users WHERE realm_id = $1)::text AS accounts,
+                (SELECT count(*) FROM admin_audit_log WHERE realm_id = $1)::text AS rows`,
+        [realmId]
+      );
+      return { accounts: Number(counts.accounts), rows: Number(counts.rows) };
+    };
+    const booted = await bootWithAdminListener();
+    const { app, admin } = booted;
+    if (admin === undefined) throw new Error('admin listener not booted');
+    await resetE2eState(app);
+    const operator = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!operator) throw new Error('default realm missing');
+    const { realm } = await app.repositories.realms.createWithPrimaryHost(
+      { name: 'alpha', issuer: 'https://alpha.example.com', enabled: true },
+      'alpha.example.com'
+    );
+    const userId = (await app.repositories.users.create({ realmId: operator.id })).id;
+    await app.repositories.adminGrants.create({
+      userId,
+      role: { kind: 'built-in', name: 'editor' },
+      targetRealmId: realm.id,
+      createdBy: null,
+    });
+    const token = await app.jwtUtils.signAccessToken(
+      { id: operator.id },
+      { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
+    );
+
+    let release = (): void => undefined;
+    hold.release = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      hold.entered = resolve;
+    });
+    try {
+      const address = await admin.listen({ host: '127.0.0.1', port: 0 });
+      const call = fetch(`${address}${realmPath(realm.id, '/fixture-holds')}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      await entered;
+      const before = await committed(realm.id);
+
+      // The server closes while the call waits inside its handler.
+      const startedClosing = Date.now();
+      const closing = booted.close();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      release();
+
+      // Its account and audit row were written: the pool was still open.
+      const response = await call;
+      expect(response.status).toBe(200);
+      expect(await committed(realm.id)).toEqual({
+        accounts: before.accounts + 1,
+        rows: before.rows + 1,
+      });
+      // The client keeps its connection alive; the close does not wait for it.
+      await closing;
+      expect(Date.now() - startedClosing).toBeLessThan(5_000);
+      expect(admin.server.listening).toBe(false);
+    } finally {
+      release();
+      delete hold.entered;
+      delete hold.release;
+      await observer.close();
+    }
+  }, 240_000);
+});

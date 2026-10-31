@@ -943,8 +943,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     credentials an admin sets for an account (password, passkey, other
     credential), and rotating a client's secret or registration access token.
 
+- **The admin API's own listener and request pipeline** ([#511], ADR-019
+  Decisions 7 and 8). A process that holds the `admin` role runs a second HTTP
+  server for the admin API, on `ADMIN_API_HOST` and `ADMIN_API_PORT`
+  (`127.0.0.1`, port `3002`, by default) once `ADMIN_API_ENABLED=true` turns it
+  on: it is off by default until the first admin operations ([#517]) and
+  DPoP-bound admin tokens ([#520]) ship, and until [#520] a production process
+  refuses an `ADMIN_API_HOST` that is not loopback. It
+  binds before the public port and closes with the server. The public listener
+  answers 404 for every admin path, but for a CORS preflight, which it answers
+  as on any other path, and refuses to boot an admin route. The
+  listener grants nothing for a caller's network position: every admin route
+  runs behind the same stages, in order: the request id, the admin family's
+  token guard (with the keys of the realm the token's issuer names, the
+  `Bearer` scheme only, and one answer for every refusal), a DPoP stage left
+  empty for [#520], the realm from the path
+  (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
+  the caller's grants and scopes, the classification and permission check, an
+  approval gate, the handler inside one database transaction, and the audit
+  row. Until approvals ship ([#512]) the gate fails closed: every request
+  classified `security` answers the new `approval_required` problem code (403)
+  and never runs. A call that reaches a realm within the caller's grants writes
+  exactly one admin audit row, reads included: `succeeded` in the handler's
+  transaction, or `denied` or `failed` in a new one with no diff (a `denied`
+  or `failed` row that cannot be written is logged instead). A realm
+  outside the grants answers 404, is logged, and adds no row to that realm's
+  chain. The listener has request ceilings of its own, 100 calls a minute each,
+  whatever `RATE_LIMIT_MAX` and `RATE_LIMIT_WINDOW` say (`RATE_LIMIT_ENABLED`
+  only chooses Redis or memory for the counts): per client address (the TCP
+  peer: the listener trusts no proxy), the calls the token guard refuses, past
+  which a call without a token is refused before the guard and a refused token
+  answers 429, while a valid token is never held back; per token subject, every
+  call after the guard; and per address, every call to the OpenAPI document.
+  Every request id is the server's own. A handler answers by returning its
+  body, serialized inside its transaction, so a body its response schema
+  refuses fails the call and rolls its change back; a route's own preHandler
+  refuses by throwing, never by sending the reply; and an admin route may not
+  have hooks that would run before authorization. The admin OpenAPI document is
+  served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
+  token. No admin operation ships yet ([#517] adds the first).
+
 ### Changed
 
+- **A process binds a second port only once the admin listener is turned
+  on** ([#511]). An existing deployment binds nothing new: the listener is off
+  by default. A process with `ADMIN_API_ENABLED=true` and the `admin` role
+  (`SERVICE_ROLES=all`, the default, holds it) also listens on
+  `127.0.0.1:3002` (`ADMIN_API_HOST` and `ADMIN_API_PORT`), and refuses to start
+  when that port is taken: two such processes in one network namespace, such as
+  a blue/green pair on one host or containers on the host network, need a
+  distinct `ADMIN_API_PORT` each.
 - **BREAKING (relying parties and resource servers): tokens are signed and
   verified per realm, through the signer** ([#491], ADR-019 Decisions 1 and 9).
   The JWT plugin holds no key any more. Every access token, ID token, hybrid
@@ -1694,7 +1742,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#509]: https://github.com/qauth-labs/qauth/issues/509
 [#510]: https://github.com/qauth-labs/qauth/issues/510
 [#511]: https://github.com/qauth-labs/qauth/issues/511
+[#512]: https://github.com/qauth-labs/qauth/issues/512
 [#513]: https://github.com/qauth-labs/qauth/issues/513
+[#517]: https://github.com/qauth-labs/qauth/issues/517
+[#520]: https://github.com/qauth-labs/qauth/issues/520
 [#522]: https://github.com/qauth-labs/qauth/issues/522
 [#524]: https://github.com/qauth-labs/qauth/issues/524
 [#536]: https://github.com/qauth-labs/qauth/issues/536

@@ -6,6 +6,7 @@ import { awaitDatabaseMigrations } from '@qauth-labs/fastify-plugin-db';
 import Fastify, { LogController } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
+import { createAdminServer } from './app/admin/listener';
 import { app } from './app/app';
 import {
   answerClientError,
@@ -16,7 +17,7 @@ import {
 } from './app/helpers/request-bounds';
 import { openapiOptions } from './app/openapi-options';
 import errorHandler from './app/plugins/error-handler';
-import { servesApiDocs } from './app/service-roles';
+import { servesAdminListener, servesApiDocs } from './app/service-roles';
 import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
@@ -113,11 +114,23 @@ server.setNotFoundHandler(answerRouteNotFound);
 server.setValidatorCompiler(validatorCompiler);
 server.setSerializerCompiler(serializerCompiler);
 
+// The admin API's internal listener (ADR-019 Decisions 7 and 8, #511): a
+// second Fastify instance, on a process that holds the `admin` role while
+// ADMIN_API_ENABLED is on. `createAdminServer` gives it the rules above (the
+// Zod compilers, the request deadline, problem documents for the router's
+// refusals and unknown paths); the app installs the admin API on it, sharing
+// its database, cache, signer and JWT plugins, and closes it when this
+// server closes. It logs through this server's logger.
+const adminServer = servesAdminListener(env.SERVICE_ROLES, env.ADMIN_API_ENABLED)
+  ? createAdminServer({ loggerInstance: server.log.child({ listener: 'admin' }) })
+  : undefined;
+
 async function shutdown(signal: string) {
   server.log.info(`${signal} received, shutting down gracefully...`);
   try {
     // close() also stops the job runner, which waits for a running job up to
-    // its shutdown limit before the database pool closes (app/plugins/jobs.ts).
+    // its shutdown limit before the database pool closes (app/plugins/jobs.ts),
+    // and the admin listener, before the database closes (#511).
     await server.close();
     process.exit(0);
   } catch (error) {
@@ -180,7 +193,18 @@ async function start() {
     }
 
     // Register app (routes) after swagger so they appear in OpenAPI spec
-    await server.register(app);
+    await server.register(
+      app,
+      adminServer === undefined ? {} : { adminListener: { server: adminServer } }
+    );
+
+    // The admin listener binds first, once the boot steps have run: a process
+    // that cannot serve its admin API fails before it takes public traffic.
+    if (adminServer !== undefined) {
+      await server.ready();
+      await adminServer.listen({ port: env.ADMIN_API_PORT, host: env.ADMIN_API_HOST });
+      server.log.info(`Admin API listening on http://${env.ADMIN_API_HOST}:${env.ADMIN_API_PORT}`);
+    }
 
     // Start listening.
     await server.listen({ port: env.PORT, host: env.HOST });

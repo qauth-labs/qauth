@@ -61,6 +61,7 @@
               "invalid_dpop_proof",
               "forbidden",
               "email_not_verified",
+              "approval_required",
               "not_found",
               "method_not_allowed",
               "conflict",
