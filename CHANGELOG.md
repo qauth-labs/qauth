@@ -1764,6 +1764,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OpenAPI document no longer claims version 1.0.0.** `info.version` was
+  a fixed `1.0.0` from the first Swagger UI (2026-02-28), which read as the 1.0
+  stability promise QAuth has not made. A release image now carries its own
+  version (`release-images.yml` passes the tag's `X.Y.Z` or `X.Y.Z-rc.N` as
+  `QAUTH_VERSION`); every other build, the committed
+  `stable-surface/openapi.json` and the docs site's copy among them, says
+  `0.0.0-dev`. The stable-surface check is unchanged: it compares release
+  tags, not this field.
 - **The verification email's link works again.** Since 42c4d1e4 (2026-09-25)
   the auth server verified an account only on `POST /auth/verify`, with the
   token and the account's password in a JSON body, but the mail still links to
