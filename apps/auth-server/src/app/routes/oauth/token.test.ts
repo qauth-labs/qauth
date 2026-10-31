@@ -5510,6 +5510,26 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(signArg.expiresInOverride).toBe(900);
   });
 
+  it("caps the delegated token at the realm's access lifetime, from the row it already has (#527)", async () => {
+    // The subject lives far longer than the realm's 300 s, and the JWT
+    // plugin's 900 s is only the fallback of a realm with no policies.
+    const exp = Math.floor(Date.now() / 1000) + 10000;
+    const { fastify, ctx } = setupExchangeStub({ subjectExp: exp });
+    const realmReads = withRealmLifetimes(fastify);
+
+    const result = await invoke(fastify, ctx, {
+      ...exchangeRequest(),
+      realm: REALM_WITH_POLICIES,
+    });
+
+    const signArg = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0][1];
+    expect(signArg.expiresInOverride).toBe(300);
+    expect((result as { expires_in: number }).expires_in).toBe(300);
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+    expect(fastify.jwtUtils.getAccessTokenLifespan).not.toHaveBeenCalled();
+  });
+
   it('emits the bare `invalid_request` error code via InvalidRequestError (RFC 6749 §5.2)', async () => {
     // The wire `error` field must be the bare token; detail goes in
     // error_description. InvalidRequestError.message is exactly "invalid_request".
@@ -5791,6 +5811,27 @@ describe('POST /oauth/token — ID-JAG CONSUME (jwt-bearer grant, ADR-011)', () 
     // `issued_token_type`.
     expect(result).not.toHaveProperty('refresh_token');
     expect(result).not.toHaveProperty('issued_token_type');
+  });
+
+  it("signs with the realm's access lifetime and answers it as expires_in, without a realm query (#527)", async () => {
+    enableIdJag();
+    const idpKey = await wireTrustedIdp();
+    const { fastify, ctx } = setupConsumeStub();
+    const realmReads = withRealmLifetimes(fastify);
+
+    const result = (await invoke(fastify, ctx, {
+      ...bearerRequest(await signIdJag(idpKey, { scope: 'chat.read chat.history' })),
+      realm: REALM_WITH_POLICIES,
+    })) as Record<string, unknown>;
+
+    expect(result['expires_in']).toBe(300);
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+    expect(fastify.policyStore.ofRealm).toHaveBeenCalledExactlyOnceWith(REALM_WITH_POLICIES);
+    expect(realmReads).toEqual([]);
+    expect(fastify.jwtUtils.getAccessTokenLifespan).not.toHaveBeenCalled();
   });
 
   // #510: an admin token comes only from a sign-in at QAuth itself, never

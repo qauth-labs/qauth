@@ -84,6 +84,12 @@ export interface TokenLifetimes {
  * fill moves the same values onto the row, so the lifetimes do not change
  * when it lands.
  *
+ * The store reads the whole document, so a value the schema refuses in any
+ * group, not only `tokens`, fails the request (a server error, logged) rather
+ * than let the server guess what the realm meant. The policy store writes no
+ * value the schema refuses; such a value comes from a row written by hand, or
+ * by a node of another release.
+ *
  * @throws PolicyValidationError when the realm's stored policies are not a
  *   valid policy document
  */

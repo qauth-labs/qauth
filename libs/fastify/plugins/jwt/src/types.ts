@@ -69,10 +69,12 @@ export interface JwtPluginOptions extends FastifyPluginOptions {
    * before #283 carries a `typ` at all. Only the "`typ` must be PRESENT" half
    * is breaking: enabling it in the same deploy that begins stamping would
    * reject every access token minted by the previous build that is still inside
-   * {@link accessTokenLifespan} (default 900s).
+   * its lifetime (the realm's, #527: 900 s by default, 8 h for a development
+   * client).
    *
-   * Turn this on in a LATER deploy, at least one `ACCESS_TOKEN_LIFESPAN` after
-   * the build that introduced stamping has fully rolled out.
+   * Turn this on in a LATER deploy, at least the longest access token lifetime
+   * of any realm, the development lifetime included, after the build that
+   * introduced stamping has fully rolled out.
    */
   requireAccessTokenTyp?: boolean;
   /**
