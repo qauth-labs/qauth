@@ -1,5 +1,6 @@
 import type {
   BrowserSession,
+  SessionActor,
   SessionAssuranceLevel,
   SessionRevokedReason,
 } from '@qauth-labs/fastify-plugin-sessions';
@@ -122,7 +123,7 @@ export async function resolveBrowserSession(
     // The account behind the session is gone or disabled, or was disabled
     // after the session began (#748) — end the session so the cookie cannot
     // keep using it, and treat it as no sign-in.
-    await endBrowserSession(fastify, session.realmId, session.sid, 'admin');
+    await endBrowserSession(fastify, session.realmId, session.sid, 'admin', SYSTEM_ACTOR);
     clearSessionCookie(reply);
     return null;
   }
@@ -155,14 +156,21 @@ async function trackBrowserSession(
   if (failed) throw failed[0];
 }
 
+/**
+ * Who ends a session whose account is gone or disabled: QAuth itself, on the
+ * request that found it so.
+ */
+const SYSTEM_ACTOR: SessionActor = Object.freeze({ type: 'system' });
+
 /** Revoke one session through the service and drop its side record. */
 export async function endBrowserSession(
   fastify: FastifyInstance,
   realmId: string,
   sid: string,
-  reason: SessionRevokedReason
+  reason: SessionRevokedReason,
+  actor: SessionActor
 ): Promise<void> {
-  await fastify.sessionService.revoke({ realmId, sid, reason });
+  await fastify.sessionService.revoke({ realmId, sid, reason, actor });
   await deleteSessionSideRecord(fastify, realmId, sid);
 }
 
@@ -183,8 +191,10 @@ export async function endBrowserSessions(
 ): Promise<string[]> {
   const key = REDIS_KEYS.USER_BROWSER_SESSIONS(userId);
   const sids = await fastify.redis.smembers(key);
+  // The user signs themselves out.
+  const actor: SessionActor = { type: 'user', id: userId };
   for (const sid of sids) {
-    await endBrowserSession(fastify, realmId, sid, 'sign_out_everywhere');
+    await endBrowserSession(fastify, realmId, sid, 'sign_out_everywhere', actor);
   }
   await fastify.redis.del(key);
   return sids;

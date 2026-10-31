@@ -2197,6 +2197,7 @@ describe('GET /oauth/authorize — disabled user', () => {
       realmId: REALM.id,
       sid: 'sid-1',
       reason: 'admin',
+      actor: { type: 'system' },
     });
     expect(sessions.service.sessions.has('sid-1')).toBe(false);
     expect(state.headers['Set-Cookie']).toContain('Max-Age=0');

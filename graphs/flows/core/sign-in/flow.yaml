@@ -523,7 +523,7 @@ states:
         target: updatingLastLogin
         effect: [createSession]
         say: 'the session is created, with a new sid; no cookie the request carried is read'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:59
+        source: apps/auth-server/src/app/helpers/browser-session.ts:60
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'

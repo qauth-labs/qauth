@@ -608,6 +608,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guide). During a rolling upgrade the previous release writes codes without a
   session, and a session it revokes keeps its registry rows, which the lookups
   skip, and its codes unspent.
+- **Session lists and revocations** ([#550], ADR-019 Decisions 3 and 4). The
+  session service lists a user's sessions, or the sessions that served a
+  client, newest first in cursor pages (a cursor of another list is refused),
+  each with its clients, address, user agent, `auth_time`, `last_seen_at` and
+  state (`live`, `idle`, `expired` or `revoked`). It ends one session (a second
+  call reports `already_ended` and changes nothing), a user's sessions (but one,
+  or only those created before a time, for a password reset), and a realm's
+  sessions in batches of 500 (at most 5,000), each its own transaction, for key
+  retirement and bulk revocation. Every revocation names its actor, returns the
+  ended sessions with the clients they served, writes a cache tombstone for
+  each, and then tells the listeners registered with `onSessionsEnded`, once
+  per session, in the process that revoked, after the commit. Refresh-token
+  families and Authority Trees are left to the caller. Two jobs run on the
+  `web` role. `session-expiry`, every five minutes, marks the sessions past
+  their absolute end or their realm's idle limit (which no read accepted
+  already) as `expired` or `idle`, so their clients leave the registry and the
+  listeners hear of the end. `session-purge`, hourly, deletes the rows that
+  ended or expired more than `SESSION_RETENTION_DAYS` ago (a new advanced key,
+  30 by default). The single revocation now passes on the clients the session
+  served, which the store adapter used to drop. No HTTP route is added; the
+  account and admin APIs will add them.
 
 - **The key variables move into the key store at first boot** ([#485],
   ADR-019 Decision 9 and its answer on existing issuers). At every boot, after
@@ -1942,6 +1963,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549
+[#550]: https://github.com/qauth-labs/qauth/issues/550
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
 [#577]: https://github.com/qauth-labs/qauth/issues/577

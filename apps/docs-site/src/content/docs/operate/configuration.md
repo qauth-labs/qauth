@@ -266,6 +266,7 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `SESSION_COOKIE_SECURE`      | deployment | `true`  | 0.1.0 | Set the `Secure` attribute on the session cookie; only a plain-HTTP development stack turns it off.                                                                                              |
 | `SESSION_COOKIE_TTL`         | deployment | `86400` | 0.1.0 | The browser session lifetime, in seconds, counted from sign-in.                                                                                                                                  |
 | `SESSION_LAST_SEEN_INTERVAL` | deployment | `60`    | 0.2.0 | How often, at most, in seconds, the last-seen time of a browser session is written; the idle limit of its realm is judged from that time.                                                        |
+| `SESSION_RETENTION_DAYS`     | deployment | `30`    | 0.2.0 | The days a browser session row is kept after it ended or expired, for the account and admin session lists, before the session purge job deletes it.                                              |
 
 ### Mail
 

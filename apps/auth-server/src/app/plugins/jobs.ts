@@ -67,6 +67,9 @@ export const jobsPlugin = fp<JobsPluginOptions>(
             ...(options.eventRetentionFallback === undefined
               ? {}
               : { eventRetentionFallback: options.eventRetentionFallback }),
+            ...(options.sessionRetentionDays === undefined
+              ? {}
+              : { sessionRetentionDays: options.sessionRetentionDays }),
           },
           roles
         ),
