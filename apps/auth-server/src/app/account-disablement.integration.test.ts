@@ -297,6 +297,9 @@ describe('an account enabled again does not bring back what it held before (#748
     const app = server();
     const userId = await seed(app);
     const old = await signInAndObtainTokens(app);
+    // So what was held before is refused for being issued before the
+    // disablement, not for falling within the margin.
+    await waitPastMargin();
     await setEnabled(app, userId, false);
     await setEnabled(app, userId, true);
     await waitPastDisablement(app, userId);

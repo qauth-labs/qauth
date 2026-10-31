@@ -96,6 +96,19 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     return value === null || value === undefined ? null : Number(value);
   }
 
+  /**
+   * The database's clock, in epoch milliseconds, as the triggers read it: the
+   * bounds of a recorded time, which the host's clock may disagree with.
+   */
+  async function dbNow(): Promise<number> {
+    const {
+      rows: [now],
+    } = await db().query<{ now: string }>(
+      `SELECT floor(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now`
+    );
+    return Number(now.now);
+  }
+
   async function setEnabled(userId: string, enabled: boolean): Promise<void> {
     await db().query(`UPDATE users SET enabled = $1 WHERE id = $2`, [enabled, userId]);
   }
@@ -105,9 +118,9 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     const enabled = await seedUser(realm);
     const disabled = await seedUser(realm, false);
 
-    const start = Date.now();
+    const start = await dbNow();
     await migrate();
-    const end = Date.now();
+    const end = await dbNow();
 
     expect(await notValidBefore(enabled)).toBeNull();
     // Disabled at a time nobody recorded: what it holds was issued before now.
@@ -130,9 +143,9 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
     const user = await seedUser(realm);
     await migrate();
 
-    const start = Date.now();
+    const start = await dbNow();
     await setEnabled(user, false);
-    const end = Date.now();
+    const end = await dbNow();
 
     const recorded = await notValidBefore(user);
     expect(recorded).not.toBeNull();
@@ -158,7 +171,7 @@ describe('migration 0044 — users.not_valid_before (seed-then-migrate)', () => 
       // Other transactions read the account as enabled until the commit, and
       // may sign it in meanwhile.
       await client.query(`SELECT pg_sleep(0.3)`);
-      const beforeCommit = Date.now();
+      const beforeCommit = await dbNow();
       await client.query('COMMIT');
 
       const committed = await notValidBefore(user);

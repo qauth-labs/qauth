@@ -9,7 +9,7 @@
  * Requires Docker; skips locally without it, fails on CI (requireDockerOrSkip).
  */
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { createRealmsRepository, createUsersRepository } from '../lib/repositories';
@@ -56,6 +56,17 @@ describe('setUserEnabled (real Postgres)', () => {
     return r;
   }
 
+  /**
+   * The database's clock, in epoch milliseconds, as the triggers read it: the
+   * bounds of a recorded time, which the host's clock may disagree with.
+   */
+  async function dbNow(): Promise<number> {
+    const { rows } = await db().execute<{ now: string }>(
+      sql`SELECT floor(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now`
+    );
+    return Number(rows[0].now);
+  }
+
   async function eventsOf(realmId: string) {
     return db().select().from(events).where(eq(events.realmId, realmId)).orderBy(events.seq);
   }
@@ -63,9 +74,9 @@ describe('setUserEnabled (real Postgres)', () => {
   it('disables the account, records the time from the database clock, and writes the event', async () => {
     const { realm, user } = await seed('dis-1');
 
-    const before = Date.now();
+    const before = await dbNow();
     const result = await setUserEnabled(db(), { realm: 'dis-1', userId: user.id, enable: false });
-    const after = Date.now();
+    const after = await dbNow();
 
     if (result.status !== 'disabled') throw new Error(`expected disabled, got ${result.status}`);
     expect(result).toMatchObject({ userId: user.id, enabled: false });
