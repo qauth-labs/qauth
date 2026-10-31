@@ -2,8 +2,8 @@ import Fastify from 'fastify';
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEPRECATIONS_PAGE_URL,
   deprecationFieldValue,
+  DEPRECATIONS_PAGE_URL,
   LEGACY_ACCOUNT_DEVELOPER_PATHS_DEPRECATED_AT,
   sendDeprecationHeaders,
 } from './deprecation';
