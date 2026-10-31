@@ -5,12 +5,17 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/shared-interaction-contract": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
     "ajv-formats": "catalog:",
     "tslib": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@qauth-labs/shared-test-vectors": "workspace:*",
-    "tsx": "catalog:"
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

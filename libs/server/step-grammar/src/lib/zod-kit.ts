@@ -14,11 +14,12 @@ import { toJsonSchemaPart } from './json-schema';
  * A `format` is checked as the published schemas' validator checks it
  * (`formats.ts`, ajv-formats in full mode), beside the `pattern`.
  *
- * Zod counts a string's length in UTF-16 code units where JSON Schema counts
- * code points, so a character outside the Basic Multilingual Plane counts
- * twice. Against a maximum that is stricter. Against a minimum it would be
- * laxer, but every string here with a minimum above one is held to ASCII by
- * its pattern or is parsed as JSON (`jsonString`), so no value is affected.
+ * Zod counts a string's length in code points (since Zod 4.5), as JSON Schema
+ * does, so the two agree on every length but the passwords': `password` and
+ * `new_password` use `passwordSchema` from `@qauth-labs/shared-validation`,
+ * which counts UTF-16 code units as ADR-017 Decision 8 says. For a character
+ * outside the Basic Multilingual Plane that is stricter than the published
+ * `maxLength`.
  */
 
 /**

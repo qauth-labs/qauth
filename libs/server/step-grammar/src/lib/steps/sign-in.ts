@@ -1,3 +1,4 @@
+import { passwordSchema } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import { defineStep } from '../grammar';
@@ -43,7 +44,9 @@ export const password = defineStep({
   params: EMPTY_OBJECT,
   personal: identifierPersonal,
   answer: object({
-    password: z.string().min(1).max(256).meta({
+    // `passwordSchema` counts UTF-16 code units, as ADR-017 Decision 8 says;
+    // Zod's own `.max()` counts code points.
+    password: passwordSchema.min(1).meta({
       description:
         'The password. The server refuses one longer than 256 UTF-16 code units before anything else (ADR-017 Decision 8).',
     }),

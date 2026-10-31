@@ -147,11 +147,12 @@ new case id, not an edited case.
 
 Zod and the published schema's validator read the same rules, `format` included: the Zod schemas
 run ajv-formats' `uri` and `date-time` checks, the ones the contract's own tests validate with.
-Two differences remain, on purpose. Zod counts a string's length in UTF-16 code units, where JSON
-Schema counts code points: stricter against a maximum, and no value is affected against a minimum,
-because every string with a minimum above one is held to ASCII by its pattern or parsed as JSON.
-And the server parses a WebAuthn response string as the JSON document it names, which JSON
-Schema's `contentSchema` only annotates.
+Both count a string's length in code points (Zod since 4.5). Two differences remain, on purpose.
+A password (`password`, `new_password`) is counted in UTF-16 code units, as ADR-017 Decision 8 and
+the published description say, through `passwordSchema` from `@qauth-labs/shared-validation`:
+stricter than the published `maxLength` for a character outside the Basic Multilingual Plane, so
+129 emoji are refused. And the server parses a WebAuthn response string as the JSON document it
+names, which JSON Schema's `contentSchema` only annotates.
 
 ## Known gaps, for the issues that serve these steps
 

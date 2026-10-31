@@ -1,3 +1,4 @@
+import { passwordSchema } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import { defineStep } from '../grammar';
@@ -87,7 +88,8 @@ export const newPassword = defineStep({
   }),
   personal: identifierPersonal,
   answer: object({
-    new_password: z.string().min(1).max(256).meta({ description: 'The new password.' }),
+    // UTF-16 code units, as for `password` (ADR-017 Decision 8).
+    new_password: passwordSchema.min(1).meta({ description: 'The new password.' }),
   }),
   errors: ['password_rejected'],
   amr: [],

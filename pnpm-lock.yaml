@@ -1532,6 +1532,9 @@ importers:
       '@qauth-labs/shared-interaction-contract':
         specifier: workspace:*
         version: link:../../shared/interaction-contract
+      '@qauth-labs/shared-validation':
+        specifier: workspace:*
+        version: link:../../shared/validation
       ajv-formats:
         specifier: 'catalog:'
         version: 3.0.1(ajv@8.20.0)
@@ -1545,9 +1548,21 @@ importers:
       '@qauth-labs/shared-test-vectors':
         specifier: workspace:*
         version: link:../../shared/test-vectors
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
       tsx:
         specifier: 'catalog:'
         version: 4.23.15
+      typescript:
+        specifier: ~6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
 
   libs/shared/errors:
     dependencies:

@@ -314,12 +314,36 @@ describe('the Zod schemas and the published schema', () => {
     }
   });
 
-  it('differ on purpose in one place: the server parses a WebAuthn response, JSON Schema only annotates it', () => {
+  it('differ on purpose: the server parses a WebAuthn response, JSON Schema only annotates it', () => {
     expect(
       verdicts('webauthn_get', 'answer', { webauthn_response: '{"not":"a credential"}' })
     ).toEqual({
       zod: false,
       json: true,
     });
+  });
+
+  // ADR-017 Decision 8: a password is at most 256 UTF-16 code units. JSON
+  // Schema's `maxLength` counts code points, so the server is stricter for a
+  // character outside the Basic Multilingual Plane.
+  it('differ on purpose: the server counts a password in UTF-16 code units', () => {
+    const emoji = '\u{1F600}';
+    for (const [name, member] of [
+      ['password', 'password'],
+      ['new_password', 'new_password'],
+    ] as const) {
+      expect(verdicts(name, 'answer', { [member]: emoji.repeat(128) })).toEqual({
+        zod: true,
+        json: true,
+      });
+      expect(verdicts(name, 'answer', { [member]: emoji.repeat(129) })).toEqual({
+        zod: false,
+        json: true,
+      });
+      expect(verdicts(name, 'answer', { [member]: 'x'.repeat(256) })).toEqual({
+        zod: true,
+        json: true,
+      });
+    }
   });
 });
