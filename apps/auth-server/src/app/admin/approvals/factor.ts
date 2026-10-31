@@ -12,8 +12,9 @@ import { canonicalizeJson } from '@qauth-labs/fastify-plugin-db';
  *
  * The passkey factor (WebAuthn, #623) is the only one a deployment will use.
  * Until it ships, only the test factor exists
- * (`apps/auth-server/src/testing/approval-factor.ts`), which refuses to be
- * built under `NODE_ENV=production`, so no production process can approve.
+ * (`apps/auth-server/src/testing/approval-factor.ts`), which is built only
+ * in a test run and never under `NODE_ENV=production`, so no production
+ * process can approve.
  *
  * Binding: a factor's challenge is derived from the approval's `op_hash`
  * ({@link approvalChallengeOf}), with the approval id, the approver and a

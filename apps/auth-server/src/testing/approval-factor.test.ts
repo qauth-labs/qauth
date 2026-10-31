@@ -66,4 +66,14 @@ describe('the test approval factor (#512)', () => {
     vi.stubEnv('NODE_ENV', 'production');
     expect(() => createTestApprovalFactor()).toThrow(/never built in production/);
   });
+
+  it('is built only in a test run', () => {
+    vi.stubEnv('VITEST', undefined);
+    for (const mode of ['development', '', undefined]) {
+      vi.stubEnv('NODE_ENV', mode);
+      expect(() => createTestApprovalFactor()).toThrow(/built only in a test run/);
+    }
+    vi.stubEnv('NODE_ENV', 'test');
+    expect(() => createTestApprovalFactor()).not.toThrow();
+  });
 });

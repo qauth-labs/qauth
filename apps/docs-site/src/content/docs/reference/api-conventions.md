@@ -228,7 +228,8 @@ Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approv
 3. An approver confirms on that page with a factor, or declines. There is no admin route for it.
    The passkey factor is the only one a deployment will use. Neither it nor the approval page has
    shipped yet, so no code a deployment runs gives an approval; the one factor that exists is for
-   tests, and refuses to be built under `NODE_ENV=production`.
+   tests, and is built only in a test run (`VITEST` set or `NODE_ENV=test`), never under
+   `NODE_ENV=production`.
 4. The client reads the approval, `GET /admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}`,
    until its `status` is `approved`.
 5. It repeats the original call, unchanged, with the header `QAuth-Approval: <approvalId>`. The

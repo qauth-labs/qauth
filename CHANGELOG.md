@@ -1133,7 +1133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   happens through a factor (the `ApprovalFactor` interface), never through an
   admin route. Neither the passkey factor nor the approval page has shipped,
   so no code a deployment runs gives an approval; the one factor that exists is
-  for tests and refuses to be built under `NODE_ENV=production`. The answer
+  for tests and is built only in a test run, never under
+  `NODE_ENV=production`. The answer
   carries `approvalUrl`, `/approvals/{realmId}/{approvalId}` on the requester
   realm's issuer, built from its row. Every security
   operation registers a renderer, and the admin listener refuses to boot one

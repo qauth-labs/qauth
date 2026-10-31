@@ -20,8 +20,10 @@ import {
  * one approval and one approver, it is answered once, and an answer verifies
  * only for the approval and approver it was made for.
  *
- * Refuses to be built under `NODE_ENV=production`, so a production process
- * can never approve with it.
+ * Built only in a test run, where Vitest sets `VITEST` or `NODE_ENV` is
+ * `test`, and never under `NODE_ENV=production`: a process that is not a
+ * test, a production one or one whose `NODE_ENV` is unset, can never approve
+ * with it.
  */
 
 /** What the test authenticator answers a challenge with. */
@@ -42,8 +44,11 @@ export interface TestApprovalFactor {
 
 /** Build a test factor with a key of its own. */
 export function createTestApprovalFactor(): TestApprovalFactor {
-  if (process.env['NODE_ENV'] === 'production') {
-    throw new Error('The test approval factor is never built in production');
+  const testRun = process.env['VITEST'] !== undefined || process.env['NODE_ENV'] === 'test';
+  if (process.env['NODE_ENV'] === 'production' || !testRun) {
+    throw new Error(
+      'The test approval factor is built only in a test run, and never built in production'
+    );
   }
   const key = randomBytes(32);
   const challenges = new Map<string, { readonly challenge: string; used: boolean }>();
