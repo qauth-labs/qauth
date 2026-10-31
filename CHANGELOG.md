@@ -1215,6 +1215,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An agent client always sees the consent screen** ([#845], ADR-015
+  Decision 11, ADR-014 §11). A stored consent that covers the request no
+  longer skips `/ui/consent` for a client with `is_agent`: every browser
+  authorization of an agent shows the screen, which says the client is an AI
+  agent and how long it may keep working. `prompt=none` from an agent answers
+  `consent_required`, with no code, whenever no fresh login is needed; a
+  fresh-login requirement still answers `login_required` first. The legacy
+  Bearer path of `/oauth/authorize`, which cannot show the screen, answers an
+  agent with `access_denied`. An agent integration that relied on a remembered
+  consent to get a code without a page now gets the page, or the error, each
+  time.
 - **The consent screen leads with what the server verified about the client**
   ([#593]). Its heading and title name the verified domain, or say "An
   unverified app", never the client's own name, which now appears below,
@@ -2001,6 +2012,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#827]: https://github.com/qauth-labs/qauth/issues/827
+[#845]: https://github.com/qauth-labs/qauth/issues/845
 
 ### Fixed
 
