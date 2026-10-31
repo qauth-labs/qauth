@@ -22,6 +22,14 @@ import { toJsonSchemaPart } from './json-schema';
  */
 
 /**
+ * A maximum length that ends the parse when it fails, so no later check (a
+ * pattern, a `format`, the JSON parse of {@link jsonString}) reads an
+ * oversized value. Zod runs every check in turn by default; `abort` changes
+ * nothing in the generated JSON Schema.
+ */
+const STOP_AT_MAX = { abort: true } as const;
+
+/**
  * A string that matches `pattern`, read with the `u` flag as JSON Schema
  * reads every pattern. The published `pattern` is the string itself:
  * `RegExp#source` would write `/` as `\/`.
@@ -47,7 +55,7 @@ export function base64url(min: number, max: number, description: string) {
 /** An RFC 3339 UTC time, such as `2026-10-26T09:30:00Z`: a real date and time. */
 export function dateTime(description: string) {
   return matching(
-    z.string().max(30),
+    z.string().max(30, STOP_AT_MAX),
     '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,9})?Z$'
   )
     .refine(isDateTime)
@@ -71,7 +79,7 @@ const BROWSER_LOCAL_SCHEME = '^(?:javascript|data|vbscript|file|blob):';
 /** An absolute URI of any scheme except those a browser runs or reads locally. */
 export function absoluteUri(maxLength: number, description: string) {
   const browserLocal = new RegExp(BROWSER_LOCAL_SCHEME, 'u');
-  return matching(z.string().max(maxLength), `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS}+$`)
+  return matching(z.string().max(maxLength, STOP_AT_MAX), `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS}+$`)
     .refine((value) => !browserLocal.test(value))
     .refine(isUri)
     .meta({
@@ -83,7 +91,7 @@ export function absoluteUri(maxLength: number, description: string) {
 
 /** A URI that matches `pattern`: `format: uri`, checked as RFC 3986 reads it. */
 export function uriMatching(maxLength: number, pattern: string, description: string) {
-  return matching(z.string().max(maxLength), pattern)
+  return matching(z.string().max(maxLength, STOP_AT_MAX), pattern)
     .refine(isUri)
     .meta({ format: 'uri', description });
 }
@@ -185,7 +193,7 @@ export function jsonString<T extends z.ZodType>(
   return z
     .string()
     .min(minLength)
-    .max(maxLength)
+    .max(maxLength, STOP_AT_MAX)
     .refine((value) => {
       try {
         return content.safeParse(JSON.parse(value)).success;

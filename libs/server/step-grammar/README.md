@@ -138,5 +138,6 @@ Schema's `contentSchema` only annotates.
 | `interaction-mapper.test.ts` | The step view of every example equals the contract's example step read                                                |
 | `fipa-mapper.test.ts`        | ADR-017's wire examples; `redirect_to_web`; `interaction_type_required` is always a version-1 name                    |
 | `no-prose.test.ts`           | No output of either mapper carries prose; an offer that tries is refused                                              |
+| `zod-kit.test.ts`            | A value over its maximum length is refused before a pattern, a `format` or a JSON parse reads it                      |
 | `exhaustive.test.ts`         | Runs the TypeScript compiler: a step without a mapper fails the type check                                            |
 | `vectors.test.ts`            | The committed vectors are what the mappers give, and a reader recovers each step from them                            |
