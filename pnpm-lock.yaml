@@ -1038,6 +1038,46 @@ importers:
         specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
 
+  libs/fastify/plugins/sign-in-engine:
+    dependencies:
+      '@qauth-labs/server-federation':
+        specifier: workspace:*
+        version: link:../../../server/federation
+      '@qauth-labs/server-sign-in-engine':
+        specifier: workspace:*
+        version: link:../../../server/sign-in-engine
+      '@qauth-labs/server-step-grammar':
+        specifier: workspace:*
+        version: link:../../../server/step-grammar
+      '@qauth-labs/shared-events':
+        specifier: workspace:*
+        version: link:../../../shared/events
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.7
+      fastify-plugin:
+        specifier: 'catalog:'
+        version: 6.0.1
+    devDependencies:
+      '@qauth-labs/infra-db':
+        specifier: workspace:*
+        version: link:../../../infra/db
+      '@qauth-labs/server-password':
+        specifier: workspace:*
+        version: link:../../../server/password
+      '@qauth-labs/shared-testing':
+        specifier: workspace:*
+        version: link:../../../shared/testing
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+
   libs/fastify/plugins/signer:
     dependencies:
       '@qauth-labs/core-crypto':
@@ -1537,6 +1577,31 @@ importers:
 
   libs/server/sessions:
     dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
+    devDependencies:
+      '@vitest/coverage-v8':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      '@vitest/ui':
+        specifier: 'catalog:'
+        version: 5.0.5(vitest@5.0.5)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+
+  libs/server/sign-in-engine:
+    dependencies:
+      '@qauth-labs/server-step-grammar':
+        specifier: workspace:*
+        version: link:../step-grammar
+      '@qauth-labs/shared-validation':
+        specifier: workspace:*
+        version: link:../../shared/validation
       tslib:
         specifier: 'catalog:'
         version: 2.8.1

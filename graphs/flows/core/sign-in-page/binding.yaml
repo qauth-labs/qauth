@@ -1,4 +1,4 @@
-# core.sign-in bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
+# core.sign-in-page bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
 # delurio's replay drives a browser today, and `request` below is the request template QAuth asks of its replay over
 # HTTP (method, path, query, form, headers, and values saved from earlier responses), with a cookie jar per walk. The
 # shared server binding (#565) gives the server's address, the realm's hosts and how a replay reaches the database;
@@ -13,7 +13,7 @@
 #   counters of the replay's address are shared by every walk, and a walk must not inherit another's.
 schema: delurio-graph/0
 kind: binding
-flow: core.sign-in
+flow: core.sign-in-page
 extends: ../../../bindings/server.binding.yaml # written by #565
 
 server:

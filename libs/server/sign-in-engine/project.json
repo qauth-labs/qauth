@@ -1,0 +1,8 @@
+{
+  "name": "server-sign-in-engine",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/sign-in-engine/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "// targets": "to see all targets run: nx show project server-sign-in-engine --web"
+}
