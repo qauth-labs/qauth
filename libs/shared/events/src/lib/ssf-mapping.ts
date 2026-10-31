@@ -313,6 +313,10 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
     const keyId = dataMember(definition, 'keyId');
     if (keyId === undefined || keyId.optional) {
       problems.push('ssf.subject "key" needs a required data.keyId');
+    } else if (dataKind(keyId.schema) !== 'string') {
+      // The SET names the key as an `opaque` identifier, a string: any other
+      // keyId would leave every event of the type unsent.
+      problems.push('ssf.subject "key" needs data.keyId to be a string');
     }
     // A key event reaches every stream of the realm: a type about a user or a
     // client must never widen its delivery that way.
@@ -327,6 +331,17 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
   }
   if (subject === 'key' && mapping.clientOnly) {
     problems.push('an event about a key goes to every stream of the realm, never to one client');
+  }
+  // A receiver may add any client of the realm as a subject: no relation is
+  // checked for a client, as it is for a user. So an event about a client
+  // reaches only that client's own stream, never every receiver that added it.
+  if (
+    (subject === 'client' || (subject === 'subject' && definition.subject === 'client')) &&
+    mapping.clientOnly !== true
+  ) {
+    problems.push(
+      'an event about a client goes to its own stream only: set ssf.clientOnly, since any receiver may add a client'
+    );
   }
   if (
     mapping.initiatingEntity !== undefined &&

@@ -243,6 +243,39 @@ describe('the SSF rule of the registry (#540)', () => {
         }),
       ]).join('\n')
     ).toContain('ssf.subject "key" is for a type with no subject');
+    // The SET names the key by a string: a keyId of any other kind would
+    // leave every event of the type unsent.
+    expect(
+      validate([
+        securityType({
+          subject: undefined,
+          data: z.strictObject({ keyId: z.int().describe('A number.') }),
+          ssf: { event: CAEP_SESSION_REVOKED, subject: 'key' },
+        }),
+      ]).join('\n')
+    ).toContain('ssf.subject "key" needs data.keyId to be a string');
+  });
+
+  // Any receiver may add any client of the realm as a subject, with no
+  // relation checked: an event about a client must reach that client alone.
+  it('keeps an event about a client to its own stream', () => {
+    const clientType = (ssf: SsfEventMapping) => securityType({ subject: 'client', ssf });
+    const apiKeyType = (ssf: SsfEventMapping) => securityType({ subject: 'api_key', ssf });
+    const message = 'an event about a client goes to its own stream only: set ssf.clientOnly';
+    expect(validate([clientType({ event: CAEP_SESSION_REVOKED })]).join('\n')).toContain(message);
+    expect(
+      validate([apiKeyType({ event: CAEP_SESSION_REVOKED, subject: 'client' })]).join('\n')
+    ).toContain(message);
+    // A user's type naming its client as the subject is about the client too.
+    expect(
+      validate([withMapping({ event: CAEP_SESSION_REVOKED, subject: 'client' })]).join('\n')
+    ).toContain(message);
+    expect(validate([clientType({ event: CAEP_SESSION_REVOKED, clientOnly: true })])).toEqual([]);
+    expect(
+      validate([apiKeyType({ event: CAEP_SESSION_REVOKED, subject: 'client', clientOnly: true })])
+    ).toEqual([]);
+    // An event about a user is limited by the user's relation instead.
+    expect(validate([withMapping({ event: CAEP_SESSION_REVOKED })])).toEqual([]);
   });
 
   it('fails a subject mapping for a type whose subject is not a user or a client', () => {
