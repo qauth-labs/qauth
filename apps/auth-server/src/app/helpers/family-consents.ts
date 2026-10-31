@@ -114,7 +114,7 @@ export function familyConsentRoutes(family: ConsentFamily): {
       schema: {
         operationId: `${family}.consents.list`,
         description:
-          "List the active OAuth consents of the token's user, newest first, one page at a time.",
+          "List the active OAuth consents of the token's user, one page at a time, by when each was first given, newest first. A new grant to the same client keeps its consent where it is in the list.",
         tags,
         security: [{ bearerAuth: [] }],
         'x-qauth-stability': 'stable',
@@ -156,12 +156,16 @@ export function familyConsentRoutes(family: ConsentFamily): {
       config: { surface: 'api' },
       handler: async (request, reply) => {
         const userId = requireTokenUserId(request);
+        // The account family accepts a delegated token: the event then names
+        // the acting agent. The developer family refuses one at its guard.
+        const act = request.jwtPayload?.act;
         await revokeConsentForUser(
           request.server,
           request,
           requestRealm(request).id,
           userId,
-          request.params.consentId
+          request.params.consentId,
+          act === undefined || act === null ? {} : { act }
         );
         reply.code(204);
         return reply.send(null);

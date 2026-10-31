@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import { readPage } from '../api-conventions/cursor';
 import type { Page } from '../api-conventions/paging';
-import { emitUserEvent } from './user-events';
+import { emitUserEvent, type UserEventOptions } from './user-events';
 
 /**
  * Consent listing and revocation, shared by the two surfaces that expose it
@@ -68,9 +68,10 @@ export type ConsentWithClient = Awaited<
 >[number];
 
 /**
- * One page of the active consents of `userId` in the realm, newest first
- * (#524), by `grantedAt` and then id. `list` names the list in its cursors,
- * so a cursor of another list is refused (`invalid_cursor`).
+ * One page of the active consents of `userId` in the realm (#524), by when
+ * each was first given, newest first: by id, a UUIDv7 the row keeps, since a
+ * re-grant rewrites `grantedAt`. `list` names the list in its cursors, so a
+ * cursor of another list is refused (`invalid_cursor`).
  */
 export async function pageConsentsForUser<Item>(
   fastify: FastifyInstance,
@@ -88,6 +89,7 @@ export async function pageConsentsForUser<Item>(
       list: page.list,
       limit: page.limit,
       cursor: page.cursor,
+      // The repository keys on the id alone; the time rides along unread.
       position: (row) => ({ at: row.grantedAt, id: row.id }),
       item: page.item,
     },
@@ -117,7 +119,8 @@ export async function revokeConsentForUser(
   request: FastifyRequest,
   realmId: string,
   userId: string,
-  consentId: string
+  consentId: string,
+  options: Pick<UserEventOptions, 'act'> = {}
 ): Promise<void> {
   // Joined to the client in the same query: the event names the client by its
   // public `client_id`.
@@ -175,6 +178,10 @@ export async function revokeConsentForUser(
         userId,
         clientId: owned.clientClientId,
         actor: 'user',
+        // An agent revoking for the user through the account API (a delegated
+        // token, RFC 8693): the event names the agent as its actor, with the
+        // whole chain (#524).
+        ...(options.act === undefined ? {} : { act: options.act }),
       }
     );
   });

@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, desc, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt } from 'drizzle-orm';
 
 import type {
   KeysetPage,
@@ -118,8 +118,12 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
 
     /**
      * One page of the active consents a user of the realm holds, with each
-     * one's client, newest first (#524): ordered by `granted_at` and then
-     * `id`, both descending, starting after `page.after`.
+     * one's client, by when each consent was first given, newest first
+     * (#524): ordered by `id` alone, descending, starting after
+     * `page.after.id`. The id is a UUIDv7 the row keeps for its life, while a
+     * new grant to the same client rewrites `granted_at`, so a page keyed on
+     * that column would skip a consent re-granted between two reads.
+     * `page.after.at` is not read.
      */
     async pageActiveForUserWithClient(
       realmId: string,
@@ -140,15 +144,10 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
         .where(
           and(
             activeConsentsOf(realmId, userId),
-            after === undefined
-              ? undefined
-              : or(
-                  lt(oauthConsents.grantedAt, after.at),
-                  and(eq(oauthConsents.grantedAt, after.at), lt(oauthConsents.id, after.id))
-                )
+            after === undefined ? undefined : lt(oauthConsents.id, after.id)
           )
         )
-        .orderBy(desc(oauthConsents.grantedAt), desc(oauthConsents.id))
+        .orderBy(desc(oauthConsents.id))
         .limit(page.limit);
 
       return rows.map((r) => ({

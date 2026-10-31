@@ -311,6 +311,19 @@ export interface OAuthClientsRepository extends RealmScopedRepository<
   ): Promise<OAuthClient[]>;
 
   /**
+   * Give the client named `clientId` in every realm exactly `audience` where
+   * it differs, in one statement, and return how many rows changed (#524).
+   * The system client's boot step only: not realm-scoped, since the system
+   * client has the same configured `client_id` in every realm, and never
+   * called with an id from a request.
+   */
+  setAudienceInEveryRealm(
+    clientId: string,
+    audience: readonly string[],
+    tx?: DbClient
+  ): Promise<number>;
+
+  /**
    * Find an OAuth client of the realm by ID and lock its row until the
    * transaction `tx` ends (`SELECT … FOR UPDATE`), for a write that is
    * conditional on what it read (#524, `If-Match`).
@@ -551,8 +564,9 @@ export interface OAuthConsentsRepository {
     >
   >;
   /**
-   * One page of {@link listActiveForUserWithClient}'s rows, by `granted_at`
-   * and then `id`, both descending (#524).
+   * One page of {@link listActiveForUserWithClient}'s rows, by `id` alone,
+   * descending: by when each consent was first given, since a re-grant
+   * rewrites `granted_at` and keeps the row (#524). `page.after.at` is not read.
    */
   pageActiveForUserWithClient(
     realmId: string,
