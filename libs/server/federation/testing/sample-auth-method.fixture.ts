@@ -22,10 +22,11 @@ import type { AuthMethodKitScenario } from '../src/testing';
  *
  * What it shows:
  *
- * - `start()` makes a fresh `state` and keeps it in the transaction;
- * - the callback refuses a `state` that differs from its transaction's,
- *   missing, empty or repeated, compared in constant time, before it spends
- *   the code (the host refuses a callback with no transaction at all);
+ * - `start()` makes a fresh `state`, sends it to the provider and answers it
+ *   as the binding, so the host refuses a callback that does not carry it
+ *   back before the method runs;
+ * - the callback compares `state` with its transaction too, in constant
+ *   time, before it spends the code: belt and braces, at no cost;
  * - the code is redeemed through `context.egress`, never `fetch`;
  * - `verify()` accepts only results its own callback produced (a `WeakSet`
  *   of them), so nothing else can sign anyone in through it;
@@ -96,7 +97,7 @@ export function createSampleAuthMethod(
       url.searchParams.set('client_id', context.config.clientId);
       url.searchParams.set('redirect_uri', context.routeUrl('/callback'));
       url.searchParams.set('state', state);
-      return { redirectTo: url.href, transaction: { state } };
+      return { redirectTo: url.href, transaction: { state }, binding: state };
     },
 
     routes: [

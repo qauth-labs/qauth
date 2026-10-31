@@ -215,6 +215,33 @@ export const AUTH_METHOD_ICON_MEDIA_TYPES = Object.freeze(['image/png'] as const
 export const MAX_UPSTREAM_TRANSACTION_BYTES = 4096;
 
 /**
+ * A binding (#599): the value `start()` answers beside its transaction, which
+ * the authorization request carries to the provider (as `state`, usually)
+ * and the provider's callback carries back. 22 to 512 base64url characters:
+ * 22 is the length of 128 random bits in base64url. The pattern checks the
+ * length and the alphabet only; the method makes the value random.
+ *
+ * @experimental
+ */
+export const AUTH_METHOD_BINDING_PATTERN = /^[A-Za-z0-9_-]{22,512}$/;
+
+/**
+ * The parameter a callback route carries the binding back in when the route
+ * names none: `state` (RFC 6749 §4.1.2).
+ *
+ * @experimental
+ */
+export const DEFAULT_AUTH_METHOD_BINDING_PARAMETER = 'state';
+
+/**
+ * A parameter name a callback route may name as its binding parameter:
+ * ASCII letters, digits, `_`, `.` and `-`, at most 64 characters.
+ *
+ * @experimental
+ */
+export const AUTH_METHOD_BINDING_PARAMETER_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/**
  * The longest URL a method may send the browser to when it starts.
  *
  * @experimental
@@ -282,8 +309,9 @@ export const MAX_AUTH_METHOD_PARAMETER_VALUES = 16;
  * declining at the provider:
  *
  * - `transaction_mismatch`: no transaction is pending for this browser, or the
- *   callback does not belong to it (`state` differs). A callback replayed in
- *   another browser, or forged, ends here.
+ *   callback does not belong to it (its binding, `state` by default, is
+ *   missing, repeated or another's). A callback replayed in another browser,
+ *   or forged, ends here; the host answers it before the method runs.
  * - `provider_error`: the provider answered with an error, other than the
  *   person declining (`access_denied`).
  * - `invalid_response`: the provider's answer failed a check, such as the ID

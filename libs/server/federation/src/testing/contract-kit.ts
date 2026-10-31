@@ -10,7 +10,12 @@ import type {
   UpstreamStart,
 } from '../auth-method/auth-method.interface';
 import { createAuthMethodContext } from '../auth-method/context';
-import { completeUpstreamStep, startUpstreamStep } from '../auth-method/engine';
+import {
+  completeUpstreamStep,
+  presentedUpstreamBinding,
+  startUpstreamStep,
+  upstreamBindingMatches,
+} from '../auth-method/engine';
 import { AuthMethodContractError } from '../auth-method/errors';
 import { authMethodParameters } from '../auth-method/parameters';
 import { authMethodProblems } from '../auth-method/validate';
@@ -133,17 +138,15 @@ interface KitRun {
  * disabled:
  *
  * 1. `start()` answers an `https` redirect with no credentials and no fragment,
- *    and a transaction of JSON data within its cap; two starts answer different
- *    transactions.
- * 2. The provider's callback, with its transaction, ends in an identity whose
- *    attributes carry the method's `type`; a second sign-in of the same person
- *    resolves the same `externalSub`.
- * 3. The callback carries a value of the authorization request (`state`) that
- *    binds it to its transaction. Without it, with it empty or repeated, and
- *    with another start's transaction, the callback never gives a result, and
- *    never calls the provider: it checks the binding before it spends the code.
- *    (A request with no transaction never reaches the method: the host
- *    answers it.)
+ *    a transaction of JSON data within its cap and a binding of 22 to 512
+ *    base64url characters; two starts answer different transactions.
+ * 2. Two starts answer different bindings, and each sends its binding to the
+ *    provider, in the redirect or in a body it posted.
+ * 3. The provider's callback carries the binding back in the callback
+ *    route's `bindingParameter` (`state` by default): the kit, like the host,
+ *    hands the handler the transaction only when it does. It ends in an
+ *    identity whose attributes carry the method's `type`; a second sign-in of
+ *    the same person resolves the same `externalSub`.
  * 4. `verify()` rejects inputs that no callback produced, a well-formed
  *    identity, a copy of a real result and a result already used among them.
  * 5. When the scenario gives one, the declined callback ends as `declined`.
@@ -232,9 +235,17 @@ async function runChecks(
   }
   run.checks.push('start');
 
+  bindingChecks(first, second, run);
+  run.checks.push('transaction-binding');
+
   // The provider signs the person in, for the second start.
   const signIn = await scenario.callback(new URL(second.start.redirectTo));
-  const happy = await callback(method, context, signIn, second.start.transaction, run);
+  const happy = await callback(method, context, signIn, second.start, run);
+  if (happy === HOST_REFUSED) {
+    run.stop(
+      "the provider's callback does not carry back the binding start() answered, in the callback route's bindingParameter (state by default): the host answers it as transaction_mismatch before the method runs"
+    );
+  }
   const completion = await completeUpstreamStep(method, happy).catch((error: unknown) =>
     run.stop(`the callback's outcome was refused: ${describe(error)}`)
   );
@@ -249,7 +260,7 @@ async function runChecks(
     method,
     context,
     await scenario.callback(new URL(third.start.redirectTo)),
-    third.start.transaction,
+    third.start,
     run
   );
   const repeated = await completeUpstreamStep(method, again).catch(() => undefined);
@@ -261,22 +272,13 @@ async function runChecks(
   }
   run.checks.push('callback');
 
-  await bindingChecks(method, context, run, { first, second, signIn });
-  run.checks.push('transaction-binding');
-
   await verifyChecks(method, result, run);
   run.checks.push('verify-fails-closed');
 
   if (scenario.declined !== undefined) {
     const fourth = await started(method, context, run);
     const declinedRequest = await scenario.declined(new URL(fourth.start.redirectTo));
-    const declined = await callback(
-      method,
-      context,
-      declinedRequest,
-      fourth.start.transaction,
-      run
-    );
+    const declined = await callback(method, context, declinedRequest, fourth.start, run);
     if ((declined as { kind?: unknown }).kind !== 'declined') {
       run.fail(`the declined callback answered ${describeOutcome(declined)}, not declined`);
     }
@@ -285,80 +287,22 @@ async function runChecks(
 }
 
 /**
- * The callback must be bound to its transaction by a value of its own start
- * that it carries back (`state`): a value one start sent to the provider and
- * the other did not, in the redirect or in a body the method posted (a pushed
- * authorization request). At least one such value must bind, with at least
- * 128 bits of randomness: without it, with it empty or repeated, the callback
- * never gives a result and never calls the provider. With another start's
- * transaction it never does either.
+ * The binding `start()` answers is what the host checks a callback against
+ * (the engine has already checked it is 22 to 512 base64url characters, the
+ * length of 128 random bits; the kit cannot measure randomness). Two starts
+ * must answer different bindings, and the start must send its binding to the
+ * provider, in the redirect or in a body the method posted (a pushed
+ * authorization request), or the provider cannot carry it back.
  */
-async function bindingChecks(
-  method: AuthMethod,
-  context: AuthMethodContext,
-  run: KitRun,
-  starts: { first: KitStart; second: KitStart; signIn: AuthMethodKitRequest }
-): Promise<void> {
-  const { first, second, signIn } = starts;
-  const firstValues = new Set(first.values);
-  const perStart = new Set(second.values.filter((value) => !firstValues.has(value)));
-  const candidates = [
-    ...echoedNames(signIn.query, perStart).map((name) => ['query', name] as const),
-    ...echoedNames(signIn.form, perStart).map((name) => ['form', name] as const),
-  ];
-  if (candidates.length === 0) {
+function bindingChecks(first: KitStart, second: KitStart, run: KitRun): void {
+  if (first.start.binding === second.start.binding) {
+    run.fail('two starts answered the same binding: it must be fresh for each start');
+  }
+  if (!second.values.includes(second.start.binding)) {
     run.fail(
-      'the callback carries no value of its own start (such as state) back: nothing binds it to its transaction'
+      'start() did not send its binding to the provider, in the redirect or in a body it posted: the provider cannot carry it back'
     );
   }
-
-  /** Why the callback did not refuse `request`, or `undefined` when it did. */
-  const notRefused = async (label: string, request: AuthMethodKitRequest, transaction: unknown) => {
-    const before = run.egressCalls;
-    const outcome = await callback(method, context, request, transaction, run);
-    if ((outcome as { kind?: unknown }).kind === 'result') {
-      return `the callback gave a result ${label}: it must check state against its transaction`;
-    }
-    if (run.egressCalls > before) {
-      return `the callback called the provider ${label}: it must check state before it spends the code`;
-    }
-    return undefined;
-  };
-
-  const mixed = await notRefused(
-    "with another start's transaction",
-    signIn,
-    first.start.transaction
-  );
-  if (mixed !== undefined) run.fail(mixed);
-
-  const unbound: string[] = [];
-  let bound = false;
-  for (const [part, name] of candidates) {
-    const value = String(signIn[part]?.[name]);
-    const changed = (replacement: string | readonly string[] | undefined) => {
-      const parameters: Record<string, string | readonly string[]> = { ...(signIn[part] ?? {}) };
-      if (replacement === undefined) delete parameters[name];
-      else parameters[name] = replacement;
-      return { ...signIn, [part]: parameters };
-    };
-    const failures = [
-      await notRefused(`without ${name}`, changed(undefined), second.start.transaction),
-      await notRefused(`with ${name} empty`, changed(''), second.start.transaction),
-      await notRefused(`with ${name} repeated`, changed([value, value]), second.start.transaction),
-    ].filter((failure): failure is string => failure !== undefined);
-    if (failures.length > 0) {
-      unbound.push(...failures);
-      continue;
-    }
-    bound = true;
-    if (value.length < 22) {
-      run.fail(
-        `${name} binds the callback but is shorter than 22 characters: it must carry at least 128 bits of randomness (22 base64url characters)`
-      );
-    }
-  }
-  if (!bound) for (const failure of unbound) run.fail(failure);
 }
 
 /** `verify()` rejects anything that is not a fresh result of its own callback. */
@@ -388,17 +332,6 @@ async function verifyChecks(method: AuthMethod, result: unknown, run: KitRun): P
       'verify() resolved for a result it had already verified: a result signs one person in once'
     );
   }
-}
-
-/** The parameter names of `parameters` whose value is one of `values`. */
-function echoedNames(
-  parameters: AuthMethodParameters | undefined,
-  values: ReadonlySet<string>
-): string[] {
-  if (parameters === undefined) return [];
-  return Object.entries(parameters)
-    .filter(([, value]) => typeof value === 'string' && value !== '' && values.has(value))
-    .map(([name]) => name);
 }
 
 /** A start, and every value it sent the provider: the redirect's query and posted bodies. */
@@ -452,12 +385,22 @@ function settled<T>(work: () => Promise<T>): Promise<T> {
   return Promise.resolve().then(work);
 }
 
-/** Run one request through the method's routes as the host would, following a bounce once. */
+/**
+ * What the kit's host answers a callback whose binding does not match, as the
+ * route mount does: before the method runs.
+ */
+const HOST_REFUSED = Object.freeze({ kind: 'failed', reason: 'transaction_mismatch' } as const);
+
+/**
+ * Run one request through the method's routes as the host would, following a
+ * bounce once: the callback's binding is compared with the start's before
+ * the handler is called, and a mismatch answers {@link HOST_REFUSED}.
+ */
 async function callback(
   method: AuthMethod,
   context: AuthMethodContext,
   request: AuthMethodKitRequest,
-  transaction: unknown,
+  start: UpstreamStart,
   run: KitRun
 ): Promise<unknown> {
   let route = findRoute(method.routes, request.method, request.path);
@@ -509,6 +452,12 @@ async function callback(
     return run.stop(`${route.method} ${route.path} is not a callback route`);
   }
   const callbackRoute = route;
+  if (
+    !upstreamBindingMatches(start.binding, presentedUpstreamBinding(callbackRoute, { query, form }))
+  ) {
+    return HOST_REFUSED;
+  }
+  const transaction = start.transaction;
   return settled(() =>
     callbackRoute.handle({ method: callbackRoute.method, query, form, transaction }, context)
   ).catch((error: unknown) => run.stop(`the callback route threw: ${describe(error)}`));

@@ -8,10 +8,13 @@ import {
 import type { AuthMethod, AuthMethodContext } from './auth-method.interface';
 import { createAuthMethodContext } from './context';
 import { MAX_UPSTREAM_TRANSACTION_BYTES } from './contract';
-import { completeUpstreamStep, startUpstreamStep } from './engine';
+import { completeUpstreamStep, startUpstreamStep, upstreamBindingMatches } from './engine';
 import { AuthMethodFaultError } from './errors';
 
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+/** A binding: 22 base64url characters and more. */
+const BINDING = 'b1nd1ng-0f-th1s-st4rt_xyz';
 
 function contextOf<TConfig>(method: AuthMethod<TConfig>): AuthMethodContext<TConfig> {
   return createAuthMethodContext(method, {
@@ -46,6 +49,7 @@ describe('startUpstreamStep', () => {
       'https://auth.example.com/upstream/oidc_sample/callback'
     );
     expect(url.searchParams.get('state')).toBe((start.transaction as { state: string }).state);
+    expect(start.binding).toBe(url.searchParams.get('state'));
     expect(Object.isFrozen(start)).toBe(true);
     expect(Object.isFrozen(start.transaction)).toBe(true);
   });
@@ -55,6 +59,7 @@ describe('startUpstreamStep', () => {
       start: async () => ({
         redirectTo: ' https://provider.example/authorize?q=a b\n',
         transaction: {},
+        binding: BINDING,
       }),
     });
     const start = await startUpstreamStep(method, contextOf(method), { uiLocales: [] });
@@ -109,12 +114,43 @@ describe('startUpstreamStep', () => {
     );
   });
 
+  it.each([
+    ['missing', undefined],
+    ['not a string', 42],
+    ['shorter than 22 characters', 'x'.repeat(21)],
+    ['longer than 512 characters', 'x'.repeat(513)],
+    ['outside base64url', `${'x'.repeat(21)}+`],
+  ])('refuses a binding that is %s', async (_label, binding) => {
+    const method = withMembers({
+      start: async () => ({
+        redirectTo: 'https://provider.example/authorize',
+        transaction: {},
+        binding,
+      }),
+    });
+    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
+      'start() answered a binding that is not 22 to 512 base64url characters'
+    );
+  });
+
   it("lets start()'s own rejection through unchanged", async () => {
     const failure = new Error('discovery failed');
     const method = withMembers({ start: async () => Promise.reject(failure) });
     await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toBe(
       failure
     );
+  });
+});
+
+describe('upstreamBindingMatches', () => {
+  it('matches only the same binding, as one string', () => {
+    expect(upstreamBindingMatches(BINDING, BINDING)).toBe(true);
+    for (const presented of [undefined, '', BINDING.toUpperCase(), `${BINDING}x`, [BINDING]]) {
+      expect(upstreamBindingMatches(BINDING, presented)).toBe(false);
+    }
+    // An expected value that is no binding never matches, not even itself.
+    expect(upstreamBindingMatches('', '')).toBe(false);
+    expect(upstreamBindingMatches('short', 'short')).toBe(false);
   });
 });
 

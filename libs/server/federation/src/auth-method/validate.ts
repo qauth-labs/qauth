@@ -1,6 +1,7 @@
 import type { CredentialProvider } from '../providers/credential-provider.interface';
 import type { AuthMethod } from './auth-method.interface';
 import {
+  AUTH_METHOD_BINDING_PARAMETER_PATTERN,
   AUTH_METHOD_CONTRACT,
   AUTH_METHOD_CONTRACT_NAME,
   AUTH_METHOD_DISPLAY_NAME_PATTERN,
@@ -67,8 +68,20 @@ export function authMethodSnapshot(method: object): unknown {
       ? Object.freeze(
           routes.map((route: unknown) => {
             if (typeof route !== 'object' || route === null) return route;
-            const { kind, method: verb, path, handle } = route as Record<string, unknown>;
-            return Object.freeze({ kind, method: verb, path, handle: bound(handle, route) });
+            const {
+              kind,
+              method: verb,
+              path,
+              handle,
+              bindingParameter,
+            } = route as Record<string, unknown>;
+            return Object.freeze({
+              kind,
+              method: verb,
+              path,
+              handle: bound(handle, route),
+              ...(bindingParameter === undefined ? {} : { bindingParameter }),
+            });
           })
         )
       : routes,
@@ -189,6 +202,17 @@ export function routeProblems(routes: unknown): string[] {
       seen.add(key);
     }
     if (typeof entry['handle'] !== 'function') problems.push(`${at}.handle must be a function`);
+    const bindingParameter = entry['bindingParameter'];
+    if (
+      bindingParameter !== undefined &&
+      (entry['kind'] !== 'callback' ||
+        typeof bindingParameter !== 'string' ||
+        !AUTH_METHOD_BINDING_PARAMETER_PATTERN.test(bindingParameter))
+    ) {
+      problems.push(
+        `${at}.bindingParameter must be the name of a parameter (${AUTH_METHOD_BINDING_PARAMETER_PATTERN.source}), on a callback route only`
+      );
+    }
   });
 
   if (callbacks === 0) {

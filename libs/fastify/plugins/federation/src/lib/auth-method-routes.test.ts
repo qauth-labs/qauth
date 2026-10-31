@@ -45,7 +45,11 @@ function method(type = 'oidc_corp', routes?: readonly AuthMethodRoute[]): AuthMe
       safeParse: (value: unknown) => ({ success: true, data: value }),
     } as unknown as AuthMethod['configSchema'],
     steps: [UPSTREAM_STEP_URN],
-    start: async () => ({ redirectTo: 'https://idp.example/authorize', transaction: {} }),
+    start: async () => ({
+      redirectTo: 'https://idp.example/authorize',
+      transaction: {},
+      binding: BINDING,
+    }),
     verify: async () => Promise.reject(new Error('not a result of this method')),
     extractAttributes: () => [],
     routes: routes ?? [
@@ -63,13 +67,21 @@ function method(type = 'oidc_corp', routes?: readonly AuthMethodRoute[]): AuthMe
   };
 }
 
+/** The pending transaction's binding: 22 base64url characters and more. */
+const BINDING = 'b1nd1ng-0f-th1s-st4rt_xyz';
+
+/** What the host stores from `startUpstreamStep`'s answer. */
+const pending = () => ({ binding: BINDING, transaction: { state: 'kept' } });
+
 function host(): AuthMethodRouteHost & {
   complete: ReturnType<typeof vi.fn>;
+  peekTransaction: ReturnType<typeof vi.fn>;
   takeTransaction: ReturnType<typeof vi.fn>;
 } {
   return {
     contextFor: vi.fn(async () => ({}) as never),
-    takeTransaction: vi.fn(async () => ({ state: 'kept' })),
+    peekTransaction: vi.fn(async () => pending()),
+    takeTransaction: vi.fn(async () => pending()),
     complete: vi.fn(async (_method, outcome, _request, reply) => reply.send({ handed: outcome })),
   };
 }
@@ -182,7 +194,7 @@ describe('AuthMethod routes', () => {
 
     const response = await booted.app.inject({
       method: 'GET',
-      url: '/upstream/oidc_corp/callback?code=c1&state=s1&state=s2',
+      url: `/upstream/oidc_corp/callback?code=c1&state=${BINDING}&scope=a&scope=b`,
       headers: { cookie: '__Host-qauth_flow=secret-flow', authorization: 'Bearer token' },
     });
 
@@ -193,40 +205,93 @@ describe('AuthMethod routes', () => {
     expect(Object.keys(request).sort()).toEqual(['form', 'method', 'query', 'transaction']);
     expect(request).toEqual({
       method: 'GET',
-      query: { code: 'c1', state: ['s1', 's2'] },
+      query: { code: 'c1', state: BINDING, scope: ['a', 'b'] },
       form: {},
       transaction: { state: 'kept' },
     });
     expect(response.json()).toEqual({
-      handed: { kind: 'result', result: { query: { code: 'c1', state: ['s1', 's2'] } } },
+      handed: {
+        kind: 'result',
+        result: { query: { code: 'c1', state: BINDING, scope: ['a', 'b'] } },
+      },
     });
   });
 
   it('answers transaction_mismatch itself when no transaction is pending, and never runs the method', async () => {
     const routeHost = host();
-    routeHost.takeTransaction.mockResolvedValue(undefined);
+    routeHost.peekTransaction.mockResolvedValue(undefined);
     const booted = await boot([method()], routeHost);
 
     const response = await booted.app.inject({
       method: 'GET',
-      url: '/upstream/oidc_corp/callback?code=attacker&state=forged',
+      url: `/upstream/oidc_corp/callback?code=attacker&state=${BINDING}`,
     });
 
     expect(response.json()).toEqual({ handed: { kind: 'failed', reason: 'transaction_mismatch' } });
+    expect(routeHost.takeTransaction).not.toHaveBeenCalled();
     expect(callbackHandle).not.toHaveBeenCalled();
     expect(routeHost.contextFor).not.toHaveBeenCalled();
   });
 
   it.each([
+    ['missing', '?code=attacker'],
+    ['empty', '?code=attacker&state='],
+    ['repeated', `?code=attacker&state=${BINDING}&state=${BINDING}`],
+    ["another start's", '?code=attacker&state=b1nd1ng-0f-4n0th3r-st4rt'],
+    ['in another case', `?code=attacker&state=${BINDING.toUpperCase()}`],
+    ['under another name', `?code=attacker&session_state=${BINDING}`],
+  ])(
+    'answers a binding that is %s with transaction_mismatch, and leaves the transaction pending',
+    async (_label, search) => {
+      const routeHost = host();
+      const booted = await boot([method()], routeHost);
+      const response = await booted.app.inject({
+        method: 'GET',
+        url: `/upstream/oidc_corp/callback${search}`,
+      });
+      expect(response.json()).toEqual({
+        handed: { kind: 'failed', reason: 'transaction_mismatch' },
+      });
+      // Compared before the take: another site cannot cancel the sign-in.
+      expect(routeHost.peekTransaction).toHaveBeenCalledTimes(1);
+      expect(routeHost.takeTransaction).not.toHaveBeenCalled();
+      expect(callbackHandle).not.toHaveBeenCalled();
+      expect(routeHost.contextFor).not.toHaveBeenCalled();
+    }
+  );
+
+  it('reads the binding from the parameter the callback route names', async () => {
+    const handle = vi.fn(async () => ({ kind: 'declined' as const }));
+    const routes: AuthMethodRoute[] = [
+      { kind: 'callback', method: 'GET', path: '/callback', bindingParameter: 'rs', handle },
+    ];
+    const routeHost = host();
+    const booted = await boot([method('oidc_corp', routes)], routeHost);
+    const refused = await booted.app.inject({
+      method: 'GET',
+      url: `/upstream/oidc_corp/callback?state=${BINDING}`,
+    });
+    expect(refused.json()).toEqual({ handed: { kind: 'failed', reason: 'transaction_mismatch' } });
+    expect(handle).not.toHaveBeenCalled();
+    await booted.app.inject({ method: 'GET', url: `/upstream/oidc_corp/callback?rs=${BINDING}` });
+    expect(handle).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
     ['null, as a cache answers a missing key', null],
     ['a string', 'state-value'],
+    ['a record with no transaction', { binding: BINDING }],
+    [
+      "another start's record, put there between the two reads",
+      { binding: 'x'.repeat(22), transaction: {} },
+    ],
   ])('treats a taken transaction that is %s as none', async (_label, taken) => {
     const routeHost = host();
     routeHost.takeTransaction.mockResolvedValue(taken);
     const booted = await boot([method()], routeHost);
     const response = await booted.app.inject({
       method: 'GET',
-      url: '/upstream/oidc_corp/callback?code=attacker',
+      url: `/upstream/oidc_corp/callback?code=attacker&state=${BINDING}`,
     });
     expect(response.json()).toEqual({ handed: { kind: 'failed', reason: 'transaction_mismatch' } });
     expect(callbackHandle).not.toHaveBeenCalled();
@@ -241,27 +306,36 @@ describe('AuthMethod routes', () => {
     }
   });
 
-  it('hands a POST callback only a urlencoded form, never a JSON body', async () => {
+  it('hands a POST callback only a urlencoded form, and reads its binding there', async () => {
     const routes: AuthMethodRoute[] = [
       { kind: 'callback', method: 'GET', path: '/callback', handle: callbackHandle },
       { kind: 'callback', method: 'POST', path: '/post', handle: callbackHandle },
     ];
     const booted = await boot([method('oidc_corp', routes)]);
-    await booted.app.inject({
+    // A JSON body is never read: its state is no binding.
+    const json = await booted.app.inject({
       method: 'POST',
       url: '/upstream/oidc_corp/post',
       headers: { 'content-type': 'application/json' },
-      payload: { code: 'c1', state: 's1' },
+      payload: { code: 'c1', state: BINDING },
+    });
+    expect(json.json()).toEqual({ handed: { kind: 'failed', reason: 'transaction_mismatch' } });
+    // Nor is the query of a POST.
+    await booted.app.inject({
+      method: 'POST',
+      url: `/upstream/oidc_corp/post?state=${BINDING}`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'code=c2',
     });
     await booted.app.inject({
       method: 'POST',
       url: '/upstream/oidc_corp/post',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      payload: 'code=c2&state=s2',
+      payload: `code=c3&state=${BINDING}`,
     });
     expect(
       callbackHandle.mock.calls.map(([request]) => (request as unknown as { form: unknown }).form)
-    ).toEqual([{}, { code: 'c2', state: 's2' }]);
+    ).toEqual([{ code: 'c3', state: BINDING }]);
   });
 
   it('drops parameters past the caps', async () => {
@@ -269,7 +343,7 @@ describe('AuthMethod routes', () => {
     const many = Array.from({ length: 80 }, (_, i) => `p${i}=v`).join('&');
     await booted.app.inject({
       method: 'GET',
-      url: `/upstream/oidc_corp/callback?long=${'x'.repeat(8193)}&${many}`,
+      url: `/upstream/oidc_corp/callback?state=${BINDING}&long=${'x'.repeat(8193)}&${many}`,
     });
     const [request] = callbackHandle.mock.calls[0];
     const query = (request as { query: Record<string, unknown> }).query;
@@ -366,7 +440,7 @@ describe('AuthMethod routes', () => {
     const booted = await boot([corp], routeHost);
     const response = await booted.app.inject({
       method: 'GET',
-      url: '/upstream/oidc_corp/callback?code=c1&state=s1',
+      url: `/upstream/oidc_corp/callback?code=c1&state=${BINDING}`,
     });
     // The host's completion answers, not a raw 500.
     expect(response.statusCode).toBe(200);
@@ -386,7 +460,7 @@ describe('AuthMethod routes', () => {
     const booted = await boot([method()], routeHost);
     const response = await booted.app.inject({
       method: 'GET',
-      url: '/upstream/oidc_corp/callback?code=c1&state=s1',
+      url: `/upstream/oidc_corp/callback?code=c1&state=${BINDING}`,
     });
     expect(response.statusCode).toBe(200);
     expect(callbackHandle).not.toHaveBeenCalled();
@@ -402,7 +476,7 @@ describe('AuthMethod routes', () => {
     const booted = await boot([method()]);
     await booted.app.inject({
       method: 'GET',
-      url: '/upstream/oidc_corp/callback?__proto__=x&state=s',
+      url: `/upstream/oidc_corp/callback?__proto__=x&state=${BINDING}`,
     });
     const [request] = callbackHandle.mock.calls[0];
     expect(Object.getPrototypeOf(request.query)).toBeNull();
@@ -414,7 +488,7 @@ describe('AuthMethod routes', () => {
       writable: true,
       configurable: true,
     }) as Record<string, string>;
-    expected['state'] = 's';
+    expected['state'] = BINDING;
     expect(request.query).toEqual(expected);
   });
 

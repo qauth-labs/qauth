@@ -47,28 +47,13 @@ function withCallback(wrap: (original: CallbackHandle) => CallbackHandle): AuthM
 }
 
 /**
- * A callback written the common wrong way, by hand: it redeems the code with
- * the provider, then decides by `check` whether the answer belongs to the
- * transaction.
+ * A callback written by hand that decides by `check` whether the answer
+ * belongs to the transaction, then hands it to the sample's own callback.
  */
-function handWritten(
-  check: (presented: unknown, expected: string) => boolean,
-  options: { spendFirst?: boolean } = {}
-): AuthMethod {
+function handWritten(check: (presented: unknown, expected: string) => boolean): AuthMethod {
   return withCallback((original) => async (request, context) => {
     const transaction = request.transaction as { state: string };
-    const presented = request.query['state'];
-    if (options.spendFirst) {
-      // Spends the code before it looks at state.
-      await context.egress.request({
-        method: 'POST',
-        url: SAMPLE_CONFIG.tokenEndpoint,
-        body: `code=${String(request.query['code'])}&client_secret=${SAMPLE_CONFIG.clientSecret}`,
-        purpose: 'upstream-token',
-        source: 'admin',
-      });
-    }
-    if (!check(presented, transaction.state)) {
+    if (!check(request.query['state'], transaction.state)) {
       return { kind: 'failed', reason: 'transaction_mismatch' };
     }
     // Hand the original the transaction its own check accepted.
@@ -88,8 +73,8 @@ describe('checkAuthMethod, the contract test kit', () => {
       'config-schema',
       'context',
       'start',
-      'callback',
       'transaction-binding',
+      'callback',
       'verify-fails-closed',
       'declined',
       'egress-only',
@@ -142,39 +127,14 @@ describe('checkAuthMethod, the contract test kit', () => {
       `);
     });
 
-    it('one whose callback ignores its transaction', async () => {
-      const method = handWritten(() => true);
-      expect(await kitProblems(method)).toMatchInlineSnapshot(`
-        [
-          "the callback gave a result with another start's transaction: it must check state against its transaction",
-          "the callback gave a result without state: it must check state against its transaction",
-          "the callback gave a result with state empty: it must check state against its transaction",
-          "the callback gave a result with state repeated: it must check state against its transaction",
-        ]
-      `);
-    });
-
-    it('one that compares state only when the callback carries one', async () => {
-      const method = handWritten((presented, expected) =>
-        presented === undefined ? true : presented === expected
+    it('one whose callback route names a binding parameter the provider does not carry back', async () => {
+      const method = createSampleAuthMethod();
+      const routes = method.routes.map((route) =>
+        route.kind === 'callback' ? { ...route, bindingParameter: 'session_state' } : route
       );
-      expect(await kitProblems(method)).toMatchInlineSnapshot(`
+      expect(await kitProblems({ ...method, routes })).toMatchInlineSnapshot(`
         [
-          "the callback gave a result without state: it must check state against its transaction",
-        ]
-      `);
-    });
-
-    it('one that spends the code before it checks state', async () => {
-      const method = handWritten((presented, expected) => presented === expected, {
-        spendFirst: true,
-      });
-      expect(await kitProblems(method)).toMatchInlineSnapshot(`
-        [
-          "the callback called the provider with another start's transaction: it must check state before it spends the code",
-          "the callback called the provider without state: it must check state before it spends the code",
-          "the callback called the provider with state empty: it must check state before it spends the code",
-          "the callback called the provider with state repeated: it must check state before it spends the code",
+          "the provider's callback does not carry back the binding start() answered, in the callback route's bindingParameter (state by default): the host answers it as transaction_mismatch before the method runs",
         ]
       `);
     });
@@ -235,15 +195,15 @@ describe('checkAuthMethod, the contract test kit', () => {
         start: async (context: Parameters<typeof method.start>[0]) => {
           const start = await method.start(context, { uiLocales: [] });
           const url = new URL(start.redirectTo);
-          url.searchParams.set('state', 'fixed');
-          return { redirectTo: url.href, transaction: { state: 'fixed' } };
+          const value = 'fixed-fixed-fixed-fixed';
+          url.searchParams.set('state', value);
+          return { redirectTo: url.href, transaction: { state: value }, binding: value };
         },
       };
       expect(await kitProblems(fixed)).toMatchInlineSnapshot(`
         [
           "two starts answered the same transaction: its state must be fresh for each start",
-          "the callback carries no value of its own start (such as state) back: nothing binds it to its transaction",
-          "the callback gave a result with another start's transaction: it must check state against its transaction",
+          "two starts answered the same binding: it must be fresh for each start",
         ]
       `);
     });
@@ -258,7 +218,7 @@ describe('checkAuthMethod, the contract test kit', () => {
           const start = await loose.start(context, { uiLocales: [] });
           const url = new URL(start.redirectTo);
           url.searchParams.delete('state');
-          return { redirectTo: url.href, transaction: start.transaction };
+          return { redirectTo: url.href, transaction: start.transaction, binding: start.binding };
         },
       };
       expect(
@@ -273,8 +233,8 @@ describe('checkAuthMethod, the contract test kit', () => {
         })
       ).toMatchInlineSnapshot(`
         [
-          "the callback carries no value of its own start (such as state) back: nothing binds it to its transaction",
-          "the callback gave a result with another start's transaction: it must check state against its transaction",
+          "start() did not send its binding to the provider, in the redirect or in a body it posted: the provider cannot carry it back",
+          "the provider's callback does not carry back the binding start() answered, in the callback route's bindingParameter (state by default): the host answers it as transaction_mismatch before the method runs",
         ]
       `);
     });
@@ -447,6 +407,17 @@ describe('checkAuthMethod, the contract test kit', () => {
   });
 
   describe('passes for a correct method', () => {
+    it('whose callback leaves the binding to the host, which never runs it without one', async () => {
+      // It hands the provider's answer on without comparing state: the host
+      // compares the binding before the handler ever sees the transaction.
+      await expect(
+        checkAuthMethod(
+          handWritten(() => true),
+          sampleScenario()
+        )
+      ).resolves.toBeDefined();
+    });
+
     it('whose provider echoes scope and prompt back beside state', async () => {
       const method = createSampleAuthMethod();
       const echoing = {
@@ -456,7 +427,7 @@ describe('checkAuthMethod, the contract test kit', () => {
           const url = new URL(start.redirectTo);
           url.searchParams.set('scope', 'openid email');
           url.searchParams.set('prompt', 'login');
-          return { redirectTo: url.href, transaction: start.transaction };
+          return { redirectTo: url.href, transaction: start.transaction, binding: start.binding };
         },
       };
       const scenario = sampleScenario();
@@ -501,7 +472,7 @@ describe('checkAuthMethod, the contract test kit', () => {
           const url = new URL(context.config.authorizationEndpoint);
           url.searchParams.set('client_id', context.config.clientId);
           url.searchParams.set('request_uri', requestUri);
-          return { redirectTo: url.href, transaction: { state } };
+          return { redirectTo: url.href, transaction: { state }, binding: state };
         },
       };
       const scenario = sampleScenario();
@@ -577,12 +548,12 @@ describe('checkAuthMethod, the contract test kit', () => {
           const state = String(count);
           const url = new URL(start.redirectTo);
           url.searchParams.set('state', state);
-          return { redirectTo: url.href, transaction: { state } };
+          return { redirectTo: url.href, transaction: { state }, binding: state };
         },
       };
       expect(await kitProblems(counting)).toMatchInlineSnapshot(`
         [
-          "state binds the callback but is shorter than 22 characters: it must carry at least 128 bits of randomness (22 base64url characters)",
+          "start() failed: AuthMethod oidc_sample: start() answered a binding that is not 22 to 512 base64url characters",
         ]
       `);
     });

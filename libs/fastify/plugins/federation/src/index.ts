@@ -42,11 +42,13 @@ export type {
   AuthMethodRouteRequest,
   AuthMethodSigner,
   AuthMethodStepUrn,
+  PendingUpstreamTransaction,
   UpstreamCallbackOutcome,
   UpstreamFailureReason,
   UpstreamStart,
   UpstreamStartRequest,
   UpstreamStepCompletion,
+  UpstreamStepCompletionOptions,
   UpstreamStepFailureReason,
 } from '@qauth-labs/server-federation';
 export {

@@ -28,16 +28,22 @@ import type {
  *
  * 1. The engine offers the upstream step and the person picks the method.
  * 2. The engine calls {@link AuthMethod.start}. The method returns where the
- *    browser goes and the transaction it needs back (`state`, `nonce`, a PKCE
- *    verifier). The engine keeps the transaction server-side, bound to the
- *    interaction and its flow cookie; it never reaches the browser.
+ *    browser goes, the transaction it needs back (`state`, `nonce`, a PKCE
+ *    verifier) and the binding: the random value the authorization request
+ *    carries to the provider and the callback carries back (`state`). The
+ *    engine keeps the transaction and the binding server-side, bound to the
+ *    interaction and its flow cookie; the transaction never reaches the
+ *    browser.
  * 3. The provider sends the browser back to one of the method's callback
- *    routes, under `/upstream/<type>/`. The host takes the pending
- *    transaction (single use). With none (no flow cookie, another
- *    interaction, a replay) the host answers `transaction_mismatch` itself
- *    and the method never runs. Otherwise the route's handler gets the
- *    transaction, checks the answer against it (`state` first, before it
- *    spends the code) and returns an outcome.
+ *    routes, under `/upstream/<type>/`. The host compares the binding the
+ *    callback carries (in the route's `bindingParameter`, `state` by default)
+ *    with the pending transaction's, in constant time, before it takes the
+ *    transaction: with no pending transaction (no flow cookie, another
+ *    interaction, a replay) or a binding that is missing, repeated or
+ *    another's, it answers `transaction_mismatch` itself, leaves the
+ *    transaction pending, and the method never runs. Otherwise it takes the
+ *    transaction (single use) and the route's handler gets it, checks the
+ *    provider's answer and returns an outcome.
  * 4. The engine turns a `result` outcome into a `VerifiedIdentity` by calling
  *    `verify(result)`, checks it, and takes the attributes from
  *    `extractAttributes()`. Every attribute's `source` must equal `type`.
@@ -281,6 +287,26 @@ export interface UpstreamStart<TTransaction = unknown> {
    * hands it, once, to the callback the same browser reaches.
    */
   readonly transaction: TTransaction;
+  /**
+   * The value that binds the callback to this start: fresh and random for
+   * each start, sent to the provider in the authorization request (as
+   * `state`, usually) so the provider sends it back. 22 to 512 base64url
+   * characters (`AUTH_METHOD_BINDING_PATTERN`): 22 is the length of 128
+   * random bits. The host compares it with what the callback carries before
+   * it hands over the transaction.
+   */
+  readonly binding: string;
+}
+
+/**
+ * What the host keeps for a started upstream step until its callback: the
+ * `transaction` and `binding` that `startUpstreamStep` answered.
+ *
+ * @experimental
+ */
+export interface PendingUpstreamTransaction<TTransaction = unknown> {
+  readonly binding: string;
+  readonly transaction: TTransaction;
 }
 
 /**
@@ -318,6 +344,13 @@ export interface AuthMethodCallbackRoute<
   TTransaction = unknown,
 > extends AuthMethodRouteBase {
   readonly kind: 'callback';
+  /**
+   * The parameter the provider carries the binding back in: a query
+   * parameter of a `GET` route, a form member of a `POST` one. Default
+   * `state`. The host reads it, once and unrepeated, and compares it with
+   * the pending transaction's binding before the handler runs.
+   */
+  readonly bindingParameter?: string;
   handle(
     request: AuthMethodCallbackRequest<TTransaction>,
     context: AuthMethodContext<TConfig>
@@ -370,9 +403,10 @@ export interface AuthMethodCallbackRequest<TTransaction = unknown> extends AuthM
   /**
    * The transaction `start()` returned for this method, which the request's
    * flow cookie names, taken: a second request never sees it again. Always
-   * present: without one the host answers `transaction_mismatch` and never
-   * calls the handler. It may still belong to another start than the answer
-   * does, so the handler compares `state` before anything else.
+   * present, and always the one whose binding the request carries: without a
+   * pending transaction, or with a binding that does not match, the host
+   * answers `transaction_mismatch` and never calls the handler. A handler may
+   * still compare `state` with the transaction itself; it costs nothing.
    */
   readonly transaction: TTransaction;
 }

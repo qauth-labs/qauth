@@ -201,6 +201,29 @@ describe('the static checks of the AuthMethod contract', () => {
     ]);
   });
 
+  it('accepts a callback that names its binding parameter, and refuses a bad name or a bounce that names one', () => {
+    expect(
+      authMethodProblems(sample({ routes: [{ ...callbackAt('/cb'), bindingParameter: 'rs' }] }))
+    ).toEqual([]);
+    const problem =
+      'routes[0].bindingParameter must be the name of a parameter (^[A-Za-z0-9_.-]{1,64}$), on a callback route only';
+    for (const bindingParameter of ['', 'a b', 'x'.repeat(65), 7]) {
+      expect(
+        authMethodProblems(sample({ routes: [{ ...callbackAt('/cb'), bindingParameter }] }))
+      ).toEqual([problem]);
+    }
+    expect(
+      authMethodProblems(
+        sample({
+          routes: [
+            { kind: 'bounce', method: 'POST', path: '/cb', handle, bindingParameter: 'state' },
+            callbackAt('/cb'),
+          ],
+        })
+      )
+    ).toEqual([problem]);
+  });
+
   it('throws one error that lists every problem', () => {
     try {
       assertAuthMethod(sample({ type: 'wallet', id: 'X', steps: [] }));

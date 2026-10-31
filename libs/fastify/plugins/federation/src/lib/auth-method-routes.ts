@@ -7,7 +7,9 @@ import {
   type AuthMethodRoute,
   authMethodRoutePrefix,
   authMethodTypeProblems,
+  presentedUpstreamBinding,
   routeProblems,
+  upstreamBindingMatches,
 } from '@qauth-labs/server-federation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
@@ -47,10 +49,24 @@ export interface AuthMethodRouteHost {
    */
   contextFor(method: AuthMethod, request: FastifyRequest): Promise<AuthMethodContext>;
   /**
+   * Read, without taking it, the pending transaction of `method` that the
+   * request's flow cookie names: the `PendingUpstreamTransaction`
+   * (`{ binding, transaction }`) stored from `startUpstreamStep`'s answer.
+   * `undefined` or `null` when there is no flow cookie or no such
+   * transaction; anything but such an object reads as none.
+   *
+   * The mount compares the callback's binding with this one before it calls
+   * {@link takeTransaction}, so a request that does not carry the binding
+   * (a cross-site callback, a forged one) leaves the pending sign-in alone.
+   */
+  peekTransaction(method: AuthMethod, request: FastifyRequest): Promise<unknown>;
+  /**
    * Take the pending transaction of `method` that the request's flow cookie
-   * names, once: a second call for the same transaction answers `undefined`
-   * (or `null`). `undefined` or `null` too when there is no flow cookie or no
-   * such transaction. Anything but an object reads as no transaction.
+   * names, once: the same `{ binding, transaction }` as
+   * {@link peekTransaction}, and a second call for the same transaction
+   * answers `undefined` (or `null`). `undefined` or `null` too when there is
+   * no flow cookie or no such transaction. Anything but such an object reads
+   * as no transaction.
    */
   takeTransaction(method: AuthMethod, request: FastifyRequest): Promise<unknown>;
   /**
@@ -184,20 +200,27 @@ async function handle(
     return reply.redirect(location, 303);
   }
 
-  // The host, not the method, refuses a callback with no pending transaction:
-  // a forged callback, one forwarded to another browser, a replay. The method
-  // never runs for it, so it never spends the code or calls the provider.
-  const transaction = await host.takeTransaction(method, request);
-  // `null` too: a cache's "no such key" (takeValue answers null). A stored
-  // transaction is always an object (`startUpstreamStep` refuses anything else).
-  if (typeof transaction !== 'object' || transaction === null) {
-    return host.complete(
-      method,
-      { kind: 'failed', reason: 'transaction_mismatch' },
-      request,
-      reply
-    );
+  // The host, not the method, binds a callback to its start: it compares the
+  // binding the callback carries with the pending transaction's, in constant
+  // time, BEFORE it takes the transaction. A forged callback, one forwarded
+  // to another browser, a replay, or a cross-site request that does not
+  // carry the binding ends here as transaction_mismatch: the method never
+  // runs, and the pending sign-in stays pending, so another site cannot
+  // cancel it.
+  const mismatch = () =>
+    host.complete(method, { kind: 'failed', reason: 'transaction_mismatch' }, request, reply);
+  const presented = presentedUpstreamBinding(route, seen);
+  if (!bindingMatches(await host.peekTransaction(method, request), presented)) {
+    return mismatch();
   }
+  const taken = await host.takeTransaction(method, request);
+  // Again on what was taken: another start in the same browser may have
+  // replaced the transaction between the two reads.
+  if (!bindingMatches(taken, presented)) return mismatch();
+  // A stored transaction is always an object (`startUpstreamStep` refuses
+  // anything else); `null` is a cache's "no such key".
+  const transaction = (taken as { transaction?: unknown }).transaction;
+  if (typeof transaction !== 'object' || transaction === null) return mismatch();
   // The transaction is spent from here on: whatever goes wrong now ends the
   // step through the engine, never as an error that escapes the route.
   let context: AuthMethodContext;
@@ -218,6 +241,12 @@ async function handle(
     outcome = fault(type, 'the callback route threw', error);
   }
   return host.complete(method, outcome, request, reply);
+}
+
+/** Whether `pending` is a stored transaction whose binding `presented` is. */
+function bindingMatches(pending: unknown, presented: string | undefined): boolean {
+  if (typeof pending !== 'object' || pending === null) return false;
+  return upstreamBindingMatches((pending as { binding?: unknown }).binding, presented);
 }
 
 /** `error` as a fault of the method: itself when it already is one, else wrapped. */

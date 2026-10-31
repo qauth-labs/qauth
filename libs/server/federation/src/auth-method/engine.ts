@@ -3,14 +3,19 @@ import type {
   UserAttribute,
   VerifiedIdentity,
 } from '../providers/credential-provider.interface';
+import { constantTimeEquals } from '../subject/subject-binding';
 import type {
   AuthMethod,
   AuthMethodContext,
+  AuthMethodRoute,
+  AuthMethodRouteRequest,
   UpstreamStart,
   UpstreamStartRequest,
 } from './auth-method.interface';
 import {
   AUTH_METHOD_ATTRIBUTE_KEY_PATTERN,
+  AUTH_METHOD_BINDING_PATTERN,
+  DEFAULT_AUTH_METHOD_BINDING_PARAMETER,
   MAX_AUTH_METHOD_ATTRIBUTE_VALUE_LENGTH,
   MAX_AUTH_METHOD_EXTERNAL_SUB_LENGTH,
   MAX_AUTH_METHOD_RAW_CLAIMS_BYTES,
@@ -82,8 +87,9 @@ export type UpstreamStepCompletion =
 /**
  * Start an upstream transaction: call `method.start()` and check its answer.
  * The redirect must be an absolute `https` URL with no credentials and no
- * fragment, and the transaction JSON data within its cap. The returned
- * transaction is a frozen copy, what the engine stores.
+ * fragment, the transaction JSON data within its cap, and the binding 22 to
+ * 512 base64url characters. The returned transaction is a frozen copy; the
+ * host stores it with the binding (a `PendingUpstreamTransaction`).
  *
  * A rejection of `start()` (the provider's discovery document cannot be read,
  * for instance) propagates unchanged.
@@ -100,7 +106,7 @@ export async function startUpstreamStep<TConfig, TTransaction>(
   if (typeof answer !== 'object' || answer === null) {
     throw new AuthMethodFaultError(method.type, 'start() did not answer an object');
   }
-  const { redirectTo, transaction } = answer as Record<string, unknown>;
+  const { redirectTo, transaction, binding } = answer as Record<string, unknown>;
   const redirectProblem = upstreamRedirectProblem(redirectTo);
   if (redirectProblem !== undefined) {
     throw new AuthMethodFaultError(method.type, `start() answered ${redirectProblem}`);
@@ -126,7 +132,52 @@ export async function startUpstreamStep<TConfig, TTransaction>(
       `start() answered a redirect longer than ${MAX_UPSTREAM_REDIRECT_LENGTH} characters`
     );
   }
-  return Object.freeze({ redirectTo: href, transaction: stored as TTransaction });
+  if (typeof binding !== 'string' || !AUTH_METHOD_BINDING_PATTERN.test(binding)) {
+    throw new AuthMethodFaultError(
+      method.type,
+      'start() answered a binding that is not 22 to 512 base64url characters'
+    );
+  }
+  return Object.freeze({ redirectTo: href, transaction: stored as TTransaction, binding });
+}
+
+/**
+ * The binding a request to `route` carries: the single value of the route's
+ * binding parameter (`state` unless the route names another), from the
+ * query of a `GET` route and the form of a `POST` one. `undefined` when the
+ * parameter is missing or repeated, or `route` is not a callback route.
+ *
+ * @experimental
+ */
+export function presentedUpstreamBinding(
+  route: AuthMethodRoute,
+  request: Pick<AuthMethodRouteRequest, 'query' | 'form'>
+): string | undefined {
+  if (route.kind !== 'callback') return undefined;
+  const name = route.bindingParameter ?? DEFAULT_AUTH_METHOD_BINDING_PARAMETER;
+  const parameters = route.method === 'GET' ? request.query : request.form;
+  const value = Object.hasOwn(parameters, name) ? parameters[name] : undefined;
+  return typeof value === 'string' ? value : undefined;
+}
+
+/**
+ * Whether the binding a callback carried is the pending transaction's, in
+ * constant time (`constantTimeEquals`). `false` unless both are strings and
+ * the expected one is a binding: a missing or repeated parameter never
+ * matches, and neither does an empty one.
+ *
+ * The host runs it before it takes the transaction, so a callback from
+ * another site cannot spend or cancel a pending sign-in.
+ *
+ * @experimental
+ */
+export function upstreamBindingMatches(expected: unknown, presented: unknown): boolean {
+  return (
+    typeof expected === 'string' &&
+    typeof presented === 'string' &&
+    AUTH_METHOD_BINDING_PATTERN.test(expected) &&
+    constantTimeEquals(expected, presented)
+  );
 }
 
 /**
