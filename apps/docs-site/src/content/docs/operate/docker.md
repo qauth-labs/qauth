@@ -692,6 +692,13 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
   operator's to ensure.
 - With `pkce_required: false` the seed prints a warning naming the client. PKCE
   stays required on the redirect flow for every client.
+- A `--rotate` entry that sets a profile on a client a developer, dynamic
+  registration or a CIMD document created is refused by name before any secret
+  is issued; the seed exits `1` and leaves that client unchanged.
+- The system client is provisioned only through `system_client` (or the
+  migration runner): a `clients` entry with its id is refused before anything
+  is written. The seed reads that id from `SYSTEM_CLIENT_ID` (default
+  `system`), so set it for the seed too when the auth server uses another.
 - The database holds the rules on every path: no profile on a dynamic, CIMD,
   agent or developer-owned client, a profile only with `private_key_jwt`, a
   policy exactly on `native_backend`, `native_backend` only with the
