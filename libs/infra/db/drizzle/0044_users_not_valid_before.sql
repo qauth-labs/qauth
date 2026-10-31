@@ -46,7 +46,10 @@ CREATE TRIGGER "users_not_valid_before"
 -- while it was open counts as issued before the disablement. A constraint
 -- trigger, deferred to the commit; its own UPDATE names no "enabled", so it
 -- does not fire itself again, and users_not_valid_before checks that it only
--- moves the time forward.
+-- moves the time forward. A later migration that disables accounts leaves its
+-- trigger events pending until the commit, and the migrator applies every
+-- pending migration in one transaction: nothing after it in that transaction
+-- may ALTER or TRUNCATE "users" (55006).
 CREATE FUNCTION "users_not_valid_before_at_commit"() RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog, pg_temp

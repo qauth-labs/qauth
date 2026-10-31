@@ -31,14 +31,18 @@ was issued before the account was disabled: every browser session, refresh
 token, authorization code and access token from before stays refused, whether
 or not anyone used it while the account was disabled. Whoever held one,
 the account's owner or someone who took it, must sign in. A refresh token
-counts from the sign-in that started its family, so a rotation does not make
-it newer, and an authorization code from the sign-in behind it. An access
-token from before cannot sign the owner out of the sessions started since.
+counts from the start of its family, the code exchange or sign-in that issued
+its first token, so a rotation does not make it newer; an authorization code
+counts from the sign-in behind it. An access token from before cannot sign the
+owner out of the sessions started since.
 
 The account records the time it was last disabled, `users.not_valid_before`
 (epoch milliseconds, from the database's clock). Disabling sets it to the
 time the disabling transaction commits: until then the account still reads as
-enabled, and what it is issued meanwhile counts as issued before. Enabling
+enabled, and what it is issued meanwhile counts as issued before. The time is
+taken just before the commit, so a commit that then waits, for a synchronous
+standby for example, leaves the account readable as enabled a little longer
+than the time says. Enabling
 never clears it, and the database refuses an update that clears it or moves
 it back. A session or token issued up to one second after that time counts
 as issued before it, and an access token, whose issue time is kept to the
@@ -57,12 +61,13 @@ stays refused once the account is enabled.
 
 During a rolling upgrade, a node of the previous release still checks only
 whether the account is enabled. Once the account is enabled again, such a node
-accepts its old browser sessions and access tokens, and may rotate its old
-refresh tokens and mint codes from its old sessions. Nodes of this release
-refuse those rotated tokens and codes, because they count from the sign-in
-behind them, but an access token such a node mints works at them until it
-expires. Enable an account that was disabled for a takeover only after every
-node runs this release.
+accepts the account's old browser sessions and access tokens. Nodes of this
+release refuse the refresh tokens it rotates from an old family and the codes
+it mints from an old session. But from an old session it can also run a whole
+code exchange, and the new refresh family that starts works at every node
+until it ends, as does any access token such a node mints until it expires.
+Enable an account that was disabled for a takeover only after every node runs
+this release.
 
 ## Disable or enable an account
 
