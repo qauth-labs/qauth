@@ -19,6 +19,12 @@ export interface SessionUtilsInstance {
    * mis-typed object or throwing.
    */
   getSession<T extends SessionData>(sessionId: string, schema?: ZodType<T>): Promise<T | null>;
+  /**
+   * Read a session and delete it in one atomic step (Redis `GETDEL`): of two
+   * concurrent callers only the first gets the value. The key is deleted even
+   * when its value does not parse or validate, which then reads as a miss.
+   */
+  takeSession<T extends SessionData>(sessionId: string, schema?: ZodType<T>): Promise<T | null>;
   deleteSession(sessionId: string): Promise<void>;
   extendSession(sessionId: string, ttl?: number): Promise<void>;
   hasSession(sessionId: string): Promise<boolean>;
