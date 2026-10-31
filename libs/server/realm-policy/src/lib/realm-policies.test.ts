@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { policyField } from './field';
@@ -748,5 +748,24 @@ describe('registerPolicyGroup on the shared registry', () => {
       /differs only in case from the registered group "bruteForce"/
     );
     expect(REALM_POLICY_REGISTRY.field('tokens.idTokenLifespanSeconds')).toBeUndefined();
+  });
+
+  it('adds a valid group, which the other wrappers then read', async () => {
+    // A fresh copy of the module, so the group stays out of the registry the
+    // other tests read.
+    vi.resetModules();
+    const fresh = await import('./realm-policies');
+    fresh.registerPolicyGroup('testOnlyGroup', { delaySeconds: lifetime() });
+    expect(fresh.REALM_POLICY_REGISTRY.field('testOnlyGroup.delaySeconds')?.field.default).toBe(60);
+    expect(fresh.parseRealmPolicies({})).toEqual({
+      ...TABLE_DEFAULTS,
+      testOnlyGroup: { delaySeconds: 60 },
+    });
+    expect(
+      fresh
+        .diffPolicies({}, { testOnlyGroup: { delaySeconds: 120 } })
+        .changes.map((change) => [change.path, change.class])
+    ).toEqual([['testOnlyGroup.delaySeconds', 'security']]);
+    expect(REALM_POLICY_REGISTRY.field('testOnlyGroup.delaySeconds')).toBeUndefined();
   });
 });
