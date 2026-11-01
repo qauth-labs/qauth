@@ -396,6 +396,16 @@ catalog:
   '@types/zxcvbn': '^4.4.5'
   '@vitest/coverage-v8': '^5.0.5'
   '@vitest/ui': '^5.0.5'
+  # delurio's open checker of delurio-graph/0, the format of graphs/ (ADR-021,
+  # amendment of 2026-10-22): `nx run graphs:check` runs its `check` command.
+  # A root devDependency only: no app or lib imports it, and no image carries
+  # it. EXACT pin: while delurio is 0.x a minor release can judge the same
+  # graphs differently (a new check, a stricter schema), so a bump is a reviewed
+  # change that moves the pin and the graphs together. 0.1.1 is the newest
+  # release past minimumReleaseAge; 0.2.0 adds the `schema` rule, which refuses
+  # the `<error>.<cause>` exit names of graphs/README.md. Provenance-signed; no
+  # advisory names it or its two dependencies (elkjs 0.12.0, yaml 2.9.1).
+  '@delurio/cli': '0.1.1'
   drizzle-kit: '^0.31.11'
   esbuild: '^0.28.2'
   # Runs only `@nx/dependency-checks` on package.json files now (the
