@@ -162,9 +162,13 @@ cookie.
 The plugin runtime builds the context for the request's realm
 (`apps/auth-server/src/app/helpers/auth-method-plugins.ts`): the realm's stored config with its
 secret members decrypted back into place, the method's `type` as the signer's provider, and the
-request's logger with the plugin's name. In a single deployment the signer is called as `local`,
-the caller inside its own process; a deployment that runs the signer apart gives the role that
-serves the sign-in pages a grant of its own when the signer service lands (#497).
+request's logger with the plugin's name. The signer is called as `local`, the caller inside the
+signer's own process, which every role shares in a single deployment. No other caller would do:
+`web`, which serves a plugin's routes, may neither decrypt nor sign a client assertion, and `api`
+may decrypt only a realm's mail secrets and an upstream OpenID Connect client's secret, never a
+plugin secret's `auth-method-plugin:` context. A deployment that runs the signer apart gives the
+role that serves the sign-in pages a grant of its own when the signer service lands (#497); until
+then a process without the signer refuses the call.
 
 ## Routes
 
@@ -390,17 +394,21 @@ another host: an admin who cannot read the write-only secret cannot send it else
 secret again whenever either value changes. The signer lets the `api` role decrypt a context under
 `upstream-oidc:client-secret:`, and neither `web` nor `delivery`. `openUpstreamOidcConfig` decrypts
 the secret for the method's context, and `describeUpstreamOidcConfig` is the view an API or event
-may carry, with neither the secret nor its ciphertext. Where the stored form lives is #714's and
-#600's.
+may carry, with neither the secret nor its ciphertext. Where the stored form lives is provider
+administration's (#714): the client is not a plugin package, so the plugin runtime's
+`realm_auth_method_plugins` (#600), which seals a plugin's secrets under contexts of its own, does
+not hold it.
 
 **What the sign-in flow must add.** `externalSub` is the provider's bare `sub`, and the type
 `oidc_<alias>` does not name the issuer, while only `iss` and `sub` together identify a person
 (OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer, so the upstream
 sign-in flow (#639) stores it with the credential and refuses a mismatch, or provider
 administration (#714) refuses an issuer change while credentials exist. The host opens the stored
-config and builds the method's context as the signer caller `api`, or `local` in a single
-deployment: `api` may decrypt the client secret and sign client assertions, and `web` may do
-neither.
+config and builds the method's context as a signer caller that may decrypt the client secret and
+sign client assertions: `api` may do both, and `web`, which serves the sign-in pages where a
+method's routes mount, may do neither. So in a single deployment the host calls as `local`, as the
+plugin runtime does ([above](#what-a-method-is-handed)); which role calls once the signer runs
+apart is #497's.
 
 **At registration.** `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery
 and the egress client's address checks on every endpoint without calling it, and answers one

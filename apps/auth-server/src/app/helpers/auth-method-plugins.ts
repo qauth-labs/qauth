@@ -42,15 +42,27 @@ import { requestRealm } from './request-realm';
  * `PLUGIN_API_ENABLED` says. A fixed list in the server's code, never a
  * setting (#600): the first-party provider plugins of ADR-020 §4 add their
  * packages here as they ship (#671, #672, #673). Empty until then.
+ *
+ * The generic upstream OIDC client (`@qauth-labs/server-upstream-oidc`,
+ * #601) cannot go on this list as it is built: it is a factory that builds
+ * one method per configured provider, every one with the id `oidc`, where a
+ * plugin package exports one `authMethod`; and its client secret sits inside
+ * the `clientAuthentication` union, a mark the secret-member reader refuses.
+ * Provider administration (#714) registers it instead.
  */
 export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([]);
 
 /**
  * The signer caller a plugin's context signs and a plugin secret decrypts as.
- * `local`: in a single deployment every role shares the signer's process
- * (ADR-019 Decision 9), as the realm secret store does (#529). A split
- * deployment gives the web role a grant of its own when the signer service
- * runs apart (#497); until then a process without the signer refuses both.
+ * `local`, the caller inside the signer's own process (ADR-019 Decision 9),
+ * which may decrypt any context: in a single deployment every role shares
+ * that process. The realm secret store (#529) encrypts as `local` too, but
+ * decrypts as `api`, whose grant lists only the mail and upstream client
+ * secret prefixes; `web`, which serves a plugin's routes, may decrypt
+ * nothing. So a plugin's routes need `local` here until the signer service
+ * runs apart (#497) and a role gets a grant of its own for the
+ * `auth-method-plugin:` contexts; until then a process without the signer
+ * refuses both.
  */
 export const AUTH_METHOD_PLUGIN_SIGNER_CALLER = 'local';
 
