@@ -7,7 +7,7 @@ const EC = { kty: 'EC', crv: 'P-256', x: 'eA', y: 'eQ' };
 const RSA = { kty: 'RSA', n: 'bg', e: 'AQAB' };
 
 describe('publicJwkProblem (#925, #935)', () => {
-  it('finds nothing wrong with a public OKP, EC and RSA key, or a key type it does not know', () => {
+  it('accepts a public OKP, EC and RSA key, and a key type it does not know', () => {
     for (const jwk of [OKP, EC, RSA, { kty: 'AKP', alg: 'ML-DSA-65', pub: 'cA' }]) {
       expect(publicJwkProblem(jwk), JSON.stringify(jwk)).toBeUndefined();
     }
