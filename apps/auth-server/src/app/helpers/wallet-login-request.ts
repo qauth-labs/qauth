@@ -17,6 +17,8 @@ import {
   SD_JWT_VC_FORMAT,
   selectOid4vpResponseMode,
   signOid4vpRequestObject,
+  UNSIGNED_CLIENT_ID_PREFIX,
+  verifierKeyMatchesLeaf,
   verifierMaterialProvisionedBy,
   type VerifierProfile,
   type VerifierSigningMaterial,
@@ -83,7 +85,10 @@ import { storeWalletRequestObject } from './wallet-login-flow';
  * request realm's `oid4vp_request_signing` key (`signRequestObject`). This
  * process holds the certificate chain, which is public, and never the PEM.
  * The key boot step imports `OID4VP_VERIFIER_SIGNING_KEY` into the default
- * realm; a realm without the key fails the sign-in with the uniform refusal.
+ * realm, and two realms never share a key (ADR-019 Decision 9), so under a
+ * profile that signs its requests another realm offers no wallet login:
+ * {@link resolveWalletLoginCapabilityIn} answers `undefined` for a realm whose
+ * store holds no active request key the chain names.
  *
  * ## The same-device return leg (#405, ADR-013)
  *
@@ -303,6 +308,93 @@ export function resolveWalletLoginCapability(
     ],
     signingMaterial,
   };
+}
+
+/**
+ * Decide whether the request realm can serve a wallet login (#546): the
+ * deployment's capability ({@link resolveWalletLoginCapability}) and, when its
+ * profile signs requests, an active `oid4vp_request_signing` key in the
+ * realm's key store that the configured certificate chain names.
+ *
+ * The chain is the deployment's, and the key boot step imports its key into
+ * the default realm only. Another realm under a signing profile therefore has
+ * no key to sign with, and its pages render no wallet entry rather than one
+ * whose every attempt fails with the uniform refusal (#296: no button whose
+ * only outcome is a failure). Read through the signer's published keys, which
+ * every role may read.
+ *
+ * @param fastify - server instance, for the signer and logging.
+ * @param realm - the realm the browser's request was resolved to.
+ * @returns the capability, or `undefined` when this realm may not offer a
+ * wallet flow. Never throws: a key list that cannot be read answers
+ * `undefined`, logged.
+ */
+export function resolveWalletLoginCapabilityIn(
+  fastify: FastifyInstance,
+  realm: Pick<RealmRow, 'id'>
+): Promise<WalletLoginCapability | undefined> {
+  return walletLoginCapabilityInRealm(fastify, resolveWalletLoginCapability(fastify), realm);
+}
+
+/**
+ * The realm half of {@link resolveWalletLoginCapabilityIn}, for a capability
+ * already resolved: exported so its rule is provable with an explicit
+ * capability, as the env-backed one is resolved once per process.
+ */
+export async function walletLoginCapabilityInRealm(
+  fastify: FastifyInstance,
+  capability: WalletLoginCapability | undefined,
+  realm: Pick<RealmRow, 'id'>
+): Promise<WalletLoginCapability | undefined> {
+  if (capability === undefined || !signsRequests(capability.profile)) return capability;
+
+  const material = capability.signingMaterial;
+  // Refused by the capability already when the profile requires signing; a
+  // profile that only prefers a signed prefix cannot present it without one.
+  if (material === undefined) return undefined;
+
+  try {
+    const keys = await fastify.signer.getVerificationKeys(
+      'web',
+      realm.id,
+      'oid4vp_request_signing'
+    );
+    const named = keys.some(
+      (key) =>
+        key.status === 'active' &&
+        verifierKeyMatchesLeaf(material, key.publicJwk as Readonly<Record<string, unknown>>)
+    );
+    if (named) return capability;
+    fastify.log.debug(
+      { realmId: realm.id },
+      "wallet login unavailable in this realm: its key store holds no OID4VP request key the verifier's certificate chain names"
+    );
+    return undefined;
+  } catch (error) {
+    fastify.log.error(
+      { err: error, realmId: realm.id },
+      "wallet login unavailable: the realm's OID4VP request keys could not be read"
+    );
+    return undefined;
+  }
+}
+
+/** Whether the request realm's sign-in page offers a wallet login (#546). */
+export async function walletLoginOfferedIn(
+  fastify: FastifyInstance,
+  realm: Pick<RealmRow, 'id'>
+): Promise<boolean> {
+  return (await resolveWalletLoginCapabilityIn(fastify, realm)) !== undefined;
+}
+
+/**
+ * Whether a request built under `profile` is signed: its presented Client
+ * Identifier Prefix, the one the builder uses, is any but `redirect_uri`,
+ * which OID4VP 1.0 §5.9.3 never signs (`isSignedOid4vpRequest`).
+ */
+function signsRequests(profile: VerifierProfile): boolean {
+  const prefix = profile.verifierIdentity.presentedPrefixes[0]?.prefix;
+  return prefix !== undefined && prefix !== UNSIGNED_CLIENT_ID_PREFIX;
 }
 
 /**

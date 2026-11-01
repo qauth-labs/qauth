@@ -189,6 +189,11 @@ button that fails:
   of a process with the signer role and it is imported into the default
   realm's store (#546); the boot stops when the chain names no stored key.
   What is refused is the profile mandating signing with nothing to sign with.
+- The profile signs its requests and the request's realm holds no active
+  `oid4vp_request_signing` key the chain names. Keys are kept per realm, and
+  the import lands in the default realm only, so under `haip-1.0` another
+  realm's sign-in page offers no wallet login (#546). The unsigned
+  `oid4vp-1.0-base` profile reads no key and is offered in every realm.
 - The profile's response posture contradicts its permitted modes — a table
   entry requiring encryption while listing only plain `direct_post`, say. An
   encrypted response itself is never a reason: `direct_post.jwt` is built (#377

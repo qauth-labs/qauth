@@ -1565,11 +1565,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (migration 0053) in place of the scheme marker. A row the previous release
   wrote keeps opening, with its marker and `OID4VP_RESPONSE_KEY_SECRET`, until
   it expires (at most 15 minutes). During a rolling upgrade a node of the
-  previous release cannot open a row a new node sealed, so a wallet sign-in
-  that starts on a new node and ends on an old one fails with the uniform
-  refusal; upgrade every `web` and `api` node together, or let such sign-ins be
-  retried. A realm other than the default one signs request objects only once
-  its own store holds a request key.
+  previous release cannot redeem a row a new node sealed: the wallet's
+  response there answers 500 and leaves the row live, so the wallet can retry,
+  and a retry that reaches a new node completes the sign-in. Keys are kept per
+  realm and the import lands in the default realm only, so under a profile
+  that signs its requests (`haip-1.0`) a realm whose own store holds no
+  request key the chain names offers no wallet login on its sign-in and
+  account-linking pages; the unsigned `oid4vp-1.0-base` profile is offered in
+  every realm as before.
 - **CIMD comes from the realm row** ([#534], ADR-019 Decisions 1 and 10,
   ADR-007). Whether a realm accepts an HTTPS URL as a `client_id`, its trust
   policy and its trusted domains are the realm's `registration.cimd` policy, so

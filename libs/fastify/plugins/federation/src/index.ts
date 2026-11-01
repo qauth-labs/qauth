@@ -312,6 +312,7 @@ export {
   SD_JWT_VC_FORMAT,
   selectOid4vpResponseMode,
   signOid4vpRequestObject,
+  UNSIGNED_CLIENT_ID_PREFIX,
   verifierKeyMatchesLeaf,
   verifierMaterialProvisionedBy,
   X509_HASH_CLIENT_ID_PREFIX,

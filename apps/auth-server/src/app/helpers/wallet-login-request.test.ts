@@ -52,6 +52,7 @@ import {
   resolveWalletLoginCapability,
   WALLET_LOGIN_RETURN_PATH,
   type WalletLoginCapability,
+  walletLoginCapabilityInRealm,
   type WalletLoginInvocation,
   walletLoginResponseUri,
 } from './wallet-login-request';
@@ -120,7 +121,7 @@ function fakeFastify() {
 
   return {
     log: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
-    // Only the two operations this module calls, each a spy over the real
+    // Only the operations this module calls, each a spy over the real
     // in-process signer (#546).
     signer: {
       signRequestObject: vi.fn<Signer['signRequestObject']>((caller, input) =>
@@ -128,6 +129,9 @@ function fakeFastify() {
       ),
       encrypt: vi.fn<Signer['encrypt']>((caller, input) =>
         TEST_SIGNER.signer.encrypt(caller, input)
+      ),
+      getVerificationKeys: vi.fn<Signer['getVerificationKeys']>((caller, realmId, purpose) =>
+        TEST_SIGNER.signer.getVerificationKeys(caller, realmId, purpose)
       ),
     },
     sessionUtils: {
@@ -213,6 +217,18 @@ describe('resolveWalletLoginCapability', () => {
     envMock.OID4VP_VERIFIER_PROFILE = 'haip-1.0';
     const fastify = fakeFastify();
     expect(() => resolveWalletLoginCapability(fastify)).not.toThrow();
+  });
+});
+
+describe('walletLoginCapabilityInRealm — an unsigned profile (#546)', () => {
+  it('passes the capability through without reading any key, in every realm', async () => {
+    const fastify = fakeFastify();
+    const capability = resolveWalletLoginCapability(fastify);
+
+    expect(capability?.profile.id).toBe('oid4vp-1.0-base');
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM_KEYLESS)).toBe(capability);
+    expect(await walletLoginCapabilityInRealm(fastify, undefined, REALM)).toBeUndefined();
+    expect(fastify.signer.getVerificationKeys).not.toHaveBeenCalled();
   });
 });
 
@@ -480,6 +496,58 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
       buildWalletLoginInvocation(fastify, signingCapability(), REALM_KEYLESS)
     ).rejects.toMatchObject({ code: 'SIGNER_KEY_NOT_FOUND' });
     expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+  });
+
+  it('offers a wallet login only in a realm whose store holds the key the chain names (#546)', async () => {
+    // The key boot step imports the verifier key into the default realm only,
+    // and two realms never share a key: another realm under a signing profile
+    // renders no wallet entry rather than one that always fails.
+    const fastify = fakeFastify();
+    const capability = signingCapability();
+
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM)).toBe(capability);
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM_KEYLESS)).toBeUndefined();
+    // REALM_B holds a key, but not the one this chain's leaf names.
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM_B)).toBeUndefined();
+    expect(fastify.signer.getVerificationKeys).toHaveBeenCalledWith(
+      'web',
+      REALM_KEYLESS.id,
+      'oid4vp_request_signing'
+    );
+  });
+
+  it('does not count a retired request key', async () => {
+    // A signer of its own, which re-reads its store at every call, so the
+    // retirement below is what the gate sees.
+    const signer = createTestSigner({ refreshIntervalMs: 0 });
+    const realm = { issuer: 'https://retired.example.com', id: randomUUID() };
+    await signer.addRealm({ ...realm, oid4vpRequestSigningKey: PKI.signingKeyPem });
+    const fastify = fakeFastify();
+    vi.mocked(fastify.signer.getVerificationKeys).mockImplementation((caller, realmId, purpose) =>
+      signer.signer.getVerificationKeys(caller, realmId, purpose)
+    );
+    expect(await walletLoginCapabilityInRealm(fastify, signingCapability(), realm)).toBeDefined();
+
+    const [key] = await signer.signer.getVerificationKeys(
+      'web',
+      realm.id,
+      'oid4vp_request_signing'
+    );
+    if (key === undefined) throw new Error('the realm holds no request key');
+    signer.setKeyStatus(realm.id, key.kid, 'retired');
+
+    expect(await walletLoginCapabilityInRealm(fastify, signingCapability(), realm)).toBeUndefined();
+  });
+
+  it('answers undefined, logged, when the key list cannot be read', async () => {
+    const fastify = fakeFastify();
+    vi.mocked(fastify.signer.getVerificationKeys).mockRejectedValueOnce(new Error('unreachable'));
+
+    expect(await walletLoginCapabilityInRealm(fastify, signingCapability(), REALM)).toBeUndefined();
+    expect(fastify.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM.id }),
+      expect.stringContaining('could not be read')
+    );
   });
 
   it("fails, and parks nothing, when the chain's leaf names another key than the realm's", async () => {
