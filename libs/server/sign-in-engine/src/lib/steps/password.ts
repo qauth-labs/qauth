@@ -47,7 +47,11 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
     try {
       await reservation.settle(outcome);
     } catch (error) {
-      deps.onSettleFailure?.(new SignInStoreUnavailableError('ladder', error));
+      try {
+        deps.onSettleFailure?.(new SignInStoreUnavailableError('ladder', error));
+      } catch {
+        // A reporter that fails must not change the password's verdict either.
+      }
     }
   };
   const handler: StepHandler<'password'> = {

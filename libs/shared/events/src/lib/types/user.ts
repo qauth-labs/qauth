@@ -60,7 +60,7 @@ export const userSignInStepPassed = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'The sign-in engine accepted an answer to one step of a sign-in: the identifier, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.',
+    'The sign-in engine accepted an answer to one step of a sign-in: the identifier, a solved bot challenge, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,

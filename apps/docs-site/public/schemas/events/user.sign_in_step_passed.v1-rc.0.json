@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.sign_in_step_passed.v1-rc.0.json",
   "title": "urn:qauth:event:user.sign_in_step_passed:v1-rc.0",
-  "description": "The user.sign_in_step_passed event, v1-rc.0. The sign-in engine accepted an answer to one step of a sign-in: the identifier, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.",
+  "description": "The user.sign_in_step_passed event, v1-rc.0. The sign-in engine accepted an answer to one step of a sign-in: the identifier, a solved bot challenge, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.",
   "type": "object",
   "properties": {
     "id": {

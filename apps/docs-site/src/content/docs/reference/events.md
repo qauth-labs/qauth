@@ -287,7 +287,7 @@ A sign-in was refused: an unknown identifier, a wrong credential, a locked or di
 
 ### user.sign_in_step_passed v1-rc.0
 
-The sign-in engine accepted an answer to one step of a sign-in: the identifier, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.
+The sign-in engine accepted an answer to one step of a sign-in: the identifier, a solved bot challenge, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.
 
 - Identifier: `urn:qauth:event:user.sign_in_step_passed:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0

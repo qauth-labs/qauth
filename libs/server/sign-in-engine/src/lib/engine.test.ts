@@ -1111,6 +1111,83 @@ describe('what the second review of #614 pinned', () => {
     ]);
   });
 
+  it('keeps no identifier a mismatch brought when the record of the mismatch cannot be written', async () => {
+    const built = build(undefined, {
+      identifierDigest: async () => Promise.reject(new Error('identifier key store down')),
+    });
+    // The request's login_hint and the answer's differ: the round ends the
+    // transaction, and its record needs the identifier's HMAC.
+    const result = await built.engine.advance(
+      null,
+      answer('identifier', { login_hint: 'bob@example.com' }),
+      context({ loginHint: IDENTIFIER })
+    );
+    expect(result).toEqual({ kind: 'refused', reason: 'unavailable', transaction: tx() });
+  });
+
+  it('ends the transaction when a discoverable factor proves another account than the identifier names', async () => {
+    const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', OTHER_USER);
+    const built = build({ [IDENTIFIER]: kindAccount('passwordAndPasskey') }, { steps: [passkey] });
+    const first = await built.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+    expect(first).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'password' }, alternatives: [{ step: 'webauthn_get' }] },
+    });
+    const ctx = context();
+    const result = await built.engine.advance(
+      first.transaction as SignInTransaction,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      ctx
+    );
+    expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(ctx.records).toEqual([
+      {
+        outcome: 'ended',
+        step: 'webauthn_get',
+        reason: 'subject_mismatch',
+        identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+      },
+    ]);
+  });
+
+  it('accepts a discoverable factor that proves the account the identifier names', async () => {
+    const passkey = fakeFactorStep('webauthn_get', 'first_factor', 'passkey', USER);
+    const built = build({ [IDENTIFIER]: kindAccount('passwordAndPasskey') }, { steps: [passkey] });
+    const first = await built.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+    const result = await built.engine.advance(
+      first.transaction as SignInTransaction,
+      answer('webauthn_get', { webauthn_response: WEBAUTHN_RESPONSE }),
+      context()
+    );
+    expect(result).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+  });
+
+  it('refuses to build with a totp step that is not a second factor', () => {
+    const totp = fakeFactorStep('totp', 'second_factor', 'totp', USER);
+    expect(() =>
+      build(undefined, {
+        steps: [{ ...totp, role: 'first_factor', factor: 'password' } as AnyStepHandler],
+      })
+    ).toThrow(/totp is only a second factor/);
+  });
+
+  it('keeps the password verdict when the reporter of a failed settle throws too', async () => {
+    const ladder: LadderHook = {
+      reserve: async () => ({
+        kind: 'reserved',
+        settle: async () => Promise.reject(new Error('redis down')),
+      }),
+    };
+    const built = build(undefined, {
+      hooks: { ladder },
+      onUnavailable: () => {
+        throw new Error('the log is down too');
+      },
+    });
+    const { second } = await signIn(built, PASSWORD);
+    expect(second).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+  });
+
   it('keeps no identifier from a round that failed before its record was written', async () => {
     let failing = true;
     const built = build(undefined, {
@@ -1350,6 +1427,16 @@ describe('the hooks', () => {
       ctx
     );
     expect(solved).toMatchObject({ kind: 'step', offer: { current: { step: 'password' } } });
+    // The solved challenge is audited, as every processed step is; it comes
+    // before the identifier is taken, so its record names nobody.
+    expect(ctx.records.slice(-2)).toEqual([
+      { outcome: 'passed', step: 'captcha' },
+      {
+        outcome: 'passed',
+        step: 'identifier',
+        identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+      },
+    ]);
     // A transport that does not serve the captcha step gets the delay and 429.
     due = true;
     const native = await built.engine.advance(

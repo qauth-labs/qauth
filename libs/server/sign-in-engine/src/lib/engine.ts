@@ -207,6 +207,11 @@ function buildHandlers(deps: SignInEngineDependencies) {
     if (handler.discoverable === true && handler.role !== 'first_factor') {
       throw new Error(`sign-in engine: only a first factor is discoverable (${handler.step})`);
     }
+    // A one-time code proves possession of a device, never who the person is:
+    // alone it would complete a sign-in wherever no MFA policy applies.
+    if (handler.step === 'totp' && handler.role !== 'second_factor') {
+      throw new Error('sign-in engine: totp is only a second factor');
+    }
     byStep.set(handler.step, handler);
   }
   const ofRole = (role: AnyStepHandler['role']) => extra.filter((handler) => handler.role === role);
@@ -535,9 +540,21 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       read: ReadAnswer
     ): Promise<RoundResult | null> => {
       // Another user's proof ends the transaction, whatever that user's state.
-      const { subject } = state.transaction;
+      const { subject, identifier } = state.transaction;
       if (subject !== undefined && subject !== account.userId) {
         return ended(read.step, 'subject_mismatch');
+      }
+      // The first proof of a transaction that holds an identifier must prove
+      // the account the identifier names: a discoverable factor names its
+      // account by itself, and may name another. The password step proved
+      // that account by reading it, so it needs no second read.
+      if (subject === undefined && identifier !== undefined && read.step !== 'password') {
+        const named = await fromStore('accounts', () =>
+          deps.accounts.findByIdentifier(realmId, identifier)
+        );
+        if (named === null || named.userId !== account.userId) {
+          return ended(read.step, 'subject_mismatch');
+        }
       }
       if (!account.enabled) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_disabled');
@@ -594,6 +611,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
               { step: read.step, params: read.params } as OfferedStep,
             ],
           };
+          await audit('passed', read.step);
           return null;
         default:
           throw new Error(`sign-in engine: ${read.step} answered ${verdict.kind}`);
@@ -673,15 +691,27 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
     const beforeIdentifier = state.transaction;
     const heldBefore = beforeIdentifier.identifier;
+    /**
+     * End on a mismatch. The record names the identifier this round brought
+     * first; if writing it fails, the round keeps no identifier, as below.
+     */
+    const mismatch = async (step: StepName): Promise<RoundResult> => {
+      try {
+        return await ended(step, 'subject_mismatch');
+      } catch (error) {
+        state.transaction = beforeIdentifier;
+        throw error;
+      }
+    };
     for (const { identifier, step } of brought) {
       if (state.transaction.identifier === undefined) {
         // A discoverable factor fixed the subject without an identifier: one
         // brought now cannot be checked against it, so it ends the
         // transaction.
-        if (state.transaction.subject !== undefined) return ended(step, 'subject_mismatch');
+        if (state.transaction.subject !== undefined) return mismatch(step);
         state.transaction = { ...state.transaction, identifier };
       } else if (state.transaction.identifier !== identifier) {
-        return ended(step, 'subject_mismatch');
+        return mismatch(step);
       }
     }
 
