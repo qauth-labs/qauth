@@ -855,8 +855,10 @@ states:
     title: Save the consent
     description: >-
       Merged into the user's active consent for the client, or created: the shown scopes, and those scopes for each
-      named resource. Only a saved consent lets /oauth/token mint a refresh token, and lets /oauth/authorize skip this
-      screen next time.
+      named resource. Only a saved consent that covers a code's scopes at each of its resources lets /oauth/token mint
+      a refresh token for it. A saved consent also lets /oauth/authorize skip this screen next time. A first-party
+      client's administrative consent (ADR-017 Decision 9) skips it without one, for a request with no dangerous scope
+      and no prompt=consent; such a code gets a refresh token only when a saved consent covers it all the same.
     source: apps/auth-server/src/app/routes/ui/consent.ts:962
     invoke: { action: Consent.grant }
     on:

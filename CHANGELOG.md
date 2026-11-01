@@ -1364,8 +1364,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/oauth/authorize` and on `POST /ui/consent`, whatever it says: a session
   signed in more than two minutes earlier meets the login page (the window
   `prompt=login` gives every client), and `prompt=none` answers
-  `login_required`; the request's own `prompt=consent` still shows the screen. A client without a profile is
-  unaffected; no client has one until an operator sets it.
+  `login_required`; the request's own `prompt=consent` still shows the screen.
+  A client without a profile is unaffected; no client has one until an
+  operator sets it. The system client is the first an upgrade reaches: once
+  the operator provisions it from `SYSTEM_CLIENT_*` or the seed manifest's
+  `system_client` section ([#631]), which give it the `web_redirect` profile,
+  its `/oauth/authorize` requests skip the screen too.
 
 - **The AuthMethod contract, experimental** ([#599], ADR-003 as amended,
   ADR-018 §4, ADR-019 Decision 12). The plugin API for sign-in methods, such as

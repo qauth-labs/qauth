@@ -573,7 +573,14 @@ migration runner `SYSTEM_CLIENT_REDIRECT_URI` and one of
 `SYSTEM_CLIENT_ID` and `DEFAULT_REALM_NAME`, and the run that applies the
 migrations provisions it too (see
 [The system client](/operate/docker/#the-system-client)). The seed manifest's
-`system_client` section does the same.
+`system_client` section does the same. The profile also waives the consent
+screen
+([#633](https://github.com/qauth-labs/qauth/issues/633), ADR-017 Decision 9):
+once provisioned, the system client is issued codes at `/oauth/authorize`
+without it, unless a request asks for a dangerous scope or `prompt=consent`,
+and each such code is recorded as a
+[`consent.administrative`](/reference/events/#consentadministrative-v1-rc0)
+event.
 
 Nothing breaks if you do not, yet. An existing system client row is kept as
 it is, except that a row without the developer API's audience is given it
