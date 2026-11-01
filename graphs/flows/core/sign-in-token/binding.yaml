@@ -136,6 +136,27 @@ scenarios:
         # counted, then refused with 400
         repeat: '{server.env.LOGIN_RATE_LIMIT}'
 
+  insideTheLadderWait:
+    # ladderWait: five wrong passwords on one account, then the right one. The lock is raised above them so that the
+    # account's failure ladder (#615) refuses first. The fifth failure sets a one-second wait from its arrival; its
+    # answer takes the 500 ms floor, and the request follows it inside that second.
+    given: { gate: ladderWait, account: verified, password: right, requireVerified: true }
+    server: { env: { FAILED_LOGIN_MAX_ATTEMPTS: '8' } }
+    as: lockout
+    setup:
+      - request:
+          method: POST
+          path: /auth/login
+          json: { email: '{account.email}', password: not-the-password }
+          # counted on the lock and on the ladder, then refused with 401
+        repeat: 5
+
+  # A replay over HTTP cannot make the failure ladder's Redis fail; apps/auth-server/src/app/routes/auth/login.test.ts
+  # reaches this exit with a failing ladder.
+  ladderUnavailable:
+    given: { gate: ladderUnavailable, account: verified, password: right, requireVerified: true }
+    skip: the replay cannot make the failure ladder's store fail
+
   # A replay over HTTP cannot make a store fail; apps/auth-server/src/app/routes/auth/login.test.ts reaches this exit
   # with a failing repository.
   storeFailure:

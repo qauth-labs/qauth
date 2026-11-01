@@ -484,6 +484,48 @@ scenarios:
         save: { returnTo: { from: header, name: Location, query: return_to } } # /ui/resume/<handle>
     data: { resumePath: '{returnTo}' }
 
+  insideTheLadderWait:
+    # ladderWait: five wrong passwords on one account, then the right one. The lock is raised above them so that the
+    # account's failure ladder (#615) refuses first. The fifth failure sets a one-second wait from its arrival; its
+    # answer takes the 500 ms floor, and the walk follows it inside that second.
+    given:
+      gate: ladderWait
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    server: { env: { FAILED_LOGIN_MAX_ATTEMPTS: '8' } }
+    walks: [[SHOW, SUBMIT]]
+    as: lockout
+    setup:
+      - request: { method: GET, path: /ui/login, follow: false }
+        save:
+          csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value }
+          csrfCookie: { from: cookie, name: __Host-qauth_login_csrf }
+      - request:
+          method: POST
+          path: /ui/login
+          form:
+            email: '{account.email}'
+            password: not-the-password
+            csrf_token: '{csrfToken}'
+          headers: { Cookie: '__Host-qauth_login_csrf={csrfCookie}' }
+          # counted on the lock and on the ladder, then refused with 401
+        repeat: 5
+
+  # A replay over HTTP cannot make the failure ladder's Redis fail; apps/auth-server/src/app/routes/ui/login.test.ts
+  # reaches this exit with a failing ladder.
+  ladderUnavailable:
+    given:
+      gate: ladderUnavailable
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    skip: the replay cannot make the failure ladder's store fail
+
   # A replay over HTTP cannot make a store fail, and apps/auth-server/src/app/routes/ui/login.test.ts does not reach
   # this exit either: server_error.store is drawn from the code alone.
   storeFailure:
