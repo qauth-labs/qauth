@@ -1817,6 +1817,9 @@ importers:
       fastify:
         specifier: 'catalog:'
         version: 5.12.7
+      ioredis:
+        specifier: 'catalog:'
+        version: 5.11.1(supports-color@8.1.1)
       pg:
         specifier: 'catalog:'
         version: 8.23.1

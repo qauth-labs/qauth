@@ -6,6 +6,7 @@
   "dependencies": {
     "drizzle-orm": "catalog:",
     "fastify": "catalog:",
+    "ioredis": "catalog:",
     "pg": "catalog:",
     "supertest": "catalog:",
     "testcontainers": "catalog:",
