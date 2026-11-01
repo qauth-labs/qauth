@@ -92,6 +92,9 @@ describe('provisionSystemClient (real Postgres)', () => {
     const row = await systemRow(realmId);
     expect(row).toMatchObject({
       clientId: 'system',
+      // The developer API's audience from the start (#524), as the auth
+      // server's getOrCreateSystemClient creates the row.
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
       tokenEndpointAuthMethod: 'private_key_jwt',
       jwks: JWKS,
       jwksUri: null,

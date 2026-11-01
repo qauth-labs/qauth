@@ -21,7 +21,9 @@
  *
  * It never changes the row's name, description, scopes, audience, `enabled`
  * or `suspended`, so an operator's suspension and the audience the auth
- * server gives the system client survive a run. A row that the profile's
+ * server gives the system client survive a run. A row it creates gets that
+ * audience from the start, the developer API's (#524), so the portal's first
+ * token is accepted without waiting for the auth server's next boot. A row that the profile's
  * CHECKs would refuse (a developer's, an agent, a dynamic or CIMD
  * registration) is refused here first, by name, and left as it is.
  *
@@ -31,7 +33,11 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { isLoopbackHost, redirectTarget } from '@qauth-labs/shared-validation';
+import {
+  DEVELOPER_API_AUDIENCE,
+  isLoopbackHost,
+  redirectTarget,
+} from '@qauth-labs/shared-validation';
 import { and, eq, sql } from 'drizzle-orm';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
@@ -248,6 +254,9 @@ export async function provisionSystemClient(
           clientId: spec.client_id,
           clientSecretHash: unusableSecretHash(),
           name: 'System Client',
+          // As the auth server's getOrCreateSystemClient creates it (#524):
+          // the portal's token carries exactly the developer API's audience.
+          audience: [DEVELOPER_API_AUDIENCE],
           developerId: null,
           isAgent: false,
           ...owned,
