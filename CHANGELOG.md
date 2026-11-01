@@ -1200,25 +1200,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process that holds the `signer` role while the roles are split runs one more
   HTTP server, on `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port
   `3443`, by default; advanced keys), for the other roles' calls to the signer
-  service ([#497] adds its routes). It serves HTTP/1.1 over TLS 1.3 only and
-  requires a client certificate that `INTERNAL_TLS_CA_PATH` issued: a client
-  with none, or one from another CA, gets no HTTP answer. The new
-  `INTERNAL_PEER_ROLES` maps a subject alternative name of the peer's
-  certificate (a DNS name, or a URI such as a SPIFFE ID) to the role it calls
-  as, `request.peerRole`; a peer whose SANs it does not map, or map to two
-  roles, gets `403` `forbidden` on every path. The certificate, key and CA
-  files are read again every five seconds and applied with no restart once a
-  rotation is complete. Its routes register by role from an internal route
-  manifest, all under `/internal/`, which the public listener refuses to
-  register. Such a process refuses to start without the three TLS files and
-  `INTERNAL_PEER_ROLES`, naming each, before it waits for the database. A
-  single process runs no internal listener, whatever routes it holds. The listener is not
-  routed by host and shares the app's database pool, cache and signer. The
-  admin API keeps its own listener and its own rule: a peer certificate grants
-  nothing there. `createInternalClient` (`apps/auth-server/src/app/internal/client.ts`)
-  is how the other roles call it: `https` only, the server known by
-  `expectedServerSan` rather than its host name, a keep-alive pool, a deadline
-  and a cap on each answer, and credentials that can be reloaded.
+  service ([#497] adds its routes). A single process runs none. It serves
+  HTTP/1.1 over TLS 1.3 only and requires a client certificate that
+  `INTERNAL_TLS_CA_PATH` issued: a client with none, or one from another CA,
+  gets no HTTP answer. A CA file that holds a public root CA, as a system
+  bundle does, is refused, and one with no `CA:TRUE` certificate, or a key file
+  its group or others may read, is warned of. The new `INTERNAL_PEER_ROLES`
+  maps a subject alternative name of the peer's certificate (a DNS name, or a
+  URI such as a SPIFFE ID) to the role it calls as, `request.peerRole`, and
+  refuses `signer`, which never calls as a peer; a peer whose SANs it does not
+  map, or map to two roles, gets `403` `forbidden` on every path. Each internal
+  route module names the peer roles that may call it, and a peer of another
+  role gets `403` on its routes. A request on a connection whose peer
+  certificate has expired since the handshake, or that was made before the TLS
+  files were last reloaded, gets `403` too; every `403` closes its connection,
+  so the peer connects again. The certificate, key and CA files are read again
+  every five seconds and applied with no restart once a rotation is complete.
+  The listener holds at most 1024 connections at once. Its routes register by
+  role from an internal route manifest, all under `/internal/`, which the
+  public listener refuses to register. Such a process refuses to start without
+  the three TLS files and `INTERNAL_PEER_ROLES`, naming each, before it waits
+  for the database. The listener is not routed by host, shares the app's
+  database pool, cache and signer, and closes at the same time as the admin
+  listener. The admin API keeps its own listener and its own rule: a peer
+  certificate grants nothing there. `createInternalClient`
+  (`apps/auth-server/src/app/internal/client.ts`) is how the other roles call
+  it: `https` only, the server known by `expectedServerSan` rather than its
+  host name, every request kept below the base URL's path, a keep-alive pool
+  (a request whose pooled connection the server had just closed is sent once
+  more on a new one), a deadline and a cap on each answer, and credentials
+  that can be reloaded.
 - **Client display data and the verified domain** ([#593], ADR-019 Decision 6).
   One function in the auth server says who a client is from the server's own
   records, as the Interaction API's `ClientDisplay`: the host of a CIMD client's

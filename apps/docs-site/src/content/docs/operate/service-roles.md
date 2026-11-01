@@ -83,17 +83,30 @@ It serves mutual TLS only, TLS 1.3 and HTTP/1.1:
 - `INTERNAL_TLS_CERT_PATH` and `INTERNAL_TLS_KEY_PATH` hold the certificate it
   serves, and `INTERNAL_TLS_CA_PATH` the CA certificates that issue every
   peer's. A client that presents no certificate, or one another CA issued,
-  gets no HTTP answer.
+  gets no HTTP answer. The CA file must hold only the CA that issues QAuth's
+  peers: one that holds a public root CA, as a system bundle does, is refused,
+  and one with no certificate marked `CA:TRUE` is warned of. Make the key file
+  readable by the server's user only (such as a Kubernetes secret's
+  `defaultMode: 0400`): the server warns when its group or others may read it.
 - `INTERNAL_PEER_ROLES` maps a subject alternative name (SAN) of a peer's
   certificate to the role the peer calls as, as a JSON object. A key with a
   `:` is a URI SAN, such as a SPIFFE ID, compared exactly; any other key is a
-  DNS SAN, compared without regard to case. Wildcards and IP addresses are
-  refused. A peer whose certificate holds no mapped SAN, or SANs mapped to two
+  DNS SAN, compared without regard to case. Wildcards, IP addresses and the
+  `signer` role are refused: the signer serves the listener and never calls
+  it. A peer whose certificate holds no mapped SAN, or SANs mapped to two
   roles, gets `403` on every path.
+- Each internal route admits only the peer roles its module names: a peer of
+  another role gets `403` there.
 - The listener reads its three files again every five seconds and serves new
   ones with no restart, once a rotation has written both the certificate and
   its key. A mesh's or a SPIFFE agent's certificates are files like any other,
   so either can issue them.
+- The handshake checks a peer's certificate once per connection, so each
+  request checks again: a request on a connection whose peer certificate has
+  expired since, or that was made before the files were last reloaded (a CA
+  replaced among them), gets `403`. Every `403` closes its connection, and the
+  peer connects again under the files served then.
+- It holds at most 1024 connections at once.
 
 The process refuses to start, naming each setting, when the three files or
 `INTERNAL_PEER_ROLES` are missing: the signer is never served without mutual
@@ -105,15 +118,9 @@ internal route takes the realm from the request, not from the `Host` header.
 The admin API keeps [its own listener](#the-admin-listener) and its own rule:
 a peer certificate grants nothing there.
 
-```bash
-# The signer's nodes: the internal listener, reachable by the other nodes.
-SERVICE_ROLES=api,admin,signer,delivery
-INTERNAL_HOST=0.0.0.0
-INTERNAL_TLS_CERT_PATH=/run/secrets/signer.crt
-INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
-INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
-INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/web":"web"}
-```
+Until the signer service ships, `web` must sit with the signer: the settings
+of the split that works today, with the internal listener, are in
+[What a split deployment can do today](#what-a-split-deployment-can-do-today).
 
 ## What a split deployment can do today
 
@@ -152,7 +159,8 @@ INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
 INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/admin":"admin"}
 
-# Admin nodes: no KEK, no private key.
+# Admin nodes: no KEK, no private key. Their certificate holds the SAN
+# spiffe://example.org/qauth/admin, which the signer's nodes map to admin.
 SERVICE_ROLES=admin
 SIGNER_URL=https://signer.internal:3443
 INTERNAL_TLS_CERT_PATH=/run/secrets/admin.crt

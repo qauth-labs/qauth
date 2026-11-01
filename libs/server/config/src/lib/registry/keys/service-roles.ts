@@ -50,6 +50,6 @@ export const SERVICE_ROLE_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: "A PEM file with the CA certificates that issue internal peers' certificates, which the internal listener requires of every client and reloads when the file changes; required where `SIGNER_URL` is, and where the internal listener runs while the roles are split.",
+    docs: "A PEM file with the CA certificates that issue internal peers' certificates, which the internal listener requires of every client and reloads when the file changes; a file that holds a public root CA, such as a system bundle, is refused; required where `SIGNER_URL` is, and where the internal listener runs while the roles are split.",
   },
 ]);

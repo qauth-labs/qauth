@@ -32,6 +32,6 @@ export const INTERNAL_LISTENER_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: 'A JSON object from a subject alternative name of a peer\'s certificate, a URI such as a SPIFFE ID or a DNS name, to the service role the peer calls the internal listener as, such as `{"spiffe://example.org/qauth/web":"web"}`; the listener answers `403` to a peer whose certificate names no SAN here, and with the internal TLS files it refuses to start without one.',
+    docs: 'A JSON object from a subject alternative name of a peer\'s certificate, a URI such as a SPIFFE ID or a DNS name, to the service role the peer calls the internal listener as, such as `{"spiffe://example.org/qauth/web":"web"}`; the listener answers `403` to a peer whose certificate names no SAN here, and to one whose role a route\'s module does not admit; `signer` is refused, as the signer never calls as a peer, and with the internal TLS files the listener refuses to start without one.',
   },
 ]);
