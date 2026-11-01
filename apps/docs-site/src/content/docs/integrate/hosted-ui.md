@@ -218,7 +218,7 @@ it in the redirect:
 
 Redis was already on that path before #319, and not marginally: the
 Redis-backed `@fastify/rate-limit` plugin is registered app-wide
-(`apps/auth-server/src/app/app.ts:275`) ahead of both route sweeps (lines 294
+(`apps/auth-server/src/app/app.ts:271`) ahead of both route sweeps (lines 294
 and 301), against the same `fastify.redis` client
 (`apps/auth-server/src/app/plugins/rate-limit.ts:28`); `RATE_LIMIT_ENABLED`
 defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);

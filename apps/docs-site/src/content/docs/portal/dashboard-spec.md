@@ -223,7 +223,7 @@ three independent blockers, each fatal on its own:
    which withholds it from cross-site `fetch()` subresource requests regardless of
    `credentials: 'include'`.
 3. Production CORS is fail-closed: `origin` resolves to `false` unless an operator sets
-   `CORS_ORIGIN` (`apps/auth-server/src/app/app.ts:273`).
+   `CORS_ORIGIN` (`apps/auth-server/src/app/app.ts:269`).
 
 It was the only page in the portal that called the auth-server directly from the browser. See
 [the portal guide](/portal/guide/#the-consents-page) for the full account.
