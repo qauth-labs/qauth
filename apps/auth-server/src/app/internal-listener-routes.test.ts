@@ -27,6 +27,7 @@ const FIXTURE_MODULE: InternalRouteModule = {
   module: 'fixture',
   prefix: '/internal/fixture/v1-rc.0',
   roles: ['signer'],
+  peerRoles: ['web'],
   load: async () => ({
     default: async (scope) => {
       scope.get('/peer', async (request) => ({ peerRole: request.peerRole }));

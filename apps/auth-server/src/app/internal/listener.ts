@@ -6,6 +6,7 @@ import { ForbiddenError } from '@qauth-labs/shared-errors';
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
+  type FastifyReply,
   type FastifyRequest,
   LogController,
   type RouteOptions,
@@ -36,6 +37,7 @@ import {
   resolvePeerRole,
 } from './peer-certificate';
 import {
+  internalModuleProblem,
   type InternalRouteModule,
   internalRouteModulesFor,
   internalRouteProblem,
@@ -65,8 +67,16 @@ import {
  * name of its certificate: INTERNAL_PEER_ROLES maps it to the role it calls
  * as, `request.peerRole`, and a request from a peer with no role is refused
  * with 403 before any route, or the 404 of a path no route serves, is
- * reached. The certificate files are read again when they change, so a
- * rotated certificate is served with no restart.
+ * reached. A route module names the peer roles that may call it, and a peer
+ * of another role gets 403 on its routes. The certificate files are read
+ * again when they change, so a rotated certificate is served with no restart.
+ *
+ * The handshake checks the peer's certificate once per connection, so each
+ * request checks again what may have changed since: a request after the
+ * certificate's `notAfter`, or on a connection made before the TLS files were
+ * last reloaded (a CA replaced among them), is refused with 403. Every 403
+ * closes its connection, so the peer connects again under the files served
+ * then.
  *
  * Without the TLS files it serves plain HTTP, which the boot rule allows only
  * to a single process on loopback (`service-roles.ts`). No request there has
@@ -131,40 +141,121 @@ export interface InternalServerOptions {
 /** The parts of a connection the peer check reads: a TLS socket's, when it is one. */
 type PeerSocket = Partial<Pick<TLSSocket, 'authorized' | 'getPeerX509Certificate'>>;
 
+/** What the listener knows of a connection's peer, resolved at its first request. */
+type SocketPeer = PeerRoleResolution & {
+  readonly sans: string[];
+  /** When the peer's certificate stops being valid, in ms since the epoch: never without one. */
+  readonly notAfterMs: number;
+};
+
 /**
  * The role of the peer on `socket`: none on a plain-HTTP connection or one
  * whose certificate did not verify, and otherwise the role its SANs map to.
  */
-function resolveSocketPeer(
-  socket: PeerSocket,
-  peerRoles: InternalPeerRoles
-): PeerRoleResolution & { readonly sans: string[] } {
+function resolveSocketPeer(socket: PeerSocket, peerRoles: InternalPeerRoles): SocketPeer {
+  const none: SocketPeer = {
+    refused: 'no-certificate',
+    sans: [],
+    notAfterMs: Number.POSITIVE_INFINITY,
+  };
   if (typeof socket.getPeerX509Certificate !== 'function' || socket.authorized !== true) {
-    return { refused: 'no-certificate', sans: [] };
+    return none;
   }
   const certificate = socket.getPeerX509Certificate();
-  if (certificate === undefined) return { refused: 'no-certificate', sans: [] };
+  if (certificate === undefined) return none;
   const sans = certificateSans(certificate.subjectAltName);
-  return { ...resolvePeerRole(sans, peerRoles), sans: loggableSans(sans) };
+  // An unreadable date counts as expired.
+  const notAfterMs = certificate.validToDate.getTime();
+  return {
+    ...resolvePeerRole(sans, peerRoles),
+    sans: loggableSans(sans),
+    notAfterMs: Number.isNaN(notAfterMs) ? 0 : notAfterMs,
+  };
+}
+
+/**
+ * Which TLS files each connection's handshake ran under: a generation the
+ * listener bumps on every reload of its files, and the one each connection
+ * was made in, stamped when its handshake completes.
+ */
+class TlsGenerations {
+  private generation = 0;
+  private readonly sockets = new WeakMap<object, number>();
+
+  /** The generation of the files served now. */
+  get current(): number {
+    return this.generation;
+  }
+
+  /** The files changed: every connection made before now is of an older generation. */
+  bump(): void {
+    this.generation += 1;
+  }
+
+  /** `socket` completed its handshake under the files served now. */
+  stamp(socket: object): void {
+    this.sockets.set(socket, this.generation);
+  }
+
+  /** The generation `socket` was made in: the current one for a socket never stamped (plain HTTP). */
+  of(socket: object): number {
+    return this.sockets.get(socket) ?? this.generation;
+  }
+}
+
+/**
+ * Refuse an internal request with 403 and close its connection once the
+ * answer is sent: the peer connects again, and its next handshake checks its
+ * certificate under the TLS files served then.
+ */
+function refuseInternalRequest(reply: FastifyReply, message: string): never {
+  reply.header('connection', 'close');
+  throw new ForbiddenError(message);
 }
 
 /**
  * The peer check: an `onRequest` hook of the listener's root, registered
  * after the request id (so a refusal carries it) and before the answer to an
- * unknown path (so a peer with no role learns nothing of the routes). A
- * connection's peer cannot change, TLS 1.3 having no renegotiation, so it is
- * resolved once per connection.
+ * unknown path (so a peer with no role learns nothing of the routes).
+ *
+ * A connection's peer cannot change, TLS 1.3 having no renegotiation, so its
+ * role is resolved once per connection. What the handshake checked can stop
+ * holding while the connection lives, kept alive or resumed: each request is
+ * refused once the certificate's `notAfter` has passed, or once the TLS files
+ * the handshake ran under were replaced.
  */
-const peerRolePlugin = fp<{ readonly peerRoles: InternalPeerRoles }>(
-  async (fastify, { peerRoles }) => {
-    const resolved = new WeakMap<object, ReturnType<typeof resolveSocketPeer>>();
+const peerRolePlugin = fp<{
+  readonly peerRoles: InternalPeerRoles;
+  readonly generations: TlsGenerations;
+}>(
+  async (fastify, { peerRoles, generations }) => {
+    const resolved = new WeakMap<object, SocketPeer & { readonly generation: number }>();
     fastify.decorateRequest('peerRole', undefined);
-    fastify.addHook('onRequest', async (request) => {
+    fastify.addHook('onRequest', async (request, reply) => {
       const socket = request.raw.socket;
       let peer = resolved.get(socket);
       if (peer === undefined) {
-        peer = resolveSocketPeer(socket as PeerSocket, peerRoles);
+        peer = {
+          ...resolveSocketPeer(socket as PeerSocket, peerRoles),
+          generation: generations.of(socket),
+        };
         resolved.set(socket, peer);
+      }
+      if (peer.generation < generations.current) {
+        request.log.debug(
+          'Refused an internal request on a connection made before the TLS files were reloaded'
+        );
+        refuseInternalRequest(
+          reply,
+          'The internal TLS files changed since this connection was made: connect again'
+        );
+      }
+      if (Date.now() >= peer.notAfterMs) {
+        request.log.warn(
+          { sans: peer.sans, notAfter: new Date(peer.notAfterMs).toISOString() },
+          'Refused an internal request: the peer certificate has expired'
+        );
+        refuseInternalRequest(reply, 'The peer certificate has expired');
       }
       if ('role' in peer) {
         request.peerRole = peer.role;
@@ -174,7 +265,7 @@ const peerRolePlugin = fp<{ readonly peerRoles: InternalPeerRoles }>(
         { refused: peer.refused, sans: peer.sans },
         'Refused an internal request: the peer certificate maps to no role in INTERNAL_PEER_ROLES'
       );
-      throw new ForbiddenError('The peer has no role on the internal listener');
+      refuseInternalRequest(reply, 'The peer has no role on the internal listener');
     });
   },
   { name: '@qauth-labs/internal-peer-role' }
@@ -190,6 +281,16 @@ const unknownRoutePlugin = fp(
 
 /** How long a connection may take to complete its TLS handshake. */
 export const INTERNAL_HANDSHAKE_TIMEOUT_MS = 10_000;
+
+/**
+ * The most connections the internal listener holds open at once; past it, a
+ * new connection is closed before its handshake. Room for 32 peer processes
+ * with the internal client's default pool of 32 connections each
+ * (`client.ts`), while a flood of connections that never complete a
+ * handshake cannot take the process's file descriptors from the public
+ * listener and the database pool.
+ */
+export const INTERNAL_MAX_CONNECTIONS = 1_024;
 
 /** The shortest time between two log lines about refused handshakes. */
 const REFUSAL_LOG_INTERVAL_MS = 60_000;
@@ -258,7 +359,10 @@ function isCertificateRefusal(
  * - no proxy is trusted, and no route is chosen by host;
  * - with `tls`, a client certificate the CA file issued is required at the
  *   handshake, and the files are read again while the listener listens;
- * - every request is checked for its peer's role before anything else.
+ * - every request is checked for its peer's role before anything else, and
+ *   for a certificate that expired or TLS files replaced since its connection
+ *   was made; each 403 closes its connection;
+ * - at most {@link INTERNAL_MAX_CONNECTIONS} connections are open at once.
  */
 export function createInternalServer(options: InternalServerOptions): FastifyInstance {
   const { tls } = options;
@@ -300,13 +404,18 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
   server.setNotFoundHandler(answerRouteNotFound);
+  server.server.maxConnections = INTERNAL_MAX_CONNECTIONS;
+  const generations = new TlsGenerations();
   void server.register(errorHandler);
   void server.register(requestIdPlugin);
-  void server.register(peerRolePlugin, { peerRoles: options.peerRoles });
+  void server.register(peerRolePlugin, { peerRoles: options.peerRoles, generations });
   void server.register(unknownRoutePlugin);
 
   if (tls !== undefined) {
     const tlsServer = server.server as unknown as TlsServer;
+    // Registered after the HTTP layer's own listener, and run in the same
+    // emit, so before the connection's first request is read.
+    tlsServer.on('secureConnection', (socket) => generations.stamp(socket));
     const refusalLog = new LogSampler(REFUSAL_LOG_INTERVAL_MS);
     tlsServer.on('tlsClientError', (error, socket) => {
       const fields = {
@@ -338,11 +447,14 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
         tls.files,
         tls.material,
         (material) => {
-          // A new context for new connections. Idle keep-alive connections
-          // close, so their peers connect again under the new files; a
-          // connection busy with a request keeps its context until it is
-          // idle at a later reload, or closes.
+          // A new context for new connections, with new session ticket keys
+          // (`setSecureContext` makes them), so no session made before
+          // resumes after. Every connection made before is of an older
+          // generation now: the idle ones close, and the next request on a
+          // busy one is refused with 403 and closes it, so each peer
+          // connects again under the new files.
           tlsServer.setSecureContext(internalSecureContextOptions(material));
+          generations.bump();
           server.server.closeIdleConnections();
           server.log.info(
             { certificate: describeCertificate(material.cert) },
@@ -417,8 +529,10 @@ export async function closeInternalServer(internal: FastifyInstance): Promise<vo
  * listener of the process.
  *
  * Each module of the process's roles registers in its own scope, under its
- * prefix, its routes tagged with the module's roles. The boot is refused for
- * a route outside `/internal/` or with no role this process holds.
+ * prefix, its routes tagged with the module's roles, and refuses with 403 a
+ * peer whose role is not among the module's `peerRoles`. The boot is refused
+ * for a module that names no peer role, and for a route outside `/internal/`
+ * or with no role this process holds.
  *
  * `internal` stops accepting requests when `source` begins to close, before
  * the database closes, and while any other listener of the app closes.
@@ -444,11 +558,25 @@ export async function installInternalApi(
   });
 
   const modules = internalRouteModulesFor(options.roles, options.modules);
+  const unguarded = modules
+    .map((entry) => internalModuleProblem(entry))
+    .filter((problem) => problem !== undefined);
+  if (unguarded.length > 0) throw new Error(unguarded.join('\n'));
   for (const entry of modules) {
     const plugin = (await entry.load()).default;
     await internal.register(async (scope) => {
       scope.addHook('onRoute', (route) => {
         route.config = { ...route.config, serviceRoles: entry.roles };
+      });
+      // After the root's peer check: every request here has a peer role.
+      scope.addHook('onRequest', async (request, reply) => {
+        const role = request.peerRole;
+        if (role !== undefined && entry.peerRoles.includes(role)) return;
+        request.log.warn(
+          { peerRole: role, module: entry.module },
+          "Refused an internal request: the module does not admit the peer's role"
+        );
+        refuseInternalRequest(reply, "The peer's role may not call this route");
       });
       await scope.register(plugin, { prefix: entry.prefix });
     });

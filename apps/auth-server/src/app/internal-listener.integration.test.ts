@@ -59,6 +59,7 @@ const FIXTURE_MODULE: InternalRouteModule = {
   module: 'fixture',
   prefix: PREFIX,
   roles: ['signer'],
+  peerRoles: ['web', 'api', 'delivery', 'admin'],
   load: async () => ({ default: fixtureRoutes }),
 };
 

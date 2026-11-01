@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   INTERNAL_ROUTE_MODULES,
+  internalModuleProblem,
   type InternalRouteModule,
   internalRouteModulesFor,
   internalRouteProblem,
@@ -55,11 +56,44 @@ describe('the internal route manifest', () => {
     expect(Object.isFrozen(INTERNAL_ROUTE_MODULES)).toBe(true);
   });
 
+  it('names the peer roles of every module', () => {
+    for (const entry of INTERNAL_ROUTE_MODULES) {
+      expect(internalModuleProblem(entry), entry.module).toBeUndefined();
+    }
+  });
+
+  it('refuses a module that names no peer role', () => {
+    const load = async () => ({ default: async () => undefined });
+    const open: InternalRouteModule = {
+      module: 'open',
+      prefix: '/internal/open/v1-rc.0',
+      roles: ['signer'],
+      peerRoles: [],
+      load,
+    };
+    expect(internalModuleProblem(open)).toContain(
+      'The internal route module open names no peer role'
+    );
+    expect(internalModuleProblem({ ...open, peerRoles: ['admin'] })).toBeUndefined();
+  });
+
   it('gives a process the modules of the roles it holds', () => {
     const load = async () => ({ default: async () => undefined });
     const modules: InternalRouteModule[] = [
-      { module: 'signer', prefix: '/internal/signer/v1-rc.0', roles: ['signer'], load },
-      { module: 'web', prefix: '/internal/web/v1-rc.0', roles: ['web', 'api'], load },
+      {
+        module: 'signer',
+        prefix: '/internal/signer/v1-rc.0',
+        roles: ['signer'],
+        peerRoles: ['web', 'api'],
+        load,
+      },
+      {
+        module: 'web',
+        prefix: '/internal/web/v1-rc.0',
+        roles: ['web', 'api'],
+        peerRoles: ['delivery'],
+        load,
+      },
     ];
     expect(internalRouteModulesFor(['signer'], modules).map((entry) => entry.module)).toEqual([
       'signer',

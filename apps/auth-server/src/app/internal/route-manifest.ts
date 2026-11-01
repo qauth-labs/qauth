@@ -11,10 +11,12 @@ import type { FastifyPluginAsync, RouteOptions } from 'fastify';
  * route answers on both listeners.
  *
  * The manifest is empty until the signer service (#497) adds its routes under
- * `/internal/signer/v1-rc.0`, for the `signer` role. A route reads the role
- * its caller's certificate maps to with `requestPeerRole(request)`
- * (`./listener.ts`) and decides what that role may do; the listener has
- * already refused a peer with no role.
+ * `/internal/signer/v1-rc.0`, for the `signer` role. Each module names the
+ * peer roles that may call it (`peerRoles`): the listener refuses a peer with
+ * no role, and a peer whose role the module does not name, with 403 before
+ * the route runs. A route reads the caller's role with
+ * `requestPeerRole(request)` (`./listener.ts`) to decide what that role may
+ * do within the module.
  */
 
 /** The path every internal route sits under. */
@@ -28,6 +30,12 @@ export interface InternalRouteModule {
   readonly prefix: string;
   /** The roles whose processes register it. Never empty. */
   readonly roles: readonly ServiceRole[];
+  /**
+   * The roles of the peers that may call it, as INTERNAL_PEER_ROLES maps
+   * their certificates: a peer of any other role gets 403 on every route of
+   * the module. Never empty: the boot is refused otherwise.
+   */
+  readonly peerRoles: readonly ServiceRole[];
   /** The module, imported when a process registers it. */
   readonly load: () => Promise<{ readonly default: FastifyPluginAsync }>;
 }
@@ -41,6 +49,16 @@ export function internalRouteModulesFor(
   modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
 ): readonly InternalRouteModule[] {
   return modules.filter((entry) => entry.roles.some((role) => roles.includes(role)));
+}
+
+/**
+ * Why `entry` cannot register on the internal listener, or `undefined`: it
+ * must name at least one peer role that may call it, so no module is open to
+ * every peer by omission.
+ */
+export function internalModuleProblem(entry: InternalRouteModule): string | undefined {
+  if (entry.peerRoles.length > 0) return undefined;
+  return `The internal route module ${entry.module} names no peer role: list in peerRoles the roles whose peers may call it`;
 }
 
 /** A path under `/internal`, or `/internal` itself. */

@@ -501,6 +501,7 @@ describe('the internal listener (#496)', () => {
         module: 'fixture',
         prefix: '/internal/fixture/v1-rc.0',
         roles: ['api'] as const,
+        peerRoles: ['web'] as const,
         load: async () => ({ default: async () => undefined }),
       },
     ];

@@ -26,7 +26,12 @@ import {
   writeTlsFiles,
 } from '../../testing/internal-pki';
 import { createInternalClient, type InternalClient, InternalClientError } from './client';
-import { createInternalServer, installInternalApi, requestPeerRole } from './listener';
+import {
+  createInternalServer,
+  installInternalApi,
+  INTERNAL_MAX_CONNECTIONS,
+  requestPeerRole,
+} from './listener';
 import type { InternalRouteModule } from './route-manifest';
 import { readInternalTlsFiles } from './tls-files';
 
@@ -56,7 +61,10 @@ const PEER_ROLES = internalListenerEnvSchema.parse({
 }).INTERNAL_PEER_ROLES;
 
 /** What the fixture routes saw. */
-const seen = { requests: 0 };
+const seen = { requests: 0, adminOnly: 0 };
+
+/** Ends the request `/hold` keeps open, once it is. */
+const hold: { release?: () => void } = {};
 
 const fixtureRoutes: FastifyPluginAsync = async (scope) => {
   scope.get('/peer', async (request) => ({ peerRole: requestPeerRole(request) }));
@@ -69,13 +77,39 @@ const fixtureRoutes: FastifyPluginAsync = async (scope) => {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     return { slow: true };
   });
+  scope.get('/hold', async () => {
+    await new Promise<void>((resolve) => {
+      hold.release = resolve;
+    });
+    hold.release = undefined;
+    return { held: true };
+  });
 };
 
 const FIXTURE_MODULE: InternalRouteModule = {
   module: 'fixture',
   prefix: FIXTURE_PREFIX,
   roles: ['signer'],
+  peerRoles: ['web', 'api', 'delivery', 'admin'],
   load: async () => ({ default: fixtureRoutes }),
+};
+
+const ADMIN_ONLY_PREFIX = '/internal/admin-only/v1-rc.0';
+
+/** A module only the admin role's peers may call. */
+const ADMIN_ONLY_MODULE: InternalRouteModule = {
+  module: 'admin-only',
+  prefix: ADMIN_ONLY_PREFIX,
+  roles: ['signer'],
+  peerRoles: ['admin'],
+  load: async () => ({
+    default: async (scope) => {
+      scope.get('/peer', async (request) => {
+        seen.adminOnly += 1;
+        return { peerRole: requestPeerRole(request) };
+      });
+    },
+  }),
 };
 
 /** A module of a role the process does not hold: it must not register. */
@@ -83,6 +117,7 @@ const OTHER_ROLE_MODULE: InternalRouteModule = {
   module: 'other-role',
   prefix: '/internal/other/v1-rc.0',
   roles: ['web'],
+  peerRoles: ['api'],
   load: async () => ({ default: async (scope) => void scope.get('/x', async () => ({})) }),
 };
 
@@ -213,7 +248,7 @@ beforeAll(async () => {
   source = sourceScope();
   await installInternalApi(internal, source, {
     roles: ['api', 'signer'],
-    modules: [FIXTURE_MODULE, OTHER_ROLE_MODULE],
+    modules: [FIXTURE_MODULE, ADMIN_ONLY_MODULE, OTHER_ROLE_MODULE],
   });
   await internal.listen({ host: '127.0.0.1', port: 0 });
   port = (internal.server.address() as AddressInfo).port;
@@ -229,6 +264,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   seen.requests = 0;
+  seen.adminOnly = 0;
 });
 
 describe('mutual TLS on the internal listener', () => {
@@ -323,6 +359,72 @@ describe('peer roles', () => {
     const response = await client(peers.web).request({ method: 'GET', path: '/oauth/token' });
     expect(response.status).toBe(404);
     expect(JSON.parse(response.body.toString())).toMatchObject({ code: 'not_found' });
+  });
+
+  it("answers 403 to a peer whose role the route's module does not admit, before the route runs", async () => {
+    for (const role of ['web', 'api', 'delivery'] as const) {
+      const response = await client(peers[role]).request({
+        method: 'GET',
+        path: `${ADMIN_ONLY_PREFIX}/peer`,
+      });
+      expect(response.status, role).toBe(403);
+      expect(response.headers['connection'], role).toBe('close');
+      expect(JSON.parse(response.body.toString()), role).toMatchObject({ code: 'forbidden' });
+    }
+    expect(seen.adminOnly).toBe(0);
+    expect(warnings.some((line) => line.includes("does not admit the peer's role"))).toBe(true);
+
+    const admitted = await client(peers.admin).request({
+      method: 'GET',
+      path: `${ADMIN_ONLY_PREFIX}/peer`,
+    });
+    expect(admitted.status).toBe(200);
+    expect(JSON.parse(admitted.body.toString())).toEqual({ peerRole: 'admin' });
+    expect(seen.adminOnly).toBe(1);
+  });
+
+  it('closes the connection of every refused request', async () => {
+    const response = await client(peers.stranger).request({
+      method: 'GET',
+      path: `${FIXTURE_PREFIX}/peer`,
+    });
+    expect(response.status).toBe(403);
+    expect(response.headers['connection']).toBe('close');
+  });
+
+  it('refuses a request on a kept-alive connection once the peer certificate has expired, and closes it', async () => {
+    const notAfter = new Date(Math.floor(Date.now() / 1_000) * 1_000 + 60 * 60 * 1_000);
+    const expiring = pki.issue({ uris: ['spiffe://qauth.test/web'], notAfter });
+    const connections = vi.fn();
+    internal.server.on('secureConnection', connections);
+    try {
+      const pooled = client(expiring, { maxSockets: 1 });
+      const path = `${FIXTURE_PREFIX}/peer`;
+      expect((await pooled.request({ method: 'GET', path })).status).toBe(200);
+
+      // The same connection, past the certificate's notAfter.
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(notAfter.getTime() + 1_000);
+      let refused: Awaited<ReturnType<InternalClient['request']>>;
+      try {
+        refused = await pooled.request({ method: 'GET', path });
+      } finally {
+        clock.mockRestore();
+      }
+      expect(refused.status).toBe(403);
+      expect(refused.headers['connection']).toBe('close');
+      expect(connections).toHaveBeenCalledTimes(1);
+      expect(warnings.some((line) => line.includes('the peer certificate has expired'))).toBe(true);
+
+      // The refusal closed it: the next request makes a new connection.
+      expect((await pooled.request({ method: 'GET', path })).status).toBe(200);
+      expect(connections).toHaveBeenCalledTimes(2);
+    } finally {
+      internal.server.off('secureConnection', connections);
+    }
+  });
+
+  it('caps the connections it holds open at once', () => {
+    expect(internal.server.maxConnections).toBe(INTERNAL_MAX_CONNECTIONS);
   });
 
   it('registers the modules of the roles the process holds, and no other', () => {
@@ -543,11 +645,32 @@ describe('certificate reload', () => {
     await eventually(async () => (await served()) === nextFingerprint);
   });
 
-  it('trusts a new CA file once it is replaced, and the old CA no longer', async () => {
+  it("trusts a new CA file once it is replaced, and the old CA's peers no longer, on a connection made before as on a new one", async () => {
+    // A connection of a peer of the old CA, busy with a request while the
+    // files are replaced, so the reload does not close it as idle.
+    const busy = client(peers.web, { maxSockets: 1 });
+    expect((await busy.request({ method: 'GET', path: `${FIXTURE_PREFIX}/peer` })).status).toBe(
+      200
+    );
+    const held = busy.request({ method: 'GET', path: `${FIXTURE_PREFIX}/hold` });
+    await eventually(() => hold.release !== undefined);
+
     const newSigner = otherPki.issue({ dnsNames: [SIGNER_DNS], uris: [SIGNER_URI] });
     tlsDirectory.replace(newSigner, otherPki.caPem);
     const fingerprint = fingerprintOf(newSigner.cert);
     await eventually(async () => (await served()) === fingerprint);
+
+    // The request in flight finishes; the next one on that connection, which
+    // the old CA's certificate opened, is refused, and the connection closes.
+    hold.release?.();
+    expect((await held).status).toBe(200);
+    const stale = await busy.request({ method: 'GET', path: `${FIXTURE_PREFIX}/peer` });
+    expect(stale.status).toBe(403);
+    expect(stale.headers['connection']).toBe('close');
+    const reconnected = await busy
+      .request({ method: 'GET', path: `${FIXTURE_PREFIX}/peer` })
+      .catch((caught: unknown) => caught);
+    expect((reconnected as InternalClientError).code).toBe('unreachable');
 
     const newPeer = otherPki.issue({ uris: ['spiffe://qauth.test/web'] });
     const response = await client(newPeer, { ca: otherPki.caPem }).request({
@@ -576,6 +699,7 @@ describe('installInternalApi', () => {
               module: 'misplaced',
               prefix: '/oauth',
               roles: ['signer'],
+              peerRoles: ['web'],
               load: async () => ({
                 default: async (routes) => void routes.get('/x', async () => ({})),
               }),
@@ -583,6 +707,26 @@ describe('installInternalApi', () => {
           ],
         })
       ).rejects.toThrow('GET /oauth/x: every route of the internal listener sits under /internal/');
+    } finally {
+      await scope.close();
+      await server.close();
+    }
+  });
+});
+
+describe('installInternalApi and peer roles', () => {
+  it('refuses a module that names no peer role, before it loads any module', async () => {
+    const server = createInternalServer({ peerRoles: PEER_ROLES });
+    const scope = sourceScope();
+    const load = vi.fn(async () => ({ default: fixtureRoutes }));
+    try {
+      await expect(
+        installInternalApi(server, scope, {
+          roles: ['signer'],
+          modules: [FIXTURE_MODULE, { ...FIXTURE_MODULE, module: 'open', peerRoles: [], load }],
+        })
+      ).rejects.toThrow('The internal route module open names no peer role');
+      expect(load).not.toHaveBeenCalled();
     } finally {
       await scope.close();
       await server.close();
