@@ -334,6 +334,10 @@ export async function bootAuthServer(
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
+      // The mail transport's seeds (#529): SMTP_PASSWORD or RESEND_API_KEY
+      // left by one boot would seed the next one's realm.
+      key.startsWith('SMTP_') ||
+      key.startsWith('RESEND_') ||
       key.startsWith('JWT_') ||
       key.startsWith('PQC_') ||
       key === 'HYBRID_SIGNING_ENABLED' ||
@@ -354,7 +358,9 @@ export async function bootAuthServer(
   // first import's parsed `env` would be reused for every later boot.
   vitest.vi.resetModules();
 
-  const { app, defaultRealmBootSettings } = await import('../app/app');
+  const { app, defaultRealmBootSettings, defaultRealmSecretSeedSettings } =
+    await import('../app/app');
+  const { seedDefaultRealmSecrets } = await import('../app/helpers/realm-secrets');
   const { createAdminServer } = await import('../app/admin/listener');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
   const { keyVariableSettings } = await import('../app/helpers/key-variables');
@@ -442,6 +448,8 @@ export async function bootAuthServer(
           environmentKeys: withVariables ? keyVariableSettings(env, bootEnvironment) : {},
         }
       );
+    // Read now: a later boot of another server rewrites `process.env`.
+    const secretSeedSettings = defaultRealmSecretSeedSettings();
     defaultRealmReboots.set(server, async () => {
       await bootDefaultRealm(
         {
@@ -453,6 +461,20 @@ export async function bootAuthServer(
         defaultRealmBootSettings()
       );
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
+      // The default realm's secrets (#529), as the boot seeds them once its
+      // keys exist.
+      const secrets = server.realmSecretStore;
+      if (secrets !== null) {
+        await seedDefaultRealmSecrets(
+          {
+            realms: server.repositories.realms,
+            policies: server.policyStore,
+            secrets,
+            log: quiet,
+          },
+          secretSeedSettings
+        );
+      }
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
     tokenKeyRotations.set(server, async (realmName, rotation) => {
@@ -814,9 +836,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, link, options) => {
+  emailService.sendVerificationEmail = async (realmId, to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, link, options);
+    return original.call(emailService, realmId, to, token, link, options);
   };
   try {
     const response = await app.inject({

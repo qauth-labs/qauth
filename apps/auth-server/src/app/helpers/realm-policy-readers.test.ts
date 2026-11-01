@@ -26,8 +26,15 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
     }
   });
 
-  it('holds the two policies the server read from the row before #516', () => {
+  it('holds the two policies the server read from the row before #516, and the mail transport and sender (#529)', () => {
     expect([...POLICIES_READ_FROM_REALM_ROW].sort()).toEqual([
+      'mail.fromAddress',
+      'mail.fromName',
+      'mail.provider',
+      'mail.smtp.host',
+      'mail.smtp.port',
+      'mail.smtp.secure',
+      'mail.smtp.user',
       'posture.maxEnvironmentLaxity',
       'registration.dynamicRegistrationAllowedScopes',
     ]);

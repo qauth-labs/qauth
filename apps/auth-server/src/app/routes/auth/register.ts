@@ -124,7 +124,7 @@ async function mailExistingAccount(
   }
 
   if (parsed.data.email_verified) {
-    await fastify.emailService.sendAccountExistsEmail(credential.externalSub);
+    await fastify.emailService.sendAccountExistsEmail(params.realm.id, credential.externalSub);
     return;
   }
 
@@ -138,6 +138,7 @@ async function mailExistingAccount(
     used: false,
   });
   await fastify.emailService.sendVerificationEmail(
+    params.realm.id,
     credential.externalSub,
     params.token,
     realmMailLink(params.realm)
@@ -337,6 +338,7 @@ export default async function (fastify: FastifyInstance) {
         background.run(
           () =>
             fastify.emailService.sendVerificationEmail(
+              realm.id,
               normalizedEmail,
               token,
               realmMailLink(realm)

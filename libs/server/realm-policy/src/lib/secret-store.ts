@@ -43,6 +43,22 @@ export function realmSecretPaths(registry: PolicyRegistry = REALM_POLICY_REGISTR
     .map((entry) => entry.path);
 }
 
+/**
+ * The environment key that seeds each secret field of `registry`, by path
+ * (`mail.smtp.password` → `SMTP_PASSWORD`): what the boot's seed and its log
+ * lines name.
+ */
+export function secretSeedKeys(
+  registry: PolicyRegistry = REALM_POLICY_REGISTRY
+): ReadonlyMap<string, string> {
+  return new Map(
+    registry
+      .fields()
+      .filter((entry) => entry.field.secret && entry.field.seedEnv !== null)
+      .map((entry) => [entry.path, entry.field.seedEnv as string])
+  );
+}
+
 /** A secret's value as {@link RealmSecretStorage} stores it: ciphertext, and the key that made it. */
 export interface EncryptedRealmSecret {
   /** The signer's `data_at_rest` ciphertext, `v1.<kid>.<iv>.<ciphertext>`. */

@@ -246,16 +246,29 @@ describe('realm policies at boot on the auth server (#516)', () => {
     expect(await defaultRealmRow()).toEqual(filled);
     expect(secondWarnings.filter((line) => line.msg.includes(KEPT))).toEqual([]);
     const ignored = secondWarnings.filter((line) => line.msg.includes(IGNORED));
-    // The allowlist's area reads the realm row: its key is ignored, once.
+    // The allowlist's area and the mail transport and sender (#529) read the
+    // realm row: each key set is ignored, once. The harness's environment
+    // sets EMAIL_PROVIDER and EMAIL_FROM_ADDRESS.
     expect(ignored).toEqual([
       expect.objectContaining({
         variable: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
         policy: 'registration.dynamicRegistrationAllowedScopes',
         realm: 'master',
       }),
+      expect.objectContaining({
+        variable: 'EMAIL_PROVIDER',
+        policy: 'mail.provider',
+        realm: 'master',
+      }),
+      expect.objectContaining({
+        variable: 'EMAIL_FROM_ADDRESS',
+        policy: 'mail.fromAddress',
+        realm: 'master',
+      }),
     ]);
     // The allowlist changed in the environment, to a looser list: the stored,
-    // stricter one applies, and no further warning is needed (#529).
+    // stricter one applies, and no further warning is needed (#529). The mail
+    // keys agree with the stored values.
     expect(secondWarnings.filter((line) => line.environment !== undefined)).toEqual([]);
     // The token lifetimes and the password policy still read the
     // environment (#527, #528): no warning tells the operator to drop them.

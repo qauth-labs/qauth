@@ -99,14 +99,18 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     summary:
       'the browser-session endpoints: authorize, the ceremony pages, consents and wallet linking',
     // The session expiry and purge jobs (#550) run through the session service.
+    // Its mail sender reads a realm transport's secret through the realm
+    // secret store, which the app builds over `realmSecrets` (#529).
     plugins: ['sessions'],
-    repositories: [],
+    repositories: ['realmSecrets'],
   },
   api: {
     summary:
       'token, introspection, revocation, userinfo, registration, discovery, JWKS, the OID4VP endpoints, the account and developer APIs, SSF and the legacy /auth routes',
+    // Its mail sender (registration, a resent verification link) reads a
+    // realm transport's secret through the realm secret store (#529).
     plugins: [],
-    repositories: [],
+    repositories: ['realmSecrets'],
   },
   admin: {
     // The admin API's internal listener (#511): its token guard verifies with
@@ -120,10 +124,12 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role
-    // (`holdsSigner`); the key jobs (#542) go here when they land.
+    // (`holdsSigner`); the key jobs (#542) go here when they land. The boot
+    // seeds the default realm's secrets from the environment where it can
+    // encrypt them (#529), so this role builds the realm secret store.
     summary: 'the KEK, the private keys and the signer',
     plugins: [],
-    repositories: [],
+    repositories: ['realmSecrets'],
   },
   delivery: {
     // The reader and the SSF delivery route; the event store's lag and age

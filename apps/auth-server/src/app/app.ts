@@ -1,10 +1,10 @@
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { databasePlugin, hasRepository } from '@qauth-labs/fastify-plugin-db';
 import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
 import { egressPlugin, type EgressPluginOptions } from '@qauth-labs/fastify-plugin-egress';
-import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 import { type DeliveryRoute, eventDeliveryPlugin } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
   assertAttestingIssuersUsable,
@@ -24,6 +24,8 @@ import {
   defaultsFromEnv,
   REALM_POLICY_SCHEMA_VERSION,
   realmPolicyPlugin,
+  secretSeedKeys,
+  secretSeedsFromEnv,
   seedKeysSetIn,
 } from '@qauth-labs/fastify-plugin-realm-policy';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
@@ -58,6 +60,12 @@ import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
+import {
+  type DefaultRealmSecretSeedSettings,
+  realmMailSource,
+  realmSecretCipher,
+  seedDefaultRealmSecrets,
+} from './helpers/realm-secrets';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
 import { isJtiRevoked } from './helpers/token-revocation';
@@ -155,6 +163,19 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
     // the server reads from the row (#529): a stricter or another value is
     // logged, so a key changed in the environment does not go unseen.
     environmentSeeds: defaultsFromEnv(env),
+  };
+}
+
+/**
+ * The settings of the default realm's secret seed (#529), from the raw
+ * environment: the secret values it sets, and each one's key. Exported for
+ * the E2E harness, which seeds again after it empties the database.
+ */
+export function defaultRealmSecretSeedSettings(): DefaultRealmSecretSeedSettings {
+  return {
+    realmName: env.DEFAULT_REALM_NAME,
+    seeds: secretSeedsFromEnv(process.env),
+    seedKeys: secretSeedKeys(),
   };
 }
 
@@ -405,40 +426,6 @@ async function registerFederation(
 
 /** The mail service, for a process whose roles send mail (#495: `api`). */
 async function registerEmail(fastify: FastifyInstance): Promise<void> {
-  // Configure email provider from environment variables
-  const emailProvider = env.EMAIL_PROVIDER;
-
-  // Build provider-specific configuration
-  let providerConfig: EmailProviderConfig | undefined;
-  if (emailProvider === 'resend') {
-    if (!env.RESEND_API_KEY) {
-      throw new Error(
-        'RESEND_API_KEY is required when EMAIL_PROVIDER is "resend". Please set it in your environment variables.'
-      );
-    }
-    providerConfig = {
-      apiKey: env.RESEND_API_KEY,
-      fromAddress: env.EMAIL_FROM_ADDRESS,
-    };
-  } else if (emailProvider === 'smtp') {
-    if (!env.SMTP_HOST || !env.SMTP_PORT || !env.SMTP_USER || !env.SMTP_PASSWORD) {
-      throw new Error(
-        'SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD are required when EMAIL_PROVIDER is "smtp". Please set them in your environment variables.'
-      );
-    }
-    providerConfig = {
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_SECURE,
-      auth: {
-        user: env.SMTP_USER,
-        pass: env.SMTP_PASSWORD,
-      },
-      fromAddress: env.EMAIL_FROM_ADDRESS,
-    };
-  }
-  // For 'mock' provider, providerConfig is undefined (no config needed)
-
   // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
   // set to another base than the default realm's issuer, where the links went.
   const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
@@ -449,11 +436,20 @@ async function registerEmail(fastify: FastifyInstance): Promise<void> {
     );
   }
 
+  // Each realm sends through its own transport, from its own sender (ADR-019
+  // Decision 10, #529): `mail.*` of its policies, read anew for every mail,
+  // and the SMTP password or Resend API key of its secret store. The
+  // transport built for a realm is kept until its policy counter moves, so a
+  // change reaches the next mail without a restart. EMAIL_PROVIDER, SMTP_*,
+  // RESEND_API_KEY and EMAIL_FROM_* only seed: the policies of a new realm,
+  // and the default realm's secrets once (`seedDefaultRealmSecrets`). A
+  // transport that lacks what it sends with no longer stops the boot: the
+  // policy update refuses it, and a mail through it fails, naming the path.
+  // The environment's secrets serve only a realm with no policies yet, as
+  // before, during a rolling upgrade.
   await fastify.register(emailPlugin, {
-    provider: emailProvider,
-    providerConfig,
+    source: realmMailSource(fastify, secretSeedsFromEnv(process.env)),
     serviceConfig: {
-      defaultFrom: env.EMAIL_FROM_ADDRESS,
       // No link base here: a mail's links start at the issuer of the realm
       // the account belongs to, passed with each mail (ADR-019 Decision 1,
       // #490). EMAIL_BASE_URL is no longer read.
@@ -627,9 +623,21 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // The realm policy store (#516): `fastify.policyStore`, which the default
   // realm's boot step below fills realms through, and the flows read a
   // realm's policies from, off the realm row they already loaded.
+  //
+  // The realm secret store (#529) comes with it where this process's roles
+  // read or seed a realm's secrets: values encrypted with the realm's
+  // data-at-rest key through the signer, in `realm_secrets`.
   await fastify.register(realmPolicyPlugin, {
     seeds: realmPolicySeeds,
     realms: fastify.repositories.realms,
+    ...(hasRepository(fastify.repositories, 'realmSecrets')
+      ? {
+          secrets: {
+            repository: fastify.repositories.realmSecrets,
+            cipher: realmSecretCipher(fastify),
+          },
+        }
+      : {}),
   });
 
   // The default realm's boot step (ADR-019 Decision 1, #484): find or create
@@ -679,6 +687,25 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
           }
         : {}),
     });
+    // The default realm's secrets (#529), once its key boot step above gave
+    // it a data-at-rest key: SMTP_PASSWORD or RESEND_API_KEY is stored
+    // encrypted in the realm the first time a node can, and never again. An
+    // `onReady` hook registered after the signer's, so it runs after it.
+    if (defaultRealmBoot) {
+      fastify.addHook('onReady', async () => {
+        const secrets = fastify.realmSecretStore;
+        if (secrets === null) return;
+        await seedDefaultRealmSecrets(
+          {
+            realms: fastify.repositories.realms,
+            policies: fastify.policyStore,
+            secrets,
+            log: fastify.log,
+          },
+          defaultRealmSecretSeedSettings()
+        );
+      });
+    }
   } else {
     fastify.decorate(
       'signer',

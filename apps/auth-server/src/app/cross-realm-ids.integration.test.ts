@@ -746,9 +746,9 @@ describe('an id from another realm is an unknown id (#489)', () => {
     const tokens: string[] = [];
     const emailService = w.app.emailService;
     const original = emailService.sendVerificationEmail;
-    emailService.sendVerificationEmail = async (to, token, options) => {
+    emailService.sendVerificationEmail = async (realmId, to, token, link, options) => {
       if (to === email) tokens.push(token);
-      return original.call(emailService, to, token, options);
+      return original.call(emailService, realmId, to, token, link, options);
     };
     try {
       const registered = await w.app.inject({

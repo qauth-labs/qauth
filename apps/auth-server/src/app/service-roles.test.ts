@@ -94,8 +94,10 @@ describe('what each role loads (the boot-time list)', () => {
     );
   });
 
-  it('gives signer only the realms the resolver reads and their published keys', () => {
-    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys']);
+  it('gives signer the realms the resolver reads, their published keys and their secrets', () => {
+    // The secrets for the boot's seed of the default realm (#529), which only
+    // a process that can encrypt runs.
+    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys', 'realmSecrets']);
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
 
@@ -132,6 +134,8 @@ describe('what each role loads (the boot-time list)', () => {
       expect(web).not.toContain(name);
     }
     expect(web).toContain('sessions');
+    // Its mail sender reads a realm transport's secret (#529).
+    expect(web).toContain('realmSecrets');
     expect([...pluginsFor(['web'])]).toEqual([
       'dpop',
       'jwt',

@@ -5,6 +5,7 @@ export * from './lib/storage';
 export {
   compareSeedWithStored,
   defaultsFromEnv,
+  diffPolicies,
   type PolicyIssue,
   PolicySchemaVersionError,
   PolicySecretStoreUnavailableError,
@@ -23,6 +24,7 @@ export {
   realmSecretPaths,
   type RealmSecretSeedReport,
   type RealmSecretStore,
+  secretSeedKeys,
   secretSeedsFromEnv,
   type SeedComparison,
   seedKeysSetIn,
