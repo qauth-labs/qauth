@@ -16,7 +16,8 @@ import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
  *
  * The keys are the registry's: every `realm-seed` key whose policy path is in
  * `POLICIES_READ_FROM_REALM_ROW`, under its current name and its old ones. A
- * read is `x.KEY`, `x['KEY']` or `{ KEY } = x`, in any source file under
+ * read is `x.KEY` or `x?.KEY`, `x['KEY']` or ``x[`KEY`]``, or a destructured
+ * `{ KEY }` in a declaration or a parameter, in any source file under
  * `apps/auth-server/src` but tests and test support. A key named in a comment,
  * a message or an object literal that sets it (the OpenAPI export's
  * environment) is not a read.
@@ -137,10 +138,13 @@ describe('environment keys of policies read from the realm row (#528, #534)', ()
           'const { PASSWORD_MIN_SCORE } = env;',
           'const { FAILED_LOGIN_WINDOW: window } = process.env;',
           'const c = process.env.PASSWORD_MIN_SCORE;',
+          'const d = env?.FAILED_LOGIN_WINDOW;',
+          'const e = env[`PASSWORD_MIN_SCORE`];',
+          'function f({ FAILED_LOGIN_WINDOW }: Env) {}',
         ].join('\n'),
         watched
       ).map((read) => read.line)
-    ).toEqual([1, 2, 3, 4, 5]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(
       readsIn(
         [
