@@ -5,6 +5,7 @@ import {
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
+  REALM_MAIL_SECRET_CONTEXT_PREFIX,
   SIGNER_CALLERS,
   SIGNER_POLICY,
   type SignerCaller,
@@ -50,7 +51,6 @@ describe('SIGNER_POLICY', () => {
         'signHybrid',
         'signClientAssertion',
         'encrypt',
-        'decrypt',
         'getVerificationKeys',
         'getJwks',
         'getUpstreamJwks',
@@ -99,12 +99,33 @@ describe('SIGNER_POLICY', () => {
       expect(isSignerCallAllowed('delivery', 'decrypt', context), String(context)).toBe(false);
     }
     // A grant of `true` takes any context, or none.
-    expect(isSignerCallAllowed('api', 'decrypt')).toBe(true);
-    expect(isSignerCallAllowed('api', 'decrypt', 'anything')).toBe(true);
+    expect(isSignerCallAllowed('local', 'decrypt')).toBe(true);
+    expect(isSignerCallAllowed('local', 'decrypt', 'anything')).toBe(true);
     expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'encrypt'))).toEqual([
       'local',
       'api',
     ]);
+  });
+
+  it("lets api decrypt only a realm's mail transport secret (#529)", () => {
+    expect(SIGNER_POLICY.api.decrypt).toEqual([REALM_MAIL_SECRET_CONTEXT_PREFIX]);
+    // The contexts `realmSecretContext` of server-realm-policy makes.
+    for (const context of [
+      'realm_secrets:mail.smtp.password',
+      'realm_secrets:mail.resend.apiKey',
+    ]) {
+      expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
+    }
+    for (const context of [
+      undefined,
+      '',
+      'delivery:ssf_streams.x:1',
+      'realm_secrets:admin.x',
+      'realm_secrets:mailx',
+      'oid4vp_request_states.key:1',
+    ]) {
+      expect(isSignerCallAllowed('api', 'decrypt', context), String(context)).toBe(false);
+    }
   });
 
   it('gives the cookie secrets to web and local only', () => {

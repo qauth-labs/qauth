@@ -393,6 +393,10 @@ export async function bootAuthServer(
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
+      // The mail transport's seeds (#529): SMTP_PASSWORD or RESEND_API_KEY
+      // left by one boot would seed the next one's realm.
+      key.startsWith('SMTP_') ||
+      key.startsWith('RESEND_') ||
       key.startsWith('JWT_') ||
       // A key variable too (#493): a boot that leaves it out boots without it.
       key === 'SESSION_COOKIE_SECRET' ||
@@ -416,7 +420,8 @@ export async function bootAuthServer(
   // first import's parsed `env` would be reused for every later boot.
   vitest.vi.resetModules();
 
-  const { app, defaultRealmBootSettings } = await import('../app/app');
+  const { app, defaultRealmBootSettings, realmSecretSeedSettings } = await import('../app/app');
+  const { seedRealmSecrets } = await import('../app/helpers/realm-secrets');
   const { createAdminServer } = await import('../app/admin/listener');
   const { createInternalServer } = await import('../app/internal/listener');
   const { readInternalTlsFiles } = await import('../app/internal/tls-files');
@@ -536,7 +541,7 @@ export async function bootAuthServer(
     // The environment as this server booted with it: a later boot of another
     // server rewrites `process.env`.
     const bootEnvironment = { ...process.env };
-    const quiet = { info: () => undefined, warn: () => undefined };
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
     const bootRealmKeys = (realmName: string, withVariables: boolean) =>
       bootRealmKeysWithKekEnv(
         {
@@ -552,6 +557,8 @@ export async function bootAuthServer(
           environmentKeys: withVariables ? keyVariableSettings(env, bootEnvironment) : {},
         }
       );
+    // Read now: a later boot of another server rewrites `process.env`.
+    const secretSeedSettings = realmSecretSeedSettings();
     defaultRealmReboots.set(server, async () => {
       await bootDefaultRealm(
         {
@@ -563,6 +570,20 @@ export async function bootAuthServer(
         defaultRealmBootSettings()
       );
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
+      // The realms' secrets (#529), as the boot seeds them once the default
+      // realm's keys exist.
+      const secrets = server.realmSecretStore;
+      if (secrets !== null) {
+        await seedRealmSecrets(
+          {
+            realms: server.repositories.realms,
+            policies: server.policyStore,
+            secrets,
+            log: quiet,
+          },
+          secretSeedSettings
+        );
+      }
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
     const keyDependencies = {
@@ -929,9 +950,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, link, options) => {
+  emailService.sendVerificationEmail = async (realmId, to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, link, options);
+    return original.call(emailService, realmId, to, token, link, options);
   };
   try {
     const response = await app.inject({

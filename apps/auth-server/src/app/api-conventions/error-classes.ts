@@ -214,8 +214,8 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * cookie-authenticated route without a browser session, and the Shared Signals
  * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
  * routes answer problem documents), the admin pipeline's refusal of a
- * security operation that carries no approval, and an approval's refused
- * move. Each code is one the problem types page
+ * security operation that carries no approval, an approval's refused move,
+ * and a refused realm policy update. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -240,8 +240,9 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   },
   // The list and update conventions of the account and developer APIs
   // (#506, #524): a cursor another list issued or that does not parse, and a
-  // merge patch whose result fails the resource's schema, and an update sent
-  // as another media type than a merge patch.
+  // merge patch whose result fails the resource's schema (a realm policy
+  // update the schema or a rule refuses too, #529), and an update sent as
+  // another media type than a merge patch.
   { errorClass: InvalidCursorError, code: 'invalid_cursor', oauthError: 'invalid_request' },
   {
     errorClass: UnprocessableContentError,

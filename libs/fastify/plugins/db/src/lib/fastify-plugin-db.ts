@@ -21,6 +21,7 @@ import {
   createOAuthConsentsRepository,
   createOid4vpRequestStatesRepository,
   createRealmPublicKeysRepository,
+  createRealmSecretsRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
   createSessionsRepository,
@@ -38,6 +39,7 @@ import {
   type OAuthConsentsRepository,
   type Oid4vpRequestStatesRepository,
   type RealmPublicKeysRepository,
+  type RealmSecretsRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
   type SessionsRepository,
@@ -138,6 +140,13 @@ declare module 'fastify' {
        * verifies a realm's tokens and serves its JWKS with them (#495).
        */
       realmPublicKeys: RealmPublicKeysRepository;
+      /**
+       * The values of the realms' secret policy fields (`realm_secrets`,
+       * #529), as ciphertext: the realm secret store encrypts and decrypts
+       * them through the signer. The mail sender, the boot's seed and the
+       * policy update reach them only through that store.
+       */
+      realmSecrets: RealmSecretsRepository;
     };
   }
 }
@@ -173,6 +182,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   adminAuditLog: true,
   adminApprovals: true,
   realmPublicKeys: true,
+  realmSecrets: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -266,6 +276,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       adminAuditLog: () => createAdminAuditLogRepository(database.db),
       adminApprovals: () => createAdminApprovalsRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
+      realmSecrets: () => createRealmSecretsRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

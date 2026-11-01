@@ -2,24 +2,51 @@ import type { Transporter } from 'nodemailer';
 import nodemailer from 'nodemailer';
 
 import type { EmailOptions, EmailProvider, EmailResult, SmtpProviderConfig } from '../../types';
+import {
+  resolveSmtpDestination,
+  type SmtpConnectionPolicy,
+  STRICT_SMTP_CONNECTION_POLICY,
+} from '../smtp-destination';
 
 /**
- * SMTP email provider implementation
+ * SMTP email provider implementation.
+ *
+ * Each mail resolves the host and checks the address it connects to against
+ * `config.connection` (#529, from the review of #937): a public unicast
+ * address unless the operator allows the host, never a cloud metadata
+ * address. The connection then dials that address, with the host name as its
+ * TLS server name, so the certificate is checked against the name and DNS
+ * cannot point the connection anywhere else. A connection that starts
+ * without TLS (`secure: false`) must be upgraded with STARTTLS unless the
+ * operator allows plaintext (`SMTP_ALLOW_PLAINTEXT`).
  */
 export class SmtpEmailProvider implements EmailProvider {
-  private readonly transporter: Transporter;
   private readonly defaultFrom?: string;
+  private readonly connection: SmtpConnectionPolicy;
 
-  constructor(config: SmtpProviderConfig) {
-    this.transporter = nodemailer.createTransport({
-      host: config.host,
-      port: config.port,
-      secure: config.secure,
-      auth: config.auth,
-      requireTLS: config.options?.requireTLS,
-      ignoreTLS: config.options?.ignoreTLS,
-    });
+  constructor(private readonly config: SmtpProviderConfig) {
     this.defaultFrom = config.fromAddress;
+    this.connection = config.connection ?? STRICT_SMTP_CONNECTION_POLICY;
+  }
+
+  /** The transport of one mail, to the address its host resolves to now. */
+  private async transporter(): Promise<Transporter> {
+    const { address, servername } = await resolveSmtpDestination(this.config.host, this.connection);
+    return nodemailer.createTransport({
+      host: address,
+      port: this.config.port,
+      secure: this.config.secure,
+      auth: this.config.auth,
+      // A connection that starts in the clear must become TLS, unless the
+      // operator allows a plaintext relay; a realm setting never can.
+      requireTLS: this.config.secure ? false : !this.connection.allowPlaintext,
+      ...(servername === undefined ? {} : { servername }),
+      // The certificate is checked, against the host name when it is one.
+      tls: {
+        rejectUnauthorized: true,
+        ...(servername === undefined ? {} : { servername }),
+      },
+    });
   }
 
   /**
@@ -46,7 +73,8 @@ export class SmtpEmailProvider implements EmailProvider {
         };
       }
 
-      const info = await this.transporter.sendMail({
+      const transporter = await this.transporter();
+      const info = await transporter.sendMail({
         from,
         to: options.to,
         subject: options.subject,

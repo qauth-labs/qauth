@@ -1,4 +1,10 @@
+import { isIP } from 'node:net';
+
 import { z } from 'zod';
+
+/** A host name: lower-case labels of letters, digits, `-` and `_`, 253 characters at most. */
+const SMTP_HOST_NAME =
+  /^(?=.{1,253}$)[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?(?:\.[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?)*$/;
 
 /** Blank is read as unset, since Docker Compose passes an absent variable as `''`. */
 function blankAsUnset(value: unknown): unknown {
@@ -88,6 +94,52 @@ export const emailEnvSchema = z.object({
    * SMTP password (required if EMAIL_PROVIDER is 'smtp')
    */
   SMTP_PASSWORD: z.string().optional(),
+
+  /**
+   * The operator's switch for a plaintext SMTP relay (review of #937): a
+   * realm's smtp transport with `mail.smtp.secure` off must be upgraded with
+   * STARTTLS unless this is `true`. No realm policy can turn it on.
+   */
+  SMTP_ALLOW_PLAINTEXT: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
+
+  /**
+   * The SMTP hosts a realm's smtp transport may name and reach although they
+   * are not public (review of #937): `localhost`, a private, loopback,
+   * link-local or unique-local address, or a name that resolves to one.
+   * Comma-separated host names or IP literals, matched exactly; never a cloud
+   * metadata address, which stays refused. Blank is unset: none.
+   */
+  SMTP_ALLOWED_HOSTS: z.preprocess(
+    blankAsUnset,
+    z
+      .string()
+      .optional()
+      .transform((value, ctx) => {
+        const hosts = (value ?? '')
+          .split(',')
+          .map((entry) =>
+            entry
+              .trim()
+              .toLowerCase()
+              .replace(/\.$/, '')
+              .replace(/^\[(.*)\]$/, '$1')
+          )
+          .filter((entry) => entry !== '');
+        for (const host of hosts) {
+          if (isIP(host) === 0 && !SMTP_HOST_NAME.test(host)) {
+            ctx.addIssue({
+              code: 'custom',
+              message: `SMTP_ALLOWED_HOSTS holds "${host}", which is neither a host name nor an IP address; a wildcard is not allowed`,
+            });
+            return z.NEVER;
+          }
+        }
+        return hosts;
+      })
+  ),
 });
 
 /**

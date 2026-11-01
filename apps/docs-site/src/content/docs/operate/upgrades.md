@@ -338,15 +338,18 @@ ceiling or an allowlist that does not follow the environment is named once.
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
 flows move to the stored values one area at a time: the sign-in policy
-([#528](https://github.com/qauth-labs/qauth/issues/528)), mail
-([#529](https://github.com/qauth-labs/qauth/issues/529)) and CIMD
+([#528](https://github.com/qauth-labs/qauth/issues/528)), the verification
+link's lifetime and resend rule, and CIMD
 ([#534](https://github.com/qauth-labs/qauth/issues/534)) still read the
 environment. The token lifetimes
 ([#527](https://github.com/qauth-labs/qauth/issues/527)) come from the row:
 `ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN` and
 `REFRESH_TOKEN_LIFESPAN` set the lifetimes of a realm only while it has no
 policies (one a node of the previous release created during a rolling
-upgrade, until a node of this release boots again). The dynamic
+upgrade, until a node of this release boots again). The mail transport and
+sender come from the row too
+([#529](https://github.com/qauth-labs/qauth/issues/529), see
+[Mail secrets move into the realm](#mail-secrets-move-into-the-realm)). The dynamic
 registration allowlist and the environment ceiling come from the row too:
 `/oauth/register` and the clients API no longer write
 `DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm's list. A realm that has its
@@ -360,6 +363,13 @@ key that is still set, once:
 - for any other key, an info line that the stored policies ignore it, that
   the server still applies it to every realm until it reads that policy from
   the row, and that the stored value applies from then on.
+
+For a key whose policy the server reads from the row, a second warning says
+when the key is stricter than the stored value (`... is stricter than the
+stored ...`), or, for a policy with no order such as `SMTP_HOST`, when it holds
+another value (`... differs from the stored ...`): the stored value applies, so
+store the key's value through the realm's policies if the realm should have it.
+Nothing more is logged when they agree.
 
 **A key changed after this upgrade never reaches the stored policies.** The
 first boot stored the value each key had then. Change a key whose area has not
@@ -386,14 +396,110 @@ value the fill keeps from a realm's row that the schema refuses, such as a
 scope written into the allowlist by hand, stops the first boot too, naming the
 realm and the field; a scope listed twice is kept once.
 
-`SMTP_PASSWORD` and `RESEND_API_KEY` are never written to the row: the realm's
-secret store takes them once it ships
-([#529](https://github.com/qauth-labs/qauth/issues/529)), and until then the
-server reads them from the environment. During a rolling upgrade a node of the
+`SMTP_PASSWORD` and `RESEND_API_KEY` are never written to the row: they go to
+the realm's secret store (see the next section). During a rolling upgrade a node of the
 previous release reads none of the new columns and runs on the environment as
 before. A realm such a node creates during the roll has no policies (counter 0)
 until a node of this release boots again, since only the boot fills them, so
 restart one node of this release once the roll is complete.
+
+### Mail secrets move into the realm
+
+From this release each realm sends its mail through its own transport and from
+its own sender: `mail.provider`, `mail.fromAddress`, `mail.fromName` and
+`mail.smtp.*` of its policies, read again for every mail
+([#529](https://github.com/qauth-labs/qauth/issues/529)). The SMTP password and
+the Resend API key are secrets: migration 0049 adds the `realm_secrets` table,
+which holds each value encrypted with the realm's data-at-rest key and never
+in the clear, and no response, log line, audit record or realm file shows one.
+The realm's representation says only whether each is set (`passwordSet`,
+`apiKeySet`).
+
+**The first boot stores the environment's secret, once.** After the key boot
+step, a node that holds the signer stores `SMTP_PASSWORD` (or
+`RESEND_API_KEY`) of the environment in the default realm's secret store, and
+records a key the environment does not set as unset, unless the realm's stored
+transport needs it (`SMTP_PASSWORD` for `smtp`): that one stays unrecorded,
+and the first boot whose environment sets it stores it. The log says
+`realm secret seeded from the environment` at `info`. From then on the stored
+value is used, and no later boot reads the key for that realm: each boot warns
+`SMTP_PASSWORD only seeds the first realm's mail.smtp.password at its first
+boot, and is ignored` while the key is still set. Remove both keys from the
+environment once every node runs this release; until then a realm that a node
+of the previous release created during the roll still sends with them.
+
+**Other realms get the environment's secret where it is theirs.** The first
+boot after the upgrade fills every realm's policies from the environment, the
+mail transport included. Each realm whose stored transport is the
+environment's and needs a secret it has no row for gets the environment's
+value at that boot, or at the first later boot that can encrypt it (a realm
+with no data-at-rest key yet is logged and tried again). Nothing is recorded
+for a realm whose transport needs nothing.
+
+**`SMTP_PASSWORD` goes only to its own server.** No realm whose stored
+`mail.smtp.host`, `port` or `user` differs from `SMTP_HOST`, `SMTP_PORT` and
+`SMTP_USER` is given `SMTP_PASSWORD`: the boot logs
+`SMTP_PASSWORD is not stored in the realm "..."` as an error instead. Point the
+environment at the realm's server, or set the realm's password through a policy
+update. For the same reason a policy update that selects `smtp`, or changes
+`mail.smtp.host`, `port` or `secure`, must give `mail.smtp.password` again.
+
+**A mail transport that lacks a setting no longer stops the boot.**
+`EMAIL_PROVIDER=smtp` without `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` or
+`SMTP_PASSWORD`, or `resend` without `RESEND_API_KEY`, used to refuse to start.
+Now the realm's policy update refuses such a transport (422
+`unprocessable_content`, with one JSON Pointer per refused field), the boot warns
+for each setting or secret the default realm's stored transport lacks
+(`the realm "master" cannot send mail: its mail.smtp.host is required ...`), and
+a mail through it fails, logging the missing path.
+
+**SMTP needs TLS and a public host (breaking).** A realm's smtp transport now
+requires STARTTLS when `mail.smtp.secure` is off, checks the server certificate
+against the host name, and connects only to a public address its host resolves
+to: never `localhost`, a private, loopback, link-local or unique-local address,
+or a cloud metadata address. A policy update that names `localhost` or such an
+IP address as `mail.smtp.host` is refused. Only the operator can relax this,
+for every realm, with two keys no realm policy can change:
+
+- `SMTP_ALLOW_PLAINTEXT=true` lets a transport send without STARTTLS;
+- `SMTP_ALLOWED_HOSTS` lists the hosts (names or IP addresses, comma-separated)
+  a realm may name and reach although they are not public. A cloud metadata
+  address stays refused.
+
+A deployment that sends through a local plaintext relay, such as Mailpit on
+`localhost:1025` or a relay container on a private Docker network, sets both
+before it upgrades, for example `SMTP_ALLOW_PLAINTEXT=true` and
+`SMTP_ALLOWED_HOSTS=localhost`; otherwise its mail fails, and the log names the
+refused host. The boot logs an error for every realm whose stored SMTP host is
+`localhost`, a non-public IP address not in `SMTP_ALLOWED_HOSTS` or a cloud
+metadata address, or a listed relay that starts in the clear
+(`mail.smtp.secure` false) while `SMTP_ALLOW_PLAINTEXT` is off
+(`the realm "master" cannot send mail: its mail.smtp.host localhost is
+localhost or a non-public address, which needs localhost in SMTP_ALLOWED_HOSTS
+...`), and serves on. It resolves no host name: a name that resolves to a
+private address is named when a mail connects to it.
+
+**The `From` header carries the sender name.** Mail is now sent from
+`EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>` as the realm stores them (`QAuth
+<no-reply@example.com>` by default), where it used to carry the address alone.
+
+Until the admin API's realm policy update
+([#517](https://github.com/qauth-labs/qauth/issues/517)) ships, no route changes
+a realm's mail transport, sender or password, and the environment keys no longer
+do. To replace a leaked or rotated `SMTP_PASSWORD` or `RESEND_API_KEY` of the
+default realm meanwhile, set the new value in the environment, delete the
+realm's row for it, and restart every node:
+
+```sql
+DELETE FROM realm_secrets
+ WHERE name = 'mail.smtp.password' -- or 'mail.resend.apiKey'
+   AND realm_id = (SELECT id FROM realms WHERE name = 'master'); -- DEFAULT_REALM_NAME
+```
+
+The next boot of a node that holds the signer stores the new value, as at the
+first boot. Restart every node, not one: a running node keeps the transport it
+built for the realm until the realm's policies change, and deleting the row
+changes none of them.
 
 ### Redirect URIs the consent screen cannot show
 

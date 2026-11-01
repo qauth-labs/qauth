@@ -1,4 +1,5 @@
 import {
+  defaultsFromEnv,
   RealmPolicySeedRefusedError,
   type RealmPolicySeedReport,
 } from '@qauth-labs/fastify-plugin-realm-policy';
@@ -15,8 +16,10 @@ import {
   JWT_ISSUER_PATH_WARNING,
   JWT_ISSUER_TRAILING_SLASH_WARNING,
   keptFromRowWarning,
+  seedKeyDiffersWarning,
   seedKeyIgnoredWarning,
   seedKeyStillAppliedNote,
+  seedKeyStricterWarning,
 } from './default-realm-boot';
 import type { RealmRow } from './request-realm';
 
@@ -523,6 +526,80 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
     expect(seedKeyIgnoredWarning('PASSWORD_MIN_SCORE', 'master', 'password.minScore')).toBe(
       'PASSWORD_MIN_SCORE only seeds new realms and is ignored: the realm "master" already has its policies, and its password.minScore stays as stored'
     );
+  });
+
+  it('warns when a key read from the row is stricter than the stored value, or differs where there is no order (#529)', async () => {
+    const { deps, warn } = existingRealm(NOTHING);
+    // The row stores the mail host and the score of an earlier environment.
+    const stored = defaultsFromEnv({
+      SMTP_HOST: 'old.example.com',
+      PASSWORD_MIN_SCORE: '1',
+      DEFAULT_DYNAMIC_REGISTRATION_SCOPES: 'openid profile',
+    });
+    const ofRealm = vi.fn(() => ({ policies: stored }));
+    Object.assign(deps.policies, { ofRealm });
+    const environmentSeeds = defaultsFromEnv({
+      SMTP_HOST: 'new.example.com',
+      PASSWORD_MIN_SCORE: '3',
+      DEFAULT_DYNAMIC_REGISTRATION_SCOPES: 'profile openid',
+    });
+
+    await bootDefaultRealm(deps, {
+      ...settings,
+      seedKeysSet: [
+        ...settings.seedKeysSet,
+        { key: 'SMTP_HOST', path: 'mail.smtp.host', readFromRealmRow: true },
+      ],
+      environmentSeeds,
+    });
+
+    const compared = seedKeyLines(warn).filter(
+      ([fields]) => (fields as { environment?: string }).environment !== undefined
+    );
+    expect(compared).toEqual([
+      [
+        {
+          variable: 'PASSWORD_MIN_SCORE',
+          realm: 'master',
+          policy: 'password.minScore',
+          environment: 'stricter',
+        },
+        seedKeyStricterWarning('PASSWORD_MIN_SCORE', 'master', 'password.minScore'),
+      ],
+      [
+        {
+          variable: 'SMTP_HOST',
+          realm: 'master',
+          policy: 'mail.smtp.host',
+          environment: 'different',
+        },
+        seedKeyDiffersWarning('SMTP_HOST', 'master', 'mail.smtp.host'),
+      ],
+    ]);
+    // The same set of scopes, in another order, says nothing more; nor does a
+    // key whose policy the server still reads from the environment.
+    expect(JSON.stringify(compared)).not.toContain('DEFAULT_DYNAMIC_REGISTRATION_SCOPES');
+    expect(JSON.stringify(compared)).not.toContain('ACCESS_TOKEN_LIFESPAN');
+    // No value reaches the lines.
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('example.com');
+    expect(seedKeyStricterWarning('PASSWORD_MIN_SCORE', 'master', 'password.minScore')).toBe(
+      'PASSWORD_MIN_SCORE is stricter than the stored password.minScore of the realm "master", and the stored value applies: the environment only seeds. To keep PASSWORD_MIN_SCORE\'s value, store it through the realm\'s policies'
+    );
+  });
+
+  it('logs no comparison when the stored and the seeded values agree, or there are no seeds', async () => {
+    const { deps, warn } = existingRealm(NOTHING);
+    const seeds = defaultsFromEnv({ PASSWORD_MIN_SCORE: '3' });
+    Object.assign(deps.policies, { ofRealm: vi.fn(() => ({ policies: seeds })) });
+
+    await bootDefaultRealm(deps, { ...settings, environmentSeeds: seeds });
+    await bootDefaultRealm(deps, settings);
+
+    expect(
+      seedKeyLines(warn).filter(
+        ([fields]) => (fields as { environment?: string }).environment !== undefined
+      )
+    ).toEqual([]);
   });
 
   it('says a key whose policy is not read from the row yet still applies, and does not warn', async () => {

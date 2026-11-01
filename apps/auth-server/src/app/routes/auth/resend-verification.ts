@@ -189,7 +189,12 @@ export default async function (fastify: FastifyInstance) {
         const recipient = credential.externalSub;
         const send: Promise<void> = Promise.resolve()
           .then(() =>
-            fastify.emailService.sendVerificationEmail(recipient, token, realmMailLink(realm))
+            fastify.emailService.sendVerificationEmail(
+              realm.id,
+              recipient,
+              token,
+              realmMailLink(realm)
+            )
           )
           .then(
             () => undefined,

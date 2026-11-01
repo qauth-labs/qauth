@@ -114,8 +114,10 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   api: {
     summary:
       'token, introspection, revocation, userinfo, registration, discovery, JWKS, the OID4VP endpoints, the account and developer APIs, SSF and the legacy /auth routes',
+    // Its mail sender (registration, a resent verification link) reads a
+    // realm transport's secret through the realm secret store (#529).
     plugins: [],
-    repositories: [],
+    repositories: ['realmSecrets'],
   },
   admin: {
     // The admin API's internal listener (#511): its token guard verifies with
@@ -123,16 +125,21 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // `adminGrants`, and writes `adminAuditLog`. Its approval gate and
     // approval routes read and write `adminApprovals` (#512). The key
     // operations arrive on the same listener (#496).
+    // The realm policy update and representation (#517) read and write the
+    // realms' secrets through the realm secret store (#529): without it, the
+    // policy store refuses a write of a secret, and cannot tell one set.
     summary: 'the admin API and key operations, on the internal listener',
     plugins: ['jwt'],
-    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals'],
+    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals', 'realmSecrets'],
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role
-    // (`holdsSigner`); the key jobs (#542) go here when they land.
+    // (`holdsSigner`); the key jobs (#542) go here when they land. The boot
+    // seeds the default realm's secrets from the environment where it can
+    // encrypt them (#529), so this role builds the realm secret store.
     summary: 'the KEK, the private keys and the signer',
     plugins: [],
-    repositories: [],
+    repositories: ['realmSecrets'],
   },
   delivery: {
     // The reader and the SSF delivery route; the event store's lag and age

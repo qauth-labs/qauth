@@ -96,6 +96,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read the environment until they move to the row ([#527], [#528], [#529],
   [#534]); the token lifetimes moved with [#527] (below). See **Realm policies move
   onto the realm row** in `operate/upgrades`.
+- **Each realm sends its mail through its own transport and sender** ([#529],
+  ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
+  policies (transport, sender address and name, SMTP host, port, TLS and user)
+  from its row for every mail, and builds the realm's provider on its first
+  mail after a change, keyed by realm id and `policies_version`, so a change
+  reaches the next mail without a restart; app.ts no longer builds one provider
+  for the process. The SMTP password and the Resend API key go to the new
+  realm secret store: migration 0049 adds `realm_secrets`, which holds each
+  value encrypted with the realm's data-at-rest key by the signer, under a
+  context that names the field, and CHECKs refuse anything but that ciphertext.
+  The representation (`policyStore.representation`) shows only `passwordSet`
+  and `apiKeySet`; logs, errors and the audit diff never carry a value. Only
+  the mail sender is handed the store's reader of a value (no decorator holds
+  one), and the signer lets the `api` role decrypt only a context under
+  `realm_secrets:mail.`. The first boot that can encrypt stores
+  `SMTP_PASSWORD` or `RESEND_API_KEY` in the default realm, once, and records
+  an unset one, unless the realm's stored transport needs it: then a later
+  boot whose environment sets it still stores it. Every other realm whose
+  stored transport is the environment's and needs the secret (as the
+  upgrade's fill leaves each realm) gets it too, and nothing is recorded
+  there; `SMTP_PASSWORD` goes to no realm whose stored SMTP host, port or user
+  is not `SMTP_HOST`, `SMTP_PORT` and `SMTP_USER`, which is logged as an error.
+  Later boots ignore both keys for a realm that has the secret and warn while
+  they are set. A policy update that selects `smtp` without its host, port,
+  user, sender address and password, or `resend` without its sender address
+  and API key, is refused (422 `unprocessable_content`, with a JSON Pointer
+  per refused field in `errors`), and so is one that selects `smtp` or changes
+  its host, port or TLS mode without giving the password again; an update
+  that changes nothing of `mail` is not checked, and a gap the realm already
+  had does not refuse an update. The boot no longer refuses an incomplete
+  environment, and warns for each setting or secret the default realm's
+  stored transport lacks. Until the admin API's policy update ([#517]) ships, a mail secret is
+  replaced by deleting its `realm_secrets` row and restarting with the new
+  value, as `operate/upgrades` describes. Mail is
+  sent from `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>`, as the realm stores them.
+  Each boot also warns when a seed key of a policy the server reads from the row
+  is stricter than the stored value, or, for a policy with no order, differs
+  from it. See **Mail secrets move into the realm** in `operate/upgrades`.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).
@@ -1381,6 +1419,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
   when its lifetime is computed.
 
+- **BREAKING (operators): SMTP needs TLS and a public host, unless the operator
+  allows otherwise** ([#529]). A realm's smtp transport whose `mail.smtp.secure`
+  is off now requires STARTTLS (nodemailer `requireTLS`), with the certificate
+  checked against the host name, and connects only to a public unicast address
+  its host resolves to, never to `localhost`, a private, loopback, link-local,
+  unique-local or cloud metadata address; each mail resolves the host, checks
+  the address and dials that address with the host name as its TLS server name,
+  so DNS cannot point the connection elsewhere. A policy update that names
+  `localhost` or such an IP address as `mail.smtp.host` is refused. Two
+  operator-only keys, which no realm policy can change, relax this:
+  `SMTP_ALLOW_PLAINTEXT=true` lets a transport send without STARTTLS, and
+  `SMTP_ALLOWED_HOSTS` lists the hosts a realm may name and reach although they
+  are not public (a metadata address never). **Action for operators**: a local
+  plaintext SMTP relay, such as Mailpit on `localhost:1025` or a relay
+  container on a private network, needs `SMTP_ALLOW_PLAINTEXT=true` and its
+  host in `SMTP_ALLOWED_HOSTS`, or its mail fails, logged with the refused
+  host. Each boot logs an error, and still serves, for every realm whose
+  stored SMTP host is `localhost`, a non-public IP address not in
+  `SMTP_ALLOWED_HOSTS` or a cloud metadata address, or a listed relay that
+  starts in the clear while `SMTP_ALLOW_PLAINTEXT` is off, naming the realm,
+  the host and the key to set; a host name is checked when a mail connects,
+  not at boot. See **Mail secrets move into the realm** in `operate/upgrades`.
 - **BREAKING (operators): the token lifetime keys are bounded** ([#527]).
   `ACCESS_TOKEN_LIFESPAN` and `DEV_ACCESS_TOKEN_LIFESPAN` above 86400 s (a day),
   or `REFRESH_TOKEN_LIFESPAN` above 7776000 s (90 days), now refuse to boot.

@@ -44,6 +44,21 @@ export const LOG_REDACT_PATHS = [
   'secret',
   '*.secret',
   'authorization',
+  // A realm mail transport's secrets (#529), wherever a policy patch, a
+  // representation sent back or a transport's settings are logged whole: the
+  // SMTP password (`mail.smtp.password`, nodemailer's `auth.pass`) and the
+  // Resend API key (`mail.resend.apiKey`).
+  'apiKey',
+  '*.apiKey',
+  'pass',
+  '*.pass',
+  '*.auth.pass',
+  '*.smtp.password',
+  '*.*.smtp.password',
+  '*.*.*.smtp.password',
+  '*.resend.apiKey',
+  '*.*.resend.apiKey',
+  '*.*.*.resend.apiKey',
 ] as const;
 
 /**

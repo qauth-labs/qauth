@@ -435,7 +435,7 @@ See `.env.docker.example` for all available variables. Key variables:
 | `KEK`                          | Yes      | Key-encryption key, the base64 of 32 random bytes; wraps every key in the realm key store (or `KEK_PATH`, a file holding it, mounted into the container)         |
 | `JWT_ISSUER`                   | No       | JWT issuer URL (default: http://localhost:3000). At first boot it becomes the default realm's permanent issuer; a later boot with another value refuses to start |
 | `DEFAULT_REALM_ENDPOINT_HOSTS` | No       | Names server-side callers reach the auth-server by (default: `auth-server`, the developer portal's)                                                              |
-| `EMAIL_PROVIDER`               | No       | Email provider: mock, resend, smtp (default: mock)                                                                                                               |
+| `EMAIL_PROVIDER`               | No       | Email provider of a new realm: mock, resend, smtp (default: mock); the realm row decides afterwards                                                              |
 | `REQUIRE_VERIFIED_ACCOUNT`     | No       | Refuse password login until the address is verified (`true`)                                                                                                     |
 | `NODE_ENV`                     | No       | `production` (default) or `development` for dev                                                                                                                  |
 | `LOG_LEVEL`                    | No       | `info` (default); use `debug` for development                                                                                                                    |

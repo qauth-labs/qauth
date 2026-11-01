@@ -63,3 +63,40 @@ describe('the keys that seed realm mail policies (#514)', () => {
     });
   });
 });
+
+describe("the operator's SMTP switches (review of #937)", () => {
+  it('requires STARTTLS and public hosts unless set', () => {
+    const parsed = emailEnvSchema.parse(REQUIRED);
+    expect(parsed.SMTP_ALLOW_PLAINTEXT).toBe(false);
+    expect(parsed.SMTP_ALLOWED_HOSTS).toEqual([]);
+    expect(
+      emailEnvSchema.parse({ ...REQUIRED, SMTP_ALLOWED_HOSTS: '' }).SMTP_ALLOWED_HOSTS
+    ).toEqual([]);
+  });
+
+  it('reads SMTP_ALLOW_PLAINTEXT as a flag, never any non-empty string as true', () => {
+    expect(
+      emailEnvSchema.parse({ ...REQUIRED, SMTP_ALLOW_PLAINTEXT: 'true' }).SMTP_ALLOW_PLAINTEXT
+    ).toBe(true);
+    expect(
+      emailEnvSchema.parse({ ...REQUIRED, SMTP_ALLOW_PLAINTEXT: 'false' }).SMTP_ALLOW_PLAINTEXT
+    ).toBe(false);
+    expect(emailEnvSchema.safeParse({ ...REQUIRED, SMTP_ALLOW_PLAINTEXT: 'yes' }).success).toBe(
+      false
+    );
+  });
+
+  it('reads SMTP_ALLOWED_HOSTS as a list of host names and IP addresses, as the checks compare them', () => {
+    expect(
+      emailEnvSchema.parse({
+        ...REQUIRED,
+        SMTP_ALLOWED_HOSTS: ' LocalHost , mail.internal., 10.0.0.25,[::1]',
+      }).SMTP_ALLOWED_HOSTS
+    ).toEqual(['localhost', 'mail.internal', '10.0.0.25', '::1']);
+    for (const bad of ['*.internal', 'mail internal', 'smtp://mail']) {
+      expect(emailEnvSchema.safeParse({ ...REQUIRED, SMTP_ALLOWED_HOSTS: bad }).success, bad).toBe(
+        false
+      );
+    }
+  });
+});
