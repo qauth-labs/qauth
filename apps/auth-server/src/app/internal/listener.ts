@@ -469,6 +469,9 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
               'The internal TLS files changed but cannot be used yet; the listener keeps the files it serves'
             );
           },
+          onWarning: (message) => {
+            server.log.warn(message);
+          },
         }
       );
     });

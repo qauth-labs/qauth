@@ -1,7 +1,7 @@
 import { X509Certificate } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { createSecureContext, type SecureContextOptions } from 'node:tls';
+import { createSecureContext, rootCertificates, type SecureContextOptions } from 'node:tls';
 
 /**
  * THE INTERNAL TLS FILES (ADR-019 Decision 8, issue #496).
@@ -66,17 +66,62 @@ export function internalSecureContextOptions(material: InternalTlsMaterial): Sec
   };
 }
 
+/** Each PEM certificate of a file, in order. */
+const PEM_CERTIFICATE = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g;
+
+/** The SHA-256 fingerprints of the public root CAs Node.js trusts by default, read once. */
+let publicRoots: ReadonlySet<string> | undefined;
+
+function publicRootFingerprints(): ReadonlySet<string> {
+  publicRoots ??= new Set(rootCertificates.map((pem) => new X509Certificate(pem).fingerprint256));
+  return publicRoots;
+}
+
+/**
+ * The CA file's certificates, every one of which must parse, and none of
+ * which may be a public root CA: the listener trusts each certificate the
+ * file holds to issue a peer, so a system bundle there would let any
+ * certificate a public CA issued pass the handshake.
+ *
+ * @throws InternalTlsFileError
+ */
+function caCertificates(ca: Buffer): X509Certificate[] {
+  const pems = ca.toString('latin1').match(PEM_CERTIFICATE) ?? [];
+  const refused = new InternalTlsFileError(
+    `${VARIABLES.caPath} does not hold a PEM CA certificate: it issues every internal peer's certificate`
+  );
+  if (pems.length === 0) throw refused;
+  const certificates = pems.map((pem) => {
+    try {
+      return new X509Certificate(pem);
+    } catch {
+      throw refused;
+    }
+  });
+  const roots = publicRootFingerprints();
+  const publicRoot = certificates.find((certificate) => roots.has(certificate.fingerprint256));
+  if (publicRoot !== undefined) {
+    throw new InternalTlsFileError(
+      `${VARIABLES.caPath} holds a public root CA (${publicRoot.subject.replace(/\n/g, ', ')}): it must hold only the CA that issues QAuth's internal peers, never a system bundle, or any publicly issued certificate passes the handshake`
+    );
+  }
+  return certificates;
+}
+
 /**
  * Check that `material` makes a usable identity: the certificate parses and
- * has not expired, the CA file parses, and the private key belongs to the
- * certificate. The message names the files, never their contents.
+ * has not expired, every certificate of the CA file parses and none is a
+ * public root CA, and the private key belongs to the certificate. The
+ * message names the files, never their contents.
  *
+ * @returns what is usable but likely a mistake, for the log: a CA file with
+ *   no certificate marked as a CA (`basicConstraints` `CA:TRUE`)
  * @throws InternalTlsFileError
  */
 export function checkInternalTlsMaterial(
   material: InternalTlsMaterial,
   now: Date = new Date()
-): void {
+): readonly string[] {
   let certificate: X509Certificate;
   try {
     certificate = new X509Certificate(material.cert);
@@ -93,13 +138,7 @@ export function checkInternalTlsMaterial(
       `${VARIABLES.certPath} holds a certificate that expired on ${certificate.validTo}`
     );
   }
-  try {
-    new X509Certificate(material.ca);
-  } catch {
-    throw new InternalTlsFileError(
-      `${VARIABLES.caPath} does not hold a PEM CA certificate: it issues every internal peer's certificate`
-    );
-  }
+  const authorities = caCertificates(material.ca);
   try {
     createSecureContext(internalSecureContextOptions(material));
   } catch (error) {
@@ -108,15 +147,32 @@ export function checkInternalTlsMaterial(
       `${VARIABLES.keyPath} and ${VARIABLES.certPath} do not make a TLS identity (${reason}): the key must be the certificate's own`
     );
   }
+  return authorities.some((certificate) => certificate.ca)
+    ? []
+    : [
+        `${VARIABLES.caPath} holds no CA certificate (none has basicConstraints CA:TRUE): put there the CA that issues the internal peers' certificates`,
+      ];
+}
+
+/** Options for {@link readInternalTlsFiles}. */
+export interface InternalTlsReadOptions {
+  /** Called with each thing that is usable but likely a mistake, for the log. */
+  readonly onWarning?: (message: string) => void;
 }
 
 /**
  * Read the three files and check them ({@link checkInternalTlsMaterial}).
- * Synchronous: it runs once, at boot, before the listener exists.
+ * Synchronous: it runs once, at boot, before the listener exists. Besides
+ * what the check warns of, it warns when the key file is readable by its
+ * group or by others: a warning, not a refusal, as a Kubernetes secret
+ * volume mounts its files 0644 unless told otherwise.
  *
  * @throws InternalTlsFileError naming the variable of a file that cannot be read
  */
-export function readInternalTlsFiles(files: InternalTlsFiles): InternalTlsMaterial {
+export function readInternalTlsFiles(
+  files: InternalTlsFiles,
+  options: InternalTlsReadOptions = {}
+): InternalTlsMaterial {
   const read = (name: keyof InternalTlsFiles): Buffer => {
     try {
       return readFileSync(files[name]);
@@ -128,7 +184,14 @@ export function readInternalTlsFiles(files: InternalTlsFiles): InternalTlsMateri
     }
   };
   const material = { cert: read('certPath'), key: read('keyPath'), ca: read('caPath') };
-  checkInternalTlsMaterial(material);
+  const warnings = [...checkInternalTlsMaterial(material)];
+  const keyMode = statSync(files.keyPath).mode & 0o777;
+  if ((keyMode & 0o044) !== 0) {
+    warnings.push(
+      `${VARIABLES.keyPath} names ${files.keyPath}, which its group or others may read (mode ${keyMode.toString(8).padStart(4, '0')}): make it readable by this process's user only, such as 0400 (a Kubernetes secret's defaultMode)`
+    );
+  }
+  for (const warning of warnings) options.onWarning?.(warning);
   return material;
 }
 
@@ -156,6 +219,8 @@ export interface InternalTlsWatchOptions {
    * per distinct set of contents, not on every read.
    */
   readonly onError?: (error: InternalTlsFileError) => void;
+  /** Called with what the check warns of in new files it hands over ({@link checkInternalTlsMaterial}). */
+  readonly onWarning?: (message: string) => void;
 }
 
 /** A running watch; {@link stop} ends it. */
@@ -203,8 +268,9 @@ export function watchInternalTlsFiles(
     }
     if (stopped || sameMaterial(next, current)) return;
     if (refused !== undefined && sameMaterial(next, refused)) return;
+    let warnings: readonly string[];
     try {
-      checkInternalTlsMaterial(next);
+      warnings = checkInternalTlsMaterial(next);
     } catch (error) {
       refused = next;
       options.onError?.(error as InternalTlsFileError);
@@ -223,6 +289,7 @@ export function watchInternalTlsFiles(
     }
     refused = undefined;
     current = next;
+    for (const warning of warnings) options.onWarning?.(warning);
   };
 
   const timer = setInterval(() => {

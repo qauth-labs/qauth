@@ -193,7 +193,12 @@ async function start() {
         ...(internalPlan.tls === undefined
           ? {}
           : {
-              tls: { files: internalPlan.tls, material: readInternalTlsFiles(internalPlan.tls) },
+              tls: {
+                files: internalPlan.tls,
+                material: readInternalTlsFiles(internalPlan.tls, {
+                  onWarning: (message) => server.log.warn({ listener: 'internal' }, message),
+                }),
+              },
             }),
       });
     }
