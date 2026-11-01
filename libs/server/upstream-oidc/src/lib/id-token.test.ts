@@ -144,6 +144,19 @@ describe('validateIdToken', () => {
     ).rejects.toThrow();
   });
 
+  it.each(['none', 'HS256', 'HS384', 'HS512'])(
+    'refuses %s even when a caller lists it, before any key lookup',
+    async (alg) => {
+      const lookup = vi.fn<IdTokenKeys>(async () => [publicJwk]);
+      const header = { alg, kid: 'k1' };
+      const token = `${base64url(header)}.${base64url(claims())}.${alg === 'none' ? '' : 'c2ln'}`;
+      await expect(
+        validateIdToken(token, { ...EXPECTED, algorithms: [alg as never, 'ES256'] }, lookup)
+      ).rejects.toThrow(/algorithm/);
+      expect(lookup).not.toHaveBeenCalled();
+    }
+  );
+
   it('refuses an algorithm the provider key set has keys for but the config does not allow', async () => {
     const token = await sign(claims());
     await expect(

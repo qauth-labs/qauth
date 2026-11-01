@@ -11,6 +11,7 @@ import {
   authMethodRoutePrefix,
   type AuthMethodRouteRequest,
   MAX_AUTH_METHOD_RAW_CLAIMS_BYTES,
+  MAX_UPSTREAM_REDIRECT_LENGTH,
   UPSTREAM_STEP_URN,
   type UpstreamCallbackOutcome,
   type UpstreamStart,
@@ -215,6 +216,11 @@ export function createUpstreamOidcMethod(
     if (locales !== '') parameters.push(['ui_locales', locales]);
     // `set`: a parameter the endpoint's own query already names is replaced.
     for (const [name, value] of parameters) url.searchParams.set(name, value);
+    if (url.href.length > MAX_UPSTREAM_REDIRECT_LENGTH) {
+      throw invalidResponse(
+        `the authorization request is longer than ${MAX_UPSTREAM_REDIRECT_LENGTH} characters`
+      );
+    }
 
     return {
       redirectTo: url.href,
@@ -292,9 +298,7 @@ export function createUpstreamOidcMethod(
     const userinfo = config.fetchUserinfo
       ? await readUserinfo(context, metadata, tokens.accessToken, sub)
       : {};
-    // The ID token's claims win: they are signed, and `iss`, `sub` and `aud`
-    // stay the checked ones.
-    const claims = { ...userinfo, ...idTokenClaims };
+    const claims = mergedClaims(idTokenClaims, userinfo);
     if (Buffer.byteLength(JSON.stringify(claims), 'utf8') > MAX_AUTH_METHOD_RAW_CLAIMS_BYTES) {
       throw invalidResponse('the claims are larger than an identity may carry');
     }
@@ -384,6 +388,39 @@ function ownTransaction(
     if (typeof transaction[name] !== 'string') throw mismatch('an incomplete transaction');
   }
   return transaction as unknown as UpstreamOidcTransaction;
+}
+
+/**
+ * Claims whose truth another claim of the same source vouches for: a value
+ * and its `*_verified` flag (OpenID Connect Core 1.0 §5.1).
+ */
+const VERIFIED_CLAIM_PAIRS: readonly (readonly [value: string, flag: string])[] = [
+  ['email', 'email_verified'],
+  ['phone_number', 'phone_number_verified'],
+];
+
+/**
+ * The identity's claims: the ID token's over the userinfo answer's. The ID
+ * token's win: they are signed, and `iss`, `sub` and `aud` stay the checked
+ * ones. A value and its `*_verified` flag are taken together, from the source
+ * that holds the value: an ID token's unverified `email` never takes a
+ * userinfo answer's `email_verified` for another address.
+ */
+function mergedClaims(
+  idToken: Readonly<Record<string, unknown>>,
+  userinfo: Readonly<Record<string, unknown>>
+): Record<string, unknown> {
+  const claims: Record<string, unknown> = { ...userinfo, ...idToken };
+  for (const [value, flag] of VERIFIED_CLAIM_PAIRS) {
+    const source = Object.hasOwn(idToken, value)
+      ? idToken
+      : Object.hasOwn(userinfo, value)
+        ? userinfo
+        : undefined;
+    delete claims[flag];
+    if (source !== undefined && Object.hasOwn(source, flag)) claims[flag] = source[flag];
+  }
+  return claims;
 }
 
 /** One parameter's single value; a missing or repeated one is `undefined`. */

@@ -41,7 +41,7 @@ describe('checkUpstreamOidcProvider', () => {
     expect(egress.validateDestination.mock.calls.map(([url, options]) => [url, options])).toEqual([
       [
         provider.authorizationEndpoint,
-        { purpose: 'upstream-discovery', source: 'remote_document', realm: 'acme' },
+        { purpose: 'upstream-authorization', source: 'remote_document', realm: 'acme' },
       ],
       [
         provider.tokenEndpoint,

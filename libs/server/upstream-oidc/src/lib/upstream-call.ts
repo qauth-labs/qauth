@@ -33,6 +33,8 @@ export const UPSTREAM_OIDC_CALL_CAPS = Object.freeze({
 
 /** The egress purposes of the client's calls: fixed labels for counts and logs. */
 export const UPSTREAM_OIDC_PURPOSES = Object.freeze({
+  /** Never called: the browser goes there. The registration check's label for it. */
+  authorization: 'upstream-authorization',
   discovery: 'upstream-discovery',
   jwks: 'upstream-jwks',
   token: 'upstream-token',

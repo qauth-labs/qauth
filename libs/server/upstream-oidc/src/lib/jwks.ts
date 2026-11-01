@@ -161,7 +161,12 @@ export class UpstreamJwksCache {
     if (found.length > 0) return found;
     const now = Date.now();
     const last = this.#refreshedAt.get(key);
-    if (last !== undefined && now - last < UPSTREAM_JWKS_REFRESH_INTERVAL_MS) return found;
+    if (last !== undefined && now - last < UPSTREAM_JWKS_REFRESH_INTERVAL_MS) {
+      // Refreshed lately, perhaps while this call waited on the older set:
+      // read what the cache holds now, which fetches nothing while the
+      // refreshed set (or its fetch in flight) is there.
+      return verificationCandidates(await this.#sets.get(key, load), algorithm, kid);
+    }
     this.#refreshedAt.delete(key);
     this.#refreshedAt.set(key, now);
     while (this.#refreshedAt.size > MAX_CACHED_KEY_SETS) {

@@ -97,6 +97,7 @@ describe('discovery', () => {
     ['no token endpoint', { token_endpoint: undefined }],
     ['no jwks_uri', { jwks_uri: undefined }],
     ['a relative userinfo endpoint', { userinfo_endpoint: '/userinfo' }],
+    ['no code among the response types', { response_types_supported: ['id_token'] }],
     ['no S256 among the PKCE methods', { code_challenge_methods_supported: ['plain'] }],
     [
       'no support for the configured client authentication',

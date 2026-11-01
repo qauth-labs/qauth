@@ -435,6 +435,47 @@ describe('the callback', () => {
       expect(outcome).toEqual({ kind: 'failed', reason: 'invalid_response' });
     });
 
+    it('takes a value and its verified flag from the same source', async () => {
+      const s = await setup('client_secret_basic', { fetchUserinfo: true });
+      // The ID token's email is unverified; userinfo vouches for another one.
+      const { outcome } = await signIn(s, {
+        sub: 'user-1',
+        claims: { email: 'ada@example.com', phone_number: '+90 555 000 0000' },
+        userinfo: {
+          email: 'other@example.com',
+          email_verified: true,
+          phone_number_verified: true,
+        },
+      });
+      const completion = await completeUpstreamStep(s.method, outcome);
+      if (completion.kind !== 'identity') throw new Error(completion.kind);
+      expect(completion.identity.rawClaims).not.toHaveProperty('email_verified');
+      expect(completion.identity.rawClaims).not.toHaveProperty('phone_number_verified');
+      expect(completion.attributes).toEqual(
+        expect.arrayContaining([
+          { source: TYPE, attrKey: 'email', attrValue: 'ada@example.com', verified: false },
+          { source: TYPE, attrKey: 'phone_number', attrValue: '+90 555 000 0000', verified: false },
+        ])
+      );
+    });
+
+    it('takes both from userinfo when the ID token carries no such value', async () => {
+      const s = await setup('client_secret_basic', { fetchUserinfo: true });
+      const { outcome } = await signIn(s, {
+        sub: 'user-1',
+        claims: { email_verified: false },
+        userinfo: { email: 'ada@example.com', email_verified: true },
+      });
+      const completion = await completeUpstreamStep(s.method, outcome);
+      if (completion.kind !== 'identity') throw new Error(completion.kind);
+      expect(completion.attributes).toContainEqual({
+        source: TYPE,
+        attrKey: 'email',
+        attrValue: 'ada@example.com',
+        verified: true,
+      });
+    });
+
     it('is not read unless the config asks for it', async () => {
       const s = await setup();
       const { outcome } = await signIn(s);

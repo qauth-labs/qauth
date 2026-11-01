@@ -109,7 +109,11 @@ export async function checkUpstreamOidcProvider(
   }
 
   const endpoints: [string, string | undefined, string][] = [
-    ['authorization endpoint', metadata.authorizationEndpoint, UPSTREAM_OIDC_PURPOSES.discovery],
+    [
+      'authorization endpoint',
+      metadata.authorizationEndpoint,
+      UPSTREAM_OIDC_PURPOSES.authorization,
+    ],
     ['token endpoint', metadata.tokenEndpoint, UPSTREAM_OIDC_PURPOSES.token],
     ['jwks_uri', metadata.jwksUri, UPSTREAM_OIDC_PURPOSES.jwks],
     ['userinfo endpoint', metadata.userinfoEndpoint, UPSTREAM_OIDC_PURPOSES.userinfo],

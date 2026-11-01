@@ -136,6 +136,30 @@ describe('the JWKS cache', () => {
     expect(request).toHaveBeenCalledTimes(3);
   });
 
+  it('finds a rotated key for every callback that waited on the older set', async () => {
+    const { provider, cache, location } = await jwksSetup();
+    const older = { keys: [{ kty: 'EC', crv: 'P-256', x: 'old', y: 'old', kid: 'old' }] };
+    const rotated = { keys: [provider.publicJwk] };
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    // The first fetch answers the older set, once the gate opens; later
+    // fetches answer the rotated one.
+    const request = vi.fn(async () => {
+      const set = request.mock.calls.length === 1 ? older : rotated;
+      await gate;
+      return answer({ body: Buffer.from(JSON.stringify(set)), url: location.uri });
+    });
+    // Two callbacks for the new key wait on the first, older set.
+    const first = cache.candidates({ request }, location, 'ES256', provider.publicJwk.kid);
+    const second = cache.candidates({ request }, location, 'ES256', provider.publicJwk.kid);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    release();
+    expect(await first).toHaveLength(1);
+    expect(await second).toHaveLength(1);
+    // One refresh for both.
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps one realm’s key set apart from another’s', async () => {
     const { request, cache, location, provider } = await jwksSetup();
     await cache.candidates({ request }, location, 'ES256', provider.publicJwk.kid);

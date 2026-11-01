@@ -161,6 +161,10 @@ export function parseDiscoveryDocument(
     }
     return value as string[];
   };
+  const responseTypes = listed('response_types_supported');
+  if (responseTypes !== undefined && !responseTypes.includes('code')) {
+    throw invalidResponse(`${purpose}: the provider does not support response_type=code`);
+  }
   const challengeMethods = listed('code_challenge_methods_supported');
   if (challengeMethods !== undefined && !challengeMethods.includes('S256')) {
     throw invalidResponse(`${purpose}: the provider does not support PKCE with S256`);
