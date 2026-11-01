@@ -166,7 +166,8 @@ beforeAll(async () => {
   egress = createEgressClient({ allowlist: ALLOWLIST });
   signer = createTestSigner({ refreshIntervalMs: 0 });
   realmId = await signer.addRealm({ issuer: ORIGIN });
-});
+  // Certificates and RSA keys: slow when every project's suite runs at once.
+}, 30_000);
 
 afterAll(async () => {
   network.current = undefined;
