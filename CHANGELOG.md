@@ -2452,6 +2452,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
+[#891]: https://github.com/qauth-labs/qauth/issues/891
 
 ### Deprecated
 
@@ -2477,6 +2478,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expired one is refused, and the next release removes the grace.
 
 ### Fixed
+
+- **A client that signs users in can be kept from minting tokens with no user
+  for its users' scopes** ([#891]). `client_credentials` granted any scope in
+  a client's `scopes`, so a relying party given the grant to manage its SSF
+  stream could also get a token whose `sub` is its own `client_id` for a scope
+  its users grant it (`notes:read`, say), which a resource server that did not
+  check `sub` acted on app-wide. Migration 0051 adds
+  `oauth_clients.client_credentials_scopes`, the scopes that grant may issue,
+  out of `scopes`; the seed manifest's `client_credentials_scopes` is the only
+  way to set it, and no owner route can change it. With a list, the token
+  endpoint refuses any other scope on `client_credentials` with `invalid_scope`
+  (event reason `scope_not_allowed_for_grant`); without one the grant is as
+  before. The manifest refuses a listed scope `scopes` does not hold, an empty
+  list, and the list on a client without the grant, and `--rotate` refuses an
+  entry without the list for a client whose row has one, so a rotation cannot
+  lift it unnoticed. The admin API's reserved `clients.update` cases count
+  lifting or widening the list as `token-content`. The **SSF transmitter**
+  page's receiver example now lists `["ssf:stream"]` there, and its warning
+  covers only a client without the list.
+
+  **Action for operators**: give every client that signs users in and holds
+  `client_credentials` a `client_credentials_scopes`, an SSF receiver's
+  `["ssf:stream"]`, in its manifest entry, and keep an SSF receiver's
+  `audience` to the realm's issuer alone: the list narrows the token's scopes,
+  not its `aud`. The seeder writes an existing client only with `--rotate`;
+  without rotating, also set the column with an `UPDATE` (see the SSF
+  transmitter page and the upgrade guide). The list takes effect on a node
+  once that node runs this release; until every node does, a node of the
+  previous release, which ignores the column, still issues every scope of
+  `scopes`. Setting it during the roll does no harm, since such a node's
+  writes leave the column as it is. Rolling back to an earlier release without
+  restoring the backup lifts every list, because older code ignores the
+  column; the column and its values are kept, and the lists apply again after
+  upgrading.
 
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped

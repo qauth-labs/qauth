@@ -791,6 +791,127 @@ describe('POST /oauth/token route — client_credentials grant', () => {
     });
   });
 
+  // #891: a relying party that signs users in and receives SSF events as
+  // itself holds `client_credentials` beside `authorization_code`. Its
+  // `client_credentials_scopes` keeps the scopes its users grant it off the
+  // tokens that name no user.
+  describe('client_credentials_scopes narrows the grant (#891)', () => {
+    const RP_SCOPES = ['openid', 'notes:read', 'ssf:stream'];
+
+    async function issue(clientCredentialsScopes: unknown, scope: string) {
+      const { fastify, ctx } = createFastifyStub();
+      await tokenRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        id: 'client-uuid-notes',
+        clientId: 'notes-app',
+        clientSecretHash: 'hash',
+        enabled: true,
+        grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
+        scopes: RP_SCOPES,
+        audience: ['https://auth.example.com'],
+        clientCredentialsScopes,
+      });
+      (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(true);
+      (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('cc.jwt');
+      if (!ctx.handler) throw new Error('Handler missing');
+      const result = ctx.handler(
+        {
+          body: {
+            grant_type: 'client_credentials',
+            client_id: 'notes-app',
+            client_secret: 'secret',
+            scope,
+          },
+          ip: '127.0.0.1',
+          headers: { 'user-agent': 'vitest' },
+        },
+        createReply()
+      );
+      return { fastify, result };
+    }
+
+    it('issues a scope the list names', async () => {
+      const { fastify, result } = await issue(['ssf:stream'], 'ssf:stream');
+
+      await expect(result).resolves.toMatchObject({ scope: 'ssf:stream' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ sub: 'notes-app', scope: 'ssf:stream' })
+      );
+    });
+
+    it.each([
+      ['alone', 'notes:read', 'notes:read'],
+      ['beside a scope the list names', 'ssf:stream notes:read openid', 'notes:read openid'],
+    ])(
+      'refuses a scope the client holds but the list leaves out, %s',
+      async (_label, scope, refused) => {
+        const { fastify, result } = await issue(['ssf:stream'], scope);
+
+        const error = await result.then(
+          () => undefined,
+          (thrown: unknown) => thrown
+        );
+        expect(error).toBeInstanceOf(InvalidScopeError);
+        expect(wireAnswer(error)).toMatchObject({
+          statusCode: 400,
+          message: 'invalid_scope',
+          errorDescription: `${refused} not permitted for this client with the client_credentials grant`,
+        });
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          {
+            grantType: 'client_credentials',
+            error: 'invalid_scope',
+            reason: 'scope_not_allowed_for_grant',
+          },
+        ]);
+      }
+    );
+
+    it('keeps scopes the ceiling: a listed scope the client does not hold is refused', async () => {
+      const { fastify, result } = await issue(['ssf:stream', 'notes:write'], 'notes:write');
+
+      await expect(result).rejects.toThrow(InvalidScopeError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        {
+          grantType: 'client_credentials',
+          error: 'invalid_scope',
+          reason: 'scope_not_allowed_for_client',
+        },
+      ]);
+    });
+
+    it.each([
+      ['NULL', null],
+      ['absent', undefined],
+    ])('leaves the grant as it was when the list is %s: any scope of scopes', async (_l, list) => {
+      const { result } = await issue(list, 'notes:read ssf:stream');
+
+      await expect(result).resolves.toMatchObject({ scope: 'notes:read ssf:stream' });
+    });
+
+    it.each([
+      ['a string', 'ssf:stream'],
+      ['an object', { scopes: ['ssf:stream'] }],
+      ['an empty string member', ['ssf:stream', '']],
+      ['a number member', ['ssf:stream', 1]],
+    ])('refuses every scope when the stored list is %s', async (_label, list) => {
+      const { fastify, result } = await issue(list, 'ssf:stream');
+
+      await expect(result).rejects.toThrow(InvalidScopeError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+      expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+        {
+          grantType: 'client_credentials',
+          error: 'invalid_scope',
+          reason: 'scope_not_allowed_for_grant',
+        },
+      ]);
+    });
+  });
+
   it('authenticates client via Authorization: Basic header', async () => {
     const { fastify, ctx } = createFastifyStub();
     await tokenRoute(fastify);
@@ -4369,6 +4490,31 @@ describe('POST /oauth/token route — refresh_token grant', () => {
     await expect(
       handler(refreshRequest({ scope: 'read:foo' }), createReply())
     ).resolves.toBeDefined();
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ scopes: ['read:foo'] }),
+      expect.anything()
+    );
+  });
+
+  // #891: `client_credentials_scopes` narrows only the grant whose tokens
+  // name no user. A user's refresh token keeps the scopes the user granted.
+  it('leaves the refresh grant the scopes client_credentials_scopes leaves out', async () => {
+    const { fastify, ctx, confidentialClient, storedToken } = setupRefreshStub();
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...confidentialClient,
+      grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
+      scopes: ['read:foo', 'ssf:stream'],
+      clientCredentialsScopes: ['ssf:stream'],
+    });
+    (
+      fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+    ).mockResolvedValue({ ...storedToken, scopes: ['read:foo'] });
+
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await expect(handler(refreshRequest(), createReply())).resolves.toBeDefined();
     expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
       expect.objectContaining({ scopes: ['read:foo'] }),
       expect.anything()
