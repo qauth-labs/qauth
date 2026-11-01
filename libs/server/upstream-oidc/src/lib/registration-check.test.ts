@@ -103,6 +103,22 @@ describe('checkUpstreamOidcProvider', () => {
     ).toMatchObject({ ok: false, finding: 'invalid_config', detail: 'issuer: custom' });
   });
 
+  it('reports userinfo reads without a userinfo endpoint set by hand as invalid_config', async () => {
+    const { egress } = await hostEgress();
+    expect(
+      await checkUpstreamOidcProvider(egress, 'acme', {
+        ...CONFIG,
+        fetchUserinfo: true,
+        endpoints: {
+          authorization: 'https://idp.internal.example/a',
+          token: 'https://idp.internal.example/t',
+          jwks: 'https://idp.internal.example/j',
+        },
+      })
+    ).toEqual({ ok: false, finding: 'invalid_config', detail: 'endpoints.userinfo: custom' });
+    expect(egress.validateDestination).not.toHaveBeenCalled();
+  });
+
   it('reports a client assertion algorithm the provider does not list as invalid_document', async () => {
     const { provider, egress } = await hostEgress();
     provider.tamper.discovery = { token_endpoint_auth_signing_alg_values_supported: ['RS256'] };

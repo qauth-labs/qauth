@@ -69,6 +69,31 @@ describe('upstreamOidcConfigSchema', () => {
     expect(upstreamOidcConfigSchema.safeParse({ ...BASE, ...overrides }).success).toBe(false);
   });
 
+  it('refuses userinfo reads when the endpoints set by hand name no userinfo endpoint', () => {
+    const endpoints = {
+      authorization: 'https://idp.example.com/a',
+      token: 'https://idp.example.com/t',
+      jwks: 'https://idp.example.com/j',
+    };
+    const result = upstreamOidcConfigSchema.safeParse({ ...BASE, endpoints, fetchUserinfo: true });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => [issue.path.join('.'), issue.code])).toEqual([
+      ['endpoints.userinfo', 'custom'],
+    ]);
+    // With a userinfo endpoint, without userinfo reads, or with discovery, it parses.
+    for (const config of [
+      {
+        ...BASE,
+        endpoints: { ...endpoints, userinfo: 'https://idp.example.com/u' },
+        fetchUserinfo: true,
+      },
+      { ...BASE, endpoints, fetchUserinfo: false },
+      { ...BASE, fetchUserinfo: true },
+    ]) {
+      expect(upstreamOidcConfigSchema.safeParse(config).success).toBe(true);
+    }
+  });
+
   it('marks the client secret writeOnly, so an admin API keeps it out of responses', () => {
     const schema = JSON.stringify(toJSONSchema(upstreamOidcConfigSchema));
     expect(schema).toMatch(/"clientSecret":\{[^}]*"writeOnly":true/);

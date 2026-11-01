@@ -164,8 +164,8 @@ export const upstreamEndpointsSchema = z.strictObject({
   issParameterSupported: z.boolean().default(false),
 });
 
-/** The config schema of the generic upstream OIDC client. */
-export const upstreamOidcConfigSchema = z.strictObject({
+/** The config's members, each checked on its own. */
+const upstreamOidcConfigMembers = z.strictObject({
   /** The provider's issuer identifier, compared byte for byte. */
   issuer: issuerUrl,
   /** The client id QAuth is registered under at the provider. */
@@ -200,6 +200,26 @@ export const upstreamOidcConfigSchema = z.strictObject({
     }),
   /** Whether to read the userinfo endpoint after the code exchange. */
   fetchUserinfo: z.boolean().default(false),
+});
+
+/**
+ * The config schema of the generic upstream OIDC client. A config that could
+ * never sign anyone in is refused here, so the registration check reports it
+ * as `invalid_config` rather than each `start()` failing: userinfo reads
+ * with endpoints set by hand that name no userinfo endpoint.
+ */
+export const upstreamOidcConfigSchema = upstreamOidcConfigMembers.superRefine((config, context) => {
+  if (
+    config.fetchUserinfo &&
+    config.endpoints !== undefined &&
+    config.endpoints.userinfo === undefined
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['endpoints', 'userinfo'],
+      message: 'fetchUserinfo needs a userinfo endpoint among the endpoints set by hand',
+    });
+  }
 });
 
 /** A provider's config as the method reads it, after parsing. */
