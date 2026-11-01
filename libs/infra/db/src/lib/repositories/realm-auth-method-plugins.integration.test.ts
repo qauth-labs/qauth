@@ -1,6 +1,6 @@
 /**
  * Real-Postgres integration tests for each realm's AuthMethod plugin state
- * (`realm_auth_method_plugins`, migration 0049, issue #600).
+ * (`realm_auth_method_plugins`, migration 0050, issue #600).
  *
  * The rules under test live in the DDL and in the conditional writes: one row
  * per realm and plugin, the CHECKs on the stored forms (a secret that is not

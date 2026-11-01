@@ -1381,7 +1381,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loads only while `PLUGIN_API_ENABLED=true`, the switch of the experimental
   item `plugin-api`, which now warns at boot while on; with it off the
   package is never imported and the boot logs why. Each realm keeps its state
-  of each plugin in `realm_auth_method_plugins` (migration 0049): off by
+  of each plugin in `realm_auth_method_plugins` (migration 0050): off by
   default, its config's plain members, and each secret member (marked
   `writeOnly` in the plugin's schema) as a ciphertext under the realm's
   `data_at_rest` key. The admin API lists and reads the installed plugins
