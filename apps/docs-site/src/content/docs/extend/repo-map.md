@@ -35,6 +35,10 @@ reverse-proxy configuration and the container test that runs it in front of stub
 tagged `scope:reference-proxy` and `type:testing`, and imports no workspace project
 (`.oxlintrc.json:318`).
 
+`graphs/` is a project too, `graphs`, with no tags: it holds the flow graphs of ADR-021 and no
+code, so nothing can import it. Its one target, `graphs:check`, runs delurio's pinned checker over
+the directory (`graphs/README.md`).
+
 `apps/migration-runner` is tagged `scope:migration-runner`, and may depend only on the database
 library (`type:db`) and, in its container suite, the testing library. Its build bundles
 `src/main.ts`, `pg` and `drizzle-orm` into one file, `dist/apps/migration-runner/main.js`, beside a
