@@ -1,7 +1,6 @@
-import { X509Certificate } from 'node:crypto';
 import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
-import { connect, type ConnectionOptions } from 'node:tls';
+import type { ConnectionOptions } from 'node:tls';
 
 import { internalListenerEnvSchema } from '@qauth-labs/server-config';
 import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
@@ -17,8 +16,12 @@ vi.mock('../../config/env', () => ({
 
 import {
   createInternalPki,
+  eventually,
+  fingerprintOf,
   type InternalPki,
   type IssuedCredentials,
+  servedFingerprint,
+  tlsExchange,
   type TlsFileDirectory,
   writeTlsFiles,
 } from '../../testing/internal-pki';
@@ -144,35 +147,9 @@ function recordingLogger() {
   return logger;
 }
 
-/**
- * Open a TLS connection with `options` and send one HTTP request on it: what
- * came back, if anything, and the error that ended it.
- */
-function rawExchange(
-  options: ConnectionOptions
-): Promise<{ readonly error?: NodeJS.ErrnoException; readonly received: string }> {
-  return new Promise((resolve) => {
-    let received = '';
-    let error: NodeJS.ErrnoException | undefined;
-    const socket = connect({
-      host: '127.0.0.1',
-      port,
-      checkServerIdentity: () => undefined,
-      ...options,
-    });
-    socket.on('secureConnect', () => {
-      socket.write(
-        `GET ${FIXTURE_PREFIX}/peer HTTP/1.1\r\nHost: signer\r\nConnection: close\r\n\r\n`
-      );
-    });
-    socket.on('data', (chunk: Buffer) => {
-      received += chunk.toString('latin1');
-    });
-    socket.on('error', (cause: NodeJS.ErrnoException) => {
-      error = cause;
-    });
-    socket.on('close', () => resolve({ ...(error === undefined ? {} : { error }), received }));
-  });
+/** {@link tlsExchange} to the listener, for the fixture route. */
+function rawExchange(options: ConnectionOptions) {
+  return tlsExchange({ host: '127.0.0.1', port }, options, `${FIXTURE_PREFIX}/peer`);
 }
 
 /**
@@ -200,32 +177,8 @@ async function refusedHandshake(
 }
 
 /** The fingerprint of the certificate the listener serves to a new connection. */
-function servedFingerprint(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = connect({
-      host: '127.0.0.1',
-      port,
-      cert: peers.web.cert,
-      key: peers.web.key,
-      ca: [pki.caPem, otherPki.caPem],
-      checkServerIdentity: () => undefined,
-    });
-    socket.on('secureConnect', () => {
-      const fingerprint = socket.getPeerCertificate().fingerprint256;
-      socket.end();
-      resolve(fingerprint);
-    });
-    socket.on('error', reject);
-  });
-}
-
-/** Wait until `check` holds, reading again every 25 ms, for `timeoutMs` at most. */
-async function eventually(check: () => Promise<boolean>, timeoutMs = 5_000): Promise<void> {
-  const started = Date.now();
-  while (!(await check())) {
-    if (Date.now() - started > timeoutMs) throw new Error('eventually: timed out');
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+function served(): Promise<string> {
+  return servedFingerprint({ host: '127.0.0.1', port }, peers.web, [pki.caPem, otherPki.caPem]);
 }
 
 beforeAll(async () => {
@@ -516,12 +469,12 @@ describe('the internal client', () => {
 
 describe('certificate reload', () => {
   it('serves new certificate files with no restart, and still asks every client for one', async () => {
-    expect(await servedFingerprint()).toBe(new X509Certificate(signer.cert).fingerprint256);
+    expect(await served()).toBe(fingerprintOf(signer.cert));
 
     const rotated = pki.issue({ dnsNames: [SIGNER_DNS], uris: [SIGNER_URI] });
     tlsDirectory.replace(rotated, pki.caPem);
-    const rotatedFingerprint = new X509Certificate(rotated.cert).fingerprint256;
-    await eventually(async () => (await servedFingerprint()) === rotatedFingerprint);
+    const rotatedFingerprint = fingerprintOf(rotated.cert);
+    await eventually(async () => (await served()) === rotatedFingerprint);
 
     const response = await client(peers.web).request({
       method: 'GET',
@@ -543,7 +496,7 @@ describe('certificate reload', () => {
   });
 
   it('keeps the files it serves while a rotation is half-way, and applies it once complete', async () => {
-    const served = await servedFingerprint();
+    const before = await served();
     const next = pki.issue({ dnsNames: [SIGNER_DNS], uris: [SIGNER_URI] });
     const warningsBefore = warnings.length;
 
@@ -553,21 +506,21 @@ describe('certificate reload', () => {
       warnings.slice(warningsBefore).some((line) => line.includes('cannot be used yet'))
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(await servedFingerprint()).toBe(served);
+    expect(await served()).toBe(before);
     expect(
       warnings.slice(warningsBefore).filter((line) => line.includes('cannot be used yet'))
     ).toHaveLength(1);
 
     tlsDirectory.writeOne('keyPath', next.key);
-    const nextFingerprint = new X509Certificate(next.cert).fingerprint256;
-    await eventually(async () => (await servedFingerprint()) === nextFingerprint);
+    const nextFingerprint = fingerprintOf(next.cert);
+    await eventually(async () => (await served()) === nextFingerprint);
   });
 
   it('trusts a new CA file once it is replaced, and the old CA no longer', async () => {
     const newSigner = otherPki.issue({ dnsNames: [SIGNER_DNS], uris: [SIGNER_URI] });
     tlsDirectory.replace(newSigner, otherPki.caPem);
-    const fingerprint = new X509Certificate(newSigner.cert).fingerprint256;
-    await eventually(async () => (await servedFingerprint()) === fingerprint);
+    const fingerprint = fingerprintOf(newSigner.cert);
+    await eventually(async () => (await served()) === fingerprint);
 
     const newPeer = otherPki.issue({ uris: ['spiffe://qauth.test/web'] });
     const response = await client(newPeer, { ca: otherPki.caPem }).request({

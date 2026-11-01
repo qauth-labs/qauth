@@ -176,6 +176,28 @@ async function start() {
       server.log.warn({ variable: experimental.variable }, experimental.message);
     }
 
+    // The internal listener, before anything waits on the database: a
+    // process whose roles split and that would serve the signer without
+    // mutual TLS stops here, naming each setting it lacks, and no route of
+    // the signer is ever registered. Its TLS files are read and checked now,
+    // so a file that cannot be read or a key that is not the certificate's
+    // own stops the boot too.
+    const internalPlan = internalListenerPlan(env);
+    if (internalPlan.serves) {
+      if (internalPlan.problems.length > 0) {
+        throw new ServiceRoleBootError(internalPlan.problems);
+      }
+      internalServer = createInternalServer({
+        loggerInstance: server.log.child({ listener: 'internal' }),
+        peerRoles: internalPlan.peerRoles,
+        ...(internalPlan.tls === undefined
+          ? {}
+          : {
+              tls: { files: internalPlan.tls, material: readInternalTlsFiles(internalPlan.tls) },
+            }),
+      });
+    }
+
     // The database must have every migration of this release (#474, ADR-018
     // §5) before the boot steps read it. Behind, the server waits up to
     // DB_MIGRATION_WAIT_MS for the migration runner a deployment may start
@@ -203,25 +225,6 @@ async function start() {
       await server.register(swaggerUi, {
         routePrefix: '/docs',
         uiConfig: { docExpansion: 'list', filter: true },
-      });
-    }
-
-    // The internal listener, before the app: a process whose roles split
-    // and that would serve the signer without mutual TLS stops here, naming
-    // each setting it lacks, and no route of the signer is ever registered.
-    const internalPlan = internalListenerPlan(env);
-    if (internalPlan.serves) {
-      if (internalPlan.problems.length > 0) {
-        throw new ServiceRoleBootError(internalPlan.problems);
-      }
-      internalServer = createInternalServer({
-        loggerInstance: server.log.child({ listener: 'internal' }),
-        peerRoles: internalPlan.peerRoles,
-        ...(internalPlan.tls === undefined
-          ? {}
-          : {
-              tls: { files: internalPlan.tls, material: readInternalTlsFiles(internalPlan.tls) },
-            }),
       });
     }
 

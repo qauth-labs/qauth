@@ -92,6 +92,18 @@ const SIGNER_SERVICE: Record<string, string> = {
   INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
 };
 
+/**
+ * The internal listener settings of a split process holding the signer
+ * (#496): it serves the signer to the other roles over mutual TLS. Never read
+ * here, as these boots run no internal listener.
+ */
+const SIGNER_LISTENER: Record<string, string> = {
+  INTERNAL_TLS_CERT_PATH: '/run/secrets/signer.crt',
+  INTERNAL_TLS_KEY_PATH: '/run/secrets/signer.key',
+  INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+  INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
+};
+
 /** `METHOD /url` for each method of each route. */
 function operations(routes: readonly RouteOptions[]): Set<string> {
   return new Set(
@@ -132,8 +144,9 @@ describe('service roles (#495)', () => {
   function environmentFor(serviceRoles: string): Record<string, string> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
     const base = baseEnvironment(infra, jwt);
-    if (serviceRoles === 'all' || serviceRoles.split(',').includes('signer')) {
-      return { ...base, SERVICE_ROLES: serviceRoles };
+    if (serviceRoles === 'all') return { ...base, SERVICE_ROLES: serviceRoles };
+    if (serviceRoles.split(',').includes('signer')) {
+      return { ...base, ...SIGNER_LISTENER, SERVICE_ROLES: serviceRoles };
     }
     const { KEK: _kek, JWT_PRIVATE_KEY: _privateKey, ...withoutKeys } = base;
     return { ...withoutKeys, ...SIGNER_SERVICE, SERVICE_ROLES: serviceRoles };
