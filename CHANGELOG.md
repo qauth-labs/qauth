@@ -2377,6 +2377,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the workspace's TypeScript 6.0 or at TypeScript 7: TypeScript 5 rejects
   `"bundler"` with the libraries' `module: commonjs` (TS5095).
 
+- CI's `affected` legs use a self-hosted Nx remote cache ([#960]), a server
+  speaking Nx's HTTP cache spec. A push to main reads and writes it with a
+  write token only main can reach (the `protected` environment); every other
+  run reads at most, with a token the server refuses to store with, so a pull
+  request replays what main built and checked and never stores its own
+  results. Nx talks to the server through a local proxy
+  (`.github/actions/nx-remote-cache`) that turns an unreachable or failing
+  server into cache misses, so losing the cache makes CI slower and never red.
+  The docs site's `build` is now cacheable, with the docs records and the
+  root-level Markdown files as declared inputs.
+
+  **Action for contributors**: nothing. Local runs do not use the remote cache.
+
 [#359]: https://github.com/qauth-labs/qauth/issues/359
 [#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
@@ -2476,6 +2489,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
 [#891]: https://github.com/qauth-labs/qauth/issues/891
+[#960]: https://github.com/qauth-labs/qauth/issues/960
 
 ### Deprecated
 

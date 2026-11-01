@@ -50,6 +50,12 @@ pnpm format:check
 `.oxfmtrc.json`. `typecheck` runs TypeScript 7's `tsgo` (`"compiler": "tsgo"` in `nx.json`),
 except on the docs site, where it runs `astro check`.
 
+Your local runs use Nx's local cache only. CI's `affected` legs also read a self-hosted
+remote cache that only runs on main write to (`.github/actions/nx-remote-cache`), so a pull
+request replays the tasks main already ran; a fork's pull request gets no cache token and
+computes everything. A cached task is only as good as its declared `inputs`: when you add a
+file a target reads, add it to that target's inputs too, or CI will replay a stale result.
+
 ## Architecture principles
 
 Keep changes aligned with the principles in [`AGENTS.md`](./AGENTS.md):

@@ -232,8 +232,10 @@
   "affected": {
     "legacy": true
   },
-  // No remote cache: the Nx Cloud workspace was dropped on 31 Oct 2026, when
-  // its free plan ran out and the cache had saved little. This keeps `nx`
-  // commands (generators, migrations) from connecting the workspace again.
+  // No Nx Cloud: the workspace was dropped on 31 Oct 2026, when its free plan
+  // ran out. This keeps `nx` commands (generators, migrations) from connecting
+  // it again. CI's remote cache is a self-hosted server Nx reaches through
+  // NX_SELF_HOSTED_REMOTE_CACHE_SERVER, set by .github/actions/nx-remote-cache
+  // (#960), which needs no Nx Cloud.
   "neverConnectToCloud": true
 }

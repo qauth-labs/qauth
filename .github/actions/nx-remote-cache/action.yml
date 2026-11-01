@@ -1,0 +1,77 @@
+name: Nx remote cache
+description: >-
+  Points Nx at a self-hosted remote cache (Nx's HTTP cache spec) through a
+  local proxy that turns every cache failure into a miss, so a slow, broken
+  or missing cache server makes a run slower and never fails it.
+
+inputs:
+  url:
+    description: >-
+      Base URL of the cache server, https. Empty: the run uses the local cache
+      only.
+    required: false
+    default: ''
+  token:
+    description: >-
+      The server's bearer token for this repository: the write token on main,
+      the read-only one everywhere else. Empty (a fork's pull request gets no
+      secrets): the run uses the local cache only.
+    required: false
+    default: ''
+  summary:
+    description: >-
+      'true' writes this job's cache counters (reads, hits, writes, errors) to
+      the job summary instead of starting the proxy. Use it in a last step with
+      `if: always()`.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # Starts the proxy in the background and, when it answers, sets
+    # NX_SELF_HOSTED_REMOTE_CACHE_SERVER for the later steps of the job. Nx gets
+    # no token: the proxy holds it and adds it to each request. When the server
+    # cannot be reached or refuses the token, the step warns and sets nothing,
+    # so Nx runs with its local cache alone. The step itself never fails.
+    - if: inputs.summary != 'true'
+      shell: bash
+      env:
+        NX_REMOTE_CACHE_URL: ${{ inputs.url }}
+        NX_REMOTE_CACHE_TOKEN: ${{ inputs.token }}
+        PROXY: ${{ github.action_path }}/proxy.mjs
+      run: |
+        set -uo pipefail
+        if [ -z "$NX_REMOTE_CACHE_URL" ] || [ -z "$NX_REMOTE_CACHE_TOKEN" ]; then
+          echo "::notice title=Nx remote cache::No cache URL or token in this run (a fork's pull request gets no secrets): Nx uses the local cache only."
+          exit 0
+        fi
+        dir="$RUNNER_TEMP/nx-remote-cache"
+        mkdir -p "$dir"
+        nohup node "$PROXY" serve --upstream "$NX_REMOTE_CACHE_URL" \
+          --ready-file "$dir/ready.json" --stats-file "$dir/stats.json" \
+          > "$dir/proxy.log" 2>&1 &
+        pid=$!
+        for _ in $(seq 1 100); do
+          [ -s "$dir/ready.json" ] && break
+          kill -0 "$pid" 2>/dev/null || break
+          sleep 0.2
+        done
+        if [ ! -s "$dir/ready.json" ]; then
+          kill "$pid" 2>/dev/null || true
+          reason=$(tail -n 1 "$dir/proxy.log" 2>/dev/null || true)
+          echo "::warning title=Nx remote cache::Not used in this run: ${reason:-the proxy did not start}. Nx uses the local cache only."
+          exit 0
+        fi
+        port=$(node -e 'process.stdout.write(String(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).port))' "$dir/ready.json")
+        echo "NX_SELF_HOSTED_REMOTE_CACHE_SERVER=http://127.0.0.1:${port}" >> "$GITHUB_ENV"
+        cat "$dir/proxy.log"
+
+    - if: inputs.summary == 'true'
+      shell: bash
+      env:
+        PROXY: ${{ github.action_path }}/proxy.mjs
+      run: |
+        dir="$RUNNER_TEMP/nx-remote-cache"
+        node "$PROXY" summary --stats-file "$dir/stats.json" --ready-file "$dir/ready.json" >> "$GITHUB_STEP_SUMMARY" || true
+        grep -h '::warning' "$dir/proxy.log" 2>/dev/null || true
