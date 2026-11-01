@@ -161,7 +161,12 @@ describe('client registration read from the realm row (#534, real containers)', 
 
   afterEach(async () => {
     network.current = undefined;
-    await Promise.all(others.splice(0).map((server) => server.close()));
+    const extra = others.splice(0);
+    await Promise.all(extra.map((server) => server.close()));
+    // A node booted with its own settings left them in process.env
+    // (`bootAuthServer` writes its environment there): put the suite's back,
+    // so a later test or boot never seeds a realm with CIMD off.
+    if (extra.length > 0) Object.assign(process.env, environment());
   });
 
   function server(): FastifyInstance {

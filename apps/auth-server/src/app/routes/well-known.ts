@@ -99,10 +99,14 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'meta' },
     },
     async (request, reply) => {
+      // Built before the cache header is set, so a failure (a stored policy
+      // the schema refuses, #534, or the realm's keys) answers an error no
+      // cache keeps for an hour.
+      const document = buildAuthorizationServerMetadata(await buildInput(requestRealm(request)));
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildAuthorizationServerMetadata(await buildInput(requestRealm(request))));
+      return reply.send(document);
     }
   );
 
@@ -118,10 +122,12 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'meta' },
     },
     async (request, reply) => {
+      // As above: the cache header only on a document that was built.
+      const document = buildOpenIdConfiguration(await buildInput(requestRealm(request)));
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildOpenIdConfiguration(await buildInput(requestRealm(request))));
+      return reply.send(document);
     }
   );
 

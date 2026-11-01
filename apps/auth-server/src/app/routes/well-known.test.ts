@@ -14,6 +14,7 @@ vi.mock('../../config/env', () => ({
   env: mockEnv,
 }));
 
+import { PolicyValidationError } from '@qauth-labs/fastify-plugin-realm-policy';
 import { EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
 
 import { testPolicyStore } from '../../testing/realm-policies';
@@ -41,6 +42,8 @@ async function buildApp(overrides?: {
   idTokenSigningAlgValuesSupported?: string[];
   /** The request realm's CIMD policy (#534); the seeded defaults (on) when absent. */
   cimd?: CimdPolicy;
+  /** A policy store in place of the test one, for a realm whose stored policies fail to read. */
+  policyStore?: unknown;
 }) {
   const app = Fastify({ logger: false });
 
@@ -66,10 +69,11 @@ async function buildApp(overrides?: {
   } as unknown as never);
   app.decorate(
     'policyStore',
-    testPolicyStore(
-      {},
-      overrides?.cimd === undefined ? {} : { registration: { cimd: overrides.cimd } }
-    ) as never
+    (overrides?.policyStore ??
+      testPolicyStore(
+        {},
+        overrides?.cimd === undefined ? {} : { registration: { cimd: overrides.cimd } }
+      )) as never
   );
   supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: overrides?.realmIssuer ?? ISSUER }));
 
@@ -253,6 +257,25 @@ describe('CIMD in the discovery documents follows the realm policy (#534)', () =
       trustedDomains: [],
     })) {
       expect(body).not.toHaveProperty('client_id_metadata_document_supported');
+    }
+  });
+
+  it('answers a server error no cache keeps for a realm whose stored policies the schema refuses', async () => {
+    const app = await buildApp({
+      policyStore: {
+        ofRealm: () => {
+          throw new PolicyValidationError('the stored policies are not valid', []);
+        },
+      },
+    });
+    try {
+      for (const url of PATHS) {
+        const res = await app.inject({ method: 'GET', url });
+        expect(res.statusCode, url).toBe(500);
+        expect(res.headers['cache-control'], url).toBeUndefined();
+      }
+    } finally {
+      await app.close();
     }
   });
 
