@@ -158,11 +158,12 @@ but v0.2 carries both steps at once:
   boots, it gives the system client of every realm the developer audience, so
   `POST /auth/login` mints the new token from then on, on every node, since
   each one reads the client's row. The deprecated `/api/clients` and
-  `/api/consents` accept only the new token. `/auth/logout` still accepts the
-  old one, whose `aud` is the system client's id, for this release only, so a
-  developer whose portal session began before the upgrade can still sign out:
-  the call ends their sessions, refresh tokens and codes, and grants nothing.
-  The next release removes that grace. The Bearer path of `/oauth/authorize` is
+  `/api/consents` accept only the new token. `/auth/logout` still accepts a
+  live old one, whose `aud` is the system client's id, for this release only,
+  so a developer whose portal session began before the upgrade can still sign
+  out: the call ends their sessions, refresh tokens and codes, and grants
+  nothing. An expired old token is refused, and the next release removes the
+  grace. The Bearer path of `/oauth/authorize` is
   gone: an `Authorization` header there signs no one in, and a request without
   a browser session goes to the login page.
 
