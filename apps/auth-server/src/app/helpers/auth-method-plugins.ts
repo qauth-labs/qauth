@@ -244,14 +244,16 @@ export async function authMethodPluginEnabledIn(
 
 /**
  * The realm's config of the plugin as the plugin's schema takes it: the
- * stored plain members, with each secret member decrypted back into place.
- * For the plugin's context only; never for a response, an event or a log.
+ * stored plain members, with each secret member decrypted back into place;
+ * and the decrypted secrets by path, which the context keeps out of its log
+ * lines and its egress labels. For the plugin's context only; never for a
+ * response, an event or a log.
  */
 export async function authMethodPluginConfig(
   fastify: Pick<FastifyInstance, 'signer'>,
   plugin: Pick<InstalledAuthMethodPlugin, 'id' | 'secretPaths'>,
   row: Pick<RealmAuthMethodPlugin, 'realmId' | 'config' | 'secrets'>
-): Promise<Record<string, unknown>> {
+): Promise<{ config: Record<string, unknown>; secrets: ReadonlyMap<string, string> }> {
   const cipher = authMethodPluginSecretCipher(fastify);
   const secrets = new Map<string, string>();
   for (const path of plugin.secretPaths) {
@@ -260,7 +262,10 @@ export async function authMethodPluginConfig(
   }
   // A member the plugin marks secret comes only from the secret store, never
   // from the plain config an earlier version of the plugin may have kept.
-  return withConfigMembers(withoutConfigMembers(row.config, plugin.secretPaths), secrets);
+  return {
+    config: withConfigMembers(withoutConfigMembers(row.config, plugin.secretPaths), secrets),
+    secrets,
+  };
 }
 
 /** The context of a plugin the request's realm has not enabled: never built. */
@@ -297,8 +302,10 @@ export async function authMethodPluginContext(
       `The AuthMethod ${method.type} is not an enabled plugin of the realm`
     );
   }
+  const { config, secrets } = await authMethodPluginConfig(fastify, plugin, row);
   return createAuthMethodContext(plugin.method, {
-    config: await authMethodPluginConfig(fastify, plugin, row),
+    config,
+    secrets,
     // The routes answer on the realm's host, at its root.
     origin: new URL(realmIssuer(realm)).origin,
     realmName: realm.name,

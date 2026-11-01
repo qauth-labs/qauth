@@ -138,7 +138,8 @@ the contract hands it only what it needs. `createAuthMethodContext`
   user chose), and adds the realm's name itself: a method cannot pick another realm's allowlist
   entries or lift the client's caps. `operator` and `admin` are the labels the realm's allowlist
   applies to, for non-public addresses, so the adapter keeps them only for a URL whose origin is
-  the origin of a URL in the method's parsed config; any other call goes as `remote_document`.
+  the origin of a URL among the plain members of the method's parsed config, never a secret
+  member; any other call goes as `remote_document`.
   `redirect: 'error'` makes a redirect answer reject the call before anything goes to its target
   (the host client's `maxRedirects: 0`, the one cap a method may set, since it can only tighten);
   a call that carries a credential in its body uses it, or a `307` would send that body on.
@@ -150,7 +151,10 @@ the contract hands it only what it needs. `createAuthMethodContext`
 - `log`: a logger's four levels, with a fields object and a message. The fields are nested under
   `authMethod`, so a method cannot overwrite the line's `reqId` or `realm`, as a copy in which
   `code`, `code_verifier`, `client_secret`, `client_assertion`, `refresh_token`, `access_token`,
-  `id_token`, `nonce` and `password` are redacted at any depth;
+  `id_token`, `nonce` and `password` are redacted at any depth, matched without regard to case,
+  `_` or `-` (`clientSecret` matches `client_secret`). The last segment of each of the method's
+  secret paths is redacted the same way, and each secret's value is cut out of every string and
+  of the message;
 - `routeUrl(path)`: the absolute URL of one of the method's own routes on the realm host, for a
   `redirect_uri`. Only a path the method's `routes` declare.
 

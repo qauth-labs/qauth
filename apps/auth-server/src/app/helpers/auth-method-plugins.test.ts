@@ -229,6 +229,20 @@ describe('the plugin context (#600)', () => {
     );
   });
 
+  it("redacts the plugin's own secrets in its log lines, by name and by value", async () => {
+    const { fastify, request, runtime, child } = await server({});
+    const method = runtime.ofType('corp_sso')?.method;
+    if (method === undefined) throw new Error('the fixture plugin did not load');
+    const context = await authMethodPluginContext(fastify, request, method);
+
+    context.log.warn({ clientSecret: 'by-name', sent: `secret=${SECRET}` }, `sent ${SECRET}`);
+
+    expect(child.warn).toHaveBeenCalledWith(
+      { authMethod: { clientSecret: '[Redacted]', sent: 'secret=[Redacted]' } },
+      'sent [Redacted]'
+    );
+  });
+
   it.each<[string, Partial<RealmAuthMethodPlugin> | undefined]>([
     ['has no row for the plugin', undefined],
     ['has the plugin off', { enabled: false }],
