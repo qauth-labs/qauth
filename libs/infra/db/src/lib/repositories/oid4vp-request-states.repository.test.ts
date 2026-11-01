@@ -115,6 +115,7 @@ describe('createOid4vpRequestStatesRepository.redeem', () => {
     expect(setClause).toContain('"response_encryption_kid" = null');
     expect(setClause).toContain('"response_encryption_private_jwk" = null');
     expect(setClause).toContain('"response_encryption_key_protection" = null');
+    expect(setClause).toContain('"response_encryption_sealing_kid" = null');
   });
 
   /**
@@ -260,6 +261,7 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
     expect(setClause).toContain('"response_encryption_kid" = null');
     expect(setClause).toContain('"response_encryption_private_jwk" = null');
     expect(setClause).toContain('"response_encryption_key_protection" = null');
+    expect(setClause).toContain('"response_encryption_sealing_kid" = null');
   });
 
   it('projects the PRE-update key columns into RETURNING via a primary-key self-join', async () => {
@@ -284,6 +286,7 @@ describe('createOid4vpRequestStatesRepository.redeemByEncryptionKid', () => {
     expect(returning).toContain('"before"."response_encryption_kid"');
     expect(returning).toContain('"before"."response_encryption_private_jwk"');
     expect(returning).toContain('"before"."response_encryption_key_protection"');
+    expect(returning).toContain('"before"."response_encryption_sealing_kid"');
     expect(returning).not.toContain('"oid4vp_request_states"."response_encryption_private_jwk"');
     // Everything else is the row as it now stands, `redeemed_at` included.
     expect(returning).toContain('"oid4vp_request_states"."redeemed_at"');

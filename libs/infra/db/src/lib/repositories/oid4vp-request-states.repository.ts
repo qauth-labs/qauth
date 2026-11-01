@@ -34,11 +34,12 @@ import { oid4vpRequestStates } from '../schema/oid4vp';
  * no window in which a consumed row still carries a usable key — the row lock
  * that serializes redemption also serializes the erasure.
  *
- * All three are cleared together because the schema's
+ * All of them are cleared together because the schema's
  * `..._response_encryption_complete` CHECK allows only all-set or all-null:
  * after consumption none of them has a purpose (the `kid` can match nothing —
- * the redemption predicates require `redeemed_at IS NULL` — and the marker
- * describes a value that is gone), so all-null is the honest state.
+ * the redemption predicates require `redeemed_at IS NULL` — and the marker or
+ * the sealing key's `kid` describes a value that is gone), so all-null is the
+ * honest state.
  *
  * Literal `null` rather than a bound parameter so the statement SAYS what it
  * does: a reader of the SQL, or of the unit test that pins it, sees the
@@ -48,6 +49,7 @@ const CLEAR_RESPONSE_ENCRYPTION = {
   responseEncryptionKid: sql`null`,
   responseEncryptionPrivateJwk: sql`null`,
   responseEncryptionKeyProtection: sql`null`,
+  responseEncryptionSealingKid: sql`null`,
 } as const;
 
 /**
@@ -274,6 +276,7 @@ export function createOid4vpRequestStatesRepository(
           responseEncryptionKid: before.responseEncryptionKid,
           responseEncryptionPrivateJwk: before.responseEncryptionPrivateJwk,
           responseEncryptionKeyProtection: before.responseEncryptionKeyProtection,
+          responseEncryptionSealingKid: before.responseEncryptionSealingKid,
         });
 
       return redeemed;
