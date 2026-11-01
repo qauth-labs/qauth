@@ -61,7 +61,7 @@ describe('upgradePathsTo', () => {
   it('refuses an upgrade list a store could not read every version with', () => {
     const refused: [string, PolicySchemaUpgrade[], string][] = [
       ['a version that is not one', [step('v1', '1-rc.1')], '1-rc.1'],
-      ['a target that is not one', [step('1-rc.0', 'next')], '1-rc.1'],
+      ['an upgrade to what is not a version', [step('1-rc.0', 'next')], '1-rc.1'],
       ['an upgrade that stays', [step('1-rc.1', '1-rc.1')], '1-rc.1'],
       ['an upgrade that goes back', [step('1-rc.1', '1-rc.0')], '1-rc.1'],
       ['an upgrade past the target', [step('1-rc.0', '1-rc.2')], '1-rc.1'],
@@ -90,24 +90,23 @@ describe('upgradePathsTo', () => {
 });
 
 describe('REALM_POLICY_UPGRADES (contract, #908)', () => {
-  it('leads from the first stored schema version to this release’s', () => {
+  it('leads from the first stored schema version to this release’s, one version at a time', () => {
     // A release that changes REALM_POLICY_SCHEMA_VERSION appends the upgrade
     // from the version before it (version.ts says what else it ships).
     // Without it, every realm a release stored is refused from then on.
-    const paths = upgradePathsTo(REALM_POLICY_UPGRADES, REALM_POLICY_SCHEMA_VERSION);
-
-    if (FIRST_REALM_POLICY_SCHEMA_VERSION === REALM_POLICY_SCHEMA_VERSION) {
-      expect(REALM_POLICY_UPGRADES).toEqual([]);
-    } else {
-      expect(paths.get(FIRST_REALM_POLICY_SCHEMA_VERSION)?.at(-1)?.to).toBe(
-        REALM_POLICY_SCHEMA_VERSION
-      );
-    }
+    // The list is the history of the versions: each upgrade goes from the
+    // one the upgrade before it gave, so no version a release stored is
+    // left without a path.
+    expect(FIRST_REALM_POLICY_SCHEMA_VERSION).toBe('1-rc.0');
+    let version = FIRST_REALM_POLICY_SCHEMA_VERSION;
     for (const upgrade of REALM_POLICY_UPGRADES) {
-      expect(
-        compareSchemaVersions(upgrade.from, FIRST_REALM_POLICY_SCHEMA_VERSION)
-      ).toBeGreaterThanOrEqual(0);
+      expect(upgrade.from).toBe(version);
+      version = upgrade.to;
     }
+    expect(version).toBe(REALM_POLICY_SCHEMA_VERSION);
+    expect(upgradePathsTo(REALM_POLICY_UPGRADES, REALM_POLICY_SCHEMA_VERSION).size).toBe(
+      REALM_POLICY_UPGRADES.length
+    );
   });
 
   it('is what a store over the default registry reads with', () => {

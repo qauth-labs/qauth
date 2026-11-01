@@ -47,8 +47,9 @@ import {
  *    environment key later changes no realm. A new realm got its policies
  *    when step 1 created it. A realm whose policies an earlier release
  *    stored under an older schema version gets them upgraded and stored
- *    under this release's version (#908); one whose policies follow a later
- *    version, or an older one no upgrade reaches, is named in a warning;
+ *    under this release's version (#908). A warning names a realm whose
+ *    policies follow an older version that no upgrade reaches, and one whose
+ *    policies follow a later version and lack fields of this release;
  * 4. when no realm is the operator realm yet, mark this one (simple mode);
  * 5. add each `DEFAULT_REALM_ENDPOINT_HOSTS` name the realm lacks as an
  *    endpoint host, and remove none;
@@ -388,7 +389,7 @@ export async function bootDefaultRealm(
       { realm: skipped.realmName, realmId: skipped.realmId, schemaVersion: skipped.schemaVersion },
       skipped.reason === 'newer'
         ? 'realm policies of another schema version left as they are: a node of this release does not complete them'
-        : 'realm policies of an earlier schema version that no upgrade of this release reaches left as they are: the realm refuses every request that reads them'
+        : 'realm policies of an earlier schema version that no upgrade of this release reaches left as they are: every read of them through the policy store is refused'
     );
   }
   for (const { key, path, readFromRealmRow } of ignoredSeedKeys(

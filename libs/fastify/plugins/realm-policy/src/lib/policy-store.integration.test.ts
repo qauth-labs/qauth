@@ -285,8 +285,17 @@ describe('policy store over the realms table (integration)', () => {
       minimumScore: 4,
     });
     expect((await next.seedRealms()).upgraded).toEqual([]);
-    // A node of this release, during the roll, reads it but never writes it.
-    await expect(storeOn(db()).update(realm.id, {}, { expectedVersion: 3 })).rejects.toMatchObject({
+    // A node of the previous release, during the roll, reads it with its own
+    // schema: the renamed field as its seed (3), looser than stored, which is
+    // why version.ts has such a change stop the old nodes first. It never
+    // writes it.
+    const previous = storeOn(db());
+    expect(await previous.get(realm.id)).toMatchObject({
+      version: 3,
+      schemaVersion: '1-rc.1',
+      policies: { password: { minScore: 3 } },
+    });
+    await expect(previous.update(realm.id, {}, { expectedVersion: 3 })).rejects.toMatchObject({
       name: 'PolicySchemaVersionError',
       reason: 'newer',
     });

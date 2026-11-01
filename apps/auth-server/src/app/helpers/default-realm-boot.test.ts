@@ -769,7 +769,7 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
 
     expect(warn).toHaveBeenCalledWith(
       { realm: 'master', realmId: REALM_ID, schemaVersion: '1-rc.0' },
-      'realm policies of an earlier schema version that no upgrade of this release reaches left as they are: the realm refuses every request that reads them'
+      'realm policies of an earlier schema version that no upgrade of this release reaches left as they are: every read of them through the policy store is refused'
     );
   });
 

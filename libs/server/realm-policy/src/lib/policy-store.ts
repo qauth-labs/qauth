@@ -166,7 +166,8 @@ export interface KeptFromRow {
 }
 
 /**
- * Why {@link RealmPolicyStore.seedRealms} left a realm's policies as they are:
+ * Why a realm's policies follow a schema version the store does not write,
+ * and so why {@link RealmPolicyStore.seedRealms} left them as they are:
  *
  * - `newer`: they follow a later schema version (a later release's, during a
  *   rolling upgrade) and lack fields of this release. Completing them would
@@ -174,7 +175,7 @@ export interface KeptFromRow {
  * - `no-upgrade`: they follow an older schema version that no upgrade of this
  *   release reaches. Every read of them is refused.
  */
-export type SkippedPoliciesReason = 'newer' | 'no-upgrade';
+export type PolicySchemaVersionReason = 'newer' | 'no-upgrade';
 
 /** What {@link RealmPolicyStore.seedRealms} did. */
 export interface RealmPolicySeedReport {
@@ -194,7 +195,7 @@ export interface RealmPolicySeedReport {
   /** The realms left as they are, each with the schema version its policies follow, and why. */
   readonly skipped: readonly (SeededRealm & {
     readonly schemaVersion: string | null;
-    readonly reason: SkippedPoliciesReason;
+    readonly reason: PolicySchemaVersionReason;
   })[];
 }
 
@@ -275,7 +276,10 @@ export interface RealmPolicyStore<Row, Tx> {
    *
    * A realm whose policies follow an older schema version is upgraded
    * (#908): written once under this release's version, the fields the
-   * upgraded document lacks completed from the seeds (`upgraded`). One whose
+   * upgraded document lacks completed from the seeds (`upgraded`). It is
+   * written even when the upgraded document lacks nothing: a reader that
+   * takes one of the four column-backed fields straight off the row, not
+   * through the store, sees an upgraded value only once it is written. One whose
    * policies follow a later version and lack fields of this release, or an
    * older version that no upgrade reaches, is left as it is (`skipped`).
    *
@@ -371,7 +375,7 @@ export class PolicySchemaVersionError extends Error {
     readonly realmId: string,
     readonly storedVersion: string | null,
     readonly schemaVersion: string,
-    readonly reason: SkippedPoliciesReason
+    readonly reason: PolicySchemaVersionReason
   ) {
     super(
       reason === 'newer'
@@ -646,8 +650,9 @@ export function createPolicyStore<Row, Tx>(
    * upgraded to the registry's (#908), any other one as it is.
    *
    * @throws PolicyValidationError when the document follows an older version
-   *   that no upgrade reaches: read with this release's schema, a field it
-   *   renamed would read as its seed, which may be looser than stored
+   *   that no upgrade reaches (read with this release's schema, a field it
+   *   renamed would read as its seed, which may be looser than stored), or an
+   *   upgrade fails or gives no document
    */
   function readable(record: RealmPolicyRecord, standing: Standing): RealmPolicyRecord {
     if (standing.kind === 'no-upgrade') {
@@ -664,11 +669,23 @@ export function createPolicyStore<Row, Tx>(
     if (standing.kind !== 'older') return record;
     let document = structuredClone(record.document) as Record<string, unknown>;
     for (const step of standing.steps) {
-      const next: unknown = step.upgrade(document);
+      // A step that fails, or gives no document, leaves a document this
+      // release cannot read: refused like any invalid one, so the boot names
+      // the realm and a reader of the realm fails closed.
+      let next: unknown;
+      try {
+        next = step.upgrade(document);
+      } catch (error) {
+        if (error instanceof PolicyValidationError) throw error;
+        next = undefined;
+      }
       if (!isPlainObject(next)) {
-        throw new TypeError(
-          `The upgrade of the realm policies from schema version ${step.from} gave no policy document`
-        );
+        throw new PolicyValidationError('The stored realm policies cannot be read', [
+          {
+            path: '',
+            message: `the upgrade from schema version ${step.from} to ${step.to} gave no policy document`,
+          },
+        ]);
       }
       document = next;
     }
@@ -950,7 +967,7 @@ export function createPolicyStore<Row, Tx>(
         const upgraded: (SeededRealm & { from: string; paths: readonly string[] })[] = [];
         const skipped: (SeededRealm & {
           schemaVersion: string | null;
-          reason: SkippedPoliciesReason;
+          reason: PolicySchemaVersionReason;
         })[] = [];
         for (const listed of await storage.list(inner)) {
           // A realm that has its policies under this release's schema version

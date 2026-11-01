@@ -1210,6 +1210,39 @@ describe('createPolicyStore — a document of an older schema version (#908)', (
     expect(writes).toEqual([]);
   });
 
+  it('is refused, naming the step, when an upgrade fails or gives no document', async () => {
+    const failing: readonly PolicySchemaUpgrade[][] = [
+      [
+        {
+          ...TO_RC1,
+          upgrade: () => {
+            throw new TypeError("Cannot read properties of undefined (reading 'minScore')");
+          },
+        },
+      ],
+      [{ ...TO_RC1, upgrade: () => null as unknown as Record<string, unknown> }],
+    ];
+    for (const upgrades of failing) {
+      const { store, writes } = nextStoreOver(
+        [realmOfPreviousVersion({ name: 'legacy' })],
+        upgrades
+      );
+      const issue = {
+        path: '',
+        message: 'the upgrade from schema version 1-rc.0 to 1-rc.1 gave no policy document',
+      };
+
+      await expect(store.get('realm-a')).rejects.toMatchObject({
+        name: 'PolicyValidationError',
+        issues: [issue],
+      });
+      const refused = await store.seedRealms().catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(RealmPolicySeedRefusedError);
+      expect(refused).toMatchObject({ realmName: 'legacy', issues: [issue] });
+      expect(writes).toEqual([]);
+    }
+  });
+
   it('reports nothing for a realm another writer upgraded first', async () => {
     const memory = nextStoreOver([realmOfPreviousVersion()]);
     memory.onBeforeWrite((realmId) => {

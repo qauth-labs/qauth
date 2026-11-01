@@ -32,18 +32,29 @@
  *    the change touches read, updated and written under the new version, and
  *    never looser than stored: a renamed field keeps its value, a narrowed one
  *    takes the nearest value the new schema accepts that is as strict or
- *    stricter, and a removed one leaves nothing a new field reads as looser.
- * 3. The storage's join, when the change moves one of the four column-backed
- *    fields (`REALM_POLICY_COLUMNS` of `@qauth-labs/infra-db`): the storage
- *    joins a column at this release's path whatever version the document
- *    follows, so the upgrade finds it there already.
+ *    stricter, and a removed one is deleted rather than carried over.
+ * 3. For one of the four column-backed fields (`REALM_POLICY_COLUMNS` of
+ *    `@qauth-labs/infra-db`): the storage joins a column at this release's
+ *    path whatever version the document follows, so a change that moves one
+ *    changes the join, and the upgrade finds the field there already. Some
+ *    readers take these columns straight off the row (the environment
+ *    ceiling, the dynamic registration allowlist), not through the store, so
+ *    a change that narrows one reaches them only once the boot has written
+ *    the upgraded document; until a node of the new release boots, they read
+ *    the stored value.
  * 4. The secret store's move, when the change renames a secret field: an
  *    upgrade sees no secret, since none is in a stored document.
- * 5. A release note on the rolling upgrade: a node of the previous release
- *    reads a document the new release wrote with its own schema, as it reads
- *    any document of a later version (members it does not know are skipped,
- *    fields it lacks take its seeds), and refuses to write it. The note says
- *    whether that is safe for the change, or the old nodes stop first.
+ * 5. A release note on the rolling upgrade. The first boot of the new
+ *    release writes every realm of the old version under the new one. A node
+ *    of the previous release reads such a document with its own schema, as it
+ *    reads any document of a later version (members it does not know are
+ *    skipped, fields it lacks take its seeds), and refuses to write it. So a
+ *    renamed field reads as the old release's seed there, which may be looser
+ *    than stored, for as long as old nodes run, and after a downgrade (which
+ *    is not supported). The note of a change that renames, narrows or removes
+ *    a field says that the previous release's nodes stop before the new
+ *    release boots; only a change the previous release reads as strictly
+ *    may roll.
  */
 export const REALM_POLICY_SCHEMA_VERSION = '1-rc.0';
 
