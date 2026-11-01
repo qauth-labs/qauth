@@ -244,8 +244,8 @@ export interface MemorySessionRedisMulti {
 
 /**
  * The Redis commands the browser-session helpers send for the side record
- * (`helpers/session-side-record.ts`) and the per-user index of
- * `/auth/logout`, held in memory. Each is a `vi.fn`; spread it into a test's
+ * (`helpers/session-side-record.ts`) and the per-user index the previous
+ * release's `/auth/logout` reads (#912), held in memory. Each is a `vi.fn`; spread it into a test's
  * own `redis` stub beside the commands other code needs.
  */
 export interface MemorySessionRedis {
@@ -380,7 +380,7 @@ export interface FakeSideRecordSeed {
 }
 
 /**
- * A fake session service, the Redis the side record and the logout index
+ * A fake session service, the Redis the side record and the per-user index
  * live in, and the signer the cookie keys come from (#493), together: what a
  * unit test of a route that reads the session cookie needs. Put
  * {@link service} on `fastify.sessionService`, {@link signer} on

@@ -44,9 +44,9 @@ export interface BrowserSignIn {
 
 /**
  * Sign the user in on this browser: a new session through the session service
- * (ADR-019 Decision 3, #488), with the request's address and `User-Agent`,
- * recorded under the user for `/auth/logout`. Always a new session with a new
- * `sid`, whatever cookie the browser sent: the session-fixation defence.
+ * (ADR-019 Decision 3, #488), with the request's address and `User-Agent`.
+ * Always a new session with a new `sid`, whatever cookie the browser sent:
+ * the session-fixation defence.
  *
  * The address and the `User-Agent` are stored as the sign-in event records
  * them (`eventRequest`): an address in its published form, the header cut to
@@ -152,13 +152,19 @@ export async function resolveBrowserSession(
 }
 
 /**
- * Record a newly created browser session under its user, so
- * {@link endBrowserSessions} can end it (`/auth/logout`). The index lives as
- * long as the latest-ending session in it, which is not always the newest: a
- * realm whose lifetime shrank between two sign-ins gives the newer session an
- * earlier end. So the deadline is set on a new index (`NX`) and otherwise only
- * ever moved later (`GT`), never pulled in under a session still live
- * (Redis 7.0 or later).
+ * Record a newly created browser session under its user, in the Redis
+ * per-user index that the previous release's `/auth/logout` reads to find the
+ * sessions it ends. This release's logout reads Postgres instead
+ * ({@link endBrowserSessions}, #912) and never reads the index; it is still
+ * written so that, during a rolling upgrade, a node of the previous release
+ * also ends the sessions this release's nodes created. REMOVE IN THE NEXT
+ * RELEASE, with `REDIS_KEYS.USER_BROWSER_SESSIONS`.
+ *
+ * The index lives as long as the latest-ending session in it, which is not
+ * always the newest: a realm whose lifetime shrank between two sign-ins gives
+ * the newer session an earlier end. So the deadline is set on a new index
+ * (`NX`) and otherwise only ever moved later (`GT`), never pulled in under a
+ * session still live (Redis 7.0 or later).
  */
 async function trackBrowserSession(
   fastify: FastifyInstance,
@@ -210,12 +216,23 @@ export async function endBrowserSession(
 }
 
 /**
- * End every browser session of `userId` recorded by `createBrowserSession`:
- * revoke each through the session service (so `/oauth/authorize` shows the
- * login page again on every node, after the cache's tombstone), drop its side
- * record, and drop the index. Returns the ids it ended, so the caller can
- * clear the cookie of the request it is handling when that is one of them;
- * other browsers' cookies go stale and are cleared on their next request.
+ * End every live browser session of `userId` in the realm: "sign out
+ * everywhere" (`/auth/logout`). The sessions are found and ended in Postgres,
+ * in one transaction, by the session service's `revokeAllForUser` (#550), so
+ * `/oauth/authorize` shows the login page again on every node once the
+ * cache's tombstones are written. Nothing in Redis decides which sessions
+ * end: a per-user index that Redis lost (eviction, a restart without
+ * persistence, a failover) once let the sessions it no longer named survive
+ * the sign-out (#912).
+ *
+ * Then, as a cache's tidying, it drops each ended session's side record and
+ * the previous release's per-user index. Neither is read for an ended
+ * session, and both expire on their own, so a Redis failure there is logged
+ * and does not stop the logout's later steps (the codes and refresh tokens).
+ *
+ * Returns the ids it ended, so the caller can clear the cookie of the request
+ * it is handling when that is one of them; other browsers' cookies go stale
+ * and are cleared on their next request.
  *
  * @param realmId - the user's realm: a session is only ever ended in it
  */
@@ -224,13 +241,26 @@ export async function endBrowserSessions(
   realmId: string,
   userId: string
 ): Promise<string[]> {
-  const key = REDIS_KEYS.USER_BROWSER_SESSIONS(userId);
-  const sids = await fastify.redis.smembers(key);
-  // The user signs themselves out.
-  const actor: SessionActor = { type: 'user', id: userId };
-  for (const sid of sids) {
-    await endBrowserSession(fastify, realmId, sid, 'sign_out_everywhere', actor, userId);
+  const { sessions } = await fastify.sessionService.revokeAllForUser({
+    realmId,
+    userId,
+    reason: 'sign_out_everywhere',
+    // The user signs themselves out.
+    actor: { type: 'user', id: userId },
+  });
+  const sids = sessions.map(({ session }) => session.id);
+  const tidied = await Promise.allSettled([
+    ...sids.map(async (sid) => deleteSessionSideRecord(fastify, realmId, sid)),
+    fastify.redis.del(REDIS_KEYS.USER_BROWSER_SESSIONS(userId)),
+  ]);
+  const failed = tidied.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected'
+  );
+  if (failed !== undefined) {
+    fastify.log.warn(
+      { err: failed.reason, realmId },
+      'The sessions are ended, but their side records or the per-user index could not be dropped; they expire with the sessions'
+    );
   }
-  await fastify.redis.del(key);
   return sids;
 }

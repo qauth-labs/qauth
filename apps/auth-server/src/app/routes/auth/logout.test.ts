@@ -93,7 +93,10 @@ function loginClaims(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** The per-user index of hosted browser sessions that logout ends. */
+/**
+ * The per-user index of hosted browser sessions that the previous release's
+ * logout read (#912): this release only drops it.
+ */
 const SESSION_INDEX = `user-browser-sessions:${VALID_USER.id}`;
 
 /**
@@ -113,8 +116,9 @@ async function signedIn(sessions: BrowserSessionFixture, sid: string) {
 
 function createFastifyStub() {
   const ctx: TestContext = {};
-  // The session service (#488) and the Redis of the per-user index (none by
-  // default) and the sessions' side records.
+  // The session service (#488), which holds the sessions logout ends, and the
+  // Redis of the sessions' side records and the per-user index (none by
+  // default).
   const sessions = createBrowserSessionFixture();
 
   const fastify: any = {
@@ -245,35 +249,64 @@ describe('POST /auth/logout', () => {
 
     it('ends every hosted session of the user, with or without a cookie on the request', async () => {
       // The portal calls /auth/logout from its server, so no browser cookie
-      // comes along: the sessions are found through the per-user index.
+      // comes along: the sessions are found by the user, through the service.
       const { fastify, ctx, sessions } = createFastifyStub();
       await signedIn(sessions, 'sess-a');
       await signedIn(sessions, 'sess-b');
 
       await logOut(fastify, ctx);
 
-      expect(sessions.redis.smembers).toHaveBeenCalledWith(SESSION_INDEX);
-      // Revoked through the session service, in the user's realm (#488).
-      expect(sessions.service.revoke).toHaveBeenCalledTimes(2);
-      expect(sessions.service.revoke).toHaveBeenCalledWith({
+      // Ended in one call to the service, in the user's realm (#488, #912).
+      expect(sessions.service.revokeAllForUser).toHaveBeenCalledExactlyOnceWith({
         realmId: REALM.id,
-        sid: 'sess-a',
+        userId: VALID_USER.id,
         reason: 'sign_out_everywhere',
         actor: { type: 'user', id: VALID_USER.id },
-        userId: VALID_USER.id,
-      });
-      expect(sessions.service.revoke).toHaveBeenCalledWith({
-        realmId: REALM.id,
-        sid: 'sess-b',
-        reason: 'sign_out_everywhere',
-        actor: { type: 'user', id: VALID_USER.id },
-        userId: VALID_USER.id,
       });
       expect(sessions.service.sessions.size).toBe(0);
       // Their side records and the index go with them.
       expect(sessions.redis.hashes.size).toBe(0);
       expect(sessions.redis.del).toHaveBeenCalledWith(SESSION_INDEX);
       expect(sessions.redis.sets.has(SESSION_INDEX)).toBe(false);
+    });
+
+    it('ends the sessions the per-user index no longer names (#912)', async () => {
+      // Redis lost the index (eviction, a restart without persistence, a
+      // failover): the sessions it named are still ended.
+      const { fastify, ctx, sessions } = createFastifyStub();
+      const { cookie } = await signedIn(sessions, 'sess-a');
+      await signedIn(sessions, 'sess-b');
+      sessions.redis.sets.delete(SESSION_INDEX);
+
+      const reply = await logOut(fastify, ctx, cookie);
+
+      expect(sessions.redis.smembers).not.toHaveBeenCalled();
+      expect(sessions.service.sessions.size).toBe(0);
+      expect(sessions.redis.hashes.size).toBe(0);
+      expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
+      expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
+        VALID_USER.id,
+        'logout'
+      );
+    });
+
+    it('still invalidates the codes and revokes the refresh tokens when Redis cannot drop the side records', async () => {
+      // The sessions end in Postgres; the side records and the index are a
+      // cache's leftovers that expire on their own.
+      const { fastify, ctx, sessions } = createFastifyStub();
+      await signedIn(sessions, 'sess-a');
+      sessions.redis.del.mockRejectedValue(new Error('Connection is closed.'));
+
+      await logOut(fastify, ctx);
+
+      expect(sessions.service.sessions.has('sess-a')).toBe(false);
+      expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
+        VALID_USER.id,
+        'logout'
+      );
+      expect(fastify.log.warn).toHaveBeenCalledOnce();
     });
 
     it('clears the session cookie the request carries when it was one of them', async () => {
@@ -314,9 +347,6 @@ describe('POST /auth/logout', () => {
       const reply = await logOut(fastify, ctx, other.cookie);
 
       expect(reply.headers['Set-Cookie']).toBeUndefined();
-      expect(sessions.service.revoke).not.toHaveBeenCalledWith(
-        expect.objectContaining({ sid: 'other' })
-      );
       expect(sessions.service.sessions.has('other')).toBe(true);
     });
   });
@@ -392,7 +422,7 @@ describe('POST /auth/logout', () => {
     });
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
-    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.service.revokeAllForUser).not.toHaveBeenCalled();
     expect(sessions.service.sessions.has('sess-new')).toBe(true);
   });
 
@@ -660,8 +690,7 @@ describe('POST /auth/logout', () => {
       await expect(
         handler(logoutRequest('Bearer bound.access.jwt'), createReply())
       ).rejects.toBeInstanceOf(JWTInvalidError);
-      expect(sessions.redis.smembers).not.toHaveBeenCalled();
-      expect(sessions.service.revoke).not.toHaveBeenCalled();
+      expect(sessions.service.revokeAllForUser).not.toHaveBeenCalled();
       expect(fastify.repositories.authorizationCodes.invalidateForUser).not.toHaveBeenCalled();
       expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
     }
@@ -685,7 +714,7 @@ describe('POST /auth/logout', () => {
     if (!handler) throw new Error('Handler missing');
 
     await expect(handler(logoutRequest(), createReply())).rejects.toBe(storeDown);
-    expect(fastify.redis.del).toHaveBeenCalledWith(`user-browser-sessions:${VALID_USER.id}`);
+    expect(fastify.sessionService.revokeAllForUser).toHaveBeenCalledOnce();
     expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalledWith(
       VALID_USER.id
     );

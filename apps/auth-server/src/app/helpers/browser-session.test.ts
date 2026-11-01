@@ -54,6 +54,7 @@ beforeEach(() => {
     sessionService: sessions.service,
     signer: sessions.signer,
     redis: sessions.redis,
+    log: { warn: vi.fn() },
   } as unknown as FastifyInstance;
   users.findById.mockResolvedValue({ id: USER_ID, enabled: true });
 });
@@ -372,7 +373,15 @@ describe('resolveBrowserSession', () => {
 });
 
 describe('endBrowserSessions (logout ends every session)', () => {
-  it('revokes every recorded session of the user, drops their side records and the index', async () => {
+  const INDEX = `user-browser-sessions:${USER_ID}`;
+  const SIGN_OUT_EVERYWHERE = {
+    realmId: REALM.id,
+    userId: USER_ID,
+    reason: 'sign_out_everywhere',
+    actor: { type: 'user', id: USER_ID },
+  };
+
+  it('ends every live session of the user in the realm through the service, when Redis lost the per-user index (#912)', async () => {
     const a = await createBrowserSession(fastify, makeRequest(), {
       realmId: REALM.id,
       userId: USER_ID,
@@ -382,26 +391,95 @@ describe('endBrowserSessions (logout ends every session)', () => {
       realmId: REALM.id,
       userId: USER_ID,
     });
+    const otherUser = sessions.service.seed({ realmId: REALM.id, userId: 'another-user' });
+    const otherRealm = sessions.service.seed({ realmId: OTHER_REALM.id, userId: USER_ID });
+    // Evicted, or gone with a Redis restart or failover.
+    sessions.redis.sets.delete(INDEX);
 
-    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([a.sid, b.sid]);
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual(
+      [a.sid, b.sid].sort()
+    );
 
-    for (const sid of [a.sid, b.sid]) {
-      expect(sessions.service.revoke).toHaveBeenCalledWith({
-        realmId: REALM.id,
-        sid,
-        reason: 'sign_out_everywhere',
-        actor: { type: 'user', id: USER_ID },
-        userId: USER_ID,
-      });
-    }
-    expect(sessions.service.sessions.size).toBe(0);
+    expect(sessions.service.revokeAllForUser).toHaveBeenCalledExactlyOnceWith(SIGN_OUT_EVERYWHERE);
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.redis.smembers).not.toHaveBeenCalled();
+    expect(sessions.service.sessions.has(a.sid)).toBe(false);
+    expect(sessions.service.sessions.has(b.sid)).toBe(false);
+    // Another user's session and the user's session in another realm stay.
+    expect(sessions.service.sessions.has(otherUser.sid)).toBe(true);
+    expect(sessions.service.sessions.has(otherRealm.sid)).toBe(true);
+    // The ended session's side record goes with it.
     expect(sessions.redis.hashes.size).toBe(0);
-    expect(sessions.redis.sets.has(`user-browser-sessions:${USER_ID}`)).toBe(false);
   });
 
+  it('drops the side records of the sessions it ended and the per-user index', async () => {
+    const a = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      identifier: 'alice@example.com',
+    });
+    const b = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      identifier: 'alice@example.com',
+    });
+    expect(sessions.redis.sets.get(INDEX)).toEqual(new Set([a.sid, b.sid]));
+
+    await endBrowserSessions(fastify, REALM.id, USER_ID);
+
+    expect(sessions.redis.del).toHaveBeenCalledWith(`browser-session-side:${REALM.id}:${a.sid}`);
+    expect(sessions.redis.del).toHaveBeenCalledWith(`browser-session-side:${REALM.id}:${b.sid}`);
+    expect(sessions.redis.del).toHaveBeenCalledWith(INDEX);
+    expect(sessions.redis.hashes.size).toBe(0);
+    expect(sessions.redis.sets.has(INDEX)).toBe(false);
+  });
+
+  it('still answers the sessions it ended when Redis cannot drop their side records or the index', async () => {
+    const a = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      identifier: 'alice@example.com',
+    });
+    const redisDown = new Error('Connection is closed.');
+    sessions.redis.del.mockRejectedValue(redisDown);
+
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([a.sid]);
+
+    expect(sessions.service.sessions.has(a.sid)).toBe(false);
+    expect(fastify.log.warn).toHaveBeenCalledExactlyOnceWith(
+      { err: redisDown, realmId: REALM.id },
+      expect.stringContaining('expire with the sessions')
+    );
+  });
+
+  it('throws when the service cannot end the sessions, and touches nothing in Redis', async () => {
+    await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+      identifier: 'alice@example.com',
+    });
+    const storeDown = new Error('connection terminated');
+    sessions.service.revokeAllForUser.mockRejectedValue(storeDown);
+
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).rejects.toBe(storeDown);
+
+    expect(sessions.redis.del).not.toHaveBeenCalled();
+    expect(sessions.redis.hashes.size).toBe(1);
+  });
+
+  it('ends nothing for a user with no live session', async () => {
+    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([]);
+    expect(sessions.service.revokeAllForUser).toHaveBeenCalledExactlyOnceWith(SIGN_OUT_EVERYWHERE);
+    expect(fastify.log.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('the per-user index the previous release reads (REMOVE IN THE NEXT RELEASE)', () => {
   it('keeps the index until its latest session ends, when a newer one ends earlier', async () => {
-    // The realm's lifetime shrank between the two sign-ins: the newer session
-    // ends first. Its deadline must not pull the index in under the older one.
+    // A node of the previous release still finds a user's sessions through the
+    // index at logout during a rolling upgrade. The realm's lifetime shrank
+    // between the two sign-ins: the newer session ends first. Its deadline
+    // must not pull the index in under the older one.
     const index = `user-browser-sessions:${USER_ID}`;
     const older = await createBrowserSession(fastify, makeRequest(), {
       realmId: REALM.id,
@@ -422,23 +500,8 @@ describe('endBrowserSessions (logout ends every session)', () => {
 
     expect(sessions.redis.expiries.get(index)).toBe(older.expiresAt);
 
-    // Past the newer session's end, the index is still there for logout.
+    // Past the newer session's end, the index still names the older one.
     sessions.redis.dropExpired(shorterEnd + 1);
-    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([
-      older.sid,
-      newer.sid,
-    ]);
-    expect(sessions.service.revoke).toHaveBeenCalledWith({
-      realmId: REALM.id,
-      sid: older.sid,
-      reason: 'sign_out_everywhere',
-      actor: { type: 'user', id: USER_ID },
-      userId: USER_ID,
-    });
-  });
-
-  it('ends nothing for a user with no recorded session', async () => {
-    await expect(endBrowserSessions(fastify, REALM.id, USER_ID)).resolves.toEqual([]);
-    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.redis.sets.get(index)).toEqual(new Set([older.sid, newer.sid]));
   });
 });

@@ -8,9 +8,9 @@
 #   protocol endpoint. A client branches on its `code`; the `detail` wording may change.
 # - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard is written on the
 #   transition it decides, and that transition's `source:` is the line of the check.
-# - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions and the access
-#   token denylist live in the cache, and the event store has its own writer (ADR-019 Decision 8). The two database
-#   writes are domain actions (graphs/domain/).
+# - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions live in the
+#   session service (Postgres, with the cache in front), the access token denylist lives in the cache, and the event
+#   store has its own writer (ADR-019 Decision 8). The two database writes are domain actions (graphs/domain/).
 schema: delurio-graph/0
 kind: flow
 id: core.logout
@@ -277,9 +277,10 @@ states:
   endingSessions:
     title: End the user's browser sessions
     description: >-
-      Every hosted browser session of the user, found through the per-user index rather than a cookie and revoked
-      through the session service, so that none of them can obtain a new authorization code once the codes are
-      invalidated. The cookie of the request is cleared when it names one of them.
+      Every live hosted browser session of the user, found by the user in Postgres rather than through a cookie or
+      the Redis per-user index (#912) and revoked in one transaction by the session service, so that none of them
+      can obtain a new authorization code once the codes are invalidated. The cookie of the request is cleared when
+      it names one of them.
     source: apps/auth-server/src/app/routes/auth/logout.ts:154
     invoke: { external: browserSessionStore }
     on:
@@ -287,7 +288,7 @@ states:
         target: invalidatingCodes
         effect: [endSessions]
         say: 'the sessions are ended'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:191
+        source: apps/auth-server/src/app/helpers/browser-session.ts:244
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'
