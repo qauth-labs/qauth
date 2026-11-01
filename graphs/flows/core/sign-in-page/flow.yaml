@@ -201,7 +201,7 @@ failures:
   creatingSession: { from: browserSessionStore, server: [server_error] }
   updatingLastLogin: { from: User.updateLastLogin, server: [server_error] }
   recordingSignIn: { from: eventStore, server: [server_error] }
-  # the resume handler swallows a store error and answers the spent handle's 400 page
+  # consumePendingAuthorization swallows a store error, and the resume handler answers the spent handle's 400 page
   consumingHandle: { from: pendingAuthorizationStore, store: [bad_request] }
 
 # The main story: /oauth/authorize sent a browser with no session here; the user signs in with a verified account, and
@@ -793,8 +793,8 @@ states:
     title: Tell the user the authorization request has expired
     description: >-
       Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, and so does a
-      store that cannot be read, with no link and no redirect: the user starts again from the application, which
-      still holds the PKCE verifier.
+      store that cannot read or delete the handle, with no link and no redirect: the user starts again from the
+      application, which still holds the PKCE verifier.
     source: apps/auth-server/src/app/routes/ui/resume.ts:123
     response:
       status: 400

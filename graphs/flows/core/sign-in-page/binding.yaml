@@ -485,7 +485,8 @@ scenarios:
     data: { resumePath: '{returnTo}' }
 
   # A replay over HTTP cannot make a store fail, and apps/auth-server/src/app/routes/ui/login.test.ts does not reach
-  # this exit either: server_error.store, and consumingHandle's FAIL.store, are drawn from the code alone.
+  # this exit either: server_error.store is drawn from the code alone. consumingHandle's FAIL.store is reached by
+  # apps/auth-server/src/app/routes/ui/resume.test.ts for a failed read; no test covers a failed delete.
   storeFailure:
     given:
       gate: open
