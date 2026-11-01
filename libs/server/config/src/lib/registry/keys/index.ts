@@ -9,6 +9,7 @@ import { EVENT_DELIVERY_KEYS } from './event-delivery';
 import { EVENT_RETENTION_KEYS } from './event-retention';
 import { EVENT_TELEMETRY_KEYS } from './event-telemetry';
 import { FEDERATION_KEYS } from './federation';
+import { INTERNAL_LISTENER_KEYS } from './internal-listener';
 import { KEK_KEYS } from './kek';
 import { PASSKEY_KEYS } from './passkeys';
 import { RATE_LIMIT_KEYS } from './rate-limits';
@@ -28,6 +29,7 @@ export { AUTH_SERVER_KEYS, DEVELOPER_PORTAL_KEYS };
 export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...SERVER_KEYS,
   ...SERVICE_ROLE_KEYS,
+  ...INTERNAL_LISTENER_KEYS,
   ...ADMIN_API_KEYS,
   ...EGRESS_KEYS,
   ...EVENT_TELEMETRY_KEYS,
