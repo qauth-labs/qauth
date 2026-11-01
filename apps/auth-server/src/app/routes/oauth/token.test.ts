@@ -5542,6 +5542,9 @@ describe('POST /oauth/token route — token-exchange grant (RFC 8693, ADR-007 §
     expect(signArg.expiresInOverride).toBeGreaterThan(110);
     expect(signArg.expiresInOverride).toBeLessThanOrEqual(120);
     expect((result as { expires_in: number }).expires_in).toBe(signArg.expiresInOverride);
+    // The signer caps `exp` at the subject's own, with the clock it reads at
+    // signing, after the awaits since the clamp above.
+    expect(signArg.expiresNotAfter).toBe(exp);
   });
 
   it('does NOT extend lifespan beyond the configured default when the subject lives longer', async () => {

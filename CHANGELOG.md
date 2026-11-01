@@ -1320,7 +1320,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   update ([#517]) ships, no route changes them. `signIdToken` of
   `@qauth-labs/fastify-plugin-jwt` takes an `expiresInOverride`, as
   `signAccessToken` does; the plugin's `accessTokenLifespan` and
-  `refreshTokenLifespan` stay the fallback.
+  `refreshTokenLifespan` stay the fallback. Each lifetime is bounded, in the
+  realm policies and in the keys that seed them: an access token (and so an ID
+  token) and a development access token at a day, so a token always expires
+  well inside the 14 days a retired signing key stays published, and a
+  refresh token at 90 days. A key above its bound refuses to boot; a realm row
+  written by hand above it is refused like any invalid policy, so the realm's
+  token requests fail rather than issue it. A token whose audience is the
+  admin API lives at most the realm's `tokens.adminAccessTokenLifespanSeconds`
+  (ADR-019 Decision 7, at most 900 s), whatever its client's tier gives. A
+  delegated token of token exchange is capped at its subject token's `exp`
+  when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
+  when its lifetime is computed.
 - **The developer API and the account API's consents, under versioned
   prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
   serves a developer's clients (list, create, read, merge-patch update,

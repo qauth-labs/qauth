@@ -218,6 +218,12 @@ export interface JwtUtils {
        * lifespan applies.
        */
       expiresInOverride?: number;
+      /**
+       * The latest `exp` the token may carry, in epoch seconds: the
+       * token-exchange grant passes the subject token's `exp`, so the clock
+       * read at signing cannot let the delegated token outlive it.
+       */
+      expiresNotAfter?: number;
     }
   ): Promise<string>;
   /**
@@ -253,6 +259,8 @@ export interface JwtUtils {
       cnf?: ConfirmationClaim;
       /** The lifespan in seconds, in place of the configured one, as for {@link signAccessToken}. */
       expiresInOverride?: number;
+      /** The latest `exp`, in epoch seconds, as for {@link signAccessToken}. */
+      expiresNotAfter?: number;
     }
   ): Promise<HybridSignedToken>;
   /**

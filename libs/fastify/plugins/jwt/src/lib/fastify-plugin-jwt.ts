@@ -128,14 +128,22 @@ function verificationKeyFor(
   return key?.algorithm === selector.alg ? key : undefined;
 }
 
-/** The registered claims the plugin adds to a token's claims: `aud`, `iat` and `exp`. */
+/**
+ * The registered claims the plugin adds to a token's claims: `aud`, `iat` and
+ * `exp`. `notAfter`, in epoch seconds, caps `exp`: the clock is read here, at
+ * signing, so a cap the caller computed earlier from a lifetime in seconds
+ * cannot drift past it.
+ */
 function withLifetime(
   claims: Record<string, unknown>,
   audience: string | string[],
-  expiresIn: number
+  expiresIn: number,
+  notAfter?: number
 ): Record<string, unknown> {
   const issuedAt = Math.floor(Date.now() / 1000);
-  return { ...claims, aud: audience, iat: issuedAt, exp: issuedAt + expiresIn };
+  const exp =
+    notAfter === undefined ? issuedAt + expiresIn : Math.min(issuedAt + expiresIn, notAfter);
+  return { ...claims, aud: audience, iat: issuedAt, exp };
 }
 
 /**
@@ -321,13 +329,18 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         // a shorter one it computed (RFC 8693 token-exchange clamps to the
         // subject token's remaining lifetime). The configured lifespan is the
         // fallback for a caller that passes none.
-        const { expiresInOverride, ...fields } = payload;
+        const { expiresInOverride, expiresNotAfter, ...fields } = payload;
         const { claims, audience } = buildAccessTokenClaims(fields);
         return signer.signJws(SIGNER_CALLER, {
           realmId: realm.id,
           purpose: 'token_signing',
           typ: ACCESS_TOKEN_TYP,
-          claims: withLifetime(claims, audience, expiresInOverride ?? options.accessTokenLifespan),
+          claims: withLifetime(
+            claims,
+            audience,
+            expiresInOverride ?? options.accessTokenLifespan,
+            expiresNotAfter
+          ),
         });
       },
       isHybridSigningEnabled() {
@@ -341,12 +354,17 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         // replaces the configured lifespan (the realm's, or an RFC 8693
         // clamp). The claims are shaped by the same `buildAccessTokenClaims`,
         // so the bearer token is indistinguishable from a classical one.
-        const { expiresInOverride, ...fields } = payload;
+        const { expiresInOverride, expiresNotAfter, ...fields } = payload;
         const { claims, audience } = buildAccessTokenClaims(fields);
         return signer.signHybrid(SIGNER_CALLER, {
           realmId: realm.id,
           typ: ACCESS_TOKEN_TYP,
-          claims: withLifetime(claims, audience, expiresInOverride ?? options.accessTokenLifespan),
+          claims: withLifetime(
+            claims,
+            audience,
+            expiresInOverride ?? options.accessTokenLifespan,
+            expiresNotAfter
+          ),
         });
       },
       async verifyHybridAccessToken(realm, hybrid, verifyOptions) {

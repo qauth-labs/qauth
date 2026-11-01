@@ -387,6 +387,33 @@ describe('signing through the signer (#491)', () => {
     }
   });
 
+  it('caps exp at expiresNotAfter, read against the clock at signing, and never makes it a claim', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const capped = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+        expiresInOverride: 120,
+        expiresNotAfter: now + 30,
+      });
+      const later = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+        expiresInOverride: 120,
+        expiresNotAfter: now + 3_600,
+      });
+
+      expect(payload(capped)['exp']).toBe(now + 30);
+      const laterClaims = payload(later);
+      expect((laterClaims['exp'] as number) - (laterClaims['iat'] as number)).toBe(120);
+      expect(payload(capped)).not.toHaveProperty('expiresNotAfter');
+    } finally {
+      await app.close();
+    }
+  });
+
   it("gives an ID token the configured lifespan, or the override, a realm's lifetime that may be longer (#527)", async () => {
     const realms = await createRealms();
     const app = await buildTestApp(realms);

@@ -2130,6 +2130,9 @@ async function handleTokenExchange(
     // above).
     ...dpopConfirmation(ctx),
     expiresInOverride: accessTokenExpiresIn,
+    // The clamp above read the clock before the awaits since; the signer reads
+    // it again, so the subject's own `exp` caps the delegated one there too.
+    ...(subjectPayload.exp !== undefined ? { expiresNotAfter: subjectPayload.exp } : {}),
   });
 
   // Per-agent action audit (ADR-007 §2, #186). The delegated token was minted
