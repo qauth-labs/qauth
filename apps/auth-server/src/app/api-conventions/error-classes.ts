@@ -37,6 +37,7 @@ import {
 
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
+import { RealmPolicyRefusedError } from '../helpers/realm-policy-update';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import type { OAuthErrorCode } from './oauth-error';
@@ -209,8 +210,8 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * cookie-authenticated route without a browser session, and the Shared Signals
  * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
  * routes answer problem documents), the admin pipeline's refusal of a
- * security operation that carries no approval, and an approval's refused
- * move. Each code is one the problem types page
+ * security operation that carries no approval, an approval's refused move,
+ * and a refused realm policy update. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -231,6 +232,13 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   {
     errorClass: InteractionExpiredError,
     code: 'interaction_expired',
+    oauthError: 'invalid_request',
+  },
+  // A realm policy update the schema or a rule refuses (#529), such as the
+  // smtp transport without a password. Its message names paths, never values.
+  {
+    errorClass: RealmPolicyRefusedError,
+    code: 'unprocessable_content',
     oauthError: 'invalid_request',
   },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
