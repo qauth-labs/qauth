@@ -30,7 +30,8 @@ import {
  * node of a deployment answers the same bytes for the same realm, whether it
  * holds the signer or reads the published keys without one (#495). An
  * endpoint host gets its realm's documents unchanged, and a host that names
- * no realm gets 421. The deployment switches stay global.
+ * no realm gets 421. The deployment switches stay global; CIMD is the
+ * realm's own policy (#534).
  *
  * Each test boots the real auth-server, whose boot step creates the default
  * realm on `auth.example.com` (from `JWT_ISSUER`) by importing
@@ -421,8 +422,9 @@ describe('discovery and the JWKS are served per realm (#494)', () => {
     }
   }, 120_000);
 
-  it('keeps the deployment switches global: every realm advertises CIMD and ID-JAG alike, or neither does', async () => {
-    // CIMD_ENABLED is on by default; ID-JAG is advertised once an issuer is trusted.
+  it('keeps ID-JAG a deployment switch, the same in every realm, and advertises CIMD per realm, from its policies (#534)', async () => {
+    // CIMD_ENABLED is on by default and seeds both realms; ID-JAG is
+    // advertised once an issuer is trusted.
     const app = await firstNode(
       variables({ ID_JAG_ENABLED: 'true', ID_JAG_TRUSTED_ISSUERS: 'https://idp.example.com' })
     );
@@ -441,17 +443,42 @@ describe('discovery and the JWKS are served per realm (#494)', () => {
       expect(a['authorization_grant_profiles_supported']).toBeDefined();
     }
 
-    // A node with both switches off advertises neither, in any realm. The
+    // Realm B switches CIMD off in its policies: only its documents drop it.
+    const realmB = await realmIdOf(app, 'beta');
+    const current = await app.policyStore.get(realmB);
+    if (current === undefined) throw new Error('beta has no policies');
+    await app.policyStore.update(
+      realmB,
+      { registration: { cimd: { enabled: false } } },
+      { expectedVersion: current.version }
+    );
+    app.realmHostCache.clear();
+    for (const path of DISCOVERY_DOCUMENTS) {
+      expect((await documentAt(app, path, HOST_A))['client_id_metadata_document_supported']).toBe(
+        true
+      );
+      expect(await documentAt(app, path, HOST_B)).not.toHaveProperty(
+        'client_id_metadata_document_supported'
+      );
+    }
+
+    // A node with both switches off advertises ID-JAG in no realm, and CIMD
+    // still as each realm stores it: CIMD_ENABLED only seeds a new realm. The
     // harness leaves these settings in place between boots: drop them first.
     for (const key of UNCLEARED_SETTINGS) delete process.env[key];
     const off = await boot(variables({ CIMD_ENABLED: 'false' }));
     for (const path of DISCOVERY_DOCUMENTS) {
       for (const host of [HOST_A, HOST_B]) {
         const document = await documentAt(off, path, host);
-        expect(document).not.toHaveProperty('client_id_metadata_document_supported');
         expect(document).not.toHaveProperty('authorization_grant_profiles_supported');
         expect(document['grant_types_supported']).not.toContain(JWT_BEARER_GRANT_TYPE);
       }
+      expect((await documentAt(off, path, HOST_A))['client_id_metadata_document_supported']).toBe(
+        true
+      );
+      expect(await documentAt(off, path, HOST_B)).not.toHaveProperty(
+        'client_id_metadata_document_supported'
+      );
     }
   }, 180_000);
 });
