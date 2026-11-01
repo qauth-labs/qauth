@@ -142,16 +142,21 @@ return {1, n, run}
  * Settle a success. KEYS: the counter, the known-IP set. ARGV: now, the
  * policy's onSuccess (`clear` or `withdraw`), the reservation's run id,
  * knownIpMs, the IP's HMAC (empty for none), the most known IPs kept.
- * `clear` ends the run; `withdraw` takes this attempt back from its own run
- * only. The IP becomes known, the stalest dropped past the cap.
+ * Both act on the reservation's own run only: `clear` ends it, `withdraw`
+ * takes this attempt back from it. A run another success already ended, and
+ * a run begun since, stay as they are, so a success that settles late never
+ * wipes failures counted after it. The IP becomes known either way, the
+ * stalest dropped past the cap.
  */
 export const SETTLE_SUCCESS_SCRIPT = `
 local now = tonumber(ARGV[1])
-if ARGV[2] == 'clear' then
-  redis.call('DEL', KEYS[1])
-elseif redis.call('HGET', KEYS[1], 'run') == ARGV[3] then
-  local n = redis.call('HINCRBY', KEYS[1], 'n', -1)
-  if n <= 0 then redis.call('DEL', KEYS[1]) end
+if redis.call('HGET', KEYS[1], 'run') == ARGV[3] then
+  if ARGV[2] == 'clear' then
+    redis.call('DEL', KEYS[1])
+  else
+    local n = redis.call('HINCRBY', KEYS[1], 'n', -1)
+    if n <= 0 then redis.call('DEL', KEYS[1]) end
+  end
 end
 local knownMs = tonumber(ARGV[4])
 if knownMs > 0 and ARGV[5] ~= '' then

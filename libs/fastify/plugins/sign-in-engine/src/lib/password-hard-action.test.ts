@@ -91,8 +91,7 @@ describe('the password hard action', () => {
     const sink = log();
     const action = createPasswordHardAction({
       credentials: stores,
-      armed: async () => false,
-      notices: notices(),
+      arming: { hostedReset: () => false, notices: notices() },
       log: sink,
     });
     await action.ceilingReached(TARGET);
@@ -110,8 +109,7 @@ describe('the password hard action', () => {
     const sink = log();
     const action = createPasswordHardAction({
       credentials: stores,
-      armed: async () => true,
-      notices: notice,
+      arming: { hostedReset: () => true, notices: notice },
       log: sink,
       now: () => 1_793_491_200_000,
     });
@@ -143,14 +141,25 @@ describe('the password hard action', () => {
     const sink = log();
     const action = createPasswordHardAction({
       credentials: stores,
-      armed: async () => true,
-      notices: notice,
+      arming: { hostedReset: () => true, notices: notice },
       log: sink,
     });
     await expect(action.ceilingReached(TARGET)).resolves.toBeUndefined();
-    expect(sink.error).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(sink.error).toHaveBeenCalledTimes(2));
     expect(sink.error.mock.calls[1][1]).toMatch(/not told/);
     expect(stores.clearDisabledAt).not.toHaveBeenCalled();
+  });
+
+  it('answers without waiting for the notice to be sent', async () => {
+    const notice = notices();
+    notice.passwordDisabled.mockReturnValueOnce(new Promise<void>(() => undefined));
+    const action = createPasswordHardAction({
+      credentials: credentials(),
+      arming: { hostedReset: () => true, notices: notice },
+      log: log(),
+    });
+    await expect(action.ceilingReached(TARGET)).resolves.toBeUndefined();
+    expect(notice.passwordDisabled).toHaveBeenCalledWith(TARGET);
   });
 
   it('lets a store failure reject, for the caller to report', async () => {
@@ -158,8 +167,7 @@ describe('the password hard action', () => {
     stores.setDisabledAt.mockRejectedValueOnce(new Error('db down'));
     const action = createPasswordHardAction({
       credentials: stores,
-      armed: async () => true,
-      notices: notices(),
+      arming: { hostedReset: () => true, notices: notices() },
       log: log(),
     });
     await expect(action.ceilingReached(TARGET)).rejects.toThrow('db down');
@@ -170,7 +178,7 @@ describe('the password hard action', () => {
     const sink = log();
     const action = createPasswordHardAction({
       credentials: stores,
-      armed: async () => false,
+      arming: { hostedReset: () => false },
       log: sink,
     });
     await action.clearIgnoredMark(TARGET);

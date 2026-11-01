@@ -81,9 +81,12 @@ export function createHardActionArming(sources: HardActionArmingSources): HardAc
 /** What {@link createPasswordHardAction} needs. */
 export interface PasswordHardActionDependencies {
   readonly credentials: HardActionCredentials;
-  readonly armed: HardActionArming;
-  /** The owner's notice; required for the hard action to be armed at all. */
-  readonly notices?: PasswordDisabledNotices;
+  /**
+   * What arms it, and the owner's notice it sends: the same sources the
+   * caller hands {@link createHardActionArming}, so the notice that arms the
+   * hard action is the one it sends.
+   */
+  readonly arming: HardActionArmingSources;
   readonly log: HardActionLog;
   /** The clock, in epoch ms. `Date.now` by default. */
   readonly now?: () => number;
@@ -99,8 +102,10 @@ export const PASSWORD_DISABLED_ALERT = 'password disabled by the failure ladder'
  *   account is being guessed at, and nothing stops it but the wait); armed, it
  *   marks the password, and only the call that marked it alerts the operator
  *   and sends the notice, so a run of failures past the ceiling sends one.
- *   A notice that fails is alerted too; the mark stays, as the owner's reset
- *   ends it.
+ *   The notice is sent without being awaited: a slow mail transport must not
+ *   lengthen the refused attempt's answer, which would tell an account that
+ *   exists from one that does not. A notice that fails is alerted too; the
+ *   mark stays, as the owner's reset ends it.
  * - `clearIgnoredMark`: clears a mark the lookup ignored while the hard action
  *   was unarmed, after the password proved the account.
  *
@@ -108,10 +113,11 @@ export const PASSWORD_DISABLED_ALERT = 'password disabled by the failure ladder'
  */
 export function createPasswordHardAction(deps: PasswordHardActionDependencies): PasswordHardAction {
   const now = deps.now ?? (() => Date.now());
+  const armed = createHardActionArming(deps.arming);
   return Object.freeze({
     async ceilingReached(input: PasswordHardActionInput): Promise<void> {
       const subject = { realmId: input.realmId, userId: input.userId };
-      if (!(await deps.armed(input.realmId))) {
+      if (!(await armed(input.realmId))) {
         deps.log.warn(
           { ...subject, reason: 'hard_action_unarmed' },
           'password failure ladder reached its hard ceiling; the hard action is unarmed, so the password stays usable'
@@ -128,15 +134,24 @@ export function createPasswordHardAction(deps: PasswordHardActionDependencies): 
       if (marked === undefined) return;
       // The operator's alert: this log line is the alerting hook.
       deps.log.error({ ...subject, credentialId: marked.id }, PASSWORD_DISABLED_ALERT);
-      try {
-        if (deps.notices === undefined) throw new Error('no notice to send');
-        await deps.notices.passwordDisabled(input);
-      } catch (error) {
+      const notTold = (error: unknown) =>
         deps.log.error(
           { ...subject, credentialId: marked.id, err: error },
           'the owner was not told their password was disabled'
         );
+      const notices = deps.arming.notices;
+      if (notices === undefined) {
+        notTold(new Error('no notice to send'));
+        return;
       }
+      // Off the answer's path: not awaited, its failure alerted.
+      let sending: Promise<void>;
+      try {
+        sending = notices.passwordDisabled(input);
+      } catch (error) {
+        sending = Promise.reject(error);
+      }
+      sending.catch(notTold);
     },
 
     async clearIgnoredMark(input: PasswordHardActionInput): Promise<void> {

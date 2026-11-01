@@ -132,7 +132,8 @@ describe('the failure ladder over real Redis and Postgres', () => {
         return inner.verifyDecoy(presented);
       },
     };
-    const armed = createHardActionArming({ hostedReset: () => hostedReset, notices });
+    const arming = { hostedReset: () => hostedReset, notices };
+    const armed = createHardActionArming(arming);
     buildEngine = (store, timeoutMs) =>
       createSignInEngine({
         accounts: createRepositoryAccountDirectory(
@@ -153,8 +154,7 @@ describe('the failure ladder over real Redis and Postgres', () => {
         },
         passwordHardAction: createPasswordHardAction({
           credentials: userCredentials,
-          armed,
-          notices,
+          arming,
           log: silent,
         }),
         clock: { now: () => Date.now(), sleep: async () => undefined },
@@ -323,7 +323,7 @@ describe('the failure ladder over real Redis and Postgres', () => {
       ladder: createRedisFailureLadder(redis, { ipDigest, now: () => now }),
       hardAction: createPasswordHardAction({
         credentials: userCredentials,
-        armed: async () => false,
+        arming: { hostedReset: () => false },
         log: silent,
       }),
       hardActionArmed: async () => false,
@@ -384,7 +384,7 @@ describe('the failure ladder over real Redis and Postgres', () => {
         ladder: createRedisFailureLadder(client, { ipDigest, timeoutMs: 1_000 }),
         hardAction: createPasswordHardAction({
           credentials: userCredentials,
-          armed: async () => false,
+          arming: { hostedReset: () => false },
           log: silent,
         }),
         hardActionArmed: async () => false,

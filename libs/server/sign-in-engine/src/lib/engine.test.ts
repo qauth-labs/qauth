@@ -1765,9 +1765,9 @@ describe('the failure ladder (#615)', () => {
     expect(calls).toEqual([`ceiling:${REALM}:${USER}:${IDENTIFIER}`]);
   });
 
-  it('never fires it for no account, a disabled user, a disabled or missing password, and answers each alike', async () => {
+  it('never fires it for no account, a disabled user, a disabled, missing or unreadable password, and answers each alike', async () => {
     const answers = new Set<string>();
-    for (const kind of ['unknown', 'disabled', 'locked', 'passkeyOnly'] as const) {
+    for (const kind of ['unknown', 'disabled', 'locked', 'passkeyOnly', 'unreadable'] as const) {
       const { calls, action } = recordingHardAction();
       const built = build(
         { [IDENTIFIER]: accountKinds()[kind] },

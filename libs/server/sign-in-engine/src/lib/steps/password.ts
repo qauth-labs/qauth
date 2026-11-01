@@ -135,15 +135,9 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
       const refuse = async (audit: VerdictAudit): Promise<StepVerdict> => {
         const settled = await settle(reservation, 'failure');
         // The hard action, for an account that exists and is enabled, whose
-        // password is not already disabled. A disabled user is never changed.
-        if (
-          settled.ceilingReached &&
-          candidate !== null &&
-          candidate.enabled &&
-          password !== undefined &&
-          password !== null &&
-          !password.disabled
-        ) {
+        // password was usable: not already disabled, its data readable. A
+        // disabled user is never changed.
+        if (settled.ceilingReached && candidate !== null && candidate.enabled && hash !== null) {
           await hardAction(() => deps.hardAction.ceilingReached(target(candidate.userId)));
         }
         return { kind: 'refused', error: 'invalid_credentials', audit };

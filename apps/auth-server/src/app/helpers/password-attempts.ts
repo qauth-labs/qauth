@@ -6,6 +6,7 @@ import {
   createPasswordHardAction,
   createRedisFailureLadder,
   END_USER_IP_HMAC_LABEL,
+  type HardActionArmingSources,
   type PasswordAttempts,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance } from 'fastify';
@@ -55,12 +56,14 @@ function cookieRingSecrets(fastify: FastifyInstance): DigestSecretSource {
  */
 export function createServerPasswordAttempts(fastify: FastifyInstance): PasswordAttempts {
   const secrets = cookieRingSecrets(fastify);
-  const hardActionArmed = createHardActionArming({
+  // One source for the arming and for the notice the hard action sends.
+  const arming: HardActionArmingSources = {
     // The hosted reset (#642) is not built: nothing can turn it on.
     hostedReset: () => false,
     // No notice template (#637) yet: the deployment cannot tell the owner.
     notices: undefined,
-  });
+  };
+  const hardActionArmed = createHardActionArming(arming);
   return createPasswordAttempts({
     identifierDigest: createCookieSecretIdentifierDigest(secrets, 'local'),
     ladder: createRedisFailureLadder(fastify.redis, {
@@ -68,7 +71,7 @@ export function createServerPasswordAttempts(fastify: FastifyInstance): Password
     }),
     hardAction: createPasswordHardAction({
       credentials: fastify.repositories.userCredentials,
-      armed: hardActionArmed,
+      arming,
       log: fastify.log,
     }),
     hardActionArmed,

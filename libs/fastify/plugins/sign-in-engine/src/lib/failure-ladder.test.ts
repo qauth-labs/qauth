@@ -134,10 +134,12 @@ class FakeRedis implements LadderRedis {
 
   private settleSuccess([counter, known]: string[], argv: string[]): unknown {
     const now = Number(argv[0]);
-    if (argv[1] === 'clear') {
+    if (this.hashes.get(counter)?.get('run') !== argv[2]) {
+      // Another run: nothing to settle on it.
+    } else if (argv[1] === 'clear') {
       this.hashes.delete(counter);
       this.expiries.delete(counter);
-    } else if (this.hashes.get(counter)?.get('run') === argv[2]) {
+    } else {
       const state = this.hashes.get(counter) as Map<string, string>;
       const n = Number(state.get('n')) - 1;
       state.set('n', String(n));
@@ -308,6 +310,16 @@ describe('the Redis failure ladder', () => {
     // The owner signs in before the 100th attempt settles: the run ends.
     await (await reserved(IP)).settle('success');
     expect(await hundredth.settle('failure')).toEqual({ ceilingReached: false });
+  });
+
+  it('leaves a run begun after it alone when a success settles late', async () => {
+    const { fail, reserved, counter } = setup();
+    const late = await reserved();
+    // Another success of the owner ends the run; a new run starts.
+    await (await reserved()).settle('success');
+    await fail(4);
+    await late.settle('success');
+    expect(counter()?.get('n')).toBe('4');
   });
 
   it('takes the attempt back on a success for a counter of failures alone', async () => {
