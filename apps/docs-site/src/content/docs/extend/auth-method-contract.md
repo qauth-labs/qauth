@@ -162,13 +162,16 @@ cookie.
 The plugin runtime builds the context for the request's realm
 (`apps/auth-server/src/app/helpers/auth-method-plugins.ts`): the realm's stored config with its
 secret members decrypted back into place, the method's `type` as the signer's provider, and the
-request's logger with the plugin's name. The signer is called as `local`, the caller inside the
-signer's own process, which every role shares in a single deployment. No other caller would do:
-`web`, which serves a plugin's routes, may neither decrypt nor sign a client assertion, and `api`
-may decrypt only a realm's mail secrets and an upstream OpenID Connect client's secret, never a
-plugin secret's `auth-method-plugin:` context. A deployment that runs the signer apart gives the
-role that serves the sign-in pages a grant of its own when the signer service lands (#497); until
-then a process without the signer refuses the call.
+request's logger with the plugin's name. The context signs and decrypts as `api`: its grant holds
+`signClientAssertion`, and among the stored secrets it may decrypt are a plugin secret's
+`auth-method-plugin:<plugin>:<path>` contexts, beside a realm's mail secrets and an upstream
+OpenID Connect client's secret. `web`, which serves a plugin's routes, may neither decrypt nor sign
+a client assertion, and `local` would open every stored secret. The admin API seals a plugin
+secret as `local`, as the realm secret store does, and opens a stored or sealed one as `api`. In a
+single deployment every role shares the signer's process. A deployment that runs the signer apart
+(#497) still needs a grant for the admin API, since the signer service takes the role from the
+caller's certificate and never accepts `local` from a peer; until then a process without the
+signer refuses the call.
 
 ## Routes
 

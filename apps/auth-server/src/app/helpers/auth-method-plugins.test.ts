@@ -2,6 +2,7 @@ import { types } from 'node:util';
 
 import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
 import { AuthMethodConfigError } from '@qauth-labs/fastify-plugin-federation';
+import { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,7 @@ import {
   authMethodPluginContext,
   AuthMethodPluginDisabledError,
   authMethodPluginEnabledIn,
+  authMethodPluginSecretCipher,
   authMethodPluginSecretContext,
   FIRST_PARTY_AUTH_METHOD_PLUGINS,
   loadDeploymentAuthMethodPlugins,
@@ -145,7 +147,7 @@ describe('the plugin context (#600)', () => {
     expect(JSON.stringify(context.config)).not.toMatch(/PRIVATE KEY/);
   });
 
-  it("decrypts the realm's secret members under the plugin's own context, as the local signer caller", async () => {
+  it("decrypts the realm's secret members under the plugin's own context, as the api signer caller", async () => {
     const { fastify, request, runtime, signer } = await server({});
     const method = runtime.ofType('corp_sso')?.method;
     if (method === undefined) throw new Error('the fixture plugin did not load');
@@ -163,12 +165,34 @@ describe('the plugin context (#600)', () => {
       ciphertext: CIPHERTEXT,
       context: authMethodPluginSecretContext('corp', 'clientSecret'),
     });
+    expect(AUTH_METHOD_PLUGIN_SIGNER_CALLER).toBe('api');
     expect(authMethodPluginSecretContext('corp', 'clientSecret')).toBe(
       'auth-method-plugin:corp:clientSecret'
     );
   });
 
-  it('binds the signer to the realm, the plugin and the local caller', async () => {
+  it('seals a plugin secret as local and opens it as api, under the plugin secret prefix', async () => {
+    const { fastify, signer } = await server({});
+    const cipher = authMethodPluginSecretCipher(fastify);
+
+    expect(await cipher.seal(REALM.id, 'corp', 'clientSecret', SECRET)).toBe(CIPHERTEXT);
+    expect(await cipher.open(REALM.id, 'corp', 'clientSecret', CIPHERTEXT)).toBe(SECRET);
+
+    const context = authMethodPluginSecretContext('corp', 'clientSecret');
+    expect(context.startsWith(AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX)).toBe(true);
+    expect(signer.encrypt).toHaveBeenCalledWith('local', {
+      realmId: REALM.id,
+      plaintext: Buffer.from(SECRET, 'utf8'),
+      context,
+    });
+    expect(signer.decrypt).toHaveBeenCalledWith('api', {
+      realmId: REALM.id,
+      ciphertext: CIPHERTEXT,
+      context,
+    });
+  });
+
+  it('binds the signer to the realm, the plugin and the api caller', async () => {
     const { fastify, request, runtime, signer } = await server({});
     const method = runtime.ofType('corp_sso')?.method;
     if (method === undefined) throw new Error('the fixture plugin did not load');
@@ -181,10 +205,10 @@ describe('the plugin context (#600)', () => {
     await context.signer.getUpstreamJwks();
 
     expect(signer.signClientAssertion).toHaveBeenCalledWith(
-      'local',
+      'api',
       expect.objectContaining({ realmId: REALM.id, providerId: 'corp_sso' })
     );
-    expect(signer.getUpstreamJwks).toHaveBeenCalledWith('local', REALM.id, 'corp_sso');
+    expect(signer.getUpstreamJwks).toHaveBeenCalledWith('api', REALM.id, 'corp_sso');
     expect(context.routeUrl('/callback')).toBe(
       'https://auth.example.com/upstream/corp_sso/callback'
     );

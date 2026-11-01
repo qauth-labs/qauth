@@ -10,6 +10,7 @@ import {
   withConfigMembers,
   withoutConfigMembers,
 } from '@qauth-labs/fastify-plugin-federation';
+import { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify';
 
 import { realmIssuer } from './realm-url';
@@ -53,26 +54,74 @@ import { requestRealm } from './request-realm';
 export const FIRST_PARTY_AUTH_METHOD_PLUGINS: readonly string[] = Object.freeze([]);
 
 /**
- * The signer caller a plugin's context signs and a plugin secret decrypts as.
- * `local`, the caller inside the signer's own process (ADR-019 Decision 9),
- * which may decrypt any context: in a single deployment every role shares
- * that process. The realm secret store (#529) encrypts as `local` too, but
- * decrypts as `api`, whose grant lists only the mail and upstream client
- * secret prefixes; `web`, which serves a plugin's routes, may decrypt
- * nothing. So a plugin's routes need `local` here until the signer service
- * runs apart (#497) and a role gets a grant of its own for the
- * `auth-method-plugin:` contexts; until then a process without the signer
- * refuses both.
+ * The signer caller a plugin's context signs as, and a plugin secret
+ * decrypts as: `api`, whose grant holds `signClientAssertion` and the
+ * `auth-method-plugin:` contexts among the three kinds of stored secret it
+ * may decrypt (`AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX`), as it opens an
+ * upstream OpenID Connect client's secret (#601). `web`, which serves a
+ * plugin's routes, may neither decrypt nor sign a client assertion, and
+ * `local` would open every stored secret. The admin API's configure and
+ * enable open a stored or sealed secret as `api` too.
+ *
+ * In a single deployment every role shares the signer's process. A split
+ * signer (#497) takes the role from the caller's certificate and never
+ * accepts `local` from a peer, so the admin API, which seals as `local`
+ * ({@link AUTH_METHOD_PLUGIN_SEAL_CALLER}) and opens as `api`, still needs a
+ * grant of its own there; until then a process without the signer refuses
+ * both.
  */
-export const AUTH_METHOD_PLUGIN_SIGNER_CALLER = 'local';
+export const AUTH_METHOD_PLUGIN_SIGNER_CALLER = 'api';
 
 /**
- * The `context` a plugin secret is encrypted under, beside its realm: it
- * binds the ciphertext to the plugin and to the member, so a ciphertext of
- * one plugin's secret, or of another member, never decrypts as this one.
+ * The signer caller a plugin secret is sealed as: `local`, the caller inside
+ * the signer's own process, as the realm secret store (#529) encrypts. The
+ * admin API gets a grant of its own when it moves out (#497).
+ */
+export const AUTH_METHOD_PLUGIN_SEAL_CALLER = 'local';
+
+/**
+ * The `context` a plugin secret is encrypted under, beside its realm:
+ * `auth-method-plugin:<plugin id>:<path>`, under the prefix the signer's
+ * policy lets `api` decrypt. It binds the ciphertext to the plugin and to
+ * the member, so a ciphertext of one plugin's secret, or of another member,
+ * never decrypts as this one.
  */
 export function authMethodPluginSecretContext(pluginId: string, path: string): string {
-  return `auth-method-plugin:${pluginId}:${path}`;
+  return `${AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX}${pluginId}:${path}`;
+}
+
+/** Seals and opens a plugin's secret members over the signer (#600). */
+export interface AuthMethodPluginSecretCipher {
+  /** Encrypt `plaintext` for `path` of the plugin in the realm, as {@link AUTH_METHOD_PLUGIN_SEAL_CALLER}. */
+  seal(realmId: string, pluginId: string, path: string, plaintext: string): Promise<string>;
+  /** Decrypt a ciphertext sealed for `path` of the plugin in the realm, as {@link AUTH_METHOD_PLUGIN_SIGNER_CALLER}. */
+  open(realmId: string, pluginId: string, path: string, ciphertext: string): Promise<string>;
+}
+
+/**
+ * The plugin secrets' cipher over the signer (#600), as `realmSecretCipher`
+ * is the realm secrets' (#529): it encrypts as `local` and decrypts as
+ * `api`. `fastify.signer` is read on each call.
+ */
+export function authMethodPluginSecretCipher(
+  fastify: Pick<FastifyInstance, 'signer'>
+): AuthMethodPluginSecretCipher {
+  return Object.freeze({
+    seal: (realmId: string, pluginId: string, path: string, plaintext: string) =>
+      fastify.signer.encrypt(AUTH_METHOD_PLUGIN_SEAL_CALLER, {
+        realmId,
+        plaintext: Buffer.from(plaintext, 'utf8'),
+        context: authMethodPluginSecretContext(pluginId, path),
+      }),
+    async open(realmId: string, pluginId: string, path: string, ciphertext: string) {
+      const plaintext = await fastify.signer.decrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
+        realmId,
+        ciphertext,
+        context: authMethodPluginSecretContext(pluginId, path),
+      });
+      return plaintext.toString('utf8');
+    },
+  });
 }
 
 /** The plugins this process loaded, by id and by type. */
@@ -203,15 +252,11 @@ export async function authMethodPluginConfig(
   plugin: Pick<InstalledAuthMethodPlugin, 'id' | 'secretPaths'>,
   row: Pick<RealmAuthMethodPlugin, 'realmId' | 'config' | 'secrets'>
 ): Promise<Record<string, unknown>> {
+  const cipher = authMethodPluginSecretCipher(fastify);
   const secrets = new Map<string, string>();
   for (const path of plugin.secretPaths) {
     if (!Object.hasOwn(row.secrets, path)) continue;
-    const plaintext = await fastify.signer.decrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
-      realmId: row.realmId,
-      ciphertext: row.secrets[path],
-      context: authMethodPluginSecretContext(plugin.id, path),
-    });
-    secrets.set(path, plaintext.toString('utf8'));
+    secrets.set(path, await cipher.open(row.realmId, plugin.id, path, row.secrets[path]));
   }
   // A member the plugin marks secret comes only from the secret store, never
   // from the plain config an earlier version of the plugin may have kept.

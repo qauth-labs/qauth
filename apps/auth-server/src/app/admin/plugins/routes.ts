@@ -15,10 +15,7 @@ import { ifMatchAllows } from '../../api-conventions/conditional-requests';
 import { pageQuerySchema, pageSchema } from '../../api-conventions/paging';
 import { type AdminOperation, operationSchemaExtensions } from '../../helpers/admin-operations';
 import { InvalidCursorError } from '../../helpers/api-request-errors';
-import {
-  AUTH_METHOD_PLUGIN_SIGNER_CALLER,
-  authMethodPluginSecretContext,
-} from '../../helpers/auth-method-plugins';
+import { authMethodPluginSecretCipher } from '../../helpers/auth-method-plugins';
 import {
   type AdminChange,
   adminTransaction,
@@ -277,10 +274,11 @@ function requireCurrent(
 }
 
 /**
- * The plaintext of each secret the row holds, but those in `skip`, for a
- * schema check only: a request that replaces or clears a secret needs no
- * look at the value it replaces, so a stored value that no longer opens
- * never blocks the update that would replace it.
+ * The plaintext of each secret the row holds, but those in `skip`, opened as
+ * `api` (`authMethodPluginSecretCipher`), for a schema check only: a request
+ * that replaces or clears a secret needs no look at the value it replaces,
+ * so a stored value that no longer opens never blocks the update that would
+ * replace it.
  */
 async function storedSecrets(
   fastify: FastifyInstance,
@@ -289,15 +287,11 @@ async function storedSecrets(
   ciphertexts: Readonly<Record<string, string>>,
   skip: ReadonlySet<string> = new Set()
 ): Promise<Map<string, string>> {
+  const cipher = authMethodPluginSecretCipher(fastify);
   const plaintexts = new Map<string, string>();
   for (const path of plugin.secretPaths) {
     if (!Object.hasOwn(ciphertexts, path) || skip.has(path)) continue;
-    const plaintext = await fastify.signer.decrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
-      realmId,
-      ciphertext: ciphertexts[path],
-      context: authMethodPluginSecretContext(plugin.id, path),
-    });
-    plaintexts.set(path, plaintext.toString('utf8'));
+    plaintexts.set(path, await cipher.open(realmId, plugin.id, path, ciphertexts[path]));
   }
   return plaintexts;
 }
@@ -322,12 +316,7 @@ async function openSealed(
   sealed: string
 ): Promise<string> {
   try {
-    const plaintext = await fastify.signer.decrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
-      realmId,
-      ciphertext: sealed,
-      context: authMethodPluginSecretContext(plugin.id, path),
-    });
-    return plaintext.toString('utf8');
+    return await authMethodPluginSecretCipher(fastify).open(realmId, plugin.id, path, sealed);
   } catch (error) {
     if (NOT_SEALED_HERE.has((error as { code?: unknown } | null)?.code)) {
       throw new BadRequestError(
@@ -574,11 +563,12 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         // would get the value back, and the log would keep it.
         throw new BadRequestError('path names no secret member of the plugin');
       }
-      const sealed = await fastify.signer.encrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
-        realmId: requestAdminCaller(request).targetRealm.id,
-        plaintext: Buffer.from(value, 'utf8'),
-        context: authMethodPluginSecretContext(plugin.id, path),
-      });
+      const sealed = await authMethodPluginSecretCipher(fastify).seal(
+        requestAdminCaller(request).targetRealm.id,
+        plugin.id,
+        path,
+        value
+      );
       return { path, sealed };
     }
   );
