@@ -13,6 +13,11 @@ import {
   type PemKeyPair,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import {
+  createMockVerifierPki,
+  verifierIdentityEnvironment,
+  verifierKeyVariable,
+} from '../testing/mock-verifier-pki';
 
 /**
  * THE KEY IMPORT AT FIRST BOOT, THROUGH THE REAL AUTH-SERVER (ADR-019 Decision
@@ -222,6 +227,101 @@ describe('key import at first boot, through the real auth-server', () => {
     } finally {
       await second.close();
     }
+  });
+
+  describe('the OID4VP verifier key (#546)', () => {
+    const pki = createMockVerifierPki();
+
+    /** A deployment that configures the verifier's chain, with or without its key variable. */
+    function verifierVariables(
+      withKey: boolean,
+      of: ReturnType<typeof createMockVerifierPki> = pki
+    ): Record<string, string> {
+      return {
+        ...oldVariables(),
+        ...verifierIdentityEnvironment(of),
+        ...(withKey ? verifierKeyVariable(of) : {}),
+      };
+    }
+
+    async function storedRequestKeys(server: BootedAuthServer) {
+      const { rows } = await server.app.dbPool.query<{
+        kid: string;
+        algorithm: string;
+        status: string;
+        public_jwk: { x?: string; y?: string };
+      }>(
+        `SELECT k.kid, k.algorithm, k.status, p.public_jwk FROM realm_keys k
+           JOIN realms r ON r.id = k.realm_id
+           JOIN realm_public_keys p ON p.realm_id = k.realm_id AND p.kid = k.kid
+          WHERE r.name = 'master' AND k.purpose = 'oid4vp_request_signing'`
+      );
+      return rows;
+    }
+
+    it('imports OID4VP_VERIFIER_SIGNING_KEY once as the ES256 request key, and warns on later boots', async () => {
+      const leaf = pki.leaf.publicKey.export({ format: 'jwk' });
+
+      const first = await boot(verifierVariables(true));
+      let imported: Awaited<ReturnType<typeof storedRequestKeys>>;
+      try {
+        imported = await storedRequestKeys(first);
+        expect(imported).toHaveLength(1);
+        expect(imported[0]).toMatchObject({ algorithm: 'ES256', status: 'active' });
+        expect(imported[0]?.public_jwk.x).toBe(leaf.x);
+        expect(imported[0]?.public_jwk.y).toBe(leaf.y);
+      } finally {
+        await first.close();
+      }
+
+      const lines: LogLine[] = [];
+      const second = await boot(verifierVariables(true), lines);
+      try {
+        expect(await storedRequestKeys(second)).toEqual(imported);
+        const warned = lines
+          .filter((line) => line.msg.includes("is in the realm's key store"))
+          .map((line) => line.variable);
+        expect(warned).toContain('OID4VP_VERIFIER_SIGNING_KEY');
+        expect(
+          lines.find((line) => line.variable === 'OID4VP_VERIFIER_SIGNING_KEY')?.msg
+        ).toContain('signs the OID4VP request objects');
+        for (const line of lines) {
+          expect(JSON.stringify(line)).not.toContain(pki.signingKeyPem.slice(40, 80));
+        }
+      } finally {
+        await second.close();
+      }
+
+      // The operator removes the variable: the stored key keeps signing, and
+      // nothing warns about it.
+      const quiet: LogLine[] = [];
+      const third = await boot(verifierVariables(false), quiet);
+      try {
+        expect(await storedRequestKeys(third)).toEqual(imported);
+        expect(quiet.map((line) => line.variable)).not.toContain('OID4VP_VERIFIER_SIGNING_KEY');
+      } finally {
+        await third.close();
+      }
+    });
+
+    it('stops the boot when a chain is configured and the store holds no request key', async () => {
+      await expect(boot(verifierVariables(false))).rejects.toMatchObject({
+        name: 'InvalidConfigurationError',
+        message: expect.stringContaining('holds no OID4VP request key'),
+      });
+    });
+
+    it('stops the boot when the configured chain names another key than the stored one', async () => {
+      const first = await boot(verifierVariables(true));
+      await first.close();
+
+      await expect(
+        boot(verifierVariables(false, createMockVerifierPki({ name: 'other.example' })))
+      ).rejects.toMatchObject({
+        name: 'InvalidConfigurationError',
+        message: expect.stringContaining('does not name'),
+      });
+    });
   });
 
   it('stops the boot when JWT_PUBLIC_KEY is not the public half of JWT_PRIVATE_KEY', async () => {

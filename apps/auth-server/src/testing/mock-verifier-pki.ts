@@ -12,8 +12,10 @@ import { createTestCertificate, type TestCertificate, toPkcs8Pem } from './x509-
  * can arrange — so this mints an equivalent three-tier chain and hands the
  * pieces to the two parties that need different halves of it:
  *
- * - **QAuth** gets the leaf's private key, the chain (leaf + intermediate) and
- *   the anchor, as the three environment variables an operator would set.
+ * - **QAuth** gets the chain (leaf + intermediate) and the anchor, as the
+ *   public variables an operator sets, and the leaf's private key, which an
+ *   operator sets once for the key boot step to import into the key store
+ *   (#546).
  * - **The wallet** gets the ANCHOR ONLY, and gets it out of band — never from
  *   the request. That asymmetry is the whole assertion: a signed request whose
  *   `x5c` carried its own anchor would validate against itself, which is not
@@ -30,7 +32,10 @@ import { createTestCertificate, type TestCertificate, toPkcs8Pem } from './x509-
 
 /** A minted verifier PKI, in the two shapes its two consumers need. */
 export interface MockVerifierPki {
-  /** `OID4VP_VERIFIER_SIGNING_KEY` — the leaf's PKCS#8 private key. */
+  /**
+   * `OID4VP_VERIFIER_SIGNING_KEY` — the leaf's PKCS#8 private key, which the
+   * key boot step imports into the key store (#546).
+   */
   readonly signingKeyPem: string;
   /**
    * `OID4VP_VERIFIER_CERTIFICATE_CHAIN` — leaf first, then the intermediate,
@@ -115,7 +120,10 @@ export function createMockVerifierPki(options: CreateMockVerifierPkiOptions = {}
 }
 
 /**
- * The three environment variables an operator sets to provision this identity.
+ * The public variables an operator sets to provision this identity: the chain
+ * and its anchor. The key is not among them (#546): it is in the key store,
+ * from {@link verifierKeyVariable} on an earlier boot, or from the harness's
+ * `oid4vpRequestSigningKey`.
  *
  * Built from the PKI rather than written out by each suite, so a test cannot
  * configure a chain that does not match the key it also configured — which would
@@ -123,8 +131,16 @@ export function createMockVerifierPki(options: CreateMockVerifierPkiOptions = {}
  */
 export function verifierIdentityEnvironment(pki: MockVerifierPki): Record<string, string> {
   return {
-    OID4VP_VERIFIER_SIGNING_KEY: pki.signingKeyPem,
     OID4VP_VERIFIER_CERTIFICATE_CHAIN: pki.certificateChainPem,
     OID4VP_VERIFIER_TRUST_ANCHORS: pki.trustAnchorPem,
   };
+}
+
+/**
+ * The key variable an operator sets for one boot, which imports the leaf key
+ * into the default realm's key store as its `oid4vp_request_signing` key
+ * (#546).
+ */
+export function verifierKeyVariable(pki: MockVerifierPki): Record<string, string> {
+  return { OID4VP_VERIFIER_SIGNING_KEY: pki.signingKeyPem };
 }

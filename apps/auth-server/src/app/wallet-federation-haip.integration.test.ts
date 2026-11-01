@@ -1,6 +1,8 @@
+import { protectEphemeralKey } from '@qauth-labs/fastify-plugin-federation';
+import { OID4VP_RESPONSE_KEY_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance } from 'fastify';
-import { decodeProtectedHeader, exportJWK, generateKeyPair } from 'jose';
+import { decodeProtectedHeader, exportJWK, generateKeyPair, type JWK } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -53,8 +55,10 @@ import {
  * #377 cleared the first three and #379 gave the fourth an operator surface:
  *
  *  1. ~~no WRPAC / X.509 verifier material is provisioned~~ — **CLEARED**
- *     (Phase A). `OID4VP_VERIFIER_SIGNING_KEY` and its chain/anchor siblings
- *     provision it, and this suite configures them.
+ *     (Phase A). The chain and anchor variables provision it, and this suite
+ *     configures them. The ES256 key the chain names is in the key store
+ *     (#546): every deployment here boots with no `OID4VP_VERIFIER_SIGNING_KEY`
+ *     set, after an earlier boot imported it (`oid4vpRequestSigningKey`).
  *  2. ~~`signingAlgs: ['ES256']` unmet~~ — **CLEARED** (Phase A).
  *     `deriveCryptoCapabilities` claims ES256 for a deployment that provisioned
  *     both halves.
@@ -139,7 +143,8 @@ function haipVerifierEnvironment(pki: ReturnType<typeof createMockVerifierPki>) 
     OID4VP_SUBJECT_BINDING_CLAIMS: BINDING_CLAIMS,
     // The verifier identity #377 made provisionable. Without it every refusal
     // below would fire on the CERTIFICATE count, and the assertions would pass
-    // for the state that existed before any of this work.
+    // for the state that existed before any of this work. The chain alone: the
+    // key it names is in the key store (#546).
     ...verifierIdentityEnvironment(pki),
   };
 }
@@ -426,14 +431,16 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     response_encryption_kid: string | null;
     response_encryption_private_jwk: string | null;
     response_encryption_key_protection: string | null;
+    response_encryption_sealing_kid: string | null;
   }> {
     const { rows } = await app.dbPool.query<{
       redeemed_at: string | null;
       response_encryption_kid: string | null;
       response_encryption_private_jwk: string | null;
       response_encryption_key_protection: string | null;
+      response_encryption_sealing_kid: string | null;
     }>(
-      'select redeemed_at, response_encryption_kid, response_encryption_private_jwk, response_encryption_key_protection from oid4vp_request_states where state_hash = $1',
+      'select redeemed_at, response_encryption_kid, response_encryption_private_jwk, response_encryption_key_protection, response_encryption_sealing_kid from oid4vp_request_states where state_hash = $1',
       [stateHash]
     );
     expect(rows).toHaveLength(1);
@@ -456,6 +463,49 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     return response.json() as { status: string; redirect_to?: string };
   }
 
+  /**
+   * Every E2E deployment boots with the verifier key in the default realm's
+   * key store, imported by an earlier boot, and no key variable (#546).
+   */
+  const STORED_REQUEST_KEY = { oid4vpRequestSigningKey: pki.signingKeyPem } as const;
+
+  /**
+   * Rewrite a request-state row's response key the way the release before
+   * #546 wrote it: the private JWK under the `plain` marker, or under
+   * `aes-256-gcm` with `OID4VP_RESPONSE_KEY_SECRET`, and no sealing key. The
+   * JWK is read back through the signer, the only holder of the key that
+   * sealed it.
+   */
+  async function rewriteAsPreviousRelease(
+    app: FastifyInstance,
+    stateHash: string,
+    secret?: string
+  ): Promise<void> {
+    const { rows } = await app.dbPool.query<{
+      realm_id: string;
+      response_encryption_kid: string;
+      response_encryption_private_jwk: string;
+    }>(
+      'select realm_id, response_encryption_kid, response_encryption_private_jwk from oid4vp_request_states where state_hash = $1',
+      [stateHash]
+    );
+    const row = rows[0];
+    if (row === undefined) throw new Error('rewriteAsPreviousRelease: no request state');
+    const plaintext = await app.signer.decrypt('api', {
+      realmId: row.realm_id,
+      ciphertext: row.response_encryption_private_jwk,
+      context: `${OID4VP_RESPONSE_KEY_CONTEXT_PREFIX}${row.response_encryption_kid}`,
+    });
+    const legacy = protectEphemeralKey(JSON.parse(plaintext.toString('utf8')) as JWK, {
+      kid: row.response_encryption_kid,
+      ...(secret === undefined ? {} : { secret: Buffer.from(secret, 'base64') }),
+    });
+    await app.dbPool.query(
+      'update oid4vp_request_states set response_encryption_private_jwk = $2, response_encryption_key_protection = $3, response_encryption_sealing_kid = null where state_hash = $1',
+      [stateHash, legacy.value, legacy.protection]
+    );
+  }
+
   /** Boot a deployment, seed it, and hand it to the body — then close it. */
   async function withDeployment<T>(
     environment: Record<string, string>,
@@ -466,7 +516,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
   ): Promise<T> {
     let booted: BootedAuthServer | undefined;
     try {
-      booted = await bootAuthServer(environment);
+      booted = await bootAuthServer(environment, STORED_REQUEST_KEY);
       await resetE2eState(booted.app);
       const ids = await seedClient(booted.app);
       return await body({ app: booted.app, ids });
@@ -562,9 +612,35 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     const wallet = await walletHolding(issuer);
 
     await withDeployment(haipEnv([issuer]), async ({ app, ids }) => {
+      // The key in the store, and no key variable (#546): the JAR below is
+      // signed by the signer with the stored key the chain names.
+      expect(process.env['OID4VP_VERIFIER_SIGNING_KEY']).toBeUndefined();
+      expect(process.env['OID4VP_VERIFIER_SIGNING_KEY_PATH']).toBeUndefined();
+      const leaf = pki.leaf.publicKey.export({ format: 'jwk' });
+      const requestKeys = await app.signer.getVerificationKeys(
+        'local',
+        ids.realmId,
+        'oid4vp_request_signing'
+      );
+      expect(
+        requestKeys.map((key) => [key.status, key.algorithm, key.publicJwk.x, key.publicJwk.y])
+      ).toEqual([['active', 'ES256', leaf.x, leaf.y]]);
+
       const asserted = 'haip-newcomer@example.com';
       await linkedAccount(app, wallet, asserted);
       const { flow, request, answer, stateHash } = await walletAnswers(app, wallet, asserted);
+
+      // The row holds the private half sealed by the signer, with the realm's
+      // data_at_rest key, and no marker of the release before (#546).
+      const sealed = await storedEncryptionColumns(app, stateHash);
+      expect(sealed.response_encryption_key_protection).toBeNull();
+      expect(sealed.response_encryption_sealing_kid).toMatch(/^[A-Za-z0-9_-]+$/);
+      expect(
+        sealed.response_encryption_private_jwk?.startsWith(
+          `v1.${sealed.response_encryption_sealing_kid as string}.`
+        )
+      ).toBe(true);
+      expect(sealed.response_encryption_private_jwk).not.toContain('"d"');
 
       // What the JAR asked for: the whole HAIP shape at once.
       expect(request.clientId.startsWith('x509_hash:')).toBe(true);
@@ -600,6 +676,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
         response_encryption_kid: null,
         response_encryption_private_jwk: null,
         response_encryption_key_protection: null,
+        response_encryption_sealing_kid: null,
       });
 
       // The login is real, and created nothing: the account is the one the
@@ -783,10 +860,10 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
     );
   }, 180_000);
 
-  it('decrypts a row whose key was stored under OID4VP_RESPONSE_KEY_SECRET', async () => {
-    // The opt-in at-rest envelope, end to end: the request helper wraps the
-    // private half under the configured secret, the intake unwraps it by the
-    // marker the ROW carries, and the login completes.
+  it('opens a row the previous release wrote under OID4VP_RESPONSE_KEY_SECRET (#546)', async () => {
+    // The upgrade path: a sign-in started on a node of the release before
+    // #546, whose row holds the key under the opt-in envelope and its marker,
+    // completes on this release while the secret is still set.
     const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
     const wallet = await walletHolding(issuer);
     const secret = Buffer.alloc(32, 7).toString('base64');
@@ -795,42 +872,70 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       haipEnv([issuer], { OID4VP_RESPONSE_KEY_SECRET: secret }),
       async ({ app }) => {
         await linkedAccount(app, wallet, 'haip-wrapped@example.com');
-        const { flow, answer } = await walletAnswers(app, wallet, 'haip-wrapped@example.com');
+        const { flow, answer, stateHash } = await walletAnswers(
+          app,
+          wallet,
+          'haip-wrapped@example.com'
+        );
 
-        // The row holds an ENVELOPE, not a JWK: the private scalar is not in the
-        // column in the clear, and the marker says which scheme wrote it.
-        const stored = await app.dbPool
-          .query<{
-            response_encryption_key_protection: string;
-            response_encryption_private_jwk: string;
-          }>(
-            'select response_encryption_key_protection, response_encryption_private_jwk from oid4vp_request_states where redeemed_at is null'
-          )
-          .then((result) => result.rows[0]);
-        expect(stored?.response_encryption_key_protection).toBe('aes-256-gcm');
-        expect(stored?.response_encryption_private_jwk.startsWith('1.')).toBe(true);
-        expect(stored?.response_encryption_private_jwk).not.toContain('"d"');
+        // This release sealed it through the signer, the secret set or not...
+        expect(
+          (await storedEncryptionColumns(app, stateHash)).response_encryption_sealing_kid
+        ).not.toBeNull();
+        // ...and the previous release would have written this.
+        await rewriteAsPreviousRelease(app, stateHash, secret);
+        const legacy = await storedEncryptionColumns(app, stateHash);
+        expect(legacy.response_encryption_key_protection).toBe('aes-256-gcm');
+        expect(legacy.response_encryption_sealing_kid).toBeNull();
+        expect(legacy.response_encryption_private_jwk?.startsWith('1.')).toBe(true);
 
         expect((await postWalletResponse(app, answer.formBody)).statusCode).toBe(200);
         expect((await pollStatus(app, flow)).status).toBe('complete');
       }
     );
-  }, 180_000);
+  }, 240_000);
 
-  it('refuses — and still consumes — a row written under a secret the process no longer holds', async () => {
-    // The bounded consequence the env doc names: rotate the secret with a
-    // sign-in in flight and that sign-in is lost, nothing else. The row is
-    // found by kid and SPENT before the envelope is opened, so the refusal is
-    // the uniform one and the correlator does not survive to be retried under
-    // the right secret later.
+  it('opens a plain row of the previous release until it expires, and refuses it after (#546)', async () => {
+    // The default posture before #546 stored the key in the clear under the
+    // `plain` marker, with no secret: such a row needs nothing to open. It
+    // lives as long as its request, at most 15 minutes, like every row.
+    const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
+    const wallet = await walletHolding(issuer);
+
+    await withDeployment(haipEnv([issuer]), async ({ app }) => {
+      await linkedAccount(app, wallet, 'haip-plain@example.com');
+
+      const live = await walletAnswers(app, wallet, 'haip-plain@example.com');
+      await rewriteAsPreviousRelease(app, live.stateHash);
+      expect(
+        (await storedEncryptionColumns(app, live.stateHash)).response_encryption_key_protection
+      ).toBe('plain');
+      expect((await postWalletResponse(app, live.answer.formBody)).statusCode).toBe(200);
+      expect((await pollStatus(app, live.flow)).status).toBe('complete');
+
+      const expired = await walletAnswers(app, wallet, 'haip-plain@example.com');
+      await rewriteAsPreviousRelease(app, expired.stateHash);
+      await app.dbPool.query(
+        'update oid4vp_request_states set expires_at = $2 where state_hash = $1',
+        [expired.stateHash, Date.now() - 1_000]
+      );
+      expect((await postWalletResponse(app, expired.answer.formBody)).statusCode).toBe(400);
+      expect((await pollStatus(app, expired.flow)).status).not.toBe('complete');
+    });
+  }, 240_000);
+
+  it("keeps a sealed key unreadable without the signer's key — and a signer without it refuses and still consumes the row (#546)", async () => {
+    // The private scalar is nowhere in the database: not in the row, and not
+    // in the key store, which holds the realm's data_at_rest key wrapped under
+    // the KEK. Only the signer opens it. A store that no longer holds the key
+    // the row names — the key lost, or a copy of the rows without it — opens
+    // nothing: the sign-in is refused with the uniform refusal, and the row is
+    // spent before the open is tried.
     if (infra === undefined) throw new Error('infrastructure not started');
     const issuer = await createMockIssuer(TRUSTED_ISSUER, 'k1');
     const wallet = await walletHolding(issuer);
-    const written = Buffer.alloc(32, 7).toString('base64');
-    const rotated = Buffer.alloc(32, 9).toString('base64');
 
-    // Written under one secret...
-    const first = await bootAuthServer(haipEnv([issuer], { OID4VP_RESPONSE_KEY_SECRET: written }));
+    const first = await bootAuthServer(haipEnv([issuer]), STORED_REQUEST_KEY);
     let flow: StartedFlow;
     let answer: WalletAuthorizationResponse;
     let stateHash: string;
@@ -838,21 +943,49 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       await resetE2eState(first.app);
       await seedClient(first.app);
       // An account the response WOULD sign in to, so "not complete" below is
-      // about the secret alone.
-      await linkedAccount(first.app, wallet, 'haip-rotated@example.com');
+      // about the key alone.
+      await linkedAccount(first.app, wallet, 'haip-sealed@example.com');
       ({ flow, answer, stateHash } = await walletAnswers(
         first.app,
         wallet,
-        'haip-rotated@example.com'
+        'haip-sealed@example.com'
       ));
+
+      const sealed = await storedEncryptionColumns(first.app, stateHash);
+      const sealingKid = sealed.response_encryption_sealing_kid as string;
+      const { rows: sealingKeys } = await first.app.dbPool.query<{
+        purpose: string;
+        status: string;
+      }>('select purpose, status from realm_keys where kid = $1', [sealingKid]);
+      expect(sealingKeys).toEqual([{ purpose: 'data_at_rest', status: 'active' }]);
+
+      // The scalar, read through the signer, appears in no row of either table.
+      const { rows } = await first.app.dbPool.query<{ realm_id: string }>(
+        'select realm_id from oid4vp_request_states where state_hash = $1',
+        [stateHash]
+      );
+      const plaintext = await first.app.signer.decrypt('api', {
+        realmId: (rows[0] as { realm_id: string }).realm_id,
+        ciphertext: sealed.response_encryption_private_jwk as string,
+        context: `${OID4VP_RESPONSE_KEY_CONTEXT_PREFIX}${sealed.response_encryption_kid as string}`,
+      });
+      const scalar = (JSON.parse(plaintext.toString('utf8')) as JWK).d as string;
+      expect(scalar.length).toBeGreaterThan(20);
+      for (const table of ['oid4vp_request_states', 'realm_keys']) {
+        const { rows: dump } = await first.app.dbPool.query<{ row: string }>(
+          `select row_to_json(t)::text as row from ${table} t`
+        );
+        expect(dump.length, table).toBeGreaterThan(0);
+        for (const { row } of dump) expect(row, table).not.toContain(scalar);
+      }
+
+      // The store loses the key the row names; the next boot creates another.
+      await first.app.dbPool.query('delete from realm_keys where kid = $1', [sealingKid]);
     } finally {
       await first.close();
     }
 
-    // ...and posted to a process holding another. Same Postgres and Redis —
-    // the row and the browser's flow record are both still there — so this is
-    // a rotation mid-flight, not a fresh deployment.
-    const second = await bootAuthServer(haipEnv([issuer], { OID4VP_RESPONSE_KEY_SECRET: rotated }));
+    const second = await bootAuthServer(haipEnv([issuer]), STORED_REQUEST_KEY);
     try {
       const refused = await second.app.inject({
         method: 'POST',
@@ -863,20 +996,19 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
       expect(refused.statusCode).toBe(400);
       expect(refused.json()).toMatchObject({ error: 'invalid_request' });
 
-      // Consumed — and the envelope the rotated secret could not open is gone
-      // with it: erased by the redemption itself, whether or not the decrypt
-      // that followed succeeded.
+      // Consumed, and the ciphertext erased by the redemption itself.
       expect(await storedEncryptionColumns(second.app, stateHash)).toEqual({
         redeemed: true,
         response_encryption_kid: null,
         response_encryption_private_jwk: null,
         response_encryption_key_protection: null,
+        response_encryption_sealing_kid: null,
       });
       expect((await pollStatus(second.app, flow)).status).not.toBe('complete');
     } finally {
       await second.close();
     }
-  }, 240_000);
+  }, 300_000);
 
   // ------------------------------------ the same-device return leg (#405)
 
@@ -915,6 +1047,7 @@ describe('wallet federation E2E — haip-1.0 with direct_post.jwt (real containe
         response_encryption_kid: null,
         response_encryption_private_jwk: null,
         response_encryption_key_protection: null,
+        response_encryption_sealing_kid: null,
       });
 
       // §14.2: the poll never completes a same-device flow.

@@ -62,8 +62,7 @@ vi.mock('../../config/env', async () => {
       // Deliberately unset — see the assertions.
       OID4VP_REQUESTED_VCT: undefined,
       OID4VP_WALLET_INVOCATION_ENDPOINT: 'openid4vp://',
-      OID4VP_VERIFIER_SIGNING_KEY: pki.signingKeyPem,
-      OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined,
+      // The chain alone: the key it names is in the key store (#546).
       OID4VP_VERIFIER_CERTIFICATE_CHAIN: pemBlocks(pki.certificateChainPem),
       OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [],
       OID4VP_VERIFIER_TRUST_ANCHORS: pemBlocks(pki.trustAnchorPem),
