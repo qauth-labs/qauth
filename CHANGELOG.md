@@ -1047,11 +1047,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against a double submit. A user switch ends the interaction and
   starts a new one for the same request at the identifier step, with nothing
   proved carried over and the request's absolute expiry kept. A switch made
-  after the person signed in also ends the browser session that sign-in
-  started and clears its cookie ([#896]), so a browser whose new ceremony is
-  abandoned is signed in as nobody and no client gets SSO from the first user;
-  `interaction.cancelled` records it with `sessionEnded: true`. An unknown,
-  expired or finished interaction and a wrong cookie get one
+  after the person signed in also ends, as a sign-out by the first user, the
+  browser session that sign-in started and the session the browser's cookie
+  names when it is a later one of the same user (a sign-in again in another
+  tab), and clears that cookie ([#896]); `interaction.cancelled` records it
+  with `sessionEnded: true`. A cookie session of another user stays, and when
+  the cookie keys cannot be read only the session the sign-in started ends. A
+  switch before anyone signed in ends no session, so a browser that was
+  already signed in when the interaction started stays signed in ([#964]). An
+  unknown, expired or finished interaction and a wrong cookie get one
   `interaction_expired` answer (410), the same bytes whatever the cause, and so
   does a finish after the session its sign-in started has ended, by a sign-out
   in another tab, a revoke or its own end ([#963]): no request completes under
@@ -2499,6 +2503,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#896]: https://github.com/qauth-labs/qauth/issues/896
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
+[#964]: https://github.com/qauth-labs/qauth/issues/964
 
 ### Deprecated
 
