@@ -503,6 +503,25 @@ describe('mix-up defence: a response for provider A at provider B’s callback',
     expect(b.provider.tokenRequests).toHaveLength(0);
   });
 
+  it('is refused when A and B are two aliases of one issuer', async () => {
+    const a = await setup('client_secret_basic', {}, { type: 'oidc_a' });
+    const b = await setup('client_secret_basic', {}, { type: 'oidc_b' });
+    const start = await startUpstreamStep(a.method, a.host.context, { uiLocales: [] });
+    const response = a.provider.authorize(new URL(start.redirectTo), PERSON);
+    expect(await callback(b, response, start.transaction)).toEqual({
+      kind: 'failed',
+      reason: 'transaction_mismatch',
+    });
+    // The provider and the callback both name A; either refuses it on its own.
+    expect(
+      await callback(b, response, {
+        ...start.transaction,
+        redirectUri: b.host.context.routeUrl('/callback'),
+      })
+    ).toEqual({ kind: 'failed', reason: 'transaction_mismatch' });
+    expect(b.provider.tokenRequests).toHaveLength(0);
+  });
+
   it('is refused with B’s own transaction when the response names A as its issuer', async () => {
     const { a, b } = await twoProviders();
     const startA = await startUpstreamStep(a.method, a.host.context, { uiLocales: [] });
