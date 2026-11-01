@@ -23,6 +23,7 @@ import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
+import { ladderEndUserIp } from '../../helpers/password-attempts';
 import { tokenLifetimesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { refreshFamilyEnd, refreshTokenExpiresAt } from '../../helpers/refresh-family';
@@ -118,7 +119,7 @@ export default async function (fastify: FastifyInstance) {
           attempt = await fastify.passwordAttempts.reserve({
             realmId: realm.id,
             identifier: normalizedEmail,
-            endUserIp: clientAddressKey(request),
+            ...ladderEndUserIp(request),
           });
         } catch (error) {
           if (!(error instanceof SignInStoreUnavailableError)) throw error;

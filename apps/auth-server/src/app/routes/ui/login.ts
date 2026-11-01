@@ -16,6 +16,7 @@ import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
+import { ladderEndUserIp } from '../../helpers/password-attempts';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -395,7 +396,7 @@ export default async function (fastify: FastifyInstance) {
         attempt = await fastify.passwordAttempts.reserve({
           realmId: realm.id,
           identifier: normalizedEmail,
-          endUserIp: clientAddressKey(request),
+          ...ladderEndUserIp(request),
         });
       } catch (error) {
         if (!(error instanceof SignInStoreUnavailableError)) throw error;

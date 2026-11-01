@@ -891,7 +891,12 @@ describe('UI /ui/login — the email field is bounded', () => {
 describe('UI /ui/login — the per-account failure ladder (#615)', () => {
   type Ladder = ReturnType<typeof createFakePasswordAttempts>;
 
-  async function setup(options: { verifies: boolean; credential?: Record<string, unknown> }) {
+  async function setup(options: {
+    verifies: boolean;
+    credential?: Record<string, unknown>;
+    /** The request's address; `undefined` for a request that carries none. */
+    ip?: string | undefined;
+  }) {
     vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
     // makeFastify's realm policies leave the verified-account gate off (#528).
     const { fastify, ctx, sessions } = makeFastify();
@@ -916,7 +921,7 @@ describe('UI /ui/login — the per-account failure ladder (#615)', () => {
         {
           body: { email: 'User@Example.com', password: 'pw', csrf_token: rawToken },
           headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
-          ip: '2001:db8:1:2:aaaa:bbbb:cccc:7',
+          ip: 'ip' in options ? options.ip : '2001:db8:1:2:aaaa:bbbb:cccc:7',
         },
         reply
       );
@@ -941,6 +946,16 @@ describe('UI /ui/login — the per-account failure ladder (#615)', () => {
         .invocationCallOrder[0]
     );
     expect(ladder.reserved[0].account).toEqual({ userId: 'user-1' });
+  });
+
+  it('hands the ladder no end-user IP for a request with no client address, so none is exempted or made known', async () => {
+    const { ladder, post } = await setup({ verifies: false, ip: undefined });
+    expect((await post()).statusCode).toBe(401);
+    expect(ladder.reserve).toHaveBeenCalledOnce();
+    expect(ladder.reserve.mock.calls[0][0]).toStrictEqual({
+      realmId: REALM.id,
+      identifier: 'user@example.com',
+    });
   });
 
   it('refuses an attempt inside the wait with 429 and Retry-After, verifying nothing', async () => {

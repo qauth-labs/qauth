@@ -1263,7 +1263,12 @@ describe('POST /auth/login', () => {
 describe('POST /auth/login — the per-account failure ladder (#615)', () => {
   type Ladder = ReturnType<typeof createFakePasswordAttempts>;
 
-  async function setup(options: { verifies: boolean; credential?: Record<string, unknown> }) {
+  async function setup(options: {
+    verifies: boolean;
+    credential?: Record<string, unknown>;
+    /** The request's address; `undefined` for a request that carries none. */
+    ip?: string | undefined;
+  }) {
     const { fastify, ctx } = createFastifyStub();
     await loginRoute(fastify);
     const handler = ctx.handler;
@@ -1286,7 +1291,7 @@ describe('POST /auth/login — the per-account failure ladder (#615)', () => {
       handler(
         {
           body: { email: 'User@Example.com', password: 'pw' },
-          ip: '2001:db8:1:2:aaaa:bbbb:cccc:7',
+          ip: 'ip' in options ? options.ip : '2001:db8:1:2:aaaa:bbbb:cccc:7',
           headers: { 'user-agent': 'vitest' },
           log: requestLog(),
         },
@@ -1307,6 +1312,16 @@ describe('POST /auth/login — the per-account failure ladder (#615)', () => {
       (fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock).mock
         .invocationCallOrder[0]
     );
+  });
+
+  it('hands the ladder no end-user IP for a request with no client address, so none is exempted or made known', async () => {
+    const { ladder, login } = await setup({ verifies: true, ip: undefined });
+    await expect(login()).resolves.toMatchObject({ access_token: 'jwt' });
+    expect(ladder.reserve).toHaveBeenCalledOnce();
+    expect(ladder.reserve.mock.calls[0][0]).toStrictEqual({
+      realmId: REALM.id,
+      identifier: 'user@example.com',
+    });
   });
 
   it('refuses an attempt inside the wait with 429 and Retry-After, verifying nothing', async () => {

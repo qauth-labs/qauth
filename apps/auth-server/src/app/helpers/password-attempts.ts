@@ -11,6 +11,11 @@ import {
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance } from 'fastify';
 
+import {
+  clientAddressKey,
+  type ClientAddressSource,
+  UNKNOWN_CLIENT_ADDRESS,
+} from './client-address';
 import { cookieKeyRing } from './cookie-keys';
 
 declare module 'fastify' {
@@ -23,6 +28,27 @@ declare module 'fastify' {
      */
     passwordAttempts: PasswordAttempts;
   }
+}
+
+/**
+ * The end-user IP a password attempt hands the failure ladder (#615), as the
+ * fields of `fastify.passwordAttempts.reserve`: the client address key
+ * (`clientAddressKey`, an IPv6 client by its /64), or no `endUserIp` at all
+ * when the request carries no client address.
+ *
+ * `clientAddressKey` keys every address-less request as one constant
+ * (`UNKNOWN_CLIENT_ADDRESS`), as a listener on a Unix socket sees every
+ * client. Handed to the ladder, that constant would make all such clients one
+ * known IP: a single successful sign-in from any of them would exempt every
+ * other from the account's wait for 30 days. Without an `endUserIp` the
+ * attempt still counts, but is neither exempted nor recorded as a known IP.
+ *
+ * Every route that reserves a password attempt passes its request through
+ * here, so none hands the ladder the constant.
+ */
+export function ladderEndUserIp(request: ClientAddressSource): { readonly endUserIp?: string } {
+  const key = clientAddressKey(request);
+  return key === UNKNOWN_CLIENT_ADDRESS ? {} : { endUserIp: key };
 }
 
 /**

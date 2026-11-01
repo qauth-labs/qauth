@@ -20,6 +20,7 @@ import type { BruteForcePolicy } from './account-policies';
 import { hashEmail } from './auth-events';
 import { clientAddressKey, type ClientAddressSource } from './client-address';
 import { recordSuccessfulLogin, registerLoginAttempt } from './failed-login';
+import { ladderEndUserIp } from './password-attempts';
 
 /** The `Retry-After` of a verification refused because the failure ladder's store failed (#615). */
 const LADDER_UNAVAILABLE_RETRY_SECONDS = 5;
@@ -196,7 +197,7 @@ export async function verifyEmailAddress(
     attempt = await fastify.passwordAttempts.reserve({
       realmId: credential.realmId,
       identifier: credential.externalSub,
-      endUserIp: clientAddressKey(request),
+      ...ladderEndUserIp(request),
     });
   } catch (error) {
     if (!(error instanceof SignInStoreUnavailableError)) throw error;

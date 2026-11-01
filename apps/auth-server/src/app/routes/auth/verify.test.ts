@@ -396,6 +396,21 @@ describe('POST /auth/verify', () => {
         expect(reservation.succeeded).not.toHaveBeenCalled();
       });
 
+      it('hands the ladder no end-user IP for a request with no client address, so none is exempted or made known', async () => {
+        const { fastify, handler } = await setup({ verifies: false });
+        const attempts = attemptsOf(fastify);
+
+        await expect(handler({ ...request, ip: undefined }, createReply().reply)).rejects.toThrow(
+          InvalidCredentialsError
+        );
+
+        expect(attempts.reserve).toHaveBeenCalledOnce();
+        expect(attempts.reserve.mock.calls[0][0]).toStrictEqual({
+          realmId: REALM_ID,
+          identifier: 'user@example.com',
+        });
+      });
+
       it('refuses an attempt inside the wait before the compare, with Retry-After', async () => {
         const { fastify, handler } = await setup({ verifies: true });
         attemptsOf(fastify).reserve.mockResolvedValueOnce({ kind: 'wait', retryAfterSeconds: 8 });
