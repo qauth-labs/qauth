@@ -158,9 +158,13 @@ describe('isNativeBrowserLegRedirectUri (#631)', () => {
     }
   });
 
-  it('refuses plain http to a host, localhost by name, a scheme with no domain and what the screen cannot show', () => {
+  it('refuses plain http to a host, a fragment, localhost by name, a scheme with no domain and what the screen cannot show', () => {
     for (const uri of [
       'http://notes.example.com/callback',
+      // A fragment, even an empty one (RFC 6749 §3.1.2).
+      'https://notes.example.com/app/callback#done',
+      'https://notes.example.com/app/callback#',
+      'com.example.notes:/callback#x',
       'http://localhost:8080/callback',
       'http://dev.localhost/callback',
       'http://0.0.0.0/callback',

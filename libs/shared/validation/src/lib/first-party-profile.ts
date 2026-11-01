@@ -141,11 +141,14 @@ function isLoopbackIpLiteral(hostname: string): boolean {
  * - an `http` loopback URI with an IP literal (RFC 8252 §7.3), such as
  *   `http://127.0.0.1/callback`.
  *
- * And always one the consent screen can describe ({@link redirectTarget}).
+ * And always one the consent screen can describe ({@link redirectTarget}),
+ * with no fragment (RFC 6749 §3.1.2): an authorization request names the
+ * callback without one, and the exact match would never find it.
  * Whether an `https` URI is really claimed by the app and never served by the
  * backend cannot be checked here; that stays a requirement of the profile.
  */
 export function isNativeBrowserLegRedirectUri(redirectUri: string): boolean {
+  if (redirectUri.includes('#')) return false;
   const target = redirectTarget(redirectUri);
   if (target === undefined) return false;
   const url = new URL(redirectUri);
