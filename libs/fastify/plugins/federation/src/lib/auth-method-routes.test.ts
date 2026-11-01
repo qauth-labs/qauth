@@ -482,8 +482,9 @@ describe('AuthMethod routes', () => {
     expect(Object.getPrototypeOf(request.query)).toBeNull();
     // An own member named __proto__, as the query the handler sees holds it;
     // compared as entries, so the test never builds such an object itself.
-    expect(Object.hasOwn(request.query, '__proto__')).toBe(true);
-    expect(Object.entries(request.query)).toEqual([
+    const query = request.query as Record<string, string>;
+    expect(Object.hasOwn(query, '__proto__')).toBe(true);
+    expect(Object.entries(query)).toEqual([
       ['__proto__', 'x'],
       ['state', BINDING],
     ]);
