@@ -631,9 +631,16 @@ client only with `--rotate`, which also issues a new secret). A later
 `--rotate` refuses an entry without the list for a client that has one, so the
 manifest and the row stay in step.
 
-Set the list only after every node runs this release. A node of the previous
-release does not read the column and keeps issuing every scope of `scopes` on
-`client_credentials`.
+The list takes effect on a node once that node runs this release. Until every
+node does, a node of the previous release, which does not read the column,
+still issues every scope of `scopes` on `client_credentials`. Setting the list
+during the roll does no harm: such a node's writes to the client, a `--rotate`
+of its seeder included, do not name the column and leave the list as it is.
+
+Rolling back to an earlier release without restoring the backup lifts every
+list, because its token endpoint ignores the column. The column and its values
+are kept, and the lists apply again once the nodes run this release again;
+restoring the backup from before the upgrade removes them with the column.
 
 ## Upgrading within 1.x
 

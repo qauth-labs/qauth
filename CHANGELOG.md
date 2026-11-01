@@ -2498,13 +2498,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page's receiver example now lists `["ssf:stream"]` there, and its warning
   covers only a client without the list.
 
-  **Action for operators**: once every node runs this release, give every
-  client that signs users in and holds `client_credentials` a
-  `client_credentials_scopes`, an SSF receiver's `["ssf:stream"]`, in its
-  manifest entry. The seeder writes an existing client only with `--rotate`;
+  **Action for operators**: give every client that signs users in and holds
+  `client_credentials` a `client_credentials_scopes`, an SSF receiver's
+  `["ssf:stream"]`, in its manifest entry, and keep an SSF receiver's
+  `audience` to the realm's issuer alone: the list narrows the token's scopes,
+  not its `aud`. The seeder writes an existing client only with `--rotate`;
   without rotating, also set the column with an `UPDATE` (see the SSF
-  transmitter page and the upgrade guide). A node of the previous release
-  ignores the column.
+  transmitter page and the upgrade guide). The list takes effect on a node
+  once that node runs this release; until every node does, a node of the
+  previous release, which ignores the column, still issues every scope of
+  `scopes`. Setting it during the roll does no harm, since such a node's
+  writes leave the column as it is. Rolling back to an earlier release without
+  restoring the backup lifts every list, because older code ignores the
+  column; the column and its values are kept, and the lists apply again after
+  upgrading.
 
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped

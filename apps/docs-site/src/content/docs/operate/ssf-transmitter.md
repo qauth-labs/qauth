@@ -137,6 +137,12 @@ a `client_credentials` request for one of them is refused with `invalid_scope`. 
 a list that names a scope `scopes` does not hold, and the list on a client without the
 `client_credentials` grant.
 
+Keep the realm's issuer the client's only `audience` (without one, the token's `aud` is the
+client's `client_id`, which `/ssf/` refuses). The list narrows a `client_credentials` token's
+scopes, not its `aud`, which is the client's `audience`: a resource server listed there beside the
+issuer finds itself in the `aud` of a token that names no user, and accepts it if it checks only
+`aud` and the signature.
+
 The receiver then gets a token:
 
 ```bash
