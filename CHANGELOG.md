@@ -103,7 +103,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mail after a change, keyed by realm id and `policies_version`, so a change
   reaches the next mail without a restart; app.ts no longer builds one provider
   for the process. The SMTP password and the Resend API key go to the new
-  realm secret store: migration 0048 adds `realm_secrets`, which holds each
+  realm secret store: migration 0049 adds `realm_secrets`, which holds each
   value encrypted with the realm's data-at-rest key by the signer, under a
   context that names the field, and CHECKs refuse anything but that ciphertext.
   The representation (`policyStore.representation`) shows only `passwordSet`

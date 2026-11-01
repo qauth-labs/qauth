@@ -409,7 +409,7 @@ From this release each realm sends its mail through its own transport and from
 its own sender: `mail.provider`, `mail.fromAddress`, `mail.fromName` and
 `mail.smtp.*` of its policies, read again for every mail
 ([#529](https://github.com/qauth-labs/qauth/issues/529)). The SMTP password and
-the Resend API key are secrets: migration 0048 adds the `realm_secrets` table,
+the Resend API key are secrets: migration 0049 adds the `realm_secrets` table,
 which holds each value encrypted with the realm's data-at-rest key and never
 in the clear, and no response, log line, audit record or realm file shows one.
 The realm's representation says only whether each is set (`passwordSet`,

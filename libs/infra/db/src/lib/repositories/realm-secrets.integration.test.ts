@@ -1,6 +1,6 @@
 /**
  * Real-Postgres integration tests for `realm_secrets` (issue #529, migration
- * 0048).
+ * 0049).
  *
  * The table's promise lives in its DDL: it holds the signer's ciphertext and
  * never a plaintext, and a secret's row stays once written. Only a database
