@@ -1,6 +1,7 @@
 import {
-  authMethodRoutesPlugin,
+  type AuthMethodRouteHost,
   completeUpstreamStep,
+  mountAuthMethodRoutes,
 } from '@qauth-labs/fastify-plugin-federation';
 import { BadRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
@@ -12,7 +13,13 @@ import { requestRealm } from '../helpers/request-realm';
 /**
  * THE ROUTES OF AuthMethod PLUGINS (ADR-019 Decision 12, issues #599 and
  * #600): each loaded plugin's routes, under `/upstream/<type>` on the realm
- * host, mounted by `authMethodRoutesPlugin` from the provider registry.
+ * host, mounted by `mountAuthMethodRoutes` from the provider registry's
+ * method of each installed plugin's type, and no other method's. A built-in
+ * AuthMethod, such as a provider of the generic upstream OpenID Connect
+ * client, is no plugin: its realm state is not a plugin row, so the gate
+ * below would answer 404 for it forever. Provider administration (#714)
+ * mounts the built-in AuthMethods with a context of their own when it
+ * registers them.
  *
  * A route of a plugin the request's realm has not enabled answers as a path
  * no route serves: the `not_found` problem document, from a `preParsing`
@@ -42,8 +49,14 @@ function routeType(url: string | undefined): string | undefined {
 }
 
 const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
+  // The registry's method of each installed plugin's type: the snapshot the
+  // registry checked. A built-in AuthMethod is mounted with its own context
+  // when #714 registers it, never here, behind the plugin gate.
+  const methods = fastify.providerRegistry
+    .authMethods()
+    .filter((method) => fastify.authMethodPlugins.ofType(method.type) !== undefined);
   // No plugin loaded: no route, and no hook.
-  if (fastify.providerRegistry.authMethods().length === 0) return;
+  if (methods.length === 0) return;
 
   // Checked in `preParsing`, after the request ceiling (a route-level
   // `onRequest` hook) and before the body is read: a flood of requests to an
@@ -75,20 +88,19 @@ const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
-  await fastify.register(authMethodRoutesPlugin, {
-    host: {
-      contextFor: (method, request) => authMethodPluginContext(fastify, request, method),
-      // No upstream step is offered before #639, so no transaction is pending.
-      peekTransaction: async () => undefined,
-      takeTransaction: async () => undefined,
-      async complete(method, outcome) {
-        // A fault of the method (its bounce or its context failed) ends as
-        // every fault does: the generic error and its trace id.
-        await completeUpstreamStep(method, outcome);
-        throw new BadRequestError('No sign-in through this provider is pending in this browser');
-      },
+  const host: AuthMethodRouteHost = {
+    contextFor: (method, request) => authMethodPluginContext(fastify, request, method),
+    // No upstream step is offered before #639, so no transaction is pending.
+    peekTransaction: async () => undefined,
+    takeTransaction: async () => undefined,
+    async complete(method, outcome) {
+      // A fault of the method (its bounce or its context failed) ends as
+      // every fault does: the generic error and its trace id.
+      await completeUpstreamStep(method, outcome);
+      throw new BadRequestError('No sign-in through this provider is pending in this browser');
     },
-  });
+  };
+  for (const method of methods) mountAuthMethodRoutes(fastify, method, host);
 };
 
 export default upstreamRoutes;
