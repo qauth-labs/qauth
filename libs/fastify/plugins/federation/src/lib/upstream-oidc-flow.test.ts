@@ -168,6 +168,9 @@ beforeAll(async () => {
   egress = createEgressClient({ allowlist: ALLOWLIST });
   signer = createTestSigner({ refreshIntervalMs: 0 });
   realmId = await signer.addRealm({ issuer: ORIGIN });
+  // The private_key_jwt case's assertion key: an RSA key, made here rather
+  // than under that test's own timeout.
+  await signer.addUpstreamClient(realmId, 'oidc_private_key_jwt', { clientId: CLIENT_ID });
   // Certificates and RSA keys: slow when every project's suite runs at once.
 }, 30_000);
 
@@ -384,11 +387,9 @@ describe('the code flow with PKCE, against a mock provider', () => {
   it.each(['client_secret_basic', 'client_secret_post', 'private_key_jwt'] as const)(
     'signs a person in with %s',
     async (authentication) => {
+      // The signer holds the oidc_private_key_jwt assertion key from beforeAll.
       const type = `oidc_${authentication}`;
       registerClient(publicProvider, type, authentication);
-      if (authentication === 'private_key_jwt') {
-        await signer.addUpstreamClient(realmId, type, { clientId: CLIENT_ID });
-      }
       const { app } = await boot(type, await seal(type, configFor(authentication)));
       const tokenRequestsBefore = publicProvider.tokenRequests.length;
       const assertionsBefore = publicProvider.assertions.length;
