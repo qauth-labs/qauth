@@ -11,7 +11,7 @@ import {
   routeProblems,
   upstreamBindingMatches,
 } from '@qauth-labs/server-federation';
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest, FastifySchema } from 'fastify';
 import fp from 'fastify-plugin';
 
 import packageJson from '../../package.json';
@@ -157,11 +157,19 @@ export function mountAuthMethodRoutes(
       exposeHeadRoute: false,
       // Not part of QAuth's API: a deployment's sign-in callbacks, which its
       // OpenAPI document does not list (#600).
-      schema: { hide: true },
+      schema: hiddenFromOpenapi(),
       handler: async (request, reply) => handle(mounted, request, reply),
     });
   }
 }
+
+/**
+ * The schema of a mounted route: `hide`, which `@fastify/swagger` reads to
+ * leave a route out of the OpenAPI document. This lib does not depend on the
+ * swagger plugin, whose types declare the member, hence the cast. A new
+ * object per route: Fastify marks the schema object it compiles.
+ */
+const hiddenFromOpenapi = (): FastifySchema => ({ hide: true }) as unknown as FastifySchema;
 
 /** The largest body a method's route reads, in bytes. */
 const MAX_ROUTE_BODY_BYTES = 64 * 1024;
