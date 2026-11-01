@@ -51,8 +51,11 @@ function keysReadFromRealmRow(): ReadonlyMap<string, string> {
 
 /** The names of `keys` that `source` reads, with the line of each read. */
 function readsIn(source: string, keys: ReadonlySet<string>, fileName = 'sample.ts') {
-  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const reads: { key: string; line: number }[] = [];
+  // A file that names no key cannot read one: parse only the others, which
+  // keeps the walk of the whole source tree to a few files.
+  if (![...keys].some((key) => source.includes(key))) return reads;
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true);
   const found = (key: string, node: ts.Node) => {
     if (keys.has(key)) {
       reads.push({ key, line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1 });
@@ -147,7 +150,7 @@ describe('environment keys of policies read from the realm row (#528)', () => {
     }
 
     expect(unexpected).toEqual([]);
-  });
+  }, 30_000);
 
   it('allows only reads that still happen, of keys it watches', () => {
     for (const [key, paths] of Object.entries(ALLOWED_READS)) {

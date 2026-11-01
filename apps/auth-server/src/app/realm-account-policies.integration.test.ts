@@ -57,6 +57,8 @@ const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const WRONG_PASSWORD = 'Wrong-Password-For-This-Account-7!';
 /** zxcvbn scores it 1: weak, below the seeded lowest score of 2. */
 const SCORE_ONE_PASSWORD = 'monkey12345';
+/** A source address of its own, for guesses whose lockout must not reach the suite's other sign-ins. */
+const GUESSER = '198.51.100.7';
 
 describe('account policies read from the realm row (#528, real containers)', () => {
   let infra: E2eInfrastructure | undefined;
@@ -136,31 +138,18 @@ describe('account policies read from the realm row (#528, real containers)', () 
     app.realmHostCache.clear();
   }
 
-  /** `POST /auth/register` at `host`, the account left unverified. */
-  function register(
+  /**
+   * `POST /auth/register` at `host` of a new address, the account left
+   * unverified. An accepted registration's verification mail goes out off the
+   * request path: it is waited for, so no mail is still being sent when the
+   * next test empties the database.
+   */
+  async function register(
     app: FastifyInstance,
     host: string,
     email: string,
     password = E2E_PASSWORD
   ): Promise<LightMyRequestResponse> {
-    return app.inject({
-      method: 'POST',
-      url: '/auth/register',
-      headers: { host },
-      payload: { email, password },
-    });
-  }
-
-  /**
-   * Register an account at `host` and leave it unverified. Waits for the
-   * verification mail, which goes out off the request path, so no mail is
-   * still being sent when the next test empties the database.
-   */
-  async function registerUnverified(
-    app: FastifyInstance,
-    host: string,
-    email: string
-  ): Promise<void> {
     const emailService = app.emailService;
     const original = emailService.sendVerificationEmail;
     let sent = false;
@@ -170,31 +159,60 @@ describe('account policies read from the realm row (#528, real containers)', () 
       return result;
     };
     try {
-      const response = await register(app, host, email);
-      expect(response.statusCode, response.body).toBe(202);
-      const deadline = Date.now() + 5_000;
-      while (!sent && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
+      const response = await app.inject({
+        method: 'POST',
+        url: '/auth/register',
+        headers: { host },
+        payload: { email, password },
+      });
+      if (response.statusCode === 202) {
+        const deadline = Date.now() + 5_000;
+        while (!sent && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(sent, `the verification mail to ${email}`).toBe(true);
       }
-      expect(sent).toBe(true);
+      return response;
     } finally {
       emailService.sendVerificationEmail = original;
     }
   }
 
-  /** `POST /auth/login` at `host`. */
+  /** Register an account at `host` and leave it unverified. */
+  async function registerUnverified(
+    app: FastifyInstance,
+    host: string,
+    email: string
+  ): Promise<void> {
+    const response = await register(app, host, email);
+    expect(response.statusCode, response.body).toBe(202);
+  }
+
+  /** `POST /auth/login` at `host`, from `remoteAddress` when given. */
   function apiLogin(
     app: FastifyInstance,
     host: string,
     email: string,
-    password = E2E_PASSWORD
+    password = E2E_PASSWORD,
+    remoteAddress?: string
   ): Promise<LightMyRequestResponse> {
     return app.inject({
       method: 'POST',
       url: '/auth/login',
       headers: { host },
       payload: { email, password },
+      ...(remoteAddress === undefined ? {} : { remoteAddress }),
     });
+  }
+
+  /**
+   * A problem document without its `trace_id`, which is the request id and so
+   * differs between any two requests (#513). Every other member must match.
+   */
+  function stableProblem(response: LightMyRequestResponse): Record<string, unknown> {
+    const { trace_id: traceId, ...rest } = response.json() as Record<string, unknown>;
+    expect(traceId).toEqual(expect.any(String));
+    return rest;
   }
 
   /** The `/ui/login` form at `host`, CSRF included, as a browser fills it in. */
@@ -265,7 +283,7 @@ describe('account policies read from the realm row (#528, real containers)', () 
     const refused = await apiLogin(app, HOST_A, 'unverified@example.com');
     const wrong = await apiLogin(app, HOST_A, 'unverified@example.com', WRONG_PASSWORD);
     expect(refused.statusCode).toBe(401);
-    expect(refused.json()).toEqual(wrong.json());
+    expect(stableProblem(refused)).toEqual(stableProblem(wrong));
     const refusedForm = await formLogin(app, HOST_A, 'unverified@example.com');
     expect(refusedForm.statusCode).toBe(401);
     expect(refusedForm.body).toContain('confirm your email address first');
@@ -411,6 +429,19 @@ describe('account policies read from the realm row (#528, real containers)', () 
         password: { minScore: 2 },
         bruteForce: { enabled: true, maxAttempts: 5 },
       });
+      // Its environment turns the lockout off; the realm's stored policy locks
+      // after five failures, and that node applies it. From an address of its
+      // own, so the first node's sign-ins below are not counted with it.
+      await registerPasswordAccount(other.app, 'locked@example.com');
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        expect(
+          (await apiLogin(other.app, HOST_A, 'locked@example.com', WRONG_PASSWORD, GUESSER))
+            .statusCode
+        ).toBe(401);
+      }
+      expect(
+        (await apiLogin(other.app, HOST_A, 'locked@example.com', E2E_PASSWORD, GUESSER)).statusCode
+      ).toBe(429);
 
       // A realm that node creates gets its environment's values.
       const { realm: gamma } = await other.app.repositories.realms.createWithPrimaryHost(

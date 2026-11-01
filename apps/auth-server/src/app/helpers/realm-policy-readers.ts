@@ -1,7 +1,4 @@
-import type {
-  RealmPolicies,
-  RealmPolicyStoreOfRealms,
-} from '@qauth-labs/fastify-plugin-realm-policy';
+import type { RealmPolicyStoreOfRealms } from '@qauth-labs/fastify-plugin-realm-policy';
 import type { FastifyInstance } from 'fastify';
 
 import type { RealmRow } from './request-realm';

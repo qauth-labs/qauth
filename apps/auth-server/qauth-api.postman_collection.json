@@ -125,7 +125,7 @@
               "host": ["{{baseUrl}}"],
               "path": ["auth", "register"]
             },
-            "description": "Register a password account.\n\nAnswers every address with the same 202 and message, whether it was free or already registered. The next step arrives by email: a verification link for a new account, a notice for an existing one. The account can log in once its address is verified (REQUIRE_VERIFIED_ACCOUNT, default true)."
+            "description": "Register a password account.\n\nAnswers every address with the same 202 and message, whether it was free or already registered. The next step arrives by email: a verification link for a new account, a notice for an existing one. The account can log in once its address is verified (the realm's accounts.requireVerifiedAccount, default true)."
           }
         },
         {
