@@ -1578,6 +1578,49 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     };
   }
 
+  // ADR-019 Decision 7: a token for the admin API lives at most the realm's
+  // admin lifetime, whatever the client's tier gives; the ID token keeps the
+  // realm's access lifetime.
+  it.each([
+    ['caps a token for the admin API at the admin lifetime', ADMIN_API_AUDIENCE, 120],
+    ['leaves a token for any other audience at the tier lifetime', 'https://api.example.com', 300],
+  ])('%s', async (_label, resource, expected) => {
+    const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+    client.audience = ['https://api.example.com', ADMIN_API_AUDIENCE];
+    (fastify as unknown as { policyStore: unknown }).policyStore = testPolicyStore({
+      ...REALM_LIFETIMES,
+      adminAccessTokenLifespanSeconds: 120,
+    });
+    (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
+      liveBuiltInGrant('viewer'),
+    ]);
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, scopes: ['openid', 'read:foo'], resource: [resource] });
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      scopes: ['openid', 'read:foo'],
+      revokedAt: null,
+    });
+    await tokenRoute(fastify);
+    if (!ctx.handler) throw new Error('Handler missing');
+
+    const result = await ctx.handler(
+      { ...baseRequest(), realm: REALM_WITH_POLICIES },
+      createReply()
+    );
+
+    expect(result).toMatchObject({ expires_in: expected });
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ aud: resource, expiresInOverride: expected })
+    );
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: 300 })
+    );
+  });
+
   it("signs the access, ID and refresh tokens with the realm's lifetimes, from the row it already has (#527)", async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     const realmReads = withRealmLifetimes(fastify);

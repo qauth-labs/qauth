@@ -688,8 +688,7 @@ Every way of ending a grant stops new tokens being minted from it:
 | `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
 
 **Otherwise, access tokens already issued under the grant are not reached.**
-They are stateless JWTs and stay valid until `exp` (the realm's
-`tokens.accessTokenLifespanSeconds`, 900 s by default) wherever they are accepted: at resource servers that verify
+They are stateless JWTs and stay valid until `exp` wherever they are accepted: at resource servers that verify
 them locally, at introspection, at `/oauth/userinfo`, and as a token-exchange
 `subject_token`. Only an access token revoked by value, at `/oauth/revoke` or
 as the token presented to `/auth/logout`, or by a replay of the grant it came
@@ -699,7 +698,12 @@ routes, not a resource server that verifies the JWT locally. A replay revokes
 the access tokens QAuth recorded when it issued them, in Redis; one issued
 while Redis could not record it, or a replay while Redis is unavailable, leaves
 the token valid until it expires, and the server logs it. A short
-access-token lifetime is what bounds this window. A delegated token from token
+access-token lifetime is what bounds this window: the realm's
+`tokens.accessTokenLifespanSeconds` (900 s by default) for a staging or
+production client, its `tokens.developmentAccessTokenLifespanSeconds` (8 hours
+by default) for a development client, each at most a day, and at most its
+`tokens.adminAccessTokenLifespanSeconds` (600 s by default, at most 900 s) for a
+token whose audience is the admin API. A delegated token from token
 exchange, and an ID-JAG minted from one, never outlive the subject token they
 were derived from.
 

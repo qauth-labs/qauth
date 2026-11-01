@@ -28,6 +28,9 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   'tokens.accessTokenLifespanSeconds',
   'tokens.developmentAccessTokenLifespanSeconds',
   'tokens.refreshTokenLifespanSeconds',
+  // The token endpoint: the ceiling of a token for the admin API (ADR-019
+  // Decision 7), which no environment key seeds.
+  'tokens.adminAccessTokenLifespanSeconds',
 ]);
 
 /**
@@ -64,6 +67,11 @@ export interface TokenLifetimes {
   readonly developmentAccessTokenLifespanSeconds: number;
   /** How long a newly issued or rotated refresh token is valid, from its issue. */
   readonly refreshTokenLifespanSeconds: number;
+  /**
+   * The longest an access token whose audience is the admin API may live
+   * (ADR-019 Decision 7: at most 900 s), whatever its client's tier gives.
+   */
+  readonly adminAccessTokenLifespanSeconds: number;
 }
 
 /**
@@ -80,9 +88,9 @@ export interface TokenLifetimes {
  * 0: created by a node of the previous release during a rolling upgrade,
  * until a boot fills it) runs on the JWT plugin's lifespans, which the
  * environment gave at registration, as every realm did before #527, and on
- * the development lifetime its fill will store, the environment's seed. The
- * fill moves the same values onto the row, so the lifetimes do not change
- * when it lands.
+ * the development and admin lifetimes its fill will store, the environment's
+ * seed and the schema's default. The fill moves the same values onto the row,
+ * so the lifetimes do not change when it lands.
  *
  * The store reads the whole document, so a value the schema refuses in any
  * group, not only `tokens`, fails the request (a server error, logged) rather
@@ -109,11 +117,13 @@ export function tokenLifetimesOf(
       accessTokenLifespanSeconds: tokens.accessTokenLifespanSeconds,
       developmentAccessTokenLifespanSeconds: tokens.developmentAccessTokenLifespanSeconds,
       refreshTokenLifespanSeconds: tokens.refreshTokenLifespanSeconds,
+      adminAccessTokenLifespanSeconds: tokens.adminAccessTokenLifespanSeconds,
     });
   }
   return Object.freeze({
     accessTokenLifespanSeconds: sources.jwtUtils.getAccessTokenLifespan(),
     developmentAccessTokenLifespanSeconds: tokens.developmentAccessTokenLifespanSeconds,
     refreshTokenLifespanSeconds: sources.jwtUtils.getRefreshTokenLifespan(),
+    adminAccessTokenLifespanSeconds: tokens.adminAccessTokenLifespanSeconds,
   });
 }

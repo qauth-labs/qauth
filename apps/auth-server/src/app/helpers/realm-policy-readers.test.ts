@@ -35,6 +35,7 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
       'posture.maxEnvironmentLaxity',
       'registration.dynamicRegistrationAllowedScopes',
       'tokens.accessTokenLifespanSeconds',
+      'tokens.adminAccessTokenLifespanSeconds',
       'tokens.developmentAccessTokenLifespanSeconds',
       'tokens.refreshTokenLifespanSeconds',
     ]);
@@ -91,7 +92,7 @@ describe('tokenLifetimesOf (#527)', () => {
     adminAccessTokenLifespanSeconds: 600,
   };
 
-  it('reads the three lifetimes from the policies of a realm that has them, from the row it is given', () => {
+  it('reads the four lifetimes from the policies of a realm that has them, from the row it is given', () => {
     const from = sources(STORED);
     const realm = testRealm({ id: 'r', policiesVersion: 3 });
 
@@ -99,6 +100,7 @@ describe('tokenLifetimesOf (#527)', () => {
       accessTokenLifespanSeconds: 300,
       developmentAccessTokenLifespanSeconds: 7_200,
       refreshTokenLifespanSeconds: 86_400,
+      adminAccessTokenLifespanSeconds: 600,
     });
     expect(from.policyStore.ofRealm).toHaveBeenCalledWith(realm);
     // The plugin's lifespans are only the fallback of a realm with no policies.
@@ -117,7 +119,7 @@ describe('tokenLifetimesOf (#527)', () => {
     expect(long.accessTokenLifespanSeconds).toBe(1_800);
   });
 
-  it("runs a realm with no policies yet on the JWT plugin's lifespans and the development lifetime of its fill", () => {
+  it("runs a realm with no policies yet on the JWT plugin's lifespans and the development and admin lifetimes of its fill", () => {
     const from = sources(STORED);
     const realm = testRealm({ id: 'r', policiesVersion: 0 });
 
@@ -125,14 +127,14 @@ describe('tokenLifetimesOf (#527)', () => {
       accessTokenLifespanSeconds: 900,
       developmentAccessTokenLifespanSeconds: 7_200,
       refreshTokenLifespanSeconds: 604_800,
+      adminAccessTokenLifespanSeconds: 600,
     });
   });
 
-  it('hands out a frozen object without the admin lifetime, which the admin API reads', () => {
+  it('hands out a frozen object', () => {
     const lifetimes = tokenLifetimesOf(sources(STORED), testRealm({ id: 'r', policiesVersion: 2 }));
 
     expect(Object.isFrozen(lifetimes)).toBe(true);
-    expect(lifetimes).not.toHaveProperty('adminAccessTokenLifespanSeconds');
   });
 
   it('lets a store refusal of invalid stored policies through, rather than guess a lifetime', () => {

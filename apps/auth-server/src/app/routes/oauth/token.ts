@@ -20,6 +20,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
@@ -606,6 +607,25 @@ function accessTokenLifespanForPolicy(
   });
 }
 
+/**
+ * The access token lifetime of a token with `aud`: the tier's
+ * ({@link accessTokenLifespanForPolicy}), and for a token whose audience
+ * names the admin API at most the realm's `tokens.adminAccessTokenLifespanSeconds`
+ * (ADR-019 Decision 7: admin tokens are short-lived, at most 900 s), whatever
+ * the client's tier gives. Callers pass it as the signed `exp` override and as
+ * the response `expires_in`, as for the tier's.
+ */
+function accessTokenLifespanFor(
+  lifetimes: TokenLifetimes,
+  policy: EnvironmentPolicy,
+  aud: string | readonly string[]
+): number {
+  const tierSeconds = accessTokenLifespanForPolicy(lifetimes, policy);
+  return [aud].flat().includes(API_FAMILY_AUDIENCES.admin)
+    ? Math.min(tierSeconds, lifetimes.adminAccessTokenLifespanSeconds)
+    : tierSeconds;
+}
+
 /** What a replay's `token.request_failed` adds: the family it revoked, and how much of it. */
 interface ReplayRevocation {
   readonly refreshFamilyId?: string;
@@ -1056,13 +1076,14 @@ async function handleAuthorizationCode(
         }
       : undefined;
 
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
-  // `short` (staging/production baseline) vs `long` (development convenience),
-  // mapped to concrete seconds in one place. Passed both as the signed `exp`
-  // override and the response `expires_in` so they always agree.
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(ctx.tokenLifetimes, policy);
   // A QAuth API audience only when a `resource` named it (#509).
   const aud = resolveUserGrantAudience(client, effectiveResource);
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
+  // `short` (staging/production baseline) vs `long` (development convenience),
+  // mapped to concrete seconds in one place, and at most the admin ceiling for
+  // the admin API's audience. Passed both as the signed `exp` override and the
+  // response `expires_in` so they always agree.
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   // Not burned on a refusal, like a `resource` outside the binding: the client
   // may redeem the code again with a `resource` that names no such audience.
   await assertReservedAudiencesListed(ctx, aud, user.id);
@@ -1287,10 +1308,9 @@ async function handleClientCredentials(
     }
   }
 
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(ctx.tokenLifetimes, policy);
-
   const aud = resolveAudience(client, requestedResource);
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   await assertReservedAudiencesListed(ctx, aud);
   // The token names no account, and admin grants belong to accounts (#510):
   // no admin scope, and no admin audience.
@@ -1597,10 +1617,10 @@ async function handleRefreshToken(
     familyEnd
   );
 
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(ctx.tokenLifetimes, policy);
   // A QAuth API audience only when a `resource` named it (#509).
   const aud = resolveUserGrantAudience(client, effectiveResource);
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   await assertReservedAudiencesListed(ctx, aud, user.id);
   // Without the admin scopes the account holds no live grant for now (#510).
   // The rotated refresh token keeps `grantedScopes`, so a grant given again
@@ -2082,7 +2102,7 @@ async function handleTokenExchange(
   // #197): a `development` delegated token may match the longer dev TTL, but is
   // still clamped to the subject token's remaining lifetime (a HARD floor — the
   // delegated token can never outlive the authority it was derived from).
-  const configuredLifespan = accessTokenLifespanForPolicy(ctx.tokenLifetimes, policy);
+  const configuredLifespan = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   const subjectRemaining =
     subjectPayload.exp !== undefined
       ? subjectPayload.exp - Math.floor(Date.now() / 1000)
@@ -2575,14 +2595,14 @@ async function handleJwtBearer(
   // a GRANT, like an authorization code, and a grant's short single-use window
   // exists to bound REDEMPTION, not to bound what redemption produces. EMA §5.2
   // shows exactly this (a 300s assertion yielding an 86400s access token).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(ctx.tokenLifetimes, policy);
-
+  //
   // EMA §5.1, the profile's central MUST: the issued access token is
   // audience-restricted to the MCP server the assertion's `resource` claim
   // identifies — never the client's configured default audience, and never the
   // whole allowlist. `resolveAudience` collapses the single value to a string
   // `aud`, so the token names exactly one resource server.
   const aud = resolveAudience(client, [assertion.resource]);
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
   await assertReservedAudiencesListed(ctx, aud, user.id);
   // An admin token comes only from a sign-in at QAuth itself (ADR-019
