@@ -68,7 +68,7 @@ Every line below is `await`ed except where noted, so the order in the file is th
 | 1   | `databasePlugin`, `apps/auth-server/src/app/app.ts:61`              | Postgres pool + the `repositories` decorator          |
 | 2   | `cachePlugin`, `apps/auth-server/src/app/app.ts:75`                 | Redis (`lazyConnect: true`) as `fastify.redis`        |
 | 3   | `passwordPlugin`, `apps/auth-server/src/app/app.ts:89`              | argon2id hasher + strength scoring                    |
-| 4   | `pkcePlugin`, `apps/auth-server/src/app/app.ts:100`                  | PKCE challenge verification helpers                   |
+| 4   | `pkcePlugin`, `apps/auth-server/src/app/app.ts:100`                 | PKCE challenge verification helpers                   |
 | 5   | `assertTrustedIssuersUsable`, `apps/auth-server/src/app/app.ts:132` | **Boot check** — not a plugin                         |
 | 6   | `federationPlugin`, `apps/auth-server/src/app/app.ts:134`           | The ADR-003 `providerRegistry` decorator              |
 | 7   | `emailPlugin`, `apps/auth-server/src/app/app.ts:179`                | Resend / SMTP / mock provider                         |
