@@ -4,9 +4,10 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, count, desc, eq, sql } from 'drizzle-orm';
+import { and, count, desc, eq, lt, or, sql } from 'drizzle-orm';
 
 import type {
+  KeysetPage,
   NewOAuthClient,
   OAuthClient,
   OAuthClientsRepository,
@@ -23,6 +24,29 @@ function clientOfRealm(realmId: string, id: string) {
 /** The clients of `realmId` a developer owns. */
 function ownedBy(realmId: string, developerId: string) {
   return and(eq(oauthClients.realmId, realmId), eq(oauthClients.developerId, developerId));
+}
+
+/**
+ * The first-party columns as every application write leaves them: empty
+ * (ADR-017 Decision 2, #631). Spread last, so no caller's value survives.
+ */
+const NOT_FIRST_PARTY = {
+  firstPartyProfile: null,
+  firstPartyPolicy: null,
+  firstPartyReason: null,
+} as const;
+
+/**
+ * `data` without the first-party columns, which `update` never writes
+ * (ADR-017 Decision 2, #631). `UpdateOAuthClient` already leaves them out,
+ * but only at compile time: a caller that spreads a wider object, or casts,
+ * would otherwise set or clear a profile through an ordinary update. Removed,
+ * not nulled, so an update leaves the operator's profile as it is.
+ */
+function withoutFirstPartyColumns<T extends object>(data: T): T {
+  const copy = { ...data } as Record<string, unknown>;
+  for (const column of Object.keys(NOT_FIRST_PARTY)) delete copy[column];
+  return copy as T;
 }
 
 /**
@@ -45,7 +69,15 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     async create(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
       try {
-        const [client] = await invoker.insert(oauthClients).values(data).returning();
+        const [client] = await invoker
+          .insert(oauthClients)
+          // Never first party (ADR-017 Decision 2, #631): dynamic registration,
+          // the developer API and the server's own system client create rows
+          // here, and first-partyness is the operator's to set, through the
+          // seed manifest or the system-client provisioner, whatever the
+          // caller passed.
+          .values({ ...data, ...NOT_FIRST_PARTY })
+          .returning();
         return client;
       } catch (error) {
         if (isUniqueConstraintError(error)) {
@@ -141,6 +173,100 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     },
 
     /**
+     * One page of the OAuth clients of the realm a developer owns, newest
+     * first (#524): the filter of {@link listByDeveloper}, ordered by
+     * `created_at` and then `id`, both descending, so rows created in the same
+     * millisecond still have one order, starting after `page.after`.
+     *
+     * @param realmId - Realm the request was resolved to
+     * @param developerId - Owning developer's user id
+     * @param page - How many rows, and the last row of the previous page
+     * @param tx - Optional transaction client
+     * @returns At most `page.limit` owned OAuth clients
+     */
+    async pageByDeveloper(
+      realmId: string,
+      developerId: string,
+      page: KeysetPage,
+      tx?: DbClient
+    ): Promise<OAuthClient[]> {
+      const invoker = tx ?? defaultDb;
+      const after = page.after;
+      return invoker
+        .select()
+        .from(oauthClients)
+        .where(
+          and(
+            ownedBy(realmId, developerId),
+            after === undefined
+              ? undefined
+              : or(
+                  lt(oauthClients.createdAt, after.at),
+                  and(eq(oauthClients.createdAt, after.at), lt(oauthClients.id, after.id))
+                )
+          )
+        )
+        .orderBy(desc(oauthClients.createdAt), desc(oauthClients.id))
+        .limit(page.limit);
+    },
+
+    /**
+     * Find an OAuth client of the realm by ID and lock its row
+     * (`SELECT … FOR UPDATE`) until `tx` ends (#524). A write conditional on
+     * what was read (`If-Match`) reads through this, so no other write lands
+     * between the read and the write.
+     *
+     * @param realmId - Realm the request was resolved to
+     * @param id - OAuth client ID
+     * @param tx - The transaction that holds the lock
+     * @returns OAuth client if found, undefined otherwise
+     */
+    async findByIdForUpdate(
+      realmId: string,
+      id: string,
+      tx: DbClient
+    ): Promise<OAuthClient | undefined> {
+      const [client] = await tx
+        .select()
+        .from(oauthClients)
+        .where(clientOfRealm(realmId, id))
+        .limit(1)
+        .for('update');
+      return client;
+    },
+
+    /**
+     * Give the client named `clientId` in EVERY realm exactly `audience`,
+     * where its audience differs, in one statement (#524): the boot step that
+     * gives the system client the developer API's audience. Not realm-scoped
+     * on purpose, and never called with an id from a request: the system
+     * client has the same configured `client_id` in every realm.
+     *
+     * @param clientId - The configured client_id, the same in every realm
+     * @param audience - The audience the row must hold
+     * @param tx - Optional transaction client
+     * @returns How many rows changed
+     */
+    async setAudienceInEveryRealm(
+      clientId: string,
+      audience: readonly string[],
+      tx?: DbClient
+    ): Promise<number> {
+      const invoker = tx ?? defaultDb;
+      const changed = await invoker
+        .update(oauthClients)
+        .set({ audience: [...audience], updatedAt: Date.now() })
+        .where(
+          and(
+            eq(oauthClients.clientId, clientId),
+            sql`${oauthClients.audience} IS DISTINCT FROM ${JSON.stringify(audience)}::jsonb`
+          )
+        )
+        .returning({ id: oauthClients.id });
+      return changed.length;
+    },
+
+    /**
      * Count the OAuth clients owned by a developer, without loading them.
      *
      * Same filter as {@link listByDeveloper}. The per-developer client ceiling
@@ -179,7 +305,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .insert(oauthClients)
         // A CIMD client is never operator-provisioned (ANT-2026-O8U3P920),
         // whatever the caller passed.
-        .values({ ...data, provisionedByOperator: false })
+        // Nor first party (#631): its document is self-asserted. The conflict
+        // update below never names the first-party columns either.
+        .values({ ...data, provisionedByOperator: false, ...NOT_FIRST_PARTY })
         .onConflictDoUpdate({
           target: [oauthClients.realmId, oauthClients.clientId],
           set: {
@@ -242,7 +370,7 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     ): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
       const updateData = {
-        ...data,
+        ...withoutFirstPartyColumns(data),
         updatedAt: data.updatedAt ?? Date.now(),
       };
 

@@ -16,6 +16,7 @@ import {
   signInWithPassword,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { sessionIdOfCookie } from '../testing/session-cookie-value';
 import type { InteractionDecision, InteractionState } from './helpers/interaction';
 import type { InteractionStep } from './helpers/interaction-record';
 
@@ -351,7 +352,8 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     expect(answered.statusCode).toBe(200);
     const sessionAfter = owner.jar.get(SESSION_COOKIE);
     expect(sessionAfter).toBeDefined();
-    const sidOf = (cookie: string | undefined) => cookie?.slice(0, cookie.lastIndexOf('.'));
+    const sidOf = (cookie: string | undefined) =>
+      cookie === undefined ? undefined : sessionIdOfCookie(cookie);
     expect(sidOf(sessionAfter)).not.toBe(sidOf(sessionBefore));
     // The new session is a real one, in Postgres, for the user.
     const { rows } = await app.dbPool.query<{ id: string; user_id: string }>(

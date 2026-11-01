@@ -26,9 +26,9 @@ mints a **fresh** session id (session-fixation defence — a pre-login session
 id is never reused), sets it as `__Host-qauth_session`, and redirects to
 `return_to`. On failure it re-renders the form, and the two failure modes
 handle the CSRF token differently: a `403` (CSRF pair missing or mismatched,
-`apps/auth-server/src/app/routes/ui/login.ts:304`) mints and sets a **fresh**
+`apps/auth-server/src/app/routes/ui/login.ts:312`) mints and sets a **fresh**
 token so a legitimate retry can succeed; a `401` (bad credentials,
-`apps/auth-server/src/app/routes/ui/login.ts:339`) **reuses** the existing
+`apps/auth-server/src/app/routes/ui/login.ts:347`) **reuses** the existing
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong. An account whose address is not verified yet gets that
 same `401` page while `REQUIRE_VERIFIED_ACCOUNT` is on (the default), so the
@@ -37,9 +37,10 @@ one; its message mentions confirming the address for that reason.
 
 The session is stored in Postgres, with Redis as a cache in front of it, in
 the realm of the host the browser signed in on: the cookie names no session at
-another realm's host. The cookie lasts `SESSION_COOKIE_TTL` from sign-in and is
-not extended by use. The session behind it can end sooner, when the realm sets
-`sso_max_lifespan` or `sso_idle_timeout`.
+another realm's host. The cookie lasts until the session's absolute end:
+`SESSION_COOKIE_TTL` from sign-in, or the realm's `sso_max_lifespan` when it
+sets one, and is not extended by use. The session behind it can end sooner,
+when the realm sets `sso_idle_timeout`.
 [`POST /auth/logout`](/integrate/api-reference/#post-authlogout) ends every
 hosted session of the user, so the next `/oauth/authorize` shows this page
 again.
@@ -118,8 +119,9 @@ the line leaves to this page:
   refresh token is issued and the agent stops when its access token expires.
 - **An access token outlives both ends.** Revoking the consent and the
   family's end stop refreshes; an access token already issued works until it
-  expires, `ACCESS_TOKEN_LIFESPAN` (15 minutes by default) or, for a
-  `development` client, `DEV_ACCESS_TOKEN_LIFESPAN`.
+  expires, after the realm's access token lifetime
+  (`tokens.accessTokenLifespanSeconds`, 15 minutes by default) or, for a
+  `development` client, its `tokens.developmentAccessTokenLifespanSeconds`.
 - **The limit is the one the page read.** The page states the realm's limit
   as it is when the page renders. A limit the operator changes later applies
   to the family as the Refresh Token section describes, not as the page said.
@@ -129,10 +131,8 @@ the line leaves to this page:
   session's own end, which the old limit set.
 
 A stored consent never skips the screen for an agent client (ADR-015
-Decision 11): every authorization request from an agent shows it, `prompt=none`
-from an agent answers `consent_required` with no code, and the legacy Bearer
-path of `/oauth/authorize`, which cannot show the screen, issues an agent no
-code.
+Decision 11): every authorization request from an agent shows it, and
+`prompt=none` from an agent answers `consent_required` with no code.
 
 The decision is taken for the page the user saw. A client whose `is_agent`
 changes between the page and the decision (a Client ID Metadata Document can
@@ -218,7 +218,7 @@ it in the redirect:
 
 Redis was already on that path before #319, and not marginally: the
 Redis-backed `@fastify/rate-limit` plugin is registered app-wide
-(`apps/auth-server/src/app/app.ts:258`) ahead of both route sweeps (lines 294
+(`apps/auth-server/src/app/app.ts:260`) ahead of both route sweeps (lines 294
 and 301), against the same `fastify.redis` client
 (`apps/auth-server/src/app/plugins/rate-limit.ts:28`); `RATE_LIMIT_ENABLED`
 defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);

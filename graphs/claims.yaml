@@ -10,8 +10,8 @@ kind: claims
 operations:
   POST /auth/logout: { flow: [logout] }
   POST /auth/login: { flow: [sign-in-token] }
-  GET /ui/login: { flow: [sign-in] }
-  POST /ui/login: { flow: [sign-in] }
-  GET /ui/resume/{handle}: { flow: [sign-in] }
+  GET /ui/login: { flow: [sign-in-page] }
+  POST /ui/login: { flow: [sign-in-page] }
+  GET /ui/resume/{handle}: { flow: [sign-in-page] }
   GET /ui/consent: { flow: [consent] }
   POST /ui/consent: { flow: [consent] }

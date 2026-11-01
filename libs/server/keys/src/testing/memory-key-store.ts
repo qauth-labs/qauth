@@ -6,6 +6,7 @@ import type {
   StoredKeySummary,
 } from '../lib/key-store';
 import type { RealmKeyBootStore, StoredPublicKey } from '../lib/realm-key-boot';
+import type { WrappedSignerKey } from '../lib/signer-key-store';
 
 /**
  * An in-memory {@link RealmKeyBootStore} for this library's unit tests. Never
@@ -98,6 +99,29 @@ export function createMemoryKeyStore(options: MemoryKeyStoreOptions = {}): Memor
             (filter.scopeId === undefined || key.scopeId === filter.scopeId) &&
             (filter.status === undefined || key.status === filter.status)
         );
+    },
+
+    async getWrappedKey(
+      realmId: string,
+      kid: string,
+      tx: MemoryTx
+    ): Promise<WrappedSignerKey | undefined> {
+      calls.push({ method: 'getWrappedKey', tx });
+      const key = rows.find((row) => row.key.realmId === realmId && row.key.kid === kid)?.key;
+      if (key === undefined) return undefined;
+      return {
+        realmId: key.realmId,
+        purpose: key.purpose,
+        scopeId: key.scopeId,
+        kid: key.kid,
+        algorithm: key.algorithm,
+        status: key.status,
+        ciphertext: key.ciphertext,
+        iv: key.iv,
+        wrappedDek: key.wrappedDek,
+        kekRef: key.kekRef,
+        aadVersion: key.aadVersion,
+      };
     },
 
     async lockRealm(_realmId: string, tx: MemoryTx): Promise<void> {

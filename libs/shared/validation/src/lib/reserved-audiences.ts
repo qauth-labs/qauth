@@ -23,6 +23,15 @@
 /** The prefix of every audience QAuth defines. */
 export const RESERVED_AUDIENCE_PREFIX = 'urn:qauth:aud:';
 
+/**
+ * The developer API's audience (ADR-019 Decision 7, #524): the audience of
+ * the system client, so of the developer portal's token. The auth server's
+ * `API_FAMILY_AUDIENCES.developer` is this value; it is here so the system
+ * client's provisioner (`@qauth-labs/infra-db/system-client`), which the
+ * migration runner bundles without the auth server, writes the same one.
+ */
+export const DEVELOPER_API_AUDIENCE = 'urn:qauth:aud:developer:v1-rc.0';
+
 const RESERVED_AUDIENCE = /^\s*urn:qauth:aud:/i;
 
 /** Whether `value` is an audience in QAuth's reserved namespace, in any case. */

@@ -135,9 +135,30 @@ describe('updateClientHandler', () => {
     });
 
     await updateClientHandler({ data: { id: 'row-1', patch: { name: 'New' } } });
-    expect(authServerClient.updateClient).toHaveBeenCalledWith('dev-token', 'row-1', {
-      name: 'New',
+    expect(authServerClient.updateClient).toHaveBeenCalledWith(
+      'dev-token',
+      'row-1',
+      { name: 'New' },
+      undefined
+    );
+  });
+
+  it('forwards the ETag the form was filled from as If-Match (#524)', async () => {
+    vi.mocked(readSessionCookie).mockReturnValue(validSession);
+    vi.mocked(authServerClient.updateClient).mockResolvedValue({
+      ok: true,
+      data: { name: 'New' } as never,
     });
+
+    await updateClientHandler({
+      data: { id: 'row-1', patch: { name: 'New' }, ifMatch: '"v1"' },
+    });
+    expect(authServerClient.updateClient).toHaveBeenCalledWith(
+      'dev-token',
+      'row-1',
+      { name: 'New' },
+      '"v1"'
+    );
   });
 });
 
@@ -257,6 +278,20 @@ describe('normalizeCreateInput — input caps & enum validation', () => {
 });
 
 describe('normalizeUpdateInput — input caps & enum validation', () => {
+  it('passes a short ETag through as ifMatch, and drops anything else', () => {
+    expect(normalizeUpdateInput({ id: 'row-1', name: 'x', ifMatch: '"v1"' })).toEqual({
+      id: 'row-1',
+      patch: { name: 'x' },
+      ifMatch: '"v1"',
+    });
+    for (const ifMatch of [42, '', 'x'.repeat(257)]) {
+      expect(normalizeUpdateInput({ id: 'row-1', name: 'x', ifMatch })).toEqual({
+        id: 'row-1',
+        patch: { name: 'x' },
+      });
+    }
+  });
+
   it('rejects an over-length name', () => {
     expect(() => normalizeUpdateInput({ id: 'row-1', name: 'a'.repeat(256) })).toThrow(
       /at most 255/i

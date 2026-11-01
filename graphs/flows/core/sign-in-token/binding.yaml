@@ -8,7 +8,7 @@
 # - A scenario's `request` is merged over the event's template; a field or a header set to null is left out.
 # - Before each walk the replay empties the cache, then runs the scenario's `setup`: the rate-limit and failed-login
 #   counters of the replay's address are shared by every walk, and a walk must not inherit another's.
-# - The accounts, their seed and the server settings are core.sign-in's: the two routes share one failed-login counter
+# - The accounts, their seed and the server settings are core.sign-in-page's: the two routes share one failed-login counter
 #   and one gate.
 schema: delurio-graph/0
 kind: binding

@@ -50,6 +50,7 @@ vi.mock('./user-events', async (importOriginal) => {
   return { ...actual, emitUserEvent: vi.fn(checkedEmitUserEvent(actual.userEventFor)) };
 });
 
+import { createFakeCookieSigner } from '../../testing/cookie-keys';
 import { testRealm } from '../../testing/request-realm';
 import { WALLET_RETURN_CODE_TTL_MS } from '../constants';
 import type { RealmRow } from './request-realm';
@@ -109,6 +110,8 @@ function makeFastify() {
     },
     sessionUtils,
     redis: createRedis(),
+    // The wallet-flow cookie is signed with the realm's cookie key (#493).
+    signer: createFakeCookieSigner(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, sessionUtils };
@@ -514,7 +517,11 @@ describe('advanceWalletLinkFlow — the return leg and the done-marker (#405)', 
     expect(first.outcome).toEqual({ status: 'linked', rebound: false });
     expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
     expect(
-      readWalletFlowBindings(cookieValue(first.setCookies, '__Host-qauth_wallet_flow'))
+      await readWalletFlowBindings(
+        fastify,
+        REALM.id,
+        cookieValue(first.setCookies, '__Host-qauth_wallet_flow')
+      )
     ).toEqual([]);
     expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
     expect(linkWalletPresentation).toHaveBeenCalledTimes(1);

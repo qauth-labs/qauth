@@ -141,3 +141,48 @@ describe('response framing', () => {
     expect(err.reason).not.toBe('timeout');
   }, 10_000);
 });
+
+// The pool refuses a fetch process's answer beyond these bounds; the exchange
+// holds a host's response to them first, and fails with the reason.
+describe('response head bounds', () => {
+  const head = (lines: readonly string[]): string =>
+    `HTTP/1.1 200 OK\r\n${lines.map((line) => `${line}\r\n`).join('')}Content-Length: 2\r\n\r\n{}`;
+
+  it('returns a response at every bound', async () => {
+    respond = (write) =>
+      write(
+        head([
+          // With Content-Length, 100 headers.
+          ...Array.from({ length: 97 }, (_, i) => `x-h${i}: v`),
+          `x-${'n'.repeat(254)}: v`,
+          `x-v: ${'v'.repeat(8192)}`,
+        ])
+      );
+    const res = await fetchFixture(IN_TIME_MS);
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.headers)).toHaveLength(100);
+  });
+
+  it.each([
+    [
+      'more headers than the pool takes',
+      Array.from({ length: 100 }, (_, i) => `x-h${i}: v`),
+      'the response has more than 100 headers',
+    ],
+    [
+      'a header name longer than the pool takes',
+      [`x-${'n'.repeat(255)}: v`],
+      'a response header name is longer than 256 bytes',
+    ],
+    [
+      'a header value longer than the pool takes',
+      [`x-v: ${'v'.repeat(8193)}`],
+      'a response header value is longer than 8192 bytes',
+    ],
+  ])('fails on %s, with the reason', async (_case, lines, reason) => {
+    respond = (write) => write(head(lines));
+    const err = await refusal(fetchFixture(IN_TIME_MS));
+    expect(err).toMatchObject({ reason: 'network', outcome: 'failed' });
+    expect(err.message).toBe(`egress to localhost failed: ${reason}`);
+  });
+});

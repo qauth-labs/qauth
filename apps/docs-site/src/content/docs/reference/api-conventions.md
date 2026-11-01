@@ -38,7 +38,11 @@ is not limited to the families: every route that is not an OAuth protocol endpoi
   [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
   built-in roles. The account and developer families define no scopes here: their guards check the
   token's audience, and that its subject is an active user or client of the request's realm
-  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change.
+  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change. Until
+  then a token with the developer audience reaches the whole developer API for its subject, reads
+  and writes alike, and one with the account audience the whole account API. Only an operator can
+  give a client either audience (`urn:qauth:aud:` is reserved, below), so a client that lists the
+  developer audience is trusted as the developer portal is.
 
 ### Family tokens
 
@@ -324,8 +328,9 @@ of `approvals.approve`.
   token exchange: an admin acts as itself, never through an agent, so a token exchange that names
   the admin audience is refused with `invalid_target` whatever grants the user holds. The token
   `/auth/login` mints leaves the admin audience out, whatever the system client lists.
-- The legacy Bearer path of `/oauth/authorize` never issues one: a request on it that names a
-  family audience, or a client whose default audience holds one, is refused with `access_denied`.
+- `/oauth/authorize` takes the user from the browser session only. Its legacy Bearer path, where
+  the developer portal's token stood in for a sign-in with no consent screen, was retired by #524:
+  an `Authorization` header there signs no one in.
 - A family audience never makes a client authoritative at introspection: QAuth is the only
   resource server for it, so a client introspects a family token only when the token is its own.
 - `urn:qauth:aud:` is reserved for the audiences QAuth defines, in any letter case, by the rule the
@@ -334,15 +339,30 @@ of `approvals.approve`.
   resolve the client with the rest; neither stores those members. The seed manifest refuses it in
   a `cimd_clients` entry, the one place it would be stored. The rule is `isReservedAudience` in
   `@qauth-labs/shared-validation`.
-- The developer portal's token keeps the system client's id as its audience in this release.
-  `/api/clients`, `/api/consents`, `/auth/logout` and the Bearer path of `/oauth/authorize`
-  (`assertManagementToken`), and userinfo, accept a system-client token with the developer
-  audience too, and #524 starts minting it. Expand, then contract (ADR-018 §5): every node accepts the
-  token before any node mints it.
+- The developer portal's token, which `/auth/login` mints for the system client, carries the
+  developer audience since #524. The system client lists it from its creation, and one created
+  before is given it the next time a node boots or reads it. The deprecated `/api/clients` and
+  `/api/consents`, and `/auth/logout` (`assertManagementToken`), accept a system-client token with
+  exactly that audience, and no longer one whose audience is the system client's id. Expand, then
+  contract (ADR-018 §5): #509 made every node accept the audience before #524 minted it.
 
-No route is served under these prefixes yet. The developer routes at `/api/clients` and
-`/api/consents` and the account routes at `/consents` move under them, and their old paths are then
-listed in [Deprecations](#deprecations).
+### Served routes
+
+| Family    | Routes                                                                                                                                |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| account   | `GET /account/v1-rc.0/consents`, `DELETE /account/v1-rc.0/consents/{consentId}`                                                       |
+| developer | `/developer/v1-rc.0/clients` (list, create, read, update, delete, `regenerate-secret`), its `api-keys`, `/developer/v1-rc.0/consents` |
+
+They replace `/api/clients`, `/api/consents` and the cookie-authenticated `/consents`, which stay as
+deprecated aliases ([Deprecations](#deprecations)) and share their domain logic, so ownership, the
+realm's scope allowlist and the events cannot drift between the two. Each route admits a user's
+token only (`subjects: ['user']`), and looks its rows up in the request's realm again after the
+guard. A developer's client representation names registered client metadata by its RFC 7591 name
+(`client_id`, `client_name`, `redirect_uris`, `grant_types`, `response_types`,
+`token_endpoint_auth_method`, `client_secret`); its `scopes` stay a list, which RFC 7591's
+space-separated `scope` string is not. The account and developer families share one OpenAPI
+document, so their operation ids begin with the family: `developer.clients.list`,
+`account.consents.delete`.
 
 ## Names
 
@@ -410,6 +430,9 @@ Updates use optimistic concurrency (RFC 9110 §13.1.1).
 - An update whose `If-Match` is stale is refused with 412 `precondition_failed`. The client reads
   the resource again and retries on the new representation.
 - A successful update returns the new representation and its new `ETag`.
+- A member that records use rather than configuration, such as a developer client's `lastUsedAt`,
+  is left out of the `ETag`: no update writes it, and counting it would make every edit of a client
+  in use stale.
 
 ## Updates
 
@@ -417,8 +440,11 @@ Updates use optimistic concurrency (RFC 9110 §13.1.1).
 - A member set to `null` is removed, or reset to its default. A member left out keeps its value. An
   array is replaced whole.
 - The patch itself is a request body: an unknown member is refused with 400 `validation_error`.
+  A body sent as another media type is refused with 415 `unsupported_media_type`.
 - The merged result is checked against the resource's schema. A result that fails is refused with
-  422 `unprocessable_content`, and `errors` names each failing field.
+  422 `unprocessable_content`, and `errors` names each failing field. A rule of the resource that a
+  create checks too answers as the create does, such as a developer client's `invalid_redirect_uri`
+  and `invalid_client_metadata` (400), so the same mistake gets the same code on both.
 
 ## Errors
 
@@ -514,6 +540,11 @@ protocol endpoint.
 | `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                              |
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
+
+Only the admin API enforces `x-qauth-permission` today. On the developer and account APIs it
+names the permission an operation will need (`clients.read`, `clients.write`, `consents.read`,
+...), and nothing checks it yet: a token the family's guard accepts passes every operation of the
+family.
 
 On the admin API every id in `x-qauth-permission` is a permission of the
 [admin catalog](/reference/admin-permissions/), and not a retired one, and `x-qauth-class` is the
@@ -637,12 +668,28 @@ off, and it may change in a minor release without a deprecation window (ADR-018 
 
 ### Deprecations
 
-| Operation | Replacement | Deprecated in | Sunset |
-| --------- | ----------- | ------------- | ------ |
-| —         | —           | —             | —      |
+| Operation                                         | Replacement                                                     | Deprecated in | Sunset |
+| ------------------------------------------------- | --------------------------------------------------------------- | ------------- | ------ |
+| `GET /api/clients`                                | `GET /developer/v1-rc.0/clients`                                | v0.2 (#524)   | —      |
+| `POST /api/clients`                               | `POST /developer/v1-rc.0/clients`                               | v0.2 (#524)   | —      |
+| `GET /api/clients/{id}`                           | `GET /developer/v1-rc.0/clients/{clientId}`                     | v0.2 (#524)   | —      |
+| `PATCH /api/clients/{id}`                         | `PATCH /developer/v1-rc.0/clients/{clientId}`                   | v0.2 (#524)   | —      |
+| `DELETE /api/clients/{id}`                        | `DELETE /developer/v1-rc.0/clients/{clientId}`                  | v0.2 (#524)   | —      |
+| `POST /api/clients/{id}/regenerate-secret`        | `POST /developer/v1-rc.0/clients/{clientId}/regenerate-secret`  | v0.2 (#524)   | —      |
+| `GET /api/clients/{clientId}/api-keys`            | `GET /developer/v1-rc.0/clients/{clientId}/api-keys`            | v0.2 (#524)   | —      |
+| `POST /api/clients/{clientId}/api-keys`           | `POST /developer/v1-rc.0/clients/{clientId}/api-keys`           | v0.2 (#524)   | —      |
+| `DELETE /api/clients/{clientId}/api-keys/{keyId}` | `DELETE /developer/v1-rc.0/clients/{clientId}/api-keys/{keyId}` | v0.2 (#524)   | —      |
+| `GET /api/consents`                               | `GET /developer/v1-rc.0/consents`                               | v0.2 (#524)   | —      |
+| `DELETE /api/consents/{id}`                       | `DELETE /developer/v1-rc.0/consents/{consentId}`                | v0.2 (#524)   | —      |
+| `GET /consents`                                   | `GET /account/v1-rc.0/consents`                                 | v0.2 (#524)   | —      |
+| `DELETE /consents/{id}`                           | `DELETE /account/v1-rc.0/consents/{consentId}`                  | v0.2 (#524)   | —      |
 
-No operation is deprecated yet. When the account and developer routes move under their prefixes,
-their old paths are listed here.
+Each answers as before, in its own shape, and carries `Deprecation: @1793404800` (2026-10-31) and
+`Link: <https://docs.qauth.dev/reference/api-conventions/#deprecations>; rel="deprecation"` on every
+response, errors included (`api-conventions/deprecation.ts`). No sunset date is set yet: before 1.0
+nothing is promised, and the release-candidate cleanup removes these paths once their callers have
+moved. The developer portal calls only the replacements; the cookie-authenticated `/consents`
+serves the hosted UI until the account console (v0.3) takes its place.
 
 ## Enforcement
 

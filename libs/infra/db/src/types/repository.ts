@@ -65,6 +65,12 @@ export type UpdateOAuthClient = Partial<
     // #593: the verified domain is admin state (`clients.update`, a security
     // operation), so no owner or self-registration path may write it.
     | 'verifiedDomain'
+    // #631: first-partyness is operator-set (ADR-017 Decision 2). Only the
+    // seed manifest, the system-client provisioner and, later, a
+    // `qauth:admin:security` operation write these, none through `update`.
+    | 'firstPartyProfile'
+    | 'firstPartyPolicy'
+    | 'firstPartyReason'
   >
 > & {
   updatedAt?: number;
@@ -246,6 +252,19 @@ export interface BaseRepository<TSelect, TInsert, TUpdate> {
  * an unknown id gets, so neither the answer nor its timing tells the caller
  * that the id exists elsewhere.
  */
+/**
+ * One page of a list read by keyset (#524): at most `limit` rows, ordered by a
+ * time column and then the row id, both descending, starting after the row
+ * `after` names. The API's cursor carries `after`; a list never pages by
+ * offset, which skips or repeats rows when rows are added between two reads.
+ */
+export interface KeysetPage {
+  /** Most rows to return. */
+  readonly limit: number;
+  /** The time (epoch milliseconds) and id of the last row of the previous page. */
+  readonly after?: { readonly at: number; readonly id: string };
+}
+
 export interface RealmScopedRepository<TSelect, TInsert, TUpdate> {
   /** Create a new entity; its realm is in `data` */
   create(data: TInsert, tx?: DbClient): Promise<TSelect>;
@@ -284,6 +303,38 @@ export interface OAuthClientsRepository extends RealmScopedRepository<
    * therefore never returned here.
    */
   listByDeveloper(realmId: string, developerId: string, tx?: DbClient): Promise<OAuthClient[]>;
+
+  /**
+   * One page of the OAuth clients a developer owns, newest first: the rows
+   * {@link listByDeveloper} returns, by `created_at` and then `id`, both
+   * descending (#524).
+   */
+  pageByDeveloper(
+    realmId: string,
+    developerId: string,
+    page: KeysetPage,
+    tx?: DbClient
+  ): Promise<OAuthClient[]>;
+
+  /**
+   * Give the client named `clientId` in every realm exactly `audience` where
+   * it differs, in one statement, and return how many rows changed (#524).
+   * The system client's boot step only: not realm-scoped, since the system
+   * client has the same configured `client_id` in every realm, and never
+   * called with an id from a request.
+   */
+  setAudienceInEveryRealm(
+    clientId: string,
+    audience: readonly string[],
+    tx?: DbClient
+  ): Promise<number>;
+
+  /**
+   * Find an OAuth client of the realm by ID and lock its row until the
+   * transaction `tx` ends (`SELECT … FOR UPDATE`), for a write that is
+   * conditional on what it read (#524, `If-Match`).
+   */
+  findByIdForUpdate(realmId: string, id: string, tx: DbClient): Promise<OAuthClient | undefined>;
 
   /**
    * Count the OAuth clients owned by a developer: the rows
@@ -454,6 +505,16 @@ export interface RefreshTokensRepository {
     tx?: DbClient
   ): Promise<number>;
   /**
+   * Revoke every refresh token of one client not already revoked, for every
+   * user, expired ones included, under the
+   * client's exclusive token lock, which every rotation and every insert of
+   * the client's tokens holds shared (#631: removing a client's first-party
+   * profile ends every family it holds).
+   *
+   * @returns Count of rows revoked by this call.
+   */
+  revokeAllForClient(oauthClientId: string, reason: string, tx?: DbClient): Promise<number>;
+  /**
    * Delete the families whose every token has expired, whole. A rotated token
    * is kept while its family has a live token, so replay detection lasts as
    * long as the family. Returns count of deleted tokens.
@@ -509,6 +570,24 @@ export interface OAuthConsentsRepository {
   listActiveForUserWithClient(
     realmId: string,
     userId: string,
+    tx?: DbClient
+  ): Promise<
+    Array<
+      OAuthConsent & {
+        clientClientId: string;
+        clientName: string;
+      }
+    >
+  >;
+  /**
+   * One page of {@link listActiveForUserWithClient}'s rows, by `id` alone,
+   * descending: by when each consent was first given, since a re-grant
+   * rewrites `granted_at` and keeps the row (#524). `page.after.at` is not read.
+   */
+  pageActiveForUserWithClient(
+    realmId: string,
+    userId: string,
+    page: KeysetPage,
     tx?: DbClient
   ): Promise<
     Array<
@@ -624,6 +703,16 @@ export interface ApiKeysRepository {
    * (callers mask them); the route projects to non-secret fields only.
    */
   listByClient(realmId: string, clientId: string, tx?: DbClient): Promise<ApiKey[]>;
+  /**
+   * One page of {@link listByClient}'s rows, by `created_at` and then `id`,
+   * both descending (#524).
+   */
+  pageByClient(
+    realmId: string,
+    clientId: string,
+    page: KeysetPage,
+    tx?: DbClient
+  ): Promise<ApiKey[]>;
   /**
    * Find a single API key of the realm by id, or undefined.
    */

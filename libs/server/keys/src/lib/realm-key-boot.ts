@@ -1,10 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
 import type { JWK } from 'jose';
 
 import { LOCAL_KEK_PROVIDER } from './default-kek-provider';
-import { sealKeyMaterial } from './envelope';
+import { openKeyMaterial, sealKeyMaterial } from './envelope';
 import {
   type EnvironmentKey,
   type EnvironmentKeySettings,
@@ -23,6 +23,7 @@ import { KEY_PURPOSES } from './key-purposes';
 import type { RealmKeyStore, StoredKeyStatus, StoredKeySummary } from './key-store';
 import { publicKeyIdentity } from './published-keys';
 import { isRealmId } from './realm-id';
+import type { WrappedSignerKey } from './signer-key-store';
 
 /**
  * A realm's key boot step (ADR-019 Decision 9 and its answer on existing
@@ -37,12 +38,16 @@ import { isRealmId } from './realm-id';
  * 2. Each configured key the realm's store lacks is imported, as an `active`
  *    key. A signing key counts as stored when the realm has a published key
  *    with the same public key (RFC 7638 thumbprint), whatever its `kid`. The
- *    cookie secret is imported only into a realm with no `cookie_hmac` key.
- * 3. A signing key the store lacks, while the realm has an active key of its
- *    algorithm, replaces that key: the stored key, and its hybrid partner, are
- *    retired and unpublished at once. Changing the variable is how a deployment
- *    replaces a signing key until rotation through the store ships (manual
- *    rotation #544, emergency retirement #551).
+ *    cookie secret counts as stored when a stored `cookie_hmac` key holds the
+ *    same bytes: each stored cookie key is opened with the KEK and compared
+ *    with the secret in constant time (#493).
+ * 3. A signing key or a cookie secret the store lacks, while the realm has an
+ *    active key of its algorithm, replaces that key: the stored key, and its
+ *    hybrid partner, are retired, and a published one is unpublished at once.
+ *    Changing the variable is how a deployment replaces a signing key or the
+ *    cookie key until rotation through the store ships (manual rotation #544,
+ *    emergency retirement #551). A replaced cookie key is the realm's previous
+ *    cookie key: cookies it signed keep verifying until the next replacement.
  * 4. `provisionRealmKeys` creates the standard keys still missing:
  *    `event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
  *    on a fresh deployment.
@@ -85,6 +90,12 @@ export interface RealmKeyBootStore<Tx> extends RealmKeyStore<Tx> {
   /** Every `realm_public_keys` row of the realm, whatever its status or window. */
   listPublicKeys(realmId: string, tx: Tx): Promise<readonly StoredPublicKey[]>;
   /**
+   * One key of the realm with its sealed material, or `undefined`. The step
+   * opens each stored `cookie_hmac` key with the KEK to compare it with the
+   * configured cookie secret.
+   */
+  getWrappedKey(realmId: string, kid: string, tx: Tx): Promise<WrappedSignerKey | undefined>;
+  /**
    * Whether a realm other than `realmId` publishes a key whose public JWK has
    * every member of `identity` ({@link publicKeyIdentity}), whatever its
    * status or window.
@@ -113,7 +124,7 @@ export interface BootRealmKeysOptions<Tx> extends Omit<KeyFactoryOptions<Tx>, 's
 export interface EnvironmentKeyOutcome {
   readonly purpose: EnvironmentKey['purpose'];
   readonly algorithm: EnvironmentKey['algorithm'];
-  /** The `kid` of the stored key that holds it, or of the realm's cookie key. */
+  /** The `kid` of the stored key that holds it. */
   readonly kid: string;
   /** The variables that set it. */
   readonly variables: readonly string[];
@@ -143,10 +154,7 @@ export interface RealmKeysBootResult {
   readonly imported: readonly EnvironmentKeyOutcome[];
   /** The imported keys that replaced a stored key, with the keys they retired. */
   readonly replaced: readonly ReplacedKeyOutcome[];
-  /**
-   * The configured keys the realm already held as active keys. For the cookie
-   * secret: the realm already had a cookie key, which may not be this secret.
-   */
+  /** The configured keys the realm already held as active keys. */
   readonly alreadyStored: readonly EnvironmentKeyOutcome[];
   /** The configured keys the store holds, but not as its active key. Nothing changed for them. */
   readonly inactive: readonly InactiveKeyOutcome[];
@@ -214,6 +222,7 @@ export async function bootRealmKeys<Tx>(
       );
       const { pending, alreadyStored, inactive } = await sortEnvironmentKeys(
         store,
+        kekProvider,
         realmId,
         keys,
         tx
@@ -295,6 +304,7 @@ interface PendingImport {
  */
 async function sortEnvironmentKeys<Tx>(
   store: RealmKeyBootStore<Tx>,
+  kekProvider: KekProvider,
   realmId: string,
   keys: readonly EnvironmentKey[],
   tx: Tx
@@ -309,53 +319,96 @@ async function sortEnvironmentKeys<Tx>(
   let published: { readonly key: StoredPublicKey; readonly thumbprint: string }[] | undefined;
 
   for (const key of keys) {
-    if (key.purpose === 'cookie_hmac') {
-      const stored = await store.listByRealm(
-        realmId,
-        { purpose: 'cookie_hmac', scopeId: null },
-        tx
-      );
-      if (stored.length === 0) {
-        pending.push({ key });
-      } else {
-        const current = stored.find((row) => row.status === 'active') ?? stored[0];
-        alreadyStored.push(outcome(key, current.kid));
-      }
-      continue;
-    }
-
-    published ??= await thumbprintsOf(await store.listPublicKeys(realmId, tx));
-    const match = published.find(
-      ({ key: stored, thumbprint }) =>
-        stored.purpose === key.purpose && thumbprint === key.thumbprint
-    );
     const active = await store.listByRealm(
       realmId,
       { purpose: key.purpose, scopeId: null, status: 'active' },
       tx
     );
     const current = active.find((row) => row.algorithm === key.algorithm);
+
+    let match: { readonly kid: string; readonly status: StoredKeyStatus } | undefined;
+    if (key.purpose === 'cookie_hmac') {
+      match = await findStoredSecret(store, kekProvider, realmId, key, current, tx);
+    } else {
+      published ??= await thumbprintsOf(await store.listPublicKeys(realmId, tx));
+      match = published.find(
+        ({ key: stored, thumbprint }) =>
+          stored.purpose === key.purpose && thumbprint === key.thumbprint
+      )?.key;
+    }
     if (match === undefined) {
       pending.push(current === undefined ? { key } : { key, replaces: current });
       continue;
     }
 
-    const { status } = match.key;
+    const { status } = match;
     if (status === 'compromised') {
       throw new InvalidConfigurationError(
         `${key.variables.join(' and ')} holds a key the realm marked compromised. Remove the variable.`,
-        { variables: key.variables, realmId, kid: match.key.kid }
+        { variables: key.variables, realmId, kid: match.kid }
       );
     }
     if (status === 'active') {
-      alreadyStored.push(outcome(key, match.key.kid));
+      alreadyStored.push(outcome(key, match.kid));
     } else {
       inactive.push(
-        Object.freeze({ ...outcome(key, match.key.kid), status, activeKid: current?.kid ?? null })
+        Object.freeze({ ...outcome(key, match.kid), status, activeKid: current?.kid ?? null })
       );
     }
   }
   return { pending, alreadyStored, inactive };
+}
+
+/**
+ * The stored `cookie_hmac` key that holds the configured cookie secret, or
+ * `undefined` (#493). A cookie key has no public half to compare, so each
+ * stored key is opened with the KEK, the realm's active key first, and its
+ * bytes compared with the secret's in constant time: the SHA-256 digests of
+ * both, so neither the comparison nor its length check depends on where or
+ * whether the two differ. Every opened copy and every digest is zeroed.
+ *
+ * @throws the KEK provider's error when a stored cookie key does not open: a
+ *   retired cookie key sealed under a KEK no longer configured refuses every
+ *   boot whose secret differs from the active key, as the step cannot tell
+ *   whether the variable holds it
+ */
+async function findStoredSecret<Tx>(
+  store: RealmKeyBootStore<Tx>,
+  kekProvider: KekProvider,
+  realmId: string,
+  key: EnvironmentKey,
+  active: StoredKeySummary | undefined,
+  tx: Tx
+): Promise<StoredKeySummary | undefined> {
+  const stored = await store.listByRealm(realmId, { purpose: key.purpose, scopeId: null }, tx);
+  const ordered = [
+    ...(active === undefined ? [] : [active]),
+    ...stored.filter((row) => row.kid !== active?.kid && row.algorithm === key.algorithm),
+  ];
+  const wanted = createHash('sha256').update(key.material).digest();
+  try {
+    for (const row of ordered) {
+      const sealed = await store.getWrappedKey(realmId, row.kid, tx);
+      if (sealed === undefined) continue;
+      const material = await openKeyMaterial(kekProvider, sealed, {
+        realmId: sealed.realmId,
+        purpose: sealed.purpose,
+        scopeId: sealed.scopeId,
+        kid: sealed.kid,
+        algorithm: sealed.algorithm,
+      });
+      const digest = createHash('sha256').update(material).digest();
+      material.fill(0);
+      try {
+        if (timingSafeEqual(digest, wanted)) return row;
+      } finally {
+        digest.fill(0);
+      }
+    }
+    return undefined;
+  } finally {
+    wanted.fill(0);
+  }
 }
 
 /**
@@ -392,7 +445,9 @@ function checkHybridPair(
  * of each when the partner is not replaced too: a pair retires together
  * (ADR-005). A retired published key leaves its JWKS at once. The variable
  * change took it out of service, so no overlap applies; a deployment that
- * wants one waits for rotation through the store (#544).
+ * wants one waits for rotation through the store (#544). A retired cookie
+ * key is never published: it stays the realm's previous cookie key, which
+ * verifies the cookies it signed until the next replacement.
  */
 async function retireReplacedKeys<Tx>(
   store: RealmKeyBootStore<Tx>,

@@ -34,6 +34,13 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** The client as the page keeps it: never with a secret, which only the reveal modal holds. */
+function withoutSecret(client: ClientWithSecret): OAuthClient {
+  const copy: ClientWithSecret = { ...client };
+  delete copy.clientSecret;
+  return copy;
+}
+
 function ClientDetailsPage() {
   const router = useRouter();
   const { clientId } = Route.useParams();
@@ -75,6 +82,9 @@ function ClientDetailsPage() {
     const result = await updateClientFn({
       data: {
         id: clientId,
+        // The version the form was filled from: a client changed since is
+        // refused (412) instead of overwritten.
+        ...(load.status === 'ready' && load.client.etag ? { ifMatch: load.client.etag } : {}),
         name: values.name,
         description: values.description || null,
         redirectUris: values.redirectUris,
@@ -121,6 +131,11 @@ function ClientDetailsPage() {
     if (result.ok) {
       setConfirmRegenerate(false);
       setRegenerated(result.data);
+      // A new secret is a change of the client: its `updatedAt`, and so its
+      // `ETag`, moved. The page takes the version the answer names, or the
+      // next save would name the old one and be refused as stale (412). The
+      // secret itself stays in the reveal modal only.
+      setLoad({ status: 'ready', client: withoutSecret(result.data) });
       return;
     }
     if (result.error.code === 'UNAUTHENTICATED') {

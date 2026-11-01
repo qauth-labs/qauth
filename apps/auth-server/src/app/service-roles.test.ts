@@ -132,9 +132,10 @@ describe('what each role loads (the boot-time list)', () => {
       expect(web).not.toContain(name);
     }
     expect(web).toContain('sessions');
+    // No web route reads an access token since the authorization endpoint's
+    // Bearer path was retired (#524).
     expect([...pluginsFor(['web'])]).toEqual([
       'dpop',
-      'jwt',
       'password',
       'federation',
       'email',

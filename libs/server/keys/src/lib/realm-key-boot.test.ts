@@ -2,7 +2,17 @@ import { createPrivateKey, generateKeyPairSync, randomBytes } from 'node:crypto'
 
 import type { SignatureAlgorithm } from '@qauth-labs/core-crypto';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// A pass-through spy: the boot step's comparisons run as they do in production.
+const { timingSafeEqualSpy } = vi.hoisted(() => ({
+  timingSafeEqualSpy: vi.fn<(a: NodeJS.ArrayBufferView, b: NodeJS.ArrayBufferView) => boolean>(),
+}));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  timingSafeEqualSpy.mockImplementation(actual.timingSafeEqual);
+  return { ...actual, timingSafeEqual: timingSafeEqualSpy };
+});
 
 import { KEK_A, localProvider } from '../testing/keks';
 import {
@@ -327,24 +337,163 @@ describe('bootRealmKeys — later boots', () => {
     expect(error.message).toContain('marked compromised');
   });
 
-  it('does not import a cookie secret into a realm that has a cookie key', async () => {
+  it('replaces a generated cookie key with a secret the variable sets later (#493)', async () => {
     const store = createMemoryKeyStore();
     const fresh = await boot(store);
-    const cookieKey = fresh.generated.find((key) => key.purpose === 'cookie_hmac');
+    const generated = fresh.generated.find((key) => key.purpose === 'cookie_hmac');
+    if (generated === undefined) throw new Error('no cookie key generated');
+
+    const result = await boot(store, {
+      now: () => LATER,
+      environmentKeys: { cookieSecret: source(COOKIE_SECRET, 'SESSION_COOKIE_SECRET') },
+    });
+
+    const [replacement] = result.imported;
+    expect(replacement).toMatchObject({
+      purpose: 'cookie_hmac',
+      algorithm: 'HS256',
+      variables: ['SESSION_COOKIE_SECRET'],
+    });
+    expect(result.replaced).toEqual([{ ...replacement, retiredKids: [generated.kid] }]);
+    expect(result.alreadyStored).toEqual([]);
+    // Never published, so nothing to unpublish: it stays the previous key.
+    expect(storedKey(store, generated.kid)).toMatchObject({
+      status: 'retired',
+      retireAt: LATER,
+      unpublishAt: null,
+    });
+    expect(storedKey(store, replacement.kid)).toMatchObject({
+      status: 'active',
+      activateAt: LATER,
+      publishAt: null,
+    });
+    const opened = await open(store, replacement.kid, localProvider({ KEK: KEK_A }));
+    expect(opened.equals(Buffer.from(COOKIE_SECRET, 'utf8'))).toBe(true);
+  });
+
+  it('replaces the stored cookie key when the variable changed after the upgrade (#493)', async () => {
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, { environmentKeys: UPGRADE });
+    const first = imported.find((key) => key.purpose === 'cookie_hmac');
+    if (first === undefined) throw new Error('no cookie secret imported');
+    const changed = `${COOKIE_SECRET}-changed`;
+
+    const result = await boot(store, {
+      now: () => LATER,
+      environmentKeys: { cookieSecret: source(changed, 'SESSION_COOKIE_SECRET') },
+    });
+
+    expect(result.replaced).toEqual([
+      expect.objectContaining({ purpose: 'cookie_hmac', retiredKids: [first.kid] }),
+    ]);
+    expect(storedKey(store, first.kid).status).toBe('retired');
+    const active = store.rows.filter(
+      ({ key }) => key.purpose === 'cookie_hmac' && key.status === 'active'
+    );
+    expect(active).toHaveLength(1);
+    const opened = await open(store, active[0].key.kid, localProvider({ KEK: KEK_A }));
+    expect(opened.equals(Buffer.from(changed, 'utf8'))).toBe(true);
+  });
+
+  it('recognises the stored cookie secret by its bytes, whatever its kid, and imports nothing', async () => {
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, { environmentKeys: UPGRADE });
+    const first = imported.find((key) => key.purpose === 'cookie_hmac');
+    const rows = store.rows.length;
 
     const result = await boot(store, {
       environmentKeys: { cookieSecret: source(COOKIE_SECRET, 'SESSION_COOKIE_SECRET') },
     });
 
     expect(result.imported).toEqual([]);
-    expect(result.alreadyStored).toEqual([
-      {
-        purpose: 'cookie_hmac',
-        algorithm: 'HS256',
-        kid: cookieKey?.kid,
-        variables: ['SESSION_COOKIE_SECRET'],
+    expect(result.replaced).toEqual([]);
+    expect(result.alreadyStored).toEqual([first]);
+    expect(store.rows).toHaveLength(rows);
+  });
+
+  it('compares the cookie secret with each stored key in constant time', async () => {
+    const store = createMemoryKeyStore();
+    await boot(store, { environmentKeys: UPGRADE });
+    await boot(store, {
+      environmentKeys: {
+        cookieSecret: source(`${COOKIE_SECRET}-changed`, 'SESSION_COOKIE_SECRET'),
       },
+    });
+    timingSafeEqualSpy.mockClear();
+
+    // Two stored keys now: the active one, then the retired one, which matches.
+    await boot(store, {
+      environmentKeys: { cookieSecret: source(COOKIE_SECRET, 'SESSION_COOKIE_SECRET') },
+    });
+
+    expect(timingSafeEqualSpy).toHaveBeenCalledTimes(2);
+    for (const [a, b] of timingSafeEqualSpy.mock.calls) {
+      // Digests of both, so the length check says nothing about the secret.
+      expect([Buffer.from(a as Uint8Array).length, Buffer.from(b as Uint8Array).length]).toEqual([
+        32, 32,
+      ]);
+    }
+  });
+
+  it('changes nothing for a cookie secret the store retired, and reports it', async () => {
+    // A node that still has the old value during a rolling restart: it must
+    // not put the old key back.
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, { environmentKeys: UPGRADE });
+    const first = imported.find((key) => key.purpose === 'cookie_hmac');
+    if (first === undefined) throw new Error('no cookie secret imported');
+    const { imported: replacements } = await boot(store, {
+      environmentKeys: {
+        cookieSecret: source(`${COOKIE_SECRET}-changed`, 'SESSION_COOKIE_SECRET'),
+      },
+    });
+    const rows = store.rows.length;
+
+    const result = await boot(store, {
+      environmentKeys: { cookieSecret: source(COOKIE_SECRET, 'SESSION_COOKIE_SECRET') },
+    });
+
+    expect(result.imported).toEqual([]);
+    expect(result.replaced).toEqual([]);
+    expect(result.inactive).toEqual([
+      { ...first, status: 'retired', activeKid: replacements[0].kid },
     ]);
+    expect(store.rows).toHaveLength(rows);
+    expect(storedKey(store, replacements[0].kid).status).toBe('active');
+  });
+
+  it('refuses a cookie secret the realm marked compromised', async () => {
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, { environmentKeys: UPGRADE });
+    const first = imported.find((key) => key.purpose === 'cookie_hmac');
+    const stored = store.rows.find(({ key }) => key.kid === first?.kid);
+    if (stored === undefined) throw new Error('not stored');
+    (stored.key as { status: string }).status = 'compromised';
+
+    const error = await refusal(
+      boot(store, {
+        environmentKeys: { cookieSecret: source(COOKIE_SECRET, 'SESSION_COOKIE_SECRET') },
+      })
+    );
+
+    expect(error.message).toContain('marked compromised');
+    expect(error.details).toMatchObject({ variables: ['SESSION_COOKIE_SECRET'], kid: first?.kid });
+  });
+
+  it('refuses to replace the cookie key under the development KEK, and stores nothing', async () => {
+    const store = createMemoryKeyStore();
+    await boot(store, { kekProvider: localProvider({}) });
+    const before = store.rows.map(({ key }) => `${key.kid}:${key.status}`);
+
+    const error = await refusal(
+      boot(store, {
+        kekProvider: localProvider({}),
+        environmentKeys: { cookieSecret: source(COOKIE_SECRET, 'SESSION_COOKIE_SECRET') },
+      })
+    );
+
+    expect(error.details).toMatchObject({ variables: ['SESSION_COOKIE_SECRET'] });
+    expect(store.rows.map(({ key }) => `${key.kid}:${key.status}`)).toEqual(before);
   });
 
   it('refuses an ML-DSA-65 key that would join an Ed25519 key stored without one', async () => {

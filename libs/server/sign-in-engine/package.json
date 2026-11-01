@@ -1,0 +1,17 @@
+{
+  "name": "@qauth-labs/server-sign-in-engine",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/server-step-grammar": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
+    "tslib": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

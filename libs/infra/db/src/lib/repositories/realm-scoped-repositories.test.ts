@@ -107,6 +107,10 @@ export function requiredRealmArgument(db: DbClient): void {
   void clients.listByDeveloper(ID);
   // @ts-expect-error a developer's clients are those of a realm (#489)
   void clients.countByDeveloper(ID);
+  // @ts-expect-error a developer's clients are those of a realm (#524)
+  void clients.pageByDeveloper(ID, { limit: 1 });
+  // @ts-expect-error a client id is looked up in a realm (#524)
+  void clients.findByIdForUpdate(ID, db);
 
   // @ts-expect-error a consent is looked up in a realm (#489)
   void consents.findActive(ID, OTHER_ID);
@@ -116,6 +120,8 @@ export function requiredRealmArgument(db: DbClient): void {
   void consents.listActiveForUser(ID);
   // @ts-expect-error a user's consents are those of a realm (#489)
   void consents.listActiveForUserWithClient(ID);
+  // @ts-expect-error a user's consents are those of a realm (#524)
+  void consents.pageActiveForUserWithClient(ID, { limit: 1 });
   // @ts-expect-error a consent id is looked up in a realm (#489)
   void consents.revoke(ID);
 
@@ -125,6 +131,8 @@ export function requiredRealmArgument(db: DbClient): void {
   void apiKeys.findById(ID);
   // @ts-expect-error a client's API keys are those of a realm (#489)
   void apiKeys.listByClient(ID);
+  // @ts-expect-error a client's API keys are those of a realm (#524)
+  void apiKeys.pageByClient(ID, { limit: 1 });
   // @ts-expect-error an API key is looked up in a realm (#489)
   void apiKeys.revoke(ID);
 
@@ -189,6 +197,18 @@ const CALLS: readonly RealmScopedCall[] = [
     (db) => createOAuthClientsRepository(db).listByDeveloper(REALM_ID, ID),
   ],
   [
+    'oauthClients.pageByDeveloper',
+    (db) =>
+      createOAuthClientsRepository(db).pageByDeveloper(REALM_ID, ID, {
+        limit: 2,
+        after: { at: 1, id: OTHER_ID },
+      }),
+  ],
+  [
+    'oauthClients.findByIdForUpdate',
+    (db) => createOAuthClientsRepository(db).findByIdForUpdate(REALM_ID, ID, db),
+  ],
+  [
     'oauthClients.countByDeveloper',
     (db) => createOAuthClientsRepository(db).countByDeveloper(REALM_ID, ID),
   ],
@@ -208,6 +228,14 @@ const CALLS: readonly RealmScopedCall[] = [
     'oauthConsents.listActiveForUserWithClient',
     (db) => createOAuthConsentsRepository(db).listActiveForUserWithClient(REALM_ID, ID),
   ],
+  [
+    'oauthConsents.pageActiveForUserWithClient',
+    (db) =>
+      createOAuthConsentsRepository(db).pageActiveForUserWithClient(REALM_ID, ID, {
+        limit: 2,
+        after: { at: 1, id: OTHER_ID },
+      }),
+  ],
   ['oauthConsents.revoke', (db) => createOAuthConsentsRepository(db).revoke(REALM_ID, ID)],
   [
     'oauthConsents.upsertGrant',
@@ -219,6 +247,14 @@ const CALLS: readonly RealmScopedCall[] = [
   ],
   ['apiKeys.findById', (db) => createApiKeysRepository(db).findById(REALM_ID, ID)],
   ['apiKeys.listByClient', (db) => createApiKeysRepository(db).listByClient(REALM_ID, ID)],
+  [
+    'apiKeys.pageByClient',
+    (db) =>
+      createApiKeysRepository(db).pageByClient(REALM_ID, ID, {
+        limit: 2,
+        after: { at: 1, id: OTHER_ID },
+      }),
+  ],
   ['apiKeys.revoke', (db) => createApiKeysRepository(db).revoke(REALM_ID, ID)],
   ['userCredentials.findById', (db) => createUserCredentialsRepository(db).findById(REALM_ID, ID)],
   [

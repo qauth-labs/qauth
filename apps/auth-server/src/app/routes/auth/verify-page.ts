@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { requestRealm } from '../../helpers/request-realm';
 import {
   generateCsrfToken,
   LOGIN_CSRF_COOKIE_NAME,
@@ -76,10 +77,14 @@ export default async function (fastify: FastifyInstance) {
 
       // Signed double-submit CSRF, as GET /ui/login does: keep a valid cookie
       // the browser already has, otherwise mint a token and set it.
-      const existing = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const existing = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       const csrfToken = existing ?? generateCsrfToken();
       if (!existing) {
-        setLoginCsrfCookie(reply, csrfToken);
+        await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, csrfToken);
       }
 
       return sendVerifyEmailPage(reply, 200, { kind: 'form', token: parsed.data, csrfToken });

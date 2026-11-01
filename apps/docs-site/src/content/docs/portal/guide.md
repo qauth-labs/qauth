@@ -147,7 +147,7 @@ All of `/clients` sits under the `_authed` layout.
   (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:72`, the `handleSave`
   function).
 - **Delete** is a confirmation modal calling `deleteClientFn`
-  (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:99`, the `handleDelete`
+  (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:102`, the `handleDelete`
   function); the modal's own copy says the deletion "cannot be undone."
 
 Every client-management server function (`apps/developer-portal/src/server/actions/clients.server.ts`)
@@ -161,7 +161,7 @@ token is attached server-side on every request; the browser never sees it.
 
 A confidential client's secret is shown exactly once — at creation
 (`apps/developer-portal/src/routes/_authed/clients.new.tsx:83`, the `SecretReveal` render) or
-after a regeneration (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:324`) —
+after a regeneration (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:327`) —
 through the shared
 `SecretReveal` component (`apps/developer-portal/src/components/secret-reveal.tsx`). Its own
 doc comment states the mechanism plainly:
@@ -173,34 +173,37 @@ doc comment states the mechanism plainly:
 
 There is no "view secret again" affordance anywhere in the client-detail page: once the reveal
 modal closes, the detail view only ever shows "Hidden. Secrets are shown only once, at creation
-or regeneration." (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:202`). A public
+or regeneration." (`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:205`). A public
 client (`tokenEndpointAuthMethod === 'none'`) has no secret to show at all
-(`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:201`).
+(`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:204`).
 **Regenerating** a secret (behind a confirmation modal warning that existing integrations break
 immediately) invalidates the old one and re-triggers the same one-time reveal.
 
 The absence of a "view again" button is a UI convenience, not the guarantee. "Never retrievable"
 is enforced two levels below it, and neither is client-side:
 
-- **At the type level**, the portal's own client for `/api/clients` distinguishes the two shapes.
-  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:63`) — what every list
+- **At the type level**, the portal's own client for the developer API's clients distinguishes the
+  two shapes.
+  `OAuthClient` (`apps/developer-portal/src/server/auth-server-client.ts:82`) — what every list
   and get call returns — has no `clientSecret` field at all; the comment above it says why:
   "deliberately absent here — it only exists on {@link ClientWithSecret}"
-  (`apps/developer-portal/src/server/auth-server-client.ts:54`). `ClientWithSecret`
-  (`apps/developer-portal/src/server/auth-server-client.ts:133`) is a distinct type, returned
+  (`apps/developer-portal/src/server/auth-server-client.ts:79`). `ClientWithSecret`
+  (`apps/developer-portal/src/server/auth-server-client.ts:164`) is a distinct type, returned
   **only** by the create and regenerate calls
-  (`apps/developer-portal/src/server/auth-server-client.ts:129`). There is no portal API call
+  (`apps/developer-portal/src/server/auth-server-client.ts:159`). There is no portal API call
   that can ask for a client and get a secret back outside those two responses — the type the
   other calls return cannot carry one.
-- **On the auth-server**, where the actual guarantee is enforced: `POST /api/clients` generates
+- **On the auth-server**, where the actual guarantee is enforced: a client create (`POST` on the
+  developer API's clients, or the deprecated `/api/clients`) generates
   the secret, hashes it with Argon2id, and keeps the plaintext only in a local variable
-  (`generateClientSecret`, `apps/auth-server/src/app/routes/clients/index.ts:307`). Only
+  (`generateClientSecret`, `apps/auth-server/src/app/helpers/developer-clients.ts:279`). Only
   `clientSecretHash` is passed to the repository's `create` call
-  (`apps/auth-server/src/app/routes/clients/index.ts:529`); the plaintext is spread into the
-  HTTP response once (`apps/auth-server/src/app/routes/clients/index.ts:580`) and then goes out
+  (`apps/auth-server/src/app/helpers/developer-clients.ts:425`); the plaintext is spread into the
+  HTTP response once (`apps/auth-server/src/app/routes/developer/clients.ts:243`, and
+  `apps/auth-server/src/app/routes/clients/index.ts:216` on the deprecated path) and then goes out
   of scope. Regeneration is the same shape: only the new `hash` is persisted
-  (`apps/auth-server/src/app/routes/clients/index.ts:799`), and the plaintext is returned once
-  (`apps/auth-server/src/app/routes/clients/index.ts:817`). No code path — in the portal or the
+  (`apps/auth-server/src/app/helpers/developer-clients.ts:648`), and the plaintext is returned once
+  (`apps/auth-server/src/app/routes/developer/clients.ts:404`). No code path — in the portal or the
   auth-server — reads a plaintext secret back out of storage, because no plaintext secret is
   ever stored.
 
@@ -220,7 +223,7 @@ the tree today: `apps/developer-portal/src/components/api-keys-section.tsx`.
 
 The management UI is **not** a standalone page — it is a section embedded in the client-detail
 page, rendered under the client's own fields
-(`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:222`). Its own doc comment
+(`apps/developer-portal/src/routes/_authed/clients.$clientId.tsx:225`). Its own doc comment
 describes the gate:
 
 > Environment gating: the create form renders ONLY when `client.staticApiKeysAllowed` is true (a
@@ -250,9 +253,10 @@ attach it as `Authorization: Bearer <token>`. No token or session cookie reaches
 the page sits under the `_authed` layout, so an anonymous visitor is redirected to `/login` rather
 than shown a network `401`.
 
-The auth-server endpoints behind it are `GET /api/consents` and `DELETE /api/consents/:id`
-(`apps/auth-server/src/app/routes/consents-api/index.ts`), gated by `fastify.requireJwt` and scoped
-to the token's `sub` — the same auth model as `/api/clients`. A consent belonging to another user
+The auth-server endpoints behind it are the developer API's consents, `GET` and `DELETE` on
+`/developer/v1-rc.0/consents` (#524; `apps/auth-server/src/app/helpers/family-consents.ts`),
+behind the developer family's token guard and scoped to the token's `sub`, the same auth model as
+the developer API's clients. The deprecated `/api/consents` serves the same data in its old shape. A consent belonging to another user
 is reported as `404`, never `403`, so the API cannot be used to discover that someone else's
 consent id exists.
 
@@ -265,19 +269,21 @@ how the caller authenticates; ownership and auditing are shared through
 that matters.
 
 The cookie surface requires a per-session CSRF token echoed back as `X-CSRF-Token`, because a
-cookie is ambient authority a cross-site page can make the browser attach. `/api/consents` requires
-none: a Bearer token has to be put on the request by code that already holds it.
+cookie is ambient authority a cross-site page can make the browser attach. The developer API
+requires none: a Bearer token has to be put on the request by code that already holds it. The
+cookie surface is deprecated too: the account API's `/account/v1-rc.0/consents` replaces it once
+the account console ships (v0.3).
 
 > **Historical note (fixed in #366).** This page used to be the portal's one exception to the
 > "server functions are the only callers of auth-server endpoints" rule — it called `fetch()`
 > straight from the browser with `credentials: 'include'`, expecting the auth-server's
 > `__Host-qauth_session` cookie. Three independent blockers made that impossible for a
 > portal-authenticated developer: that cookie is set only by the auth-server's own `POST /ui/login`
-> (`apps/auth-server/src/app/routes/ui/login.ts:451`), which the portal's login flow never visits;
-> it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:153`), so it is
+> (`apps/auth-server/src/app/routes/ui/login.ts:449`), which the portal's login flow never visits;
+> it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:371`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`
-> (`apps/auth-server/src/app/app.ts:290-290`). The shipped topology is cross-origin to begin with —
+> (`apps/auth-server/src/app/app.ts:292-292`). The shipped topology is cross-origin to begin with —
 > [Docker](/operate/docker/#developer-portal) runs `auth-server` and `developer-portal` as separate
 > Compose services on different ports. A fourth blocker was waiting behind those: the page never
 > read the CSRF token out of the list response, so its `DELETE` would have been refused even had

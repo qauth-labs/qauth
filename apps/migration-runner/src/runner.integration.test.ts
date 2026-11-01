@@ -45,10 +45,17 @@ interface StartedRunner {
   readonly done: Promise<RunnerResult>;
 }
 
-/** Start the built runner with nothing but PATH and DATABASE_URL in its environment. */
-function startRunner(databaseUrl: string, args: readonly string[] = []): StartedRunner {
+/**
+ * Start the built runner with nothing but PATH, DATABASE_URL and `env` in its
+ * environment.
+ */
+function startRunner(
+  databaseUrl: string,
+  args: readonly string[] = [],
+  env: Readonly<Record<string, string>> = {}
+): StartedRunner {
   const child = spawn(process.execPath, [RUNNER, ...args], {
-    env: { PATH: process.env['PATH'] ?? '', DATABASE_URL: databaseUrl },
+    env: { PATH: process.env['PATH'] ?? '', DATABASE_URL: databaseUrl, ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stdout = '';
@@ -62,8 +69,12 @@ function startRunner(databaseUrl: string, args: readonly string[] = []): Started
   return { output: () => stdout, done };
 }
 
-function runRunner(databaseUrl: string, args: readonly string[] = []): Promise<RunnerResult> {
-  return startRunner(databaseUrl, args).done;
+function runRunner(
+  databaseUrl: string,
+  args: readonly string[] = [],
+  env: Readonly<Record<string, string>> = {}
+): Promise<RunnerResult> {
+  return startRunner(databaseUrl, args, env).done;
 }
 
 async function until(condition: () => Promise<boolean> | boolean, what: string): Promise<void> {
@@ -288,6 +299,117 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
       code: 0,
       stdout: `The database is current: all ${KNOWN} migrations are applied.${ahead}\n`,
       stderr: '',
+    });
+  });
+
+  describe('the system client (#631, ADR-017 phase F0)', () => {
+    const CALLBACK = 'https://portal.example.com/auth/callback';
+    const JWKS = {
+      keys: [{ kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' }],
+    };
+    const SYSTEM_CLIENT_ENV = {
+      SYSTEM_CLIENT_REDIRECT_URI: CALLBACK,
+      SYSTEM_CLIENT_JWKS: JSON.stringify(JWKS),
+    };
+
+    async function systemClient(url: string) {
+      return query<{
+        token_endpoint_auth_method: string;
+        first_party_profile: string | null;
+        first_party_policy: unknown;
+        redirect_uris: string[];
+        grant_types: string[];
+        jwks: unknown;
+        provisioned_by_operator: boolean;
+      }>(
+        url,
+        `SELECT token_endpoint_auth_method, first_party_profile, first_party_policy, redirect_uris,
+                grant_types, jwks, provisioned_by_operator
+           FROM oauth_clients WHERE client_id = 'system'`
+      );
+    }
+
+    it('skips a realm the auth server has not created yet, then provisions it, then changes nothing', async (ctx) => {
+      const url = await freshDatabase(ctx);
+
+      const early = await runRunner(url, [], SYSTEM_CLIENT_ENV);
+      expect(early.code).toBe(0);
+      expect(early.stderr).toContain('realm "master" does not exist yet');
+      expect(await systemClient(url)).toEqual([]);
+
+      // What the auth server's first boot does before the next run.
+      await query(url, `INSERT INTO realms (name) VALUES ('master')`);
+
+      const provisioned = await runRunner(url, [], SYSTEM_CLIENT_ENV);
+      expect(provisioned.stderr).toBe('');
+      expect(provisioned.code).toBe(0);
+      expect(provisioned.stdout.trimEnd().split('\n').at(-1)).toBe(
+        'Provisioned the system client "system" in realm "master": private_key_jwt, first-party profile web_redirect.'
+      );
+      expect(await systemClient(url)).toEqual([
+        {
+          token_endpoint_auth_method: 'private_key_jwt',
+          first_party_profile: 'web_redirect',
+          first_party_policy: null,
+          redirect_uris: [CALLBACK],
+          grant_types: ['authorization_code', 'refresh_token'],
+          jwks: JWKS,
+          provisioned_by_operator: true,
+        },
+      ]);
+      const [{ count }] = await query<{ count: string }>(
+        url,
+        `SELECT count(*) FROM events WHERE type = 'urn:qauth:event:client.first_party_changed:v1-rc.0'`
+      );
+      expect(count).toBe('1');
+
+      const again = await runRunner(url, [], SYSTEM_CLIENT_ENV);
+      expect(again.code).toBe(0);
+      expect(again.stdout.trimEnd().split('\n').at(-1)).toBe(
+        'The system client "system" in realm "master" is already provisioned as configured.'
+      );
+    });
+
+    it("exits 4, with the migrations applied, when SYSTEM_CLIENT_ID names a developer's client", async (ctx) => {
+      const url = await freshDatabase(ctx);
+      expect((await runRunner(url)).code).toBe(0);
+      const [realm] = await query<{ id: string }>(
+        url,
+        `INSERT INTO realms (name) VALUES ('master') RETURNING id`
+      );
+      const [user] = await query<{ id: string }>(
+        url,
+        `INSERT INTO users (realm_id) VALUES ($1) RETURNING id`,
+        [realm.id]
+      );
+      await query(
+        url,
+        `INSERT INTO oauth_clients (realm_id, client_id, client_secret_hash, name, redirect_uris, developer_id)
+         VALUES ($1, 'mine', 'h', 'Mine', '["https://app.example.com/cb"]', $2)`,
+        [realm.id, user.id]
+      );
+
+      const refused = await runRunner(url, [], { ...SYSTEM_CLIENT_ENV, SYSTEM_CLIENT_ID: 'mine' });
+
+      expect(refused.code).toBe(4);
+      expect(refused.stderr).toContain(`client "mine" in realm "master" is a developer's client`);
+      const [row] = await query<{ first_party_profile: string | null; developer_id: string }>(
+        url,
+        `SELECT first_party_profile, developer_id FROM oauth_clients WHERE client_id = 'mine'`
+      );
+      expect(row).toEqual({ first_party_profile: null, developer_id: user.id });
+    });
+
+    it('exits 2 and touches nothing on a half-written configuration', async (ctx) => {
+      const url = await freshDatabase(ctx);
+
+      const result = await runRunner(url, [], { SYSTEM_CLIENT_REDIRECT_URI: CALLBACK });
+
+      expect(result.code).toBe(2);
+      expect(result.stdout).toBe('');
+      expect(await query(url, `SELECT to_regclass('drizzle.__drizzle_migrations') AS t`)).toEqual([
+        { t: null },
+      ]);
     });
   });
 });

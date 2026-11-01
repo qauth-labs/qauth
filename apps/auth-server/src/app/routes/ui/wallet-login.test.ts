@@ -1,3 +1,5 @@
+import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
+import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -236,6 +238,7 @@ function makeFastify(realm: RealmRow = REALM) {
     providerRegistry: { resolve: vi.fn(), has: vi.fn().mockReturnValue(true), register: vi.fn() },
     sessionUtils,
     sessionService: sessions.service,
+    signer: sessions.signer,
     // `set` (with NX) claims a parked presentation.
     redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -277,7 +280,7 @@ async function startFlow(
     getReply.reply
   );
   const csrfCookie = cookieValue(getReply.state.setCookies, '__Host-qauth_login_csrf');
-  const csrfToken = csrfCookie.split('.')[0];
+  const csrfToken = csrfCookie.split('.')[1];
 
   const cookies = [`__Host-qauth_login_csrf=${csrfCookie}`];
   if (overrides.walletFlowCookie !== undefined) {
@@ -390,8 +393,13 @@ const AUTHENTICATED = {
 
 /** The `sid`s of the browser sessions the session service created (#488), in order. */
 function sessionMints(fastify: FastifyInstance): string[] {
+  return createdSessions(fastify).map((session) => session.sid);
+}
+
+/** The sessions the fake service created, in order. */
+function createdSessions(fastify: FastifyInstance): BrowserSession[] {
   return (fastify.sessionService as FakeSessionService).create.mock.settledResults.flatMap(
-    (result) => (result.type === 'fulfilled' ? [result.value.sid] : [])
+    (result) => (result.type === 'fulfilled' ? [result.value] : [])
   );
 }
 
@@ -743,7 +751,9 @@ describe('wallet login — completion', () => {
     });
     expect(input.authTime).toBeGreaterThanOrEqual(before);
     expect(input.authTime).toBeLessThanOrEqual(Date.now());
-    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
+    expect(sessionCookieSet(state.setCookies)).toBe(
+      await sessionCookie(fastify, createdSessions(fastify)[0])
+    );
     // The account is read and stamped in the flow's realm (#489).
     expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM.id, 'user-1');
     expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith(REALM.id, 'user-1');
@@ -793,6 +803,39 @@ describe('wallet login — completion', () => {
     }
   });
 
+  it('fails with the flow still there, and mints nothing, when the cookie keys cannot be read (#493)', async () => {
+    const { routes, sessionUtils, sessions, handle, flow, binderCookie } = await startFlow();
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      (resolveWalletPresentation as unknown as Mock).mockImplementation(async () => {
+        // The presentation takes a while: the cookie keys this process read
+        // when the flow started are due for a refresh, and the signer is down.
+        vi.setSystemTime(Date.now() + 61_000);
+        sessions.signer.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+        return AUTHENTICATED;
+      });
+      const { reply } = createReply();
+
+      await expect(
+        routes.get('GET /wallet-login/:handle/status')!(
+          {
+            params: { handle },
+            headers: { cookie: `__Host-qauth_wallet_flow=${binderCookie}` },
+            ip: '127.0.0.1',
+          },
+          reply
+        )
+      ).rejects.toBeInstanceOf(TemporarilyUnavailableError);
+
+      // Nothing burned: the flow can be polled again once the signer answers.
+      expect(sessionUtils.store.has(`wallet-login:${handle}`)).toBe(true);
+      expect(sessions.service.create).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('mints a FRESH session id rather than reusing anything the browser had', async () => {
     const { fastify, routes, sessionUtils, sessions, handle, flow, binderCookie } =
       await startFlow();
@@ -824,16 +867,18 @@ describe('wallet login — completion', () => {
       realmId: 'realm-1',
       userId: 'user-1',
     });
-    const [sid] = sessionMints(fastify);
-    expect(sid).not.toBe('attacker-fixed');
-    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(sid));
+    const [created] = createdSessions(fastify);
+    expect(created.sid).not.toBe('attacker-fixed');
+    expect(sessionCookieSet(state.setCookies)).toBe(await sessionCookie(fastify, created));
     // The credential's `external_sub`, shown on the consent screen, is kept in
     // the side record.
-    await expect(sessions.sideRecord({ realmId: 'realm-1', sid })).resolves.toMatchObject({
+    await expect(
+      sessions.sideRecord({ realmId: 'realm-1', sid: created.sid })
+    ).resolves.toMatchObject({
       identifier: 'user@example.com',
     });
     // Recorded under its user, so `/auth/logout` can end it.
-    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([sid]));
+    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([created.sid]));
   });
 
   it.each([
@@ -999,7 +1044,7 @@ describe('wallet login — concurrent flows in one browser', () => {
       cookie = started.binderCookie;
     }
 
-    const bindings = readWalletFlowBindings(cookie);
+    const bindings = await readWalletFlowBindings(context.fastify, REALM.id, cookie);
     expect(bindings).toHaveLength(WALLET_FLOW_COOKIE_MAX_BINDINGS);
     expect(bindings.map((b) => b.handle)).toEqual(handles.slice(1));
   });
@@ -1471,7 +1516,9 @@ describe('wallet login — the return leg (#405)', () => {
     // The session was minted exactly as by polling.
     expect(landed.statusCode).toBe(200);
     expect(sessionMints(fastify)).toHaveLength(1);
-    expect(sessionCookieSet(landed.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
+    expect(sessionCookieSet(landed.setCookies)).toBe(
+      await sessionCookie(fastify, createdSessions(fastify)[0])
+    );
     expect(fastify.repositories.users.updateLastLogin).toHaveBeenCalledWith(REALM.id, 'user-1');
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(...WALLET_SIGNED_IN);
 
@@ -1529,13 +1576,33 @@ describe('wallet login — the return leg (#405)', () => {
     expect(first.body).toEqual({ status: 'complete', redirect_to: '/after' });
     expect(sessionMints(fastify)).toHaveLength(1);
     expect(sessionCookieSet(first.setCookies)).toBe(sessionCookieSet(landed.setCookies));
-    expect(sessionCookieSet(first.setCookies)).toBe(sessionCookie(sessionMints(fastify)[0]));
+    expect(sessionCookieSet(first.setCookies)).toBe(
+      await sessionCookie(fastify, createdSessions(fastify)[0])
+    );
     expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_wallet_flow='))).toBe(true);
     expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
 
     // Once.
     const second = await pollStatus(routes, handle, cookie);
     expect(second.body).toEqual({ status: 'expired', message: WALLET_LOGIN_EXPIRED });
+  });
+
+  it("re-issues no session cookie on the original tab's poll when the session ended meanwhile (#493)", async () => {
+    const { fastify, routes, sessionUtils, responseCodes, handle, flow, binderCookie } =
+      await startFlow({ device: 'this', returnTo: '/after' });
+    publishSignal(sessionUtils, flow.stateHash, 'received');
+    const code = issueResponseCode(responseCodes, flow.stateHash);
+    (resolveWalletPresentation as unknown as Mock).mockResolvedValue(AUTHENTICATED);
+    const cookie = `__Host-qauth_wallet_flow=${binderCookie}`;
+    await followReturn(routes, code, cookie);
+    // The cookie lasts as long as its session: one that ended has none.
+    (fastify.sessionService as FakeSessionService).sessions.clear();
+
+    const first = await pollStatus(routes, handle, cookie);
+
+    expect(first.body).toEqual({ status: 'complete', redirect_to: '/after' });
+    expect(first.setCookies.some((c) => c.startsWith('__Host-qauth_session='))).toBe(false);
+    expect(sessionUtils.store.has(`wallet-login-done:${handle}`)).toBe(false);
   });
 
   it('refuses a malformed, unknown, expired or replayed Response Code with one identical page', async () => {

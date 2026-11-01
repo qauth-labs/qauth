@@ -2,6 +2,7 @@ import {
   JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
+  TemporarilyUnavailableError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
@@ -18,13 +19,17 @@ vi.mock('../../../config/env', () => ({
 }));
 
 vi.mock('../../helpers/oauth-client', () => ({
-  getOrCreateSystemClient: vi.fn(async () => ({ clientId: 'system', audience: null })),
+  getOrCreateSystemClient: vi.fn(async () => ({
+    clientId: 'system',
+    audience: ['urn:qauth:aud:developer:v1-rc.0'],
+  })),
 }));
 
 import {
   type BrowserSessionFixture,
   createBrowserSessionFixture,
 } from '../../../testing/browser-sessions';
+import { createFakeCookieSigner } from '../../../testing/cookie-keys';
 import { testRealm } from '../../../testing/request-realm';
 import { INACTIVE_SUBJECT_DESCRIPTION } from '../../helpers/token-subject';
 import { emitUserEvent } from '../../helpers/user-events';
@@ -78,9 +83,14 @@ const VALID_USER = {
   enabled: true,
 };
 
-/** The claims `/auth/login` puts on the first-party token. */
+/** The claims `/auth/login` puts on the first-party token since #524. */
 function loginClaims(overrides: Record<string, unknown> = {}) {
-  return { sub: VALID_USER.id, clientId: 'system', aud: 'system', ...overrides };
+  return {
+    sub: VALID_USER.id,
+    clientId: 'system',
+    aud: 'urn:qauth:aud:developer:v1-rc.0',
+    ...overrides,
+  };
 }
 
 /** The per-user index of hosted browser sessions that logout ends. */
@@ -136,6 +146,7 @@ function createFastifyStub() {
       decodeTokenUnsafe: vi.fn(),
     },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: {
       ...sessions.redis,
       setex: vi.fn().mockResolvedValue('OK'),
@@ -274,6 +285,24 @@ describe('POST /auth/logout', () => {
       expect(sessions.service.sessions.has('sess-a')).toBe(false);
       expect(reply.headers['Set-Cookie']).toContain('__Host-qauth_session=');
       expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
+    });
+
+    it('still ends everything when the cookie keys cannot be read, and leaves the cookie (#493)', async () => {
+      // A process without the signer role, or a signer outage: the cookie's MAC
+      // cannot be checked, which must not stop the logout halfway.
+      const { fastify, ctx, sessions } = createFastifyStub();
+      const { cookie } = await signedIn(sessions, 'sess-a');
+      const down = createFakeCookieSigner();
+      down.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+      fastify.signer = down as unknown as FastifyInstance['signer'];
+
+      // Resolves: the logout completes.
+      const reply = await logOut(fastify, ctx, cookie);
+
+      expect(sessions.service.sessions.has('sess-a')).toBe(false);
+      expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalled();
+      expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalled();
+      expect(reply.headers['Set-Cookie']).toBeUndefined();
     });
 
     it("leaves the cookie of a session that is not the user's alone", async () => {
@@ -523,10 +552,44 @@ describe('POST /auth/logout', () => {
     expect(fastify.repositories.refreshTokens.revokeAllForUser).not.toHaveBeenCalled();
   });
 
+  // A live portal token minted before #524 still signs out for one release,
+  // so the rolling upgrade leaves no tokens of a developer who signs out on a
+  // new node. Remove with the grace in the next release.
+  it("signs out with a live portal token minted before #524, with the system client's id as audience", async () => {
+    const { fastify, ctx } = createFastifyStub();
+    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('legacy.access.jwt');
+    (fastify.jwtUtils.verifyAccessToken as unknown as Mock).mockResolvedValue(
+      loginClaims({ aud: 'system' })
+    );
+
+    await logoutRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    const result = await handler(logoutRequest('Bearer legacy.access.jwt'), createReply());
+
+    expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
+      VALID_USER.id,
+      'logout'
+    );
+    expect(result).toMatchObject({ success: true });
+  });
+
   it.each([
     ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
     ['bound to another audience', { aud: 'https://mcp.example.com' }],
     ['delegated to an agent', { act: { sub: 'agent-1' } }],
+    [
+      "minted before #524, with the system client's id among other audiences",
+      { aud: ['system', 'https://mcp.example.com'] },
+    ],
+    [
+      'issued to another client, with the system client id as audience',
+      {
+        clientId: 'third-party-app',
+        aud: 'system',
+      },
+    ],
   ])('throws (401) and does NOT revoke for a valid token %s', async (_name, overrides) => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');
@@ -548,6 +611,10 @@ describe('POST /auth/logout', () => {
     ['issued to another client', { clientId: 'third-party-app', aud: 'third-party-app' }],
     ['bound to another audience', { aud: 'https://mcp.example.com' }],
     ['delegated to an agent', { act: { sub: 'agent-1' } }],
+    // #524 retired the system client id as a portal token's audience, which
+    // logout kept accepting for an expired token with no end date. The
+    // rolling-upgrade grace covers a live token only.
+    ["minted before #524, with the system client's id as audience", { aud: 'system' }],
   ])('throws (401) and does NOT revoke for an EXPIRED token %s', async (_name, overrides) => {
     const { fastify, ctx } = createFastifyStub();
     (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue('foreign.access.jwt');

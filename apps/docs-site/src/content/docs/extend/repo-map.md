@@ -48,42 +48,44 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 `project.json` is what the boundary rules actually read**, and the two do not always agree — see
 [the crypto-native exception](#a-directory-is-not-a-tag) below.
 
-| Directory                          | Package                                   | Tag                                    |
-| ---------------------------------- | ----------------------------------------- | -------------------------------------- |
-| `libs/core/crypto`                 | `@qauth-labs/core-crypto`                 | `scope:core`                           |
-| `libs/core/crypto-native`          | `@qauth-labs/crypto-native`               | `scope:server`                         |
-| `libs/shared/errors`               | `@qauth-labs/shared-errors`               | `scope:shared`                         |
-| `libs/shared/validation`           | `@qauth-labs/shared-validation`           | `scope:shared`                         |
-| `libs/shared/testing`              | `@qauth-labs/shared-testing`              | `scope:shared`                         |
-| `libs/shared/test-vectors`         | `@qauth-labs/shared-test-vectors`         | `scope:shared`                         |
-| `libs/shared/stability`            | `@qauth-labs/shared-stability`            | `scope:shared`                         |
-| `libs/shared/interaction-contract` | `@qauth-labs/shared-interaction-contract` | `scope:shared`                         |
-| `libs/shared/interaction-client`   | `@qauth-labs/shared-interaction-client`   | `scope:shared` + `type:sdk`            |
-| `libs/ui`                          | `@qauth-labs/ui`                          | `scope:ui`                             |
-| `libs/infra/db`                    | `@qauth-labs/infra-db`                    | `scope:infra`                          |
-| `libs/infra/cache`                 | `@qauth-labs/infra-cache`                 | `scope:infra`                          |
-| `libs/server/config`               | `@qauth-labs/server-config`               | `scope:server` + `scope:server-config` |
-| `libs/server/federation`           | `@qauth-labs/server-federation`           | `scope:server`                         |
-| `libs/server/jwt`                  | `@qauth-labs/server-jwt`                  | `scope:server`                         |
-| `libs/server/keys`                 | `@qauth-labs/server-keys`                 | `scope:server` + `type:key-custody`    |
-| `libs/server/password`             | `@qauth-labs/server-password`             | `scope:server`                         |
-| `libs/server/pkce`                 | `@qauth-labs/server-pkce`                 | `scope:server`                         |
-| `libs/server/dpop`                 | `@qauth-labs/server-dpop`                 | `scope:server`                         |
-| `libs/server/realm-policy`         | `@qauth-labs/server-realm-policy`         | `scope:server`                         |
-| `libs/server/egress`               | `@qauth-labs/server-egress`               | `scope:server`                         |
-| `libs/server/email`                | `@qauth-labs/server-email`                | `scope:server`                         |
-| `libs/server/step-grammar`         | `@qauth-labs/server-step-grammar`         | `scope:server`                         |
-| `libs/fastify/plugins/db`          | `@qauth-labs/fastify-plugin-db`           | `scope:fastify`                        |
-| `libs/fastify/plugins/cache`       | `@qauth-labs/fastify-plugin-cache`        | `scope:fastify`                        |
-| `libs/fastify/plugins/jwt`         | `@qauth-labs/fastify-plugin-jwt`          | `scope:fastify`                        |
-| `libs/fastify/plugins/password`    | `@qauth-labs/fastify-plugin-password`     | `scope:fastify`                        |
-| `libs/fastify/plugins/pkce`        | `@qauth-labs/fastify-plugin-pkce`         | `scope:fastify`                        |
-| `libs/fastify/plugins/email`       | `@qauth-labs/fastify-plugin-email`        | `scope:fastify`                        |
-| `libs/fastify/plugins/federation`  | `@qauth-labs/fastify-plugin-federation`   | `scope:fastify`                        |
-| `libs/fastify/plugins/signer`      | `@qauth-labs/fastify-plugin-signer`       | `scope:fastify`                        |
-| `libs/fastify/plugins/dpop`        | `@qauth-labs/fastify-plugin-dpop`         | `scope:fastify`                        |
-| `libs/fastify/plugins/egress`      | `@qauth-labs/fastify-plugin-egress`       | `scope:fastify`                        |
-| `libs/sdk/resource-guard`          | `@qauth-labs/resource-guard`              | `scope:sdk` + `type:sdk`               |
+| Directory                             | Package                                     | Tag                                    |
+| ------------------------------------- | ------------------------------------------- | -------------------------------------- |
+| `libs/core/crypto`                    | `@qauth-labs/core-crypto`                   | `scope:core`                           |
+| `libs/core/crypto-native`             | `@qauth-labs/crypto-native`                 | `scope:server`                         |
+| `libs/shared/errors`                  | `@qauth-labs/shared-errors`                 | `scope:shared`                         |
+| `libs/shared/validation`              | `@qauth-labs/shared-validation`             | `scope:shared`                         |
+| `libs/shared/testing`                 | `@qauth-labs/shared-testing`                | `scope:shared`                         |
+| `libs/shared/test-vectors`            | `@qauth-labs/shared-test-vectors`           | `scope:shared`                         |
+| `libs/shared/stability`               | `@qauth-labs/shared-stability`              | `scope:shared`                         |
+| `libs/shared/interaction-contract`    | `@qauth-labs/shared-interaction-contract`   | `scope:shared`                         |
+| `libs/shared/interaction-client`      | `@qauth-labs/shared-interaction-client`     | `scope:shared` + `type:sdk`            |
+| `libs/ui`                             | `@qauth-labs/ui`                            | `scope:ui`                             |
+| `libs/infra/db`                       | `@qauth-labs/infra-db`                      | `scope:infra`                          |
+| `libs/infra/cache`                    | `@qauth-labs/infra-cache`                   | `scope:infra`                          |
+| `libs/server/config`                  | `@qauth-labs/server-config`                 | `scope:server` + `scope:server-config` |
+| `libs/server/federation`              | `@qauth-labs/server-federation`             | `scope:server`                         |
+| `libs/server/jwt`                     | `@qauth-labs/server-jwt`                    | `scope:server`                         |
+| `libs/server/keys`                    | `@qauth-labs/server-keys`                   | `scope:server` + `type:key-custody`    |
+| `libs/server/password`                | `@qauth-labs/server-password`               | `scope:server`                         |
+| `libs/server/pkce`                    | `@qauth-labs/server-pkce`                   | `scope:server`                         |
+| `libs/server/dpop`                    | `@qauth-labs/server-dpop`                   | `scope:server`                         |
+| `libs/server/realm-policy`            | `@qauth-labs/server-realm-policy`           | `scope:server`                         |
+| `libs/server/egress`                  | `@qauth-labs/server-egress`                 | `scope:server`                         |
+| `libs/server/email`                   | `@qauth-labs/server-email`                  | `scope:server`                         |
+| `libs/server/step-grammar`            | `@qauth-labs/server-step-grammar`           | `scope:server`                         |
+| `libs/server/sign-in-engine`          | `@qauth-labs/server-sign-in-engine`         | `scope:server`                         |
+| `libs/fastify/plugins/db`             | `@qauth-labs/fastify-plugin-db`             | `scope:fastify`                        |
+| `libs/fastify/plugins/cache`          | `@qauth-labs/fastify-plugin-cache`          | `scope:fastify`                        |
+| `libs/fastify/plugins/jwt`            | `@qauth-labs/fastify-plugin-jwt`            | `scope:fastify`                        |
+| `libs/fastify/plugins/password`       | `@qauth-labs/fastify-plugin-password`       | `scope:fastify`                        |
+| `libs/fastify/plugins/pkce`           | `@qauth-labs/fastify-plugin-pkce`           | `scope:fastify`                        |
+| `libs/fastify/plugins/email`          | `@qauth-labs/fastify-plugin-email`          | `scope:fastify`                        |
+| `libs/fastify/plugins/federation`     | `@qauth-labs/fastify-plugin-federation`     | `scope:fastify`                        |
+| `libs/fastify/plugins/signer`         | `@qauth-labs/fastify-plugin-signer`         | `scope:fastify`                        |
+| `libs/fastify/plugins/dpop`           | `@qauth-labs/fastify-plugin-dpop`           | `scope:fastify`                        |
+| `libs/fastify/plugins/egress`         | `@qauth-labs/fastify-plugin-egress`         | `scope:fastify`                        |
+| `libs/fastify/plugins/sign-in-engine` | `@qauth-labs/fastify-plugin-sign-in-engine` | `scope:fastify`                        |
+| `libs/sdk/resource-guard`             | `@qauth-labs/resource-guard`                | `scope:sdk` + `type:sdk`               |
 
 ## The layering
 

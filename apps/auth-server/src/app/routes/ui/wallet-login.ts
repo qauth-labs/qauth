@@ -16,6 +16,7 @@ import {
   WALLET_LOGIN_STATUS_RATE_WINDOW_S,
 } from '../../constants';
 import { createBrowserSession, resolveBrowserSession } from '../../helpers/browser-session';
+import { cookieKeyRing } from '../../helpers/cookie-keys';
 import { html, render, safe, safeCustomSchemeUrl } from '../../helpers/html';
 import { encodeQrCode, renderQrCodeSvg } from '../../helpers/qr-code';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -559,7 +560,12 @@ async function advanceWalletLoginFlow(
   // second flow started in the same browser does not unbind this one. See
   // `WALLET_FLOW_COOKIE_NAME`. Read before the flow because the done-marker
   // path below needs it too.
-  const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
+  const binder = await findWalletFlowBinder(
+    fastify,
+    requestRealm(request).id,
+    readCookie(request, WALLET_FLOW_COOKIE_NAME),
+    handle
+  );
 
   // A flow is resumed only at a host of the realm it was started in (#489):
   // one of another realm is an unknown flow here, answered exactly as one,
@@ -659,6 +665,10 @@ async function advanceWalletLoginFlow(
   // flow (the poll is gated and the code is spent), so keeping it addressable
   // for the few round trips below costs nothing and closes the window in
   // which that tab would have found neither flow nor marker.
+  // The session cookie is signed with the realm's cookie key (#493): read the
+  // keys before anything ends the flow or mints a session, so a signer that
+  // cannot answer fails this request while the flow is still there to retry.
+  await cookieKeyRing(fastify).keys(flow.realmId);
   if (via === 'poll') await terminate(fastify, handle, flow);
 
   if (resolution.status !== 'authenticated') {
@@ -716,7 +726,7 @@ async function advanceWalletLoginFlow(
     { realmId: flow.realmId, userId: user.id, actor: 'user' }
   );
 
-  setSessionCookie(reply, session.sid);
+  await setSessionCookie(fastify, reply, session);
 
   if (via === 'return') {
     // The wallet opened this leg in a NEW tab. The binding stays in the shared
@@ -738,7 +748,7 @@ async function advanceWalletLoginFlow(
 
   // Burn only THIS flow's binding: another flow may still be pending in the
   // same browser, and clearing the whole cookie would strand it.
-  dropWalletFlowBinding(request, reply, handle);
+  await dropWalletFlowBinding(fastify, request, reply, handle);
 
   return { status: 'complete', redirectTo: flow.returnTo };
 }
@@ -787,12 +797,18 @@ async function resolveDoneMarker(
   if (marker.mode !== 'login') return { status: 'expired' };
 
   await deleteWalletFlowDoneMarker(fastify, handle);
-  dropWalletFlowBinding(request, reply, handle);
+  await dropWalletFlowBinding(fastify, request, reply, handle);
 
   if (marker.outcome !== undefined) return { status: 'rejected' };
 
   if (typeof marker.sessionId === 'string' && marker.sessionId.length > 0) {
-    setSessionCookie(reply, marker.sessionId);
+    // The cookie lasts as long as the session (#493), so it is read for its
+    // end; a session that ended meanwhile gets no cookie.
+    const session = await fastify.sessionService.get({
+      realmId: requestRealm(request).id,
+      sid: marker.sessionId,
+    });
+    if (session !== null) await setSessionCookie(fastify, reply, session);
   }
   return { status: 'complete', redirectTo: marker.redirectTo ?? '/' };
 }
@@ -904,9 +920,13 @@ export default async function (fastify: FastifyInstance) {
       // Same signed double-submit login-CSRF cookie the password form uses, and
       // reused rather than re-minted so a user who opens both screens keeps one
       // consistent token.
-      const existing = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const existing = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       const csrfToken = existing ?? generateCsrfToken();
-      if (!existing) setLoginCsrfCookie(reply, csrfToken);
+      if (!existing) await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, csrfToken);
 
       return sendHtml(
         reply,
@@ -959,7 +979,11 @@ export default async function (fastify: FastifyInstance) {
 
       // Login CSRF, checked BEFORE anything else so a forged cross-site POST
       // cannot mint presentation requests (each of which is a DB row).
-      const cookieCsrf = verifyLoginCsrfCookie(readCookie(request, LOGIN_CSRF_COOKIE_NAME));
+      const cookieCsrf = await verifyLoginCsrfCookie(
+        fastify,
+        requestRealm(request).id,
+        readCookie(request, LOGIN_CSRF_COOKIE_NAME)
+      );
       if (!cookieCsrf || !csrfTokensEqual(cookieCsrf, body.csrf_token)) {
         await emitUserEvent(
           request,
@@ -968,7 +992,7 @@ export default async function (fastify: FastifyInstance) {
           { actor: 'user' }
         );
         const freshCsrf = generateCsrfToken();
-        setLoginCsrfCookie(reply, freshCsrf);
+        await setLoginCsrfCookie(fastify, reply, requestRealm(request).id, freshCsrf);
         return sendHtml(
           reply,
           identifierPage({
@@ -1065,8 +1089,12 @@ export default async function (fastify: FastifyInstance) {
         // ADDED to whatever this browser already holds rather than replacing
         // it: a user who starts a second sign-in while the first QR is still on
         // screen must keep both usable. See `WALLET_FLOW_COOKIE_NAME`.
-        setWalletFlowCookie(reply, [
-          ...readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME)),
+        await setWalletFlowCookie(fastify, reply, realm.id, [
+          ...(await readWalletFlowBindings(
+            fastify,
+            realm.id,
+            readCookie(request, WALLET_FLOW_COOKIE_NAME)
+          )),
           { handle, binder, expiresAt: invocation.expiresAt },
         ]);
       } catch (error) {
@@ -1458,7 +1486,11 @@ async function findReturningFlow(
   request: FastifyRequest,
   stateHash: string
 ): Promise<{ handle: string; flow: WalletLoginFlow } | null> {
-  const bindings = readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME));
+  const bindings = await readWalletFlowBindings(
+    fastify,
+    requestRealm(request).id,
+    readCookie(request, WALLET_FLOW_COOKIE_NAME)
+  );
 
   for (const binding of bindings) {
     const flow = await readWalletLoginFlow(fastify, binding.handle);

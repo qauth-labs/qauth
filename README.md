@@ -115,7 +115,6 @@ Fill in these values in `.env`:
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `JWT_PRIVATE_KEY`, `JWT_PUBLIC_KEY` | `openssl genpkey -algorithm Ed25519 -out private.pem`, then `openssl pkey -in private.pem -pubout -out public.pem`. Paste both files, BEGIN and END lines included. |
 | `KEK`                               | `openssl rand -base64 32`. Keep a copy with your backups: without it, the stored keys cannot be read.                                                               |
-| `SESSION_COOKIE_SECRET`             | `openssl rand -base64 48`                                                                                                                                           |
 | `DB_PASSWORD`                       | Any strong password.                                                                                                                                                |
 
 Then start the stack and check it:
