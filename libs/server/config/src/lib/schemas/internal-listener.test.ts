@@ -113,6 +113,7 @@ describe('internalListenerEnvSchema', () => {
     ['an unknown role', '{"web.internal":"browser"}', 'must name one role'],
     ['all', '{"web.internal":"all"}', 'must name one role'],
     ['a role list', '{"web.internal":["web","api"]}', 'must name one role'],
+    ['the signer role', '{"signer.internal":"signer"}', 'names signer: the signer serves'],
     ['a wildcard SAN', '{"*.internal":"web"}', 'no wildcard'],
     ['an IP SAN', '{"10.1.2.3":"web"}', 'an IP address is not a peer name'],
     ['the prototype', '{"__proto__":"web"}', '"__proto__"'],

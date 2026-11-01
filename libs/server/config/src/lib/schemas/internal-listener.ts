@@ -120,8 +120,9 @@ const PEER_ROLES_EXAMPLE = '{"spiffe://example.org/qauth/web":"web","api.qauth.i
  * role it calls as. Unset or blank is no peer.
  *
  * Refuses the boot, naming the entry, for a SAN {@link parsePeerSan} refuses,
- * a value that is not one role, and two spellings of one DNS name that name
- * two roles.
+ * a value that is not one role, `signer` (the role that serves the internal
+ * listener never calls one as a peer, so no certificate may call as the
+ * keys' holder), and two spellings of one DNS name that name two roles.
  */
 function parseInternalPeerRoles(raw: string | undefined, ctx: z.RefinementCtx): InternalPeerRoles {
   if (raw === undefined || raw.trim() === '') return NO_PEERS;
@@ -172,6 +173,14 @@ function parseInternalPeerRoles(raw: string | undefined, ctx: z.RefinementCtx): 
       ctx.addIssue({
         code: 'custom',
         message: `INTERNAL_PEER_ROLES entry ${JSON.stringify(text)} must name one role: ${SERVICE_ROLE_NAMES.join(', ')}`,
+      });
+      valid = false;
+      continue;
+    }
+    if (role === 'signer') {
+      ctx.addIssue({
+        code: 'custom',
+        message: `INTERNAL_PEER_ROLES entry ${JSON.stringify(text)} names signer: the signer serves the internal listener and never calls it as a peer; map the peer to the role it runs, such as web or api`,
       });
       valid = false;
       continue;
