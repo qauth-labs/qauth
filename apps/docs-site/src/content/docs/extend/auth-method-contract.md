@@ -21,11 +21,16 @@ verification. The contract lives in `libs/server/federation/src/auth-method/`.
 
 ## What exists today
 
-The contract, the registry entries, the route mount and the test kit. Nothing registers an
-AuthMethod in a running server yet: the plugin runtime that loads installed methods is #600, the
-generic OpenID Connect upstream client is #601, and the upstream sign-in flow that offers the
-step and acts on its outcome is #639. `WalletProvider` is not an AuthMethod and stays a plain
-provider whose `verify()` rejects; wallet sign-in keeps its own seam.
+The contract, the registry entries, the route mount, the test kit, the plugin runtime and the
+first method on the contract. With the plugin runtime, a deployment installs plugin packages, the
+server loads them at boot, and an admin enables, configures and disables each one per realm
+([below](#installing-and-enabling-a-plugin)). The first method is the generic OpenID Connect
+upstream client (#601, [below](#the-generic-openid-connect-client)): a library that builds one
+method per configured provider, not a plugin package, so nothing registers it in a running server
+until provider administration (#714). The upstream sign-in flow that offers the step and acts on
+its outcome is #639: until it lands, a plugin's routes answer, but no sign-in sends a browser to a
+provider, so a callback is answered as one with no pending sign-in. `WalletProvider` is not an
+AuthMethod and stays a plain provider whose `verify()` rejects; wallet sign-in keeps its own seam.
 
 ## The contract
 
@@ -55,7 +60,7 @@ type, `oidc_<issuer URL>`) never matches, and the types QAuth writes itself (`pa
 engine offers the upstream step ──► person picks the method
         │
         ▼
-start(context, { uiLocales })  ──► { redirectTo, transaction, binding }
+start({ uiLocales }, context)  ──► { redirectTo, transaction, binding }
         │  the engine keeps the transaction and its binding server-side,
         │  bound to the interaction and its flow cookie, and sends the
         │  browser on
@@ -133,7 +138,12 @@ the contract hands it only what it needs. `createAuthMethodContext`
   user chose), and adds the realm's name itself: a method cannot pick another realm's allowlist
   entries or lift the client's caps. `operator` and `admin` are the labels the realm's allowlist
   applies to, for non-public addresses, so the adapter keeps them only for a URL whose origin is
-  the origin of a URL in the method's parsed config; any other call goes as `remote_document`;
+  the origin of a URL among the plain members of the method's parsed config, never a secret
+  member; any other call goes as `remote_document`.
+  `redirect: 'error'` makes a redirect answer reject the call before anything goes to its target
+  (the host client's `maxRedirects: 0`, the one cap a method may set, since it can only tighten);
+  a call that carries a credential in its body uses it, or a `307` would send that body on.
+  `follow`, the default, follows each redirect after the same checks as the first URL;
 - `signer`: `signClientAssertion()` and `getUpstreamJwks()` over the signer role, with the realm,
   the provider and the caller role fixed by the host. Signatures, never a key (ADR-019 Decision 9).
   An assertion gets `iat` when its claims carry none (a future one is refused), and its `exp` is
@@ -141,7 +151,10 @@ the contract hands it only what it needs. `createAuthMethodContext`
 - `log`: a logger's four levels, with a fields object and a message. The fields are nested under
   `authMethod`, so a method cannot overwrite the line's `reqId` or `realm`, as a copy in which
   `code`, `code_verifier`, `client_secret`, `client_assertion`, `refresh_token`, `access_token`,
-  `id_token`, `nonce` and `password` are redacted at any depth;
+  `id_token`, `nonce` and `password` are redacted at any depth, matched without regard to case,
+  `_` or `-` (`clientSecret` matches `client_secret`). The last segment of each of the method's
+  secret paths is redacted the same way, and each secret's value is cut out of every string and
+  of the message;
 - `routeUrl(path)`: the absolute URL of one of the method's own routes on the realm host, for a
   `redirect_uri`. Only a path the method's `routes` declare.
 
@@ -149,6 +162,20 @@ Each member is an adapter the builder writes, not a bound copy of the host's fun
 can hand over its whole egress client, signer and logger and the method still reaches nothing
 more. No database or cache handle, no private key, no Fastify instance, no request header and no
 cookie.
+
+The plugin runtime builds the context for the request's realm
+(`apps/auth-server/src/app/helpers/auth-method-plugins.ts`): the realm's stored config with its
+secret members decrypted back into place, the method's `type` as the signer's provider, and the
+request's logger with the plugin's name. The context signs and decrypts as `api`: its grant holds
+`signClientAssertion`, and among the stored secrets it may decrypt are a plugin secret's
+`auth-method-plugin:<plugin>:<path>` contexts, beside a realm's mail secrets and an upstream
+OpenID Connect client's secret. `web`, which serves a plugin's routes, may neither decrypt nor sign
+a client assertion, and `local` would open every stored secret. The admin API seals a plugin
+secret as `local`, as the realm secret store does, and opens a stored or sealed one as `api`. In a
+single deployment every role shares the signer's process. A deployment that runs the signer apart
+(#497) still needs a grant for the admin API, since the signer service takes the role from the
+caller's certificate and never accepts `local` from a peer; until then a process without the
+signer refuses the call.
 
 ## Routes
 
@@ -198,7 +225,209 @@ method written against another contract version, with a route that could leave i
 under a reserved type, fails the boot, and so does a duplicate `type`.
 `createConfiguredProviders` takes the methods to register (`authMethods`), holds every entry to the
 whole contract (one with no `contract` member too, which the registry alone would take for a plain
-provider) and appends them after the built-in providers; leaving them out registers none.
+provider) and appends them after the built-in providers; leaving them out registers none. The
+auth server passes the methods of the plugins it loaded at boot.
+
+## Packaging a plugin
+
+A plugin is an npm package that exports its method as `authMethod`
+(`AUTH_METHOD_PLUGIN_EXPORT`; a CommonJS package may put it under `default`):
+
+```ts
+// index.ts of @example/qauth-plugin-corp-sso
+import type { AuthMethod } from '@qauth-labs/server-federation';
+
+export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = {
+  contract: 'qauth-auth-method/1-rc.0',
+  type: 'corp_sso',
+  id: 'corp-sso',
+  // display, configSchema, steps, routes, start, verify, extractAttributes
+};
+```
+
+One package holds one method. Its `id` is the name the admin API gives the plugin, and stays the
+same across versions of the package; its `type` is the segment of its routes,
+`/upstream/<type>/…`, and the value written to `user_credentials.provider_type`.
+
+**Secret members.** A member of the config schema marked `.meta({ writeOnly: true })` is a secret,
+such as a client secret. The runtime reads the marks from the schema's JSON Schema, from its input
+side and from its output side. A secret is a string, or a nullable one, at any depth of nested
+objects, marked on the input side or on the output side of a pipe that keeps its path and its
+string. A schema that is not an object, that holds a part JSON Schema cannot describe (a `Set`, a
+`Map`, a date, a custom check), or that marks a member inside a list, a union, a record or a
+recursive part, behind a pipe that reshapes or renames it, or one that is not a string, is refused
+at boot: the runtime could not keep it write-only. So is a schema built with a Zod copy that keeps
+a metadata registry of its own (Zod 4.6 shares one between copies): build a plugin against the
+server's Zod, as a peer dependency.
+
+## Installing and enabling a plugin
+
+**Installing.** The operator installs the package with the deployment, as any other dependency
+of the auth server, and lists it in `AUTH_METHOD_PLUGINS` by package name, comma-separated. A
+path, a URL or a `file:` or `git+` specifier is refused: the server never fetches code, and the
+admin console never uploads or edits it.
+
+```sh
+AUTH_METHOD_PLUGINS=@example/qauth-plugin-corp-sso
+PLUGIN_API_ENABLED=true
+```
+
+**At boot**, a process that serves the sign-in pages or the admin API imports each listed package,
+checks the contract version its method declares first (a plugin built for another version says
+so, whatever else it breaks), holds the method to the whole contract, reads its secret members and
+registers it after the built-in providers. A package that is not installed, throws as it is
+imported, exports no `authMethod`, is written against another contract version, or repeats another
+plugin's `id` or `type` stops the boot. The boot logs one line per plugin it loads.
+
+**The switch.** A plugin outside QAuth's first-party list loads only while
+`PLUGIN_API_ENABLED=true`, and then the server logs the experimental warning of `plugin-api` at
+every boot; a process that loads plugins and holds the `signer` role, as a single deployment
+does, logs one more line saying that plugin code runs beside the signing keys and the KEK. With it
+off, such a package is never imported, and the boot logs a warning saying why.
+QAuth's own provider plugins are first-party: they load whatever the switch says. The first-party
+list is fixed in the server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting; it is
+empty until the first-party plugins ship. Discovery has no member for plugins, and their routes
+are left out of the OpenAPI documents.
+
+**Per realm**, every plugin starts off. The admin API's plugin operations, under
+`/admin/v1-rc.0/realms/{realmId}/plugins`, list the installed plugins with the realm's state of
+each (`plugins.list`, `plugins.get`), seal a secret value (`plugins.secrets.seal`), replace a
+plugin's config (`plugins.update`, `POST …/plugins/{plugin}/config`) and turn it on and off
+(`plugins.enable`, `plugins.disable`). `{plugin}` is the plugin's `id`. The three writes change
+which upstream credentials sign users in, so each is a
+[security operation](/reference/security-operations/) with the effect `credential-path`: it needs
+`qauth:admin:security` (the permission `plugins.security`) and an approval, and
+`qauth:admin:write` reaches none of them. Each of the three names in its body the `version` of
+the state it acts on, as its read gave it (`{ "version": 1 }` for an enable or a disable), so the
+approval binds it and the approver sees it, and a state that moved since answers 412: two approved
+configures never overwrite each other unseen, and an approved enable never turns on a config its
+approver never saw. Each may carry `If-Match` too.
+
+**Secrets.** A secret's value reaches the server in one request only: `plugins.secrets.seal`
+(`POST …/plugins/{plugin}/secrets/seal`, `{ path, value }`), which encrypts it with the realm's
+`data_at_rest` key, bound to that plugin and member, and answers the ciphertext. It changes
+nothing, so it is a write under `plugins.write`. A configure request then sends the plain members
+under `config` and names each secret member under `secrets`, by path: `{ sealed }` sets one to the
+sealed value, `null` clears it, and one it does not name keeps its value, unless the configure
+sends the plugin somewhere new: a configure that keeps a stored secret while a member whose value
+is an http(s) URL is added or changes origin is refused with `400`, naming the secrets to seal
+again, so a kept secret never follows a destination it was not set for (as the upstream OpenID
+Connect client refuses a changed issuer or token endpoint). So the request an
+approval stores until it is used, and the digests it is bound by, hold a ciphertext, never the
+value. The handler checks that each sealed value opens for its member of this plugin in this
+realm, and the whole config, secrets included, must pass the plugin's own schema; a plugin is
+enabled only with a config that does. A secret member sent under `config`, however it is spelled,
+is refused. No response, audit row, event or log line holds a value: the representation says only
+which secret members hold one, and the audit row of a configure names the secrets it set or
+cleared. A member that a newer version of a plugin marks secret is never shown or handed to the
+plugin from the plain config an older version stored, and leaves it at the next write.
+
+```http
+POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/secrets/seal
+{ "path": "clientSecret", "value": "…" }
+→ 200 { "path": "clientSecret", "sealed": "v1.…" }
+
+POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/config
+QAuth-Approval: {approvalId}
+{ "version": 0,
+  "config": { "issuer": "https://idp.example", "clientId": "qauth" },
+  "secrets": { "clientSecret": { "sealed": "v1.…" } } }
+```
+
+**A disabled plugin's routes** answer `404` with the `not_found` document of a path no route
+serves, before the request's body is read and without the rate limit's headers; disabling keeps
+the config. They are checked after the rate limit, so a flood past it answers 429 where an unknown
+path answers 404: that tells a plugin of that type is installed, never which realms have it on.
+
+## The generic OpenID Connect client
+
+`libs/server/upstream-oidc` (`@qauth-labs/server-upstream-oidc`) is the relying-party client QAuth
+uses toward an upstream OpenID Provider: `createUpstreamOidcMethod({ type, display })` builds one
+AuthMethod per configured provider, with the `id` `oidc`. It makes no account decision; the
+upstream sign-in flow (#639) looks the identity up by `(realm, type, externalSub)` and decides.
+
+**Callback path.** A provider's `type` is `oidc_` and a lower-case alias (`oidc_corp`), so its
+callback is `/upstream/oidc_<alias>/callback` on the realm host, one per provider, and the
+`redirect_uri` an operator registers at the provider is
+`https://<realm host>/upstream/oidc_<alias>/callback` (`upstreamOidcRedirectUri`). The same path
+answers `GET` (a `query` response) and `POST` (a `form_post` response, which the bounce sends on to
+the `GET` callback on the same origin, so the browser brings the `SameSite=Lax` flow cookie).
+
+**Config** (`upstreamOidcConfigSchema`): `issuer`, `clientId`, `clientAuthentication`
+(`client_secret_basic` or `client_secret_post` with a `writeOnly` `clientSecret`, or
+`private_key_jwt` with the key's `signingAlgorithm`), `scopes` (with `openid`; `openid email
+profile` by default), `responseMode` (`query` or `form_post`), `idTokenSigningAlgorithms`
+(asymmetric only, never `none` or `HS*`), `fetchUserinfo`, and optional `endpoints`.
+
+What it does:
+
+- **Discovery** reads `<issuer>/.well-known/openid-configuration` through the egress client, as an
+  `admin` destination. The document's `issuer` must equal the configured one byte for byte, every
+  URL it names is an `https` URL with no credentials or fragment, and each goes out as a
+  `remote_document` destination, which the egress allowlist never opens: a discovered endpoint
+  never reaches a private or loopback address, whatever the allowlist says. A provider on a
+  private address sets `endpoints` by hand instead (authorization, token, JWKS, optional userinfo,
+  and whether it sends `iss`); those are `admin` destinations, which an allowlist entry naming the
+  realm may open, and no discovery document is read.
+- **The authorization request** carries `response_type=code`, the client id, the provider's own
+  `redirect_uri`, the scopes, a fresh `state` (the binding), a fresh `nonce` and PKCE with S256.
+- **The callback** checks the transaction is this provider's (its type, issuer and
+  `redirect_uri`), checks `iss` (RFC 9207: a response naming another issuer is refused, and so is
+  one without `iss` from a provider that says it sends it), ends as `declined` on
+  `access_denied`, and redeems the code with the verifier.
+- **Client authentication** at the token endpoint is `client_secret_basic` (each part
+  form-urlencoded first, RFC 6749 §2.3.1), `client_secret_post`, or `private_key_jwt`: the signer
+  role signs the assertion with the realm's `upstream_client_assertion` key for the provider
+  (`iss` and `sub` are the client id the signer's upstream configuration names, `aud` the issuer,
+  with a fresh `jti` and a 60-second `exp`). The method sends the string it gets back and never
+  sees a key.
+- **The ID token** is checked against the provider's key set (fetched through the egress client,
+  kept at most five minutes, fetched again for an unknown `kid` at most once a minute) with an
+  allowlist of algorithms, then `iss`, `aud`, `azp` (required when there are several audiences),
+  `exp`, `iat` (at most ten minutes old) and `nonce`, with 30 seconds of clock tolerance.
+- **Userinfo**, when `fetchUserinfo` is set, must carry the ID token's `sub`. The identity's
+  `externalSub` is the provider's `sub`, and its `rawClaims` are the ID token's claims over the
+  userinfo claims, `iss` among them. The protocol claims (`acr`, `amr`, `auth_time`, `sid`, `nonce`,
+  the validity claims and the hashes) come from the signed ID token alone; userinfo's are dropped. `extractAttributes()` takes the standard profile claims that
+  are plain text; `email` and `phone_number` are verified only when the provider's own
+  `*_verified` claim is `true`.
+- **Every call** asks for `redirect: 'error'` (no redirect is followed) and has its own deadline
+  and response cap: 5 seconds and 64 KiB for discovery, the key set and userinfo, 10 seconds and
+  64 KiB for the token request. These only stop the method waiting and reading: they abort no
+  call and limit nothing the egress client fetches. The host egress client's own limits,
+  `totalTimeoutMs` and `maxResponseBytes`, bound the underlying call.
+
+**The stored client secret.** `sealUpstreamOidcConfig` encrypts it with the realm's
+`data_at_rest` key through the signer role, under the context
+`upstream-oidc:client-secret:<realm id>:<type>:<destination>`, where `<destination>` is the
+SHA-256 of the issuer and, for endpoints set by hand, the token endpoint. So a ciphertext moved to
+another provider or realm does not decrypt, and neither does one whose config was pointed at
+another host: an admin who cannot read the write-only secret cannot send it elsewhere by changing
+`issuer` or `endpoints.token`. `openUpstreamOidcConfig` refuses such a config with
+`UpstreamClientSecretDestinationChangedError`, and provider administration (#714) asks for the
+secret again whenever either value changes. The signer lets the `api` role decrypt a context under
+`upstream-oidc:client-secret:`, and neither `web` nor `delivery`. `openUpstreamOidcConfig` decrypts
+the secret for the method's context, and `describeUpstreamOidcConfig` is the view an API or event
+may carry, with neither the secret nor its ciphertext. Where the stored form lives is provider
+administration's (#714): the client is not a plugin package, so the plugin runtime's
+`realm_auth_method_plugins` (#600), which seals a plugin's secrets under contexts of its own, does
+not hold it.
+
+**What the sign-in flow must add.** `externalSub` is the provider's bare `sub`, and the type
+`oidc_<alias>` does not name the issuer, while only `iss` and `sub` together identify a person
+(OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer, so the upstream
+sign-in flow (#639) stores it with the credential and refuses a mismatch, or provider
+administration (#714) refuses an issuer change while credentials exist. The host opens the stored
+config and builds the method's context as a signer caller that may decrypt the client secret and
+sign client assertions: `api` may do both, and `web`, which serves the sign-in pages where a
+method's routes mount, may do neither. So in a single deployment the host calls as `local`, as the
+plugin runtime does ([above](#what-a-method-is-handed)); which role calls once the signer runs
+apart is #497's.
+
+**At registration.** `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery
+and the egress client's address checks on every endpoint without calling it, and answers one
+finding: `invalid_config`, `discovery_unavailable`, `invalid_document` or `destination_refused`.
+Each use checks again, since every call goes through the egress client.
 
 ## Checking a method: the contract test kit
 

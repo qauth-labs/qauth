@@ -1,0 +1,8 @@
+{
+  "name": "server-upstream-oidc",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/upstream-oidc/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "// targets": "to see all targets run: nx show project server-upstream-oidc --web"
+}

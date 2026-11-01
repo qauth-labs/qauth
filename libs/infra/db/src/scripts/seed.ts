@@ -55,6 +55,9 @@ async function main() {
           suspendedAt: f.default({ defaultValue: null }),
           // No ID-JAG target (#434): the dev client cannot mint or redeem one.
           idJagTargets: f.default({ defaultValue: [] }),
+          // No narrowing of client_credentials (#891): drizzle-seed would
+          // otherwise fill the column with a random JSON value.
+          clientCredentialsScopes: f.default({ defaultValue: null }),
           // No verified domain (#593): drizzle-seed would otherwise fill the
           // column with a random string the CHECK refuses.
           verifiedDomain: f.default({ defaultValue: null }),

@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-10-25'
+lastVerified: '2026-11-01'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -395,6 +395,13 @@ curl -s -X POST http://localhost:3000/oauth/token \
 - The client must have the `client_credentials` grant and the requested scopes
   in its `scopes` allowlist. **At least one scope is required** (a scopeless
   machine token is rejected per RFC 9700).
+- A client that also signs users in can have its `client_credentials` grant
+  narrowed by the operator to the scopes it needs as itself
+  (`client_credentials_scopes` in the seed manifest): a scope outside that list
+  is refused with `invalid_scope` even though the client holds it, so the
+  scopes its users grant it never reach a token that names no user. A client
+  without the list may request any scope of `scopes`. See
+  [SSF transmitter](/operate/ssf-transmitter/#register-a-receiver).
 - `resource` must fall within the client's configured `audience` (or defaults to
   the `client_id`); it sets the token `aud`.
 - An audience in the reserved `urn:qauth:aud:` namespace, such as the developer

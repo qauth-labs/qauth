@@ -338,6 +338,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `OID4VP_VERIFIER_TRUST_ANCHORS_PATH`     | deployment | unset                                             | 0.1.0 | A file holding more verifier trust anchors, added to `OID4VP_VERIFIER_TRUST_ANCHORS`.                                                       |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT`      | deployment | `openid4vp://`                                    | 0.1.0 | Where the wallet sign-in screen's QR code and wallet button point: a wallet's custom scheme or universal link.                              |
 
+### Plugins
+
+| Key                   | Role       | Default | Since | Description                                                                                                                                                                                    |
+| --------------------- | ---------- | ------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_METHOD_PLUGINS` | deployment | empty   | 0.2.0 | The AuthMethod plugin packages to load at boot, by npm package name, comma-separated; the operator installs them with the deployment, and a package that is not a valid plugin stops the boot. |
+
 ### Rate limits
 
 | Key                                 | Role       | Default | Since | Description                                                                                                  |
@@ -395,7 +401,11 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ## Experimental keys
 
-No key is experimental.
+### Plugins
+
+| Key                  | Role       | Default | Since | Description                                                                                                                                           |
+| -------------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PLUGIN_API_ENABLED` | deployment | `false` | 0.2.0 | Turn on the experimental plugin API, so a plugin outside QAuth's first-party list loads; with it off, such a plugin is skipped and the boot says why. |
 
 ### Experimental values
 

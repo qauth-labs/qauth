@@ -85,6 +85,20 @@ export const clientSpecSchema = z
     grant_types: z.array(grantTypeZ).min(1),
     response_types: z.array(responseTypeZ).optional(),
     scopes: z.array(z.string().min(1)).optional(),
+    // #891: the scopes the `client_credentials` grant may issue, out of
+    // `scopes`. Its tokens name no user, so a client that also signs users in
+    // (a relying party that receives SSF events, say) lists only the scopes it
+    // needs as itself, `ssf:stream`, and keeps the scopes its users grant it
+    // on their tokens. Operator-set only, like `id_jag_targets`: no
+    // registration path accepts it. Omitted ⇒ NULL ⇒ the grant may issue any
+    // scope of `scopes`.
+    client_credentials_scopes: z
+      .array(z.string().min(1))
+      .min(1, {
+        error:
+          'client_credentials_scopes is empty: to let the client get no token as itself, leave client_credentials out of grant_types',
+      })
+      .optional(),
     audience: z.array(z.string().min(1)).nullable().optional(),
     // Each one a URI the consent screen can show where the code goes to
     // (ADR-019 Decision 6, #593), as every registration path requires.
@@ -180,6 +194,29 @@ export const clientSpecSchema = z
       path: ['token_endpoint_auth_method'],
     }
   )
+  // #891: the list narrows `scopes` for one grant, so it names only scopes
+  // the client holds, and only on a client that has the grant.
+  .refine(
+    (spec) =>
+      spec.client_credentials_scopes === undefined ||
+      spec.grant_types.includes('client_credentials'),
+    {
+      message:
+        'client_credentials_scopes applies only to a client with the client_credentials grant',
+      path: ['client_credentials_scopes'],
+    }
+  )
+  .superRefine((spec, ctx) => {
+    const held = new Set(spec.scopes ?? []);
+    for (const scope of spec.client_credentials_scopes ?? []) {
+      if (held.has(scope)) continue;
+      ctx.addIssue({
+        code: 'custom',
+        message: `"${scope}" is in client_credentials_scopes but not in scopes: the list may name only scopes the client holds`,
+        path: ['client_credentials_scopes'],
+      });
+    }
+  })
   // ADR-017 Decision 2 (#631). The database CHECKs hold the profile's shape
   // on every path; these say what is wrong in the operator's own terms first,
   // and add the rules only the seed can check.

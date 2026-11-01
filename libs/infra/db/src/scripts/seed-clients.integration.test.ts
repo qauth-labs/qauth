@@ -341,4 +341,53 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
     }
     expect(await firstPartyEvents(realmId)).toEqual([]);
   });
+
+  // #891: an entry without client_credentials_scopes writes NULL, which would
+  // lift a list the operator set by hand.
+  it('refuses, before issuing a secret, a --rotate entry that would lift a stored client_credentials_scopes', async () => {
+    const realmId = await realm('ccs-1');
+    const RECEIVER = {
+      client_id: 'notes-app',
+      name: 'Notes',
+      grant_types: ['authorization_code', 'refresh_token', 'client_credentials'],
+      redirect_uris: ['https://notes.example.com/callback'],
+      scopes: ['openid', 'notes:read', 'ssf:stream'],
+    };
+    await provisionClient(db(), realmId, spec(RECEIVER), false);
+    await integration().database.pool.query(
+      `UPDATE oauth_clients SET client_credentials_scopes = '["ssf:stream"]'
+        WHERE realm_id = $1 AND client_id = 'notes-app'`,
+      [realmId]
+    );
+    const before = await client(realmId, 'notes-app');
+
+    const refused = await provisionClient(db(), realmId, spec(RECEIVER), true);
+
+    expect(refused).toEqual({
+      clientId: 'notes-app',
+      secret: '',
+      action: 'refused',
+      refusal: 'client_credentials_scopes_dropped',
+    });
+    expect(await client(realmId, 'notes-app')).toEqual(before);
+
+    // Named in the entry, the rotation goes through and keeps the list.
+    const rotated = await provisionClient(
+      db(),
+      realmId,
+      spec({ ...RECEIVER, client_credentials_scopes: ['ssf:stream'] }),
+      true
+    );
+    expect(rotated.action).toBe('rotated');
+    expect((await client(realmId, 'notes-app')).clientCredentialsScopes).toEqual(['ssf:stream']);
+
+    // Cleared by hand first, the rotation lifts it as the entry says.
+    await integration().database.pool.query(
+      `UPDATE oauth_clients SET client_credentials_scopes = NULL
+        WHERE realm_id = $1 AND client_id = 'notes-app'`,
+      [realmId]
+    );
+    expect((await provisionClient(db(), realmId, spec(RECEIVER), true)).action).toBe('rotated');
+    expect((await client(realmId, 'notes-app')).clientCredentialsScopes).toBeNull();
+  });
 });

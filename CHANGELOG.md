@@ -1373,7 +1373,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and outside the 1.0 stability promise (the experimental item `plugin-api`).
   An AuthMethod extends `CredentialProvider` with an id, display data, a config
   schema, the upstream step, the routes it mounts under `/upstream/<type>` and
-  `start()`. The engine checks every answer of a method: the redirect, the
+  `start(request, context)`, which takes its arguments in the order a route's
+  `handle(request, context)` does. The engine checks every answer of a method: the redirect, the
   transaction and its binding, which the host compares in constant time
   before it takes the pending transaction, the identity (its assurance level
   capped, `low` by default) and every attribute, whose source must be the
@@ -1381,8 +1382,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role and a logger, never a database handle or a key, and `resolve(type)`
   answers a fail-closed stand-in for it. The contract test kit
   (`@qauth-labs/server-federation/testing`) checks a method against all of
-  it, PKCE with S256 included. Nothing registers a method in a running server
-  yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
+  it, PKCE with S256 included. The plugin runtime ([#600], below) loads
+  methods into a running server; the upstream sign-in flow is [#639].
+
+- **The plugin runtime for AuthMethod plugins, experimental** ([#600],
+  ADR-019 Decision 12, ADR-018 §4 and §5). A plugin is an npm package the
+  operator installs with the deployment and lists in `AUTH_METHOD_PLUGINS`
+  (package names only: a path or URL stops the boot). At boot a process that
+  serves the sign-in pages or the admin API imports each one, checks the
+  contract version its `authMethod` export declares, holds it to the whole
+  contract and registers it; a package that is not installed, exports no
+  method, is built for another contract version or repeats another plugin's
+  id or type stops the boot. A plugin outside the first-party list, a fixed
+  list in the server's code that is empty until the first-party plugins ship,
+  loads only while `PLUGIN_API_ENABLED=true`, the switch of the experimental
+  item `plugin-api`, which now warns at boot while on; with it off the
+  package is never imported and the boot logs why. Each realm keeps its state
+  of each plugin in `realm_auth_method_plugins` (migration 0050): off by
+  default, its config's plain members, and each secret member (marked
+  `writeOnly` in the plugin's schema) as a ciphertext under the realm's
+  `data_at_rest` key. The admin API lists and reads the installed plugins
+  (`plugins.list`, `plugins.get`, the permission `plugins.read`), seals a
+  secret value for one member (`plugins.secrets.seal`, under the new write
+  permission `plugins.write`; it changes nothing) and configures, enables and
+  disables one per realm (`plugins.update`, `plugins.enable`,
+  `plugins.disable`, each of which names in its body the version of the
+  state it acts on, so an approval binds it): security operations with
+  `credential-path`, under the new permission `plugins.security`, so they need
+  `qauth:admin:security` and an approval. A configure carries only sealed
+  values, so the request an approval stores never holds a secret in the
+  clear. A config must pass the plugin's own schema; secrets are write-only
+  and never shown in a response, an audit row or a log. A disabled plugin's routes
+  under `/upstream/<type>` answer the `not_found` document of a path no route
+  serves, and plugin routes are left out of the OpenAPI documents. A plugin's
+  context holds its realm config, the egress client, the signer bound to the
+  realm and the plugin, and a logger: no database handle and no key.
+
+- **The generic upstream OpenID Connect client, experimental** ([#601],
+  ADR-018 §3, ADR-019 Decisions 8 and 9). The new library
+  `libs/server/upstream-oidc` is the first AuthMethod: one per configured
+  provider type `oidc_<alias>`, with its own callback,
+  `/upstream/oidc_<alias>/callback`, so a response for one provider cannot be
+  replayed at another. It reads the provider's discovery document through the
+  egress client (its `issuer` must match byte for byte, and every URL it names
+  goes out as a `remote_document` destination, which the egress allowlist
+  never opens) or takes the endpoints set by hand for a provider on a private
+  address. It sends the code flow with `state`, `nonce` and PKCE S256, checks
+  the RFC 9207 `iss` parameter, accepts the callback as `GET` and as
+  `form_post` (bounced to the `GET` callback so the `SameSite=Lax` flow cookie
+  comes along), redeems the code with `client_secret_basic`,
+  `client_secret_post` or a `private_key_jwt` assertion the signer role signs,
+  validates the ID token against the provider's cached key set and an
+  allowlist of asymmetric algorithms (`iss`, `aud`, `azp`, `exp`, `iat`,
+  `nonce`), and reads userinfo when configured. Every call follows no
+  redirect and has its own deadline and size cap. A stored client secret is
+  sealed with the realm's data-at-rest key and never shown, and a
+  registration check runs discovery and the egress address checks for the
+  provider administration ([#714]). It makes no account decision: the
+  upstream sign-in flow is [#639]. The AuthMethod contract's egress request
+  gains `redirect: 'error'`, the one cap a method may set (no redirect
+  followed), which the client uses on every call. The signer lets the `api`
+  role decrypt a provider's client secret (a context under
+  `upstream-oidc:client-secret:`) as well as a realm's mail secret, so the
+  host opens a stored config as `api`. The stored secret is bound to where it
+  is sent: after the issuer or a token endpoint set by hand changes, it no
+  longer opens and must be entered again.
 
 - **The developer API and the account API's consents, under versioned
   prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
@@ -1397,6 +1461,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, 415 for another media type, 422 for `client_name` set to `null`), and
   problem documents. A client of another developer is 404, as before. The
   domain logic is shared with the deprecated paths, which keep their shapes.
+
+- **`graphs:check`, delurio's check of the flow graphs** ([#560], ADR-021).
+  `graphs/` is now an Nx project, `graphs`, whose `check` target runs
+  `delurio check graphs --strict` with `@delurio/cli`, a root development
+  dependency pinned to 0.5.0: a graph that cannot be loaded, a graph file that
+  does not follow its kind's JSON Schema (which holds every state but an exit to
+  camelCase), a broken assertion or a main story that cannot be walked fails
+  it. The five `graphs/domain/*.yaml` files are read as one domain and checked
+  too. It needs no server and no database, and is cached on `graphs/**`; no app
+  or lib depends on delurio, and no shipped image carries it. `graphs/README.md` now states QAuth's flow
+  conventions: an effect ends in `DONE` or `FAIL.<class>`, a protocol flow has
+  one exit per cause, named `<error>.<cause>`, every protocol exit declares its
+  response, and every flow is complete (no unreachable state, no transition
+  never taken, no dead end, no effect without a failure path). delurio does not
+  enforce those structural rules yet, so they are review items until it does.
+  `flows/admin/plugin-enable` now names its exits that way too, one exit per
+  cause for a refused enable and a refused disable alike. CI does not run the
+  target yet; [#568] will.
 
 ### Changed
 
@@ -2361,6 +2443,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#550]: https://github.com/qauth-labs/qauth/issues/550
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
+[#560]: https://github.com/qauth-labs/qauth/issues/560
+[#568]: https://github.com/qauth-labs/qauth/issues/568
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
@@ -2371,6 +2455,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#599]: https://github.com/qauth-labs/qauth/issues/599
 [#600]: https://github.com/qauth-labs/qauth/issues/600
+[#601]: https://github.com/qauth-labs/qauth/issues/601
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
@@ -2382,9 +2467,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
 [#633]: https://github.com/qauth-labs/qauth/issues/633
+[#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
+[#891]: https://github.com/qauth-labs/qauth/issues/891
 
 ### Deprecated
 
@@ -2410,6 +2497,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expired one is refused, and the next release removes the grace.
 
 ### Fixed
+
+- **A client that signs users in can be kept from minting tokens with no user
+  for its users' scopes** ([#891]). `client_credentials` granted any scope in
+  a client's `scopes`, so a relying party given the grant to manage its SSF
+  stream could also get a token whose `sub` is its own `client_id` for a scope
+  its users grant it (`notes:read`, say), which a resource server that did not
+  check `sub` acted on app-wide. Migration 0051 adds
+  `oauth_clients.client_credentials_scopes`, the scopes that grant may issue,
+  out of `scopes`; the seed manifest's `client_credentials_scopes` is the only
+  way to set it, and no owner route can change it. With a list, the token
+  endpoint refuses any other scope on `client_credentials` with `invalid_scope`
+  (event reason `scope_not_allowed_for_grant`); without one the grant is as
+  before. The manifest refuses a listed scope `scopes` does not hold, an empty
+  list, and the list on a client without the grant, and `--rotate` refuses an
+  entry without the list for a client whose row has one, so a rotation cannot
+  lift it unnoticed. The admin API's reserved `clients.update` cases count
+  lifting or widening the list as `token-content`. The **SSF transmitter**
+  page's receiver example now lists `["ssf:stream"]` there, and its warning
+  covers only a client without the list.
+
+  **Action for operators**: give every client that signs users in and holds
+  `client_credentials` a `client_credentials_scopes`, an SSF receiver's
+  `["ssf:stream"]`, in its manifest entry, and keep an SSF receiver's
+  `audience` to the realm's issuer alone: the list narrows the token's scopes,
+  not its `aud`. The seeder writes an existing client only with `--rotate`;
+  without rotating, also set the column with an `UPDATE` (see the SSF
+  transmitter page and the upgrade guide). The list takes effect on a node
+  once that node runs this release; until every node does, a node of the
+  previous release, which ignores the column, still issues every scope of
+  `scopes`. Setting it during the roll does no harm, since such a node's
+  writes leave the column as it is. Rolling back to an earlier release without
+  restoring the backup lifts every list, because older code ignores the
+  column; the column and its values are kept, and the lists apply again after
+  upgrading.
 
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped

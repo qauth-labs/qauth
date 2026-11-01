@@ -101,7 +101,7 @@ export function createSampleAuthMethod(
     configSchema: sampleConfigSchema,
     steps: [UPSTREAM_STEP_URN],
 
-    async start(context) {
+    async start(_request, context) {
       const state = randomBytes(16).toString('base64url');
       const codeVerifier = randomBytes(32).toString('base64url');
       const url = new URL(context.config.authorizationEndpoint);

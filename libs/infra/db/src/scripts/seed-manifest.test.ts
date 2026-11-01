@@ -344,6 +344,94 @@ describe('isCimdClientIdShape', () => {
       ).toBe(false);
     });
   });
+
+  describe('client_credentials_scopes (#891)', () => {
+    /** A relying party that signs users in and receives SSF events as itself. */
+    const receiverClient = (overrides: Record<string, unknown>) => ({
+      realm: 'master',
+      clients: [
+        {
+          client_id: 'notes-app',
+          name: 'Notes',
+          grant_types: ['authorization_code', 'refresh_token', 'client_credentials'],
+          redirect_uris: ['https://notes.example.com/callback'],
+          scopes: ['openid', 'notes:read', 'ssf:stream'],
+          audience: ['https://auth.example.com'],
+          ...overrides,
+        },
+      ],
+    });
+
+    it('accepts a list of scopes the client holds, and leaves it out when omitted', () => {
+      expect(
+        manifestSchema.parse(receiverClient({ client_credentials_scopes: ['ssf:stream'] }))
+          .clients?.[0].client_credentials_scopes
+      ).toEqual(['ssf:stream']);
+      expect(
+        manifestSchema.parse(receiverClient({})).clients?.[0].client_credentials_scopes
+      ).toBeUndefined();
+    });
+
+    it('refuses a scope the client does not hold in scopes, naming it', () => {
+      const result = manifestSchema.safeParse(
+        receiverClient({ client_credentials_scopes: ['ssf:stream', 'notes:write'] })
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toHaveLength(1);
+      expect(result.error?.issues[0].path).toEqual(['clients', 0, 'client_credentials_scopes']);
+      expect(result.error?.issues[0].message).toContain('"notes:write"');
+    });
+
+    it('refuses any scope when the entry has no scopes', () => {
+      const result = manifestSchema.safeParse(
+        receiverClient({ scopes: undefined, client_credentials_scopes: ['ssf:stream'] })
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain('"ssf:stream"');
+    });
+
+    it('refuses it on a client without the client_credentials grant', () => {
+      const result = manifestSchema.safeParse(
+        receiverClient({
+          grant_types: ['authorization_code', 'refresh_token'],
+          client_credentials_scopes: ['ssf:stream'],
+        })
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain('client_credentials grant');
+    });
+
+    it('refuses an empty list, and says how to give the client no token of its own', () => {
+      const result = manifestSchema.safeParse(receiverClient({ client_credentials_scopes: [] }));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].message).toContain('leave client_credentials out');
+    });
+
+    it.each([
+      ['a string instead of a list', 'ssf:stream'],
+      ['an empty string', ['']],
+      ['null', null],
+    ])('refuses %s', (_name, value) => {
+      expect(
+        manifestSchema.safeParse(receiverClient({ client_credentials_scopes: value })).success
+      ).toBe(false);
+    });
+
+    it('refuses it on a CIMD entry, which has no client_credentials grant', () => {
+      expect(
+        manifestSchema.safeParse({
+          realm: 'master',
+          cimd_clients: [
+            {
+              client_id: 'https://client.example.com/c',
+              scopes: ['ssf:stream'],
+              client_credentials_scopes: ['ssf:stream'],
+            },
+          ],
+        }).success
+      ).toBe(false);
+    });
+  });
 });
 
 describe('first-party profiles (#631, ADR-017 Decision 2)', () => {
