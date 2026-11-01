@@ -12,6 +12,8 @@ import {
   type AuthMethodRouteRequest,
   MAX_AUTH_METHOD_RAW_CLAIMS_BYTES,
   MAX_UPSTREAM_REDIRECT_LENGTH,
+  UPSTREAM_OIDC_METHOD_ID,
+  UPSTREAM_OIDC_TYPE_PATTERN,
   UPSTREAM_STEP_URN,
   type UpstreamCallbackOutcome,
   type UpstreamStart,
@@ -73,17 +75,10 @@ import { TtlCache } from './ttl-cache';
  * @experimental
  */
 
-/** The implementation's `id`: every configured provider's method shares it. */
-export const UPSTREAM_OIDC_METHOD_ID = 'oidc';
-
-/**
- * A provider's `type`: `oidc_` and a lower-case alias of letters, digits and
- * `_`, at most 63 characters in all. It is the AuthMethod type, the
- * `user_credentials.provider_type` value and a segment of the callback URL,
- * so it holds no `:` or `/` and never equals an ID-JAG type
- * (`oidc_<issuer URL>`).
- */
-export const UPSTREAM_OIDC_TYPE_PATTERN = /^oidc_[a-z0-9][a-z0-9_]{0,57}$/;
+// The implementation's `id`, which every configured provider's method
+// shares, and a provider's `type` (`oidc_<alias>`): defined in the contract,
+// where the plugin loader reserves both, so no plugin can take them.
+export { UPSTREAM_OIDC_METHOD_ID, UPSTREAM_OIDC_TYPE_PATTERN };
 
 /** The callback route's path below the method's prefix. */
 export const UPSTREAM_OIDC_CALLBACK_PATH = '/callback';

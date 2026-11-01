@@ -1,5 +1,10 @@
 import type { AuthMethod } from './auth-method.interface';
-import { AUTH_METHOD_CONTRACT, AUTH_METHOD_CONTRACT_NAME } from './contract';
+import {
+  AUTH_METHOD_CONTRACT,
+  AUTH_METHOD_CONTRACT_NAME,
+  UPSTREAM_OIDC_METHOD_ID,
+  UPSTREAM_OIDC_TYPE_PATTERN,
+} from './contract';
 import { AuthMethodContractError } from './errors';
 import { authMethodSecretPaths } from './secret-members';
 import { assertAuthMethod, authMethodSnapshot } from './validate';
@@ -178,6 +183,27 @@ function contractVersionProblem(candidate: unknown): string | undefined {
   return `its ${AUTH_METHOD_PLUGIN_EXPORT} names no contract version: it must declare contract ${AUTH_METHOD_CONTRACT}`;
 }
 
+/**
+ * The names a plugin may not take: those of the generic upstream OpenID
+ * Connect client (#601), its id `oidc` and its provider types
+ * `oidc_<alias>`. A plugin under one would share the client's credentials
+ * (`user_credentials.provider_type`) and its callback URLs.
+ */
+function reservedNameProblems(method: Pick<AuthMethod, 'id' | 'type'>): string[] {
+  const problems: string[] = [];
+  if (method.id === UPSTREAM_OIDC_METHOD_ID) {
+    problems.push(
+      `its id ${method.id} is the generic upstream OpenID Connect client's, which no plugin may take`
+    );
+  }
+  if (UPSTREAM_OIDC_TYPE_PATTERN.test(method.type)) {
+    problems.push(
+      `its type ${method.type} is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no plugin may take`
+    );
+  }
+  return problems;
+}
+
 /** Load one package: import it and check what it exports. */
 async function loadPackage(
   packageName: string,
@@ -224,6 +250,8 @@ async function loadPackage(
     }
     throw error;
   }
+  const reserved = reservedNameProblems(method);
+  if (reserved.length > 0) throw new AuthMethodPluginError(packageName, reserved);
   return Object.freeze({
     package: packageName,
     firstParty,
@@ -244,8 +272,10 @@ async function loadPackage(
  * @throws AuthMethodPluginError when a package is listed twice, is not
  *   installed, fails as it is imported, exports no `authMethod`, is written
  *   against another contract version, does not meet the contract, marks a
- *   secret config member the server cannot keep write-only, or repeats the
- *   `id` or the `type` of a plugin loaded before it
+ *   secret config member the server cannot keep write-only, takes the generic
+ *   upstream OpenID Connect client's id or a type in its namespace
+ *   ({@link UPSTREAM_OIDC_METHOD_ID}, {@link UPSTREAM_OIDC_TYPE_PATTERN}), or
+ *   repeats the `id` or the `type` of a plugin loaded before it
  * @experimental
  */
 export async function loadAuthMethodPlugins(

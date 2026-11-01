@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createSampleAuthMethod } from '../../testing/sample-auth-method.fixture';
-import { AUTH_METHOD_CONTRACT } from './contract';
+import {
+  AUTH_METHOD_CONTRACT,
+  UPSTREAM_OIDC_METHOD_ID,
+  UPSTREAM_OIDC_TYPE_PATTERN,
+} from './contract';
 import {
   AuthMethodPluginError,
   type ImportAuthMethodPlugin,
@@ -301,6 +305,51 @@ describe('loadAuthMethodPlugins (#600)', () => {
     expect(sameType.problems).toEqual([
       `its type corp_sso is the type of ${FIRST_PARTY}: two plugins cannot share a type`,
     ]);
+  });
+
+  it("refuses a plugin that takes the generic upstream OIDC client's id or a type in its namespace", async () => {
+    const load = (authMethod: unknown) =>
+      refusal(
+        loadAuthMethodPlugins({
+          packages: [THIRD_PARTY],
+          pluginApiEnabled: true,
+          firstParty: [],
+          importPackage: importerOf({ [THIRD_PARTY]: { authMethod } }),
+        })
+      );
+
+    expect((await load(sample('corp_sso', UPSTREAM_OIDC_METHOD_ID))).problems).toEqual([
+      "its id oidc is the generic upstream OpenID Connect client's, which no plugin may take",
+    ]);
+    for (const type of ['oidc_corp', 'oidc_0', `oidc_${'a'.repeat(58)}`]) {
+      expect(UPSTREAM_OIDC_TYPE_PATTERN.test(type), type).toBe(true);
+      const error = await load(sample(type, 'corp'));
+      expect(error.packageName).toBe(THIRD_PARTY);
+      expect(error.problems).toEqual([
+        `its type ${type} is in the generic upstream OpenID Connect client's namespace (oidc_<alias>), which no plugin may take`,
+      ]);
+    }
+    // A first-party package is held to it too.
+    const firstParty = await refusal(
+      loadAuthMethodPlugins({
+        packages: [FIRST_PARTY],
+        pluginApiEnabled: false,
+        firstParty: [FIRST_PARTY],
+        importPackage: importerOf({ [FIRST_PARTY]: { authMethod: sample('oidc_corp', 'oidc') } }),
+      })
+    );
+    expect(firstParty.problems).toHaveLength(2);
+
+    // A type outside the namespace, such as `oidcx` or `corp_oidc`, loads.
+    for (const type of ['oidcx', 'corp_oidc']) {
+      const loaded = await loadAuthMethodPlugins({
+        packages: [THIRD_PARTY],
+        pluginApiEnabled: true,
+        firstParty: [],
+        importPackage: importerOf({ [THIRD_PARTY]: { authMethod: sample(type, 'corp') } }),
+      });
+      expect(loaded.installed.map((plugin) => plugin.type)).toEqual([type]);
+    }
   });
 
   it('refuses a package listed twice', async () => {
