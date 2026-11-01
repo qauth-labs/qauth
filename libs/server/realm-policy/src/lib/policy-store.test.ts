@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { policyField } from './field';
+import { compareDirection } from './direction';
+import { PolicyDefinitionError, policyField } from './field';
 import {
   createPolicyStore,
   PolicySchemaVersionError,
@@ -21,6 +22,7 @@ import {
 } from './realm-policies';
 import { createPolicyRegistry, PolicyValidationError } from './registry';
 import { createRealmSecretStore, type RealmSecretStore } from './secret-store';
+import type { PolicySchemaUpgrade } from './upgrades';
 
 /**
  * The policy store (#516) over an in-memory storage: reads join the stored
@@ -270,6 +272,16 @@ describe('createPolicyStore — reading', () => {
     await expect(store.get('realm-a')).rejects.toBeInstanceOf(PolicyValidationError);
   });
 
+  it('reads a document of a later schema version with this release’s schema, as a rolling upgrade has it', async () => {
+    const { store } = storeOver([realmWithPolicies({ schemaVersion: '1-rc.7' })]);
+
+    expect(await store.get('realm-a')).toMatchObject({
+      version: 3,
+      schemaVersion: '1-rc.7',
+      policies: SEEDS,
+    });
+  });
+
   it('reads past members a later release stored, which this release does not know', async () => {
     const document = {
       ...structuredClone(SEEDS),
@@ -455,12 +467,15 @@ describe('createPolicyStore — update', () => {
     });
   });
 
-  it('refuses to write policies that follow another schema version, changing nothing', async () => {
+  it('refuses to write policies that follow a later schema version, changing nothing', async () => {
     const { store, writes } = storeOver([realmWithPolicies({ schemaVersion: '1-rc.7' })]);
 
-    await expect(
-      store.update('realm-a', { password: { minScore: 4 } }, { expectedVersion: 3 })
-    ).rejects.toBeInstanceOf(PolicySchemaVersionError);
+    const refused = await store
+      .update('realm-a', { password: { minScore: 4 } }, { expectedVersion: 3 })
+      .catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(PolicySchemaVersionError);
+    expect(refused).toMatchObject({ storedVersion: '1-rc.7', reason: 'newer' });
     expect(writes).toEqual([]);
   });
 
@@ -601,6 +616,7 @@ describe('createPolicyStore — seedRealms', () => {
         },
       ],
       completed: [],
+      upgraded: [],
       skipped: [],
     });
     expect(rows.get('realm-old')).toMatchObject({
@@ -682,7 +698,12 @@ describe('createPolicyStore — seedRealms', () => {
       seeds: defaultsFromEnv({ ACCESS_TOKEN_LIFESPAN: '60', PASSWORD_MIN_SCORE: '0' }),
     });
 
-    expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
     expect(memory.writes).toEqual([]);
     expect(memory.locks).toEqual([]);
     expect(memory.rows.get('realm-a')?.document).toEqual(SEEDS);
@@ -704,7 +725,12 @@ describe('createPolicyStore — seedRealms', () => {
       },
     ]);
     expect(rows.get('realm-a')).toMatchObject({ version: 4, document: SEEDS });
-    expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
     expect(writes).toHaveLength(1);
   });
 
@@ -723,7 +749,7 @@ describe('createPolicyStore — seedRealms', () => {
     });
   });
 
-  it('leaves a realm whose policies follow another schema version as it is, and says so', async () => {
+  it('leaves a realm whose policies follow a later schema version as it is, and says so', async () => {
     const document = structuredClone(SEEDS) as unknown as Record<string, Record<string, unknown>>;
     delete document['password'];
     const { store, writes } = storeOver([realmWithPolicies({ document, schemaVersion: '1-rc.7' })]);
@@ -731,7 +757,22 @@ describe('createPolicyStore — seedRealms', () => {
     expect(await store.seedRealms()).toEqual({
       filled: [],
       completed: [],
-      skipped: [{ realmId: 'realm-a', realmName: 'master', schemaVersion: '1-rc.7' }],
+      upgraded: [],
+      skipped: [
+        { realmId: 'realm-a', realmName: 'master', schemaVersion: '1-rc.7', reason: 'newer' },
+      ],
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it('passes over a realm of a later schema version that lacks no field of this release', async () => {
+    const { store, writes } = storeOver([realmWithPolicies({ schemaVersion: '1-rc.7' })]);
+
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
     });
     expect(writes).toEqual([]);
   });
@@ -741,7 +782,12 @@ describe('createPolicyStore — seedRealms', () => {
     document['password']['minScore'] = 9;
     const { store } = storeOver([realmWithPolicies({ document })]);
 
-    expect(await store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
   });
 
   it('reports nothing for a realm another writer got to first', async () => {
@@ -751,7 +797,12 @@ describe('createPolicyStore — seedRealms', () => {
       if (realm) realm.version = 1;
     });
 
-    expect(await memory.store.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
+    expect(await memory.store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
   });
 
   it('refuses the boot when a fill is not a valid document, naming the realm and path only', async () => {
@@ -802,7 +853,12 @@ describe('createPolicyStore — seedRealms', () => {
       seeds: registry.defaultsFromEnv({}),
       registry,
     });
-    expect(await before.seedRealms()).toEqual({ filled: [], completed: [], skipped: [] });
+    expect(await before.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
 
     registry.registerPolicyGroup('sessions', {
       idleSeconds: policyField(z.number().int().positive(), {
@@ -832,6 +888,481 @@ describe('createPolicyStore — seedRealms', () => {
     expect(memory.rows.get('r')?.document).toEqual({
       password: { minScore: 1 },
       sessions: { idleSeconds: 600 },
+    });
+  });
+});
+
+/** A field of the test registries of #908, whose annotations do not matter here. */
+function testField<S extends z.ZodType>(
+  schema: S,
+  seedEnv: string,
+  fallback: z.output<S>,
+  direction: 'lower-is-stricter' | 'higher-is-stricter'
+) {
+  return policyField(schema, {
+    seedEnv,
+    default: fallback,
+    direction,
+    securityWhen: 'loosening',
+    effects: ['posture-loosening'],
+    secret: false,
+    environmentBound: false,
+    doc: { summary: 'A test field.', link: 'https://docs.qauth.dev/' },
+  });
+}
+
+/** The schema an earlier release stored under: `1-rc.0`, or the same fields under `version`. */
+function previousRegistry(version = '1-rc.0') {
+  const registry = createPolicyRegistry({ version });
+  registry.registerPolicyGroup('password', {
+    minScore: testField(
+      z.number().int().min(0).max(4),
+      'PASSWORD_MIN_SCORE',
+      2,
+      'higher-is-stricter'
+    ),
+  });
+  registry.registerPolicyGroup('tokens', {
+    accessTokenLifespanSeconds: testField(
+      z.number().int().positive().max(86_400),
+      'ACCESS_TOKEN_LIFESPAN',
+      900,
+      'lower-is-stricter'
+    ),
+  });
+  return registry;
+}
+
+/**
+ * The schema of the release that changes the version to `1-rc.1`: it renames
+ * `password.minScore` to `password.minimumScore`, whose default is looser
+ * than a realm may have stored; narrows the access token lifetime to an hour;
+ * and adds `sessions.idleSeconds`.
+ */
+function nextRegistry(version = '1-rc.1') {
+  const registry = createPolicyRegistry({ version });
+  registry.registerPolicyGroup('password', {
+    minimumScore: testField(
+      z.number().int().min(0).max(4),
+      'PASSWORD_MIN_SCORE',
+      0,
+      'higher-is-stricter'
+    ),
+  });
+  registry.registerPolicyGroup('tokens', {
+    accessTokenLifespanSeconds: testField(
+      z.number().int().positive().max(3600),
+      'ACCESS_TOKEN_LIFESPAN',
+      900,
+      'lower-is-stricter'
+    ),
+  });
+  registry.registerPolicyGroup('sessions', {
+    idleSeconds: testField(
+      z.number().int().positive(),
+      'SESSION_IDLE_TEST',
+      1800,
+      'lower-is-stricter'
+    ),
+  });
+  return registry;
+}
+
+/** The fields `1-rc.1` reads from where `1-rc.0` stored them. */
+const STORED_AT: Readonly<Record<string, string>> = {
+  'password.minimumScore': 'password.minScore',
+  'tokens.accessTokenLifespanSeconds': 'tokens.accessTokenLifespanSeconds',
+};
+
+/** The upgrade the `1-rc.1` release ships: the rename, and the lifetime at most an hour. */
+const TO_RC1: PolicySchemaUpgrade = {
+  from: '1-rc.0',
+  to: '1-rc.1',
+  upgrade(document) {
+    const password = document['password'] as Record<string, unknown> | undefined;
+    if (password !== undefined && Object.hasOwn(password, 'minScore')) {
+      password['minimumScore'] = password['minScore'];
+      delete password['minScore'];
+    }
+    const tokens = document['tokens'] as Record<string, unknown> | undefined;
+    const lifespan = tokens?.['accessTokenLifespanSeconds'];
+    if (tokens !== undefined && typeof lifespan === 'number') {
+      tokens['accessTokenLifespanSeconds'] = Math.min(lifespan, 3600);
+    }
+    return document;
+  },
+};
+
+/** A realm whose policies `1-rc.0` stored: a stricter score than 1-rc.1's seed, a lifetime above its limit, and a member it does not know. */
+function realmOfPreviousVersion(overrides: Partial<MemoryRealm> = {}): MemoryRealm {
+  return realmWithPolicies({
+    schemaVersion: '1-rc.0',
+    document: {
+      password: { minScore: 4 },
+      tokens: { accessTokenLifespanSeconds: 7200 },
+      brand: { color: 'teal' },
+    },
+    ...overrides,
+  });
+}
+
+function nextStoreOver(realms: MemoryRealm[], upgrades: readonly PolicySchemaUpgrade[] = [TO_RC1]) {
+  const memory = memoryStorage(realms);
+  const registry = nextRegistry();
+  const store = createPolicyStore({
+    storage: memory.storage,
+    seeds: registry.defaultsFromEnv({}),
+    registry,
+    upgrades,
+  });
+  return { ...memory, store, registry };
+}
+
+/** The value at a dotted path. */
+function at(document: unknown, path: string): unknown {
+  return path
+    .split('.')
+    .reduce<unknown>(
+      (node, name) => (node as Record<string, unknown> | undefined)?.[name],
+      document
+    );
+}
+
+/**
+ * Each field 1-rc.1 reads from a stored one, the value it reads against the
+ * stored value: the same, or tighter by its direction, never looser.
+ */
+function looserThanStored(
+  registry: ReturnType<typeof nextRegistry>,
+  stored: unknown,
+  read: unknown
+): string[] {
+  return Object.entries(STORED_AT).flatMap(([path, storedPath]) => {
+    const before = at(stored, storedPath);
+    const after = at(read, path);
+    const field = registry.field(path);
+    if (field === undefined) return [path];
+    if (JSON.stringify(before) === JSON.stringify(after)) return [];
+    return compareDirection(field.field.direction, before, after) === 'loosening' ? [path] : [];
+  });
+}
+
+describe('createPolicyStore — a document of an older schema version (#908)', () => {
+  it('reads it through its upgrade: a renamed field keeps its value, a narrowed one reads no looser', async () => {
+    const realm = realmOfPreviousVersion();
+    const { store, registry, writes } = nextStoreOver([realm]);
+
+    const snapshot = await store.get('realm-a');
+
+    expect(snapshot).toEqual({
+      realmId: 'realm-a',
+      version: 3,
+      hasPolicies: true,
+      schemaVersion: '1-rc.1',
+      policies: {
+        // Read with the new schema alone, this would be its seed, 0.
+        password: { minimumScore: 4 },
+        // 7200 is above the new limit: an hour, shorter, so stricter.
+        tokens: { accessTokenLifespanSeconds: 3600 },
+        sessions: { idleSeconds: 1800 },
+      },
+    });
+    expect(looserThanStored(registry, realm.document, snapshot?.policies)).toEqual([]);
+    expect(store.ofRealm(realm)).toEqual(snapshot);
+    expect(writes).toEqual([]);
+  });
+
+  it('is refused, never read with the new schema, when no upgrade reaches its version', async () => {
+    const { store, writes } = nextStoreOver([realmOfPreviousVersion()], []);
+
+    const refused = await store.get('realm-a').catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(PolicyValidationError);
+    expect(refused).toMatchObject({
+      issues: [
+        { path: '', message: 'follow schema version 1-rc.0, which no upgrade to 1-rc.1 reaches' },
+      ],
+    });
+    const update = await store
+      .update('realm-a', {}, { expectedVersion: 3 })
+      .catch((error: unknown) => error);
+    expect(update).toBeInstanceOf(PolicySchemaVersionError);
+    expect(update).toMatchObject({ storedVersion: '1-rc.0', reason: 'no-upgrade' });
+    expect(writes).toEqual([]);
+  });
+
+  it('is updated as it reads upgraded, and stored under the new version', async () => {
+    const realm = realmOfPreviousVersion();
+    const stored = structuredClone(realm.document);
+    const { store, rows, registry } = nextStoreOver([realm]);
+
+    const snapshot = await store.update(
+      'realm-a',
+      { sessions: { idleSeconds: 900 } },
+      { expectedVersion: 3 }
+    );
+
+    expect(snapshot).toMatchObject({ version: 4, schemaVersion: '1-rc.1' });
+    expect(rows.get('realm-a')).toMatchObject({ version: 4, schemaVersion: '1-rc.1' });
+    // The renamed member is gone, the one this release does not know carried over.
+    expect(rows.get('realm-a')?.document).toEqual({
+      password: { minimumScore: 4 },
+      tokens: { accessTokenLifespanSeconds: 3600 },
+      sessions: { idleSeconds: 900 },
+      brand: { color: 'teal' },
+    });
+    expect(looserThanStored(registry, stored, rows.get('realm-a')?.document)).toEqual([]);
+    // Read back, it is a document of this release's version.
+    expect((await store.get('realm-a'))?.policies).toEqual(snapshot.policies);
+  });
+
+  it('is upgraded at boot once, the fields the upgrade does not give taken from the seeds', async () => {
+    const realm = realmOfPreviousVersion();
+    const stored = structuredClone(realm.document);
+    const { store, rows, writes, registry } = nextStoreOver([realm]);
+
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [
+        {
+          realmId: 'realm-a',
+          realmName: 'master',
+          from: '1-rc.0',
+          paths: ['sessions.idleSeconds'],
+        },
+      ],
+      skipped: [],
+    });
+    expect(rows.get('realm-a')).toMatchObject({
+      version: 4,
+      schemaVersion: '1-rc.1',
+      document: {
+        password: { minimumScore: 4 },
+        tokens: { accessTokenLifespanSeconds: 3600 },
+        sessions: { idleSeconds: 1800 },
+        brand: { color: 'teal' },
+      },
+    });
+    expect(looserThanStored(registry, stored, rows.get('realm-a')?.document)).toEqual([]);
+    expect(await store.seedRealms()).toEqual({
+      filled: [],
+      completed: [],
+      upgraded: [],
+      skipped: [],
+    });
+    expect(writes).toHaveLength(1);
+  });
+
+  it('is upgraded at boot when it lacks no field, which the boot used to pass over', async () => {
+    // A version change that changes no field: the document is complete
+    // under both versions, and is written under the new one all the same.
+    const relabelled = previousRegistry('1-rc.1');
+    const document = { password: { minScore: 3 }, tokens: { accessTokenLifespanSeconds: 600 } };
+    const memory = memoryStorage([realmWithPolicies({ schemaVersion: '1-rc.0', document })]);
+    const store = createPolicyStore({
+      storage: memory.storage,
+      seeds: relabelled.defaultsFromEnv({}),
+      registry: relabelled,
+      upgrades: [{ from: '1-rc.0', to: '1-rc.1', upgrade: (stored) => stored }],
+    });
+
+    expect((await store.seedRealms()).upgraded).toEqual([
+      { realmId: 'realm-a', realmName: 'master', from: '1-rc.0', paths: [] },
+    ]);
+    expect(memory.rows.get('realm-a')).toMatchObject({
+      version: 4,
+      schemaVersion: '1-rc.1',
+      document,
+    });
+  });
+
+  it('is left as it is at boot when no upgrade reaches its version, and the boot goes on', async () => {
+    const { store, writes } = nextStoreOver([realmOfPreviousVersion(), realmWithoutPolicies()], []);
+
+    const report = await store.seedRealms();
+
+    expect(report.skipped).toEqual([
+      { realmId: 'realm-a', realmName: 'master', schemaVersion: '1-rc.0', reason: 'no-upgrade' },
+    ]);
+    expect(report.filled).toMatchObject([{ realmId: 'realm-old' }]);
+    expect(writes.map((write) => write.realmId)).toEqual(['realm-old']);
+  });
+
+  it('refuses the boot when the upgraded document is not valid, naming the realm and path only', async () => {
+    const { store, writes } = nextStoreOver(
+      [realmOfPreviousVersion({ name: 'legacy' })],
+      [
+        {
+          ...TO_RC1,
+          upgrade: (document) => ({ ...TO_RC1.upgrade(document), password: { minimumScore: 9 } }),
+        },
+      ]
+    );
+
+    const refused = await store.seedRealms().catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(RealmPolicySeedRefusedError);
+    expect(refused).toMatchObject({
+      realmName: 'legacy',
+      issues: [{ path: 'password.minimumScore' }],
+    });
+    expect(writes).toEqual([]);
+  });
+
+  it('is refused, naming the step, when an upgrade fails or gives no document', async () => {
+    const failing: readonly PolicySchemaUpgrade[][] = [
+      [
+        {
+          ...TO_RC1,
+          upgrade: () => {
+            throw new TypeError("Cannot read properties of undefined (reading 'minScore')");
+          },
+        },
+      ],
+      [{ ...TO_RC1, upgrade: () => null as unknown as Record<string, unknown> }],
+    ];
+    for (const upgrades of failing) {
+      const { store, writes } = nextStoreOver(
+        [realmOfPreviousVersion({ name: 'legacy' })],
+        upgrades
+      );
+      const issue = {
+        path: '',
+        message: 'the upgrade from schema version 1-rc.0 to 1-rc.1 gave no policy document',
+      };
+
+      await expect(store.get('realm-a')).rejects.toMatchObject({
+        name: 'PolicyValidationError',
+        issues: [issue],
+      });
+      const refused = await store.seedRealms().catch((error: unknown) => error);
+      expect(refused).toBeInstanceOf(RealmPolicySeedRefusedError);
+      expect(refused).toMatchObject({ realmName: 'legacy', issues: [issue] });
+      expect(writes).toEqual([]);
+    }
+  });
+
+  it('reports nothing for a realm another writer upgraded first', async () => {
+    const memory = nextStoreOver([realmOfPreviousVersion()]);
+    memory.onBeforeWrite((realmId) => {
+      const realm = memory.rows.get(realmId);
+      if (realm) realm.version = 4;
+    });
+
+    expect((await memory.store.seedRealms()).upgraded).toEqual([]);
+  });
+
+  it('applies the upgrades from its version on, in order, each to what the one before gave', async () => {
+    const seen: unknown[] = [];
+    const first = vi.fn((document: Record<string, unknown>) => {
+      seen.push(structuredClone(document));
+      return TO_RC1.upgrade(document);
+    });
+    const second = vi.fn((document: Record<string, unknown>) => {
+      seen.push(structuredClone(document));
+      return { ...document, sessions: { idleSeconds: 600 } };
+    });
+    const registry = nextRegistry('1-rc.2');
+    const memory = memoryStorage([
+      realmOfPreviousVersion(),
+      realmWithPolicies({
+        id: 'realm-b',
+        schemaVersion: '1-rc.1',
+        document: { password: { minimumScore: 1 }, tokens: { accessTokenLifespanSeconds: 60 } },
+      }),
+    ]);
+    const store = createPolicyStore({
+      storage: memory.storage,
+      seeds: registry.defaultsFromEnv({}),
+      registry,
+      upgrades: [
+        { from: '1-rc.1', to: '1-rc.2', upgrade: second },
+        { ...TO_RC1, upgrade: first },
+      ],
+    });
+
+    expect((await store.get('realm-a'))?.policies).toEqual({
+      password: { minimumScore: 4 },
+      tokens: { accessTokenLifespanSeconds: 3600 },
+      sessions: { idleSeconds: 600 },
+    });
+    expect(seen).toEqual([
+      {
+        password: { minScore: 4 },
+        tokens: { accessTokenLifespanSeconds: 7200 },
+        brand: { color: 'teal' },
+      },
+      {
+        password: { minimumScore: 4 },
+        tokens: { accessTokenLifespanSeconds: 3600 },
+        brand: { color: 'teal' },
+      },
+    ]);
+    first.mockClear();
+    second.mockClear();
+
+    expect((await store.get('realm-b'))?.schemaVersion).toBe('1-rc.2');
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the upgrade a copy, so a read changes no row the caller loaded', () => {
+    const realm = realmOfPreviousVersion();
+    const registry = nextRegistry();
+    const storage = memoryStorage([]).storage;
+    // A storage that hands out the row's own objects, as nothing obliges it not to.
+    const store = createPolicyStore({
+      storage: {
+        ...storage,
+        recordOf: (row: MemoryRealm) => ({
+          realmId: row.id,
+          realmName: row.name,
+          version: row.version,
+          schemaVersion: row.schemaVersion,
+          document: row.document,
+          keptOnFill: {},
+        }),
+      },
+      seeds: registry.defaultsFromEnv({}),
+      registry,
+      upgrades: [TO_RC1],
+    });
+
+    store.ofRealm(realm);
+
+    expect(realm.document).toEqual({
+      password: { minScore: 4 },
+      tokens: { accessTokenLifespanSeconds: 7200 },
+      brand: { color: 'teal' },
+    });
+  });
+
+  it('refuses, when the store is created, upgrades that do not lead to the registry’s version', () => {
+    const registry = nextRegistry();
+    const storage = memoryStorage([]).storage;
+    const create = (upgrades: readonly PolicySchemaUpgrade[]) => () =>
+      createPolicyStore({ storage, seeds: registry.defaultsFromEnv({}), registry, upgrades });
+
+    expect(create([{ ...TO_RC1, to: '1-rc.2' }])).toThrow(PolicyDefinitionError);
+    expect(create([{ ...TO_RC1, from: '1-rc.1' }])).toThrow(PolicyDefinitionError);
+    expect(create([{ ...TO_RC1, from: '1-rc.0', to: '1-rc.0' }])).toThrow(PolicyDefinitionError);
+    expect(create([TO_RC1])).not.toThrow();
+  });
+
+  it('reads the previous version’s own documents unchanged with the previous registry', async () => {
+    // The 1-rc.0 release, for comparison: its documents need no upgrade.
+    const registry = previousRegistry();
+    const memory = memoryStorage([realmOfPreviousVersion()]);
+    const store = createPolicyStore({
+      storage: memory.storage,
+      seeds: registry.defaultsFromEnv({}),
+      registry,
+    });
+
+    expect((await store.get('realm-a'))?.policies).toEqual({
+      password: { minScore: 4 },
+      tokens: { accessTokenLifespanSeconds: 7200 },
     });
   });
 });

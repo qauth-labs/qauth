@@ -96,6 +96,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read the environment until they move to the row ([#527], [#528], [#529],
   [#534]); the token lifetimes moved with [#527], the sign-in policy with [#528]
   (below). See **Realm policies move onto the realm row** in `operate/upgrades`.
+- **Stored realm policies of an earlier schema version are upgraded** ([#908],
+  ADR-018 §5). A release that changes `REALM_POLICY_SCHEMA_VERSION` ships an
+  upgrade from the version before it in `REALM_POLICY_UPGRADES` (none yet: the
+  version is still `1-rc.0`). The policy store reads a document stored under an
+  older `policy_schema_version` through those upgrades, an update stores the
+  upgraded document under the current version, and the boot writes it once
+  (`realm policies of an earlier schema version upgraded to this release's`).
+  A document of an older version that no upgrade reaches is refused on read
+  and on write rather than read with the new schema, where a renamed field
+  would read as its possibly looser seed, and the boot warns about it. A document of a
+  later version, during a rolling upgrade, is still read and never written.
+  `version.ts` lists what a version change ships, and a contract test fails
+  while the upgrades do not lead from `1-rc.0` to the current version.
 - **Each realm sends its mail through its own transport and sender** ([#529],
   ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
   policies (transport, sender address and name, SMTP host, port, TLS and user)
@@ -2534,6 +2547,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#857]: https://github.com/qauth-labs/qauth/issues/857
 [#891]: https://github.com/qauth-labs/qauth/issues/891
 [#896]: https://github.com/qauth-labs/qauth/issues/896
+[#908]: https://github.com/qauth-labs/qauth/issues/908
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
