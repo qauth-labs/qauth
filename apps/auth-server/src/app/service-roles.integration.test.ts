@@ -15,6 +15,7 @@ import {
   type PemKeyPair,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { SIGNER_LISTENER } from '../testing/service-role-env';
 import { SERVICE_ROLE_NAMES } from './service-roles';
 
 /**
@@ -110,18 +111,6 @@ const SIGNER_SERVICE: Record<string, string> = {
   INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
   INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
   INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
-};
-
-/**
- * The internal listener settings of a split process holding the signer
- * (#496): it serves the signer to the other roles over mutual TLS. Never read
- * here, as these boots run no internal listener.
- */
-const SIGNER_LISTENER: Record<string, string> = {
-  INTERNAL_TLS_CERT_PATH: '/run/secrets/signer.crt',
-  INTERNAL_TLS_KEY_PATH: '/run/secrets/signer.key',
-  INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
-  INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
 };
 
 /** `METHOD /url` for each method of each route. */
