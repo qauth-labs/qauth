@@ -80,7 +80,7 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current 
 
 `urn:qauth:ia:identifier:v1-rc.0` — Asks who is signing in.
 
-Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4). Offered as an alternative of a later step, it is the account switch ("Not you?", "Use another account"): answering it ends the interaction and starts a new one for the same authorization request, and the result is a redirect to the ceremony app’s page of the new interaction. Nothing proved for the first account carries over (#592).
+Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4). Offered as an alternative of a later step, it is the account switch ("Not you?", "Use another account"): answering it ends the interaction and starts a new one for the same authorization request, and the result is a redirect to the ceremony app’s page of the new interaction. Nothing proved for the first account carries over (#592). After the person signed in during the interaction, the switch also ends the browser session that sign-in started, so the browser is signed in as nobody until the new ceremony signs someone in (#896).
 
 - Params: —
 - Schema: [steps/identifier.json](/interaction/v1-rc.0/steps/identifier.json)

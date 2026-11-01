@@ -1046,7 +1046,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport ([#616]) must submit credential steps by `fetch` or guard a form
   against a double submit. A user switch ends the interaction and
   starts a new one for the same request at the identifier step, with nothing
-  proved carried over and the request's absolute expiry kept. An unknown,
+  proved carried over and the request's absolute expiry kept. A switch made
+  after the person signed in also ends the browser session that sign-in
+  started and clears its cookie ([#896]), so a browser whose new ceremony is
+  abandoned is signed in as nobody and no client gets SSO from the first user;
+  `interaction.cancelled` records it with `sessionEnded: true`. An unknown,
   expired or finished interaction and a wrong cookie get one
   `interaction_expired` answer (410), the same bytes whatever the cause. Every
   problem document on an `/interaction/<version>/` path, `404` included, carries
@@ -2367,6 +2371,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
+[#896]: https://github.com/qauth-labs/qauth/issues/896
 
 ### Deprecated
 
