@@ -47,7 +47,12 @@ export {
   type VerifierSigningEnvLike,
 } from './federation';
 export { type IssuerKeysEnv, issuerKeysEnvSchema, type PerIssuerKeySets } from './issuer-keys';
-export { type JwtEnv, jwtEnvSchema } from './jwt';
+export {
+  type JwtEnv,
+  jwtEnvSchema,
+  MAX_ACCESS_TOKEN_LIFESPAN_SECONDS,
+  MAX_REFRESH_TOKEN_LIFESPAN_SECONDS,
+} from './jwt';
 export { type KekEnv, kekEnvSchema } from './kek';
 export {
   type AttestedKeyStorageGrade,
