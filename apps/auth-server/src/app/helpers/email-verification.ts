@@ -11,10 +11,10 @@ import {
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
+import type { BruteForcePolicy } from './account-policies';
 import { hashEmail } from './auth-events';
 import { clientAddressKey, type ClientAddressSource } from './client-address';
 import { recordSuccessfulLogin, registerLoginAttempt } from './failed-login';
-import type { BruteForcePolicy } from './realm-policy-readers';
 
 /** What a verification request carries: the mailed token and the account's password. */
 export interface EmailVerificationInput {

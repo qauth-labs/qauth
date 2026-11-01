@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { verifyEmailAddress } from '../../helpers/email-verification';
-import { accountPoliciesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { type VerifyBody, verifyBodySchema, verifyResponseSchema } from '../../schemas/auth';

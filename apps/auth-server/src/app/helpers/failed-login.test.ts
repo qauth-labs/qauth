@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import type { BruteForcePolicy } from './account-policies';
 import { recordSuccessfulLogin, registerLoginAttempt, resetFailedAttempts } from './failed-login';
-import type { BruteForcePolicy } from './realm-policy-readers';
 
 /**
  * Minimal in-memory Redis stub covering the ioredis surface the helper uses:

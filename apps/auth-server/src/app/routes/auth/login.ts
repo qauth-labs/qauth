@@ -6,6 +6,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { withoutAdminAudience } from '../../helpers/admin-scopes';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
@@ -14,7 +15,7 @@ import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { issueAccessToken } from '../../helpers/hybrid-token';
 import { getOrCreateSystemClient } from '../../helpers/oauth-client';
-import { accountPoliciesOf, tokenLifetimesOf } from '../../helpers/realm-policy-readers';
+import { tokenLifetimesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { refreshFamilyEnd, refreshTokenExpiresAt } from '../../helpers/refresh-family';
 import { requestRealm } from '../../helpers/request-realm';

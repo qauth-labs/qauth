@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
 import { REDIS_KEYS } from '../constants';
-import type { BruteForcePolicy } from './realm-policy-readers';
+import type { BruteForcePolicy } from './account-policies';
 
 /**
  * The Redis client type, derived from the `fastify.redis` decorator that the
