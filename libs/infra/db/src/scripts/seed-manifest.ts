@@ -323,9 +323,10 @@ export const manifestSchema = z
     cimd_clients: z.array(cimdClientSpecSchema).optional(),
     // ADR-017 phase F0 (#631): the developer portal's system client, as a
     // `private_key_jwt` client with the `web_redirect` first-party profile
-    // and the portal's callback. `client_id` defaults to `system`; set it to
-    // the auth server's SYSTEM_CLIENT_ID when that is set. The migration
-    // runner provisions the same row from its SYSTEM_CLIENT_* environment.
+    // and the portal's callback. A section without `client_id` takes the
+    // seed's SYSTEM_CLIENT_ID ({@link parseManifest}), `system` when that is
+    // unset, as the auth server does. The migration runner provisions the
+    // same row from its SYSTEM_CLIENT_* environment.
     system_client: systemClientSpecSchema.optional(),
   })
   .strict()
@@ -395,3 +396,34 @@ export function firstPartyColumnsOf(spec: ClientSpec): ClientFirstPartyColumns {
 }
 export type CimdClientSpec = z.infer<typeof cimdClientSpecSchema>;
 export type Manifest = z.infer<typeof manifestSchema>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Parse a manifest with {@link manifestSchema}. A `system_client` section
+ * that names no `client_id` takes `SYSTEM_CLIENT_ID` from `env` when it is
+ * set, before the schema's default (`system`) fills it: the auth server and
+ * the migration runner use that id, so the seed must provision the same row.
+ *
+ * @throws ZodError when the manifest is not valid
+ */
+export function parseManifest(
+  raw: unknown,
+  env: Readonly<Record<string, string | undefined>> = {}
+): Manifest {
+  const configured = env['SYSTEM_CLIENT_ID']?.trim();
+  if (
+    configured &&
+    isRecord(raw) &&
+    isRecord(raw['system_client']) &&
+    raw['system_client']['client_id'] === undefined
+  ) {
+    return manifestSchema.parse({
+      ...raw,
+      system_client: { ...raw['system_client'], client_id: configured },
+    });
+  }
+  return manifestSchema.parse(raw);
+}

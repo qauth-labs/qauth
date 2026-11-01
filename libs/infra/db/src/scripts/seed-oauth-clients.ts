@@ -62,7 +62,7 @@ import { realms } from '../lib/schema';
 import { describeSystemClientResult, provisionSystemClient } from '../lib/system-client/provision';
 import { applyCimdClientGrant, type CimdGrantResult } from './cimd-client-grants';
 import { type Issued, provisionClient } from './seed-clients';
-import { type ClientSpec, firstPartyColumnsOf, manifestSchema } from './seed-manifest';
+import { type ClientSpec, firstPartyColumnsOf, parseManifest } from './seed-manifest';
 
 dotenv.config({ path: '../../../.env' });
 
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
   }
 
   const raw: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
-  const manifest = manifestSchema.parse(raw);
+  const manifest = parseManifest(raw, process.env);
 
   // The system client is provisioned by the `system_client` section and the
   // migration runner only (#631): a `clients` entry for it would rewrite it as
@@ -137,13 +137,16 @@ async function main(): Promise<void> {
     }
 
     const issued: Issued[] = [];
-    for (const spec of manifest.clients ?? []) {
-      issued.push(await provisionClient(db, realm.id, spec, rotate));
+    try {
+      for (const spec of manifest.clients ?? []) {
+        issued.push(await provisionClient(db, realm.id, spec, rotate));
+      }
+    } finally {
+      // Print the secrets of every committed entry, even when a later entry
+      // throws: each entry commits on its own, and the database keeps only
+      // their hashes.
+      if (issued.length > 0) report(manifest.realm, issued);
     }
-
-    // Print the secrets before anything else can fail: they are already
-    // committed, and the database keeps only their hashes.
-    if (issued.length > 0) report(manifest.realm, issued);
     warnPkceOff(manifest.clients ?? []);
 
     const granted: CimdGrantResult[] = [];

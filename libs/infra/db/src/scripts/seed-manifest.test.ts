@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { firstPartyColumnsOf, isCimdClientIdShape, manifestSchema } from './seed-manifest';
+import {
+  firstPartyColumnsOf,
+  isCimdClientIdShape,
+  manifestSchema,
+  parseManifest,
+} from './seed-manifest';
 
 /**
  * Validation of the seed manifest, and of its `cimd_clients` section (#770).
@@ -536,5 +541,56 @@ describe('first-party profiles (#631, ADR-017 Decision 2)', () => {
         JSON.stringify(policy)
       ).not.toEqual([]);
     }
+  });
+});
+
+describe('parseManifest: the system client id', () => {
+  const SECTION = {
+    redirect_uris: ['https://portal.example.com/callback'],
+    jwks: {
+      keys: [{ kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' }],
+    },
+  };
+
+  it("takes SYSTEM_CLIENT_ID for a section that names no client_id, as the auth server's id", () => {
+    const parsed = parseManifest(
+      { realm: 'master', system_client: SECTION },
+      { SYSTEM_CLIENT_ID: ' portal ' }
+    );
+    expect(parsed.system_client?.client_id).toBe('portal');
+  });
+
+  it('keeps a client_id the section names, and falls back to system without SYSTEM_CLIENT_ID', () => {
+    expect(
+      parseManifest(
+        { realm: 'master', system_client: { ...SECTION, client_id: 'named' } },
+        { SYSTEM_CLIENT_ID: 'portal' }
+      ).system_client?.client_id
+    ).toBe('named');
+    for (const env of [{}, { SYSTEM_CLIENT_ID: '  ' }]) {
+      expect(
+        parseManifest({ realm: 'master', system_client: SECTION }, env).system_client?.client_id
+      ).toBe('system');
+    }
+  });
+
+  it('refuses a clients entry that names the id SYSTEM_CLIENT_ID gave the section', () => {
+    expect(() =>
+      parseManifest(
+        {
+          realm: 'master',
+          system_client: SECTION,
+          clients: [
+            {
+              client_id: 'portal',
+              name: 'Portal',
+              grant_types: ['client_credentials'],
+              token_endpoint_auth_method: 'client_secret_basic',
+            },
+          ],
+        },
+        { SYSTEM_CLIENT_ID: 'portal' }
+      )
+    ).toThrow(/listed twice/);
   });
 });
