@@ -157,6 +157,15 @@ export async function provisionClient(
 /*                              Row builders                                */
 /* ------------------------------------------------------------------------ */
 
+/**
+ * The `client_credentials_scopes` column of a client entry (#891): the
+ * manifest's list without repeats, or NULL when the entry has none.
+ */
+function clientCredentialsScopesOf(spec: ClientSpec): string[] | null {
+  const list = spec.client_credentials_scopes;
+  return list === undefined ? null : Array.from(new Set(list));
+}
+
 /** The three first-party columns of a client entry (#631). */
 function firstPartyRow(spec: ClientSpec) {
   const { profile, policy, reason } = firstPartyColumnsOf(spec);
@@ -177,6 +186,9 @@ export function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash:
     description: spec.description ?? null,
     redirectUris: spec.redirect_uris ?? [],
     scopes: spec.scopes ?? [],
+    // #891: the scopes `client_credentials` may issue, out of `scopes`; NULL =
+    // any of them. De-duplicated like the passkey origins.
+    clientCredentialsScopes: clientCredentialsScopesOf(spec),
     audience: spec.audience ?? null,
     // ADR-011 (#434) ID-JAG targets; `[]` = no ID-JAG mint or redemption.
     idJagTargets: spec.id_jag_targets ?? [],
@@ -223,6 +235,8 @@ export function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     description: spec.description ?? null,
     redirectUris: spec.redirect_uris ?? [],
     scopes: spec.scopes ?? [],
+    // Removed from the manifest ⇒ NULL ⇒ any scope of `scopes` again (#891).
+    clientCredentialsScopes: clientCredentialsScopesOf(spec),
     audience: spec.audience ?? null,
     // ADR-011 (#434) ID-JAG targets; `[]` = no ID-JAG mint or redemption.
     idJagTargets: spec.id_jag_targets ?? [],
