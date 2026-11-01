@@ -369,6 +369,18 @@ describe('the callback', () => {
     expect(s.provider.assertions[0]).toMatchObject({ iss: CLIENT_ID, sub: CLIENT_ID, aud: ISSUER });
   });
 
+  it('asks the signer role for the configured assertion algorithm', async () => {
+    const s = await setup('private_key_jwt', {
+      clientAuthentication: { method: 'private_key_jwt', signingAlgorithm: 'ES256' },
+    });
+    const { outcome } = await signIn(s);
+    expect(outcome.kind).toBe('result');
+    expect(s.host.signerCalls).toHaveLength(1);
+    // The request the signer received, not the JWT header: the test signer
+    // signs with its own key whatever it is asked.
+    expect(s.host.signerCalls[0].request?.['algorithm']).toBe('ES256');
+  });
+
   it('asks the egress client to follow no redirect on every call', async () => {
     const s = await setup('client_secret_post', { fetchUserinfo: true });
     await signIn(s);
