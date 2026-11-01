@@ -176,6 +176,35 @@ export interface UserCredentialsRepository {
     tx?: DbClient
   ): Promise<UserCredential>;
   setEmailVerified(id: string, tx?: DbClient): Promise<UserCredential>;
+  /**
+   * Set the hard action's disabled mark on the credential `(realm,
+   * provider type, external_sub)` names (ADR-017 Decision 7, #615), only
+   * when it has none.
+   *
+   * @returns the credential when this call set the mark; `undefined` when no
+   *   such credential exists or it was marked already
+   */
+  setDisabledAt(
+    realmId: string,
+    providerType: string,
+    externalSub: string,
+    disabledAt: number,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
+  /**
+   * Clear the disabled mark of the credential `(realm, provider type,
+   * external_sub)` names (#615): a successful sign-in while the hard action
+   * is unarmed, or the owner's reset (#642).
+   *
+   * @returns the credential when this call cleared a mark; `undefined` when
+   *   no such credential exists or it held none
+   */
+  clearDisabledAt(
+    realmId: string,
+    providerType: string,
+    externalSub: string,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
 }
 
 /**

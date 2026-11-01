@@ -258,6 +258,16 @@ const CALLS: readonly RealmScopedCall[] = [
   ['apiKeys.revoke', (db) => createApiKeysRepository(db).revoke(REALM_ID, ID)],
   ['userCredentials.findById', (db) => createUserCredentialsRepository(db).findById(REALM_ID, ID)],
   [
+    'userCredentials.setDisabledAt',
+    (db) =>
+      createUserCredentialsRepository(db).setDisabledAt(REALM_ID, 'password', 'a@example.com', 1),
+  ],
+  [
+    'userCredentials.clearDisabledAt',
+    (db) =>
+      createUserCredentialsRepository(db).clearDisabledAt(REALM_ID, 'password', 'a@example.com'),
+  ],
+  [
     'refreshTokens.findByTokenHash',
     (db) => createRefreshTokensRepository(db).findByTokenHash(REALM_ID, 'a'.repeat(64)),
   ],
