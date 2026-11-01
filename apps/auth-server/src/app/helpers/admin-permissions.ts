@@ -194,8 +194,8 @@ export function createPermissionRegistry(
 /**
  * Every admin permission. The first operations of the admin API need these:
  * reading a realm and patching its policies (#517), exporting it (#530),
- * planning a realm-file import (#518), and the approval requests of security
- * operations (#512).
+ * planning a realm-file import (#518), the AuthMethod plugin operations
+ * (#600), and the approval requests of security operations (#512).
  */
 export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
   definePermission({
@@ -230,6 +230,20 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
     resource: 'realms.policies',
     description:
       'Change a realm policy whose change is a security operation, such as loosening the sign-in methods or the password policy.',
+  }),
+  definePermission({
+    id: 'plugins.read',
+    class: 'read',
+    resource: 'plugins',
+    description:
+      "Read the AuthMethod plugins installed in the deployment and a realm's state of each, never a secret value (#600).",
+  }),
+  definePermission({
+    id: 'plugins.security',
+    class: 'security',
+    resource: 'plugins',
+    description:
+      'Enable, configure and disable an AuthMethod plugin in a realm: each changes which upstream credentials sign users in (#600).',
   }),
   definePermission({
     id: 'approvals.read',

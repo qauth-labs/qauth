@@ -10,6 +10,8 @@
     "realms.import.plan",
     "realms.policies.write",
     "realms.policies.security",
+    "plugins.read",
+    "plugins.security",
     "approvals.read",
     "approvals.approve"
   ],
@@ -71,6 +73,34 @@
       }
     },
     "realms.policies.security": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "security"
+          ]
+        }
+      }
+    },
+    "plugins.read": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "read"
+          ]
+        }
+      }
+    },
+    "plugins.security": {
       "type": "object",
       "required": [
         "class"
