@@ -95,12 +95,19 @@ const PUBLIC_ADDRESS = '93.184.215.14';
 const PRIVATE_ISSUER = 'https://private-idp.egress.test';
 const PRIVATE_ADDRESS = '10.0.0.7';
 
+/** Where a token endpoint's redirect points: a public host of its own. */
+const ELSEWHERE_ADDRESS = '151.101.1.140';
+
 const ALLOWLIST = parseEgressAllowlist({ entries: [{ cidr: '10.0.0.0/24', realms: [REALM] }] });
 
 const FLOW_COOKIE = '__Host-qauth-flow';
 
 /** How many calls of `purpose` the egress client blocked for a non-public address. */
 const addressRefusals = (purpose: string): number => egress.counts()[purpose]?.reasons.address ?? 0;
+
+/** How many calls of `purpose` the egress client blocked for a redirect. */
+const redirectRefusals = (purpose: string): number =>
+  egress.counts()[purpose]?.reasons.redirect ?? 0;
 
 const PERSON = { sub: 'user-1', claims: { email: 'ada@example.com', email_verified: true } };
 
@@ -109,6 +116,7 @@ let publicProvider: FakeProvider;
 let privateProvider: FakeProvider;
 let publicServer: FixtureServer;
 let privateServer: FixtureServer;
+let elsewhereServer: FixtureServer;
 let egress: EgressClient;
 let signer: TestSigner;
 let realmId: string;
@@ -150,6 +158,11 @@ beforeAll(async () => {
     PRIVATE_ADDRESS,
     providerHandler(privateProvider, 'private-idp.egress.test')
   );
+  net.dns.set('elsewhere.egress.test', [ELSEWHERE_ADDRESS]);
+  elsewhereServer = await net.serve(ELSEWHERE_ADDRESS, (_req, _body, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
   egress = createEgressClient({ allowlist: ALLOWLIST });
   signer = createTestSigner({ refreshIntervalMs: 0 });
   realmId = await signer.addRealm({ issuer: ORIGIN });
@@ -531,6 +544,41 @@ describe('private addresses and the egress allowlist', () => {
     expect(back.json()).toEqual({ kind: 'failed', reason: 'upstream_unavailable' });
     expect(addressRefusals('upstream-jwks')).toBe(refusalsBefore + 1);
     expect(privateServer.connections).toBe(connectionsBefore);
+  });
+
+  it('reads the discovery document of an allowlisted private issuer, and still refuses the token endpoint it names on the same host', async () => {
+    // ADR-019 Decision 8: the allowlist opens the issuer's document, which
+    // the operator's config names, and never a URL the document names, even
+    // on the same origin.
+    registerClient(privateProvider, TYPE, 'client_secret_basic');
+    const { app } = await boot(
+      TYPE,
+      await seal(TYPE, configFor('client_secret_basic', { issuer: PRIVATE_ISSUER }))
+    );
+    const requestsBefore = privateServer.requests.length;
+    const refusalsBefore = addressRefusals('upstream-token');
+    const { back } = await signInThroughQuery(app, privateProvider);
+    expect(back.json()).toEqual({ kind: 'failed', reason: 'upstream_unavailable' });
+    expect(addressRefusals('upstream-token')).toBe(refusalsBefore + 1);
+    expect(privateServer.requests.slice(requestsBefore).map((r) => `${r.method} ${r.url}`)).toEqual(
+      ['GET /.well-known/openid-configuration']
+    );
+  });
+
+  it('follows no redirect: a 307 from the token endpoint sends the code and the secret nowhere', async () => {
+    registerClient(publicProvider, TYPE, 'client_secret_post');
+    publicProvider.tamper.tokenAnswer = () => ({
+      status: 307,
+      headers: { location: 'https://elsewhere.egress.test/token' },
+      body: new Uint8Array(),
+      url: publicProvider.tokenEndpoint,
+    });
+    const { app } = await boot(TYPE, await seal(TYPE, configFor('client_secret_post')));
+    const refusalsBefore = redirectRefusals('upstream-token');
+    const { back } = await signInThroughQuery(app, publicProvider);
+    expect(back.json()).toEqual({ kind: 'failed', reason: 'upstream_unavailable' });
+    expect(redirectRefusals('upstream-token')).toBe(refusalsBefore + 1);
+    expect(elsewhereServer.connections).toBe(0);
   });
 
   it('reports the discovered private endpoint at registration, with the real egress client', async () => {
