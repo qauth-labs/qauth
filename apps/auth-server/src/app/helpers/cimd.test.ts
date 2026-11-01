@@ -20,7 +20,6 @@ vi.mock('../../config/env', () => ({ env: ENV }));
 vi.mock('./egress-get', () => ({ egressGet }));
 
 import { blockedEgress } from '../../testing/egress';
-import type { CimdPolicy } from './cimd-policy';
 import {
   cimdDocumentSchema,
   fetchAndValidateCimdDocument,
@@ -28,6 +27,7 @@ import {
   resolveCacheTtlSeconds,
   toCimdClientInsert,
 } from './cimd';
+import type { CimdPolicy } from './cimd-policy';
 
 const CLIENT_ID = 'https://app.example.com/oauth/client-metadata.json';
 
