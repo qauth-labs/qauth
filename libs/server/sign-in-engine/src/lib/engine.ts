@@ -51,6 +51,8 @@ import {
   freezeTransaction,
   newSignInTransaction,
   readSignInTransaction,
+  SIGN_IN_TRANSACTION_CLOCK_SKEW_MS,
+  SIGN_IN_TRANSACTION_MAX_AGE_MS,
   type SignInTransaction,
 } from './transaction';
 
@@ -128,6 +130,11 @@ export interface SignInEngine {
    * The returned transaction is the one to keep. A completed sign-in, a
    * redirect and a refusal that ends the transaction return `null` in its
    * place. A failed audit write rejects.
+   *
+   * The transaction is not sealed, so the engine trusts what it says once it
+   * is well formed, of `context`'s realm and client, and young enough: the
+   * transport must keep it server-side under an unguessable handle bound to
+   * the realm and the client, and never take one back from the client.
    */
   advance(
     transaction: SignInTransaction | null,
@@ -268,21 +275,58 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
   }
 
+  /**
+   * End a transaction the round may not use, before anything in it is read.
+   * The record names nobody: nothing in such a transaction can be trusted to
+   * name the person. It names the answered step when the engine has a
+   * handler for it, else the identifier step, where every transaction starts.
+   */
+  async function endUnusable(
+    answer: RoundAnswer | null,
+    context: RoundContext,
+    reason: 'transaction_invalid' | 'transaction_expired'
+  ): Promise<RoundResult> {
+    const named =
+      answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
+    const step = named !== undefined && handlers.byStep.has(named) ? named : 'identifier';
+    await context.audit(Object.freeze({ outcome: 'ended', step, reason }));
+    return TRANSACTION_ENDED;
+  }
+
   async function round(
     stored: SignInTransaction | null,
     answer: RoundAnswer | null,
     context: RoundContext
   ): Promise<RoundResult> {
-    const found = stored === null ? newSignInTransaction() : readSignInTransaction(stored);
-    // A transaction the engine did not write ends: nothing in it can be trusted.
-    if (found === null) return TRANSACTION_ENDED;
+    const now = clock.now();
+    const found =
+      stored === null
+        ? newSignInTransaction({
+            realmId: context.realm.id,
+            clientId: context.client.id,
+            createdAt: now,
+          })
+        : readSignInTransaction(stored);
+    // A transaction that is not well formed ends: nothing in it can be trusted.
+    if (found === null) return endUnusable(answer, context, 'transaction_invalid');
+    // Nor can one of another realm or client, or one that starts in the future.
+    if (
+      found.realmId !== context.realm.id ||
+      found.clientId !== context.client.id ||
+      found.createdAt > now + SIGN_IN_TRANSACTION_CLOCK_SKEW_MS
+    ) {
+      return endUnusable(answer, context, 'transaction_invalid');
+    }
+    if (now - found.createdAt > SIGN_IN_TRANSACTION_MAX_AGE_MS) {
+      return endUnusable(answer, context, 'transaction_expired');
+    }
     // A subject without an identifier comes only from a discoverable factor.
     if (
       found.subject !== undefined &&
       found.identifier === undefined &&
       !found.verified.some((step) => handlers.byStep.get(step.step)?.discoverable === true)
     ) {
-      return TRANSACTION_ENDED;
+      return endUnusable(answer, context, 'transaction_invalid');
     }
     const state: RoundState = { transaction: found };
     try {
@@ -371,12 +415,22 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         retryAfterSeconds,
         transaction: freezeTransaction(state.transaction),
       });
-    const invalidAnswer = (): RoundResult =>
-      Object.freeze({
+    /** Refuse a malformed answer to `step`, audited: nothing was verified or counted. */
+    const invalidAnswer = async (step: StepName): Promise<RoundResult> => {
+      await audit('refused', step, 'invalid_answer');
+      return Object.freeze({
         kind: 'refused',
         reason: 'invalid_answer',
         transaction: freezeTransaction(state.transaction),
       });
+    };
+    /**
+     * The step a refusal of the whole round names: the answered one when the
+     * engine has a handler for it, else the identifier step, where every
+     * transaction starts. Never a step only the client named.
+     */
+    const roundStep = (): StepName =>
+      answeredName !== undefined && handlers.byStep.has(answeredName) ? answeredName : 'identifier';
     const redirect = (reason: 'step_not_available' | 'request'): RoundResult =>
       Object.freeze({ kind: 'redirect', reason, transaction: null });
 
@@ -510,8 +564,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * `null` when it proved a factor or passed a challenge and the rules go on.
      */
     const verifyPending = async (offer: StepOffer): Promise<RoundResult | null> => {
+      const { pending } = turn;
+      if (pending === null) throw new Error('sign-in engine: no answer to verify');
       const read = readPending(offer);
-      if (read === null) return invalidAnswer();
+      if (read === null) return invalidAnswer(pending.name);
       turn.pending = null;
       const handler = handlers.byStep.get(read.step) as StepHandler;
       const verdict: StepVerdict = await handler.verify(stepRound(), {
@@ -561,13 +617,17 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const { limits, request, botChallenge } = hooks;
     if (limits !== undefined) {
       const verdict = await fromStore('limits', () => limits(hookRound));
-      if (verdict.kind === 'throttled') return throttled(verdict.retryAfterSeconds);
+      if (verdict.kind === 'throttled') {
+        await audit('refused', roundStep(), 'rate_limited');
+        return throttled(verdict.retryAfterSeconds);
+      }
     }
 
     // Rule 4: the transport's request checks.
     if (request !== undefined) {
       const verdict = await fromStore('request', () => request(hookRound));
       if (verdict.kind === 'refuse') {
+        await audit('refused', roundStep(), 'request_refused');
         return Object.freeze({
           kind: 'refused',
           reason: 'request_refused',
@@ -605,10 +665,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const fields = turn.pending.answer.fields;
       if (isRecord(fields) && Object.hasOwn(fields, 'login_hint')) {
         const identifier = readIdentifier(fields['login_hint']);
-        if (identifier === null) return invalidAnswer();
+        if (identifier === null) return invalidAnswer(turn.pending.name);
         brought.push({ identifier, step: turn.pending.name });
       } else if (turn.pending.name === 'identifier') {
-        return invalidAnswer();
+        return invalidAnswer('identifier');
       }
     }
     const beforeIdentifier = state.transaction;
@@ -667,7 +727,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
               const read = readPending(offer);
               if (read === null) {
                 state.transaction = beforeIdentifier;
-                return invalidAnswer();
+                return await invalidAnswer('identifier');
               }
               turn.pending = null;
               const verdict = await handlers.identifier.verify(stepRound(), {

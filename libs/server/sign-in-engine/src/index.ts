@@ -66,7 +66,10 @@ export { fromStore, SignInStoreUnavailableError } from './lib/store';
 export {
   newSignInTransaction,
   readSignInTransaction,
+  SIGN_IN_TRANSACTION_CLOCK_SKEW_MS,
+  SIGN_IN_TRANSACTION_MAX_AGE_MS,
   SIGN_IN_TRANSACTION_VERSION,
   type SignInTransaction,
+  type SignInTransactionBinding,
   signInTransactionSchema,
 } from './lib/transaction';

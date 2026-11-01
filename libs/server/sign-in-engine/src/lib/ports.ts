@@ -142,6 +142,19 @@ export const SIGN_IN_AUDIT_REASONS = [
   'subject_mismatch',
   /** A bot challenge was answered wrongly (PRO-19). */
   'captcha_failed',
+  /**
+   * The transaction the transport handed back is not one this round may use:
+   * malformed, of another realm or client, or starting too far in the future.
+   */
+  'transaction_invalid',
+  /** The transaction is older than `SIGN_IN_TRANSACTION_MAX_AGE_MS`. */
+  'transaction_expired',
+  /** A limiter refused the round (rule 3; PRO-13). */
+  'rate_limited',
+  /** The transport's request checks refused the round (rule 4). */
+  'request_refused',
+  /** The answer is malformed: nothing was verified or counted. */
+  'invalid_answer',
 ] as const;
 export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 

@@ -8,18 +8,46 @@ import { z } from 'zod';
  * it back on the next round; the engine never stores anything itself.
  *
  * It holds no policy (the MFA policy is read on every round, ADR-017
- * Decision 4), no answer, no password and no account state: only who the
- * transaction is for, and what it proved.
+ * Decision 4), no answer, no password and no account state: only the realm
+ * and the client it is for, when it began, who it is for, and what it proved.
+ *
+ * It is not sealed: whoever can write it can claim any subject and any
+ * verified step. The transport must keep it server-side, under an
+ * unguessable handle bound to the realm and the client, and never hand it to
+ * the client to bring back. The engine checks only that it is well formed,
+ * of the round's realm and client, and no older than
+ * {@link SIGN_IN_TRANSACTION_MAX_AGE_MS}.
  */
 
 /** The transaction format. A transaction of another version is refused, which ends it. */
 export const SIGN_IN_TRANSACTION_VERSION = 1;
+
+/**
+ * The longest a transaction lives, from round 0, in milliseconds: two hours,
+ * the longest `INTERACTION_TTL` allows. An older one ends. A transport ends
+ * its transactions sooner by its own rules (the FiPA `auth_session` lives ten
+ * minutes); this bound is the engine's backstop.
+ */
+export const SIGN_IN_TRANSACTION_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * How far in the future a transaction's start may lie, in milliseconds: the
+ * clocks of two nodes of one deployment differ by a little. One further ahead
+ * is no transaction the engine wrote.
+ */
+export const SIGN_IN_TRANSACTION_CLOCK_SKEW_MS = 60 * 1000;
 
 /** The most verified steps one transaction holds; a sign-in proves a handful. */
 const MAX_VERIFIED_STEPS = 16;
 
 export interface SignInTransaction {
   readonly v: typeof SIGN_IN_TRANSACTION_VERSION;
+  /** The realm the transaction is for: a round of another realm ends it. */
+  readonly realmId: string;
+  /** The client the transaction is for: a round of another client ends it. */
+  readonly clientId: string;
+  /** When round 0 began, in epoch milliseconds: the transaction's age counts from it. */
+  readonly createdAt: number;
   /**
    * The identifier, checked and normalised: the first one the transaction
    * was given. It never changes; a different one ends the transaction, and so
@@ -38,9 +66,22 @@ export interface SignInTransaction {
   readonly authTime?: number;
 }
 
+/** What binds a transaction to its sign-in: its realm, its client, and when it began. */
+export interface SignInTransactionBinding {
+  readonly realmId: string;
+  readonly clientId: string;
+  readonly createdAt: number;
+}
+
 /** A transaction that holds nothing yet: the state before round 0. */
-export function newSignInTransaction(): SignInTransaction {
-  return Object.freeze({ v: SIGN_IN_TRANSACTION_VERSION, verified: Object.freeze([]) });
+export function newSignInTransaction(binding: SignInTransactionBinding): SignInTransaction {
+  return Object.freeze({
+    v: SIGN_IN_TRANSACTION_VERSION,
+    realmId: binding.realmId,
+    clientId: binding.clientId,
+    createdAt: binding.createdAt,
+    verified: Object.freeze([]),
+  });
 }
 
 const verifiedStepSchema = z
@@ -63,23 +104,32 @@ const verifiedStepSchema = z
  */
 export const signInTransactionSchema = z.strictObject({
   v: z.literal(SIGN_IN_TRANSACTION_VERSION),
+  realmId: z.string().min(1).max(255),
+  clientId: z.string().min(1).max(255),
+  createdAt: z.int().nonnegative(),
   identifier: z.string().min(3).max(254).optional(),
   subject: z.string().min(1).max(64).optional(),
   verified: z.array(verifiedStepSchema).max(MAX_VERIFIED_STEPS),
   authTime: z.int().positive().optional(),
 });
 
-/** Parse a stored transaction; `null` when it is not one the engine wrote. */
+/**
+ * Parse a stored transaction; `null` when it is not well formed. A well-formed
+ * one is not thereby one the engine wrote: see the module doc.
+ */
 export function readSignInTransaction(value: unknown): SignInTransaction | null {
   const parsed = signInTransactionSchema.safeParse(value);
   if (!parsed.success) return null;
-  const { identifier, subject, verified, authTime } = parsed.data;
+  const { realmId, clientId, createdAt, identifier, subject, verified, authTime } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
   // names the account by itself.)
   if ((authTime === undefined) !== (subject === undefined)) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
+    realmId,
+    clientId,
+    createdAt,
     ...(identifier === undefined ? {} : { identifier }),
     ...(subject === undefined ? {} : { subject }),
     verified,

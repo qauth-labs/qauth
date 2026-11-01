@@ -25,7 +25,7 @@ import type { LadderHook, SignInHooks } from './hooks';
 import { type Clock, type MfaPolicy, type SignInAccount, SYSTEM_CLOCK } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
 import type { AnyStepHandler, StepHandler, StepVerdict } from './steps/handler';
-import type { SignInTransaction } from './transaction';
+import { SIGN_IN_TRANSACTION_MAX_AGE_MS, type SignInTransaction } from './transaction';
 
 const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
 const CLIENT = 'native-app';
@@ -41,10 +41,23 @@ function kindAccount(kind: Exclude<AccountKind, 'unknown'>): FakeAccount {
 const WRONG = 'not the password at all';
 const IDENTIFIER = 'alice@example.com';
 
+/** When {@link manualClock} starts, in epoch milliseconds. */
+const T0 = 1_800_000_000_000;
+
+/** A transaction as the engine writes it for {@link context}'s realm and client, begun at {@link T0}. */
+function tx(fields: Partial<SignInTransaction> = {}): SignInTransaction {
+  return {
+    v: 1,
+    realmId: REALM,
+    clientId: CLIENT,
+    createdAt: T0,
+    verified: [],
+    ...fields,
+  } as SignInTransaction;
+}
+
 /** A clock whose waits pass at once, recording them, so a test need not wait 500 ms a round. */
-function manualClock(
-  start = 1_800_000_000_000
-): Clock & { slept: number[]; advance(ms: number): void } {
+function manualClock(start = T0): Clock & { slept: number[]; advance(ms: number): void } {
   let now = start;
   const slept: number[] = [];
   return {
@@ -359,8 +372,7 @@ describe('the timing floor', () => {
       complete: (engine) => engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context()),
       invalidAnswer: (engine) =>
         engine.advance(null, answer('identifier', { login_hint: 'not an address' }), context()),
-      endedTransaction: (engine) =>
-        engine.advance({ v: 1, verified: [], subject: USER } as SignInTransaction, null, context()),
+      endedTransaction: (engine) => engine.advance({ ...tx(), subject: USER }, null, context()),
     };
     for (const [name, round] of Object.entries(rounds)) {
       const built = build(undefined, { clock: SYSTEM_CLOCK });
@@ -548,7 +560,7 @@ describe('the MFA policy, read on every round', () => {
     expect(result).toEqual({
       kind: 'refused',
       reason: 'unavailable',
-      transaction: { v: 1, verified: [] },
+      transaction: tx(),
     });
     expect(built.passwords.verifications).toBe(0);
     expect(ctx.records).toEqual([]);
@@ -989,7 +1001,7 @@ describe('what the review of #614 pinned', () => {
       ctx
     );
     expect(result).toMatchObject({ kind: 'step', offer: { current: { step: 'identifier' } } });
-    expect(result.transaction).toEqual({ v: 1, verified: [] });
+    expect(result.transaction).toEqual(tx());
     expect(ctx.records).toEqual([]);
   });
 
@@ -1083,17 +1095,20 @@ describe('what the second review of #614 pinned', () => {
 
   it('ends a transaction whose subject has no identifier unless a discoverable factor proved it', async () => {
     const built = build();
-    const forged = {
-      v: 1,
+    const forged = tx({
       subject: USER,
-      verified: [{ step: 'password', params: {} }],
-      authTime: 1,
-    } as unknown as SignInTransaction;
-    expect(await built.engine.advance(forged, null, context())).toEqual({
+      verified: [{ step: 'password', params: {} }] as never,
+      authTime: T0,
+    });
+    const ctx = context();
+    expect(await built.engine.advance(forged, null, ctx)).toEqual({
       kind: 'refused',
       reason: 'transaction_ended',
       transaction: null,
     });
+    expect(ctx.records).toEqual([
+      { outcome: 'ended', step: 'identifier', reason: 'transaction_invalid' },
+    ]);
   });
 
   it('keeps no identifier from a round that failed before its record was written', async () => {
@@ -1108,7 +1123,7 @@ describe('what the second review of #614 pinned', () => {
     expect(first).toEqual({
       kind: 'refused',
       reason: 'unavailable',
-      transaction: { v: 1, verified: [] },
+      transaction: tx(),
     });
     failing = false;
     const ctx = context({ loginHint: IDENTIFIER });
@@ -1227,6 +1242,57 @@ describe('the hooks', () => {
     }
   });
 
+  it('audits a round a limiter or the request checks refused, under the identifier the transaction holds', async () => {
+    const cases: [SignInHooks, string][] = [
+      [{ limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) }, 'rate_limited'],
+      [
+        { request: async () => ({ kind: 'refuse', code: 'unmet_authentication_requirements' }) },
+        'request_refused',
+      ],
+    ];
+    for (const [hooks, reason] of cases) {
+      // Before any identifier: the record names nobody.
+      const fresh = build(undefined, { hooks });
+      const first = context();
+      await fresh.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), first);
+      expect(first.records).toEqual([{ outcome: 'refused', step: 'password', reason }]);
+
+      // Once the transaction holds one: the record names its HMAC.
+      let throttle = false;
+      const gated: SignInHooks = Object.fromEntries(
+        Object.entries(hooks).map(([name, hook]) => [
+          name,
+          async (round: never) =>
+            throttle ? (hook as (r: never) => unknown)(round) : { kind: 'continue' },
+        ])
+      );
+      const held = build(undefined, { hooks: gated });
+      const round0 = await held.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+      throttle = true;
+      const later = context();
+      await held.engine.advance(round0.transaction as SignInTransaction, null, later);
+      expect(later.records).toEqual([
+        {
+          outcome: 'refused',
+          step: 'identifier',
+          reason,
+          identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+        },
+      ]);
+    }
+  });
+
+  it('names a refused round by the identifier step when the answer names a step it has no handler for', async () => {
+    const built = build(undefined, {
+      hooks: { limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) },
+    });
+    const ctx = context();
+    await built.engine.advance(null, answer('totp', { otp: '123456' }), ctx);
+    expect(ctx.records).toEqual([
+      { outcome: 'refused', step: 'identifier', reason: 'rate_limited' },
+    ]);
+  });
+
   it('runs the hooks in the rule order and never shows them an answer’s fields', async () => {
     const seen: string[] = [];
     const hooks: SignInHooks = {
@@ -1329,10 +1395,17 @@ describe('answers and transactions', () => {
     expect(result).toEqual({
       kind: 'refused',
       reason: 'invalid_answer',
-      transaction: { v: 1, verified: [] },
+      transaction: tx(),
     });
     expect(built.passwords.verifications).toBe(0);
-    expect(ctx.records).toEqual([]);
+    // Audited, naming nobody: the transaction holds no identifier.
+    expect(ctx.records).toEqual([
+      {
+        outcome: 'refused',
+        step: malformed.step === STEP_URNS.password ? 'password' : 'identifier',
+        reason: 'invalid_answer',
+      },
+    ]);
   });
 
   it('refuses a password answer outside the step’s schema as a fault of the request', async () => {
@@ -1354,18 +1427,97 @@ describe('answers and transactions', () => {
   });
 
   it.each([
-    ['another version', { v: 2, verified: [] }],
-    ['a subject without an identifier', { v: 1, verified: [], subject: USER }],
-    ['an unknown step', { v: 1, verified: [{ step: 'sms', params: {} }] }],
-    ['an extra member', { v: 1, verified: [], policy: 'off' }],
-  ])('ends a transaction it did not write (%s)', async (_name, stored) => {
+    ['another version', { ...tx(), v: 2 }],
+    ['a subject without an identifier', { ...tx(), subject: USER }],
+    ['an unknown step', tx({ verified: [{ step: 'sms', params: {} }] as never })],
+    ['an extra member', { ...tx(), policy: 'off' }],
+    ['no realm', { v: 1, clientId: CLIENT, createdAt: T0, verified: [] }],
+    ['another realm', tx({ realmId: '0199fa20-0000-7000-8000-00000000bbbb' })],
+    ['another client', tx({ clientId: 'another-app' })],
+    ['a start more than a minute ahead', tx({ createdAt: T0 + 60_001 })],
+  ])(
+    'ends a transaction this round may not use (%s), audited naming nobody',
+    async (_name, stored) => {
+      const built = build();
+      const ctx = context();
+      const result = await built.engine.advance(stored as unknown as SignInTransaction, null, ctx);
+      expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+      expect(ctx.records).toEqual([
+        { outcome: 'ended', step: 'identifier', reason: 'transaction_invalid' },
+      ]);
+      expect(built.directory.reads).toEqual([]);
+    }
+  );
+
+  it('ends a transaction older than two hours, audited as transaction_expired', async () => {
     const built = build();
+    const first = await built.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+    built.clock.advance(SIGN_IN_TRANSACTION_MAX_AGE_MS);
+    const ctx = context();
     const result = await built.engine.advance(
-      stored as unknown as SignInTransaction,
-      null,
-      context()
+      first.transaction as SignInTransaction,
+      passwordAnswer(PASSWORD),
+      ctx
     );
     expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+    expect(ctx.records).toEqual([
+      { outcome: 'ended', step: 'password', reason: 'transaction_expired' },
+    ]);
+    expect(built.passwords.verifications).toBe(0);
+  });
+
+  it('keeps a transaction just inside two hours', async () => {
+    const built = build();
+    const first = await built.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+    // Round 0 waited out its floor; the transaction began when it arrived.
+    built.clock.advance(SIGN_IN_TRANSACTION_MAX_AGE_MS - SIGN_IN_MIN_RESPONSE_TIME_MS);
+    const result = await built.engine.advance(
+      first.transaction as SignInTransaction,
+      passwordAnswer(PASSWORD),
+      context()
+    );
+    expect(result).toMatchObject({ kind: 'complete' });
+  });
+
+  it('ends a transaction a client forged, naming a victim and a proof, without completing', async () => {
+    const built = build();
+    const ctx = context();
+    const forged = {
+      v: 1,
+      identifier: IDENTIFIER,
+      subject: USER,
+      verified: [{ step: 'password', params: {} }],
+      authTime: 1,
+    } as unknown as SignInTransaction;
+    expect(await built.engine.advance(forged, null, ctx)).toEqual({
+      kind: 'refused',
+      reason: 'transaction_ended',
+      transaction: null,
+    });
+    expect(ctx.records).toEqual([
+      { outcome: 'ended', step: 'identifier', reason: 'transaction_invalid' },
+    ]);
+  });
+
+  it('ends a live transaction handed to a round of another realm or another client', async () => {
+    for (const elsewhere of [
+      { realm: { id: '0199fa20-0000-7000-8000-00000000bbbb' } },
+      { client: { id: 'another-app' } },
+    ]) {
+      const built = build();
+      const first = await built.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
+      const ctx = context(elsewhere);
+      const result = await built.engine.advance(
+        first.transaction as SignInTransaction,
+        passwordAnswer(PASSWORD),
+        ctx
+      );
+      expect(result).toEqual({ kind: 'refused', reason: 'transaction_ended', transaction: null });
+      expect(ctx.records).toEqual([
+        { outcome: 'ended', step: 'password', reason: 'transaction_invalid' },
+      ]);
+      expect(built.passwords.verifications).toBe(0);
+    }
   });
 
   it('refuses the round when the account directory or the identifier key fails', async () => {
