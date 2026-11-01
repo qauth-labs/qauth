@@ -1348,14 +1348,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `delurio check graphs --strict` with `@delurio/cli`, a root development
   dependency pinned to 0.1.1: a graph that cannot be loaded, a broken assertion
   or a main story that cannot be walked fails it. It needs no server and no
-  database, and is cached on `graphs/**`; no app, lib or image depends on
-  delurio. `graphs/README.md` now states QAuth's flow conventions: an effect
-  ends in `DONE` or `FAIL.<class>`, a protocol flow has one exit per cause,
-  named `<error>.<cause>`, every exit declares its response, and every flow is
-  complete (no unreachable state, no transition never taken, no dead end, no
-  effect without a failure path). delurio does not enforce those structural
-  rules yet, so they are review items until it does. CI runs the target from
-  [#568].
+  database, and is cached on `graphs/**`; no app or lib depends on delurio,
+  and no shipped image carries it. `graphs/README.md` now states QAuth's flow
+  conventions: an effect ends in `DONE` or `FAIL.<class>`, a protocol flow has
+  one exit per cause, named `<error>.<cause>`, every protocol exit declares its
+  response, and every flow is complete (no unreachable state, no transition
+  never taken, no dead end, no effect without a failure path). delurio does not
+  enforce those structural rules yet, so they are review items until it does.
+  CI does not run the target yet; [#568] will.
 
 ### Changed
 

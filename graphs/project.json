@@ -4,7 +4,7 @@
   "projectType": "library",
   "tags": [],
   "metadata": {
-    "description": "QAuth's flow, UI, domain and navigation graphs in delurio-graph/0 (ADR-021, graphs/README.md). It holds no code: nothing can import it, so it needs no scope tag and no lint boundary, and nothing in apps/ or libs/ depends on delurio. Its targets only run delurio's pinned CLI (@delurio/cli, a root devDependency) over this directory."
+    "description": "QAuth's flow, UI, domain and navigation graphs in delurio-graph/0 (ADR-021, graphs/README.md). It holds no code: nothing can import it, so it needs no scope tag and no lint boundary, nothing in apps/ or libs/ depends on delurio, and no shipped image carries it. Its targets only run delurio's pinned CLI (@delurio/cli, a root devDependency) over this directory."
   },
   "targets": {
     "check": {
@@ -17,7 +17,7 @@
         "cwd": "{workspaceRoot}"
       },
       "metadata": {
-        "description": "Run delurio's `check --strict` over every graph directory under graphs/ (each directory that holds a flow.yaml or a nav.yaml). It reads graph files only: no server, no database, no network. Findings are GNU error lines, `<file>:<line>:<column>: error: <message> [<rule id>]`. Exit 0 clean, 1 a graph cannot be loaded, 2 a finding under --strict. Cached on graphs/** and the pinned delurio version. CI runs it from #568."
+        "description": "Run delurio's `check --strict` over every graph directory under graphs/ (each directory that holds a flow.yaml or a nav.yaml). It reads graph files only: no server, no database, no network. Findings are GNU error lines, `<file>:<line>:<column>: error: <message> [<rule id>]`, with `note:` lines for a path. Exit 0 clean, 1 a graph cannot be loaded or needs a newer delurio, 2 a finding under --strict. Cached on graphs/** and the pinned delurio version. CI does not run it yet; #568 will."
       }
     }
   }

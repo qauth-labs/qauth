@@ -30,14 +30,14 @@ a released server and the new build from outside, over HTTP and `pg`, and import
 project (`.oxlintrc.json:298`, and `.oxlintrc.json:302` stops anything importing it).
 Nothing in `apps/` may be imported by anything — the app layer is the top of the graph.
 
-One project lives outside both trees: `deploy/reference/proxy` (`reference-proxy`), the reference
-reverse-proxy configuration and the container test that runs it in front of stub upstreams. It is
-tagged `scope:reference-proxy` and `type:testing`, and imports no workspace project
-(`.oxlintrc.json:318`).
+Some projects live outside both trees. One is `deploy/reference/proxy` (`reference-proxy`), the
+reference reverse-proxy configuration and the container test that runs it in front of stub
+upstreams. It is tagged `scope:reference-proxy` and `type:testing`, and imports no workspace
+project (`.oxlintrc.json:318`).
 
-`graphs/` is a project too, `graphs`, with no tags: it holds the flow graphs of ADR-021 and no
-code, so nothing can import it. Its one target, `graphs:check`, runs delurio's pinned checker over
-the directory (`graphs/README.md`).
+Another is `graphs/` (`graphs`), with no tags: it holds the flow graphs of ADR-021 and no code, so
+nothing can import it. Its one target, `graphs:check`, runs delurio's pinned checker over the
+directory (`graphs/README.md`).
 
 `apps/migration-runner` is tagged `scope:migration-runner`, and may depend only on the database
 library (`type:db`) and, in its container suite, the testing library. Its build bundles

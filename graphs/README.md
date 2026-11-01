@@ -14,8 +14,8 @@ builds no graph tooling (ADR-021, amendment of 2026-10-22).
 
 ## Layout
 
-This is the target layout. `bindings/`, `fixtures/` and `kits/` do not exist yet; each arrives
-with the first graph that needs it.
+This is the target layout. `bindings/` and `kits/` do not exist yet; each arrives with the first
+graph that needs it.
 
 ```text
 graphs/
@@ -53,8 +53,10 @@ kind: flow # or domain, ui, nav, binding, tutorial
 ## Checking the graphs
 
 delurio's open command-line tool, `@delurio/cli`, checks the graphs. It is a root development
-dependency pinned to an exact version in the catalog of `pnpm-workspace.yaml`; no app or lib
-depends on it, and no image carries it.
+dependency pinned to an exact version in the catalog of `pnpm-workspace.yaml`. No app or lib
+depends on it, and no shipped image carries it: the auth-server image deploys with `--prod`, and the
+portal and migration-runner images copy only build output. The development and security-review
+images install every development dependency, this one included.
 
 ```sh
 pnpm nx run graphs:check
@@ -63,19 +65,21 @@ pnpm nx run graphs:check
 runs `delurio check graphs --strict` from the repository root: every directory under `graphs/` that
 holds a `flow.yaml` or a `nav.yaml` is loaded and checked. It reads graph files only, so it needs
 no server, no database and no network, and Nx caches it on `graphs/**` and the pinned version. A
-finding is one line, `<file>:<line>:<column>: error: <message> [<rule id>]`. The exit code is `0`
-when every graph is clean, `1` when a graph cannot be loaded (a YAML error, an unknown state, an
-unknown name in an expression, an `always` list that does not cover every context, a nested
-state), and `2` for a finding under `--strict` (a broken assertion, a main story that cannot be
-walked, a missing catalog key).
+finding is a line `<file>:<line>:<column>: error: <message> [<rule id>]`, followed by `note:` lines
+where it has a path to show, such as the events that break an assertion. The exit code is `0` when
+every graph is clean, `1` when a graph cannot be loaded (such as a YAML error, an unknown state, an
+unknown name in an expression, an `always` list that does not cover every context, a nested state,
+or a graph written for a newer format), and `2` for a finding under `--strict` (such as a broken
+assertion or a main story that cannot be walked).
 
 To read a flow as a page, with its diagram, every way it ends and its guarantees:
 
 ```sh
-pnpm exec delurio page graphs/flows/core/logout --out graphs/flows/core/logout/viz
+pnpm exec delurio page graphs/flows/core/logout
 ```
 
-`viz/` is git-ignored. #568 runs the check in CI on every pull request, with no account and no key.
+writes `graphs/flows/core/logout/viz/`, which is git-ignored. CI does not run the check yet: #568
+will run it on every pull request, with no account and no key.
 Moving to a new delurio version, or a new format version, is one pull request that moves the pin
 and the graphs together.
 
@@ -107,7 +111,7 @@ the code answers like one of the successes still has its own transition, to that
 handler of `flows/core/sign-in-page` answers a store error with the spent handle's page, so
 `consumingHandle` has `FAIL.store` to `bad_request.handle_spent`.
 
-From `flows/core/sign-in-token`, without its `title`, `say` and `source` lines:
+From `flows/core/sign-in-token`, without its `title`, `description`, `say` and `source` lines:
 
 ```yaml
 recordingSignIn:
@@ -128,11 +132,15 @@ failures:
 A protocol flow, one that an HTTP endpoint answers, ends in the response a caller gets. Each
 response is a final state of its own, so a test can reach every error:
 
-- An error exit is named `<error>` or `<error>.<cause>`, where `<error>` is the error the caller
-  reads (the OAuth `error`, the problem document's `code`, or the `error` of a `WWW-Authenticate`
-  challenge) and `<cause>` says why, such as `unauthorized_client.grant_type` or
-  `invalid_token.dpop_bound`. Each distinct cause has its own exit, even when two causes give the
-  same error: a client cannot tell them apart, a test must.
+- An error exit is named `<error>` or `<error>.<cause>`, where `<cause>` says why, such as
+  `unauthorized_client.disabled` or `invalid_token.dpop_bound`. `<error>` is the error the caller
+  reads where the response carries one: the OAuth `error`, the problem document's `code`, or the
+  `error` of a `WWW-Authenticate` challenge. Some exits are named after the error they stand for
+  instead: a 500 is `server_error.<cause>` though its problem code is `internal_error`; a 401 with
+  a bare `Bearer` challenge is `invalid_token.<cause>`; a page or a redirect that carries no code is
+  named for what it tells the caller, such as `bad_request.handle_spent` or
+  `sign_in_required.no_session`. Each distinct cause has its own exit, even when two causes give
+  the same error: a client cannot tell them apart, a test must.
 - A success exit is named after what happened, such as `signed_out` or `code_issued`, with a cause
   when two successes answer differently (`signed_out.cookie_cleared`).
 - Two exits may give the caller the same response, and sometimes must: the password sign-ins
@@ -141,14 +149,14 @@ response is a final state of its own, so a test can reach every error:
   four causes, and a test that sees one answer differently names the cause that changed. What
   makes two exits one is the same response for the same cause: the same status, error and cause.
 
-delurio 0.2.0 and later refuse these names: their schema allows only camelCase state ids
-(delurio's SPEC.md §1, "Text"). QAuth pins 0.1.1, which has no schema check, until the names and
-delurio agree (#560).
+delurio's SPEC.md (§1, "Text") asks for camelCase identifiers, and delurio 0.2.0 and later enforce
+it with a schema check that refuses these names. QAuth pins 0.1.1, which has no schema check, until
+the names and delurio agree (#560).
 
 A flow that a library answers rather than an endpoint, such as the sign-in engine
 (`flows/core/sign-in`) or the upstream step (`flows/federation/upstream-step`), returns data to its
 caller, not an HTTP response. Its exits are named in camelCase after the answer (`lockedOut`,
-`failedProviderError`), and each writes the answer as `response.body`.
+`failedProviderError`), and the response rules below do not apply to them.
 
 ### Responses
 
@@ -160,10 +168,11 @@ delurio defines for a step with no screen (delurio's SPEC.md §2, "States"):
   `Set-Cookie`, `Retry-After` and `Cache-Control`, each as one string;
 - `body`: the body's fields, or the page in words for an HTML answer.
 
-A flow that answers a browser also says where the response sends it: `redirect: success`,
-`redirect: error` (to the client's `redirect_uri` with `error`, `error_description`, `state` and
-`iss`) or `redirect: never` (a page on QAuth), with the OAuth `code` on an error redirect and what a
-success `carries`, all three on the state itself. A value that changes per request is written in
+A flow that can send the browser back to a client's `redirect_uri`, such as consent, also says on
+each exit where the response sends it: `redirect: success`, `redirect: error` (to the client's
+`redirect_uri` with `error`, `error_description`, `state` and `iss`) or `redirect: never` (a page
+or an answer of QAuth's own), with the OAuth `code` on an error redirect and what a success
+`carries`, all three on the state itself. A value that changes per request is written in
 words (`the request id`); a value a client branches on is written exactly.
 
 From `flows/core/logout`, with three of its body fields left out:

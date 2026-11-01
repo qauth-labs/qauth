@@ -398,8 +398,9 @@ catalog:
   '@vitest/ui': '^5.0.5'
   # delurio's open checker of delurio-graph/0, the format of graphs/ (ADR-021,
   # amendment of 2026-10-22): `nx run graphs:check` runs its `check` command.
-  # A root devDependency only: no app or lib imports it, and no image carries
-  # it. EXACT pin: while delurio is 0.x a minor release can judge the same
+  # A root devDependency only: no app or lib imports it, and no shipped image
+  # carries it (the development and security-review images install every
+  # devDependency). EXACT pin: while delurio is 0.x a minor release can judge the same
   # graphs differently (a new check, a stricter schema), so a bump is a reviewed
   # change that moves the pin and the graphs together. 0.1.1 is the newest
   # release past minimumReleaseAge; 0.2.0 adds the `schema` rule, which refuses
