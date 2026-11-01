@@ -325,7 +325,20 @@ describe('each realm sends through its own mail transport (#529)', () => {
 
   it("refuses a realm's local SMTP host the operator does not list, and a plaintext relay without the switch", async () => {
     const serverA = await smtpFixture();
-    const app = await boot(without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOWED_HOSTS'));
+    const lines: LogLine[] = [];
+    const app = await boot(
+      without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOWED_HOSTS'),
+      lines
+    );
+    // The boot says so, naming the realm, the host and the key to set.
+    expect(lines.filter((line) => line.level === 50 && line.policy === 'mail.smtp.host')).toEqual([
+      expect.objectContaining({
+        level: 50,
+        realm: E2E_REALM_NAME,
+        host: '127.0.0.1',
+        variable: ['SMTP_ALLOWED_HOSTS'],
+      }),
+    ]);
     const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('no default realm');
     // The policy update refuses a private host the operator does not list...
@@ -346,9 +359,16 @@ describe('each realm sends through its own mail transport (#529)', () => {
     for (const server of servers.splice(0)) await server.close();
 
     // Listed, but with STARTTLS required: the plaintext relay is not used.
+    const strictLines: LogLine[] = [];
     const strictApp = await boot(
-      without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOW_PLAINTEXT')
+      without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOW_PLAINTEXT'),
+      strictLines
     );
+    expect(
+      strictLines.filter((line) => line.level === 50 && line.policy === 'mail.smtp.secure')
+    ).toEqual([
+      expect.objectContaining({ level: 50, host: '127.0.0.1', variable: ['SMTP_ALLOW_PLAINTEXT'] }),
+    ]);
     await register(strictApp, 'iris@example.com');
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(serverA.logins).toEqual([]);

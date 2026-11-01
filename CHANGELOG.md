@@ -1435,7 +1435,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plaintext SMTP relay, such as Mailpit on `localhost:1025` or a relay
   container on a private network, needs `SMTP_ALLOW_PLAINTEXT=true` and its
   host in `SMTP_ALLOWED_HOSTS`, or its mail fails, logged with the refused
-  host. See **Mail secrets move into the realm** in `operate/upgrades`.
+  host. Each boot logs an error, and still serves, for every realm whose
+  stored SMTP host is `localhost`, a non-public IP address not in
+  `SMTP_ALLOWED_HOSTS` or a cloud metadata address, or a listed relay that
+  starts in the clear while `SMTP_ALLOW_PLAINTEXT` is off, naming the realm,
+  the host and the key to set; a host name is checked when a mail connects,
+  not at boot. See **Mail secrets move into the realm** in `operate/upgrades`.
 - **BREAKING (operators): the token lifetime keys are bounded** ([#527]).
   `ACCESS_TOKEN_LIFESPAN` and `DEV_ACCESS_TOKEN_LIFESPAN` above 86400 s (a day),
   or `REFRESH_TOKEN_LIFESPAN` above 7776000 s (90 days), now refuse to boot.

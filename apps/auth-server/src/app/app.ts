@@ -62,6 +62,7 @@ import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables
 import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { logRefusedMailTransports } from './helpers/realm-mail-transport';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
 import {
   realmMailSource,
@@ -446,7 +447,8 @@ async function registerFederation(
 /** The mail service, for a process whose roles send mail (#495: `api`). */
 async function registerEmail(
   fastify: FastifyInstance,
-  secrets: RealmSecretReader | null
+  secrets: RealmSecretReader | null,
+  defaultRealmBoot: boolean
 ): Promise<void> {
   // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
   // set to another base than the default realm's issuer, where the links went.
@@ -487,6 +489,20 @@ async function registerEmail(
       verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
     },
   });
+
+  // A realm whose stored smtp transport the switches above now refuse (a
+  // local or private relay not in SMTP_ALLOWED_HOSTS, one in the clear
+  // without SMTP_ALLOW_PLAINTEXT) would stop sending with nothing said: each
+  // boot names it as an error, with the key to set, and serves on. After the
+  // default realm's boot step, whose `onReady` hook registered first.
+  if (defaultRealmBoot) {
+    fastify.addHook('onReady', async () => {
+      await logRefusedMailTransports(
+        { realms: fastify.repositories.realms, policies: fastify.policyStore, log: fastify.log },
+        { allowPlaintext: env.SMTP_ALLOW_PLAINTEXT, allowedHosts: env.SMTP_ALLOWED_HOSTS }
+      );
+    });
+  }
 }
 
 /**
@@ -860,7 +876,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   if (plugins.has('email')) {
-    await registerEmail(fastify, realmSecrets);
+    await registerEmail(fastify, realmSecrets, defaultRealmBoot);
   }
 
   if (plugins.has('jwt')) {

@@ -470,7 +470,14 @@ A deployment that sends through a local plaintext relay, such as Mailpit on
 `localhost:1025` or a relay container on a private Docker network, sets both
 before it upgrades, for example `SMTP_ALLOW_PLAINTEXT=true` and
 `SMTP_ALLOWED_HOSTS=localhost`; otherwise its mail fails, and the log names the
-refused host.
+refused host. The boot logs an error for every realm whose stored SMTP host is
+`localhost`, a non-public IP address not in `SMTP_ALLOWED_HOSTS` or a cloud
+metadata address, or a listed relay that starts in the clear
+(`mail.smtp.secure` false) while `SMTP_ALLOW_PLAINTEXT` is off
+(`the realm "master" cannot send mail: its mail.smtp.host localhost is
+localhost or a non-public address, which needs localhost in SMTP_ALLOWED_HOSTS
+...`), and serves on. It resolves no host name: a name that resolves to a
+private address is named when a mail connects to it.
 
 **The `From` header carries the sender name.** Mail is now sent from
 `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>` as the realm stores them (`QAuth

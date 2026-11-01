@@ -8,6 +8,7 @@ export {
   diffPolicies,
   mailTransportGaps,
   mailTransportIssues,
+  normalizeSmtpHost,
   type PolicyIssue,
   PolicySchemaVersionError,
   PolicySecretStoreUnavailableError,
@@ -31,4 +32,5 @@ export {
   type SeedComparison,
   seedKeysSetIn,
   type SetSeedKey,
+  smtpHostRefusal,
 } from '@qauth-labs/server-realm-policy';
