@@ -45,15 +45,38 @@ export function listEnabledExperimental(
 }
 
 /**
+ * The boot line of a process that loads plugin code beside the signer's keys
+ * (#600): with `PLUGIN_API_ENABLED` on, a plugin is third-party code, and it
+ * runs in the process that holds the signing keys and the KEK.
+ */
+export const PLUGIN_CODE_BESIDE_SIGNER_WARNING =
+  'Experimental feature plugin-api is on in a process that holds the signer role: AuthMethod plugin code runs beside the signing keys and the KEK, so load only plugins you trust as much as the server';
+
+/**
  * Log one `warn` line per experimental item that is on (ADR-018 §5), with the
  * item's id and its docs link. `app.ts` calls it once per boot.
+ *
+ * With the plugin API on, a process whose `roles` hold `signer` and load
+ * plugins (`web` or `admin`, as `app.ts` loads them) logs one more line
+ * ({@link PLUGIN_CODE_BESIDE_SIGNER_WARNING}).
  */
 export function logExperimentalFeatures(
   log: { warn(object: object, message: string): void },
-  config: ExperimentalSwitchConfig = env
+  config: ExperimentalSwitchConfig = env,
+  roles: readonly string[] = []
 ): void {
   for (const item of listEnabledExperimental(config)) {
     const warning = experimentalBootWarning(item);
     log.warn({ experimentalFeature: warning.id, docs: warning.docs }, warning.message);
+    if (
+      warning.id === 'plugin-api' &&
+      roles.includes('signer') &&
+      (roles.includes('web') || roles.includes('admin'))
+    ) {
+      log.warn(
+        { experimentalFeature: warning.id, docs: warning.docs, besideSigner: true },
+        PLUGIN_CODE_BESIDE_SIGNER_WARNING
+      );
+    }
   }
 }

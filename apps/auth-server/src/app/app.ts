@@ -633,9 +633,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   // ADR-018 §5: an experimental feature may change in a minor release, so a
   // deployment that turns one on is told so at every boot: one `warn` line per
-  // item, with its id and docs link. Logged here rather than in `main.ts`, so
-  // every boot of the app, a test harness's included, says it.
-  logExperimentalFeatures(fastify.log);
+  // item, with its id and docs link, and one if plugins run beside the signer.
+  // Logged here, not in `main.ts`, so every boot, a harness's too, says it.
+  logExperimentalFeatures(fastify.log, env, roles);
 
   // The OpenTelemetry log export of events (ADR-018 §3, #541), before the
   // database: the event store hands each event to it once the event's

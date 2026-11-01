@@ -148,6 +148,42 @@ describe('logExperimentalFeatures', () => {
     expect(log.lines).toEqual([]);
   });
 
+  // Review of #600: plugin code in a process that holds the keys says so.
+  it.each<[string, readonly string[], number]>([
+    ['the single deployment', ['web', 'api', 'admin', 'delivery', 'signer'], 2],
+    ['a signer process that serves the sign-in pages', ['web', 'signer'], 2],
+    ['a signer process that serves the admin API', ['admin', 'signer'], 2],
+    ['a process without the signer', ['web', 'admin'], 1],
+    ['a signer process that loads no plugin', ['api', 'signer'], 1],
+  ])('warns once more that plugin code runs beside the keys in %s', async (_case, roles, lines) => {
+    const { logExperimentalFeatures, PLUGIN_CODE_BESIDE_SIGNER_WARNING } = await loadWith([]);
+    const log = recordingLog();
+    const pluginApiOn = {
+      WALLET_FEDERATION_ENABLED: false,
+      OID4VP_VERIFIER_PROFILE: undefined,
+      PLUGIN_API_ENABLED: true,
+    };
+
+    logExperimentalFeatures(log, pluginApiOn, roles);
+
+    expect(log.lines).toHaveLength(lines);
+    if (lines === 2) {
+      expect(log.lines[1]).toEqual({
+        object: {
+          experimentalFeature: 'plugin-api',
+          docs: 'https://docs.qauth.dev/reference/experimental-features/#plugin-api',
+          besideSigner: true,
+        },
+        message: PLUGIN_CODE_BESIDE_SIGNER_WARNING,
+      });
+      expect(PLUGIN_CODE_BESIDE_SIGNER_WARNING).toContain('signing keys and the KEK');
+    }
+    // With the plugin API off, a signer process loads no third-party code.
+    const off = recordingLog();
+    logExperimentalFeatures(off, { ...pluginApiOn, PLUGIN_API_ENABLED: false }, roles);
+    expect(off.lines).toEqual([]);
+  });
+
   // #600: the plugin API warns at boot while its switch is on.
   it('logs one warning for the plugin API while PLUGIN_API_ENABLED is on', async () => {
     const { logExperimentalFeatures } = await loadWith([]);
@@ -398,6 +434,8 @@ describe('app.ts', () => {
     const code = readFileSync(resolveAppPath(), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/^\s*\/\/.*$/gm, '');
-    expect(code).toMatch(/\blogExperimentalFeatures\(\s*fastify\.log\s*\)/);
+    // With the parsed environment and the process's roles, for the line that
+    // says plugin code runs beside the signer.
+    expect(code).toMatch(/\blogExperimentalFeatures\(\s*fastify\.log,\s*env,\s*roles\s*\)/);
   });
 });

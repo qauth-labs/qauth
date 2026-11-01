@@ -131,7 +131,7 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
 
   // Acceptance criterion: with the switch on, boot logs a warning and the
   // plugin loads.
-  it('loads a third-party plugin with the switch on, and warns that the plugin API is experimental', async () => {
+  it('loads a third-party plugin with the switch on, and warns that the plugin API is experimental and runs beside the keys', async () => {
     const booted = await boot({ AUTH_METHOD_PLUGINS: THIRD_PARTY, PLUGIN_API_ENABLED: 'true' });
 
     expect(booted.methods).toEqual(['corp_sso']);
@@ -141,6 +141,16 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
         experimentalFeature: 'plugin-api',
         docs: PLUGIN_DOCS,
         msg: `Experimental feature plugin-api is on. It may change in a minor release, without a deprecation window. See ${PLUGIN_DOCS}`,
+      }),
+      // A single deployment holds the signer role: plugin code runs beside the keys.
+      expect.objectContaining({
+        level: PINO_WARN_LEVEL,
+        experimentalFeature: 'plugin-api',
+        besideSigner: true,
+        // Not imported: config/experimental-features parses the environment as it loads.
+        msg: expect.stringContaining(
+          'AuthMethod plugin code runs beside the signing keys and the KEK'
+        ),
       }),
     ]);
     // No warn line about the plugin itself: it loaded.

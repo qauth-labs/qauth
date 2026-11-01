@@ -281,7 +281,9 @@ plugin's `id` or `type` stops the boot. The boot logs one line per plugin it loa
 
 **The switch.** A plugin outside QAuth's first-party list loads only while
 `PLUGIN_API_ENABLED=true`, and then the server logs the experimental warning of `plugin-api` at
-every boot. With it off, such a package is never imported, and the boot logs a warning saying why.
+every boot; a process that loads plugins and holds the `signer` role, as a single deployment
+does, logs one more line saying that plugin code runs beside the signing keys and the KEK. With it
+off, such a package is never imported, and the boot logs a warning saying why.
 QAuth's own provider plugins are first-party: they load whatever the switch says. The first-party
 list is fixed in the server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting; it is
 empty until the first-party plugins ship. Discovery has no member for plugins, and their routes
