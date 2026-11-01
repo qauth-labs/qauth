@@ -377,4 +377,49 @@ describe('the plugin', () => {
     expect(result).toMatchObject({ kind: 'complete', signIn: { subject: USER, amr: ['pwd'] } });
     await app.close();
   });
+
+  const dependencies = () => ({
+    accounts: new FakeDirectory(new Map([[IDENTIFIER, passwordAccount(USER, 'pw')]])),
+    passwords: new FakePasswords(),
+    policy: new FakePolicy(),
+    identifierDigest: fakeIdentifierDigest,
+    requireVerifiedAccount: true,
+  });
+  const ladder = {
+    reserve: async () => ({ kind: 'reserved' as const, settle: async () => undefined }),
+  };
+
+  it('refuses to build a production engine without a ladder, so no password is guessed without limit', async () => {
+    const app = Fastify();
+    await expect(
+      (async () => {
+        await app.register(signInEnginePlugin, { ...dependencies(), production: true });
+        await app.ready();
+      })()
+    ).rejects.toThrow(/ladder hook/);
+
+    const withLadder = Fastify();
+    await withLadder.register(signInEnginePlugin, {
+      ...dependencies(),
+      hooks: { ladder },
+      production: true,
+    });
+    await expect(withLadder.ready()).resolves.toBeDefined();
+    await withLadder.close();
+  });
+
+  it('reads production from NODE_ENV when the option is absent', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    try {
+      const app = Fastify();
+      await expect(
+        (async () => {
+          await app.register(signInEnginePlugin, dependencies());
+          await app.ready();
+        })()
+      ).rejects.toThrow(/ladder hook/);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
