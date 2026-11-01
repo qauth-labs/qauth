@@ -453,6 +453,25 @@ for each setting or secret the default realm's stored transport lacks
 (`the realm "master" cannot send mail: its mail.smtp.host is required ...`), and
 a mail through it fails, logging the missing path.
 
+**SMTP needs TLS and a public host (breaking).** A realm's smtp transport now
+requires STARTTLS when `mail.smtp.secure` is off, checks the server certificate
+against the host name, and connects only to a public address its host resolves
+to: never `localhost`, a private, loopback, link-local or unique-local address,
+or a cloud metadata address. A policy update that names `localhost` or such an
+IP address as `mail.smtp.host` is refused. Only the operator can relax this,
+for every realm, with two keys no realm policy can change:
+
+- `SMTP_ALLOW_PLAINTEXT=true` lets a transport send without STARTTLS;
+- `SMTP_ALLOWED_HOSTS` lists the hosts (names or IP addresses, comma-separated)
+  a realm may name and reach although they are not public. A cloud metadata
+  address stays refused.
+
+A deployment that sends through a local plaintext relay, such as Mailpit on
+`localhost:1025` or a relay container on a private Docker network, sets both
+before it upgrades, for example `SMTP_ALLOW_PLAINTEXT=true` and
+`SMTP_ALLOWED_HOSTS=localhost`; otherwise its mail fails, and the log names the
+refused host.
+
 **The `From` header carries the sender name.** Mail is now sent from
 `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>` as the realm stores them (`QAuth
 <no-reply@example.com>` by default), where it used to carry the address alone.

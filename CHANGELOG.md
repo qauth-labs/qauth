@@ -1419,6 +1419,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
   when its lifetime is computed.
 
+- **BREAKING (operators): SMTP needs TLS and a public host, unless the operator
+  allows otherwise** ([#529]). A realm's smtp transport whose `mail.smtp.secure`
+  is off now requires STARTTLS (nodemailer `requireTLS`), with the certificate
+  checked against the host name, and connects only to a public unicast address
+  its host resolves to, never to `localhost`, a private, loopback, link-local,
+  unique-local or cloud metadata address; each mail resolves the host, checks
+  the address and dials that address with the host name as its TLS server name,
+  so DNS cannot point the connection elsewhere. A policy update that names
+  `localhost` or such an IP address as `mail.smtp.host` is refused. Two
+  operator-only keys, which no realm policy can change, relax this:
+  `SMTP_ALLOW_PLAINTEXT=true` lets a transport send without STARTTLS, and
+  `SMTP_ALLOWED_HOSTS` lists the hosts a realm may name and reach although they
+  are not public (a metadata address never). **Action for operators**: a local
+  plaintext SMTP relay, such as Mailpit on `localhost:1025` or a relay
+  container on a private network, needs `SMTP_ALLOW_PLAINTEXT=true` and its
+  host in `SMTP_ALLOWED_HOSTS`, or its mail fails, logged with the refused
+  host. See **Mail secrets move into the realm** in `operate/upgrades`.
 - **BREAKING (operators): the token lifetime keys are bounded** ([#527]).
   `ACCESS_TOKEN_LIFESPAN` and `DEV_ACCESS_TOKEN_LIFESPAN` above 86400 s (a day),
   or `REFRESH_TOKEN_LIFESPAN` above 7776000 s (90 days), now refuse to boot.
