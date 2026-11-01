@@ -110,6 +110,18 @@
 >   document. The adapter carries its own transport limits: TLS only, with an operator-set CA file
 >   where the service needs one, no redirect followed, and capped time and size of each response.
 >   An adapter package stays free of server dependencies.
+>
+> **Amended 2026-11-01** with the internal listener (#496, PR #936), which carries Decision 8's
+> mutual-TLS traffic between the roles. Decision 8 sends every outbound call that configuration
+> causes through the egress client, which refuses the private addresses the roles reach one another
+> on.
+>
+> - Decision 8: traffic between QAuth's own roles over the internal listener is not an outbound call
+>   to a configured third party, and stays outside the egress client. The internal client reaches
+>   only a role of the same deployment, such as the signer service at `SIGNER_URL`, set by the
+>   operator and never by a realm admin, a client, an end user or a fetched document. It uses mutual
+>   TLS 1.3 only, knows the server by a pinned certificate SAN, follows no redirect, never leaves
+>   the base URL's path, and caps the time and the size of each response.
 
 ## Context
 
@@ -756,7 +768,11 @@ follows no redirect, and caps the time and the size of each response (amendment 
 second is a KEK custody adapter's calls to its key service (`libs/keys/*`, loaded by
 `KEK_PROVIDER`). That destination is deployment-wide operator configuration and has no realm for
 the allowlist to name; the adapter uses TLS only, follows no redirect and caps the time and the size
-of each response (amendment of 2026-10-27). The client:
+of each response (amendment of 2026-10-27). Traffic between QAuth's own roles over the internal
+listener is not an outbound call to a configured third party and stays outside the client too: the
+internal client reaches only a role of the same deployment, such as the signer service at
+`SIGNER_URL`, over mutual TLS with the server's identity pinned (amendment of 2026-11-01). The
+client:
 
 - serves every HTTP method, not only `GET`;
 - uses `https` only, with no credentials in the URL;

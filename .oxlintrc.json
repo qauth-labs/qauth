@@ -489,12 +489,13 @@
     // operator's OpenTelemetry export goes through the SDK's exporter, outside
     // the egress client by ADR-019's amendment of 2026-10-24. The internal
     // client (`apps/auth-server/src/app/internal/client.ts`, #496) carries
-    // internal traffic between the roles of one deployment, which ADR-019
-    // Decision 8 sends over mutual TLS: its destination, such as SIGNER_URL,
-    // comes only from deployment configuration and sits on the private network
-    // the egress client refuses, and it brings its own limits (https and TLS
-    // 1.3 only, the server pinned by a certificate SAN, no redirect followed,
-    // capped time and size of each response). apps/auth-server/src/app/egress-rule.test.ts
+    // traffic between the roles of one deployment, which is not an outbound
+    // call and stays outside the egress client by ADR-019's amendment of
+    // 2026-11-01: its destination, such as SIGNER_URL, comes only from
+    // deployment configuration and sits on the private network the egress
+    // client refuses, and it brings its own limits (https and TLS 1.3 only,
+    // the server pinned by a certificate SAN, no redirect followed, capped
+    // time and size of each response). apps/auth-server/src/app/egress-rule.test.ts
     // lints samples with this block.
     {
       "files": [
