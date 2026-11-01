@@ -6,6 +6,7 @@ import { AuthMethodContractError } from './errors';
 import {
   authMethodSecretPaths,
   configMemberAt,
+  configSpellsMemberOf,
   MAX_AUTH_METHOD_SECRET_MEMBERS,
   withConfigMembers,
   withoutConfigMembers,
@@ -71,8 +72,65 @@ describe('authMethodSecretPaths (#600)', () => {
 
   it('refuses a schema with no JSON Schema form', () => {
     const notZod = { safeParse: () => ({ success: true }) } as unknown as z.ZodType;
-    expect(() => authMethodSecretPaths(withSchema(notZod))).toThrow(
-      /has no JSON Schema form, so its secret members cannot be told apart/
+    expect(() => authMethodSecretPaths(withSchema(notZod))).toThrow(/has no JSON Schema form/);
+  });
+
+  it('reads a mark on the output side of a pipe, as on its input side', () => {
+    const schema = z.object({
+      trimmed: z
+        .string()
+        .trim()
+        .pipe(z.string().min(8).meta({ writeOnly: true })),
+      reshaped: z
+        .string()
+        .transform((value) => ({ s: value }))
+        .pipe(z.object({ s: z.string().meta({ writeOnly: true }) })),
+      inputSide: z.string().meta({ writeOnly: true }).pipe(z.string().min(1)),
+    });
+    // `reshaped.s` is on the output side only, and is no member a request can
+    // send: its path still counts, so the plugin is not stored in the clear.
+    expect(authMethodSecretPaths(withSchema(schema))).toEqual([
+      'inputSide',
+      'trimmed',
+      'reshaped.s',
+    ]);
+  });
+
+  it.each<[string, z.ZodType]>([
+    ['a Set', z.object({ keys: z.set(z.string().meta({ writeOnly: true })) })],
+    ['a Map', z.object({ keys: z.map(z.string(), z.string().meta({ writeOnly: true })) })],
+    ['a date', z.object({ since: z.date() })],
+  ])('refuses a config schema holding %s, whose marks no JSON Schema shows', (_case, schema) => {
+    expect(() => authMethodSecretPaths(withSchema(schema))).toThrow(/has no JSON Schema form/);
+  });
+
+  it('reads through a shared definition, and takes a recursive part that marks nothing', () => {
+    const named = z.object({
+      a: z.string().meta({ id: 'PlainA' }),
+      key: z.string().meta({ id: 'SharedSecret', writeOnly: true }),
+    });
+    expect(authMethodSecretPaths(withSchema(named))).toEqual(['key']);
+
+    interface Node {
+      readonly label: string;
+      readonly children: readonly Node[];
+    }
+    const node: z.ZodType<Node> = z.lazy(() =>
+      z.object({ label: z.string(), children: z.array(node) })
+    );
+    expect(authMethodSecretPaths(withSchema(z.object({ tree: node })))).toEqual([]);
+  });
+
+  it('refuses a mark inside a recursive part', () => {
+    interface Node {
+      readonly secret: string;
+      readonly next?: Node;
+    }
+    const node: z.ZodType<Node> = z.lazy(() =>
+      z.object({ secret: z.string().meta({ writeOnly: true }), next: node.optional() })
+    );
+    expect(() => authMethodSecretPaths(withSchema(z.object({ chain: node })))).toThrow(
+      AuthMethodContractError
     );
   });
 
@@ -120,6 +178,15 @@ describe('config members by path', () => {
       clientSecret: 's3cret',
       mtls: { keyPassword: 'k' },
     });
+  });
+
+  it('finds a secret path however a config spells it, nested or with dots in one name', () => {
+    const paths = ['clientSecret', 'mtls.keyPassword'];
+    expect(configSpellsMemberOf({ mtls: { keyPassword: 'x' } }, paths)).toBe(true);
+    expect(configSpellsMemberOf({ 'mtls.keyPassword': 'x' }, paths)).toBe(true);
+    expect(configSpellsMemberOf({ clientSecret: null }, paths)).toBe(true);
+    expect(configSpellsMemberOf({ mtls: { certUrl: 'x' }, clientId: 'y' }, paths)).toBe(false);
+    expect(configSpellsMemberOf({ clientSecret: 'x' }, [])).toBe(false);
   });
 
   it('sets a member named __proto__ as a member, never as a prototype', () => {

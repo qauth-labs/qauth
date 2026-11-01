@@ -69,6 +69,7 @@ export {
   authMethodRoutePrefix,
   completeUpstreamStep,
   configMemberAt,
+  configSpellsMemberOf,
   createAuthMethodContext,
   isAuthMethod,
   loadAuthMethodPlugins,

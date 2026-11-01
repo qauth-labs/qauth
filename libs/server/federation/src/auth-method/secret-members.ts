@@ -69,15 +69,6 @@ function marksWriteOnly(node: JsonSchemaNode): boolean {
   });
 }
 
-/** Whether a write-only mark, or a `$ref`, appears anywhere in `node`. */
-function holdsMarkOrRef(value: unknown, depth = 0): boolean {
-  if (depth > 64) return true;
-  if (Array.isArray(value)) return value.some((item) => holdsMarkOrRef(item, depth + 1));
-  if (!isNode(value)) return false;
-  if (value['writeOnly'] === true || '$ref' in value) return true;
-  return Object.values(value).some((item) => holdsMarkOrRef(item, depth + 1));
-}
-
 /** Whether every branch of `node` is a string or `null`, with at least one string. */
 function isStringMember(node: JsonSchemaNode): boolean {
   const branches = [node, ...['anyOf', 'oneOf'].flatMap((key) => (node[key] as unknown[]) ?? [])]
@@ -90,48 +81,117 @@ function isStringMember(node: JsonSchemaNode): boolean {
 }
 
 /**
- * The paths of every secret member of `method`'s config, in schema order.
- *
- * @throws AuthMethodContractError when the schema has no JSON Schema form, is
- *   not an object, or marks a member it cannot be split by: inside a list, a
- *   union, a record or a recursive part, one that is not a string, or one
- *   whose path holds a member name outside
- *   {@link AUTH_METHOD_SECRET_SEGMENT_PATTERN}; and when it marks more than
- *   {@link MAX_AUTH_METHOD_SECRET_MEMBERS}
- * @experimental
+ * One JSON Schema document Zod wrote for the config, with its local `$ref`s
+ * (`#`, `#/$defs/<name>`) resolved: what a schema with an `id` in its
+ * metadata, or a recursive one, refers to.
  */
-export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configSchema'>): string[] {
-  const subject = `The AuthMethod ${method.type}`;
-  let document: unknown;
-  try {
-    document = z.toJSONSchema(method.configSchema as z.ZodType, {
-      io: 'input',
-      unrepresentable: 'any',
-    });
-  } catch {
-    throw new AuthMethodContractError(subject, [
-      'configSchema has no JSON Schema form, so its secret members cannot be told apart',
-    ]);
-  }
-  if (!isNode(document) || document['type'] !== 'object') {
-    throw new AuthMethodContractError(subject, [
-      'configSchema must describe an object of members: the realm stores it member by member',
-    ]);
-  }
+interface SchemaDocument {
+  readonly root: JsonSchemaNode;
+  /** The node a `$ref` names, or `undefined` for one outside the document. */
+  resolve(ref: unknown): JsonSchemaNode | undefined;
+}
 
+function schemaDocument(root: JsonSchemaNode): SchemaDocument {
+  const defs = isNode(root['$defs']) ? root['$defs'] : {};
+  return {
+    root,
+    resolve(ref) {
+      if (ref === '#') return root;
+      if (typeof ref !== 'string' || !ref.startsWith('#/$defs/')) return undefined;
+      const name = decodeURIComponent(ref.slice('#/$defs/'.length));
+      const found = Object.hasOwn(defs, name) ? defs[name] : undefined;
+      return isNode(found) ? found : undefined;
+    },
+  };
+}
+
+/**
+ * `node` with the node its `$ref` names merged under its own members, and
+ * the ref; `undefined` as the node when the ref names nothing in the
+ * document.
+ */
+function dereferenced(
+  node: JsonSchemaNode,
+  document: SchemaDocument
+): { node: JsonSchemaNode | undefined; ref: string | undefined } {
+  if (!('$ref' in node)) return { node, ref: undefined };
+  const ref = node['$ref'];
+  const target = document.resolve(ref);
+  if (target === undefined) return { node: undefined, ref: String(ref) };
+  const { $ref: _ref, ...siblings } = node;
+  return { node: { ...target, ...siblings }, ref: String(ref) };
+}
+
+/**
+ * Whether a write-only mark appears anywhere in `value`, through the local
+ * `$ref`s it holds; a `$ref` that names nothing in the document counts as a
+ * mark, since what it names cannot be read.
+ */
+function holdsMark(
+  value: unknown,
+  document: SchemaDocument,
+  seen: Set<string>,
+  depth = 0
+): boolean {
+  if (depth > 64) return true;
+  if (Array.isArray(value)) return value.some((item) => holdsMark(item, document, seen, depth + 1));
+  if (!isNode(value)) return false;
+  if (value['writeOnly'] === true) return true;
+  if ('$ref' in value) {
+    const { node, ref } = dereferenced(value, document);
+    if (node === undefined) return true;
+    if (ref !== undefined) {
+      if (seen.has(ref)) return false;
+      seen.add(ref);
+    }
+    const { $ref: _ref, ...rest } = node;
+    return holdsMark(rest, document, seen, depth + 1);
+  }
+  return Object.entries(value).some(
+    ([key, item]) => key !== '$defs' && holdsMark(item, document, seen, depth + 1)
+  );
+}
+
+/** The secret paths one document marks, and the problems it shows. */
+function walkDocument(document: SchemaDocument): { paths: string[]; problems: string[] } {
   const paths: string[] = [];
   const problems: string[] = [];
-  const walk = (node: JsonSchemaNode, path: readonly string[]): void => {
+  const walk = (
+    given: JsonSchemaNode,
+    path: readonly string[],
+    refs: ReadonlySet<string>
+  ): void => {
+    const { node, ref } = dereferenced(given, document);
+    if (node === undefined) {
+      if (holdsMark(given, document, new Set())) {
+        problems.push(
+          `configSchema refers to a part it does not hold at ${path.join('.') || 'its root'}`
+        );
+      }
+      return;
+    }
+    if (ref !== undefined && refs.has(ref)) {
+      // A recursive part has no finite member path.
+      if (holdsMark(node, document, new Set([ref]))) {
+        problems.push(
+          `configSchema marks a secret member inside a recursive part at ${path.join('.') || 'its root'}, which cannot be kept write-only`
+        );
+      }
+      return;
+    }
+    const inside = ref === undefined ? refs : new Set([...refs, ref]);
     const properties = node['properties'];
     if (node['type'] === 'object' && isNode(properties)) {
       for (const [name, child] of Object.entries(properties)) {
         if (!isNode(child)) continue;
-        walk(child, [...path, name]);
+        walk(child, [...path, name], inside);
       }
       // A mark below anything but `properties` (additionalProperties, a
       // pattern, a union of objects) has no member path.
-      const rest = Object.fromEntries(Object.entries(node).filter(([key]) => key !== 'properties'));
-      if (holdsMarkOrRef(rest)) {
+      const rest = Object.fromEntries(
+        Object.entries(node).filter(([key]) => key !== 'properties' && key !== '$defs')
+      );
+      if (holdsMark(rest, document, new Set(inside))) {
         problems.push(
           `configSchema marks a secret member${path.length > 0 ? ` under ${path.join('.')}` : ''} that is not a named member of an object`
         );
@@ -151,19 +211,107 @@ export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configS
       }
       return;
     }
-    if (holdsMarkOrRef(node)) {
+    if (holdsMark(node, document, new Set(inside))) {
       problems.push(
-        `configSchema marks a secret member inside ${path.join('.') || 'the config'} (a list, a union, a record or a recursive part), which cannot be kept write-only`
+        `configSchema marks a secret member inside ${path.join('.') || 'the config'} (a list, a union or a record), which cannot be kept write-only`
       );
     }
   };
-  walk(document, []);
+  walk(document.root, [], new Set());
+  return { paths, problems };
+}
+
+/**
+ * The paths of every secret member of `method`'s config, in schema order.
+ *
+ * The marks are read twice: from the JSON Schema of what the config schema
+ * takes (its input) and from the one of what it gives (its output), so a mark
+ * on either side of a pipe counts. The input form must exist whole: a config
+ * schema with a part JSON Schema cannot describe (a `Set`, a `Map`, a date, a
+ * custom check) is refused, since a mark inside it could not be seen. A
+ * transform's output, which no schema describes, holds no mark.
+ *
+ * @throws AuthMethodContractError when the schema has no JSON Schema form, is
+ *   not an object, or marks a member it cannot be split by: inside a list, a
+ *   union, a record or a recursive part, one that is not a string, or one
+ *   whose path holds a member name outside
+ *   {@link AUTH_METHOD_SECRET_SEGMENT_PATTERN}; and when it marks more than
+ *   {@link MAX_AUTH_METHOD_SECRET_MEMBERS}
+ * @experimental
+ */
+export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configSchema'>): string[] {
+  const subject = `The AuthMethod ${method.type}`;
+  let input: unknown;
+  let output: unknown;
+  try {
+    input = z.toJSONSchema(method.configSchema as z.ZodType, {
+      io: 'input',
+      unrepresentable: 'throw',
+    });
+    output = z.toJSONSchema(method.configSchema as z.ZodType, {
+      io: 'output',
+      unrepresentable: 'any',
+    });
+  } catch {
+    throw new AuthMethodContractError(subject, [
+      'configSchema has no JSON Schema form (it holds a Set, a Map, a date, a function or a custom check), so its secret members cannot be told apart',
+    ]);
+  }
+  if (!isNode(input) || input['type'] !== 'object' || !isNode(output)) {
+    throw new AuthMethodContractError(subject, [
+      'configSchema must describe an object of members: the realm stores it member by member',
+    ]);
+  }
+
+  const fromInput = walkDocument(schemaDocument(input));
+  const outputDocument = schemaDocument(output);
+  // An output that is no object (a transform of the whole config) holds no
+  // member path; it may hold no mark either.
+  const fromOutput =
+    output['type'] === 'object'
+      ? walkDocument(outputDocument)
+      : {
+          paths: [],
+          problems: holdsMark(output, outputDocument, new Set())
+            ? [
+                'configSchema marks a secret member in the output of a transform of the whole config',
+              ]
+            : [],
+        };
+  const paths = [...new Set([...fromInput.paths, ...fromOutput.paths])];
+  const problems = [...new Set([...fromInput.problems, ...fromOutput.problems])];
 
   if (paths.length > MAX_AUTH_METHOD_SECRET_MEMBERS) {
     problems.push(`configSchema marks more than ${MAX_AUTH_METHOD_SECRET_MEMBERS} secret members`);
   }
   if (problems.length > 0) throw new AuthMethodContractError(subject, problems);
   return paths;
+}
+
+/**
+ * Whether `config` holds a value at one of `paths`, however it is spelled:
+ * nested (`{ mtls: { keyPassword } }`) or with the dots in one member's name
+ * (`{ "mtls.keyPassword": … }`). A config sent with a secret there would
+ * store it with the plain members.
+ *
+ * @experimental
+ */
+export function configSpellsMemberOf(
+  config: unknown,
+  paths: readonly AuthMethodSecretPath[]
+): boolean {
+  if (paths.length === 0) return false;
+  const wanted = new Set(paths);
+  const walk = (value: unknown, prefix: string, depth: number): boolean => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value) || depth > 32) {
+      return false;
+    }
+    return Object.entries(value).some(([key, item]) => {
+      const at = prefix === '' ? key : `${prefix}.${key}`;
+      return wanted.has(at) || walk(item, at, depth + 1);
+    });
+  };
+  return walk(config, '', 0);
 }
 
 /**
