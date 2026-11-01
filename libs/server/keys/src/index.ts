@@ -81,10 +81,12 @@ export {
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
+  REALM_MAIL_SECRET_CONTEXT_PREFIX,
   SIGNER_CALLERS,
   SIGNER_POLICY,
   type SignerCaller,
   type SignerGrant,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './lib/signer-policy';
 export {
   CLIENT_ASSERTION_TYP,

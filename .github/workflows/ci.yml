@@ -595,6 +595,8 @@ jobs:
             -e SMTP_SECURE=false \
             -e SMTP_USER=wire-suite \
             -e SMTP_PASSWORD=wire-suite \
+            -e SMTP_ALLOW_PLAINTEXT=true \
+            -e SMTP_ALLOWED_HOSTS=localhost \
             -e EMAIL_FROM_ADDRESS='noreply@qauth.dev' \
             -e EMAIL_BASE_URL="$QAUTH_BASE_URL" \
             -e RATE_LIMIT_MAX=10000 \

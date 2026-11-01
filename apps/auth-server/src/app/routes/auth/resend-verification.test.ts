@@ -152,6 +152,7 @@ describe('POST /auth/resend-verification', () => {
     // #230: the outbound address is the credential's external_sub — the
     // registered normalized form (users.email no longer exists).
     expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
+      REALM.id,
       'user@example.com',
       'plain',
       { baseUrl: REALM.issuer }
@@ -288,6 +289,7 @@ describe('POST /auth/resend-verification', () => {
       expect(await settledSoon(answer)).toBe('settled');
       await expect(answer).resolves.toEqual({ message: SUCCESS_MESSAGES.RESEND_VERIFICATION });
       expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
+        REALM.id,
         'user@example.com',
         'plain',
         { baseUrl: REALM.issuer }

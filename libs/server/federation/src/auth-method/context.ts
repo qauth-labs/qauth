@@ -12,8 +12,10 @@ import { AuthMethodConfigError } from './errors';
 /**
  * The egress client as the host has it: the shape of `EgressClient.request`
  * in `@qauth-labs/server-egress`, which takes the realm a destination belongs
- * to and per-call caps. The context's adapter never passes caps, and sets the
- * realm itself.
+ * to and per-call caps. The context's adapter sets the realm itself, and
+ * passes one cap only: `maxRedirects: 0`, when the method asks to follow no
+ * redirect. No other cap, so a method can tighten the client's redirect cap
+ * and lift nothing.
  *
  * @experimental
  */
@@ -26,6 +28,7 @@ export interface AuthMethodHostEgress {
     purpose: string;
     source: 'operator' | 'admin' | 'remote_document';
     realm?: string;
+    limits?: { maxRedirects: 0 };
   }): Promise<AuthMethodEgressResponse>;
 }
 
@@ -83,6 +86,7 @@ export interface AuthMethodContextParts {
 
 const EGRESS_METHODS: readonly string[] = ['GET', 'POST'];
 const EGRESS_SOURCES: readonly string[] = ['operator', 'admin', 'remote_document'];
+const EGRESS_REDIRECTS: readonly unknown[] = [undefined, 'follow', 'error'];
 const ASSERTION_ALGORITHMS: readonly string[] = ['RS256', 'ES256', 'EdDSA'];
 
 /**
@@ -145,8 +149,9 @@ const MAX_LOG_DEPTH = 8;
  * the contract names and nothing else:
  *
  * - `egress.request` passes `method` (`GET` or `POST`), `url`, `headers`,
- *   `body`, `purpose` and `source`, and adds this realm's name. No caps, no
- *   other realm, no other method. `source` is `operator` or `admin` (the
+ *   `body`, `purpose` and `source`, and adds this realm's name. One cap only,
+ *   `maxRedirects: 0` when the method asks for `redirect: 'error'`; no other
+ *   cap, no other realm, no other method. `source` is `operator` or `admin` (the
  *   labels the realm's egress allowlist applies to, for non-public
  *   addresses) only when the URL's origin is the origin of a URL the
  *   method's parsed config holds; any other call goes as `remote_document`,
@@ -217,7 +222,7 @@ export function createAuthMethodContext<TConfig>(
     egress: Object.freeze({
       request(request: AuthMethodEgressRequest): Promise<AuthMethodEgressResponse> {
         // Each member read once: what is checked is what is sent.
-        const { method: verb, url, headers, body, purpose, source } = request;
+        const { method: verb, url, headers, body, purpose, source, redirect } = request;
         if (!EGRESS_METHODS.includes(verb)) {
           return Promise.reject(new TypeError('egress method must be GET or POST'));
         }
@@ -225,6 +230,9 @@ export function createAuthMethodContext<TConfig>(
           return Promise.reject(
             new TypeError('egress source must be operator, admin or remote_document')
           );
+        }
+        if (!EGRESS_REDIRECTS.includes(redirect)) {
+          return Promise.reject(new TypeError('egress redirect must be follow or error'));
         }
         return egress.request({
           method: verb,
@@ -237,6 +245,8 @@ export function createAuthMethodContext<TConfig>(
               ? source
               : 'remote_document',
           realm: realmName,
+          // The one cap a method may set: zero redirects, the floor.
+          ...(redirect === 'error' ? { limits: { maxRedirects: 0 as const } } : {}),
         });
       },
     }),

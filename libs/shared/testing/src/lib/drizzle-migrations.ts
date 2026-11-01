@@ -142,6 +142,7 @@ export const QAUTH_DOMAIN_TABLES: readonly string[] = Object.freeze([
   'realm_auth_method_plugins',
   'realm_public_keys',
   'realm_keys',
+  'realm_secrets',
   'ssf_stream_subjects',
   'ssf_streams',
   'oauth_consents',

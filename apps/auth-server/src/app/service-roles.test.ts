@@ -114,8 +114,10 @@ describe('what each role loads (the boot-time list)', () => {
     );
   });
 
-  it('gives signer only the realms the resolver reads and their published keys', () => {
-    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys']);
+  it('gives signer the realms the resolver reads, their published keys and their secrets', () => {
+    // The secrets for the boot's seed of the default realm (#529), which only
+    // a process that can encrypt runs.
+    expect(repositoriesFor(['signer'])).toEqual(['realms', 'realmPublicKeys', 'realmSecrets']);
     expect([...pluginsFor(['signer'])]).toEqual([]);
   });
 
@@ -127,6 +129,7 @@ describe('what each role loads (the boot-time list)', () => {
       'adminAuditLog',
       'adminApprovals',
       'realmPublicKeys',
+      'realmSecrets',
       // The plugin operations (#600).
       'realmAuthMethodPlugins',
     ]);
@@ -154,6 +157,8 @@ describe('what each role loads (the boot-time list)', () => {
       expect(web).not.toContain(name);
     }
     expect(web).toContain('sessions');
+    // It sends no mail, so it reads no realm secret (#529).
+    expect(web).not.toContain('realmSecrets');
     // No web route reads an access token since the authorization endpoint's
     // Bearer path was retired (#524).
     expect([...pluginsFor(['web'])]).toEqual([

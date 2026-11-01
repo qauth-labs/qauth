@@ -11,6 +11,7 @@ export * from './events';
 export * from './identity';
 export * from './keys';
 export * from './oid4vp';
+export * from './realm-secrets';
 export * from './roles';
 export * from './sessions';
 export * from './sql-helpers';

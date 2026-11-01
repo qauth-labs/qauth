@@ -1,5 +1,5 @@
 {
-  "id": "ffeb37d2-9f07-4dfa-9a3f-6aa04f26e8fe",
+  "id": "609ae559-dcb8-456d-a082-71f2d14a01aa",
   "prevId": "03705647-0cc8-4309-92f6-918149bf2092",
   "version": "7",
   "dialect": "postgresql",
@@ -1030,109 +1030,6 @@
         "audit_logs_delegation_chain_is_array": {
           "name": "audit_logs_delegation_chain_is_array",
           "value": "\"audit_logs\".\"delegation_chain\" IS NULL OR jsonb_typeof(\"audit_logs\".\"delegation_chain\") = 'array'"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.realm_auth_method_plugins": {
-      "name": "realm_auth_method_plugins",
-      "schema": "",
-      "columns": {
-        "realm_id": {
-          "name": "realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "plugin_id": {
-          "name": "plugin_id",
-          "type": "varchar(63)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "config": {
-          "name": "config",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "secrets": {
-          "name": "secrets",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'{}'::jsonb"
-        },
-        "version": {
-          "name": "version",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 1
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "realm_auth_method_plugins_realm_id_realms_id_fk": {
-          "name": "realm_auth_method_plugins_realm_id_realms_id_fk",
-          "tableFrom": "realm_auth_method_plugins",
-          "tableTo": "realms",
-          "columnsFrom": ["realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "realm_auth_method_plugins_pkey": {
-          "name": "realm_auth_method_plugins_pkey",
-          "columns": ["realm_id", "plugin_id"]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "realm_auth_method_plugins_plugin_id_form": {
-          "name": "realm_auth_method_plugins_plugin_id_form",
-          "value": "\"realm_auth_method_plugins\".\"plugin_id\" ~ '^[a-z][a-z0-9_-]{0,62}$'"
-        },
-        "realm_auth_method_plugins_config_object": {
-          "name": "realm_auth_method_plugins_config_object",
-          "value": "jsonb_typeof(\"realm_auth_method_plugins\".\"config\") = 'object'"
-        },
-        "realm_auth_method_plugins_secrets_object": {
-          "name": "realm_auth_method_plugins_secrets_object",
-          "value": "jsonb_typeof(\"realm_auth_method_plugins\".\"secrets\") = 'object'"
-        },
-        "realm_auth_method_plugins_secrets_ciphertext": {
-          "name": "realm_auth_method_plugins_secrets_ciphertext",
-          "value": "NOT jsonb_path_exists(\"realm_auth_method_plugins\".\"secrets\", 'strict $.* ? (@.type() != \"string\" || !(@ like_regex \"^v1[.][^.]+[.][^.]+[.][^.]+$\"))')"
-        },
-        "realm_auth_method_plugins_version_positive": {
-          "name": "realm_auth_method_plugins_version_positive",
-          "value": "\"realm_auth_method_plugins\".\"version\" > 0"
         }
       },
       "isRLSEnabled": false
@@ -3959,6 +3856,78 @@
         "oid4vp_request_states_response_code_redeemed_requires_hash": {
           "name": "oid4vp_request_states_response_code_redeemed_requires_hash",
           "value": "\"oid4vp_request_states\".\"response_code_redeemed_at\" is null or \"oid4vp_request_states\".\"response_code_hash\" is not null"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.realm_secrets": {
+      "name": "realm_secrets",
+      "schema": "",
+      "columns": {
+        "realm_id": {
+          "name": "realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "varchar(128)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ciphertext": {
+          "name": "ciphertext",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "key_id": {
+          "name": "key_id",
+          "type": "varchar(255)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "realm_secrets_realm_id_realms_id_fk": {
+          "name": "realm_secrets_realm_id_realms_id_fk",
+          "tableFrom": "realm_secrets",
+          "tableTo": "realms",
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "realm_secrets_pk": {
+          "name": "realm_secrets_pk",
+          "columns": ["realm_id", "name"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "realm_secrets_name_form": {
+          "name": "realm_secrets_name_form",
+          "value": "\"realm_secrets\".\"name\" ~ '^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)+$'"
+        },
+        "realm_secrets_value_and_key_together": {
+          "name": "realm_secrets_value_and_key_together",
+          "value": "(\"realm_secrets\".\"ciphertext\" IS NULL) = (\"realm_secrets\".\"key_id\" IS NULL)"
+        },
+        "realm_secrets_ciphertext_form": {
+          "name": "realm_secrets_ciphertext_form",
+          "value": "\"realm_secrets\".\"ciphertext\" IS NULL OR (\"realm_secrets\".\"ciphertext\" ~ '^v1\\.[A-Za-z0-9_-]{1,255}\\.[A-Za-z0-9_-]{16}\\.[A-Za-z0-9_-]{22,}$' AND split_part(\"realm_secrets\".\"ciphertext\", '.', 2) = \"realm_secrets\".\"key_id\")"
         }
       },
       "isRLSEnabled": false

@@ -1,11 +1,12 @@
 import { isSetDirection } from './field';
-import { REALM_POLICY_REGISTRY, type RealmPolicies } from './realm-policies';
+import { REALM_POLICY_REGISTRY, REALM_POLICY_RULES, type RealmPolicies } from './realm-policies';
 import {
   type PolicyIssue,
   type PolicyRegistry,
   PolicyValidationError,
   type RegisteredPolicyField,
 } from './registry';
+import type { PolicyRule } from './rules';
 import type { RealmSecretStore } from './secret-store';
 
 /**
@@ -108,6 +109,21 @@ export interface RealmPolicySnapshot {
   readonly policies: RealmPolicies;
 }
 
+/**
+ * A realm's policies as the admin API's realm representation shows them
+ * (#529): every field's value, and each secret field `<name>` only as
+ * `<name>Set`, whether it holds a value. Never a secret's value.
+ */
+export interface RealmPolicyRepresentation {
+  readonly realmId: string;
+  /** The policy counter the representation was read at: its `ETag`. */
+  readonly version: number;
+  readonly hasPolicies: boolean;
+  readonly schemaVersion: string;
+  /** The `representation` view of the policies. */
+  readonly policies: Readonly<Record<string, unknown>>;
+}
+
 /** Options of {@link RealmPolicyStore.update}. */
 export interface RealmPolicyUpdateOptions<Tx> {
   /**
@@ -170,6 +186,17 @@ export interface RealmPolicyStore<Row, Tx> {
    */
   get(realmId: string, tx?: Tx): Promise<RealmPolicySnapshot | undefined>;
   /**
+   * The policies of the realm `realmId` as the admin API's realm
+   * representation shows them, or `undefined` when there is none: each
+   * secret field as `<name>Set`, from the secret store. The value of a secret
+   * is never read.
+   *
+   * @throws PolicyValidationError when the stored policies are not valid
+   * @throws PolicySecretStoreUnavailableError when the store has no secret
+   *   store, which alone knows whether a secret is set
+   */
+  representation(realmId: string, tx?: Tx): Promise<RealmPolicyRepresentation | undefined>;
+  /**
    * Apply a JSON Merge Patch (RFC 7396) to the realm's policies and store
    * the result, raising the counter, where the realm's counter is still
    * `options.expectedVersion`.
@@ -179,15 +206,19 @@ export interface RealmPolicyStore<Row, Tx> {
    * a member left out keeps its value. A secret field is the exception, as in
    * the `input` view: a value sets it, `null` clears it, and the store hands
    * either to the secret store, never to the document. The merged document
-   * must be a valid policy document.
+   * must be a valid policy document, and pass every rule of the store
+   * (`PolicyStoreOptions.rules`, #529) with the secrets the update leaves
+   * set: the mail transport it selects has what it sends with, for one.
    *
    * @throws RealmPolicyNotFoundError when there is no such realm
    * @throws PolicyVersionConflictError when the realm's counter is another
    *   one, or moves before the write; nothing is changed
    * @throws PolicyValidationError when the patch or the merged document is
-   *   refused; nothing is changed
+   *   refused, by its schema or a rule; nothing is changed. Its issues name
+   *   paths, never values
    * @throws PolicySecretStoreUnavailableError when the patch sets or clears a
-   *   secret and the store has no secret store; nothing is changed
+   *   secret, or a rule asks whether one it leaves alone is set, and the store
+   *   has no secret store; nothing is changed
    * @throws PolicySchemaVersionError when the stored policies follow another
    *   schema version than this release's: writing them would relabel a
    *   document this release cannot read whole; nothing is changed
@@ -232,6 +263,12 @@ export interface PolicyStoreOptions<Row, Tx> {
   readonly secrets?: RealmSecretStore<Tx>;
   /** The registry; {@link REALM_POLICY_REGISTRY} by default. */
   readonly registry?: PolicyRegistry;
+  /**
+   * The rules every update must pass, over the whole document it would
+   * store (#529). {@link REALM_POLICY_RULES} with the default registry, none
+   * with another one.
+   */
+  readonly rules?: readonly PolicyRule[];
 }
 
 /** There is no realm of the id. */
@@ -515,6 +552,7 @@ export function createPolicyStore<Row, Tx>(
 ): RealmPolicyStore<Row, Tx> {
   const { storage, secrets } = options;
   const registry = options.registry ?? REALM_POLICY_REGISTRY;
+  const rules = options.rules ?? (options.registry === undefined ? REALM_POLICY_RULES : []);
   const layout = layoutOf(registry);
   // Parsed once, so seeds the schema refuses fail the boot, and frozen, so
   // nothing a caller does with a snapshot reaches the next one.
@@ -620,6 +658,59 @@ export function createPolicyStore<Row, Tx>(
     );
   }
 
+  /**
+   * Run the store's rules on `document`, the parsed document an update would
+   * store, against `previous`, the realm's document before it, with the
+   * secrets each leaves set: before, those the secret store holds; after,
+   * those `writes` sets, and those set before that it leaves alone.
+   *
+   * @throws PolicyValidationError naming each issue's path
+   */
+  async function checkRules(
+    realmId: string,
+    previous: Readonly<Record<string, unknown>>,
+    document: Readonly<Record<string, unknown>>,
+    writes: readonly { readonly path: string; readonly value: string | null }[],
+    tx: Tx
+  ): Promise<void> {
+    if (rules.length === 0) return;
+    // What each secret holds before and after the update: what the secret
+    // store holds, and after it what the update writes. Without a store (and
+    // so with no write: `update` refuses a write without one), a secret is
+    // unknown, and a rule that asks about one fails closed: the store cannot
+    // say the secret is unset when it may be set.
+    const before = new Map<string, boolean>();
+    const after = new Map<string, boolean>();
+    for (const entry of secretFields) {
+      if (secrets !== undefined) {
+        before.set(entry.path, await secrets.isSet(realmId, entry.path, tx));
+      }
+      const write = writes.find((candidate) => candidate.path === entry.path);
+      if (write !== undefined) after.set(entry.path, write.value !== null);
+      else if (before.has(entry.path)) after.set(entry.path, before.get(entry.path) === true);
+    }
+    const reader = (state: ReadonlyMap<string, boolean>) => (path: string) => {
+      const known = state.get(path);
+      if (known === undefined) throw new PolicySecretStoreUnavailableError([path]);
+      return known;
+    };
+    const written = (path: string) => {
+      const write = writes.find((candidate) => candidate.path === path);
+      if (write === undefined) return undefined;
+      return write.value === null ? ('cleared' as const) : ('set' as const);
+    };
+    const context = {
+      isSet: reader(after),
+      previous,
+      wasSet: reader(before),
+      written,
+    };
+    const issues = rules.flatMap((rule) => rule(document, context));
+    if (issues.length > 0) {
+      throw new PolicyValidationError('The realm policies are not valid', issues);
+    }
+  }
+
   async function conflictOrMissing(
     realmId: string,
     expectedVersion: number,
@@ -640,6 +731,28 @@ export function createPolicyStore<Row, Tx>(
     async get(realmId: string, tx?: Tx): Promise<RealmPolicySnapshot | undefined> {
       const record = await storage.read(realmId, tx);
       return record === undefined ? undefined : snapshotOf(record);
+    },
+
+    async representation(realmId: string, tx?: Tx): Promise<RealmPolicyRepresentation | undefined> {
+      const record = await storage.read(realmId, tx);
+      if (record === undefined) return undefined;
+      const snapshot = snapshotOf(record);
+      // Without a secret store, whether a secret is set is unknown: say so
+      // rather than show it unset.
+      if (secrets === undefined && secretFields.length > 0) {
+        throw new PolicySecretStoreUnavailableError(secretFields.map((entry) => entry.path));
+      }
+      const set: string[] = [];
+      for (const entry of secretFields) {
+        if (await secrets?.isSet(realmId, entry.path, tx)) set.push(entry.path);
+      }
+      return deepFreeze({
+        realmId: snapshot.realmId,
+        version: snapshot.version,
+        hasPolicies: snapshot.hasPolicies,
+        schemaVersion: snapshot.schemaVersion,
+        policies: registry.toRepresentation(snapshot.policies, set),
+      });
     },
 
     async update(
@@ -676,6 +789,7 @@ export function createPolicyStore<Row, Tx>(
         // The `input` view takes the representation's `<name>Set` members and
         // drops them, so a representation sent back changes nothing.
         const next = registry.parse(merged, 'input');
+        await checkRules(realmId, current.document, next, writes, inner);
         const written = await storage.write(
           realmId,
           {

@@ -36,6 +36,9 @@ export const defaultRealmPlugin = fp<DefaultRealmPluginOptions>(
       endpointHosts: options.endpointHosts,
       ...(options.passkeys === undefined ? {} : { passkeys: options.passkeys }),
       ...(options.seedKeysSet === undefined ? {} : { seedKeysSet: options.seedKeysSet }),
+      ...(options.environmentSeeds === undefined
+        ? {}
+        : { environmentSeeds: options.environmentSeeds }),
     };
     fastify.addHook('onReady', async () => {
       await bootDefaultRealm(

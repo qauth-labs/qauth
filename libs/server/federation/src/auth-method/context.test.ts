@@ -107,6 +107,44 @@ describe('createAuthMethodContext', () => {
     ]);
   });
 
+  it("passes redirect: 'error' on as the one cap a method may set, zero redirects", async () => {
+    const { host, parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
+    const base = {
+      method: 'POST',
+      url: 'https://provider.example/token',
+      body: 'code=x',
+      purpose: 'upstream-token',
+      source: 'admin',
+    } as const;
+    await context.egress.request({ ...base, redirect: 'error' });
+    await context.egress.request({ ...base, redirect: 'follow' });
+    await context.egress.request(base);
+
+    const sent = host.egress.request.mock.calls.map(([request]) => request);
+    expect(sent[0]).toEqual({ ...base, realm: 'acme', limits: { maxRedirects: 0 } });
+    // `follow` and no member are the host client's own redirect cap.
+    expect(sent[1]).toEqual({ ...base, realm: 'acme' });
+    expect(sent[2]).toEqual({ ...base, realm: 'acme' });
+  });
+
+  it('refuses a redirect mode the contract does not name, without calling out', async () => {
+    const { host, parts: given } = parts();
+    const context = createAuthMethodContext(createSampleAuthMethod(), given);
+    for (const redirect of ['manual', 'ERROR', 0, null]) {
+      await expect(
+        context.egress.request({
+          method: 'GET',
+          url: 'https://provider.example/',
+          purpose: 'upstream-discovery',
+          source: 'admin',
+          redirect,
+        } as never)
+      ).rejects.toThrow(TypeError);
+    }
+    expect(host.egress.request).not.toHaveBeenCalled();
+  });
+
   it('refuses an egress method or source the contract does not name, without calling out', async () => {
     const { host, parts: given } = parts();
     const context = createAuthMethodContext(createSampleAuthMethod(), given);

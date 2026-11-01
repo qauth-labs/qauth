@@ -1,20 +1,17 @@
 /**
- * Migration 0049 adds `realm_auth_method_plugins` (ADR-019 Decisions 10 and
- * 12, #600): each realm's state of each installed AuthMethod plugin. A new
- * table, so the previous release keeps working on the new schema. Its
+ * Migration 0049 adds `realm_secrets` (#529): the encrypted values of the
+ * realms' secret policy fields. One new table, whose CHECKs take only the
+ * signer's `data_at_rest` format, and its foreign key to the realm. Its
  * behaviour against a real Postgres is held by
- * `repositories/realm-auth-method-plugins.integration.test.ts`.
+ * `repositories/realm-secrets.integration.test.ts`.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
-import { realmAuthMethodPlugins } from './auth-method-plugins';
-
 const DRIZZLE_DIR = path.resolve(__dirname, '..', '..', '..', 'drizzle');
-const MIGRATION_TAG = '0049_realm_auth_method_plugins';
+const MIGRATION_TAG = '0049_realm_secrets';
 const MIGRATION_IDX = 49;
 
 interface JournalEntry {
@@ -40,7 +37,7 @@ function statementsOf(tag: string): string[] {
     .filter((statement) => statement !== '');
 }
 
-describe('migration 0049 (realm_auth_method_plugins)', () => {
+describe('migration 0049 (realm_secrets)', () => {
   const statements = statementsOf(MIGRATION_TAG);
 
   it('is in the journal, after 0048', () => {
@@ -49,41 +46,22 @@ describe('migration 0049 (realm_auth_method_plugins)', () => {
     expect(journal.entries[MIGRATION_IDX - 1]?.tag).toBe('0048_oauth_client_first_party_profile');
   });
 
-  it('only creates the table and its foreign key: no other table is touched', () => {
+  it('only adds: the table, with ciphertext-only CHECKs, and its realm foreign key', () => {
     expect(statements).toHaveLength(2);
-    expect(statements[0].startsWith('CREATE TABLE "realm_auth_method_plugins" (')).toBe(true);
-    expect(statements[1]).toBe(
-      'ALTER TABLE "realm_auth_method_plugins" ADD CONSTRAINT "realm_auth_method_plugins_realm_id_realms_id_fk" FOREIGN KEY ("realm_id") REFERENCES "public"."realms"("id") ON DELETE cascade ON UPDATE no action;'
+    const [create, foreignKey] = statements;
+    expect(create).toMatch(/^CREATE TABLE "realm_secrets" \(/);
+    expect(create).toContain('"ciphertext" text,');
+    expect(create).toContain('"key_id" varchar(255),');
+    expect(create).toContain('CONSTRAINT "realm_secrets_pk" PRIMARY KEY("realm_id","name")');
+    expect(create).toContain(
+      `CONSTRAINT "realm_secrets_ciphertext_form" CHECK ("realm_secrets"."ciphertext" IS NULL OR ("realm_secrets"."ciphertext" ~ '^v1\\.[A-Za-z0-9_-]{1,255}\\.[A-Za-z0-9_-]{16}\\.[A-Za-z0-9_-]{22,}$' AND split_part("realm_secrets"."ciphertext", '.', 2) = "realm_secrets"."key_id"))`
     );
-    // The foreign key's own `ON DELETE cascade ON UPDATE no action` aside.
-    expect(statements.join('\n').replace('ON DELETE cascade ON UPDATE no action', '')).not.toMatch(
-      /\b(DROP|UPDATE|DELETE|INSERT|RENAME)\b/
+    expect(create).toContain(
+      'CONSTRAINT "realm_secrets_value_and_key_together" CHECK (("realm_secrets"."ciphertext" IS NULL) = ("realm_secrets"."key_id" IS NULL))'
     );
-  });
-
-  it('keys a row by realm and plugin, and holds every stored form in a CHECK', () => {
-    const table = getTableConfig(realmAuthMethodPlugins);
-    expect(table.primaryKeys.map((key) => key.columns.map((column) => column.name))).toEqual([
-      ['realm_id', 'plugin_id'],
-    ]);
-    expect(table.checks.map((check) => check.name).sort()).toEqual([
-      'realm_auth_method_plugins_config_object',
-      'realm_auth_method_plugins_plugin_id_form',
-      'realm_auth_method_plugins_secrets_ciphertext',
-      'realm_auth_method_plugins_secrets_object',
-      'realm_auth_method_plugins_version_positive',
-    ]);
-    for (const name of table.checks.map((check) => check.name)) {
-      expect(statements[0]).toContain(`CONSTRAINT "${name}" CHECK (`);
-    }
-    // No backslash in the jsonpath: its string escapes differ from a regex's.
-    expect(statements[0]).toContain(`like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"`);
-  });
-
-  it('starts a plugin off, with an empty config and no secret, at version 1', () => {
-    expect(statements[0]).toContain('"enabled" boolean DEFAULT false NOT NULL');
-    expect(statements[0]).toContain(`"config" jsonb DEFAULT '{}'::jsonb NOT NULL`);
-    expect(statements[0]).toContain(`"secrets" jsonb DEFAULT '{}'::jsonb NOT NULL`);
-    expect(statements[0]).toContain('"version" integer DEFAULT 1 NOT NULL');
+    expect(foreignKey).toBe(
+      'ALTER TABLE "realm_secrets" ADD CONSTRAINT "realm_secrets_realm_id_realms_id_fk" FOREIGN KEY ("realm_id") REFERENCES "public"."realms"("id") ON DELETE cascade ON UPDATE no action;'
+    );
+    expect(create).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT)\b/);
   });
 });

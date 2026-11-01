@@ -740,4 +740,28 @@ describe('checkAuthMethod, the contract test kit', () => {
     expect(seen.length).toBeGreaterThan(0);
     for (const request of seen) expect(request).not.toHaveProperty('realm');
   });
+
+  it("shows the scenario a call's redirect: 'error' as the method sent it, not as a cap", async () => {
+    const seen: Record<string, unknown>[] = [];
+    // The sample's callback, with every outbound call asking for no redirect.
+    const strict = withCallback(
+      (original) => async (request, context) =>
+        original(request, {
+          ...context,
+          egress: { request: (call) => context.egress.request({ ...call, redirect: 'error' }) },
+        })
+    );
+    await checkAuthMethod(strict, {
+      ...sampleScenario(),
+      egress: (request) => {
+        seen.push(request as unknown as Record<string, unknown>);
+        return sampleProviderEgress(request);
+      },
+    });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const request of seen) {
+      expect(request['redirect']).toBe('error');
+      expect(request).not.toHaveProperty('limits');
+    }
+  });
 });
