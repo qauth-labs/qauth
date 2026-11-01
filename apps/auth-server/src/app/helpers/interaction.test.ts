@@ -1001,10 +1001,10 @@ describe("the user switch ends the first user's browser session (#896)", () => {
     expect(cancelledEvents()[0]?.data).not.toHaveProperty('sessionEnded');
   });
 
-  it("leaves a cookie that names a later session alone, and still ends the interaction's", async () => {
+  it("leaves a cookie that names a later session of another user alone, and still ends the interaction's", async () => {
     const owner = new Browser();
     const { id, sid } = await signedInInteraction(owner);
-    // Another tab signed someone in since: the cookie names that session now.
+    // Another tab signed someone else in since: the cookie names that session now.
     const { session: later } = await harness.sessions.signIn({
       realmId: REALM.id,
       userId: USER_B,
@@ -1016,9 +1016,73 @@ describe("the user switch ends the first user's browser session (#896)", () => {
     expect(switched.json()).toMatchObject({ kind: 'switched' });
     expect(harness.sessions.service.sessions.has(sid)).toBe(false);
     expect(harness.sessions.service.sessions.has(later.sid)).toBe(true);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
     expect(
       await verifySessionCookie(harness.app, REALM.id, owner.cookies.get(SESSION_COOKIE_NAME))
     ).toBe(later.sid);
+  });
+
+  it('ends a later session of the first user that the cookie names too, and clears the cookie (#964)', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    // The first user signed in again in another tab: the cookie names that session now.
+    const { session: later } = await harness.sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_A,
+    });
+    owner.cookies.set(SESSION_COOKIE_NAME, (await sessionCookie(harness.app, later)).split('=')[1]);
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    for (const ended of [sid, later.sid]) {
+      expect(harness.sessions.service.revoke).toHaveBeenCalledWith({
+        realmId: REALM.id,
+        sid: ended,
+        reason: 'sign_out',
+        actor: { type: 'user', id: USER_A },
+        userId: USER_A,
+      });
+      expect(harness.sessions.service.sessions.has(ended)).toBe(false);
+    }
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ reason: 'user_switch', sessionEnded: true }),
+        options: expect.objectContaining({ userId: USER_A }),
+      },
+    ]);
+  });
+
+  it("keeps the interaction when the cookie's later session cannot be read, so a retry switches and ends it", async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    const { session: later } = await harness.sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_A,
+    });
+    owner.cookies.set(SESSION_COOKIE_NAME, (await sessionCookie(harness.app, later)).split('=')[1]);
+    harness.app.log.level = 'fatal';
+    harness.sessions.service.get.mockRejectedValueOnce(new Error('session store down'));
+
+    const failed = await switchUser(owner, id);
+
+    expect(failed.statusCode).toBe(500);
+    // The switch did not go on: the interaction waits at its step, the later
+    // session is live and the browser keeps its cookie.
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+      step: CONSENT_STEP,
+      revision: 1,
+    });
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(true);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
+    expect(cancelledEvents()).toEqual([]);
+
+    const retry = await switchUser(owner, id);
+    expect(retry.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(false);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
   });
 
   it('keeps the interaction and its session when the session cannot be ended, so a retry switches', async () => {
