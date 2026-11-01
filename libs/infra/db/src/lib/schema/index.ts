@@ -2,6 +2,7 @@ export * from './admin-approvals';
 export * from './admin-audit';
 export * from './admin-grants';
 export * from './audit';
+export * from './auth-method-plugins';
 export * from './consents';
 export * from './core';
 export * from './enums';

@@ -20,6 +20,7 @@ import {
   createOAuthClientsRepository,
   createOAuthConsentsRepository,
   createOid4vpRequestStatesRepository,
+  createRealmAuthMethodPluginsRepository,
   createRealmPublicKeysRepository,
   createRealmsRepository,
   createRefreshTokensRepository,
@@ -37,6 +38,7 @@ import {
   OAuthClientsRepository,
   type OAuthConsentsRepository,
   type Oid4vpRequestStatesRepository,
+  type RealmAuthMethodPluginsRepository,
   type RealmPublicKeysRepository,
   type RealmsRepository,
   type RefreshTokensRepository,
@@ -138,6 +140,13 @@ declare module 'fastify' {
        * verifies a realm's tokens and serves its JWKS with them (#495).
        */
       realmPublicKeys: RealmPublicKeysRepository;
+      /**
+       * Each realm's state of each installed AuthMethod plugin (ADR-019
+       * Decision 12, #600): the admin API enables, configures and disables a
+       * plugin per realm, and the plugin runtime reads whether a realm has it
+       * on and its config. Secrets are stored encrypted.
+       */
+      realmAuthMethodPlugins: RealmAuthMethodPluginsRepository;
     };
   }
 }
@@ -173,6 +182,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   adminAuditLog: true,
   adminApprovals: true,
   realmPublicKeys: true,
+  realmAuthMethodPlugins: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -266,6 +276,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       adminAuditLog: () => createAdminAuditLogRepository(database.db),
       adminApprovals: () => createAdminApprovalsRepository(database.db),
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
+      realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

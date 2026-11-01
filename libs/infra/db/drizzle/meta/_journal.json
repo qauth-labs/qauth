@@ -344,6 +344,13 @@
       "when": 1793471940424,
       "tag": "0048_oauth_client_first_party_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1793498049141,
+      "tag": "0049_realm_auth_method_plugins",
+      "breakpoints": true
     }
   ]
 }
