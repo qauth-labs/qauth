@@ -667,7 +667,7 @@ describe('the stored client secret', () => {
     for (const form of forms) expect(seen).not.toContain(form);
   });
 
-  it('does not open for another provider, and not for the delivery role', async () => {
+  it('opens as api, and not for another provider, the web role or the delivery role', async () => {
     const stored = await seal(TYPE, configFor('client_secret_post'));
     await expect(
       openUpstreamOidcConfig(
@@ -676,13 +676,12 @@ describe('the stored client secret', () => {
         stored
       )
     ).rejects.toThrow();
-    await expect(
-      openUpstreamOidcConfig(
-        signer.signer,
-        { realmId, providerId: TYPE, caller: 'delivery' },
-        stored
-      )
-    ).rejects.toThrow();
+    for (const caller of ['web', 'delivery']) {
+      await expect(
+        openUpstreamOidcConfig(signer.signer, { realmId, providerId: TYPE, caller }, stored),
+        caller
+      ).rejects.toMatchObject({ code: 'SIGNER_ACCESS_DENIED', caller, operation: 'decrypt' });
+    }
     await expect(
       openUpstreamOidcConfig(signer.signer, { realmId, providerId: TYPE, caller: 'api' }, stored)
     ).resolves.toMatchObject({ clientAuthentication: { clientSecret: CLIENT_SECRET } });

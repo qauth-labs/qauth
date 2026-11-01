@@ -1,3 +1,4 @@
+import { UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX } from '@qauth-labs/server-keys';
 import { z } from 'zod';
 
 import {
@@ -28,11 +29,12 @@ import {
 
 /**
  * The start of every client secret's ciphertext context:
- * `upstream-oidc:client-secret:<realm id>:<provider type>`. It is not the
- * delivery role's `delivery:` prefix, so the role that sends events and
- * webhooks cannot decrypt a provider's secret.
+ * `upstream-oidc:client-secret:<realm id>:<provider type>`. The signer's
+ * policy defines it (`@qauth-labs/server-keys`): the `api` role may decrypt
+ * a context under it, and `web` and `delivery` may not, so the host opens a
+ * stored config as `api`, or as `local` in a single deployment.
  */
-export const UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX = 'upstream-oidc:client-secret:';
+export { UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX };
 
 /** The ciphertext context of one provider's client secret in one realm. */
 export function upstreamClientSecretContext(realmId: string, providerId: string): string {

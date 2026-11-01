@@ -55,6 +55,11 @@ signer role (`Signer.encrypt`, context `upstream-oidc:client-secret:<realm id>:<
 `openUpstreamOidcConfig` decrypts it for the method's context; `describeUpstreamOidcConfig` is
 the view an API or event may carry, with neither the secret nor its ciphertext.
 
+The context's prefix is `UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX` of `@qauth-labs/server-keys`. The
+signer's policy lets the `api` role decrypt a context under it (besides a realm's mail secret), so
+the host opens a stored config as `api`, or as `local` in a single deployment. The `web` and
+`delivery` roles cannot decrypt it.
+
 ## Registration check
 
 `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery and the egress
@@ -72,9 +77,10 @@ client's address checks on every endpoint without calling it, and reports one fi
   that provider's user with an equal `sub` sign in as an existing one.
 - **Open the stored config before building the context.** The method's `configSchema` takes the
   plaintext `clientSecret`; the stored form holds `clientSecretSealed`. A host calls
-  `openUpstreamOidcConfig` and hands the result to `createAuthMethodContext`, with a signer caller
-  role that may `decrypt` (and `signClientAssertion`, for `private_key_jwt`): `api` or `local`
-  today, not `web`.
+  `openUpstreamOidcConfig` and hands the result to `createAuthMethodContext`, both as the signer
+  caller `api`, or `local` in a single deployment: `api` may decrypt the client secret and sign
+  the `private_key_jwt` assertion. The callback routes are browser routes, but the `web` role can
+  do neither.
 - **One client id.** For `private_key_jwt` the form's `client_id` is the config's `clientId`, and
   the assertion's `iss` and `sub` are the client id the signer's upstream-provider record names;
   the two must agree.

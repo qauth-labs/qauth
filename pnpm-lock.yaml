@@ -1713,6 +1713,9 @@ importers:
       '@qauth-labs/server-federation':
         specifier: workspace:*
         version: link:../federation
+      '@qauth-labs/server-keys':
+        specifier: workspace:*
+        version: link:../keys
       jose:
         specifier: 'catalog:'
         version: 6.2.12

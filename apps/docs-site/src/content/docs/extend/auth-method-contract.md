@@ -263,8 +263,9 @@ What it does:
 **The stored client secret.** `sealUpstreamOidcConfig` encrypts it with the realm's
 `data_at_rest` key through the signer role, under the context
 `upstream-oidc:client-secret:<realm id>:<type>` (so a ciphertext moved to another provider or
-realm does not decrypt, and the delivery role, which may decrypt only `delivery:` contexts, cannot
-read it); `openUpstreamOidcConfig` decrypts it for the method's context; and
+realm does not decrypt). The signer lets the `api` role decrypt a context under
+`upstream-oidc:client-secret:`, and neither `web` nor `delivery`; `openUpstreamOidcConfig`
+decrypts it for the method's context; and
 `describeUpstreamOidcConfig` is the view an API or event may carry, with neither the secret nor its
 ciphertext. Where the stored form lives is #714's and #600's.
 
@@ -273,8 +274,9 @@ ciphertext. Where the stored form lives is #714's and #600's.
 (OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer, so the upstream
 sign-in flow (#639) stores it with the credential and refuses a mismatch, or provider
 administration (#714) refuses an issuer change while credentials exist. The host opens the stored
-config with a signer caller role that may decrypt and sign client assertions (`api` or `local`
-today).
+config and builds the method's context as the signer caller `api`, or `local` in a single
+deployment: `api` may decrypt the client secret and sign client assertions, and `web` may do
+neither.
 
 **At registration.** `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery
 and the egress client's address checks on every endpoint without calling it, and answers one

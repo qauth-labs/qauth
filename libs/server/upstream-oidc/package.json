@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/server-federation": "workspace:*",
+    "@qauth-labs/server-keys": "workspace:*",
     "jose": "catalog:",
     "tslib": "catalog:",
     "zod": "catalog:"
