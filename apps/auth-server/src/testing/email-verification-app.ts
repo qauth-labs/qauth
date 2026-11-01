@@ -8,6 +8,7 @@ import verifyApiRoute from '../app/routes/auth/verify';
 import verifyPageRoute from '../app/routes/auth/verify-page';
 import uiVerifyRoute from '../app/routes/ui/verify';
 import { createFakeCookieSigner } from './cookie-keys';
+import { createFakePasswordAttempts, type FakePasswordAttempts } from './password-attempts';
 import { supplyRequestRealm, testRealm } from './request-realm';
 
 /** The token row a known token resolves to. */
@@ -91,6 +92,8 @@ export interface EmailVerificationStubs {
   readonly verifyPassword: Mock;
   readonly transaction: Mock;
   readonly redis: ReturnType<typeof createMemoryRedis>;
+  /** The per-account failure ladder (#615): every attempt reserved unless a test says otherwise. */
+  readonly attempts: FakePasswordAttempts;
 }
 
 /**
@@ -125,6 +128,7 @@ export async function buildEmailVerificationApp(): Promise<{
     verifyPassword: vi.fn().mockResolvedValue(true),
     transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({ __tx: true })),
     redis: createMemoryRedis(),
+    attempts: createFakePasswordAttempts(),
   };
 
   app.decorate('repositories', {
@@ -144,6 +148,7 @@ export async function buildEmailVerificationApp(): Promise<{
   } as unknown as FastifyInstance['passwordHasher']);
   app.decorate('db', { transaction: stubs.transaction } as unknown as FastifyInstance['db']);
   app.decorate('redis', stubs.redis as unknown as FastifyInstance['redis']);
+  app.decorate('passwordAttempts', stubs.attempts);
   // The login-CSRF cookie is signed with the realm's cookie key (#493).
   app.decorate('signer', createFakeCookieSigner() as unknown as FastifyInstance['signer']);
 

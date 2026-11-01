@@ -1,7 +1,9 @@
+import { SignInStoreUnavailableError } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import {
   EmailAlreadyVerifiedError,
   InvalidCredentialsError,
   InvalidTokenError,
+  TemporarilyUnavailableError,
   TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
@@ -20,6 +22,10 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import {
+  createFakePasswordAttempts,
+  type FakePasswordAttempts,
+} from '../../../testing/password-attempts';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import verifyRoute from './verify';
@@ -138,6 +144,8 @@ function createFastifyStub() {
       verifyPassword: vi.fn().mockResolvedValue(true),
     },
     redis: createMemoryRedis(),
+    // The per-account failure ladder (#615): every attempt reserved by default.
+    passwordAttempts: createFakePasswordAttempts(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };
@@ -363,6 +371,89 @@ describe('POST /auth/verify', () => {
       expect(redis._store.has(`failed-login:attempts:${REALM_ID}:${EMAIL_ID}`)).toBe(false);
       // The address keeps the failures counted against it.
       expect(redis._store.get(`failed-login:attempts:${REALM_ID}:ip:127.0.0.1`)).toBe('2');
+    });
+
+    describe('the per-account failure ladder (#615)', () => {
+      const attemptsOf = (fastify: FastifyInstance) =>
+        (fastify as unknown as { passwordAttempts: FakePasswordAttempts }).passwordAttempts;
+
+      it('reserves the attempt before the compare and counts a wrong password', async () => {
+        const { fastify, handler } = await setup({ verifies: false });
+        const attempts = attemptsOf(fastify);
+        attempts.atCeiling = true;
+
+        await expect(
+          handler({ ...request, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' }, createReply().reply)
+        ).rejects.toThrow(InvalidCredentialsError);
+
+        expect(attempts.reserve).toHaveBeenCalledWith({
+          realmId: REALM_ID,
+          identifier: 'user@example.com',
+          endUserIp: '2001:db8:1:2::',
+        });
+        const [reservation] = attempts.reserved;
+        expect(reservation.failed).toHaveBeenCalledTimes(1);
+        expect(reservation.account).toEqual({ userId: 'user-1' });
+        expect(reservation.succeeded).not.toHaveBeenCalled();
+      });
+
+      it('refuses an attempt inside the wait before the compare, with Retry-After', async () => {
+        const { fastify, handler } = await setup({ verifies: true });
+        attemptsOf(fastify).reserve.mockResolvedValueOnce({ kind: 'wait', retryAfterSeconds: 8 });
+
+        const { reply, headers } = createReply();
+        await expect(handler({ ...request, ip: '127.0.0.1' }, reply)).rejects.toThrow(
+          TooManyRequestsError
+        );
+        expect(headers['Retry-After']).toBe('8');
+        expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+        expect(fastify.db.transaction).not.toHaveBeenCalled();
+      });
+
+      it('refuses with 503 before the compare when the ladder store fails', async () => {
+        const { fastify, handler } = await setup({ verifies: true });
+        attemptsOf(fastify).reserve.mockRejectedValueOnce(
+          new SignInStoreUnavailableError('ladder', new Error('redis down'))
+        );
+
+        const error = await handler({ ...request, ip: '127.0.0.1' }, createReply().reply).catch(
+          (thrown: unknown) => thrown
+        );
+        expect(error).toBeInstanceOf(TemporarilyUnavailableError);
+        expect((error as TemporarilyUnavailableError).retryAfterSeconds).toBe(5);
+        expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+        expect(fastify.db.transaction).not.toHaveBeenCalled();
+      });
+
+      it('settles a right password as a success, and clears a mark the unarmed hard action ignored', async () => {
+        const { fastify, handler } = await setup({ verifies: true });
+        (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+          credentialFixture({ disabledAt: 1_793_491_200_000 })
+        );
+
+        await expect(
+          handler({ ...request, ip: '127.0.0.1' }, createReply().reply)
+        ).resolves.toEqual({ message: 'Email verified successfully', email: 'user@example.com' });
+        const [reservation] = attemptsOf(fastify).reserved;
+        expect(reservation.succeeded).toHaveBeenCalledWith({ userId: 'user-1', ignoredMark: true });
+      });
+
+      it('refuses a password the armed hard action disabled without comparing it', async () => {
+        const { fastify, handler } = await setup({ verifies: true });
+        const attempts = attemptsOf(fastify);
+        attempts.hardActionArmed.mockResolvedValue(true);
+        (fastify.repositories.userCredentials.findById as unknown as Mock).mockResolvedValue(
+          credentialFixture({ disabledAt: 1_793_491_200_000 })
+        );
+
+        await expect(handler({ ...request, ip: '127.0.0.1' }, createReply().reply)).rejects.toThrow(
+          InvalidCredentialsError
+        );
+        expect(attempts.hardActionArmed).toHaveBeenCalledWith(REALM_ID);
+        expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+        expect(attempts.reserved[0].failed).toHaveBeenCalledTimes(1);
+        expect(fastify.db.transaction).not.toHaveBeenCalled();
+      });
     });
 
     it("counts the attempt in the request's realm, the token's account's (#487, #489)", async () => {

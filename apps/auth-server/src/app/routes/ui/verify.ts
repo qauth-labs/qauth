@@ -2,6 +2,7 @@ import {
   EmailAlreadyVerifiedError,
   InvalidCredentialsError,
   InvalidTokenError,
+  TemporarilyUnavailableError,
   TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
 import { passwordSchema } from '@qauth-labs/shared-validation';
@@ -147,6 +148,11 @@ export default async function (fastify: FastifyInstance) {
         if (error instanceof TooManyRequestsError) {
           // `Retry-After` is already on the reply.
           return formWithError(error.statusCode, VERIFY_FORM_ERRORS.lockedOut);
+        }
+        if (error instanceof TemporarilyUnavailableError) {
+          // The failure ladder's store failed (#615); already logged.
+          reply.header('Retry-After', String(error.retryAfterSeconds));
+          return formWithError(error.statusCode, VERIFY_FORM_ERRORS.unavailable);
         }
         throw error;
       }
