@@ -1,3 +1,4 @@
+import { publicJwkProblem } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 /**
@@ -10,44 +11,17 @@ import { z } from 'zod';
  * every assertion it signs while the provisioner reported success. Any other
  * member, and a key type the server may not use, is left to the verifier.
  *
- * The module reaches only `zod`, so the migration runner bundles it with the
- * provisioner.
+ * The rule is `publicJwkProblem` (`@qauth-labs/shared-validation`), which the
+ * auth server applies to the key sets clients publish (#935). The module
+ * reaches only `zod` and the shared validation rules the provisioner already
+ * imports, so the migration runner bundles it with the provisioner.
  */
-
-/**
- * The private members of a JWK (RFC 7518 §6.2.2, §6.3.2, §6.4.1; `priv` of
- * an ML-DSA key): the private part of an EC, OKP or RSA key, the RSA primes
- * and CRT values, and a symmetric key.
- */
-export const PRIVATE_JWK_MEMBERS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k', 'priv'] as const;
-
-/** The public members each known key type needs (RFC 7518 §6.2.1, §6.3.1; RFC 8037 §2). */
-const REQUIRED_PUBLIC_MEMBERS: Readonly<Record<string, readonly string[]>> = {
-  EC: ['crv', 'x', 'y'],
-  OKP: ['crv', 'x'],
-  RSA: ['n', 'e'],
-};
-
-/** A public JWK, as {@link publicJwkSchema} accepts it. */
 export const publicJwkSchema = z
   .object({ kty: z.string().min(1) })
   .catchall(z.unknown())
   .superRefine((jwk, ctx) => {
-    const found = PRIVATE_JWK_MEMBERS.filter((member) => member in jwk);
-    if (found.length > 0) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `jwks must contain PUBLIC keys only (private member ${found.map((m) => `"${m}"`).join(', ')} present)`,
-      });
-      return;
-    }
-    const missing = (REQUIRED_PUBLIC_MEMBERS[jwk.kty] ?? []).filter(
-      (member) => typeof jwk[member] !== 'string' || (jwk[member] as string).length === 0
-    );
-    if (missing.length > 0) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `a ${jwk.kty} key needs ${missing.map((m) => `"${m}"`).join(', ')}`,
-      });
+    const problem = publicJwkProblem(jwk);
+    if (problem !== undefined) {
+      ctx.addIssue({ code: 'custom', message: problem.message });
     }
   });

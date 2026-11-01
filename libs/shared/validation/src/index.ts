@@ -8,6 +8,8 @@ export type * from './lib/not-valid-before';
 export * from './lib/not-valid-before';
 export type * from './lib/password';
 export * from './lib/password';
+export type * from './lib/public-jwk';
+export * from './lib/public-jwk';
 export type * from './lib/realm-host';
 export * from './lib/realm-host';
 export type * from './lib/realm-relying-party';
