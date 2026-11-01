@@ -63,7 +63,7 @@ export const INTERACTION_PROBLEM_CODES = {
     type: 'interaction-expired',
     title: 'Interaction expired',
     description:
-      'The interaction is unknown, expired or finished, or the flow cookie does not belong to it. Every reason gets this one answer.',
+      'The interaction is unknown, expired or finished, the flow cookie does not belong to it, or a finish came after the browser session its sign-in started had ended. Every reason gets this one answer.',
   },
   content_too_large: {
     status: 413,

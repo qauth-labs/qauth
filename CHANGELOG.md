@@ -1052,7 +1052,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   abandoned is signed in as nobody and no client gets SSO from the first user;
   `interaction.cancelled` records it with `sessionEnded: true`. An unknown,
   expired or finished interaction and a wrong cookie get one
-  `interaction_expired` answer (410), the same bytes whatever the cause. Every
+  `interaction_expired` answer (410), the same bytes whatever the cause, and so
+  does a finish after the session its sign-in started has ended, by a sign-out
+  in another tab, a revoke or its own end ([#963]): no request completes under
+  a session that was signed out, and the interaction stays at its step. Every
   problem document on an `/interaction/<version>/` path, `404` included, carries
   no `instance`, `detail` or `errors`. Four new events, `interaction.created`,
   `.answered`, `.cancelled` and `.expired`, name an interaction by a random
@@ -2495,6 +2498,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#891]: https://github.com/qauth-labs/qauth/issues/891
 [#896]: https://github.com/qauth-labs/qauth/issues/896
 [#960]: https://github.com/qauth-labs/qauth/issues/960
+[#963]: https://github.com/qauth-labs/qauth/issues/963
 
 ### Deprecated
 

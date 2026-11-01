@@ -625,18 +625,7 @@ describe('answers (#592)', () => {
     const id = await owner.start();
     harness.app.log.level = 'fatal';
     // The connection drops on the delete's MULTI: Redis ran none of it.
-    const multi = harness.redis.multi;
-    harness.redis.multi = () => {
-      harness.redis.multi = multi;
-      const failing = {
-        del: () => failing,
-        zrem: () => failing,
-        exec: async () => {
-          throw new Error('redis down');
-        },
-      };
-      return failing as unknown as ReturnType<typeof multi>;
-    };
+    failNextMulti();
 
     const failed = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`);
     expect(failed.statusCode).toBe(500);
@@ -917,25 +906,44 @@ describe('the user switch (#592)', () => {
   });
 });
 
-describe("the user switch ends the first user's browser session (#896)", () => {
-  /** Start an interaction and sign USER_A in on it: its id and the session it holds. */
-  async function signedInInteraction(owner: Browser): Promise<{ id: string; sid: string }> {
-    const id = await owner.start();
-    await owner.answer(id, 0, {
-      kind: 'authenticated',
-      userId: USER_A,
-      amr: ['pwd'],
-      step: CONSENT_STEP,
-    });
-    const sid = await verifySessionCookie(
-      harness.app,
-      REALM.id,
-      owner.cookies.get(SESSION_COOKIE_NAME)
-    );
-    if (sid === null) throw new Error('the authentication set no session cookie');
-    return { id, sid };
-  }
+/** Start an interaction and sign USER_A in on it: its id and the session it holds. */
+async function signedInInteraction(owner: Browser): Promise<{ id: string; sid: string }> {
+  const id = await owner.start();
+  await owner.answer(id, 0, {
+    kind: 'authenticated',
+    userId: USER_A,
+    amr: ['pwd'],
+    step: CONSENT_STEP,
+  });
+  const sid = await verifySessionCookie(
+    harness.app,
+    REALM.id,
+    owner.cookies.get(SESSION_COOKIE_NAME)
+  );
+  if (sid === null) throw new Error('the authentication set no session cookie');
+  return { id, sid };
+}
 
+/**
+ * Make the next `MULTI` fail as a dropped connection does, Redis running none
+ * of it: the one an interaction's delete sends.
+ */
+function failNextMulti(): void {
+  const multi = harness.redis.multi;
+  harness.redis.multi = () => {
+    harness.redis.multi = multi;
+    const failing = {
+      del: () => failing,
+      zrem: () => failing,
+      exec: async () => {
+        throw new Error('redis down');
+      },
+    };
+    return failing as unknown as ReturnType<typeof multi>;
+  };
+}
+
+describe("the user switch ends the first user's browser session (#896)", () => {
   function switchUser(owner: Browser, id: string) {
     return owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
   }
@@ -1056,6 +1064,150 @@ describe("the user switch ends the first user's browser session (#896)", () => {
       'the session cookie could not be checked at a user switch'
     );
     expect(cancelledEvents()[0]?.data).toMatchObject({ sessionEnded: true });
+  });
+});
+
+describe('a finish needs the browser session its sign-in started (#963)', () => {
+  /** An administrator, who ends another user's session as a `user` naming its owner. */
+  const ADMIN = '44444444-4444-4444-8444-444444444444';
+
+  /** Answer the consent step a sign-in led to with a finish. */
+  function finish(owner: Browser, id: string) {
+    return owner.answer(id, 1, { kind: 'finished' });
+  }
+
+  /** The outcomes of the `interaction.answered` events emitted so far, oldest first. */
+  function outcomes() {
+    return vi
+      .mocked(emitUserEvent)
+      .mock.calls.filter(([, type]) => type === 'urn:qauth:event:interaction.answered:v1-rc.0')
+      .map(([, , data]) => (data as { outcome: string }).outcome);
+  }
+
+  /** Change the session the fake service holds for `sid`. */
+  function alterSession(sid: string, change: object): void {
+    const { sessions } = harness.sessions.service;
+    const session = sessions.get(sid);
+    if (session === undefined) throw new Error('no such session');
+    sessions.set(sid, { ...session, ...change });
+  }
+
+  it('finishes while the session is live, read in the realm', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+
+    const finished = await finish(owner, id);
+
+    expect(finished.json()).toMatchObject({
+      kind: 'finished',
+      transaction: { userId: USER_A, sid },
+    });
+    expect(harness.sessions.service.get).toHaveBeenCalledWith({ realmId: REALM.id, sid });
+  });
+
+  it('finishes with no session to check when nobody signed in', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+
+    expect((await owner.answer(id, 0, { kind: 'finished' })).json()).toMatchObject({
+      kind: 'finished',
+    });
+    expect(harness.sessions.service.get).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, (sid: string) => Promise<unknown> | void]>([
+    [
+      'signed out in another tab',
+      (sid) =>
+        harness.sessions.service.revoke({
+          realmId: REALM.id,
+          sid,
+          reason: 'sign_out',
+          actor: { type: 'user', id: USER_A },
+          userId: USER_A,
+        }),
+    ],
+    [
+      'signed out everywhere',
+      () =>
+        harness.sessions.service.revokeAllForUser({
+          realmId: REALM.id,
+          userId: USER_A,
+          reason: 'sign_out_everywhere',
+          actor: { type: 'user', id: USER_A },
+        }),
+    ],
+    [
+      'revoked by an administrator',
+      (sid) =>
+        harness.sessions.service.revoke({
+          realmId: REALM.id,
+          sid,
+          reason: 'admin',
+          actor: { type: 'user', id: ADMIN },
+          userId: USER_A,
+        }),
+    ],
+    ['past its end', (sid) => alterSession(sid, { expiresAt: Date.now() - 1 })],
+    [
+      'gone from the store',
+      (sid) => {
+        harness.sessions.service.sessions.delete(sid);
+      },
+    ],
+    ['held for another user', (sid) => alterSession(sid, { userId: USER_B })],
+  ])(
+    'refuses a finish after the session was %s, as an ended interaction, and keeps the interaction at its step',
+    async (_how, end) => {
+      const owner = new Browser();
+      const { id, sid } = await signedInInteraction(owner);
+      await end(sid);
+
+      const refused = await finish(owner, id);
+
+      expect(refused.statusCode).toBe(410);
+      expect(refused.json()).toMatchObject({ code: 'interaction_expired' });
+      expect(harness.logs.join('')).toContain('"interactionRefused":"session_ended"');
+      expect(outcomes()).toEqual(['authenticated']);
+      // Nothing was written and the turn is back: the interaction waits at
+      // its step, every finish is refused, and a cancel still ends it.
+      expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+        step: CONSENT_STEP,
+        revision: 1,
+      });
+      expect((await finish(owner, id)).statusCode).toBe(410);
+      expect(
+        (await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`)).json()
+      ).toMatchObject({ kind: 'cancelled' });
+    }
+  );
+
+  it('refuses a finish after a user switch ended the session and then could not delete the interaction', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    harness.app.log.level = 'fatal';
+    failNextMulti();
+
+    const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    expect(switched.statusCode).toBe(500);
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+
+    expect((await finish(owner, id)).statusCode).toBe(410);
+    expect(outcomes()).toEqual(['authenticated']);
+  });
+
+  it('fails closed when the session service cannot answer: no finish, the turn comes back, and a retry finishes', async () => {
+    const owner = new Browser();
+    const { id } = await signedInInteraction(owner);
+    harness.app.log.level = 'fatal';
+    harness.sessions.service.get.mockRejectedValueOnce(new Error('session store down'));
+
+    const failed = await finish(owner, id);
+
+    expect(failed.statusCode).toBe(500);
+    expect(outcomes()).toEqual(['authenticated']);
+    expect((await finish(owner, id)).json()).toMatchObject({ kind: 'finished' });
+    expect(outcomes()).toEqual(['authenticated', 'finished']);
   });
 });
 

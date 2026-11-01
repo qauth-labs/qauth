@@ -237,18 +237,18 @@ Every step read carries the realm's `brand`: the theme tier of ADR-019 Decision 
 
 An error is an RFC 9457 problem details document (`application/problem+json`) with a stable `code` and a `trace_id`, as on the other API families ([API conventions](/reference/api-conventions/#errors)). Its `type` and `title` are the code's entry on [Problem types](/reference/problem-types/). It carries no `detail`, `instance` or `errors` list: a page shows its own text for the code, with the trace id. A page treats a code it does not know by its HTTP status.
 
-| Code                     | Status | Meaning                                                                                                                                                |
-| ------------------------ | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `bad_request`            | 400    | The request is malformed and no more specific code applies.                                                                                            |
-| `invalid_answer`         | 400    | The answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field. The engine was not called. |
-| `forbidden`              | 403    | The request is not same-origin, or its CSRF value is missing, already used or not the current step’s. The engine was not called.                       |
-| `interaction_expired`    | 410    | The interaction is unknown, expired or finished, or the flow cookie does not belong to it. Every reason gets this one answer.                          |
-| `content_too_large`      | 413    | The request body is larger than the server accepts.                                                                                                    |
-| `unsupported_media_type` | 415    | The request body is neither `application/json` nor `application/x-www-form-urlencoded`.                                                                |
-| `misdirected_request`    | 421    | The server does not answer for the host the request names.                                                                                             |
-| `too_many_requests`      | 429    | Too many requests. `Retry-After` says when to try again.                                                                                               |
-| `internal_error`         | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                                     |
-| `service_unavailable`    | 503    | The server cannot answer now, for example while a store the engine needs is down. It fails closed.                                                     |
+| Code                     | Status | Meaning                                                                                                                                                                                              |
+| ------------------------ | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bad_request`            | 400    | The request is malformed and no more specific code applies.                                                                                                                                          |
+| `invalid_answer`         | 400    | The answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field. The engine was not called.                                               |
+| `forbidden`              | 403    | The request is not same-origin, or its CSRF value is missing, already used or not the current step’s. The engine was not called.                                                                     |
+| `interaction_expired`    | 410    | The interaction is unknown, expired or finished, the flow cookie does not belong to it, or a finish came after the browser session its sign-in started had ended. Every reason gets this one answer. |
+| `content_too_large`      | 413    | The request body is larger than the server accepts.                                                                                                                                                  |
+| `unsupported_media_type` | 415    | The request body is neither `application/json` nor `application/x-www-form-urlencoded`.                                                                                                              |
+| `misdirected_request`    | 421    | The server does not answer for the host the request names.                                                                                                                                           |
+| `too_many_requests`      | 429    | Too many requests. `Retry-After` says when to try again.                                                                                                                                             |
+| `internal_error`         | 500    | The server failed. `trace_id` finds the failure in the server log.                                                                                                                                   |
+| `service_unavailable`    | 503    | The server cannot answer now, for example while a store the engine needs is down. It fails closed.                                                                                                   |
 
 ## Paths
 

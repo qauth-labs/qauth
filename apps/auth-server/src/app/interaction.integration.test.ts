@@ -35,8 +35,9 @@ import type { InteractionStep } from './helpers/interaction-record';
  * processed; the browser session id changes at authentication; an expired
  * interaction is refused and its expiry audited; a user switch starts a new
  * interaction for the same request, and one after authentication ends the
- * first user's session so no client gets SSO from it (#896); and no audit row
- * holds an id or a flow secret.
+ * first user's session so no client gets SSO from it (#896); a finish after
+ * that session was signed out is refused (#963); and no audit row holds an id
+ * or a flow secret.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -533,6 +534,47 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
       subject_id: userId,
       actor_type: 'user',
     });
+  });
+
+  it('refuses to finish an interaction whose session was signed out after its sign-in (#963)', async () => {
+    const app = await boot();
+    const userId = await registerPasswordAccount(app, EMAIL);
+    const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm) throw new Error('default realm missing');
+    const owner = new Browser(app);
+    const id = await owner.start();
+    await owner.answer(id, 0, { kind: 'authenticated', userId, amr: ['pwd'], step: CONSENT_STEP });
+    const cookie = owner.jar.get(SESSION_COOKIE);
+    if (cookie === undefined) throw new Error('the authentication set no session cookie');
+    const sid = sessionIdOfCookie(cookie);
+    // Another request ends the session the sign-in started: a sign-out in
+    // another tab.
+    await app.sessionService.revoke({
+      realmId: realm.id,
+      sid,
+      reason: 'sign_out',
+      actor: { type: 'user', id: userId },
+      userId,
+    });
+
+    const refused = await owner.answer(id, 1, { kind: 'finished' });
+
+    // The engine decided the finish, and the answer an ended interaction
+    // gets came back instead: nothing finished, so no request completes.
+    expect(decided).toHaveLength(2);
+    expect(refused.statusCode).toBe(410);
+    expect(refused.json()).toMatchObject({ code: 'interaction_expired' });
+    expect(
+      (await interactionEvents(app))
+        .filter((row) => row.type === 'urn:qauth:event:interaction.answered:v1-rc.0')
+        .map((row) => row.data['outcome'])
+    ).toEqual(['authenticated']);
+    // The session keeps its revocation.
+    const { rows } = await app.dbPool.query<{ revoked: boolean; revoked_reason: string | null }>(
+      'SELECT revoked_at IS NOT NULL AS revoked, revoked_reason FROM sessions WHERE id = $1',
+      [sid]
+    );
+    expect(rows).toEqual([{ revoked: true, revoked_reason: 'sign_out' }]);
   });
 
   it('writes audit rows for create, answer and cancel that hold neither the id nor the cookie', async () => {

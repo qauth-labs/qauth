@@ -93,7 +93,12 @@ import { emitUserEvent } from './user-events';
  * ceremony. A browser session the failed answer created is ended. An answer
  * that outlasts the interaction's expiry is refused, and so is a finish or a
  * cancel that the expiry sweep beat to the interaction: what the sweep reports
- * expired never also finishes.
+ * expired never also finishes. A finish is refused the same way when the
+ * browser session its sign-in started has ended since (#963): a sign-out in
+ * another tab, a revoke, the session's own end, or a user switch that ended it
+ * and then failed. No request completes under a session that was signed out.
+ * Nothing was written, so the turn is given back, as after a refused answer:
+ * the interaction can still be cancelled or switched until it expires.
  *
  * ## Expiry
  *
@@ -202,7 +207,7 @@ export type InteractionSwitchResult =
   | { readonly kind: 'switched'; readonly id: string; readonly expiresAt: number };
 
 /** Why a request was refused: logged, never answered. */
-type RefusalReason = 'malformed' | 'unknown' | 'expired' | 'binding';
+type RefusalReason = 'malformed' | 'unknown' | 'expired' | 'binding' | 'session_ended';
 
 function refuse(request: FastifyRequest, reason: RefusalReason): never {
   request.log.info({ interactionRefused: reason }, 'interaction request refused');
@@ -449,7 +454,9 @@ function withAmr(amr: readonly string[], added: readonly string[] = []): string[
  *   again with the old cookie.
  * - `finished`: the interaction ends; its secret leaves the cookie, and the
  *   request and the transaction go back to the caller, which completes or
- *   denies the authorization request (#628).
+ *   denies the authorization request (#628). Only while the browser session
+ *   the sign-in started is live (#963): a finish after it ended gets the
+ *   answer an ended interaction gets, and the interaction stays at its step.
  *
  * Each processed answer is audited (`interaction.answered`).
  *
@@ -551,6 +558,25 @@ async function endUnusedSession(
   });
 }
 
+/**
+ * Whether the browser session the interaction's sign-in started is still live,
+ * for a finish (#963): the session service holds it in the interaction's
+ * realm, for the interaction's user, before its end and its idle limit. A
+ * sign-out in another tab, a sign-out everywhere, a revoke and a user switch
+ * that ended it each leave it not live. A transaction with no session, where
+ * nobody authenticated, has none to check. A session service that cannot
+ * answer throws: the finish fails, closed, and the turn is given back.
+ */
+async function signInSessionIsLive(
+  request: FastifyRequest,
+  taken: InteractionRecord
+): Promise<boolean> {
+  const { sid, userId } = taken.transaction;
+  if (sid === undefined) return true;
+  const session = await request.server.sessionService.get({ realmId: taken.realmId, sid });
+  return session !== null && session.userId === userId;
+}
+
 /** {@link answerInteraction} once the turn is taken: decide, then write what was decided. */
 async function settleAnswer(
   request: FastifyRequest,
@@ -584,6 +610,10 @@ async function settleAnswer(
     });
 
   if (decision.kind === 'finished') {
+    // The request completes under the session the sign-in started: one that
+    // has ended since is refused before anything ends (#963). Nothing is
+    // written, so the turn is given back.
+    if (!(await signInSessionIsLive(request, taken))) refuse(request, 'session_ended');
     const owned = await deleteInteraction(redis, taken, bound.idHash);
     settled.done = true;
     // The sweep claimed it first and reports it expired: it does not finish.
