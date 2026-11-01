@@ -73,7 +73,7 @@ Every line below is `await`ed except where noted, so the order in the file is th
 | 6   | `federationPlugin`, `apps/auth-server/src/app/app.ts:134`           | The ADR-003 `providerRegistry` decorator              |
 | 7   | `emailPlugin`, `apps/auth-server/src/app/app.ts:179`                | Resend / SMTP / mock provider                         |
 | 8   | `jwtPlugin`, `apps/auth-server/src/app/app.ts:191`                  | Signing keys, JWKS, revocation callback               |
-| 9   | `rateLimitPlugin`, `apps/auth-server/src/app/app.ts:246`            | `@fastify/rate-limit` wiring                          |
+| 9   | `rateLimitPlugin`, `apps/auth-server/src/app/app.ts:242`            | `@fastify/rate-limit` wiring                          |
 | 10  | `securityHeadersPlugin`, `apps/auth-server/src/app/app.ts:251`      | Helmet: CSP, HSTS, frame options                      |
 | 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:255`            | Echoes the request id back on the response            |
 | 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:256`              | Prometheus registry                                   |
