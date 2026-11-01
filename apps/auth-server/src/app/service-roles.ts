@@ -13,7 +13,6 @@ import {
   type ServiceRoleProblem,
 } from '@qauth-labs/server-config';
 
-import { isLoopbackHost } from '../config/env-schema';
 import {
   INTERNAL_ROUTE_MODULES,
   type InternalRouteModule,
@@ -178,21 +177,21 @@ export function isSingleProcess(roles: readonly ServiceRole[]): boolean {
 }
 
 /**
- * Whether a process with `roles` runs the internal listener (#496): one that
- * holds `signer` while the roles are split, so that the processes without
- * the signer reach the signer service there (#497), and one whose roles have
- * a route module on the internal listener's manifest
- * (`internal/route-manifest.ts`). A single process signs in-process: no other
- * process calls it, and it runs no internal listener until a role of its own
- * serves an internal route.
+ * Whether a process with `roles` runs the internal listener (#496): only
+ * while the roles are split, one that holds `signer`, so that the processes
+ * without the signer reach the signer service there (#497), and one whose
+ * roles have a route module on the internal listener's manifest
+ * (`internal/route-manifest.ts`). A single process runs none, whatever the
+ * manifest holds: it is one trust domain, calls its own roles in-process, and
+ * no other process calls it.
  */
 export function servesInternalListener(
   roles: readonly ServiceRole[],
   modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
 ): boolean {
   return (
-    (holdsSigner(roles) && !isSingleProcess(roles)) ||
-    internalRouteModulesFor(roles, modules).length > 0
+    !isSingleProcess(roles) &&
+    (holdsSigner(roles) || internalRouteModulesFor(roles, modules).length > 0)
   );
 }
 
@@ -300,7 +299,7 @@ export type InternalListenerPlan =
       readonly problems: readonly ServiceRoleProblem[];
       readonly host: string;
       readonly port: number;
-      /** The TLS files of mutual TLS; unset, the listener serves plain HTTP. */
+      /** The TLS files of mutual TLS; unset only when `problems` names them. */
       readonly tls?: InternalTlsFiles;
       readonly peerRoles: InternalPeerRoles;
     };
@@ -311,11 +310,9 @@ export type InternalListenerPlan =
  *
  * - With the three internal TLS files, it serves mutual TLS, and needs
  *   INTERNAL_PEER_ROLES: without a known peer it would refuse every request.
- * - With some of them only, it cannot start: the missing ones are named.
- * - With none, it serves plain HTTP, but only in a single process bound to
- *   loopback. A process whose roles are split serves the signer to other
- *   processes and refuses to start: the signer routes are never served
- *   without mutual TLS.
+ * - With some of them only, or none, it cannot start: the missing ones are
+ *   named. The listener runs only while the roles are split, so it is never
+ *   served without mutual TLS.
  * - INTERNAL_PORT must differ from PORT, and from ADMIN_API_PORT where the
  *   admin listener runs.
  *
@@ -359,11 +356,11 @@ export function internalListenerPlan(
         message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
       });
     }
-  } else if (!isSingleProcess(roles)) {
+  } else {
     for (const variable of missing) {
       problems.push({
         variable,
-        message: `${variable} is required: ${serving}, over mutual TLS only while the roles are split, so the signer routes are not registered without it; plain HTTP is for a single process on loopback`,
+        message: `${variable} is required: ${serving}, over mutual TLS only while the roles are split, so the signer routes are not registered without it`,
       });
     }
     if (peerRoles.size === 0) {
@@ -372,11 +369,6 @@ export function internalListenerPlan(
         message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
       });
     }
-  } else if (!isLoopbackHost(host)) {
-    problems.push({
-      variable: 'INTERNAL_HOST',
-      message: `INTERNAL_HOST must be a loopback address (127.0.0.0/8, ::1 or localhost), not ${host}, while the internal listener serves plain HTTP: set the internal TLS files to serve it on another address`,
-    });
   }
 
   if (settings.PORT !== undefined && port === settings.PORT) {

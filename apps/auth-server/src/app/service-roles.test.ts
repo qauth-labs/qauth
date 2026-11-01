@@ -493,30 +493,41 @@ describe('the internal listener (#496)', () => {
     ).toEqual([]);
   });
 
-  it('serves plain HTTP in a single process on loopback only', () => {
-    // A single process runs the listener once a role of its own serves an
-    // internal route; none does yet, so a fixture module stands in.
+  it('runs no internal listener in a single process, even once a role of its own serves an internal route', () => {
+    // No module ships until #497; a signer module and an api one stand in.
+    const load = async () => ({ default: async () => undefined });
     const modules = [
       {
-        module: 'fixture',
-        prefix: '/internal/fixture/v1-rc.0',
+        module: 'signer',
+        prefix: '/internal/signer/v1-rc.0',
+        roles: ['signer'] as const,
+        peerRoles: ['web'] as const,
+        load,
+      },
+      {
+        module: 'api',
+        prefix: '/internal/api/v1-rc.0',
         roles: ['api'] as const,
         peerRoles: ['web'] as const,
-        load: async () => ({ default: async () => undefined }),
+        load,
       },
     ];
-    const single = { SERVICE_ROLES: SERVICE_ROLE_NAMES };
-    for (const host of [undefined, '127.0.0.1', '127.3.4.5', '::1', 'localhost']) {
-      const plan = internalListenerPlan({ ...single, INTERNAL_HOST: host }, modules);
-      expect(plan.serves && plan.problems, String(host)).toEqual([]);
-      expect(plan.serves && plan.tls, String(host)).toBeUndefined();
+    expect(servesInternalListener(SERVICE_ROLE_NAMES, modules)).toBe(false);
+    for (const host of [undefined, '127.0.0.1', '0.0.0.0']) {
+      expect(
+        internalListenerPlan({ SERVICE_ROLES: SERVICE_ROLE_NAMES, INTERNAL_HOST: host }, modules),
+        String(host)
+      ).toEqual({ serves: false });
     }
-    for (const host of ['0.0.0.0', '10.0.0.5', 'signer.internal', '::']) {
-      const plan = internalListenerPlan({ ...single, INTERNAL_HOST: host }, modules);
-      expect(plan.serves && plan.problems.map((problem) => problem.variable), host).toEqual([
-        'INTERNAL_HOST',
-      ]);
-    }
+    // Split, a process whose roles serve a module runs it, over mutual TLS only.
+    expect(servesInternalListener(['web', 'api'], modules)).toBe(true);
+    const plan = internalListenerPlan({ SERVICE_ROLES: ['web', 'api'] }, modules);
+    expect(plan.serves && plan.problems.map((problem) => problem.variable)).toEqual([
+      'INTERNAL_TLS_CERT_PATH',
+      'INTERNAL_TLS_KEY_PATH',
+      'INTERNAL_TLS_CA_PATH',
+      'INTERNAL_PEER_ROLES',
+    ]);
   });
 
   it('keeps a process without the signer as it was: no listener, its client settings only', () => {

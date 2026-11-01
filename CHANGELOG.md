@@ -1211,8 +1211,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rotation is complete. Its routes register by role from an internal route
   manifest, all under `/internal/`, which the public listener refuses to
   register. Such a process refuses to start without the three TLS files and
-  `INTERNAL_PEER_ROLES`, naming each, before it waits for the database; plain
-  HTTP is allowed only to a single process on loopback. The listener is not
+  `INTERNAL_PEER_ROLES`, naming each, before it waits for the database. A
+  single process runs no internal listener, whatever routes it holds. The listener is not
   routed by host and shares the app's database pool, cache and signer. The
   admin API keeps its own listener and its own rule: a peer certificate grants
   nothing there. `createInternalClient` (`apps/auth-server/src/app/internal/client.ts`)

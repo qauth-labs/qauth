@@ -78,9 +78,10 @@ import {
  * closes its connection, so the peer connects again under the files served
  * then.
  *
- * Without the TLS files it serves plain HTTP, which the boot rule allows only
- * to a single process on loopback (`service-roles.ts`). No request there has
- * a peer role, so every one is refused.
+ * Without the TLS files it serves plain HTTP, which no boot reaches: the
+ * listener runs only while the roles are split, and then the boot refuses a
+ * process without the files (`service-roles.ts`). No request there has a
+ * peer role, so every one is refused.
  *
  * The listener is not routed by host (ADR-019 Decision 1): a route takes the
  * realm from the request body or from what the caller's role may do, never

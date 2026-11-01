@@ -14,7 +14,7 @@ export const INTERNAL_LISTENER_KEYS = defineKeys([
     owner: 'server',
     default: '127.0.0.1',
     since: '0.2.0',
-    docs: "The address the internal listener binds to, loopback by default; the listener runs on a process whose `SERVICE_ROLES` holds `signer` but not every role, for the other roles' calls to the signer service, and serves mutual TLS only there, while a single process without the internal TLS files may serve it over plain HTTP on loopback only.",
+    docs: "The address the internal listener binds to, loopback by default; the listener runs only on a process whose `SERVICE_ROLES` holds `signer` but not every role, for the other roles' calls to the signer service, and serves mutual TLS only, while a single process runs none.",
   },
   {
     name: 'INTERNAL_PORT',

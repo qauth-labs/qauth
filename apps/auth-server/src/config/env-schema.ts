@@ -44,12 +44,8 @@ const LOOPBACK = new BlockList();
 LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
 LOOPBACK.addAddress('::1', 'ipv6');
 
-/**
- * Whether a listener's `host` is a loopback address, or `localhost`: the
- * admin listener's in production (#511), and the internal listener's when it
- * serves plain HTTP (#496).
- */
-export function isLoopbackHost(host: string): boolean {
+/** Whether the admin listener's `host` is a loopback address, or `localhost`. */
+function isLoopbackHost(host: string): boolean {
   if (host.toLowerCase() === 'localhost') return true;
   if (isIPv4(host)) return LOOPBACK.check(host, 'ipv4');
   if (isIPv6(host)) return LOOPBACK.check(host, 'ipv6');

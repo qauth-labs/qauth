@@ -101,8 +101,6 @@ TLS. `INTERNAL_PORT` must differ from `PORT`, and from `ADMIN_API_PORT` where
 the admin API runs. Every internal route sits under `/internal/`, and the
 public listener serves none of them. The listener is not routed by host: an
 internal route takes the realm from the request, not from the `Host` header.
-Plain HTTP is allowed only to a single process bound to loopback, and no
-request there has a peer role.
 
 The admin API keeps [its own listener](#the-admin-listener) and its own rule:
 a peer certificate grants nothing there.
