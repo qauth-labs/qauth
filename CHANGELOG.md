@@ -1457,7 +1457,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   response, and every flow is complete (no unreachable state, no transition
   never taken, no dead end, no effect without a failure path). delurio does not
   enforce those structural rules yet, so they are review items until it does.
-  CI does not run the target yet; [#568] will.
+  `flows/admin/plugin-enable` now names its exits that way too, one exit per
+  cause for a refused enable and a refused disable alike. CI does not run the
+  target yet; [#568] will.
 
 ### Changed
 
