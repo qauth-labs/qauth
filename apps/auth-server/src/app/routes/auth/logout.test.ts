@@ -93,32 +93,20 @@ function loginClaims(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/**
- * The per-user index of hosted browser sessions that the previous release's
- * logout read (#912): this release only drops it.
- */
-const SESSION_INDEX = `user-browser-sessions:${VALID_USER.id}`;
-
-/**
- * A live hosted session of {@link VALID_USER}, recorded in the per-user index
- * as a sign-in records it.
- */
+/** A live hosted session of {@link VALID_USER}, with its side record. */
 async function signedIn(sessions: BrowserSessionFixture, sid: string) {
-  const signed = await sessions.signIn({
+  return sessions.signIn({
     sid,
     realmId: REALM.id,
     userId: VALID_USER.id,
     side: { identifier: VALID_USER.email },
   });
-  await sessions.redis.sadd(SESSION_INDEX, sid);
-  return signed;
 }
 
 function createFastifyStub() {
   const ctx: TestContext = {};
   // The session service (#488), which holds the sessions logout ends, and the
-  // Redis of the sessions' side records and the per-user index (none by
-  // default).
+  // Redis of the sessions' side records.
   const sessions = createBrowserSessionFixture();
 
   const fastify: any = {
@@ -264,25 +252,22 @@ describe('POST /auth/logout', () => {
         actor: { type: 'user', id: VALID_USER.id },
       });
       expect(sessions.service.sessions.size).toBe(0);
-      // Their side records and the index go with them.
+      // Their side records go with them.
       expect(sessions.redis.hashes.size).toBe(0);
-      expect(sessions.redis.del).toHaveBeenCalledWith(SESSION_INDEX);
-      expect(sessions.redis.sets.has(SESSION_INDEX)).toBe(false);
     });
 
-    it('ends the sessions the per-user index no longer names (#912)', async () => {
-      // Redis lost the index (eviction, a restart without persistence, a
-      // failover): the sessions it named are still ended.
+    it('ends the sessions when Redis has lost everything of them (#912)', async () => {
+      // An eviction, a restart without persistence, a failover: nothing in
+      // Redis names the sessions any more, and they still end.
       const { fastify, ctx, sessions } = createFastifyStub();
       const { cookie } = await signedIn(sessions, 'sess-a');
       await signedIn(sessions, 'sess-b');
-      sessions.redis.sets.delete(SESSION_INDEX);
+      sessions.redis.hashes.clear();
+      sessions.redis.expiries.clear();
 
       const reply = await logOut(fastify, ctx, cookie);
 
-      expect(sessions.redis.smembers).not.toHaveBeenCalled();
       expect(sessions.service.sessions.size).toBe(0);
-      expect(sessions.redis.hashes.size).toBe(0);
       expect(reply.headers['Set-Cookie']).toContain('Max-Age=0');
       expect(fastify.repositories.authorizationCodes.invalidateForUser).toHaveBeenCalled();
       expect(fastify.repositories.refreshTokens.revokeAllForUser).toHaveBeenCalledWith(
@@ -292,8 +277,8 @@ describe('POST /auth/logout', () => {
     });
 
     it('still invalidates the codes and revokes the refresh tokens when Redis cannot drop the side records', async () => {
-      // The sessions end in Postgres; the side records and the index are a
-      // cache's leftovers that expire on their own.
+      // The sessions end in Postgres; their side records are a cache's
+      // leftovers that expire on their own.
       const { fastify, ctx, sessions } = createFastifyStub();
       await signedIn(sessions, 'sess-a');
       sessions.redis.del.mockRejectedValue(new Error('Connection is closed.'));

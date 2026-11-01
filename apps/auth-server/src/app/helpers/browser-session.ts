@@ -7,7 +7,6 @@ import type {
 import { eventRequest } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
-import { REDIS_KEYS } from '../constants/redis-keys';
 import { accountCredentialRefusal } from './account-validity';
 import { requestRealm } from './request-realm';
 import {
@@ -73,7 +72,6 @@ export async function createBrowserSession(
     userAgent: origin?.userAgent ?? null,
     issuedAt: signIn.issuedAt,
   });
-  await trackBrowserSession(fastify, session);
   if (signIn.identifier !== undefined) {
     await writeSessionSideRecord(fastify, session, { identifier: signIn.identifier });
   }
@@ -152,38 +150,6 @@ export async function resolveBrowserSession(
 }
 
 /**
- * Record a newly created browser session under its user, in the Redis
- * per-user index that the previous release's `/auth/logout` reads to find the
- * sessions it ends. This release's logout reads Postgres instead
- * ({@link endBrowserSessions}, #912) and never reads the index; it is still
- * written so that, during a rolling upgrade, a node of the previous release
- * also ends the sessions this release's nodes created. REMOVE IN THE NEXT
- * RELEASE, with `REDIS_KEYS.USER_BROWSER_SESSIONS`.
- *
- * The index lives as long as the latest-ending session in it, which is not
- * always the newest: a realm whose lifetime shrank between two sign-ins gives
- * the newer session an earlier end. So the deadline is set on a new index
- * (`NX`) and otherwise only ever moved later (`GT`), never pulled in under a
- * session still live (Redis 7.0 or later).
- */
-async function trackBrowserSession(
-  fastify: FastifyInstance,
-  session: BrowserSession
-): Promise<void> {
-  const key = REDIS_KEYS.USER_BROWSER_SESSIONS(session.userId);
-  const results = await fastify.redis
-    .multi()
-    .sadd(key, session.sid)
-    .pexpireat(key, session.expiresAt, 'NX')
-    .pexpireat(key, session.expiresAt, 'GT')
-    .exec();
-  // A MULTI reports a failed command in its results, not by rejecting. An
-  // untracked session would survive `/auth/logout`.
-  const failed = results?.find(([error]) => error !== null);
-  if (failed) throw failed[0];
-}
-
-/**
  * Who ends a session whose account is gone or disabled: QAuth itself, on the
  * request that found it so.
  */
@@ -221,14 +187,19 @@ export async function endBrowserSession(
  * in one transaction, by the session service's `revokeAllForUser` (#550), so
  * `/oauth/authorize` shows the login page again on every node once the
  * cache's tombstones are written. Nothing in Redis decides which sessions
- * end: a per-user index that Redis lost (eviction, a restart without
- * persistence, a failover) once let the sessions it no longer named survive
- * the sign-out (#912).
+ * end: a per-user index of them in Redis, which this used to read, let the
+ * sessions it no longer named (an eviction, a restart without persistence, a
+ * failover) survive the sign-out (#912).
  *
- * Then, as a cache's tidying, it drops each ended session's side record and
- * the previous release's per-user index. Neither is read for an ended
- * session, and both expire on their own, so a Redis failure there is logged
- * and does not stop the logout's later steps (the codes and refresh tokens).
+ * Then, as a cache's tidying, it drops each ended session's side record. It
+ * is never read for an ended session and expires with the session, so a Redis
+ * failure there is logged and does not stop the logout's later steps (the
+ * codes and refresh tokens).
+ *
+ * Only the sessions this call ends count. One that ended before (signed out,
+ * revoked, lapsed) is neither ended again nor tidied, its side record expires
+ * on its own, and a cookie that names it is cleared by the next page that
+ * reads it.
  *
  * Returns the ids it ended, so the caller can clear the cookie of the request
  * it is handling when that is one of them; other browsers' cookies go stale
@@ -249,17 +220,16 @@ export async function endBrowserSessions(
     actor: { type: 'user', id: userId },
   });
   const sids = sessions.map(({ session }) => session.id);
-  const tidied = await Promise.allSettled([
-    ...sids.map(async (sid) => deleteSessionSideRecord(fastify, realmId, sid)),
-    fastify.redis.del(REDIS_KEYS.USER_BROWSER_SESSIONS(userId)),
-  ]);
-  const failed = tidied.find(
+  const tidied = await Promise.allSettled(
+    sids.map(async (sid) => deleteSessionSideRecord(fastify, realmId, sid))
+  );
+  const failed = tidied.filter(
     (result): result is PromiseRejectedResult => result.status === 'rejected'
   );
-  if (failed !== undefined) {
+  if (failed.length > 0) {
     fastify.log.warn(
-      { err: failed.reason, realmId },
-      'The sessions are ended, but their side records or the per-user index could not be dropped; they expire with the sessions'
+      { err: failed[0].reason, realmId, failed: failed.length },
+      'The sessions are ended, but some of their side records could not be dropped; they expire with the sessions'
     );
   }
   return sids;

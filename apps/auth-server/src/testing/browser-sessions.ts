@@ -237,27 +237,22 @@ export type ExpiryCondition = 'NX' | 'XX' | 'GT' | 'LT';
 /** A `MULTI` block: the commands the browser-session helpers queue. */
 export interface MemorySessionRedisMulti {
   hset(key: string, fields: Record<string, string>): MemorySessionRedisMulti;
-  sadd(key: string, ...members: string[]): MemorySessionRedisMulti;
   pexpireat(key: string, at: number, condition?: ExpiryCondition): MemorySessionRedisMulti;
   exec(): Promise<[Error | null, unknown][]>;
 }
 
 /**
  * The Redis commands the browser-session helpers send for the side record
- * (`helpers/session-side-record.ts`) and the per-user index the previous
- * release's `/auth/logout` reads (#912), held in memory. Each is a `vi.fn`; spread it into a test's
+ * (`helpers/session-side-record.ts`), held in memory. Each is a `vi.fn`; spread it into a test's
  * own `redis` stub beside the commands other code needs.
  */
 export interface MemorySessionRedis {
   readonly hashes: Map<string, Map<string, string>>;
-  readonly sets: Map<string, Set<string>>;
   /** The `PEXPIREAT` deadline last set on each key, in epoch milliseconds. */
   readonly expiries: Map<string, number>;
   hgetall: Mock<(key: string) => Promise<Record<string, string>>>;
   hset: Mock<(key: string, fields: Record<string, string>) => Promise<number>>;
   hdel: Mock<(key: string, ...fields: string[]) => Promise<number>>;
-  sadd: Mock<(key: string, ...members: string[]) => Promise<number>>;
-  smembers: Mock<(key: string) => Promise<string[]>>;
   pexpireat: Mock<(key: string, at: number, condition?: ExpiryCondition) => Promise<number>>;
   del: Mock<(...keys: string[]) => Promise<number>>;
   multi: Mock<() => MemorySessionRedisMulti>;
@@ -268,12 +263,10 @@ export interface MemorySessionRedis {
 /** Create a {@link MemorySessionRedis}. */
 export function createMemorySessionRedis(): MemorySessionRedis {
   const hashes = new Map<string, Map<string, string>>();
-  const sets = new Map<string, Set<string>>();
   const expiries = new Map<string, number>();
 
   const redis: MemorySessionRedis = {
     hashes,
-    sets,
     expiries,
     hgetall: vi.fn(async (key: string) => Object.fromEntries(hashes.get(key) ?? [])),
     hset: vi.fn(async (key: string, fields: Record<string, string>) => {
@@ -293,16 +286,8 @@ export function createMemorySessionRedis(): MemorySessionRedis {
       if (hash.size === 0) hashes.delete(key);
       return removed;
     }),
-    sadd: vi.fn(async (key: string, ...members: string[]) => {
-      const set = sets.get(key) ?? new Set<string>();
-      const before = set.size;
-      for (const member of members) set.add(member);
-      sets.set(key, set);
-      return set.size - before;
-    }),
-    smembers: vi.fn(async (key: string) => [...(sets.get(key) ?? [])]),
     pexpireat: vi.fn(async (key: string, at: number, condition?: ExpiryCondition) => {
-      if (!hashes.has(key) && !sets.has(key)) return 0;
+      if (!hashes.has(key)) return 0;
       // Redis 7 semantics: a key without a deadline counts as never ending,
       // so GT never sets one on it and LT always does.
       const current = expiries.get(key);
@@ -323,7 +308,7 @@ export function createMemorySessionRedis(): MemorySessionRedis {
     del: vi.fn(async (...keys: string[]) => {
       let removed = 0;
       for (const key of keys) {
-        if (hashes.delete(key) || sets.delete(key)) removed += 1;
+        if (hashes.delete(key)) removed += 1;
         expiries.delete(key);
       }
       return removed;
@@ -333,10 +318,6 @@ export function createMemorySessionRedis(): MemorySessionRedis {
       const block: MemorySessionRedisMulti = {
         hset(key, fields) {
           queued.push(() => redis.hset(key, fields));
-          return block;
-        },
-        sadd(key, ...members) {
-          queued.push(() => redis.sadd(key, ...members));
           return block;
         },
         pexpireat(key, at, condition) {
@@ -355,7 +336,6 @@ export function createMemorySessionRedis(): MemorySessionRedis {
       for (const [key, at] of expiries) {
         if (at > now) continue;
         hashes.delete(key);
-        sets.delete(key);
         expiries.delete(key);
       }
     },
@@ -380,9 +360,9 @@ export interface FakeSideRecordSeed {
 }
 
 /**
- * A fake session service, the Redis the side record and the per-user index
- * live in, and the signer the cookie keys come from (#493), together: what a
- * unit test of a route that reads the session cookie needs. Put
+ * A fake session service, the Redis the side record lives in, and the signer
+ * the cookie keys come from (#493), together: what a unit test of a route
+ * that reads the session cookie needs. Put
  * {@link service} on `fastify.sessionService`, {@link signer} on
  * `fastify.signer`, and spread {@link redis} into `fastify.redis`.
  */

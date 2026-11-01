@@ -277,10 +277,10 @@ states:
   endingSessions:
     title: End the user's browser sessions
     description: >-
-      Every live hosted browser session of the user, found by the user in Postgres rather than through a cookie or
-      the Redis per-user index (#912) and revoked in one transaction by the session service, so that none of them
-      can obtain a new authorization code once the codes are invalidated. The cookie of the request is cleared when
-      it names one of them.
+      Every live hosted browser session of the user, found by the user in Postgres rather than through a cookie or a
+      per-user index in Redis (#912) and revoked in one transaction by the session service, so that none of them can
+      obtain a new authorization code once the codes are invalidated. The cookie of the request is cleared when it
+      names one of them.
     source: apps/auth-server/src/app/routes/auth/logout.ts:154
     invoke: { external: browserSessionStore }
     on:
@@ -288,7 +288,7 @@ states:
         target: invalidatingCodes
         effect: [endSessions]
         say: 'the sessions are ended'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:244
+        source: apps/auth-server/src/app/helpers/browser-session.ts:215
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'
