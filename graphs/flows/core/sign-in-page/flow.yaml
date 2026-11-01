@@ -524,9 +524,9 @@ states:
     title: Create a new browser session
     description: >-
       Always a new session with a new sid, whatever cookie the browser sent: the session-fixation defence. The
-      session service stores it in Postgres with the request's address and User-Agent and the sign-in time, records it
-      under the user for /auth/logout, and keeps the signed-in address in the session's side record for the consent
-      screen.
+      session service stores it in Postgres with the request's address and User-Agent and the sign-in time, where
+      /auth/logout finds it by its user (#912), and the signed-in address is kept in the session's side record for the
+      consent screen.
     source: apps/auth-server/src/app/routes/ui/login.ts:442
     invoke: { external: browserSessionStore }
     on:
@@ -534,7 +534,7 @@ states:
         target: updatingLastLogin
         effect: [createSession]
         say: 'the session is created, with a new sid; no cookie the request carried is read'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:60
+        source: apps/auth-server/src/app/helpers/browser-session.ts:59
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'

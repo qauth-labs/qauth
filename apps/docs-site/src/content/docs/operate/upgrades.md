@@ -121,7 +121,8 @@ upgrade is refused when it is submitted and shown again after that sign-in.
 
 Nothing else is lost. Access tokens, refresh tokens and stored consents are
 untouched, so an application that already holds tokens keeps working without
-the user. The old Redis session keys (`session:<id>`) are no longer read and
+the user. The old Redis session keys (`session:<id>`, and the per-user lists
+`user-browser-sessions:<user id>` that logout read) are no longer read and
 expire on their own within `SESSION_COOKIE_TTL`; there is nothing to delete.
 
 The session cookie changes too: v0.2 signs it with the realm's cookie key from

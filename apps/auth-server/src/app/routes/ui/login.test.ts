@@ -113,8 +113,8 @@ function withRealm(handler: RouteHandler): RouteHandler {
 
 function makeFastify() {
   const ctx: TestContext = {};
-  // The session service (#488) and the Redis that holds the per-user index of
-  // browser sessions `/auth/logout` ends and the session's side record.
+  // The session service (#488) and the Redis that holds the session's side
+  // record.
   const sessions = createBrowserSessionFixture();
   const fastify: any = {
     withTypeProvider: () => ({
@@ -319,8 +319,6 @@ describe('UI /ui/login — CSRF defence', () => {
     });
     // The cookie names the new session.
     expect(sessionCookieSet(state.setCookies)).toBe(await sessionCookie(fastify, session));
-    // The new session is recorded under its user, so `/auth/logout` can end it.
-    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([session.sid]));
 
     // The sign-in is recorded for its user, without the session id or the
     // return path.

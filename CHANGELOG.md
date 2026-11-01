@@ -2563,6 +2563,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Signing out everywhere ends every session, whatever Redis has lost**
+  ([#912], found in the review of [#550]). `/auth/logout` found the user's
+  browser sessions through a per-user index in Redis, so a session the index
+  no longer named (an eviction, a restart without persistence, a failover)
+  survived the sign-out. It now ends them in Postgres, in one transaction,
+  through the session service's `revokeAllForUser`, then drops their side
+  records; the authorization codes and refresh tokens are swept after it as
+  before. A Redis failure while the side records are dropped is logged and
+  no longer stops the sweep. Nothing needs the index any more, so sign-in no
+  longer writes it: an index an earlier version left in Redis is never read
+  and expires on its own.
+
 - **A refresh token needs a stored consent for its resources too** ([#633]).
   `/oauth/token` minted a refresh token for an authorization code whenever the
   active consent covered the code's scopes, whatever RFC 8707 resources the
@@ -2718,6 +2730,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
+[#912]: https://github.com/qauth-labs/qauth/issues/912
 
 ## [0.1.3] - 2026-10-21
 
