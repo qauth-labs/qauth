@@ -11,14 +11,18 @@ permissions:
   contents: read
 
 jobs:
-  # The affected Nx targets, one matrix leg per target, so lint, typecheck,
-  # test and build run side by side instead of one after another in a single
-  # `nx affected -t lint typecheck test build`. Each leg installs and computes
+  # The affected Nx targets, one matrix leg per target, so lint, typecheck
+  # and build run side by side instead of one after another in a single
+  # `nx affected -t lint typecheck build`. Each leg installs and computes
   # the affected set on its own, and the legs share no task results (there is
   # no remote cache): a task another target depends on runs in that target's
-  # leg, as test-vectors' `validate` runs in the test leg before its `test`.
-  # `fail-fast: false` keeps what the single command did, which ran every task
-  # and reported every failure: a red leg does not cancel the others.
+  # leg. `fail-fast: false` keeps what the single command did, which ran every
+  # task and reported every failure: a red leg does not cancel the others.
+  #
+  # There is no `test` leg. Every project's `test` target is `vitest run` with
+  # a config that only adds `root` and `include` to the root one, so the
+  # `coverage` job's single repo-wide run is every one of those tests under the
+  # same settings. A `test` leg ran each of them a second time.
   #
   # The lint leg runs two targets: `lint` (Oxlint, .oxlintrc.json) and
   # `dependency-checks`, the one rule still on ESLint (@nx/dependency-checks on
@@ -30,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [lint, typecheck, test, build]
+        target: [lint, typecheck, build]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -125,11 +129,12 @@ jobs:
         if: always()
         run: node scripts/action-refs/check.mjs .github/workflows
 
-  # Coverage gate: a single repo-wide vitest run enforces the global
-  # thresholds in vitest.config.mts and fails CI on a regression. Run
-  # separately from the affected per-project `test` targets (which write
-  # per-project coverage dirs) so the threshold is evaluated once across
-  # the whole fast unit suite. The Docker-backed integration suite (#167,
+  # Unit tests and the coverage gate: a single repo-wide vitest run runs every
+  # unit test (each project's `test` target runs a subset of the same files
+  # under the same settings, so CI has no `test` leg) and enforces the global
+  # thresholds in vitest.config.mts, failing CI on a regression. The threshold
+  # is evaluated once across the whole fast unit suite. The Docker-backed
+  # integration suite (#167,
   # `*.integration.test.ts`) is excluded here, so no Postgres/Redis is
   # needed — the `integration` job below runs it instead.
   #
@@ -156,6 +161,12 @@ jobs:
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
+
+      # The one `test` dependency that is not a vitest run: test-vectors'
+      # `test` target only depends on `validate`, which checks every vector
+      # file against the qauth-vectors format. It takes about a second, so it
+      # runs on every PR rather than affected-scoped.
+      - run: pnpm exec nx run test-vectors:validate
 
       # `--reporter=default --reporter=json` keeps the human output AND emits the
       # machine report the conformance matrix joins against, so the suite is not
