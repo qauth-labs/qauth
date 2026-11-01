@@ -1,16 +1,20 @@
 /**
- * Migration 0050 adds `oauth_clients.client_credentials_scopes` (#891): one
- * nullable column with no default and a CHECK on its stored shape. Its
+ * Migration 0050 adds `realm_auth_method_plugins` (ADR-019 Decisions 10 and
+ * 12, #600): each realm's state of each installed AuthMethod plugin. A new
+ * table, so the previous release keeps working on the new schema. Its
  * behaviour against a real Postgres is held by
- * `migration-0050.integration.test.ts`.
+ * `repositories/realm-auth-method-plugins.integration.test.ts`.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
+import { realmAuthMethodPlugins } from './auth-method-plugins';
+
 const DRIZZLE_DIR = path.resolve(__dirname, '..', '..', '..', 'drizzle');
-const MIGRATION_TAG = '0050_oauth_client_client_credentials_scopes';
+const MIGRATION_TAG = '0050_realm_auth_method_plugins';
 const MIGRATION_IDX = 50;
 
 interface JournalEntry {
@@ -36,7 +40,7 @@ function statementsOf(tag: string): string[] {
     .filter((statement) => statement !== '');
 }
 
-describe('migration 0050 (oauth_clients.client_credentials_scopes)', () => {
+describe('migration 0050 (realm_auth_method_plugins)', () => {
   const statements = statementsOf(MIGRATION_TAG);
 
   it('is in the journal, after 0049', () => {
@@ -45,11 +49,41 @@ describe('migration 0050 (oauth_clients.client_credentials_scopes)', () => {
     expect(journal.entries[MIGRATION_IDX - 1]?.tag).toBe('0049_realm_secrets');
   });
 
-  it('only adds: one nullable column with no default and one CHECK, and rewrites no row', () => {
-    expect(statements).toEqual([
-      'ALTER TABLE "oauth_clients" ADD COLUMN "client_credentials_scopes" jsonb;',
-      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_client_credentials_scopes_is_array" CHECK ("oauth_clients"."client_credentials_scopes" IS NULL OR jsonb_typeof("oauth_clients"."client_credentials_scopes") = 'array');`,
+  it('only creates the table and its foreign key: no other table is touched', () => {
+    expect(statements).toHaveLength(2);
+    expect(statements[0].startsWith('CREATE TABLE "realm_auth_method_plugins" (')).toBe(true);
+    expect(statements[1]).toBe(
+      'ALTER TABLE "realm_auth_method_plugins" ADD CONSTRAINT "realm_auth_method_plugins_realm_id_realms_id_fk" FOREIGN KEY ("realm_id") REFERENCES "public"."realms"("id") ON DELETE cascade ON UPDATE no action;'
+    );
+    // The foreign key's own `ON DELETE cascade ON UPDATE no action` aside.
+    expect(statements.join('\n').replace('ON DELETE cascade ON UPDATE no action', '')).not.toMatch(
+      /\b(DROP|UPDATE|DELETE|INSERT|RENAME)\b/
+    );
+  });
+
+  it('keys a row by realm and plugin, and holds every stored form in a CHECK', () => {
+    const table = getTableConfig(realmAuthMethodPlugins);
+    expect(table.primaryKeys.map((key) => key.columns.map((column) => column.name))).toEqual([
+      ['realm_id', 'plugin_id'],
     ]);
-    expect(statements.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|NOT NULL|DEFAULT)\b/);
+    expect(table.checks.map((check) => check.name).sort()).toEqual([
+      'realm_auth_method_plugins_config_object',
+      'realm_auth_method_plugins_plugin_id_form',
+      'realm_auth_method_plugins_secrets_ciphertext',
+      'realm_auth_method_plugins_secrets_object',
+      'realm_auth_method_plugins_version_positive',
+    ]);
+    for (const name of table.checks.map((check) => check.name)) {
+      expect(statements[0]).toContain(`CONSTRAINT "${name}" CHECK (`);
+    }
+    // No backslash in the jsonpath: its string escapes differ from a regex's.
+    expect(statements[0]).toContain(`like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"`);
+  });
+
+  it('starts a plugin off, with an empty config and no secret, at version 1', () => {
+    expect(statements[0]).toContain('"enabled" boolean DEFAULT false NOT NULL');
+    expect(statements[0]).toContain(`"config" jsonb DEFAULT '{}'::jsonb NOT NULL`);
+    expect(statements[0]).toContain(`"secrets" jsonb DEFAULT '{}'::jsonb NOT NULL`);
+    expect(statements[0]).toContain('"version" integer DEFAULT 1 NOT NULL');
   });
 });

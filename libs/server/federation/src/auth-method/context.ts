@@ -12,8 +12,10 @@ import { AuthMethodConfigError } from './errors';
 /**
  * The egress client as the host has it: the shape of `EgressClient.request`
  * in `@qauth-labs/server-egress`, which takes the realm a destination belongs
- * to and per-call caps. The context's adapter never passes caps, and sets the
- * realm itself.
+ * to and per-call caps. The context's adapter sets the realm itself, and
+ * passes one cap only: `maxRedirects: 0`, when the method asks to follow no
+ * redirect. No other cap, so a method can tighten the client's redirect cap
+ * and lift nothing.
  *
  * @experimental
  */
@@ -26,6 +28,7 @@ export interface AuthMethodHostEgress {
     purpose: string;
     source: 'operator' | 'admin' | 'remote_document';
     realm?: string;
+    limits?: { maxRedirects: 0 };
   }): Promise<AuthMethodEgressResponse>;
 }
 
@@ -79,10 +82,20 @@ export interface AuthMethodContextParts {
   readonly signer: AuthMethodHostSigner;
   /** A logger, such as a pino child logger; only its four levels are used. */
   readonly log: AuthMethodLogger;
+  /**
+   * The method's secret members as the host decrypted them into `config`, by
+   * path (`clientSecret`, `mtls.keyPassword`). The context keeps them out of
+   * two places: its egress labels, so a secret that parses as a URL opens no
+   * allowlisted destination; and its log lines, where a field named as a
+   * secret path's last segment, and every occurrence of a secret's value in a
+   * string or the message, is redacted.
+   */
+  readonly secrets?: ReadonlyMap<string, string>;
 }
 
 const EGRESS_METHODS: readonly string[] = ['GET', 'POST'];
 const EGRESS_SOURCES: readonly string[] = ['operator', 'admin', 'remote_document'];
+const EGRESS_REDIRECTS: readonly unknown[] = [undefined, 'follow', 'error'];
 const ASSERTION_ALGORITHMS: readonly string[] = ['RS256', 'ES256', 'EdDSA'];
 
 /**
@@ -103,9 +116,12 @@ const ASSERTION_IAT_SKEW_SECONDS = 60;
 
 /**
  * The fields a method's log line may not carry, at any depth, matched without
- * regard to case: the value is replaced with `[Redacted]`. Codes, verifiers,
- * client secrets and assertions, tokens, nonces and passwords: what an
- * upstream sign-in handles and a log must never hold.
+ * regard to case, `_` or `-` (`clientSecret` matches `client_secret`): the
+ * value is replaced with `[Redacted]`. Codes, verifiers, client secrets and
+ * assertions, tokens, nonces and passwords: what an upstream sign-in handles
+ * and a log must never hold. The last segment of each of the method's own
+ * secret paths joins them (`AuthMethodContextParts.secrets`), so does every
+ * occurrence of a secret's value.
  *
  * @experimental
  */
@@ -145,12 +161,14 @@ const MAX_LOG_DEPTH = 8;
  * the contract names and nothing else:
  *
  * - `egress.request` passes `method` (`GET` or `POST`), `url`, `headers`,
- *   `body`, `purpose` and `source`, and adds this realm's name. No caps, no
- *   other realm, no other method. `source` is `operator` or `admin` (the
+ *   `body`, `purpose` and `source`, and adds this realm's name. One cap only,
+ *   `maxRedirects: 0` when the method asks for `redirect: 'error'`; no other
+ *   cap, no other realm, no other method. `source` is `operator` or `admin` (the
  *   labels the realm's egress allowlist applies to, for non-public
- *   addresses) only when the URL's origin is the origin of a URL the
- *   method's parsed config holds; any other call goes as `remote_document`,
- *   so a method cannot reach an allowlisted address its config does not name.
+ *   addresses) only when the URL's origin is the origin of a URL among the
+ *   plain members of the method's parsed config, never a secret one; any
+ *   other call goes as `remote_document`, so a method cannot reach an
+ *   allowlisted address its config does not name.
  * - `signer.signClientAssertion` passes `audience`, `claims` and `algorithm`,
  *   with this realm, this provider and the host's caller role. It sets `iat`
  *   when the claims carry none, and lowers `exp` to at most
@@ -159,8 +177,9 @@ const MAX_LOG_DEPTH = 8;
  *   provider.
  * - `log` calls the logger's four levels with a message and the method's
  *   fields nested under {@link AUTH_METHOD_LOG_FIELDS_KEY}, as a copy in which
- *   every field {@link AUTH_METHOD_LOG_REDACTED_FIELDS} names is redacted at
- *   any depth.
+ *   every field {@link AUTH_METHOD_LOG_REDACTED_FIELDS} names, or a secret
+ *   path's last segment, is redacted at any depth, and every secret value is
+ *   cut out of the message and of every string.
  * - `routeUrl` answers URLs only for the paths the method's own `routes`
  *   declare.
  *
@@ -205,19 +224,30 @@ export function createAuthMethodContext<TConfig>(
   }
   const prefix = authMethodRoutePrefix(type);
   const routePaths = declaredRoutePaths(method.routes);
-  const configOrigins = urlOrigins(config);
+  const secrets = parts.secrets ?? new Map<string, string>();
+  const secretValues = [...secrets.values()].filter((value) => value !== '');
+  const configOrigins = urlOrigins(config, new Set(secrets.keys()), new Set(secretValues));
+  const redaction: LogRedaction = {
+    fields: new Set([
+      ...AUTH_METHOD_LOG_REDACTED_FIELDS.map(fieldKey),
+      ...[...secrets.keys()].map((path) => fieldKey(path.split('.').at(-1) ?? path)),
+    ]),
+    // The longest first, so no shorter value cuts a longer one apart.
+    values: [...secretValues].sort((a, b) => b.length - a.length),
+  };
   const { egress, signer, log, realmName, realmId, providerId, signerCaller } = parts;
 
   const logged = (fields: unknown): Record<string, unknown> => ({
-    [AUTH_METHOD_LOG_FIELDS_KEY]: redactedCopy(fields, 0, new WeakSet()),
+    [AUTH_METHOD_LOG_FIELDS_KEY]: redactedCopy(fields, 0, new WeakSet(), redaction),
   });
+  const message = (text: unknown): string => withoutSecrets(String(text), redaction);
 
   return Object.freeze({
     config: deepFreeze(config),
     egress: Object.freeze({
       request(request: AuthMethodEgressRequest): Promise<AuthMethodEgressResponse> {
         // Each member read once: what is checked is what is sent.
-        const { method: verb, url, headers, body, purpose, source } = request;
+        const { method: verb, url, headers, body, purpose, source, redirect } = request;
         if (!EGRESS_METHODS.includes(verb)) {
           return Promise.reject(new TypeError('egress method must be GET or POST'));
         }
@@ -225,6 +255,9 @@ export function createAuthMethodContext<TConfig>(
           return Promise.reject(
             new TypeError('egress source must be operator, admin or remote_document')
           );
+        }
+        if (!EGRESS_REDIRECTS.includes(redirect)) {
+          return Promise.reject(new TypeError('egress redirect must be follow or error'));
         }
         return egress.request({
           method: verb,
@@ -237,6 +270,8 @@ export function createAuthMethodContext<TConfig>(
               ? source
               : 'remote_document',
           realm: realmName,
+          // The one cap a method may set: zero redirects, the floor.
+          ...(redirect === 'error' ? { limits: { maxRedirects: 0 as const } } : {}),
         });
       },
     }),
@@ -278,14 +313,14 @@ export function createAuthMethodContext<TConfig>(
       },
     }),
     log: Object.freeze({
-      debug: (fields: Record<string, unknown>, message: string) =>
-        log.debug(logged(fields), String(message)),
-      info: (fields: Record<string, unknown>, message: string) =>
-        log.info(logged(fields), String(message)),
-      warn: (fields: Record<string, unknown>, message: string) =>
-        log.warn(logged(fields), String(message)),
-      error: (fields: Record<string, unknown>, message: string) =>
-        log.error(logged(fields), String(message)),
+      debug: (fields: Record<string, unknown>, text: string) =>
+        log.debug(logged(fields), message(text)),
+      info: (fields: Record<string, unknown>, text: string) =>
+        log.info(logged(fields), message(text)),
+      warn: (fields: Record<string, unknown>, text: string) =>
+        log.warn(logged(fields), message(text)),
+      error: (fields: Record<string, unknown>, text: string) =>
+        log.error(logged(fields), message(text)),
     }),
     routeUrl(path: string): string {
       if (
@@ -317,19 +352,34 @@ function declaredRoutePaths(routes: unknown): ReadonlySet<string> {
   return paths;
 }
 
-/** The origins of every absolute URL among the strings of a (plain) config. */
-function urlOrigins(config: unknown): ReadonlySet<string> {
+/**
+ * The origins of every absolute URL among the strings of a (plain) config's
+ * plain members: a member at one of `secretPaths`, and a string that is one
+ * of `secretValues`, is skipped, so a secret that parses as a URL opens no
+ * destination.
+ */
+function urlOrigins(
+  config: unknown,
+  secretPaths: ReadonlySet<string>,
+  secretValues: ReadonlySet<string>
+): ReadonlySet<string> {
   const origins = new Set<string>();
-  const walk = (value: unknown, depth: number): void => {
+  const walk = (value: unknown, path: string, depth: number): void => {
+    if (path !== '' && secretPaths.has(path)) return;
     if (typeof value === 'string') {
+      if (secretValues.has(value)) return;
       const found = originOf(value);
       if (found !== '') origins.add(found);
       return;
     }
     if (typeof value !== 'object' || value === null || depth > 32) return;
-    for (const item of Object.values(value)) walk(item, depth + 1);
+    // A list's items have no member path; a secret is never inside one.
+    const inList = Array.isArray(value);
+    for (const [key, item] of Object.entries(value)) {
+      walk(item, inList ? `${path}[]` : path === '' ? key : `${path}.${key}`, depth + 1);
+    }
   };
-  walk(config, 0);
+  walk(config, '', 0);
   return origins;
 }
 
@@ -368,15 +418,43 @@ function notPlainDataPath(
   return undefined;
 }
 
+/** What a context's logger redacts: field names, by {@link fieldKey}, and secret values. */
+interface LogRedaction {
+  readonly fields: ReadonlySet<string>;
+  readonly values: readonly string[];
+}
+
+/** A field name as redaction compares it: lower case, without `_` or `-`. */
+function fieldKey(name: string): string {
+  return name.toLowerCase().replace(/[_-]/g, '');
+}
+
+/** `text` with every occurrence of a secret value replaced by the censor. */
+function withoutSecrets(text: string, redaction: LogRedaction): string {
+  let result = text;
+  for (const value of redaction.values) {
+    if (result.includes(value)) result = result.split(value).join(LOG_CENSOR);
+  }
+  return result;
+}
+
 /**
- * A copy of a method's log fields with every field
- * {@link AUTH_METHOD_LOG_REDACTED_FIELDS} names redacted, at any depth. An
- * Error is copied as its name, message, stack, cause and own fields, as the
- * host's error serializer would write it; binary data as its size.
+ * A copy of a method's log fields with every field `redaction` names redacted,
+ * at any depth, and every secret value cut out of every string. An Error is
+ * copied as its name, message, stack, cause and own fields, as the host's
+ * error serializer would write it; binary data as its size.
  */
-function redactedCopy(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+function redactedCopy(
+  value: unknown,
+  depth: number,
+  seen: WeakSet<object>,
+  redaction: LogRedaction
+): unknown {
   if (typeof value !== 'object' || value === null) {
-    return typeof value === 'function' || typeof value === 'symbol' ? String(value) : value;
+    if (typeof value === 'string') return withoutSecrets(value, redaction);
+    return typeof value === 'function' || typeof value === 'symbol'
+      ? withoutSecrets(String(value), redaction)
+      : value;
   }
   if (depth >= MAX_LOG_DEPTH) return '[Truncated]';
   if (seen.has(value)) return '[Circular]';
@@ -389,22 +467,24 @@ function redactedCopy(value: unknown, depth: number, seen: WeakSet<object>): unk
     const copy: unknown[] = [];
     const length = value.length;
     for (let index = 0; index < length; index += 1) {
-      copy[index] = redactedCopy(value[index] as unknown, depth + 1, seen);
+      copy[index] = redactedCopy(value[index] as unknown, depth + 1, seen, redaction);
     }
     return copy;
   }
   // No prototype: a field named `__proto__` stays a field.
   const copy = Object.create(null) as Record<string, unknown>;
   if (value instanceof Error) {
-    copy['type'] = value.name;
-    copy['message'] = value.message;
-    copy['stack'] = value.stack;
-    if (value.cause !== undefined) copy['cause'] = redactedCopy(value.cause, depth + 1, seen);
+    copy['type'] = redactedCopy(value.name, depth + 1, seen, redaction);
+    copy['message'] = redactedCopy(value.message, depth + 1, seen, redaction);
+    copy['stack'] = redactedCopy(value.stack, depth + 1, seen, redaction);
+    if (value.cause !== undefined) {
+      copy['cause'] = redactedCopy(value.cause, depth + 1, seen, redaction);
+    }
   }
   for (const [key, item] of Object.entries(value)) {
-    copy[key] = AUTH_METHOD_LOG_REDACTED_FIELDS.includes(key.toLowerCase())
+    copy[key] = redaction.fields.has(fieldKey(key))
       ? LOG_CENSOR
-      : redactedCopy(item, depth + 1, seen);
+      : redactedCopy(item, depth + 1, seen, redaction);
   }
   return copy;
 }

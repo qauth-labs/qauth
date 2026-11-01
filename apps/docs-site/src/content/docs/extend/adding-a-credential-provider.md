@@ -3,7 +3,7 @@ title: Adding a credential provider
 description: The ADR-003 extension point — the CredentialProvider interface, the registry, and createConfiguredProviders as the single registration point, with PasswordProvider as the complete example and WalletProvider as the fail-closed one.
 sidebar:
   order: 5
-lastVerified: '2026-08-10'
+lastVerified: '2026-11-01'
 ---
 
 A **credential provider** is how QAuth learns that a user is who they say they are. Password
@@ -18,7 +18,9 @@ alternatives; read this for what the code actually does at `HEAD`.
 > **A sign-in method with screens or an upstream?** A method that needs Interaction API steps or
 > routes of its own, such as an upstream OpenID Connect provider, implements the
 > [AuthMethod contract](/extend/auth-method-contract/) instead, which extends `CredentialProvider`.
-> That contract is the experimental plugin API.
+> That contract is the experimental plugin API, and such a method ships as a plugin package the
+> operator installs and an admin enables per realm, with no change to QAuth's own code. This page
+> is about the in-tree providers.
 
 ## The contract
 
@@ -90,7 +92,7 @@ write `fastify.providerRegistry.resolve('password')`.
 
 `createConfiguredProviders`
 (`libs/fastify/plugins/federation/src/lib/configured-providers.ts:302`) is where "which upstreams
-exist" is decided, and `apps/auth-server/src/app/app.ts:130` is the only place that calls it.
+exist" is decided, and `apps/auth-server/src/app/app.ts:437` is the only place that calls it.
 
 Two properties make it worth understanding before you extend it:
 

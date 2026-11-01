@@ -82,6 +82,7 @@ import {
 import type { FastifyRequest } from 'fastify';
 
 import { approvalOperationDefinitions } from '../admin/approvals/operations';
+import { PLUGIN_OPERATION_DEFINITIONS } from '../admin/plugins/operations';
 import {
   RESERVED_OPERATIONS,
   type ReservedOperation,
@@ -1132,11 +1133,13 @@ export function createAdminOperationRegistry(
 }
 
 /**
- * Every admin operation, but the approval engine's own. None is registered
- * yet: the admin API's first operations, reading a realm and patching its
- * policies (#517), register here with the admin listener (#511).
+ * Every admin operation, but the approval engine's own: the plugin
+ * operations (#600). The operations that read a realm and patch its
+ * policies (#517) register here too.
  */
-export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze([]);
+export const ADMIN_OPERATIONS: readonly AdminOperation[] = Object.freeze(
+  PLUGIN_OPERATION_DEFINITIONS.map((operation) => defineOperation(operation))
+);
 
 /** The registry the admin pipeline classifies against: {@link ADMIN_OPERATIONS} and the approval operations. */
 export const OPERATION_REGISTRY: OperationRegistry = createAdminOperationRegistry(ADMIN_OPERATIONS);

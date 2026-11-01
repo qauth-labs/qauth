@@ -165,9 +165,13 @@ export const EXPERIMENTAL_ITEMS = [
       "The AuthMethod contract as plugins see it. It is public and documented, so others can write plugins, but it may change in a minor release. It becomes stable in 1.x, after QAuth's own plugins have matured on it; those first-party plugins are part of 1.0.",
     adr: 'docs/adr/018-1-0-scope-and-stability.md',
     surface: 'server',
-    switchKey: null,
-    switchValue: null,
+    // A plugin outside the first-party list loads only while it is on (#600);
+    // first-party plugins load either way.
+    switchKey: 'PLUGIN_API_ENABLED',
+    switchValue: 'true',
     requires: [],
+    // A plugin adds no discovery member: its routes are the sign-in pages'
+    // callbacks, under /upstream/<type>.
     discoveryMembers: [],
     docsPage: '/extend/auth-method-contract/',
     spec: {
@@ -175,7 +179,7 @@ export const EXPERIMENTAL_ITEMS = [
       url: 'https://docs.qauth.dev/reference/records/adr/018-1-0-scope-and-stability/',
       status: 'draft',
     },
-    built: false,
+    built: true,
     stable: false,
     conditions: {
       'spec-final': open('QAuth defines the contract itself; ADR-018 §4 makes it stable in 1.x.'),

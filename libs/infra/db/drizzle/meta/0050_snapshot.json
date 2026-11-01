@@ -1,5 +1,5 @@
 {
-  "id": "2f6fa739-b42e-456e-9507-cd57d053b97d",
+  "id": "96b5887e-05c3-4ed1-99b1-91c20f95eea7",
   "prevId": "609ae559-dcb8-456d-a082-71f2d14a01aa",
   "version": "7",
   "dialect": "postgresql",
@@ -1034,6 +1034,109 @@
       },
       "isRLSEnabled": false
     },
+    "public.realm_auth_method_plugins": {
+      "name": "realm_auth_method_plugins",
+      "schema": "",
+      "columns": {
+        "realm_id": {
+          "name": "realm_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "plugin_id": {
+          "name": "plugin_id",
+          "type": "varchar(63)",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enabled": {
+          "name": "enabled",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "config": {
+          "name": "config",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "secrets": {
+          "name": "secrets",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "version": {
+          "name": "version",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 1
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "realm_auth_method_plugins_realm_id_realms_id_fk": {
+          "name": "realm_auth_method_plugins_realm_id_realms_id_fk",
+          "tableFrom": "realm_auth_method_plugins",
+          "tableTo": "realms",
+          "columnsFrom": ["realm_id"],
+          "columnsTo": ["id"],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "realm_auth_method_plugins_pkey": {
+          "name": "realm_auth_method_plugins_pkey",
+          "columns": ["realm_id", "plugin_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "realm_auth_method_plugins_plugin_id_form": {
+          "name": "realm_auth_method_plugins_plugin_id_form",
+          "value": "\"realm_auth_method_plugins\".\"plugin_id\" ~ '^[a-z][a-z0-9_-]{0,62}$'"
+        },
+        "realm_auth_method_plugins_config_object": {
+          "name": "realm_auth_method_plugins_config_object",
+          "value": "jsonb_typeof(\"realm_auth_method_plugins\".\"config\") = 'object'"
+        },
+        "realm_auth_method_plugins_secrets_object": {
+          "name": "realm_auth_method_plugins_secrets_object",
+          "value": "jsonb_typeof(\"realm_auth_method_plugins\".\"secrets\") = 'object'"
+        },
+        "realm_auth_method_plugins_secrets_ciphertext": {
+          "name": "realm_auth_method_plugins_secrets_ciphertext",
+          "value": "jsonb_typeof(\"realm_auth_method_plugins\".\"secrets\") <> 'object' OR NOT jsonb_path_exists(\"realm_auth_method_plugins\".\"secrets\", 'strict $.* ? (@.type() != \"string\" || !(@ like_regex \"^v1[.][^.]+[.][^.]+[.][^.]+$\"))')"
+        },
+        "realm_auth_method_plugins_version_positive": {
+          "name": "realm_auth_method_plugins_version_positive",
+          "value": "\"realm_auth_method_plugins\".\"version\" > 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.oauth_consents": {
       "name": "oauth_consents",
       "schema": "",
@@ -1435,12 +1538,6 @@
           "notNull": true,
           "default": "'[]'::jsonb"
         },
-        "client_credentials_scopes": {
-          "name": "client_credentials_scopes",
-          "type": "jsonb",
-          "primaryKey": false,
-          "notNull": false
-        },
         "audience": {
           "name": "audience",
           "type": "jsonb",
@@ -1764,10 +1861,6 @@
         "oauth_clients_id_jag_targets_is_array": {
           "name": "oauth_clients_id_jag_targets_is_array",
           "value": "jsonb_typeof(\"oauth_clients\".\"id_jag_targets\") = 'array'"
-        },
-        "oauth_clients_client_credentials_scopes_is_array": {
-          "name": "oauth_clients_client_credentials_scopes_is_array",
-          "value": "\"oauth_clients\".\"client_credentials_scopes\" IS NULL OR jsonb_typeof(\"oauth_clients\".\"client_credentials_scopes\") = 'array'"
         },
         "oauth_clients_webauthn_allowed_origins_is_array": {
           "name": "oauth_clients_webauthn_allowed_origins_is_array",

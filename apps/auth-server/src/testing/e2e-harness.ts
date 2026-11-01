@@ -289,6 +289,12 @@ export interface BootAuthServerOptions {
    */
   readonly logStream?: { write(line: string): void };
   /**
+   * The lowest level `logStream` receives; `warn` by default. A suite that
+   * checks no log line holds a value (a plugin secret, #600) takes every
+   * line with `debug`.
+   */
+  readonly logLevel?: 'debug' | 'info' | 'warn';
+  /**
    * Run the default realm's boot step (#484), which needs the database. On by
    * default. A suite that boots against a database URL it never dials, to test
    * what registration accepts or refuses, turns it off.
@@ -338,6 +344,12 @@ export interface BootAuthServerOptions {
    * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
    */
   readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+  /**
+   * Replace the `import()` of an AuthMethod plugin package and the
+   * first-party list (#600), so a suite boots with fixture plugins. The app
+   * refuses it outside NODE_ENV=test.
+   */
+  readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
 }
 
 /** What a suite gives the internal listener (#496). */
@@ -409,7 +421,10 @@ export async function bootAuthServer(
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
       // The internal listener (#496): its address, its TLS files and its peers.
-      key.startsWith('INTERNAL_')
+      key.startsWith('INTERNAL_') ||
+      // The plugin runtime (#600): a boot that lists no plugin loads none.
+      key === 'AUTH_METHOD_PLUGINS' ||
+      key === 'PLUGIN_API_ENABLED'
     ) {
       delete process.env[key];
     }
@@ -438,7 +453,7 @@ export async function bootAuthServer(
   const server = Fastify({
     logger:
       options.logStream !== undefined
-        ? { level: 'warn', stream: options.logStream }
+        ? { level: options.logLevel ?? 'warn', stream: options.logStream }
         : process.env['E2E_DEBUG_LOG'] === '1',
     routerOptions: { ignoreTrailingSlash: true },
     // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
@@ -520,6 +535,9 @@ export async function bootAuthServer(
     ...(options.egressClientFactory === undefined
       ? {}
       : { egressClientFactory: options.egressClientFactory }),
+    ...(options.authMethodPlugins === undefined
+      ? {}
+      : { authMethodPlugins: options.authMethodPlugins }),
   });
   const { routes } = options;
   if (routes !== undefined) {
