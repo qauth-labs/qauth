@@ -149,5 +149,11 @@ promised: a breaking change raises `<M>`
 and no field is removed. Other areas add their groups to the same schema, such as browser sessions
 and sign-in methods; a group's name is taken once.
 
+A realm keeps its policies under the schema version they were written in. A release that changes
+the version reads a document of an older one through an upgrade it ships, which never reads a
+field looser than stored, and its first boot stores the document under the new version. A
+document of a later version, which a newer node wrote during a rolling upgrade, is read with the
+older node's schema and never written by it.
+
 The effects named above are the closed list of 11 effect tags on
 [Security operations](/reference/security-operations/).

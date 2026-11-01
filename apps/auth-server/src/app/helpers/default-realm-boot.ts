@@ -45,7 +45,10 @@ import {
  *    migration 0046 gets its fill here once, the first node to boot winning,
  *    and a realm that has its policies is not written, so changing an
  *    environment key later changes no realm. A new realm got its policies
- *    when step 1 created it;
+ *    when step 1 created it. A realm whose policies an earlier release
+ *    stored under an older schema version gets them upgraded and stored
+ *    under this release's version (#908); one whose policies follow a later
+ *    version, or an older one no upgrade reaches, is named in a warning;
  * 4. when no realm is the operator realm yet, mark this one (simple mode);
  * 5. add each `DEFAULT_REALM_ENDPOINT_HOSTS` name the realm lacks as an
  *    endpoint host, and remove none;
@@ -369,10 +372,23 @@ export async function bootDefaultRealm(
       'realm policies of this release filled from the environment'
     );
   }
+  for (const upgraded of result.policySeeding.upgraded) {
+    deps.log.info(
+      {
+        realm: upgraded.realmName,
+        realmId: upgraded.realmId,
+        schemaVersion: upgraded.from,
+        policies: upgraded.paths,
+      },
+      "realm policies of an earlier schema version upgraded to this release's"
+    );
+  }
   for (const skipped of result.policySeeding.skipped) {
     deps.log.warn(
       { realm: skipped.realmName, realmId: skipped.realmId, schemaVersion: skipped.schemaVersion },
-      'realm policies of another schema version left as they are: a node of this release does not complete them'
+      skipped.reason === 'newer'
+        ? 'realm policies of another schema version left as they are: a node of this release does not complete them'
+        : 'realm policies of an earlier schema version that no upgrade of this release reaches left as they are: the realm refuses every request that reads them'
     );
   }
   for (const { key, path, readFromRealmRow } of ignoredSeedKeys(
@@ -453,7 +469,9 @@ function storedComparison(
 
 /** Whether step 3 wrote the policies of the realm `realmId`. */
 function wrotePoliciesOf(report: RealmPolicySeedReport, realmId: string): boolean {
-  return [...report.filled, ...report.completed].some((realm) => realm.realmId === realmId);
+  return [...report.filled, ...report.completed, ...report.upgraded].some(
+    (realm) => realm.realmId === realmId
+  );
 }
 
 /**
@@ -479,7 +497,8 @@ async function seedRealmPolicies(
 /**
  * Step 7: the seed keys the environment sets that the default realm ignores.
  * None when this boot created the realm or filled its policies, which used
- * them; a key whose field this boot completed was used too.
+ * them; a key whose field this boot completed, or gave an upgraded document,
+ * was used too.
  */
 function ignoredSeedKeys(
   result: Pick<DefaultRealmBootResult, 'realm' | 'created' | 'policySeeding'>,
@@ -490,7 +509,7 @@ function ignoredSeedKeys(
     return [];
   }
   const completed = new Set(
-    result.policySeeding.completed
+    [...result.policySeeding.completed, ...result.policySeeding.upgraded]
       .filter((realm) => realm.realmId === realmId)
       .flatMap((realm) => realm.paths)
   );
