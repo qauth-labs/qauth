@@ -1448,10 +1448,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`graphs:check`, delurio's check of the flow graphs** ([#560], ADR-021).
   `graphs/` is now an Nx project, `graphs`, whose `check` target runs
   `delurio check graphs --strict` with `@delurio/cli`, a root development
-  dependency pinned to 0.4.0: a graph that cannot be loaded, a graph file that
+  dependency pinned to 0.5.0: a graph that cannot be loaded, a graph file that
   does not follow its kind's JSON Schema (which holds every state but an exit to
   camelCase), a broken assertion or a main story that cannot be walked fails
-  it. It needs no server and no database, and is cached on `graphs/**`; no app
+  it. The five `graphs/domain/*.yaml` files are read as one domain and checked
+  too. It needs no server and no database, and is cached on `graphs/**`; no app
   or lib depends on delurio, and no shipped image carries it. `graphs/README.md` now states QAuth's flow
   conventions: an effect ends in `DONE` or `FAIL.<class>`, a protocol flow has
   one exit per cause, named `<error>.<cause>`, every protocol exit declares its

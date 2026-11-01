@@ -64,7 +64,10 @@ pnpm nx run graphs:check
 
 runs `delurio check graphs --strict` from the repository root: every directory under `graphs/` that
 holds a `flow.yaml` or a `nav.yaml` is loaded and checked, and every `flow.yaml`, `ui.yaml`,
-`nav.yaml` and `catalog/*.json` is checked against its kind's JSON Schema (the `schema` rule). It
+`nav.yaml` and `catalog/*.json` is checked against its kind's JSON Schema (the `schema` rule). The
+`kind: domain` files of `domain/` are read as one domain, `qauth`, merged key by key, and checked
+against the domain schema; a plain value or a list, such as an entity's `examples`, is given in one
+file only. It
 reads graph files only, so it needs no server, no database and no network, and Nx caches it on
 `graphs/**` and the pinned version. A finding is a line
 `<file>:<line>:<column>: error: <message> [<rule id>]`, followed by `note:` lines where it has a

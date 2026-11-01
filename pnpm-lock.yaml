@@ -26,8 +26,8 @@ catalogs:
       specifier: ^21.2.3
       version: 21.2.3
     '@delurio/cli':
-      specifier: 0.4.0
-      version: 0.4.0
+      specifier: 0.5.0
+      version: 0.5.0
     '@fastify/cors':
       specifier: ^11.3.1
       version: 11.3.1
@@ -331,7 +331,7 @@ importers:
         version: 21.2.3
       '@delurio/cli':
         specifier: 'catalog:'
-        version: 0.4.0
+        version: 0.5.0
       '@nx/esbuild':
         specifier: 'catalog:'
         version: 24.0.1(@babel/traverse@7.29.7(supports-color@8.1.1))(@swc-node/register@1.12.1(@swc/core@1.16.18(@swc/helpers@0.5.23))(@swc/types@0.1.28)(supports-color@8.1.1)(typescript@6.0.3))(@swc/core@1.16.18(@swc/helpers@0.5.23))(esbuild@0.28.2)(nx@24.0.1(@swc-node/register@1.12.1(@swc/core@1.16.18(@swc/helpers@0.5.23))(@swc/types@0.1.28)(supports-color@8.1.1)(typescript@6.0.3))(@swc/core@1.16.18(@swc/helpers@0.5.23)))(supports-color@8.1.1)
@@ -2960,8 +2960,8 @@ packages:
     resolution: {integrity: sha512-kzyuwOAQnXJNLS9PSyrk0CWk35nWJW/zl/6KvnTBMFK65gm7U1/Z5BqjxeapjZCIhQcM/DsrEmcbRwDyXyXK4A==}
     engines: {node: '>=14'}
 
-  '@delurio/cli@0.4.0':
-    resolution: {integrity: sha512-XFPH1QiCTaTDjtUQa3kvurC20F3bMOrO3MDqmb8b0RXN2GMP/DELfhinaOo5LDEKalo9gpRMAigw/Xh/SoCd/g==}
+  '@delurio/cli@0.5.0':
+    resolution: {integrity: sha512-XvdOQtAK+XvOYnodTyJiBDDB8YvGvEmXb66nqydMKXYpRATqgRzSnOVdULKKw0Jh23AmhUEVUO33eclsFR25zw==}
     engines: {node: '>=22.18'}
     hasBin: true
 
@@ -11651,7 +11651,7 @@ snapshots:
 
   '@ctrl/tinycolor@4.2.0': {}
 
-  '@delurio/cli@0.4.0':
+  '@delurio/cli@0.5.0':
     dependencies:
       ajv: 8.20.0
       ajv-formats: 3.0.1
