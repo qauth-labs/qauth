@@ -8,6 +8,8 @@ import {
 } from './registry';
 import type { PolicyRule } from './rules';
 import type { RealmSecretStore } from './secret-store';
+import { type PolicySchemaUpgrade, REALM_POLICY_UPGRADES, upgradePathsTo } from './upgrades';
+import { compareSchemaVersions, isPolicySchemaVersion } from './version';
 
 /**
  * The policy store (ADR-019 Decision 10, issue #516): a realm's policies as
@@ -26,6 +28,13 @@ import type { RealmSecretStore } from './secret-store';
  * `defaultsFromEnv` when it is created, and `seedRealms`, run at boot, fills
  * a realm that has no policies yet and completes one that lacks fields a
  * later release added, once, with the first writer winning.
+ *
+ * A document an earlier release stored under an older schema version is read
+ * through the upgrades from its version (#908, `./upgrades.ts`), and the next
+ * write stores it under this release's version: `seedRealms` writes it at
+ * boot. A document of a later version (a later release's, during a rolling
+ * upgrade) is read with this release's schema and never written, and one of
+ * an older version the upgrades do not reach is refused.
  */
 
 /** A realm's stored policies as the storage reads them: the two forms joined, unparsed. */
@@ -104,7 +113,9 @@ export interface RealmPolicySnapshot {
    * The whole document, every field set. A realm with no policies yet reads
    * as its fill would leave it: the environment's seeds, and the values of
    * its row the server already read. A field missing from a stored document
-   * (added by a later release) reads as its seed.
+   * (added by a later release) reads as its seed. A document of an older
+   * schema version reads upgraded (#908), so `schemaVersion` is this
+   * release's.
    */
   readonly policies: RealmPolicies;
 }
@@ -154,6 +165,17 @@ export interface KeptFromRow {
   readonly differsFromSeed: boolean;
 }
 
+/**
+ * Why {@link RealmPolicyStore.seedRealms} left a realm's policies as they are:
+ *
+ * - `newer`: they follow a later schema version (a later release's, during a
+ *   rolling upgrade) and lack fields of this release. Completing them would
+ *   relabel them.
+ * - `no-upgrade`: they follow an older schema version that no upgrade of this
+ *   release reaches. Every read of them is refused.
+ */
+export type SkippedPoliciesReason = 'newer' | 'no-upgrade';
+
 /** What {@link RealmPolicyStore.seedRealms} did. */
 export interface RealmPolicySeedReport {
   /** The realms that had no policies and got them, each with the fields its row kept. */
@@ -161,11 +183,19 @@ export interface RealmPolicySeedReport {
   /** The realms that lacked fields of this release, and the fields each got from the seeds. */
   readonly completed: readonly (SeededRealm & { readonly paths: readonly string[] })[];
   /**
-   * The realms that lack fields of this release but whose policies follow
-   * another schema version (a later release's, during a rolling upgrade):
-   * left as they are, since completing them would relabel them.
+   * The realms whose policies followed an older schema version (#908), now
+   * stored upgraded under this release's: each with the version it followed,
+   * and the fields the upgraded document lacked, which took their seeds.
    */
-  readonly skipped: readonly (SeededRealm & { readonly schemaVersion: string | null })[];
+  readonly upgraded: readonly (SeededRealm & {
+    readonly from: string;
+    readonly paths: readonly string[];
+  })[];
+  /** The realms left as they are, each with the schema version its policies follow, and why. */
+  readonly skipped: readonly (SeededRealm & {
+    readonly schemaVersion: string | null;
+    readonly reason: SkippedPoliciesReason;
+  })[];
 }
 
 /** The policy store. `Row` is a realm row of the storage, `Tx` its transaction. */
@@ -176,13 +206,15 @@ export interface RealmPolicyStore<Row, Tx> {
    * The policies of a realm row the caller already loaded, such as the realm
    * resolver's or a token flow's. No query.
    *
-   * @throws PolicyValidationError when the stored policies are not valid
+   * @throws PolicyValidationError when the stored policies are not valid, or
+   *   follow an older schema version that no upgrade reaches
    */
   ofRealm(row: Row): RealmPolicySnapshot;
   /**
    * The policies of the realm `realmId`, or `undefined` when there is none.
    *
-   * @throws PolicyValidationError when the stored policies are not valid
+   * @throws PolicyValidationError when the stored policies are not valid, or
+   *   follow an older schema version that no upgrade reaches
    */
   get(realmId: string, tx?: Tx): Promise<RealmPolicySnapshot | undefined>;
   /**
@@ -219,9 +251,11 @@ export interface RealmPolicyStore<Row, Tx> {
    * @throws PolicySecretStoreUnavailableError when the patch sets or clears a
    *   secret, or a rule asks whether one it leaves alone is set, and the store
    *   has no secret store; nothing is changed
-   * @throws PolicySchemaVersionError when the stored policies follow another
-   *   schema version than this release's: writing them would relabel a
-   *   document this release cannot read whole; nothing is changed
+   * @throws PolicySchemaVersionError when the stored policies follow a later
+   *   schema version than this release's, or an older one that no upgrade
+   *   reaches: writing them would relabel a document this release cannot read
+   *   whole; nothing is changed. A document of an older version an upgrade
+   *   reaches is upgraded, patched and stored under this release's version
    */
   update(
     realmId: string,
@@ -235,17 +269,23 @@ export interface RealmPolicyStore<Row, Tx> {
    * their seeds. Each realm to write is read with its row locked, and each
    * write is `UPDATE ... WHERE policies_version = <read>`, so of two nodes
    * that boot together one writes and the other finds the work done, and a
-   * plain write of the row is never overwritten with what it changed. A realm that already has every field is not written, nor
-   * read further: changing an environment key later changes no realm. A
-   * realm whose policies follow another schema version is not completed
-   * (`skipped`).
+   * plain write of the row is never overwritten with what it changed. A
+   * realm that already has every field is not written, nor read further:
+   * changing an environment key later changes no realm.
+   *
+   * A realm whose policies follow an older schema version is upgraded
+   * (#908): written once under this release's version, the fields the
+   * upgraded document lacks completed from the seeds (`upgraded`). One whose
+   * policies follow a later version and lack fields of this release, or an
+   * older version that no upgrade reaches, is left as it is (`skipped`).
    *
    * A list a realm's row kept from before its policies existed is read with
    * its repeats dropped, as `defaultsFromEnv` drops them from an environment
    * value.
    *
    * @throws RealmPolicySeedRefusedError when a realm the boot would write
-   *   (filled or completed) has a value the schema refuses; nothing is written
+   *   (filled, completed or upgraded) has a value the schema refuses; nothing
+   *   is written
    */
   seedRealms(tx?: Tx): Promise<RealmPolicySeedReport>;
 }
@@ -269,6 +309,13 @@ export interface PolicyStoreOptions<Row, Tx> {
    * with another one.
    */
   readonly rules?: readonly PolicyRule[];
+  /**
+   * The upgrades of documents an earlier release stored under an older
+   * schema version (#908), one per version change, each leading to the
+   * registry's version in the end. {@link REALM_POLICY_UPGRADES} with the
+   * default registry, none with another one.
+   */
+  readonly upgrades?: readonly PolicySchemaUpgrade[];
 }
 
 /** There is no realm of the id. */
@@ -312,17 +359,24 @@ export class PolicySecretStoreUnavailableError extends Error {
   }
 }
 
-/** The stored policies follow another schema version than the store's registry. */
+/**
+ * The stored policies follow a schema version the store cannot write: a later
+ * one than its registry's (`newer`), or an older one that none of its
+ * upgrades reaches (`no-upgrade`).
+ */
 export class PolicySchemaVersionError extends Error {
   override readonly name = 'PolicySchemaVersionError';
 
   constructor(
     readonly realmId: string,
     readonly storedVersion: string | null,
-    readonly schemaVersion: string
+    readonly schemaVersion: string,
+    readonly reason: SkippedPoliciesReason
   ) {
     super(
-      `The policies of realm ${realmId} follow schema version ${String(storedVersion)}, not ${schemaVersion}; a node of the release that wrote them must change them`
+      reason === 'newer'
+        ? `The policies of realm ${realmId} follow schema version ${String(storedVersion)}, later than ${schemaVersion}; a node of the release that wrote them must change them`
+        : `The policies of realm ${realmId} follow schema version ${String(storedVersion)}, which no upgrade to ${schemaVersion} reaches`
     );
   }
 }
@@ -532,6 +586,21 @@ function withMembers(
   return result;
 }
 
+/**
+ * Where a stored document stands against the store's schema version: one it
+ * reads as it is (`current`: this release's version, or no policies yet), an
+ * older one the upgrades reach, a later one, or an older one they do not.
+ */
+type Standing =
+  | { readonly kind: 'current' }
+  | {
+      readonly kind: 'older';
+      readonly from: string;
+      readonly steps: readonly PolicySchemaUpgrade[];
+    }
+  | { readonly kind: 'newer' }
+  | { readonly kind: 'no-upgrade' };
+
 /** A realm's effective policies and the members its stored document holds that this release does not know. */
 interface EffectivePolicies {
   readonly document: Record<string, unknown>;
@@ -553,11 +622,58 @@ export function createPolicyStore<Row, Tx>(
   const { storage, secrets } = options;
   const registry = options.registry ?? REALM_POLICY_REGISTRY;
   const rules = options.rules ?? (options.registry === undefined ? REALM_POLICY_RULES : []);
+  const upgradePaths = upgradePathsTo(
+    options.upgrades ?? (options.registry === undefined ? REALM_POLICY_UPGRADES : []),
+    registry.version
+  );
   const layout = layoutOf(registry);
   // Parsed once, so seeds the schema refuses fail the boot, and frozen, so
   // nothing a caller does with a snapshot reaches the next one.
   const seeds = deepFreeze(registry.parse(options.seeds, 'document'));
   const secretFields = layout.fields.filter((entry) => entry.field.secret);
+
+  function standingOf(record: RealmPolicyRecord): Standing {
+    const stored = record.schemaVersion;
+    if (record.version === 0 || stored === registry.version) return { kind: 'current' };
+    if (!isPolicySchemaVersion(stored)) return { kind: 'no-upgrade' };
+    if (compareSchemaVersions(stored, registry.version) > 0) return { kind: 'newer' };
+    const steps = upgradePaths.get(stored);
+    return steps === undefined ? { kind: 'no-upgrade' } : { kind: 'older', from: stored, steps };
+  }
+
+  /**
+   * `record` as this release reads it: a document of an older schema version
+   * upgraded to the registry's (#908), any other one as it is.
+   *
+   * @throws PolicyValidationError when the document follows an older version
+   *   that no upgrade reaches: read with this release's schema, a field it
+   *   renamed would read as its seed, which may be looser than stored
+   */
+  function readable(record: RealmPolicyRecord, standing: Standing): RealmPolicyRecord {
+    if (standing.kind === 'no-upgrade') {
+      const stored = isPolicySchemaVersion(record.schemaVersion)
+        ? `schema version ${record.schemaVersion}`
+        : 'no schema version';
+      throw new PolicyValidationError('The stored realm policies cannot be read', [
+        {
+          path: '',
+          message: `follow ${stored}, which no upgrade to ${registry.version} reaches`,
+        },
+      ]);
+    }
+    if (standing.kind !== 'older') return record;
+    let document = structuredClone(record.document) as Record<string, unknown>;
+    for (const step of standing.steps) {
+      const next: unknown = step.upgrade(document);
+      if (!isPlainObject(next)) {
+        throw new TypeError(
+          `The upgrade of the realm policies from schema version ${step.from} gave no policy document`
+        );
+      }
+      document = next;
+    }
+    return { ...record, schemaVersion: registry.version, document };
+  }
 
   /**
    * The policies `record` stands for: its stored fields, and the seed of each
@@ -596,7 +712,8 @@ export function createPolicyStore<Row, Tx>(
     return { document: registry.parse(document, 'document'), unknown, missing, kept };
   }
 
-  function snapshotOf(record: RealmPolicyRecord): RealmPolicySnapshot {
+  function snapshotOf(stored: RealmPolicyRecord): RealmPolicySnapshot {
+    const record = readable(stored, standingOf(stored));
     const hasPolicies = record.version > 0;
     return deepFreeze({
       realmId: record.realmId,
@@ -656,6 +773,16 @@ export function createPolicyStore<Row, Tx>(
       record.version > 0 &&
       layout.fields.every((entry) => entry.field.secret || hasAt(record.document, entry.segments))
     );
+  }
+
+  /**
+   * Whether the boot has work on `record`: a realm with no policies, one
+   * that lacks fields of this release, or one of an older schema version,
+   * which it upgrades, or reports when no upgrade reaches it.
+   */
+  function needsSeeding(record: RealmPolicyRecord): boolean {
+    const { kind } = standingOf(record);
+    return kind === 'older' || kind === 'no-upgrade' || !isComplete(record);
   }
 
   /**
@@ -781,10 +908,18 @@ export function createPolicyStore<Row, Tx>(
         if (record.version !== expectedVersion) {
           throw new PolicyVersionConflictError(realmId, expectedVersion, record.version);
         }
-        if (record.version > 0 && record.schemaVersion !== registry.version) {
-          throw new PolicySchemaVersionError(realmId, record.schemaVersion, registry.version);
+        const standing = standingOf(record);
+        if (standing.kind === 'newer' || standing.kind === 'no-upgrade') {
+          throw new PolicySchemaVersionError(
+            realmId,
+            record.schemaVersion,
+            registry.version,
+            standing.kind
+          );
         }
-        const current = effective(record);
+        // A document of an older version is patched as it reads upgraded,
+        // and stored under this release's version below.
+        const current = effective(readable(record, standing));
         const merged = mergePatch(current.document, rest, []);
         // The `input` view takes the representation's `<name>Set` members and
         // drops them, so a representation sent back changes nothing.
@@ -812,11 +947,16 @@ export function createPolicyStore<Row, Tx>(
       return storage.transaction(async (inner) => {
         const filled: (SeededRealm & { keptFromRow: readonly KeptFromRow[] })[] = [];
         const completed: (SeededRealm & { paths: readonly string[] })[] = [];
-        const skipped: (SeededRealm & { schemaVersion: string | null })[] = [];
+        const upgraded: (SeededRealm & { from: string; paths: readonly string[] })[] = [];
+        const skipped: (SeededRealm & {
+          schemaVersion: string | null;
+          reason: SkippedPoliciesReason;
+        })[] = [];
         for (const listed of await storage.list(inner)) {
-          // A realm that has its policies and every field is not read further:
-          // the environment only seeds, so nothing here changes it.
-          if (isComplete(listed)) continue;
+          // A realm that has its policies under this release's schema version
+          // and every field is not read further: the environment only seeds,
+          // so nothing here changes it.
+          if (!needsSeeding(listed)) continue;
           // Read again with the row locked before computing what to write. A
           // plain write of the row (a previous release's node during a rolling
           // upgrade) leaves the counter of a realm with no policies at 0, so
@@ -824,18 +964,20 @@ export function createPolicyStore<Row, Tx>(
           // operator's tightened ceiling would be lost. Locked, a write that
           // committed first is in the fill, and one that comes later waits.
           const record = await storage.readLocked(listed.realmId, inner);
-          if (record === undefined || isComplete(record)) continue;
-          if (record.version > 0 && record.schemaVersion !== registry.version) {
+          if (record === undefined || !needsSeeding(record)) continue;
+          const standing = standingOf(record);
+          if (standing.kind === 'newer' || standing.kind === 'no-upgrade') {
             skipped.push({
               realmId: record.realmId,
               realmName: record.realmName,
               schemaVersion: record.schemaVersion,
+              reason: standing.kind,
             });
             continue;
           }
           let policies: EffectivePolicies;
           try {
-            policies = effective(record);
+            policies = effective(readable(record, standing));
           } catch (error) {
             if (error instanceof PolicyValidationError) {
               throw new RealmPolicySeedRefusedError(record.realmName, error.issues);
@@ -856,9 +998,11 @@ export function createPolicyStore<Row, Tx>(
           if (written === undefined) continue;
           const realm = { realmId: record.realmId, realmName: record.realmName };
           if (record.version === 0) filled.push({ ...realm, keptFromRow: policies.kept });
-          else completed.push({ ...realm, paths: policies.missing });
+          else if (standing.kind === 'older') {
+            upgraded.push({ ...realm, from: standing.from, paths: policies.missing });
+          } else completed.push({ ...realm, paths: policies.missing });
         }
-        return { filled, completed, skipped };
+        return { filled, completed, upgraded, skipped };
       }, tx);
     },
   });
