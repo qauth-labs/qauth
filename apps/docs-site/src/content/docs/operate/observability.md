@@ -149,8 +149,9 @@ below.
 ### Per-account failure ladder
 
 Beside that lock, every password attempt at `POST /auth/login` and
-`POST /ui/login` is reserved on the per-account failure ladder (ADR-017
-Decision 7), the one the sign-in engine uses too. It is not configurable and
+`POST /ui/login`, and every password the email verification checks
+(`POST /auth/verify`, `POST /ui/verify`), is reserved on the per-account
+failure ladder (ADR-017 Decision 7), the one the sign-in engine uses too. It is not configurable and
 does not depend on `FAILED_LOGIN_TRACKING_ENABLED`.
 
 - **Counted before the check.** One Redis script reads the account's wait,
@@ -171,6 +172,12 @@ does not depend on `FAILED_LOGIN_TRACKING_ENABLED`.
   derived from the realm's cookie HMAC secret. A rotation of that secret
   starts every account's count afresh within a minute. A run of failures is
   kept 30 days after its last counted failure.
+- **Redis memory.** Every address tried, held by an account or not, keeps a
+  small hash for 30 days, so a spray of made-up addresses grows Redis for a
+  month (the per-IP rate limits bound how fast). Size Redis for it. When Redis
+  is full, `noeviction` refuses new counts, and so every password sign-in
+  (fail closed); a `volatile-*` or `allkeys-*` policy may evict a count
+  instead, which gives that account its free tries again.
 - **Fail closed.** Unlike the lock above, a Redis error, or a call slower than
   2 s, refuses the attempt with `503` and `Retry-After: 5` before any
   credential is checked, and logs `sign-in failure ladder unavailable` at

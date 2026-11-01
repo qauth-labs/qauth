@@ -27,7 +27,8 @@ the client: the transaction is not sealed (see the engine's README). In producti
 the `production` option) the plugin refuses to register without `hooks.ladder`: the engine's
 default ladder counts nothing, so a password could be guessed without limit.
 
-The auth server's legacy routes, `POST /auth/login` and `POST /ui/login`, use the ladder today,
+The auth server's legacy routes, `POST /auth/login` and `POST /ui/login`, and the password check
+of the email verification (`POST /auth/verify`, `POST /ui/verify`) use the ladder today,
 through `createPasswordAttempts`, beside their own lock: an attempt is reserved before the password
 is read, refused inside its wait, and settled after the check. The plugin also requires
 `passwordHardAction` in production, the hard action the engine's password step calls at the

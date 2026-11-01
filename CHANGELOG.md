@@ -1117,18 +1117,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no new secret is added. A rotation of that secret starts every run afresh. A
   Redis error or a call slower than 2 s refuses the attempt with `503` and
   `Retry-After: 5` before any credential is checked. `POST /auth/login` and
-  `POST /ui/login` reserve and count on the ladder beside their own lock
-  (`FAILED_LOGIN_*`, unchanged), and the sign-in engine's `ladder` hook is the
-  same ladder. At 100 consecutive counted failures the hard action disables the
-  password (`user_credentials.disabled_at`, migration `0050`), alerts the
+  `POST /ui/login`, and the password check of the email verification
+  (`POST /auth/verify`, `POST /ui/verify`), reserve and count on the ladder
+  beside their own lock (`FAILED_LOGIN_*`, unchanged), and the sign-in
+  engine's `ladder` hook is the same ladder. At 100 consecutive counted
+  failures the hard action disables the password
+  (`user_credentials.disabled_at`, migration `0050`), alerts the
   operator (the error log `password disabled by the failure ladder`) and
   notifies the owner, but only while it is armed: while the realm's hosted
   password reset is on ([#642]) and the deployment can send the notice
   ([#637]), asked at run time. Neither ships yet, so the hard action stays
-  unarmed: each failure from the 100th on logs a warning, the credential lookup ignores a
-  disabled mark, and the next successful sign-in clears it. The two sign-in
-  flow graphs (`graphs/flows/core/sign-in-page`, `sign-in-token`) draw the
-  reservation, the wait and the unavailable store.
+  unarmed: each failure from the 100th on logs a warning, the credential
+  lookup ignores a disabled mark, and the next successful sign-in clears it.
+  The notice is sent without being awaited, so a slow mail transport cannot
+  tell, by the answer's timing, an account from a made-up address. The two
+  sign-in flow graphs (`graphs/flows/core/sign-in-page`, `sign-in-token`)
+  draw the reservation, the wait and the unavailable store.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
