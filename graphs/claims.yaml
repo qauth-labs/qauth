@@ -15,3 +15,5 @@ operations:
   GET /ui/resume/{handle}: { flow: [sign-in-page] }
   GET /ui/consent: { flow: [consent] }
   POST /ui/consent: { flow: [consent] }
+  POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/enable: { flow: [plugin-enable] }
+  POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable: { flow: [plugin-enable] }

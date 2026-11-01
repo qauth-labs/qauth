@@ -33,7 +33,7 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts libs/server/keys",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the Docker-backed key creation tests against the migrated schema (testcontainers Postgres). Requires a running Docker daemon."

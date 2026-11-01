@@ -13,7 +13,7 @@ RUN npm install --global pnpm@${PNPM_VERSION}
 # Dependencies only (layer cache)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY nx.json tsconfig.base.json ./
-COPY vitest.config.ts ./
+COPY vitest.config.mts ./
 RUN pnpm install --frozen-lockfile
 
 # Workspace (Compose Watch will sync over these; writable for sync targets)

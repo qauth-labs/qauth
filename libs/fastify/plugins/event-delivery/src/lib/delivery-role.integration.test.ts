@@ -42,7 +42,6 @@ import {
 } from '@qauth-labs/server-event-delivery';
 import type { Signer } from '@qauth-labs/server-keys';
 import {
-  applyQauthMigrations,
   createManualClock,
   type ManualClock,
   requireDockerOrSkip,
@@ -182,8 +181,7 @@ describe('the delivery role on a real Postgres', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    postgres = await startPostgresContainer();
-    await applyQauthMigrations(postgres.connectionString);
+    postgres = await startPostgresContainer({ schema: 'migrated' });
     admin = createDatabase({ connectionString: postgres.connectionString });
   }, 240_000);
 

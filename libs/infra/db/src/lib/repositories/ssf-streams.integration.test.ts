@@ -55,7 +55,10 @@ describe('SSF streams integration (real Postgres)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    ctx = await setupIntegrationDb();
+    // A container of its own: a case below creates roles, which are
+    // cluster-wide and outlive the database, so on a shared server their
+    // fixed names would meet the next suite's.
+    ctx = await setupIntegrationDb({ privateContainer: true });
     streams = createSsfStreamsRepository(ctx.database.db);
     store = createEventsRepository(ctx.database.db);
     queue = createEventDeliveriesRepository(ctx.database.db);

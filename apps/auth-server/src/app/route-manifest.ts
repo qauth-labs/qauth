@@ -142,6 +142,13 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/root'),
   },
   {
+    module: 'upstream',
+    roles: ['web'],
+    plugins: ['egress', 'federation'],
+    repositories: ['realmAuthMethodPlugins'],
+    load: () => import('./routes/upstream'),
+  },
+  {
     module: 'well-known',
     roles: ['api'],
     plugins: ['dpop', 'jwt', 'ssf'],

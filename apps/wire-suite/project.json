@@ -33,7 +33,7 @@
       "executor": "nx:run-commands",
       "cache": false,
       "options": {
-        "command": "vitest run --config vitest.wire.config.ts",
+        "command": "vitest run --config vitest.wire.config.mts",
         "cwd": "apps/wire-suite",
         "forwardAllArgs": true
       },
