@@ -21,9 +21,10 @@ verification. The contract lives in `libs/server/federation/src/auth-method/`.
 
 ## What exists today
 
-The contract, the registry entries, the route mount and the test kit. Nothing registers an
-AuthMethod in a running server yet: the plugin runtime that loads installed methods is #600, the
-generic OpenID Connect upstream client is #601, and the upstream sign-in flow that offers the
+The contract, the registry entries, the route mount, the test kit, and the first method on it:
+the generic OpenID Connect upstream client (#601, [below](#the-generic-openid-connect-client)).
+Nothing registers an AuthMethod in a running server yet: the plugin runtime that loads installed
+methods is #600, provider administration is #714, and the upstream sign-in flow that offers the
 step and acts on its outcome is #639. `WalletProvider` is not an AuthMethod and stays a plain
 provider whose `verify()` rejects; wallet sign-in keeps its own seam.
 
@@ -203,6 +204,74 @@ under a reserved type, fails the boot, and so does a duplicate `type`.
 `createConfiguredProviders` takes the methods to register (`authMethods`), holds every entry to the
 whole contract (one with no `contract` member too, which the registry alone would take for a plain
 provider) and appends them after the built-in providers; leaving them out registers none.
+
+## The generic OpenID Connect client
+
+`libs/server/upstream-oidc` (`@qauth-labs/server-upstream-oidc`) is the relying-party client QAuth
+uses toward an upstream OpenID Provider: `createUpstreamOidcMethod({ type, display })` builds one
+AuthMethod per configured provider, with the `id` `oidc`. It makes no account decision; the
+upstream sign-in flow (#639) looks the identity up by `(realm, type, externalSub)` and decides.
+
+**Callback path.** A provider's `type` is `oidc_` and a lower-case alias (`oidc_corp`), so its
+callback is `/upstream/oidc_<alias>/callback` on the realm host, one per provider, and the
+`redirect_uri` an operator registers at the provider is
+`https://<realm host>/upstream/oidc_<alias>/callback` (`upstreamOidcRedirectUri`). The same path
+answers `GET` (a `query` response) and `POST` (a `form_post` response, which the bounce sends on to
+the `GET` callback on the same origin, so the browser brings the `SameSite=Lax` flow cookie).
+
+**Config** (`upstreamOidcConfigSchema`): `issuer`, `clientId`, `clientAuthentication`
+(`client_secret_basic` or `client_secret_post` with a `writeOnly` `clientSecret`, or
+`private_key_jwt` with the key's `signingAlgorithm`), `scopes` (with `openid`; `openid email
+profile` by default), `responseMode` (`query` or `form_post`), `idTokenSigningAlgorithms`
+(asymmetric only, never `none` or `HS*`), `fetchUserinfo`, and optional `endpoints`.
+
+What it does:
+
+- **Discovery** reads `<issuer>/.well-known/openid-configuration` through the egress client, as an
+  `admin` destination. The document's `issuer` must equal the configured one byte for byte, every
+  URL it names is an `https` URL with no credentials or fragment, and each goes out as a
+  `remote_document` destination, which the egress allowlist never opens: a discovered endpoint
+  never reaches a private or loopback address, whatever the allowlist says. A provider on a
+  private address sets `endpoints` by hand instead (authorization, token, JWKS, optional userinfo,
+  and whether it sends `iss`); those are `admin` destinations, which an allowlist entry naming the
+  realm may open, and no discovery document is read.
+- **The authorization request** carries `response_type=code`, the client id, the provider's own
+  `redirect_uri`, the scopes, a fresh `state` (the binding), a fresh `nonce` and PKCE with S256.
+- **The callback** checks the transaction is this provider's (its type, issuer and
+  `redirect_uri`), checks `iss` (RFC 9207: a response naming another issuer is refused, and so is
+  one without `iss` from a provider that says it sends it), ends as `declined` on
+  `access_denied`, and redeems the code with the verifier.
+- **Client authentication** at the token endpoint is `client_secret_basic` (each part
+  form-urlencoded first, RFC 6749 §2.3.1), `client_secret_post`, or `private_key_jwt`: the signer
+  role signs the assertion with the realm's `upstream_client_assertion` key for the provider
+  (`iss` and `sub` are the client id the signer's upstream configuration names, `aud` the issuer,
+  with a fresh `jti` and a 60-second `exp`). The method sends the string it gets back and never
+  sees a key.
+- **The ID token** is checked against the provider's key set (fetched through the egress client,
+  kept at most five minutes, fetched again for an unknown `kid` at most once a minute) with an
+  allowlist of algorithms, then `iss`, `aud`, `azp` (required when there are several audiences),
+  `exp`, `iat` (at most ten minutes old) and `nonce`, with 30 seconds of clock tolerance.
+- **Userinfo**, when `fetchUserinfo` is set, must carry the ID token's `sub`. The identity's
+  `externalSub` is the provider's `sub`, and its `rawClaims` are the ID token's claims over the
+  userinfo claims, `iss` among them. `extractAttributes()` takes the standard profile claims that
+  are plain text; `email` and `phone_number` are verified only when the provider's own
+  `*_verified` claim is `true`.
+- **Every call** asks for `redirect: 'error'` (no redirect is followed) and has its own deadline
+  and response cap under the egress client's: 5 seconds and 64 KiB for discovery, the key set and
+  userinfo, 10 seconds and 64 KiB for the token request.
+
+**The stored client secret.** `sealUpstreamOidcConfig` encrypts it with the realm's
+`data_at_rest` key through the signer role, under the context
+`upstream-oidc:client-secret:<realm id>:<type>` (so a ciphertext moved to another provider or
+realm does not decrypt, and the delivery role, which may decrypt only `delivery:` contexts, cannot
+read it); `openUpstreamOidcConfig` decrypts it for the method's context; and
+`describeUpstreamOidcConfig` is the view an API or event may carry, with neither the secret nor its
+ciphertext. Where the stored form lives is #714's and #600's.
+
+**At registration.** `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery
+and the egress client's address checks on every endpoint without calling it, and answers one
+finding: `invalid_config`, `discovery_unavailable`, `invalid_document` or `destination_refused`.
+Each use checks again, since every call goes through the egress client.
 
 ## Checking a method: the contract test kit
 
