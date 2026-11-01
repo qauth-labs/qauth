@@ -289,6 +289,23 @@ describe('config members by path', () => {
     expect(configSpellsMemberOf({ clientSecret: 'x' }, [])).toBe(false);
   });
 
+  it('refuses a list on the way to a secret path, whatever it holds', () => {
+    const paths = ['clientSecret', 'mtls.tls.keyPassword'];
+    for (const config of [
+      { mtls: [{ tls: { keyPassword: 'x' } }] },
+      { mtls: { tls: [{ keyPassword: 'x' }] } },
+      { 'mtls.tls': [{ keyPassword: 'x' }] },
+      { mtls: [] },
+    ]) {
+      expect(configSpellsMemberOf(config, paths), JSON.stringify(config)).toBe(true);
+    }
+    // A list anywhere else is a plain member.
+    expect(
+      configSpellsMemberOf({ scopes: ['openid'], mtls: { certUrls: ['https://a'] } }, paths)
+    ).toBe(false);
+    expect(configSpellsMemberOf({ mtls: { tls: { other: ['x'] } } }, paths)).toBe(false);
+  });
+
   it('sets a member named __proto__ as a member, never as a prototype', () => {
     const merged = withConfigMembers({}, new Map([['__proto__', 'x']]));
     expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);

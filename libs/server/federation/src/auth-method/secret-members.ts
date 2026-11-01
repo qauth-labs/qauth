@@ -413,6 +413,11 @@ export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configS
  * (`{ "mtls.keyPassword": … }`). A config sent with a secret there would
  * store it with the plain members.
  *
+ * A list on the way to a secret path (`{ mtls: [{ keyPassword }] }`) counts
+ * too, whatever it holds: no secret member sits inside a list, so such a
+ * config is misshaped, and the value inside it could be a secret sent in
+ * the clear. So does a way to a secret path deeper than this reads.
+ *
  * @experimental
  */
 export function configSpellsMemberOf(
@@ -421,16 +426,27 @@ export function configSpellsMemberOf(
 ): boolean {
   if (paths.length === 0) return false;
   const wanted = new Set(paths);
-  const walk = (value: unknown, prefix: string, depth: number): boolean => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value) || depth > 32) {
-      return false;
-    }
-    return Object.entries(value).some(([key, item]) => {
+  // Every proper ancestor of a secret path: only below one can a member
+  // spell a secret path.
+  const ancestors = new Set(
+    paths.flatMap((path) => {
+      const segments = path.split('.');
+      return segments.slice(1).map((_, index) => segments.slice(0, index + 1).join('.'));
+    })
+  );
+  const walk = (value: Record<string, unknown>, prefix: string, depth: number): boolean =>
+    Object.entries(value).some(([key, item]) => {
       const at = prefix === '' ? key : `${prefix}.${key}`;
-      return wanted.has(at) || walk(item, at, depth + 1);
+      if (wanted.has(at)) return true;
+      if (!ancestors.has(at)) return false;
+      if (Array.isArray(item)) return true;
+      if (typeof item !== 'object' || item === null) return false;
+      // Deeper than any config this reads: refused rather than read as plain.
+      if (depth >= 32) return true;
+      return walk(item as Record<string, unknown>, at, depth + 1);
     });
-  };
-  return walk(config, '', 0);
+  if (typeof config !== 'object' || config === null || Array.isArray(config)) return false;
+  return walk(config as Record<string, unknown>, '', 0);
 }
 
 /**
