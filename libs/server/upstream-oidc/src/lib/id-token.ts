@@ -9,7 +9,7 @@ import {
   type ProtectedHeaderParameters,
 } from 'jose';
 
-import type { UpstreamIdTokenAlgorithm } from './config';
+import { UPSTREAM_ID_TOKEN_ALGORITHMS, type UpstreamIdTokenAlgorithm } from './config';
 import { invalidResponse } from './errors';
 
 /**
@@ -59,9 +59,11 @@ export type IdTokenKeys = (
 /**
  * Validate an ID token and return its claims.
  *
- * - The header's `alg` must be in `expected.algorithms`, checked before any
- *   key is looked up: `none` and `HS*` never are, so neither an unsigned
- *   token nor one MACed with the client secret gets that far.
+ * - The header's `alg` must be one of {@link UPSTREAM_ID_TOKEN_ALGORITHMS}
+ *   (asymmetric only) and in `expected.algorithms`, checked before any key
+ *   is looked up: `none` and `HS*` never are, so neither an unsigned token
+ *   nor one MACed with the client secret gets that far, whatever a caller
+ *   puts in `expected.algorithms`. A secret (`oct`) key is never used.
  * - The signature must verify under a key of the provider's key set that
  *   fits the algorithm (and the header's `kid` when it names one).
  * - `iss` equals the configured issuer; `aud` holds the client id; a token
@@ -91,8 +93,12 @@ export async function validateIdToken(
     throw invalidResponse('id_token: not a JWS', { cause });
   }
   const algorithm = header.alg;
+  // Both lists: the asymmetric ones, whatever the caller passes, and the
+  // config's. So `none` and `HS*` never pass, even from a caller that names
+  // one.
   if (
     typeof algorithm !== 'string' ||
+    !(UPSTREAM_ID_TOKEN_ALGORITHMS as readonly string[]).includes(algorithm) ||
     !(expected.algorithms as readonly string[]).includes(algorithm)
   ) {
     throw invalidResponse('id_token: signed with an algorithm the config does not allow');
@@ -108,6 +114,8 @@ export async function validateIdToken(
 
   let payload: Record<string, unknown> | undefined;
   for (const candidate of candidates) {
+    // A secret key never verifies an ID token: the provider shares it.
+    if (candidate.kty === 'oct' || candidate.k !== undefined) continue;
     let key: Awaited<ReturnType<typeof importJWK>>;
     try {
       key = await importJWK({ ...candidate }, algorithm);

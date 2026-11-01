@@ -111,7 +111,8 @@ export function verificationCandidates(
   algorithm: UpstreamIdTokenAlgorithm,
   kid: string | undefined
 ): readonly JWK[] {
-  const family = KEY_FAMILY[algorithm];
+  const family = Object.hasOwn(KEY_FAMILY, algorithm) ? KEY_FAMILY[algorithm] : undefined;
+  if (family === undefined) return [];
   return keys.filter(
     (key) =>
       key.kty === family.kty &&
