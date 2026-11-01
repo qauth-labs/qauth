@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-10-25'
+lastVerified: '2026-11-01'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -436,7 +436,7 @@ See `.env.docker.example` for all available variables. Key variables:
 | `JWT_ISSUER`                   | No       | JWT issuer URL (default: http://localhost:3000). At first boot it becomes the default realm's permanent issuer; a later boot with another value refuses to start |
 | `DEFAULT_REALM_ENDPOINT_HOSTS` | No       | Names server-side callers reach the auth-server by (default: `auth-server`, the developer portal's)                                                              |
 | `EMAIL_PROVIDER`               | No       | Email provider of a new realm: mock, resend, smtp (default: mock); the realm row decides afterwards                                                              |
-| `REQUIRE_VERIFIED_ACCOUNT`     | No       | Refuse password login until the address is verified (`true`)                                                                                                     |
+| `REQUIRE_VERIFIED_ACCOUNT`     | No       | Refuse password login until the address is verified (`true`), in a new realm; the realm row decides afterwards                                                   |
 | `NODE_ENV`                     | No       | `production` (default) or `development` for dev                                                                                                                  |
 | `LOG_LEVEL`                    | No       | `info` (default); use `debug` for development                                                                                                                    |
 
@@ -446,8 +446,11 @@ See `.env.docker.example` for all available variables. Key variables:
 > with the chosen password would tell a free address from a registered one. A
 > stack on `EMAIL_PROVIDER=mock` therefore cannot complete a sign-up. Point
 > `smtp` at a real server or a local mail catcher. For a throwaway local trial
-> only, `REQUIRE_VERIFIED_ACCOUNT=false` in `.env` lets unverified accounts sign
-> in, and gives that answer back.
+> only, `REQUIRE_VERIFIED_ACCOUNT=false` in `.env` before the first start lets
+> unverified accounts sign in, and gives that answer back. It seeds the default
+> realm's `accounts.requireVerifiedAccount` when the realm is created: on a stack
+> that already started once, the realm keeps its stored value, so remove the
+> volumes (`docker-compose down -v`, which deletes all data) to start over with it.
 
 #### Developer Portal
 

@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -31,8 +31,8 @@ token so a legitimate retry can succeed; a `401` (bad credentials,
 `apps/auth-server/src/app/routes/ui/login.ts:347`) **reuses** the existing
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong. An account whose address is not verified yet gets that
-same `401` page while `REQUIRE_VERIFIED_ACCOUNT` is on (the default), so the
-page cannot be used to tell a just-registered free address from a registered
+same `401` page while the realm requires verified accounts
+(`accounts.requireVerifiedAccount`, the default), so the page cannot be used to tell a just-registered free address from a registered
 one; its message mentions confirming the address for that reason.
 
 The session is stored in Postgres, with Redis as a cache in front of it, in

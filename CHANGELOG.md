@@ -94,8 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RealmSecretStore` names where secret fields go; the store itself comes with
   [#529], and until then a write that sets a secret is refused. The flows still
   read the environment until they move to the row ([#527], [#528], [#529],
-  [#534]); the token lifetimes moved with [#527] (below). See **Realm policies move
-  onto the realm row** in `operate/upgrades`.
+  [#534]); the token lifetimes moved with [#527], the sign-in policy with [#528]
+  (below). See **Realm policies move onto the realm row** in `operate/upgrades`.
 - **Each realm sends its mail through its own transport and sender** ([#529],
   ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
   policies (transport, sender address and name, SMTP host, port, TLS and user)
@@ -1383,6 +1383,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The verified-account gate, the password score and the failed-login lockout
+  come from the realm row** ([#528], ADR-019 Decision 10). Each realm's
+  `accounts.requireVerifiedAccount`, `password.minScore` and `bruteForce`
+  policies apply to it, so two realms of one deployment can differ: one may
+  let an unverified account sign in while another refuses it, accept a weaker
+  new password, or lock an address out after another number of failures, or
+  never. `POST /auth/login`, `POST /ui/login` and the email verification read
+  the gate and the lockout off the realm row the realm resolver already loaded,
+  with no query of their own, and `POST /auth/register` checks a new password
+  against the realm's lowest score. The failed-login counters and lockouts were
+  already kept per realm ([#487]), so the failures of one realm never lock the
+  same address in another. `REQUIRE_VERIFIED_ACCOUNT` (and its old name
+  `REQUIRE_EMAIL_VERIFIED`), `PASSWORD_MIN_SCORE` and the four
+  `FAILED_LOGIN_*` keys now only seed a new realm, and a realm that had no
+  policies at the first boot after the upgrade ([#516]): a later change of them
+  leaves an existing realm as it is, and the boot warns that each one set is
+  ignored. In particular `REQUIRE_VERIFIED_ACCOUNT=false` set on a deployment
+  that already ran this release no longer lets the existing realms' unverified
+  accounts sign in. A realm a node of the previous release created during a
+  rolling upgrade runs on the keys until a node of this release boots again
+  and fills it. A realm policy change reaches the realm's next request once the
+  realm resolver reads the row again (its cache time, 30 s), without a restart.
+  With the seeded defaults nothing changes. The password plugin
+  (`@qauth-labs/fastify-plugin-password`) no longer takes a `validationConfig`:
+  it decorates `fastify.passwordValidators`, whose `forMinScore(score)` builds a
+  validator per score on first use and keeps it (`createPasswordValidators` of
+  `@qauth-labs/shared-validation`), in place of `fastify.passwordValidator`.
 - **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
   ADR-008 §5). The access, development access and refresh token lifetimes are
   each realm's `tokens` policies, so two realms of one deployment can issue

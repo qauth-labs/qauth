@@ -929,7 +929,7 @@ export const E2E_PASSWORD = 'Correct-Horse-Battery-Staple-42!';
  * mailed link.
  *
  * Since ANT-2026-SPEMY9GU registration answers every address with the same
- * `202` and no user id, and `REQUIRE_VERIFIED_ACCOUNT` is on by default, so an
+ * `202` and no user id, and a realm requires verified accounts by default, so an
  * unverified account cannot sign in. The verification token is read from the
  * mail the server hands its provider (the mail goes out off the request path),
  * and the id from the account's password credential.

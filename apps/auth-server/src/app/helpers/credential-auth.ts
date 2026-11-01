@@ -43,7 +43,8 @@ export type PasswordCredentialCheck =
       credential: UserCredential;
       /**
        * `credential_data.email_verified`. For a password account this is the
-       * proof of a verified account, so it is the REQUIRE_VERIFIED_ACCOUNT gate source.
+       * proof of a verified account, so it is what the verified-account gate
+       * (the realm's `accounts.requireVerifiedAccount`) reads.
        */
       emailVerified: boolean;
       identity: VerifiedIdentity;

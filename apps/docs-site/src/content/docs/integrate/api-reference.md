@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -167,8 +167,9 @@ always sent.
 
 The body carries no user id: anything that differed between a new account and an
 existing one would answer the question this endpoint must not. Show a "check your
-inbox" screen, never "account created" or "address taken". With
-`REQUIRE_VERIFIED_ACCOUNT` on (the default), the account can sign in only after
+inbox" screen, never "account created" or "address taken". While the realm
+requires verified accounts (`accounts.requireVerifiedAccount`, the default), the
+account can sign in only after
 its owner has verified it; until then [`POST /auth/login`](#post-authlogin)
 answers it with the same `401` as a wrong password.
 
@@ -210,7 +211,8 @@ is not a sign-in at `GET /oauth/authorize`, which takes only the browser session
 
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
 The `401` is the same for an unknown address, a wrong password, a disabled
-account and, with `REQUIRE_VERIFIED_ACCOUNT` on (the default), an account whose
+account and, while the realm requires verified accounts
+(`accounts.requireVerifiedAccount`, the default), an account whose
 address is not verified yet: registering an address and then logging in must not
 tell a free address from a registered one.
 Renew the access token with the [`refresh_token` grant](/integrate/oauth-flow/#refresh-token-rotation)

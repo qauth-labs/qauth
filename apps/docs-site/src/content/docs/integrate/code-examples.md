@@ -3,7 +3,7 @@ title: Code Examples
 description: Copy-paste-ready Node/TypeScript and browser clients for QAuth.
 sidebar:
   order: 5
-lastVerified: '2026-07-27'
+lastVerified: '2026-11-01'
 ---
 
 Copy-paste-ready client code for QAuth. All snippets target a local instance at
@@ -29,8 +29,8 @@ create a user, log in for tokens, then call a Bearer-protected endpoint
 (`GET /api/clients`).
 
 Registration answers every address with the same `202`, and a new account can
-log in only once its address is verified (`REQUIRE_VERIFIED_ACCOUNT`, on by
-default). So run the script once with `QAUTH_REGISTER=1`, open the link in the
+log in only once its address is verified (the realm's
+`accounts.requireVerifiedAccount`, on by default). So run the script once with `QAUTH_REGISTER=1`, open the link in the
 email and confirm with the password, then run it again without the variable.
 
 ```ts

@@ -3,7 +3,7 @@ title: Portal guide
 description: The developer portal's session model, required environment variables, and every flow it implements, each traced to its route and server action.
 sidebar:
   order: 1
-lastVerified: '2026-08-10'
+lastVerified: '2026-11-01'
 ---
 
 `apps/developer-portal` (Nx project `developer-portal`) is a TanStack Start + React 19
@@ -120,8 +120,8 @@ always empty, so the check is scoped to avoid a false failure in the browser.
   above. On failure the page always shows the same generic "Invalid email or password" message
   regardless of the underlying error code, an explicit anti-enumeration choice
   (`apps/developer-portal/src/routes/login.tsx:43`). The message also asks a developer who has
-  just signed up to confirm the address first: with `REQUIRE_VERIFIED_ACCOUNT` on (the default)
-  the auth-server refuses an unverified account with the same `401` as a wrong password. The page
+  just signed up to confirm the address first: while the realm requires verified accounts
+  (`accounts.requireVerifiedAccount`, the default) the auth-server refuses an unverified account with the same `401` as a wrong password. The page
   also has a "Forgot password? Coming soon." line
   (`apps/developer-portal/src/routes/login.tsx:79`) — there is no
   password-reset endpoint anywhere in `apps/auth-server`, so that line is accurate as written,
