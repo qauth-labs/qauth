@@ -37,6 +37,19 @@ const NOT_FIRST_PARTY = {
 } as const;
 
 /**
+ * `data` without the first-party columns, which `update` never writes
+ * (ADR-017 Decision 2, #631). `UpdateOAuthClient` already leaves them out,
+ * but only at compile time: a caller that spreads a wider object, or casts,
+ * would otherwise set or clear a profile through an ordinary update. Removed,
+ * not nulled, so an update leaves the operator's profile as it is.
+ */
+function withoutFirstPartyColumns<T extends object>(data: T): T {
+  const copy: Record<string, unknown> = { ...data };
+  for (const column of Object.keys(NOT_FIRST_PARTY)) delete copy[column];
+  return copy as T;
+}
+
+/**
  * Factory function that creates an OAuth clients repository with CRUD operations
  *
  * @param defaultDb - Database client to use for queries
@@ -357,7 +370,7 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
     ): Promise<OAuthClient> {
       const invoker = tx ?? defaultDb;
       const updateData = {
-        ...data,
+        ...withoutFirstPartyColumns(data),
         updatedAt: data.updatedAt ?? Date.now(),
       };
 

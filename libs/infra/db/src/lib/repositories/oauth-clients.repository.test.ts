@@ -175,6 +175,25 @@ describe('the repository writes no first-party profile (#631)', () => {
     }
   });
 
+  it('update never names them, whatever the caller passed at run time', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOAuthClientsRepository(db)
+      .update(CIMD_ROW.realmId, '22222222-2222-2222-2222-222222222222', {
+        name: 'Renamed',
+        ...(FLAGGED as unknown as UpdateOAuthClient),
+      })
+      .catch(() => undefined);
+
+    expect(queries).toHaveLength(1);
+    const sql = queries[0].text.toLowerCase();
+    const set = sql.slice(sql.indexOf(' set '), sql.indexOf(' where '));
+    expect(set).toContain('"name"');
+    for (const column of FIRST_PARTY_COLUMNS) {
+      expect(set, column).not.toContain(column);
+    }
+  });
+
   it('upsertCimdClient writes NULL on insert and never names them on conflict', async () => {
     const { db, queries } = createRecordingDb();
 
