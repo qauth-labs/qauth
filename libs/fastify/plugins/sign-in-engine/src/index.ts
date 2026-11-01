@@ -1,14 +1,20 @@
 export * from './lib/account-directory';
 export * from './lib/audit-events';
+export * from './lib/failure-ladder';
 export * from './lib/fastify-plugin-sign-in-engine';
 export * from './lib/identifier-digest';
+export * from './lib/password-attempts';
+export * from './lib/password-hard-action';
 export * from './lib/password-verifier';
 // What the auth server works with, from the engine library it may not import.
 export {
   type AuditSink,
   type CompletedSignIn,
+  type LadderPolicy,
   type MfaPolicyReader,
   NO_SECOND_FACTOR_POLICY,
+  PASSWORD_LADDER_POLICY,
+  type PasswordHardAction,
   readSignInTransaction,
   type RoundAnswer,
   type RoundContext,

@@ -91,7 +91,12 @@ export function createMemoryLadder(
           if (settled) throw new Error('memory ladder: settled twice');
           settled = true;
           if (outcome === 'success') {
-            counters.delete(key);
+            const current = live(key);
+            if (policy.onSuccess === 'clear') counters.delete(key);
+            else if (current !== undefined && current.run === run) {
+              if (current.failures <= 1) counters.delete(key);
+              else counters.set(key, { ...current, failures: current.failures - 1 });
+            }
             if (endUserIp !== undefined && policy.knownIpMs > 0) {
               const ips = known.get(knownKey(realmId, identifierHmac)) ?? new Map<string, number>();
               ips.set(endUserIp, now());

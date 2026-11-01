@@ -42,6 +42,14 @@ export interface LadderPolicy {
    * not, so the decay tells nothing about who exists.
    */
   readonly retentionMs: number;
+  /**
+   * What a success does to the counter that reserved it: `clear` ends the
+   * run (a correct answer of the authenticator the counter is for); `withdraw`
+   * only takes the attempt back, for a counter of failures alone that a
+   * success of something else must not reset (ADR-017 Decision 7: "counters of
+   * failures alone take the attempt back"). A wait the attempt set stays.
+   */
+  readonly onSuccess: 'clear' | 'withdraw';
 }
 
 /** One day, in milliseconds. */
@@ -61,6 +69,7 @@ export const PASSWORD_LADDER_POLICY: LadderPolicy = Object.freeze({
   hardCeiling: 100,
   knownIpMs: 30 * DAY_MS,
   retentionMs: 30 * DAY_MS,
+  onSuccess: 'clear',
 });
 
 /** The largest doubling the wait is computed through: past it every wait is `maxWaitMs`. */
@@ -94,6 +103,9 @@ export function checkLadderPolicy(policy: LadderPolicy): LadderPolicy {
   if (!whole(policy.knownIpMs, 0)) throw new Error('ladder policy: knownIpMs is not a time');
   if (!whole(policy.retentionMs, policy.maxWaitMs)) {
     throw new Error('ladder policy: retentionMs shorter than the longest wait');
+  }
+  if (policy.onSuccess !== 'clear' && policy.onSuccess !== 'withdraw') {
+    throw new Error('ladder policy: onSuccess is neither clear nor withdraw');
   }
   return policy;
 }

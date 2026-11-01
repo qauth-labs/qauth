@@ -19,7 +19,11 @@ import {
 } from './account-directory';
 import { signInAuditEvent } from './audit-events';
 import { signInEnginePlugin } from './fastify-plugin-sign-in-engine';
-import { createCookieSecretIdentifierDigest, IDENTIFIER_HMAC_LABEL } from './identifier-digest';
+import {
+  createCookieSecretIdentifierDigest,
+  END_USER_IP_HMAC_LABEL,
+  IDENTIFIER_HMAC_LABEL,
+} from './identifier-digest';
 import { createArgon2PasswordVerifier } from './password-verifier';
 
 const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
@@ -31,8 +35,9 @@ function stubStores(
   overrides: Partial<{
     credential: Record<string, unknown> | undefined;
     user: { id: string; enabled: boolean } | undefined;
-    passkeys: { realmId: string }[];
+    passkeys: { realmId: string; disabledAt?: number | null }[];
     grants: unknown[];
+    disabledAt: number | null;
   }> = {}
 ) {
   const state = {
@@ -40,8 +45,9 @@ function stubStores(
       | Record<string, unknown>
       | undefined,
     user: { id: USER, enabled: true } as { id: string; enabled: boolean } | undefined,
-    passkeys: [] as { realmId: string }[],
+    passkeys: [] as { realmId: string; disabledAt?: number | null }[],
     grants: [] as unknown[],
+    disabledAt: null as number | null,
     ...overrides,
   };
   const calls: string[] = [];
@@ -51,20 +57,35 @@ function stubStores(
         calls.push(`credential:${realmId}:${providerType}:${externalSub}`);
         return state.credential === undefined
           ? undefined
-          : { id: 'cred-1', userId: USER, realmId, credentialData: state.credential };
+          : {
+              id: 'cred-1',
+              userId: USER,
+              realmId,
+              credentialData: state.credential,
+              disabledAt: state.disabledAt,
+            };
       },
       findAllByUserIdAndType: async (userId, providerType) => {
         calls.push(`all:${userId}:${providerType}`);
         if (providerType === 'password') {
           return state.credential === undefined
             ? []
-            : [{ id: 'cred-1', userId, realmId: REALM, credentialData: state.credential }];
+            : [
+                {
+                  id: 'cred-1',
+                  userId,
+                  realmId: REALM,
+                  credentialData: state.credential,
+                  disabledAt: state.disabledAt,
+                },
+              ];
         }
         return state.passkeys.map((passkey, index) => ({
           id: `passkey-${index}`,
           userId,
           realmId: passkey.realmId,
           credentialData: {},
+          disabledAt: passkey.disabledAt ?? null,
         }));
       },
     },
@@ -147,6 +168,60 @@ describe('the repository account directory', () => {
     );
     expect(account).toMatchObject({ verified: false, password: { disabled: false, hash: null } });
     expect(logger.error).toHaveBeenCalledWith({ credentialId: 'cred-1' }, expect.any(String));
+  });
+
+  it('ignores a disabled mark while the hard action is unarmed, and says so', async () => {
+    const { repos } = stubStores({ disabledAt: 1_793_491_200_000 });
+    const armed = vi.fn(async () => false);
+    const directory = createRepositoryAccountDirectory(repos, log(), { hardActionArmed: armed });
+    expect(await directory.findByIdentifier(REALM, IDENTIFIER)).toMatchObject({
+      password: { disabled: false, hash: 'hash', ignoredMark: true },
+    });
+    expect(armed).toHaveBeenCalledWith(REALM);
+    expect(await directory.findByUserId(REALM, USER)).toMatchObject({
+      factors: [{ type: 'password', disabled: false }],
+    });
+    // With no arming at all, never armed.
+    expect(
+      await createRepositoryAccountDirectory(repos, log()).findByIdentifier(REALM, IDENTIFIER)
+    ).toMatchObject({ password: { disabled: false, ignoredMark: true } });
+  });
+
+  it('makes a marked credential unusable while armed, and still bound', async () => {
+    const { repos } = stubStores({
+      disabledAt: 1_793_491_200_000,
+      passkeys: [{ realmId: REALM }, { realmId: REALM, disabledAt: 1 }],
+    });
+    const directory = createRepositoryAccountDirectory(repos, log(), {
+      hardActionArmed: async () => true,
+    });
+    const candidate = await directory.findByIdentifier(REALM, IDENTIFIER);
+    expect(candidate?.password).toEqual({ disabled: true, hash: 'hash' });
+    expect(await directory.findByUserId(REALM, USER)).toMatchObject({
+      factors: [
+        { type: 'password', disabled: true },
+        { type: 'passkey', disabled: false },
+        { type: 'passkey', disabled: true },
+      ],
+    });
+  });
+
+  it('asks whether the hard action is armed only for a marked credential, and fails closed', async () => {
+    const armed = vi.fn(async () => {
+      throw new Error('settings unreadable');
+    });
+    const { repos } = stubStores();
+    await createRepositoryAccountDirectory(repos, log(), {
+      hardActionArmed: armed,
+    }).findByIdentifier(REALM, IDENTIFIER);
+    expect(armed).not.toHaveBeenCalled();
+    const { repos: marked } = stubStores({ disabledAt: 1 });
+    await expect(
+      createRepositoryAccountDirectory(marked, log(), { hardActionArmed: armed }).findByIdentifier(
+        REALM,
+        IDENTIFIER
+      )
+    ).rejects.toThrow('settings unreadable');
   });
 
   it('names no account for a credential without a users row', async () => {
@@ -267,6 +342,25 @@ describe('the identifier HMAC', () => {
     expect(await digest({ realmId: OTHER_REALM, identifier: IDENTIFIER })).not.toBe(value);
     expect(await digest({ realmId: REALM, identifier: 'bob@example.com' })).not.toBe(value);
   });
+
+  it('derives the end-user IP key under a label of its own, as the signer’s local caller', async () => {
+    const source = signer();
+    const ipDigest = createCookieSecretIdentifierDigest(source, 'local', END_USER_IP_HMAC_LABEL);
+    const value = await ipDigest({ realmId: REALM, identifier: '203.0.113.7' });
+    const key = Buffer.from(
+      hkdfSync('sha256', secret, Buffer.alloc(0), END_USER_IP_HMAC_LABEL, 32)
+    );
+    expect(value).toBe(
+      createHmac('sha256', key).update(`${REALM}\u0000203.0.113.7`).digest('base64url')
+    );
+    expect(source.getCookieSecrets).toHaveBeenCalledWith('local', REALM);
+    expect(value).not.toBe(
+      await createCookieSecretIdentifierDigest(signer())({
+        realmId: REALM,
+        identifier: '203.0.113.7',
+      })
+    );
+  });
 });
 
 describe('audit events', () => {
@@ -386,7 +480,14 @@ describe('the plugin', () => {
     requireVerifiedAccount: true,
   });
   const ladder = {
-    reserve: async () => ({ kind: 'reserved' as const, settle: async () => undefined }),
+    reserve: async () => ({
+      kind: 'reserved' as const,
+      settle: async () => ({ ceilingReached: false }),
+    }),
+  };
+  const passwordHardAction = {
+    ceilingReached: async () => undefined,
+    clearIgnoredMark: async () => undefined,
   };
 
   it('refuses to build a production engine without a ladder, so no password is guessed without limit', async () => {
@@ -402,10 +503,25 @@ describe('the plugin', () => {
     await withLadder.register(signInEnginePlugin, {
       ...dependencies(),
       hooks: { ladder },
+      passwordHardAction,
       production: true,
     });
     await expect(withLadder.ready()).resolves.toBeDefined();
     await withLadder.close();
+  });
+
+  it('refuses to build a production engine without the password hard action', async () => {
+    const app = Fastify();
+    await expect(
+      (async () => {
+        await app.register(signInEnginePlugin, {
+          ...dependencies(),
+          hooks: { ladder },
+          production: true,
+        });
+        await app.ready();
+      })()
+    ).rejects.toThrow(/hard action/);
   });
 
   it('reads production from NODE_ENV when the option is absent', async () => {
