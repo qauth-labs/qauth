@@ -115,6 +115,16 @@ describe('discovery', () => {
     await expect(discover(provider)).rejects.toMatchObject({ reason: 'invalid_response' });
   });
 
+  it('takes a document that omits the response types and the ID token algorithms, with the configured algorithms', async () => {
+    const provider = await createFakeProvider({ issuer: ISSUER });
+    provider.tamper.discovery = {
+      response_types_supported: undefined,
+      id_token_signing_alg_values_supported: undefined,
+    };
+    const metadata = await discover(provider, { idTokenSigningAlgorithms: ['ES256', 'EdDSA'] });
+    expect(metadata.idTokenSigningAlgorithms).toEqual(['ES256', 'EdDSA']);
+  });
+
   describe('the client assertion algorithm, for private_key_jwt', () => {
     const privateKeyJwt = (signingAlgorithm: string) => ({
       clientAuthentication: { method: 'private_key_jwt', signingAlgorithm },
