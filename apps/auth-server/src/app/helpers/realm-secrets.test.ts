@@ -357,12 +357,13 @@ describe('realmMailSource (#529)', () => {
         : ({ policies: SMTP_POLICIES, ...snapshot } as RealmPolicySnapshot)
     );
     const getForUse = vi.fn(async () => PASSWORD);
-    const fastify = {
-      policyStore: { get },
-      realmSecretStore: { getForUse },
-    } as unknown as Pick<FastifyInstance, 'policyStore' | 'realmSecretStore'>;
+    const fastify = { policyStore: { get } } as unknown as Pick<FastifyInstance, 'policyStore'>;
     return {
-      source: realmMailSource(fastify, new Map([['mail.smtp.password', 'from-the-environment']])),
+      source: realmMailSource(
+        fastify,
+        { getForUse },
+        new Map([['mail.smtp.password', 'from-the-environment']])
+      ),
       get,
       getForUse,
     };

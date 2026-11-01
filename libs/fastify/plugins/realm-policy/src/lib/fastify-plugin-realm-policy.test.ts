@@ -9,7 +9,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 import { describe, expect, it, vi } from 'vitest';
 
-import { realmPolicyPlugin } from './fastify-plugin-realm-policy';
+import { createRealmSecretStoreOfRealms, realmPolicyPlugin } from './fastify-plugin-realm-policy';
 
 const SEEDS = defaultsFromEnv({ ACCESS_TOKEN_LIFESPAN: '600' });
 
@@ -116,7 +116,7 @@ describe('realmPolicyPlugin', () => {
     await app.close();
   });
 
-  it('builds the secret store over the repository and cipher it is given (#529)', async () => {
+  it('takes the secret store built over a repository and cipher, and decorates no reader of a value (#529)', async () => {
     const PASSWORD = 'the-smtp-password';
     const rows = new Map<string, { ciphertext: string | null; keyId: string | null }>();
     const repository = {
@@ -141,12 +141,13 @@ describe('realmPolicyPlugin', () => {
     };
     const lockPolicyRecord = vi.fn(async () => realmPolicyRecord(REALM));
     const writePolicies = vi.fn(async () => ({ ...REALM, policiesVersion: 6 }) as Realm);
+    const secrets = createRealmSecretStoreOfRealms({ repository, cipher });
     const app = Fastify();
     await app.register(fakeDatabasePlugin());
     await app.register(realmPolicyPlugin, {
       seeds: SEEDS,
       realms: fakeRealms({ lockPolicyRecord, writePolicies }),
-      secrets: { repository, cipher },
+      secrets,
     });
     await app.ready();
 
@@ -169,7 +170,11 @@ describe('realmPolicyPlugin', () => {
     );
     expect(JSON.stringify(writePolicies.mock.calls)).not.toContain(PASSWORD);
     expect(await app.realmSecretStore?.isSet('realm-1', 'mail.smtp.password')).toBe(true);
-    expect(await app.realmSecretStore?.getForUse('realm-1', 'mail.smtp.password')).toBe(PASSWORD);
+    // A value is read only through the store the caller kept, for the mail
+    // sender: the decorator any plugin can reach has no reader.
+    expect(Object.keys(app.realmSecretStore ?? {}).sort()).toEqual(['isSet', 'seed']);
+    expect(app.realmSecretStore).not.toHaveProperty('getForUse');
+    expect(await secrets.getForUse('realm-1', 'mail.smtp.password')).toBe(PASSWORD);
     await app.close();
   });
 });

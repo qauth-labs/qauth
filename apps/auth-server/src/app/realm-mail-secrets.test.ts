@@ -3,6 +3,7 @@ import { Writable } from 'node:stream';
 import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
 import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 import {
+  createRealmSecretStoreOfRealms,
   defaultsFromEnv,
   diffPolicies,
   REALM_POLICY_SCHEMA_VERSION,
@@ -150,12 +151,13 @@ async function buildServer() {
     )
   );
   await app.register(errorHandler);
+  const secrets = createRealmSecretStoreOfRealms({ repository: tables.repository, cipher });
   await app.register(realmPolicyPlugin, {
     seeds: defaultsFromEnv({}),
     realms: tables.realms as never,
-    secrets: { repository: tables.repository, cipher },
+    secrets,
   });
-  await app.register(emailPlugin, { source: realmMailSource(app, new Map()) });
+  await app.register(emailPlugin, { source: realmMailSource(app, secrets, new Map()) });
 
   app.patch('/admin/v1-rc.0/realms/:realmId/policies', async (request) => {
     // On purpose: a handler that logs the patch it was sent.

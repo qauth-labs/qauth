@@ -6,6 +6,7 @@ import {
   type RealmPolicyStoreOfRealms,
   type RealmSecretCipher,
   realmSecretPaths,
+  type RealmSecretReader,
   type RealmSecretStoreOfRealms,
 } from '@qauth-labs/fastify-plugin-realm-policy';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
@@ -21,7 +22,8 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
  * - The environment seeds them once, at the first boot that can encrypt
  *   them, in the default realm and in each realm whose stored transport is
  *   the environment's and needs them ({@link seedRealmSecrets}).
- * - Only the realm's mail sender reads a value ({@link realmMailSource}).
+ * - Only the realm's mail sender reads a value ({@link realmMailSource}),
+ *   through the reader app.ts hands it; no decorator carries one.
  */
 
 /**
@@ -273,9 +275,14 @@ async function seedRealm(
  * release created during a rolling upgrade, until a node of this release
  * boots again) reads as its fill, the environment's seeds, and takes its
  * secret from the environment as before (`environmentSecrets`).
+ *
+ * `secrets` is the one reader of a realm secret's value, which app.ts hands
+ * only to this source; `null` in a process with no secret store, where a
+ * realm with policies sends with no secret.
  */
 export function realmMailSource(
-  fastify: Pick<FastifyInstance, 'policyStore' | 'realmSecretStore'>,
+  fastify: Pick<FastifyInstance, 'policyStore'>,
+  secrets: RealmSecretReader | null,
   environmentSecrets: ReadonlyMap<string, string>
 ): RealmMailSource {
   return Object.freeze({
@@ -298,7 +305,7 @@ export function realmMailSource(
         },
         async secretOf(path) {
           if (!snapshot.hasPolicies) return environmentSecrets.get(path);
-          return (await fastify.realmSecretStore?.getForUse(realmId, path)) ?? undefined;
+          return (await secrets?.getForUse(realmId, path)) ?? undefined;
         },
       };
     },

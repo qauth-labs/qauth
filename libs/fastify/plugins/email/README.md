@@ -33,7 +33,9 @@ await fastify.register(emailPlugin, {
       return {
         version: snapshot.version,
         mail: snapshot.policies.mail,
-        secretOf: (path) => fastify.realmSecretStore?.getForUse(realmId, path),
+        // `secrets` is the realm secret store the caller built
+        // (`createRealmSecretStoreOfRealms`) and hands only to the mail sender.
+        secretOf: (path) => secrets.getForUse(realmId, path),
       };
     },
   },

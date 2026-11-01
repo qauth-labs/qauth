@@ -21,9 +21,11 @@ import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import {
+  createRealmSecretStoreOfRealms,
   defaultsFromEnv,
   REALM_POLICY_SCHEMA_VERSION,
   realmPolicyPlugin,
+  type RealmSecretReader,
   secretSeedKeys,
   secretSeedsFromEnv,
   seedKeysSetIn,
@@ -442,7 +444,10 @@ async function registerFederation(
 }
 
 /** The mail service, for a process whose roles send mail (#495: `api`). */
-async function registerEmail(fastify: FastifyInstance): Promise<void> {
+async function registerEmail(
+  fastify: FastifyInstance,
+  secrets: RealmSecretReader | null
+): Promise<void> {
   // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
   // set to another base than the default realm's issuer, where the links went.
   const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
@@ -459,13 +464,13 @@ async function registerEmail(fastify: FastifyInstance): Promise<void> {
   // transport built for a realm is kept until its policy counter moves, so a
   // change reaches the next mail without a restart. EMAIL_PROVIDER, SMTP_*,
   // RESEND_API_KEY and EMAIL_FROM_* only seed: the policies of a new realm,
-  // and the default realm's secrets once (`seedDefaultRealmSecrets`). A
+  // and the realms' secrets once (`seedRealmSecrets`). A
   // transport that lacks what it sends with no longer stops the boot: the
   // policy update refuses it, and a mail through it fails, naming the path.
   // The environment's secrets serve only a realm with no policies yet, as
   // before, during a rolling upgrade.
   await fastify.register(emailPlugin, {
-    source: realmMailSource(fastify, secretSeedsFromEnv(process.env)),
+    source: realmMailSource(fastify, secrets, secretSeedsFromEnv(process.env)),
     serviceConfig: {
       // No link base here: a mail's links start at the issuer of the realm
       // the account belongs to, passed with each mail (ADR-019 Decision 1,
@@ -645,17 +650,18 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // The realm secret store (#529) comes with it where this process's roles
   // read or seed a realm's secrets: values encrypted with the realm's
   // data-at-rest key through the signer, in `realm_secrets`.
+  // Only `isSet` and the seed are decorated: the store itself, which reads a
+  // value, stays here and goes to the mail sender alone (`registerEmail`).
+  const realmSecrets = hasRepository(fastify.repositories, 'realmSecrets')
+    ? createRealmSecretStoreOfRealms({
+        repository: fastify.repositories.realmSecrets,
+        cipher: realmSecretCipher(fastify),
+      })
+    : null;
   await fastify.register(realmPolicyPlugin, {
     seeds: realmPolicySeeds,
     realms: fastify.repositories.realms,
-    ...(hasRepository(fastify.repositories, 'realmSecrets')
-      ? {
-          secrets: {
-            repository: fastify.repositories.realmSecrets,
-            cipher: realmSecretCipher(fastify),
-          },
-        }
-      : {}),
+    ...(realmSecrets === null ? {} : { secrets: realmSecrets }),
   });
 
   // The default realm's boot step (ADR-019 Decision 1, #484): find or create
@@ -844,7 +850,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   if (plugins.has('email')) {
-    await registerEmail(fastify);
+    await registerEmail(fastify, realmSecrets);
   }
 
   if (plugins.has('jwt')) {

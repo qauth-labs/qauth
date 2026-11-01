@@ -27,17 +27,21 @@ export const REALM_POLICY_PLUGIN_NAME = packageJson.name;
 export type RealmPolicyStoreOfRealms = RealmPolicyStore<Realm, DbClient>;
 
 /**
- * The realm secret store as the auth server reads it, over `realm_secrets`
- * (#529): whether a secret is set, its value for the mail sender, and the
- * boot's seed. Writing a secret is the policy update's alone (`put` is not
- * here): it runs the rules and raises the policy counter in the same
- * transaction, which is what tells every node's mail sender to read the
- * secret again.
+ * The realm secret store as the auth server's decorator holds it, over
+ * `realm_secrets` (#529): whether a secret is set, and the boot's seed.
+ * Writing a secret is the policy update's alone (`put` is not here): it runs
+ * the rules and raises the policy counter in the same transaction, which is
+ * what tells every node's mail sender to read the secret again. Reading a
+ * value is not here either: only the mail sender holds a
+ * {@link RealmSecretReader}, handed to it where it is registered.
  */
-export type RealmSecretStoreOfRealms = Pick<
-  RealmSecretStoreWithSeed<DbClient>,
-  'isSet' | 'getForUse' | 'seed'
->;
+export type RealmSecretStoreOfRealms = Pick<RealmSecretStoreWithSeed<DbClient>, 'isSet' | 'seed'>;
+
+/** The one reader of a realm secret's value (#529): the realm's mail sender. */
+export type RealmSecretReader = Pick<RealmSecretStoreWithSeed<DbClient>, 'getForUse'>;
+
+/** The realm secret store over `realm_secrets`, whole: what {@link createRealmSecretStoreOfRealms} gives. */
+export type FullRealmSecretStoreOfRealms = RealmSecretStoreWithSeed<DbClient>;
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -48,10 +52,10 @@ declare module 'fastify' {
      */
     policyStore: RealmPolicyStoreOfRealms;
     /**
-     * The realm secret store (#529): the values of the realms' secret policy
-     * fields, encrypted with each realm's data-at-rest key. `getForUse` is
-     * for the realm's mail sender only. `null` in a process that was given
-     * none, where the policy store refuses every write of a secret.
+     * The realm secret store (#529): whether a realm's secret policy field
+     * holds a value, and the boot's seed. No value is read through it: the
+     * realm's mail sender alone holds the reader. `null` in a process that
+     * was given none, where the policy store refuses every write of a secret.
      */
     realmSecretStore: RealmSecretStoreOfRealms | null;
   }
@@ -63,6 +67,20 @@ export interface RealmSecretStoreSettings {
   readonly repository: Pick<RealmSecretsRepository, 'find' | 'write' | 'insertIfAbsent'>;
   /** The signer's data-at-rest operations, under the role of the component that calls. */
   readonly cipher: RealmSecretCipher;
+}
+
+/**
+ * Build the realm secret store over `realm_secrets` (#529). The caller passes
+ * it to {@link realmPolicyPlugin}, which decorates only `isSet` and `seed`,
+ * and hands its `getForUse` to the realm's mail sender alone.
+ */
+export function createRealmSecretStoreOfRealms(
+  settings: RealmSecretStoreSettings
+): FullRealmSecretStoreOfRealms {
+  return createRealmSecretStore<DbClient>({
+    storage: createRealmSecretStorage(settings.repository),
+    cipher: settings.cipher,
+  });
 }
 
 /** Options of {@link realmPolicyPlugin}. */
@@ -83,11 +101,12 @@ export interface RealmPolicyPluginOptions {
     'findById' | 'listPolicyRecords' | 'lockPolicyRecord' | 'writePolicies'
   >;
   /**
-   * The realm secret store's repository and cipher (#529). Absent, the
-   * process has no secret store (`fastify.realmSecretStore` is `null`) and
-   * the policy store refuses every write of a secret.
+   * The realm secret store (#529), from
+   * {@link createRealmSecretStoreOfRealms}. Absent, the process has no secret
+   * store (`fastify.realmSecretStore` is `null`) and the policy store refuses
+   * every write of a secret.
    */
-  readonly secrets?: RealmSecretStoreSettings;
+  readonly secrets?: FullRealmSecretStoreOfRealms;
 }
 
 /**
@@ -101,22 +120,10 @@ export interface RealmPolicyPluginOptions {
  */
 export const realmPolicyPlugin = fp(
   async (fastify: FastifyInstance, options: RealmPolicyPluginOptions) => {
-    const secrets =
-      options.secrets === undefined
-        ? null
-        : createRealmSecretStore<DbClient>({
-            storage: createRealmSecretStorage(options.secrets.repository),
-            cipher: options.secrets.cipher,
-          });
+    const secrets = options.secrets ?? null;
     fastify.decorate(
       'realmSecretStore',
-      secrets === null
-        ? null
-        : Object.freeze({
-            isSet: secrets.isSet,
-            getForUse: secrets.getForUse,
-            seed: secrets.seed,
-          })
+      secrets === null ? null : Object.freeze({ isSet: secrets.isSet, seed: secrets.seed })
     );
     fastify.decorate(
       'policyStore',
