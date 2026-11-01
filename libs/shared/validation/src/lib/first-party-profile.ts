@@ -48,6 +48,12 @@ export const FIRST_PARTY_REASON_MAX_LENGTH = 1000;
  * - `pkce_required`: PKCE S256 at the authorization challenge endpoint,
  *   default `true`. Only the redirect flow's rule is absolute; an operator may
  *   switch it off here for one client (ADR-017 question 11).
+ *
+ * Nothing reads `pkce_required` yet: the authorization challenge endpoint
+ * (ADR-017 phase F1) will. That consumer must never relax the project's PKCE
+ * rule beyond what this member says: the redirect flow always requires S256,
+ * whatever the policy holds, and where PKCE applies no method but S256 is
+ * ever accepted (no `plain`).
  */
 export const firstPartyPolicySchema = z.strictObject({
   flows: z
