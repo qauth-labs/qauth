@@ -17,7 +17,7 @@ import { env } from './env';
 /** The settings the switches below read. A new item adds the keys it reads. */
 export type ExperimentalSwitchConfig = Pick<
   typeof env,
-  'WALLET_FEDERATION_ENABLED' | 'OID4VP_VERIFIER_PROFILE'
+  'WALLET_FEDERATION_ENABLED' | 'OID4VP_VERIFIER_PROFILE' | 'PLUGIN_API_ENABLED'
 >;
 
 /**
@@ -29,6 +29,9 @@ export const EXPERIMENTAL_SWITCHES: ExperimentalSwitches<ExperimentalSwitchConfi
   // verifier runs, whatever the profile says.
   'oid4vp-1.0-base': (config) =>
     config.WALLET_FEDERATION_ENABLED && config.OID4VP_VERIFIER_PROFILE === 'oid4vp-1.0-base',
+  // The plugin API (#600): on, a plugin outside the first-party list loads.
+  // First-party plugins load whatever it says, so it is on only by its switch.
+  'plugin-api': (config) => config.PLUGIN_API_ENABLED,
 };
 
 /**

@@ -80,6 +80,7 @@ function recordingLog() {
 const PILOT_ON: ExperimentalSwitchConfig = {
   WALLET_FEDERATION_ENABLED: true,
   OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
+  PLUGIN_API_ENABLED: false,
 };
 
 const BUILT_SERVER_ITEMS: readonly ExperimentalItem[] = EXPERIMENTAL_ITEMS.filter(
@@ -114,14 +115,29 @@ describe('logExperimentalFeatures', () => {
   });
 
   it.each<[string, ExperimentalSwitchConfig]>([
-    ['nothing is on', { WALLET_FEDERATION_ENABLED: false, OID4VP_VERIFIER_PROFILE: undefined }],
+    [
+      'nothing is on',
+      {
+        WALLET_FEDERATION_ENABLED: false,
+        OID4VP_VERIFIER_PROFILE: undefined,
+        PLUGIN_API_ENABLED: false,
+      },
+    ],
     [
       'the stable profile',
-      { WALLET_FEDERATION_ENABLED: true, OID4VP_VERIFIER_PROFILE: 'haip-1.0' },
+      {
+        WALLET_FEDERATION_ENABLED: true,
+        OID4VP_VERIFIER_PROFILE: 'haip-1.0',
+        PLUGIN_API_ENABLED: false,
+      },
     ],
     [
       'the base profile with wallet sign-in off',
-      { WALLET_FEDERATION_ENABLED: false, OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base' },
+      {
+        WALLET_FEDERATION_ENABLED: false,
+        OID4VP_VERIFIER_PROFILE: 'oid4vp-1.0-base',
+        PLUGIN_API_ENABLED: false,
+      },
     ],
   ])('logs nothing for %s', async (_label, config) => {
     const { logExperimentalFeatures } = await loadWith([]);
@@ -130,6 +146,31 @@ describe('logExperimentalFeatures', () => {
     logExperimentalFeatures(log, config);
 
     expect(log.lines).toEqual([]);
+  });
+
+  // #600: the plugin API warns at boot while its switch is on.
+  it('logs one warning for the plugin API while PLUGIN_API_ENABLED is on', async () => {
+    const { logExperimentalFeatures } = await loadWith([]);
+    const log = recordingLog();
+
+    logExperimentalFeatures(log, {
+      WALLET_FEDERATION_ENABLED: false,
+      OID4VP_VERIFIER_PROFILE: undefined,
+      PLUGIN_API_ENABLED: true,
+    });
+
+    expect(log.lines).toEqual([
+      {
+        object: {
+          experimentalFeature: 'plugin-api',
+          docs: 'https://docs.qauth.dev/reference/experimental-features/#plugin-api',
+        },
+        message:
+          'Experimental feature plugin-api is on. It may change in a minor release, ' +
+          'without a deprecation window. See ' +
+          'https://docs.qauth.dev/reference/experimental-features/#plugin-api',
+      },
+    ]);
   });
 
   it('reads the deployment when no configuration is passed', async () => {
