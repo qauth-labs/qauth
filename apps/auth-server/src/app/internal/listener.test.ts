@@ -66,6 +66,9 @@ const seen = { requests: 0, adminOnly: 0 };
 /** Ends the request `/hold` keeps open, once it is. */
 const hold: { release?: () => void } = {};
 
+/** When armed, `/reset-once` closes the connection of its next request without an answer. */
+const reset = { armed: false };
+
 const fixtureRoutes: FastifyPluginAsync = async (scope) => {
   scope.get('/peer', async (request) => ({ peerRole: requestPeerRole(request) }));
   scope.post('/echo', async (request) => ({ body: request.body }));
@@ -76,6 +79,13 @@ const fixtureRoutes: FastifyPluginAsync = async (scope) => {
   scope.get('/slow', async () => {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     return { slow: true };
+  });
+  scope.get('/reset-once', async (request, reply) => {
+    if (!reset.armed) return { reset: false };
+    reset.armed = false;
+    reply.hijack();
+    request.raw.socket.destroy();
+    return reply;
   });
   scope.get('/hold', async () => {
     await new Promise<void>((resolve) => {
@@ -482,6 +492,42 @@ describe('the internal client', () => {
       expect(connections).toHaveBeenCalledTimes(1);
     } finally {
       internal.server.off('secureConnection', connections);
+    }
+  });
+
+  it('sends a request once more on a new connection when the pooled one was closed under it', async () => {
+    const connections = vi.fn();
+    internal.server.on('secureConnection', connections);
+    try {
+      const pooled = client(peers.web, { maxSockets: 1 });
+      expect((await pooled.request({ method: 'GET', path: `${FIXTURE_PREFIX}/peer` })).status).toBe(
+        200
+      );
+      reset.armed = true;
+      const response = await pooled.request({
+        method: 'GET',
+        path: `${FIXTURE_PREFIX}/reset-once`,
+      });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body.toString())).toEqual({ reset: false });
+      expect(connections).toHaveBeenCalledTimes(2);
+    } finally {
+      reset.armed = false;
+      internal.server.off('secureConnection', connections);
+    }
+  });
+
+  it('sends no request again that went out on a connection of its own', async () => {
+    reset.armed = true;
+    try {
+      const refused = await client(peers.web)
+        .request({ method: 'GET', path: `${FIXTURE_PREFIX}/reset-once` })
+        .catch((caught: unknown) => caught);
+      expect((refused as InternalClientError).code).toBe('unreachable');
+      expect((refused as InternalClientError).platformCode).toBe('ECONNRESET');
+      expect(reset.armed).toBe(false);
+    } finally {
+      reset.armed = false;
     }
   });
 

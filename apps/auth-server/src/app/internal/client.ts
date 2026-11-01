@@ -1,4 +1,4 @@
-import type { IncomingHttpHeaders } from 'node:http';
+import type { ClientRequest, IncomingHttpHeaders, IncomingMessage } from 'node:http';
 import { Agent, request as httpsRequest } from 'node:https';
 import { createSecureContext, type PeerCertificate, type SecureContext } from 'node:tls';
 
@@ -25,6 +25,10 @@ import { INTERNAL_TLS_VERSION } from './tls-files';
  *   certificate does not hold it; the URL's host name is not what is checked,
  *   so a SPIFFE certificate with no DNS name works;
  * - a keep-alive pool of connections, closed when idle;
+ * - a request sent on a pooled connection the server had just closed, that
+ *   failed with `ECONNRESET` or `EPIPE` before any answer, is sent once more
+ *   on a new connection: so an internal route must take a repeated request
+ *   as harmless;
  * - every request has a deadline and a cap on the size of its response;
  * - no redirect is followed, and the request never leaves the URL's origin.
  *
@@ -43,8 +47,10 @@ export const DEFAULT_INTERNAL_MAX_SOCKETS = 32;
 
 /**
  * How long an idle pooled connection stays open: below the 72 s Fastify's
- * server keeps one, so the client closes it first, and a request never lands
- * on a connection the server is closing.
+ * server keeps one, so the client usually closes it first. The listener
+ * still closes its idle connections on every reload of its TLS files and
+ * while it closes, so a request can land on a connection the server has just
+ * closed: such a request is sent once more on a new connection (`send`).
  */
 const IDLE_SOCKET_TIMEOUT_MS = 30_000;
 
@@ -149,9 +155,17 @@ export interface InternalClient {
 /** A pool and the requests in flight on it. */
 interface Pool {
   readonly agent: Agent;
+  /**
+   * The same credentials with no keep-alive: each request on it opens a new
+   * connection, closed after the answer. A request sent once more goes here.
+   */
+  readonly fresh: Agent;
   active: number;
   retired: boolean;
 }
+
+/** The errors of a request sent on a connection the server had closed. */
+const STALE_CONNECTION_CODES: ReadonlySet<string> = new Set(['ECONNRESET', 'EPIPE']);
 
 function positiveInteger(value: number | undefined, fallback: number, name: string): number {
   if (value === undefined) return fallback;
@@ -242,22 +256,33 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
     }
   };
 
-  const createPool = (credentials: InternalClientCredentials): Pool => ({
-    agent: new Agent({
-      keepAlive: true,
-      maxSockets,
-      maxFreeSockets: maxSockets,
-      timeout: IDLE_SOCKET_TIMEOUT_MS,
+  const createPool = (credentials: InternalClientCredentials): Pool => {
+    const tls = {
       secureContext: secureContextOf(credentials),
       rejectUnauthorized: true,
       checkServerIdentity,
       // Every connection checks the server's certificate in full: no
       // session is resumed past a rotation or a credential reload.
       maxCachedSessions: 0,
-    }),
-    active: 0,
-    retired: false,
-  });
+    };
+    return {
+      agent: new Agent({
+        ...tls,
+        keepAlive: true,
+        maxSockets,
+        maxFreeSockets: maxSockets,
+        timeout: IDLE_SOCKET_TIMEOUT_MS,
+      }),
+      fresh: new Agent({ ...tls, keepAlive: false, maxSockets }),
+      active: 0,
+      retired: false,
+    };
+  };
+
+  const destroyPool = (old: Pool): void => {
+    old.agent.destroy();
+    old.fresh.destroy();
+  };
 
   let pool = createPool(options);
   const retired = new Set<Pool>();
@@ -268,11 +293,19 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
   const release = (used: Pool): void => {
     used.active -= 1;
     if (used.retired && used.active === 0) {
-      used.agent.destroy();
+      destroyPool(used);
       retired.delete(used);
     }
   };
 
+  /**
+   * Send `request` on `used`'s pool, and once more on a new connection when
+   * the pooled connection it went out on had been closed by the server: Node's
+   * documented answer to a keep-alive connection closed under a request
+   * (`request.reusedSocket`). Only a request that got no answer, on a
+   * connection it did not open, failing with {@link STALE_CONNECTION_CODES},
+   * is sent again, and only once, within the same deadline.
+   */
   const send = (request: InternalRequest, used: Pool): Promise<InternalResponse> =>
     new Promise((resolve, reject) => {
       const target = targetOf(base, request.path);
@@ -281,27 +314,11 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
         return;
       }
       const body = request.body === undefined ? undefined : Buffer.from(request.body);
-      let outgoing: ReturnType<typeof httpsRequest>;
-      try {
-        outgoing = httpsRequest(target, {
-          method: request.method,
-          agent: used.agent,
-          headers: {
-            ...request.headers,
-            ...(body === undefined ? {} : { 'content-length': String(body.length) }),
-          },
-        });
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        reject(
-          new InternalClientError(
-            'unreachable',
-            `The internal request could not be started${code === undefined ? '' : ` (${code})`}`,
-            code
-          )
-        );
-        return;
-      }
+      const headers = {
+        ...request.headers,
+        ...(body === undefined ? {} : { 'content-length': String(body.length) }),
+      };
+      let outgoing: ClientRequest | undefined;
       let settled = false;
       const finish = (outcome: () => void): void => {
         if (settled) return;
@@ -313,7 +330,7 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
       };
       const fail = (error: InternalClientError): void => {
         finish(() => {
-          outgoing.destroy();
+          outgoing?.destroy();
           reject(error);
         });
       };
@@ -330,20 +347,61 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
       request.signal?.addEventListener('abort', onAbort, { once: true });
       pending.add(fail);
 
-      outgoing.on('error', (error: NodeJS.ErrnoException) => {
-        if (error instanceof InternalClientError) {
-          fail(error);
+      /** Send the request: on the pool, or the second time on a new connection of its own. */
+      const start = (again: boolean): void => {
+        let current: ClientRequest;
+        try {
+          current = httpsRequest(target, {
+            method: request.method,
+            agent: again ? used.fresh : used.agent,
+            headers,
+          });
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          fail(
+            new InternalClientError(
+              'unreachable',
+              `The internal request could not be started${code === undefined ? '' : ` (${code})`}`,
+              code
+            )
+          );
           return;
         }
-        fail(
-          new InternalClientError(
-            'unreachable',
-            `The internal server could not be reached${error.code === undefined ? '' : ` (${error.code})`}`,
-            error.code
-          )
-        );
-      });
-      outgoing.on('response', (response) => {
+        outgoing = current;
+        let answered = false;
+        current.on('error', (error: NodeJS.ErrnoException) => {
+          // A request given up for its second sending says nothing more.
+          if (current !== outgoing) return;
+          if (error instanceof InternalClientError) {
+            fail(error);
+            return;
+          }
+          if (
+            !again &&
+            !answered &&
+            !settled &&
+            current.reusedSocket &&
+            STALE_CONNECTION_CODES.has(error.code ?? '')
+          ) {
+            start(true);
+            return;
+          }
+          fail(
+            new InternalClientError(
+              'unreachable',
+              `The internal server could not be reached${error.code === undefined ? '' : ` (${error.code})`}`,
+              error.code
+            )
+          );
+        });
+        current.on('response', (response) => {
+          answered = true;
+          read(response);
+        });
+        current.end(body);
+      };
+
+      const read = (response: IncomingMessage): void => {
         const tooLarge = (): void =>
           fail(
             new InternalClientError(
@@ -391,8 +449,9 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
             )
           );
         });
-      });
-      outgoing.end(body);
+      };
+
+      start(false);
     });
 
   return {
@@ -414,7 +473,7 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
       // pool in use stays.
       pool = createPool(credentials);
       previous.retired = true;
-      if (previous.active === 0) previous.agent.destroy();
+      if (previous.active === 0) destroyPool(previous);
       else retired.add(previous);
     },
 
@@ -425,8 +484,8 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
       for (const fail of [...pending]) {
         fail(new InternalClientError('closed', 'The internal client is closed'));
       }
-      pool.agent.destroy();
-      for (const old of retired) old.agent.destroy();
+      destroyPool(pool);
+      for (const old of retired) destroyPool(old);
       retired.clear();
     },
   };
