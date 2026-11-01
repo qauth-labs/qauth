@@ -11,7 +11,8 @@
 #   method's own code; the transitions out of `checkingCallback` cite the sample method a plugin author copies, and the
 #   contract test kit is what holds every method to them.
 # - Exits are the engine's completions (`UpstreamStepCompletion`), not HTTP answers: the sign-in flow answers each
-#   one with its own page. Their ids are camelCase so that the delurio checker reads them as they are.
+#   one with its own page. Their ids are camelCase, as a library flow's exits are (graphs/README.md, "Protocol
+#   exits").
 # - `invoke: { external }` names a call into the method's code: start(), verify() and extractAttributes(). The
 #   method is trusted code that runs in-process (ADR-019 Decision 12), and the engine checks each answer before it
 #   acts on it.

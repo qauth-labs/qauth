@@ -63,14 +63,17 @@ pnpm nx run graphs:check
 ```
 
 runs `delurio check graphs --strict` from the repository root: every directory under `graphs/` that
-holds a `flow.yaml` or a `nav.yaml` is loaded and checked. It reads graph files only, so it needs
-no server, no database and no network, and Nx caches it on `graphs/**` and the pinned version. A
-finding is a line `<file>:<line>:<column>: error: <message> [<rule id>]`, followed by `note:` lines
-where it has a path to show, such as the events that break an assertion. The exit code is `0` when
-every graph is clean, `1` when a graph cannot be loaded (such as a YAML error, an unknown state, an
-unknown name in an expression, an `always` list that does not cover every context, a nested state,
-or a graph written for a newer format), and `2` for a finding under `--strict` (such as a broken
-assertion or a main story that cannot be walked).
+holds a `flow.yaml` or a `nav.yaml` is loaded and checked, and every `flow.yaml`, `ui.yaml`,
+`nav.yaml` and `catalog/*.json` is checked against its kind's JSON Schema (the `schema` rule). It
+reads graph files only, so it needs no server, no database and no network, and Nx caches it on
+`graphs/**` and the pinned version. A finding is a line
+`<file>:<line>:<column>: error: <message> [<rule id>]`, followed by `note:` lines where it has a
+path to show, such as the events that break an assertion. The exit code is `0` when every graph is
+clean, `1` when a graph cannot be loaded (such as a YAML error, an unknown state, an unknown name in
+an expression, an `always` list that does not cover every context, a nested state, or a graph
+written for a newer format), and `2` for a finding under `--strict` (such as a key the schema does
+not know, a state that is not an exit and not named in camelCase, a broken assertion or a main story
+that cannot be walked).
 
 To read a flow as a page, with its diagram, every way it ends and its guarantees:
 
@@ -80,6 +83,7 @@ pnpm exec delurio page graphs/flows/core/logout
 
 writes `graphs/flows/core/logout/viz/`, which is git-ignored. CI does not run the check yet: #568
 will run it on every pull request, with no account and no key.
+
 Moving to a new delurio version, or a new format version, is one pull request that moves the pin
 and the graphs together.
 
@@ -150,12 +154,10 @@ response is a final state of its own, so a test can reach every error:
   makes two exits one is the same response for the same cause: the same status, error and cause,
   where the error and the cause are read from the exit's name.
 
-delurio's SPEC.md (§1, "Text") asks for camelCase identifiers, and delurio 0.2.0 and later enforce
-it with a schema check that refuses these names. QAuth keeps them: the name is where a reader, and
-the rule against duplicate exits, finds the error and the cause, and protocol error codes are
-snake_case. delurio is to accept `<error>` and `<error>.<cause>` as the names of final states
-(decided 2026-11-01, #560). Until a delurio release does, QAuth pins 0.1.1, which has no schema
-check.
+These names are delurio's own form for an exit (SPEC.md §1, "Text"): a final state may be named in
+snake_case, followed by its cause, and every other state is camelCase. The `schema` rule refuses a
+snake_case or dotted name on a state that is not `type: final`. A page's `flow.mmd` writes the dot
+as `__` (`invalid_token__dpop_bound`), since Mermaid ids take none.
 
 A flow that a library answers rather than an endpoint, such as the sign-in engine
 (`flows/core/sign-in`) or the upstream step (`flows/federation/upstream-step`), returns data to its

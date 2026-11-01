@@ -17,7 +17,7 @@
         "cwd": "{workspaceRoot}"
       },
       "metadata": {
-        "description": "Run delurio's `check --strict` over every graph directory under graphs/ (each directory that holds a flow.yaml or a nav.yaml). It reads graph files only: no server, no database, no network. Findings are GNU error lines, `<file>:<line>:<column>: error: <message> [<rule id>]`, with `note:` lines for a path. Exit 0 clean, 1 a graph cannot be loaded or needs a newer delurio, 2 a finding under --strict. Cached on graphs/** and the pinned delurio version. CI does not run it yet; #568 will."
+        "description": "Run delurio's `check --strict` over every graph directory under graphs/ (each directory that holds a flow.yaml or a nav.yaml), and check every flow.yaml, ui.yaml, nav.yaml and catalog file against its kind's JSON Schema. It reads graph files only: no server, no database, no network. Findings are GNU error lines, `<file>:<line>:<column>: error: <message> [<rule id>]`, with `note:` lines for a path. Exit 0 clean, 1 a graph cannot be loaded or needs a newer delurio, 2 a finding under --strict. Cached on graphs/** and the pinned delurio version. CI does not run it yet; #568 will."
       }
     }
   }
