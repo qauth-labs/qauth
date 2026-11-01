@@ -99,10 +99,8 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     summary:
       'the browser-session endpoints: authorize, the ceremony pages, consents and wallet linking',
     // The session expiry and purge jobs (#550) run through the session service.
-    // Its mail sender reads a realm transport's secret through the realm
-    // secret store, which the app builds over `realmSecrets` (#529).
     plugins: ['sessions'],
-    repositories: ['realmSecrets'],
+    repositories: [],
   },
   api: {
     summary:
@@ -118,9 +116,12 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // `adminGrants`, and writes `adminAuditLog`. Its approval gate and
     // approval routes read and write `adminApprovals` (#512). The key
     // operations arrive on the same listener (#496).
+    // The realm policy update and representation (#517) read and write the
+    // realms' secrets through the realm secret store (#529): without it, the
+    // policy store refuses a write of a secret, and cannot tell one set.
     summary: 'the admin API and key operations, on the internal listener',
     plugins: ['jwt'],
-    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals'],
+    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals', 'realmSecrets'],
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role

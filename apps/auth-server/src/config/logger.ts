@@ -55,8 +55,10 @@ export const LOG_REDACT_PATHS = [
   '*.auth.pass',
   '*.smtp.password',
   '*.*.smtp.password',
+  '*.*.*.smtp.password',
   '*.resend.apiKey',
   '*.*.resend.apiKey',
+  '*.*.*.resend.apiKey',
 ] as const;
 
 /**

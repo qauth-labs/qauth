@@ -1,8 +1,10 @@
 import type { RealmMailRead, RealmMailSource } from '@qauth-labs/fastify-plugin-email';
-import type {
-  RealmPolicyStoreOfRealms,
-  RealmSecretCipher,
-  RealmSecretStoreOfRealms,
+import {
+  mailTransportIssues,
+  type RealmPolicyStoreOfRealms,
+  type RealmSecretCipher,
+  realmSecretPaths,
+  type RealmSecretStoreOfRealms,
 } from '@qauth-labs/fastify-plugin-realm-policy';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 
@@ -71,16 +73,20 @@ export interface DefaultRealmSecretSeedDependencies {
 
 /** Logged once per boot for each secret seed key the environment sets after the realm's secret was seeded. */
 export function secretSeedKeyIgnoredWarning(key: string, realmName: string, path: string): string {
-  return `${key} only seeds the first realm's ${path} at its first boot, and is ignored: the realm "${realmName}" keeps its stored ${path}, which a policy update changes. Remove ${key} from the environment once no node of an earlier release runs`;
+  return `${key} only seeds the first realm's ${path} at its first boot, and is ignored: the realm "${realmName}" keeps its stored ${path}. To replace it, see "Mail secrets move into the realm" on operate/upgrades; remove ${key} from the environment once no node of an earlier release runs`;
 }
 
-/** Logged once per boot when the default realm's stored transport lacks its secret. */
-export function mailSecretMissingWarning(
+/**
+ * Logged once per boot for each thing the default realm's stored mail
+ * transport lacks (#529): the boot no longer refuses such a configuration,
+ * which the policy update does, so it says why the realm's mail fails.
+ */
+export function mailTransportIncompleteWarning(
   realmName: string,
-  provider: string,
-  path: string
+  path: string,
+  issue: string
 ): string {
-  return `the realm "${realmName}" sends mail through ${provider}, but its ${path} is not set: its mail fails until a policy update sets it`;
+  return `the realm "${realmName}" cannot send mail: its ${path} ${issue}, so each of its mails fails until a policy update sets it`;
 }
 
 /**
@@ -95,8 +101,9 @@ export function mailSecretMissingWarning(
  *
  * It logs, never a value: one line per seeded secret; a warning per seed key
  * the environment still sets for a secret that was already seeded; and a
- * warning when the realm's stored transport lacks its secret, since the boot
- * no longer refuses such a configuration (the policy update does).
+ * warning for each thing the realm's stored transport lacks (a host, a port,
+ * a user, a sender address or its secret), by the policy update's own rule,
+ * since the boot no longer refuses such a configuration.
  */
 export async function seedDefaultRealmSecrets(
   deps: DefaultRealmSecretSeedDependencies,
@@ -126,17 +133,18 @@ export async function seedDefaultRealmSecrets(
     );
   }
 
-  const { provider } = deps.policies.ofRealm(realm).policies.mail;
-  const needed =
-    provider === 'smtp'
-      ? 'mail.smtp.password'
-      : provider === 'resend'
-        ? 'mail.resend.apiKey'
-        : undefined;
-  if (needed !== undefined && !(await deps.secrets.isSet(realm.id, needed))) {
+  // The policy update's own rule, over what the realm stores now.
+  const set = new Set<string>();
+  for (const path of realmSecretPaths()) {
+    if (await deps.secrets.isSet(realm.id, path)) set.add(path);
+  }
+  const issues = mailTransportIssues(deps.policies.ofRealm(realm).policies, {
+    isSet: (path) => set.has(path),
+  });
+  for (const issue of issues) {
     deps.log.warn(
-      { realm: realm.name, realmId: realm.id, policy: needed },
-      mailSecretMissingWarning(realm.name, provider, needed)
+      { realm: realm.name, realmId: realm.id, policy: issue.path },
+      mailTransportIncompleteWarning(realm.name, issue.path, issue.message)
     );
   }
 }

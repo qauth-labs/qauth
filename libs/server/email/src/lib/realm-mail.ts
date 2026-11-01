@@ -117,6 +117,9 @@ export interface RealmMailServiceOptions {
 
 const DEFAULT_MAX_REALMS = 256;
 
+/** How often a sender is read again when the realm's policies move while it is built. */
+const MAX_BUILD_ATTEMPTS = 3;
+
 /** What a realm's transport needs before it can send, as policy paths. */
 function missing(realmId: string, path: string, provider: string): RealmMailUnavailableError {
   return new RealmMailUnavailableError(
@@ -176,8 +179,40 @@ export function createRealmMailService(options: RealmMailServiceOptions): RealmE
     { readonly version: number; readonly service: Promise<EmailService> }
   >();
 
-  async function build(realmId: string, read: RealmMailRead): Promise<EmailService> {
-    const provider = createProvider(await transportOf(realmId, read));
+  /**
+   * The transport of the realm's policies as they are once its secret is in
+   * hand. The policies and the secret are two reads, and an update that
+   * changes both (a new host and its password) can commit between them: the
+   * transport would pair the old host with the new password, and hand that
+   * password to the host the update moves away from. So the counter is read
+   * again after the secret, and a counter that moved starts over from the
+   * policies it now names. A `mock` transport reads no secret.
+   */
+  async function consistentTransport(
+    realmId: string,
+    first: RealmMailRead
+  ): Promise<{ read: RealmMailRead; transport: MailTransport }> {
+    let read = first;
+    for (let attempt = 1; ; attempt += 1) {
+      const transport = await transportOf(realmId, read);
+      if (transport.provider === 'mock') return { read, transport };
+      const again = await source.read(realmId);
+      if (again === undefined)
+        throw new RealmMailUnavailableError(realmId, 'there is no such realm');
+      if (again.version === read.version) return { read, transport };
+      if (attempt >= MAX_BUILD_ATTEMPTS) {
+        throw new RealmMailUnavailableError(
+          realmId,
+          'its mail policies changed each time its transport was read'
+        );
+      }
+      read = again;
+    }
+  }
+
+  async function build(realmId: string, first: RealmMailRead): Promise<EmailService> {
+    const { read, transport } = await consistentTransport(realmId, first);
+    const provider = createProvider(transport);
     const { fromAddress, fromName } = read.mail;
     return createEmailService(provider, {
       ...options.serviceConfig,

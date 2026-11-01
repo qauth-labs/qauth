@@ -10,7 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { testRealm } from '../../testing/request-realm';
 import {
   type DefaultRealmSecretSeedDependencies,
-  mailSecretMissingWarning,
+  mailTransportIncompleteWarning,
   realmMailSource,
   realmSecretCipher,
   secretSeedKeyIgnoredWarning,
@@ -52,9 +52,9 @@ describe('seedDefaultRealmSecrets (#529)', () => {
 
   function deps(
     report: RealmSecretSeedReport,
-    options: { provider?: 'mock' | 'smtp' | 'resend'; isSet?: boolean; realm?: boolean } = {}
+    options: { env?: Record<string, string>; isSet?: boolean; realm?: boolean } = {}
   ) {
-    const policies = defaultsFromEnv({ EMAIL_PROVIDER: options.provider ?? 'mock' });
+    const policies = defaultsFromEnv(options.env ?? {});
     const warn = vi.fn();
     const info = vi.fn();
     const seed = vi.fn(async () => report);
@@ -123,24 +123,51 @@ describe('seedDefaultRealmSecrets (#529)', () => {
     expect(JSON.stringify(warn.mock.calls)).not.toContain(PASSWORD);
   });
 
-  it('warns when the stored transport lacks its secret, which no longer stops the boot', async () => {
+  it('warns for each thing the stored transport lacks, which no longer stops the boot', async () => {
     const report = { seeded: [], recordedUnset: [], present: [] };
-    const smtp = deps(report, { provider: 'smtp', isSet: false });
-    await seedDefaultRealmSecrets(smtp.deps, { realmName: 'master', seeds: new Map(), seedKeys });
-    expect(smtp.isSet).toHaveBeenCalledWith(REALM.id, 'mail.smtp.password');
-    expect(smtp.warn).toHaveBeenCalledWith(
-      { realm: 'master', realmId: REALM.id, policy: 'mail.smtp.password' },
-      mailSecretMissingWarning('master', 'smtp', 'mail.smtp.password')
+    const run = async (env: Record<string, string>, isSet: boolean) => {
+      const d = deps(report, { env, isSet });
+      await seedDefaultRealmSecrets(d.deps, { realmName: 'master', seeds: new Map(), seedKeys });
+      return d;
+    };
+    const whole = {
+      EMAIL_FROM_ADDRESS: 'no-reply@example.com',
+      SMTP_HOST: 'smtp.example.com',
+      SMTP_PORT: '587',
+      SMTP_USER: 'mailer',
+    };
+
+    // smtp with everything but its password.
+    const noPassword = await run({ ...whole, EMAIL_PROVIDER: 'smtp' }, false);
+    expect(noPassword.isSet).toHaveBeenCalledWith(REALM.id, 'mail.smtp.password');
+    expect(noPassword.warn.mock.calls).toEqual([
+      [
+        { realm: 'master', realmId: REALM.id, policy: 'mail.smtp.password' },
+        mailTransportIncompleteWarning(
+          'master',
+          'mail.smtp.password',
+          'must be set when mail.provider is smtp'
+        ),
+      ],
+    ]);
+
+    // smtp with its password but no host, port or user: the boot used to refuse this.
+    const noHost = await run(
+      { EMAIL_PROVIDER: 'smtp', EMAIL_FROM_ADDRESS: 'no-reply@example.com' },
+      true
     );
+    expect(noHost.warn.mock.calls.map(([fields]) => fields.policy)).toEqual([
+      'mail.smtp.host',
+      'mail.smtp.port',
+      'mail.smtp.user',
+    ]);
 
-    const resend = deps(report, { provider: 'resend', isSet: true });
-    await seedDefaultRealmSecrets(resend.deps, { realmName: 'master', seeds: new Map(), seedKeys });
-    expect(resend.isSet).toHaveBeenCalledWith(REALM.id, 'mail.resend.apiKey');
-    expect(resend.warn).not.toHaveBeenCalled();
-
-    const mock = deps(report, { provider: 'mock' });
-    await seedDefaultRealmSecrets(mock.deps, { realmName: 'master', seeds: new Map(), seedKeys });
-    expect(mock.isSet).not.toHaveBeenCalled();
+    // A whole transport, and mock, say nothing.
+    expect((await run({ ...whole, EMAIL_PROVIDER: 'smtp' }, true)).warn).not.toHaveBeenCalled();
+    expect(
+      (await run({ EMAIL_PROVIDER: 'resend', EMAIL_FROM_ADDRESS: 'a@example.com' }, true)).warn
+    ).not.toHaveBeenCalled();
+    expect((await run({}, false)).warn).not.toHaveBeenCalled();
   });
 
   it('does nothing without the default realm', async () => {

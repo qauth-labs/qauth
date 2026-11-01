@@ -109,6 +109,7 @@ describe('what each role loads (the boot-time list)', () => {
       'adminAuditLog',
       'adminApprovals',
       'realmPublicKeys',
+      'realmSecrets',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.
     expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt']);
@@ -134,8 +135,8 @@ describe('what each role loads (the boot-time list)', () => {
       expect(web).not.toContain(name);
     }
     expect(web).toContain('sessions');
-    // Its mail sender reads a realm transport's secret (#529).
-    expect(web).toContain('realmSecrets');
+    // It sends no mail, so it reads no realm secret (#529).
+    expect(web).not.toContain('realmSecrets');
     expect([...pluginsFor(['web'])]).toEqual([
       'dpop',
       'jwt',

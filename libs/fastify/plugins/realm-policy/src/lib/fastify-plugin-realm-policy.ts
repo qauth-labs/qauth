@@ -26,8 +26,18 @@ export const REALM_POLICY_PLUGIN_NAME = packageJson.name;
 /** The policy store as the auth server holds it: realm rows of the realms table. */
 export type RealmPolicyStoreOfRealms = RealmPolicyStore<Realm, DbClient>;
 
-/** The realm secret store as the auth server holds it, over `realm_secrets` (#529). */
-export type RealmSecretStoreOfRealms = RealmSecretStoreWithSeed<DbClient>;
+/**
+ * The realm secret store as the auth server reads it, over `realm_secrets`
+ * (#529): whether a secret is set, its value for the mail sender, and the
+ * boot's seed. Writing a secret is the policy update's alone (`put` is not
+ * here): it runs the rules and raises the policy counter in the same
+ * transaction, which is what tells every node's mail sender to read the
+ * secret again.
+ */
+export type RealmSecretStoreOfRealms = Pick<
+  RealmSecretStoreWithSeed<DbClient>,
+  'isSet' | 'getForUse' | 'seed'
+>;
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -98,7 +108,16 @@ export const realmPolicyPlugin = fp(
             storage: createRealmSecretStorage(options.secrets.repository),
             cipher: options.secrets.cipher,
           });
-    fastify.decorate('realmSecretStore', secrets);
+    fastify.decorate(
+      'realmSecretStore',
+      secrets === null
+        ? null
+        : Object.freeze({
+            isSet: secrets.isSet,
+            getForUse: secrets.getForUse,
+            seed: secrets.seed,
+          })
+    );
     fastify.decorate(
       'policyStore',
       createPolicyStore({

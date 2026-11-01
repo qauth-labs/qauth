@@ -6,6 +6,7 @@ export {
   compareSeedWithStored,
   defaultsFromEnv,
   diffPolicies,
+  mailTransportIssues,
   type PolicyIssue,
   PolicySchemaVersionError,
   PolicySecretStoreUnavailableError,

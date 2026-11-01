@@ -193,8 +193,9 @@ describe('createRealmMailService (#529)', () => {
 
     await service.sendVerificationEmail(REALM_A, 'a@example.com', 't1', LINK);
     await service.sendVerificationEmail(REALM_A, 'a@example.com', 't2', LINK);
-    // Every mail reads the policies; the secret is read once per counter.
-    expect(source.read).toHaveBeenCalledTimes(2);
+    // Every mail reads the policies, and a build reads them once more after
+    // the secret; the secret is read once per counter.
+    expect(source.read).toHaveBeenCalledTimes(3);
     expect(secretReads).toHaveLength(1);
     expect(built).toHaveLength(1);
 
@@ -302,6 +303,66 @@ describe('createRealmMailService (#529)', () => {
       `The realm ${REALM_A} cannot send mail: mail.smtp.password cannot be read`
     );
     expect((refused as Error).cause).toBeInstanceOf(Error);
+  });
+
+  it('never pairs the policies of one update with the secret of another', async () => {
+    // An update moves the realm to another host and password between the
+    // read of its policies and the read of its secret.
+    const realm: FakeRealm = {
+      version: 1,
+      mail: smtp('old.example.com'),
+      secrets: { 'mail.smtp.password': PASSWORD_A },
+    };
+    const reads: number[] = [];
+    let moved = false;
+    const source = {
+      read: async (): Promise<RealmMailRead> => {
+        reads.push(realm.version);
+        const snapshot = { version: realm.version, mail: structuredClone(realm.mail) };
+        return {
+          ...snapshot,
+          secretOf: async (path) => {
+            if (!moved) {
+              moved = true;
+              realm.version = 2;
+              realm.mail = smtp('new.example.com');
+              realm.secrets['mail.smtp.password'] = PASSWORD_B;
+            }
+            return realm.secrets[path];
+          },
+        };
+      },
+    };
+    const { built, createProvider } = recordingProviders();
+    const service = createRealmMailService({ source, createProvider });
+
+    await service.sendAccountExistsEmail(REALM_A, 'a@example.com');
+
+    // One provider, for the policies and the secret of the same update.
+    expect(built.map((entry) => entry.transport)).toEqual([
+      expect.objectContaining({ host: 'new.example.com', password: PASSWORD_B }),
+    ]);
+    expect(reads).toEqual([1, 2, 2]);
+  });
+
+  it('gives up when the policies change at every read, building nothing', async () => {
+    let version = 0;
+    const { built, createProvider } = recordingProviders();
+    const service = createRealmMailService({
+      source: {
+        read: async () => ({
+          version: (version += 1),
+          mail: smtp('smtp.example.com'),
+          secretOf: async () => PASSWORD_A,
+        }),
+      },
+      createProvider,
+    });
+
+    await expect(service.sendAccountExistsEmail(REALM_A, 'a@example.com')).rejects.toThrow(
+      'changed each time'
+    );
+    expect(built).toEqual([]);
   });
 
   it('refuses an unknown realm', async () => {

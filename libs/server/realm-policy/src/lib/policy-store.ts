@@ -188,10 +188,12 @@ export interface RealmPolicyStore<Row, Tx> {
   /**
    * The policies of the realm `realmId` as the admin API's realm
    * representation shows them, or `undefined` when there is none: each
-   * secret field as `<name>Set`, from the secret store (false for every one
-   * without a store). The value of a secret is never read.
+   * secret field as `<name>Set`, from the secret store. The value of a secret
+   * is never read.
    *
    * @throws PolicyValidationError when the stored policies are not valid
+   * @throws PolicySecretStoreUnavailableError when the store has no secret
+   *   store, which alone knows whether a secret is set
    */
   representation(realmId: string, tx?: Tx): Promise<RealmPolicyRepresentation | undefined>;
   /**
@@ -215,7 +217,8 @@ export interface RealmPolicyStore<Row, Tx> {
    *   refused, by its schema or a rule; nothing is changed. Its issues name
    *   paths, never values
    * @throws PolicySecretStoreUnavailableError when the patch sets or clears a
-   *   secret and the store has no secret store; nothing is changed
+   *   secret, or a rule asks whether one it leaves alone is set, and the store
+   *   has no secret store; nothing is changed
    * @throws PolicySchemaVersionError when the stored policies follow another
    *   schema version than this release's: writing them would relabel a
    *   document this release cannot read whole; nothing is changed
@@ -669,16 +672,23 @@ export function createPolicyStore<Row, Tx>(
     tx: Tx
   ): Promise<void> {
     if (rules.length === 0) return;
-    const set = new Set<string>();
+    // What each secret holds after the update: what the update writes, or
+    // what the secret store holds. Without a store, a secret the update does
+    // not write is unknown, and a rule that asks about one fails closed: the
+    // store cannot say the secret is unset when it may be set.
+    const state = new Map<string, boolean>();
     for (const entry of secretFields) {
       const write = writes.find((candidate) => candidate.path === entry.path);
-      const isSet =
-        write !== undefined
-          ? write.value !== null
-          : ((await secrets?.isSet(realmId, entry.path, tx)) ?? false);
-      if (isSet) set.add(entry.path);
+      if (write !== undefined) state.set(entry.path, write.value !== null);
+      else if (secrets !== undefined)
+        state.set(entry.path, await secrets.isSet(realmId, entry.path, tx));
     }
-    const issues = rules.flatMap((rule) => rule(document, { isSet: (path) => set.has(path) }));
+    const isSet = (path: string) => {
+      const known = state.get(path);
+      if (known === undefined) throw new PolicySecretStoreUnavailableError([path]);
+      return known;
+    };
+    const issues = rules.flatMap((rule) => rule(document, { isSet }));
     if (issues.length > 0) {
       throw new PolicyValidationError('The realm policies are not valid', issues);
     }
@@ -710,6 +720,11 @@ export function createPolicyStore<Row, Tx>(
       const record = await storage.read(realmId, tx);
       if (record === undefined) return undefined;
       const snapshot = snapshotOf(record);
+      // Without a secret store, whether a secret is set is unknown: say so
+      // rather than show it unset.
+      if (secrets === undefined && secretFields.length > 0) {
+        throw new PolicySecretStoreUnavailableError(secretFields.map((entry) => entry.path));
+      }
       const set: string[] = [];
       for (const entry of secretFields) {
         if (await secrets?.isSet(realmId, entry.path, tx)) set.push(entry.path);

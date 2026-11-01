@@ -266,7 +266,7 @@ describe('realm mail secrets stay out of logs, errors and diffs (#529)', () => {
   });
 
   it('logs a failed sign-in at the SMTP server and a missing secret without either value', async () => {
-    const { app, captured } = await buildServer();
+    const { app, captured, tables } = await buildServer();
     // The server takes another password than the realm stores.
     fixture = await startSmtpFixture({ password: 'the-server-wants-another' });
     const transport = {
@@ -289,7 +289,7 @@ describe('realm mail secrets stay out of logs, errors and diffs (#529)', () => {
       url: `/admin/v1-rc.0/realms/${REALM_ID}/policies`,
       payload: { mail: { provider: 'resend', resend: { apiKey: API_KEY } } },
     });
-    await app.realmSecretStore?.put(REALM_ID, 'mail.resend.apiKey', null);
+    await tables.repository.write(REALM_ID, 'mail.resend.apiKey', null);
     await app.inject({
       method: 'PATCH',
       url: `/admin/v1-rc.0/realms/${REALM_ID}/policies`,
