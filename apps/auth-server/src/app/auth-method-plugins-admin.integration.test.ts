@@ -428,10 +428,15 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       {
         operation: 'plugins.update',
         params: { plugin: 'corp' },
-        body: { config: { ...CONFIG, clientSecret: SECRET } },
+        // A body the route takes but for the secret, so it is the secret
+        // that is refused.
+        body: { version: 0, config: { ...CONFIG, clientSecret: SECRET } },
       }
     );
     expect(filed.statusCode).toBe(400);
+    expect(filed.json<{ detail?: string }>().detail).toContain(
+      'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets'
+    );
     expect(filed.body).not.toContain(SECRET);
     expect(await rowsText('admin_approvals', realm.id)).toBe('');
   });
