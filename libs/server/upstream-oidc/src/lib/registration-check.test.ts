@@ -102,4 +102,20 @@ describe('checkUpstreamOidcProvider', () => {
       })
     ).toMatchObject({ ok: false, finding: 'invalid_config', detail: 'issuer: custom' });
   });
+
+  it('reports a client assertion algorithm the provider does not list as invalid_document', async () => {
+    const { provider, egress } = await hostEgress();
+    provider.tamper.discovery = { token_endpoint_auth_signing_alg_values_supported: ['RS256'] };
+    expect(
+      await checkUpstreamOidcProvider(egress, 'acme', {
+        ...CONFIG,
+        clientAuthentication: { method: 'private_key_jwt', signingAlgorithm: 'EdDSA' },
+      })
+    ).toEqual({
+      ok: false,
+      finding: 'invalid_document',
+      detail: expect.stringContaining('EdDSA'),
+    });
+    expect(egress.validateDestination).not.toHaveBeenCalled();
+  });
 });

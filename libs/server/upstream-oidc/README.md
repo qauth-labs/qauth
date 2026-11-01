@@ -104,9 +104,10 @@ client's address checks on every endpoint without calling it, and reports one fi
   past its deadline is abandoned (the egress client still bounds it), and an answer over its
   cap is refused after the egress client has read it, within its own cap.
 - **Discovery is lenient where the document is silent.** A document that omits
-  `token_endpoint_auth_methods_supported`, `response_modes_supported` or
-  `response_types_supported` is taken at its word for the configured method and mode; one that
-  lists them must list what the config uses.
+  `token_endpoint_auth_methods_supported`, `response_modes_supported`,
+  `response_types_supported` or (for `private_key_jwt`)
+  `token_endpoint_auth_signing_alg_values_supported` is taken at its word for the configured
+  method, mode and assertion algorithm; one that lists them must list what the config uses.
 - **The assertion's `aud`** is the issuer identifier alone (draft-ietf-oauth-rfc7523bis). A
   provider that wants its token endpoint there is not served yet.
 

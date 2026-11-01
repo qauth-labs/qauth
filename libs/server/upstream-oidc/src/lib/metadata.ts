@@ -130,7 +130,11 @@ export async function fetchDiscoveryDocument(
  *   `S256`: QAuth sends PKCE with S256 only;
  * - when it lists `token_endpoint_auth_methods_supported`, it holds the
  *   configured method; when it lists `response_modes_supported`, it holds
- *   the configured mode.
+ *   the configured mode;
+ * - for `private_key_jwt`, when it lists
+ *   `token_endpoint_auth_signing_alg_values_supported`, it holds the
+ *   configured `signingAlgorithm`: the provider would refuse every
+ *   assertion otherwise.
  *
  * @throws UpstreamOidcError `invalid_response` when the document fails a check
  */
@@ -174,6 +178,18 @@ export function parseDiscoveryDocument(
     throw invalidResponse(
       `${purpose}: the provider does not support ${config.clientAuthentication.method}`
     );
+  }
+  const authentication = config.clientAuthentication;
+  if (authentication.method === 'private_key_jwt') {
+    const assertionAlgorithms = listed('token_endpoint_auth_signing_alg_values_supported');
+    if (
+      assertionAlgorithms !== undefined &&
+      !assertionAlgorithms.includes(authentication.signingAlgorithm)
+    ) {
+      throw invalidResponse(
+        `${purpose}: the provider does not take client assertions signed with ${authentication.signingAlgorithm}`
+      );
+    }
   }
   const responseModes = listed('response_modes_supported');
   if (responseModes !== undefined && !responseModes.includes(config.responseMode)) {

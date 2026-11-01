@@ -115,6 +115,43 @@ describe('discovery', () => {
     await expect(discover(provider)).rejects.toMatchObject({ reason: 'invalid_response' });
   });
 
+  describe('the client assertion algorithm, for private_key_jwt', () => {
+    const privateKeyJwt = (signingAlgorithm: string) => ({
+      clientAuthentication: { method: 'private_key_jwt', signingAlgorithm },
+    });
+
+    it('refuses an algorithm the provider does not list', async () => {
+      const provider = await createFakeProvider({ issuer: ISSUER });
+      provider.tamper.discovery = {
+        token_endpoint_auth_signing_alg_values_supported: ['RS256', 'PS256'],
+      };
+      await expect(discover(provider, privateKeyJwt('ES256'))).rejects.toMatchObject({
+        reason: 'invalid_response',
+        message: expect.stringContaining('ES256'),
+      });
+    });
+
+    it('takes an algorithm the provider lists, and any when it lists none', async () => {
+      const provider = await createFakeProvider({ issuer: ISSUER });
+      provider.tamper.discovery = {
+        token_endpoint_auth_signing_alg_values_supported: ['RS256', 'ES256'],
+      };
+      await expect(discover(provider, privateKeyJwt('ES256'))).resolves.toMatchObject({
+        endpointSource: 'remote_document',
+      });
+      provider.tamper.discovery = { token_endpoint_auth_signing_alg_values_supported: undefined };
+      await expect(discover(provider, privateKeyJwt('EdDSA'))).resolves.toMatchObject({
+        endpointSource: 'remote_document',
+      });
+    });
+
+    it('does not apply to a client secret method', async () => {
+      const provider = await createFakeProvider({ issuer: ISSUER });
+      provider.tamper.discovery = { token_endpoint_auth_signing_alg_values_supported: ['HS256'] };
+      await expect(discover(provider)).resolves.toMatchObject({ issuer: ISSUER });
+    });
+  });
+
   it('refuses form_post when the provider does not list it', async () => {
     const provider = await createFakeProvider({ issuer: ISSUER });
     provider.tamper.discovery = { response_modes_supported: ['query'] };
