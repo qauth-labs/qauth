@@ -157,7 +157,7 @@ context:
         and the parked value is an /oauth/authorize URL
       spent: >-
         the handle, of 1 to 100 characters, is not 43 base64url characters, or names no parked request: unknown,
-        expired or already resumed; or its parked value is not an /oauth/authorize URL; or the store cannot be read
+        expired or already resumed; or its parked value is not an /oauth/authorize URL
   attemptCounted: { values: [false, true], initial: false }
   # the 500 ms floor (MIN_RESPONSE_TIME_MS.LOGIN, counted from the request's arrival) was waited out
   floorWaited: { values: [false, true], initial: false }
@@ -201,6 +201,8 @@ failures:
   creatingSession: { from: browserSessionStore, server: [server_error] }
   updatingLastLogin: { from: User.updateLastLogin, server: [server_error] }
   recordingSignIn: { from: eventStore, server: [server_error] }
+  # the resume handler swallows a store error and answers the spent handle's 400 page
+  consumingHandle: { from: pendingAuthorizationStore, store: [bad_request] }
 
 # The main story: /oauth/authorize sent a browser with no session here; the user signs in with a verified account, and
 # the browser goes back to the authorization request it came from.
@@ -647,6 +649,10 @@ states:
           effect: [burnHandle]
           say: 'the handle is deleted, and its authorize URL read back'
           source: apps/auth-server/src/app/helpers/pending-authorization.ts:254
+      FAIL.store:
+        target: bad_request.handle_spent
+        say: 'the store cannot be read or the handle not deleted, which is answered as a spent handle, never a 500'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:255
 
   # Exits
 
@@ -786,8 +792,9 @@ states:
     type: final
     title: Tell the user the authorization request has expired
     description: >-
-      Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, with no link
-      and no redirect: the user starts again from the application, which still holds the PKCE verifier.
+      Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, and so does a
+      store that cannot be read, with no link and no redirect: the user starts again from the application, which
+      still holds the PKCE verifier.
     source: apps/auth-server/src/app/routes/ui/resume.ts:123
     response:
       status: 400
