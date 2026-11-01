@@ -7,6 +7,7 @@ import type {
   TokenKeyRotation,
   TokenKeyRotationOptions,
 } from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
+import { ServiceRoleBootError } from '@qauth-labs/server-config';
 import {
   applyQauthMigrations,
   type StartedPostgres,
@@ -29,6 +30,7 @@ import {
   answerRouteNotFound,
   answerUnknownRouteBeforeBody,
 } from '../app/helpers/request-bounds';
+import type { InternalRouteModule } from '../app/internal/route-manifest';
 
 /**
  * TEST SUPPORT — booting the REAL auth-server against throwaway containers
@@ -72,7 +74,15 @@ export interface BootedAuthServer {
    * routes by host.
    */
   readonly admin?: FastifyInstance;
-  /** Close the server (and its pools), the admin listener with it. Containers survive. */
+  /**
+   * The internal listener (#496), listening on an ephemeral port of
+   * INTERNAL_HOST, when the suite asked for it with `internalListener`. Its
+   * URL is {@link internalUrl}: `https` with the internal TLS files, `http`
+   * without.
+   */
+  readonly internal?: FastifyInstance;
+  readonly internalUrl?: string;
+  /** Close the server (and its pools), the admin and internal listeners with it. Containers survive. */
   close(): Promise<void>;
 }
 
@@ -285,6 +295,21 @@ export interface BootAuthServerOptions {
    * listening: `BootedAuthServer.admin.inject()` reaches it.
    */
   readonly adminListener?: () => AdminApiOptions | Promise<AdminApiOptions>;
+  /**
+   * Boot the internal listener beside the app (#496), as `main.ts` has it:
+   * from the environment's INTERNAL_* settings, its TLS files read at boot.
+   * Called once the boot reset the module registry, so it may import app
+   * modules. `modules` replaces the manifest's route modules (a fixture
+   * route), and `reloadIntervalMs` how often the TLS files are read again.
+   * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
+   */
+  readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+}
+
+/** What a suite gives the internal listener (#496). */
+export interface InternalListenerFixture {
+  readonly modules?: readonly InternalRouteModule[];
+  readonly reloadIntervalMs?: number;
 }
 
 /**
@@ -343,7 +368,8 @@ export async function bootAuthServer(
       // variable another boot left behind, one more reason the JWT keys go.
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
-      key.startsWith('INTERNAL_TLS_')
+      // The internal listener (#496): its address, its TLS files and its peers.
+      key.startsWith('INTERNAL_')
     ) {
       delete process.env[key];
     }
@@ -356,6 +382,9 @@ export async function bootAuthServer(
 
   const { app, defaultRealmBootSettings } = await import('../app/app');
   const { createAdminServer } = await import('../app/admin/listener');
+  const { createInternalServer } = await import('../app/internal/listener');
+  const { readInternalTlsFiles } = await import('../app/internal/tls-files');
+  const { internalListenerPlan } = await import('../app/service-roles');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
   const { keyVariableSettings } = await import('../app/helpers/key-variables');
   // The same module instance the app just loaded, since the registry was reset.
@@ -402,8 +431,44 @@ export async function bootAuthServer(
     adminServer === undefined || options.adminListener === undefined
       ? undefined
       : { server: adminServer, ...(await options.adminListener()) };
+  // As in `main.ts`: the internal listener from the environment's settings,
+  // refused before the app when its roles split and its TLS files are missing.
+  let internalServer: FastifyInstance | undefined;
+  let internalFixture: InternalListenerFixture | undefined;
+  const internalPlan =
+    options.internalListener === undefined ? undefined : internalListenerPlan(env);
+  if (options.internalListener !== undefined && internalPlan !== undefined) {
+    if (!internalPlan.serves) {
+      throw new Error('bootAuthServer: these SERVICE_ROLES run no internal listener');
+    }
+    if (internalPlan.problems.length > 0) throw new ServiceRoleBootError(internalPlan.problems);
+    internalFixture = await options.internalListener();
+    internalServer = createInternalServer({
+      loggerInstance: server.log.child({ listener: 'internal' }),
+      peerRoles: internalPlan.peerRoles,
+      ...(internalPlan.tls === undefined
+        ? {}
+        : {
+            tls: {
+              files: internalPlan.tls,
+              material: readInternalTlsFiles(internalPlan.tls),
+              ...(internalFixture.reloadIntervalMs === undefined
+                ? {}
+                : { reloadIntervalMs: internalFixture.reloadIntervalMs }),
+            },
+          }),
+    });
+  }
   await server.register(fp(app), {
     ...(adminOptions === undefined ? {} : { adminListener: adminOptions }),
+    ...(internalServer === undefined
+      ? {}
+      : {
+          internalListener: {
+            server: internalServer,
+            ...(internalFixture?.modules === undefined ? {} : { modules: internalFixture.modules }),
+          },
+        }),
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined
       ? {}
@@ -421,6 +486,15 @@ export async function bootAuthServer(
   }
   await server.ready();
   await adminServer?.ready();
+  let internalUrl: string | undefined;
+  if (internalServer !== undefined && internalPlan?.serves === true) {
+    await internalServer.listen({ host: internalPlan.host, port: 0 });
+    const address = internalServer.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('bootAuthServer: the internal listener has no TCP address');
+    }
+    internalUrl = `${internalPlan.tls === undefined ? 'http' : 'https'}://${internalPlan.host}:${address.port}`;
+  }
   injectToRealmHost(server, new URL(env.JWT_ISSUER).host);
   if (defaultRealmBoot) {
     // The environment as this server booted with it: a later boot of another
@@ -475,6 +549,9 @@ export async function bootAuthServer(
   return {
     app: server,
     ...(adminServer === undefined ? {} : { admin: adminServer }),
+    ...(internalServer === undefined || internalUrl === undefined
+      ? {}
+      : { internal: internalServer, internalUrl }),
     async close(): Promise<void> {
       await server.close();
     },

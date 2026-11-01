@@ -14,6 +14,7 @@ import {
   eventRetentionEnvSchema,
   eventTelemetryEnvSchema,
   federationEnvSchema,
+  internalListenerEnvSchema,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
   observabilityEnvSchema,
@@ -44,8 +45,12 @@ const LOOPBACK = new BlockList();
 LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
 LOOPBACK.addAddress('::1', 'ipv6');
 
-/** Whether the admin listener's `host` is a loopback address, or `localhost`. */
-function isLoopbackHost(host: string): boolean {
+/**
+ * Whether a listener's `host` is a loopback address, or `localhost`: the
+ * admin listener's in production (#511), and the internal listener's when it
+ * serves plain HTTP (#496).
+ */
+export function isLoopbackHost(host: string): boolean {
   if (host.toLowerCase() === 'localhost') return true;
   if (isIPv4(host)) return LOOPBACK.check(host, 'ipv4');
   if (isIPv6(host)) return LOOPBACK.check(host, 'ipv6');
@@ -71,6 +76,11 @@ export const envSchema = z
     // ADMIN_API_ENABLED (default off until #517 and #520), ADMIN_API_HOST
     // (default loopback) and ADMIN_API_PORT, for a process holding `admin`.
     ...adminApiEnvSchema.shape,
+    // The internal listener (ADR-019 Decision 8, #496): INTERNAL_HOST
+    // (default loopback), INTERNAL_PORT and INTERNAL_PEER_ROLES, for a process
+    // whose roles need it. Its TLS files are the service roles' above; the
+    // app checks them against the roles at boot.
+    ...internalListenerEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,

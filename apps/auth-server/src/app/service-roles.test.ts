@@ -8,6 +8,7 @@ import {
   REPOSITORY_NAMES,
   type RepositoryName,
 } from '@qauth-labs/fastify-plugin-db';
+import { internalListenerEnvSchema } from '@qauth-labs/server-config';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 
@@ -16,11 +17,14 @@ import { SERVER_JOBS, serverJobs } from './jobs';
 import {
   checkServiceRoles,
   describeServiceRoles,
+  internalListenerPlan,
   isKeyMaterialVariable,
+  isSingleProcess,
   pluginsFor,
   repositoriesFor,
   routeRolesProblem,
   servesApiDocs,
+  servesInternalListener,
   SERVICE_ROLE_NAMES,
   ServiceRoleBootError,
   type ServiceRoleSettings,
@@ -34,6 +38,22 @@ function splitSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRole
     INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
     INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
     INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+  };
+}
+
+/** INTERNAL_PEER_ROLES as the configuration reads it. */
+const PEER_ROLES = internalListenerEnvSchema.parse({
+  INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
+}).INTERNAL_PEER_ROLES;
+
+/** A split process holding the signer, with its internal listener's mutual TLS. */
+function signerSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRoleSettings {
+  return {
+    SERVICE_ROLES: roles,
+    INTERNAL_TLS_CERT_PATH: '/run/secrets/signer.crt',
+    INTERNAL_TLS_KEY_PATH: '/run/secrets/signer.key',
+    INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+    INTERNAL_PEER_ROLES: PEER_ROLES,
   };
 }
 
@@ -294,7 +314,7 @@ describe('checkServiceRoles', () => {
 
   it('warns that a process with the signer ignores SIGNER_URL', () => {
     const check = checkServiceRoles(
-      { SERVICE_ROLES: ['api', 'signer'], SIGNER_URL: 'https://signer.internal' },
+      { ...signerSettings(['api', 'signer']), SIGNER_URL: 'https://signer.internal' },
       {}
     );
     expect(check.problems).toEqual([]);
@@ -348,6 +368,151 @@ describe('checkServiceRoles', () => {
     expect(error.message).toContain('KEK is set');
     expect(error.message).toContain('SIGNER_URL is required');
     expect(error.problems.length).toBeGreaterThan(2);
+  });
+});
+
+describe('the internal listener (#496)', () => {
+  it('runs on a process that holds the signer while the roles are split, and only there', () => {
+    expect(isSingleProcess(SERVICE_ROLE_NAMES)).toBe(true);
+    expect(isSingleProcess(['web', 'api', 'admin', 'signer'])).toBe(false);
+    expect(servesInternalListener(SERVICE_ROLE_NAMES)).toBe(false);
+    for (const roles of [
+      ['signer'],
+      ['api', 'signer'],
+      ['web', 'api', 'admin', 'signer'],
+    ] as const) {
+      expect(servesInternalListener(roles), roles.join()).toBe(true);
+    }
+    for (const roles of [['web'], ['api'], ['admin'], ['delivery'], ['web', 'api']] as const) {
+      expect(servesInternalListener(roles), roles.join()).toBe(false);
+    }
+    expect(internalListenerPlan({ SERVICE_ROLES: SERVICE_ROLE_NAMES })).toEqual({ serves: false });
+    expect(internalListenerPlan(splitSettings(['web']))).toEqual({ serves: false });
+  });
+
+  it('serves mutual TLS with the three files and the peer roles, on loopback by default', () => {
+    const plan = internalListenerPlan(signerSettings(['signer']));
+    expect(plan).toEqual({
+      serves: true,
+      problems: [],
+      host: '127.0.0.1',
+      port: 3443,
+      peerRoles: PEER_ROLES,
+      tls: {
+        certPath: '/run/secrets/signer.crt',
+        keyPath: '/run/secrets/signer.key',
+        caPath: '/run/secrets/internal-ca.crt',
+      },
+    });
+    expect(checkServiceRoles(signerSettings(['signer']), {}).problems).toEqual([]);
+  });
+
+  it('may bind another address with mutual TLS', () => {
+    const plan = internalListenerPlan({ ...signerSettings(['signer']), INTERNAL_HOST: '0.0.0.0' });
+    expect(plan.serves && plan.problems).toEqual([]);
+  });
+
+  it('refuses to serve the signer without mutual TLS while the roles are split, naming each setting', () => {
+    const check = checkServiceRoles({ SERVICE_ROLES: ['api', 'signer'] }, {});
+    expect(check.problems.map((problem) => problem.variable)).toEqual([
+      'INTERNAL_TLS_CERT_PATH',
+      'INTERNAL_TLS_KEY_PATH',
+      'INTERNAL_TLS_CA_PATH',
+      'INTERNAL_PEER_ROLES',
+    ]);
+    const error = new ServiceRoleBootError(check.problems);
+    expect(error.message).toContain(
+      'INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so the signer routes are not registered without it'
+    );
+  });
+
+  it('refuses plain HTTP on loopback too while the roles are split', () => {
+    const check = checkServiceRoles(
+      { SERVICE_ROLES: ['signer'], INTERNAL_HOST: '127.0.0.1', INTERNAL_PEER_ROLES: PEER_ROLES },
+      {}
+    );
+    expect(check.problems.map((problem) => problem.variable)).toEqual([
+      'INTERNAL_TLS_CERT_PATH',
+      'INTERNAL_TLS_KEY_PATH',
+      'INTERNAL_TLS_CA_PATH',
+    ]);
+  });
+
+  it('names the TLS files missing beside the others', () => {
+    const settings = { ...signerSettings(['signer']), INTERNAL_TLS_KEY_PATH: undefined };
+    const check = checkServiceRoles(settings, {});
+    expect(check.problems.map((problem) => problem.variable)).toEqual(['INTERNAL_TLS_KEY_PATH']);
+    expect(check.problems[0]?.message).toContain('needs all three internal TLS files');
+  });
+
+  it('refuses mutual TLS with no peer it could admit', () => {
+    const check = checkServiceRoles(
+      { ...signerSettings(['signer']), INTERNAL_PEER_ROLES: new Map() },
+      {}
+    );
+    expect(check.problems.map((problem) => problem.variable)).toEqual(['INTERNAL_PEER_ROLES']);
+    expect(check.problems[0]?.message).toContain('refuses every peer');
+  });
+
+  it('refuses the public port and the admin listener port', () => {
+    const settings = { ...signerSettings(['admin', 'signer']), INTERNAL_PORT: 3000, PORT: 3000 };
+    expect(checkServiceRoles(settings, {}).problems.map((problem) => problem.message)).toEqual([
+      expect.stringContaining('INTERNAL_PORT must differ from PORT (3000)'),
+    ]);
+    expect(
+      checkServiceRoles(
+        {
+          ...settings,
+          PORT: 3000,
+          INTERNAL_PORT: 3002,
+          ADMIN_API_ENABLED: true,
+          ADMIN_API_PORT: 3002,
+        },
+        {}
+      ).problems.map((problem) => problem.message)
+    ).toEqual([expect.stringContaining('INTERNAL_PORT must differ from ADMIN_API_PORT')]);
+    // The admin listener off, its port is free.
+    expect(
+      checkServiceRoles(
+        {
+          ...settings,
+          PORT: 3000,
+          INTERNAL_PORT: 3002,
+          ADMIN_API_ENABLED: false,
+          ADMIN_API_PORT: 3002,
+        },
+        {}
+      ).problems
+    ).toEqual([]);
+  });
+
+  it('serves plain HTTP in a single process on loopback only', () => {
+    // A single process runs the listener once a role of its own serves an
+    // internal route; none does yet, so a fixture module stands in.
+    const modules = [
+      {
+        module: 'fixture',
+        prefix: '/internal/fixture/v1-rc.0',
+        roles: ['api'] as const,
+        load: async () => ({ default: async () => undefined }),
+      },
+    ];
+    const single = { SERVICE_ROLES: SERVICE_ROLE_NAMES };
+    for (const host of [undefined, '127.0.0.1', '127.3.4.5', '::1', 'localhost']) {
+      const plan = internalListenerPlan({ ...single, INTERNAL_HOST: host }, modules);
+      expect(plan.serves && plan.problems, String(host)).toEqual([]);
+      expect(plan.serves && plan.tls, String(host)).toBeUndefined();
+    }
+    for (const host of ['0.0.0.0', '10.0.0.5', 'signer.internal', '::']) {
+      const plan = internalListenerPlan({ ...single, INTERNAL_HOST: host }, modules);
+      expect(plan.serves && plan.problems.map((problem) => problem.variable), host).toEqual([
+        'INTERNAL_HOST',
+      ]);
+    }
+  });
+
+  it('keeps a process without the signer as it was: no listener, its client settings only', () => {
+    expect(checkServiceRoles(splitSettings(['web']), {}).problems).toEqual([]);
   });
 });
 

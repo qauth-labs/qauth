@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { awaitDatabaseMigrations } from '@qauth-labs/fastify-plugin-db';
+import { ServiceRoleBootError } from '@qauth-labs/server-config';
 import Fastify, { LogController } from 'fastify';
 import { serializerCompiler, validatorCompiler, ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -15,9 +16,11 @@ import {
   answerUnknownRouteBeforeBody,
   requestDeadlineOptions,
 } from './app/helpers/request-bounds';
+import { createInternalServer } from './app/internal/listener';
+import { readInternalTlsFiles } from './app/internal/tls-files';
 import { openapiOptions } from './app/openapi-options';
 import errorHandler from './app/plugins/error-handler';
-import { servesAdminListener, servesApiDocs } from './app/service-roles';
+import { internalListenerPlan, servesAdminListener, servesApiDocs } from './app/service-roles';
 import { env, envDeprecationWarnings, envExperimentalWarnings } from './config/env';
 import { buildLoggerOptions } from './config/logger';
 
@@ -125,12 +128,23 @@ const adminServer = servesAdminListener(env.SERVICE_ROLES, env.ADMIN_API_ENABLED
   ? createAdminServer({ loggerInstance: server.log.child({ listener: 'admin' }) })
   : undefined;
 
+// The internal listener (ADR-019 Decision 8, #496): a further Fastify
+// instance, on a process whose roles need it, such as one that holds the
+// signer while the roles are split. Built in `start()`, once the logger can
+// report a refusal: `internalListenerPlan` says whether it runs and how,
+// `readInternalTlsFiles` reads and checks its TLS files, and
+// `createInternalServer` gives it the rules above and mutual TLS. The app
+// installs its routes, sharing its database, cache and signer, and closes it
+// when this server closes.
+let internalServer: ReturnType<typeof createInternalServer> | undefined;
+
 async function shutdown(signal: string) {
   server.log.info(`${signal} received, shutting down gracefully...`);
   try {
     // close() also stops the job runner, which waits for a running job up to
     // its shutdown limit before the database pool closes (app/plugins/jobs.ts),
-    // and the admin listener, before the database closes (#511).
+    // and the admin listener (#511) and the internal listener (#496), before
+    // the database closes.
     await server.close();
     process.exit(0);
   } catch (error) {
@@ -192,18 +206,47 @@ async function start() {
       });
     }
 
-    // Register app (routes) after swagger so they appear in OpenAPI spec
-    await server.register(
-      app,
-      adminServer === undefined ? {} : { adminListener: { server: adminServer } }
-    );
+    // The internal listener, before the app: a process whose roles split
+    // and that would serve the signer without mutual TLS stops here, naming
+    // each setting it lacks, and no route of the signer is ever registered.
+    const internalPlan = internalListenerPlan(env);
+    if (internalPlan.serves) {
+      if (internalPlan.problems.length > 0) {
+        throw new ServiceRoleBootError(internalPlan.problems);
+      }
+      internalServer = createInternalServer({
+        loggerInstance: server.log.child({ listener: 'internal' }),
+        peerRoles: internalPlan.peerRoles,
+        ...(internalPlan.tls === undefined
+          ? {}
+          : {
+              tls: { files: internalPlan.tls, material: readInternalTlsFiles(internalPlan.tls) },
+            }),
+      });
+    }
 
-    // The admin listener binds first, once the boot steps have run: a process
-    // that cannot serve its admin API fails before it takes public traffic.
-    if (adminServer !== undefined) {
+    // Register app (routes) after swagger so they appear in OpenAPI spec
+    await server.register(app, {
+      ...(adminServer === undefined ? {} : { adminListener: { server: adminServer } }),
+      ...(internalServer === undefined ? {} : { internalListener: { server: internalServer } }),
+    });
+
+    // The admin and internal listeners bind first, once the boot steps have
+    // run: a process that cannot serve them fails before it takes public
+    // traffic.
+    if (adminServer !== undefined || internalServer !== undefined) {
       await server.ready();
+    }
+    if (adminServer !== undefined) {
       await adminServer.listen({ port: env.ADMIN_API_PORT, host: env.ADMIN_API_HOST });
       server.log.info(`Admin API listening on http://${env.ADMIN_API_HOST}:${env.ADMIN_API_PORT}`);
+    }
+    if (internalServer !== undefined && internalPlan.serves) {
+      await internalServer.listen({ port: internalPlan.port, host: internalPlan.host });
+      const scheme = internalPlan.tls === undefined ? 'http' : 'https';
+      server.log.info(
+        `Internal listener listening on ${scheme}://${internalPlan.host}:${internalPlan.port}${internalPlan.tls === undefined ? '' : ' (mutual TLS)'}`
+      );
     }
 
     // Start listening.

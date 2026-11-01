@@ -487,7 +487,14 @@
     // by `KEK_PROVIDER`) are outside `files`: their calls to the key service are
     // outside the egress client by ADR-019's amendment of 2026-10-27. The
     // operator's OpenTelemetry export goes through the SDK's exporter, outside
-    // the egress client by ADR-019's amendment of 2026-10-24. apps/auth-server/src/app/egress-rule.test.ts
+    // the egress client by ADR-019's amendment of 2026-10-24. The internal
+    // client (`apps/auth-server/src/app/internal/client.ts`, #496) carries
+    // internal traffic between the roles of one deployment, which ADR-019
+    // Decision 8 sends over mutual TLS: its destination, such as SIGNER_URL,
+    // comes only from deployment configuration and sits on the private network
+    // the egress client refuses, and it brings its own limits (https and TLS
+    // 1.3 only, the server pinned by a certificate SAN, no redirect followed,
+    // capped time and size of each response). apps/auth-server/src/app/egress-rule.test.ts
     // lints samples with this block.
     {
       "files": [
@@ -507,7 +514,8 @@
         "**/test/**",
         "libs/shared/testing/**",
         "libs/server/federation/src/status/status-list-fetch.ts",
-        "libs/shared/interaction-client/**"
+        "libs/shared/interaction-client/**",
+        "apps/auth-server/src/app/internal/client.ts"
       ],
       "rules": {
         "qauth/no-direct-network": "error"
