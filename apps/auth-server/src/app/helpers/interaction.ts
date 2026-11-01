@@ -40,7 +40,13 @@ import {
   writeInteractionState,
 } from './interaction-record';
 import { requestRealm } from './request-realm';
-import { sessionCookieHeader } from './session-cookie';
+import {
+  clearSessionCookie,
+  readCookie,
+  SESSION_COOKIE_NAME,
+  sessionCookieHeader,
+  verifySessionCookie,
+} from './session-cookie';
 import { emitUserEvent } from './user-events';
 
 /**
@@ -714,13 +720,91 @@ export async function cancelInteraction(
 }
 
 /**
+ * End the browser session a user switch leaves behind (#896): the one the
+ * interaction's authentication started, which the browser holds the cookie
+ * of. Kept, it would sign the browser in as the first user wherever the
+ * person goes next, should they abandon the new ceremony: on a shared device,
+ * the next person or the next client would get the previous user's session.
+ * Keeping it would be a multi-account model, which ADR-017 does not describe.
+ *
+ * The person ends it as the session's user, as a sign-out does: the switch
+ * is made by the browser that holds the first user's session and the flow
+ * cookie. Ended while the switch holds the turn and before the interaction
+ * is deleted: when it fails, the turn is given back and the interaction stays
+ * as it was, with its session, so a retry switches again; the switch never
+ * goes on while the first user's session is still live. Ending it twice is
+ * safe, so a retry after a delete that failed ends nothing new.
+ *
+ * @returns the `sid` it ended, or `undefined` when the interaction held no
+ *   session (a switch before anyone authenticated in it)
+ */
+async function endSwitchedSession(
+  request: FastifyRequest,
+  taken: InteractionRecord,
+  idHash: string
+): Promise<string | undefined> {
+  const { sid, userId } = taken.transaction;
+  if (sid === undefined || userId === undefined) return undefined;
+  try {
+    await endBrowserSession(
+      request.server,
+      taken.realmId,
+      sid,
+      'sign_out',
+      { type: 'user', id: userId },
+      userId
+    );
+  } catch (error) {
+    await giveTurnBack(request, taken, idHash);
+    throw error;
+  }
+  return sid;
+}
+
+/**
+ * Clear the browser's session cookie when it names `sid`, the session a user
+ * switch ended, as `/auth/logout` clears the cookie of a session it ended. A
+ * cookie that names another session, one the browser started later in another
+ * tab, stays. Best effort (#493): the cookie verifies only with the realm's
+ * cookie keys, and a signer this process cannot reach must not fail a switch
+ * whose session is already ended. That cookie then names an ended session,
+ * and the next page that reads it clears it (`resolveBrowserSession`).
+ */
+async function clearSwitchedSessionCookie(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  realmId: string,
+  sid: string
+): Promise<void> {
+  let named: string | null;
+  try {
+    named = await verifySessionCookie(
+      request.server,
+      realmId,
+      readCookie(request, SESSION_COOKIE_NAME)
+    );
+  } catch (error) {
+    request.log.warn(
+      { reason: error instanceof Error ? error.name : 'unknown_error' },
+      'the session cookie could not be checked at a user switch; the next page that reads it clears it'
+    );
+    return;
+  }
+  if (named === sid) clearSessionCookie(reply);
+}
+
+/**
  * The user switch ("Not you?", "Use another account"; #619, #658): end this
  * interaction and start a new one for the same authorization request, at the
  * identifier step, bound to a new flow secret that replaces this one's.
  * Nothing proved here carries over (ADR-017, one subject per transaction):
- * the new transaction is empty. The old id gets the generic expired answer
- * from now on. The new interaction keeps the request's absolute expiry: one
- * authorization request has one lifetime, and switching never extends it.
+ * the new transaction is empty. A switch made after the person authenticated
+ * also ends the browser session that authentication started and clears its
+ * cookie (#896), so abandoning the new ceremony leaves the browser signed in
+ * as nobody; `interaction.cancelled` records it (`sessionEnded`). The old id
+ * gets the generic expired answer from now on. The new interaction keeps the
+ * request's absolute expiry: one authorization request has one lifetime, and
+ * switching never extends it.
  *
  * @param identifierStep - the identifier step as the engine offers it (its
  *   alternatives); the plain identifier step when absent
@@ -738,11 +822,19 @@ export async function switchInteractionUser(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
+  // The first user's session ends first. When the sweep claimed the
+  // interaction meanwhile, it stays ended: the person asked to leave it, and
+  // the cookie that names it is cleared on its next read.
+  const ended = await endSwitchedSession(request, taken, bound.idHash);
   if (!(await deleteTaken(request, taken, bound.idHash))) refuse(request, 'expired');
+  if (ended !== undefined) {
+    await clearSwitchedSessionCookie(request, reply, taken.realmId, ended);
+  }
   await emitInteractionEvent(request, taken, 'urn:qauth:event:interaction.cancelled:v1-rc.0', {
     interaction: taken.ref,
     step: taken.step.name,
     reason: 'user_switch',
+    ...(ended === undefined ? {} : { sessionEnded: true }),
   });
   const started = await createInteraction(request, reply, {
     request: taken.request,

@@ -8,9 +8,11 @@ import {
   bootAuthServer,
   type BootedAuthServer,
   CookieJar,
+  E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
+  pkcePair,
   registerPasswordAccount,
   resetE2eState,
   signInWithPassword,
@@ -32,8 +34,9 @@ import type { InteractionStep } from './helpers/interaction-record';
  * cookie opens no other interaction; of two concurrent answers exactly one is
  * processed; the browser session id changes at authentication; an expired
  * interaction is refused and its expiry audited; a user switch starts a new
- * interaction for the same request; and no audit row holds an id or a flow
- * secret.
+ * interaction for the same request, and one after authentication ends the
+ * first user's session so no client gets SSO from it (#896); and no audit row
+ * holds an id or a flow secret.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -449,6 +452,87 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     expect(
       events.find((row) => row.type === 'urn:qauth:event:interaction.cancelled:v1-rc.0')
     ).toMatchObject({ data: { reason: 'user_switch' }, subject_id: userId });
+  });
+
+  it("ends the first user's session on a switch after authentication, so a client starting authorize afterwards gets no SSO from it (#896)", async () => {
+    const app = await boot();
+    const userId = await registerPasswordAccount(app, EMAIL);
+    // A client the user already granted its scopes: with a live session,
+    // `/oauth/authorize` answers it with a code at once.
+    const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm) throw new Error('default realm missing');
+    const scopes = AUTHORIZE_REQUEST.scope.split(' ');
+    const client = await app.repositories.oauthClients.create({
+      realmId: realm.id,
+      clientId: AUTHORIZE_REQUEST.client_id,
+      clientSecretHash: 'unused-public-client',
+      tokenEndpointAuthMethod: 'none',
+      name: 'Interaction client',
+      redirectUris: [AUTHORIZE_REQUEST.redirect_uri],
+      scopes,
+      grantTypes: ['authorization_code', 'refresh_token'],
+      enabled: true,
+      requirePkce: true,
+    });
+    await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, scopes);
+    const authorize = (cookie: string | undefined) =>
+      app.inject({
+        method: 'GET',
+        url: `/oauth/authorize?${new URLSearchParams({
+          response_type: 'code',
+          client_id: AUTHORIZE_REQUEST.client_id,
+          redirect_uri: AUTHORIZE_REQUEST.redirect_uri,
+          scope: AUTHORIZE_REQUEST.scope,
+          code_challenge: pkcePair().challenge,
+          code_challenge_method: 'S256',
+          state: AUTHORIZE_REQUEST.state,
+        }).toString()}`,
+        headers: cookie === undefined ? {} : { cookie },
+      });
+
+    const owner = new Browser(app);
+    const id = await owner.start();
+    await owner.answer(id, 0, { kind: 'authenticated', userId, amr: ['pwd'], step: CONSENT_STEP });
+    const firstCookie = owner.jar.get(SESSION_COOKIE);
+    if (firstCookie === undefined) throw new Error('the authentication set no session cookie');
+    const sid = sessionIdOfCookie(firstCookie);
+    // The session signs the browser in: SSO gives the client a code.
+    const before = await authorize(owner.jar.header());
+    expect(before.statusCode).toBe(302);
+    expect(new URL(before.headers['location'] as string).searchParams.get('code')).not.toBeNull();
+
+    const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    expect(switched.statusCode).toBe(200);
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+
+    // The session is ended for good, and its cookie cleared.
+    const { rows } = await app.dbPool.query<{ revoked: boolean; revoked_reason: string | null }>(
+      'SELECT revoked_at IS NOT NULL AS revoked, revoked_reason FROM sessions WHERE id = $1',
+      [sid]
+    );
+    expect(rows).toEqual([{ revoked: true, revoked_reason: 'sign_out' }]);
+    expect(String(switched.headers['set-cookie'])).toContain(`${SESSION_COOKIE}=;`);
+    expect(owner.jar.get(SESSION_COOKIE)).toBeUndefined();
+
+    // A client starting authorize afterwards gets the login page, not the
+    // first user: from the browser as it is now, and from one that kept the
+    // old cookie.
+    for (const cookie of [owner.jar.header(), `${SESSION_COOKIE}=${firstCookie}`]) {
+      const after = await authorize(cookie);
+      expect(after.statusCode).toBe(302);
+      expect(after.headers['location']).toMatch(/^\/ui\/login\?/);
+    }
+
+    // An event records it: the switch's cancel, about the first user.
+    expect(
+      (await interactionEvents(app)).find(
+        (row) => row.type === 'urn:qauth:event:interaction.cancelled:v1-rc.0'
+      )
+    ).toMatchObject({
+      data: { reason: 'user_switch', sessionEnded: true },
+      subject_id: userId,
+      actor_type: 'user',
+    });
   });
 
   it('writes audit rows for create, answer and cancel that hold neither the id nor the cookie', async () => {
