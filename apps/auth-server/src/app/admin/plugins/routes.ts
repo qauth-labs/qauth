@@ -63,8 +63,11 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  * handler checks that each sealed value opens for its member of this plugin
  * in this realm, and stores the ciphertext as it is. The body schema refuses
  * any installed plugin's secret member under `config`, however it is
- * spelled. No response, audit row or log line holds a value: the
- * representation says only which secret members hold one.
+ * spelled. A configure that keeps a stored secret while a member that holds
+ * a URL is added or changes origin is refused: the secret must be sealed
+ * again, so it never follows a destination it was not set for. No response,
+ * audit row or log line holds a value: the representation says only which
+ * secret members hold one.
  *
  * The admin API never uploads, replaces or edits plugin code.
  */
@@ -253,6 +256,81 @@ export function pluginConfigBodySchema(installed: readonly InstalledAuthMethodPl
         }),
     })
     .meta({ description: "An AuthMethod plugin's configuration in the realm." });
+}
+
+/** The origin of an absolute http(s) URL, or `undefined`. */
+function urlOriginOf(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : undefined;
+}
+
+/** The origin of each http(s) URL among a plain config's members, by member path. */
+function urlMemberOrigins(config: unknown): Map<string, string> {
+  const origins = new Map<string, string>();
+  const walk = (value: unknown, path: string, depth: number): void => {
+    const origin = urlOriginOf(value);
+    if (origin !== undefined) {
+      origins.set(path, origin);
+      return;
+    }
+    if (typeof value !== 'object' || value === null || depth > 32) return;
+    for (const [key, item] of Object.entries(value)) {
+      walk(item, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`, depth + 1);
+    }
+  };
+  walk(config, '', 0);
+  return origins;
+}
+
+/**
+ * The plain members of `after` that send somewhere `before` did not: each
+ * member whose value is an http(s) URL and that is new, or whose origin is
+ * not the one `before` holds at the same path (review of #939). A secret
+ * kept across such a configure would go to the new destination, as
+ * `UpstreamClientSecretDestinationChangedError` refuses for the upstream
+ * OpenID Connect client (#938).
+ */
+export function newUrlDestinations(
+  before: Readonly<Record<string, unknown>>,
+  after: Readonly<Record<string, unknown>>
+): string[] {
+  const old = urlMemberOrigins(before);
+  return [...urlMemberOrigins(after)]
+    .filter(([path, origin]) => old.get(path) !== origin)
+    .map(([path]) => path.slice(1));
+}
+
+/**
+ * Refuse, with 400, a configure that keeps a stored secret (one it neither
+ * sets nor clears) while it sends the plugin to a new destination: a member
+ * whose value is an http(s) URL is added or changes origin. So an admin who
+ * cannot read a write-only secret cannot send it elsewhere by changing, say,
+ * `tokenEndpoint`. The error names the secrets to seal again; it echoes no
+ * member value.
+ */
+function requireKeptSecretsStay(
+  plugin: InstalledAuthMethodPlugin,
+  row: RealmAuthMethodPlugin | undefined,
+  config: Readonly<Record<string, unknown>>,
+  changes: Readonly<Record<string, unknown>>
+): void {
+  const stored = stateOf(row).secrets;
+  const kept = plugin.secretPaths.filter(
+    (path) => Object.hasOwn(stored, path) && !Object.hasOwn(changes, path)
+  );
+  if (kept.length === 0) return;
+  const before = withoutConfigMembers(stateOf(row).config, plugin.secretPaths);
+  if (newUrlDestinations(before, config).length === 0) return;
+  const names = kept.map((path) => JSON.stringify(path)).join(', ');
+  throw new BadRequestError(
+    `The configuration sends the plugin to a new destination (a member that holds a URL is new or names another origin), and the stored secret ${names} was set for the old one: seal ${kept.length === 1 ? 'it' : 'each'} again with plugins.secrets.seal and send ${kept.length === 1 ? 'it' : 'them'} under secrets`
+  );
 }
 
 /** The installed plugin of the path, or 404. */
@@ -614,6 +692,8 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
           'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets'
         );
       }
+      // A kept secret never follows a changed destination.
+      requireKeptSecretsStay(plugin, row, config, changes);
 
       // The secrets the realm will hold: those kept, and those set; a value
       // this request replaces or clears is never opened.

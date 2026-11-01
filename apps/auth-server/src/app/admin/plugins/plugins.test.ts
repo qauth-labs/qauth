@@ -6,7 +6,7 @@ import { ADMIN_SCOPES } from '../../helpers/admin-scopes';
 import { loadDeploymentAuthMethodPlugins } from '../../helpers/auth-method-plugins';
 import type { AdminRateLimitCheck } from '../pipeline';
 import { PLUGIN_OPERATION_IDS } from './operations';
-import { pluginConfigBodySchema, pluginResource } from './routes';
+import { newUrlDestinations, pluginConfigBodySchema, pluginResource } from './routes';
 
 /**
  * The plugin operations of the admin API (#600), without a listener: their
@@ -151,6 +151,63 @@ describe('the configure body (#600)', () => {
     ['a negative version', { version: -1, config: {} }],
   ])('refuses %s', async (_case, body) => {
     expect(pluginConfigBodySchema(await installed()).safeParse(body).success).toBe(false);
+  });
+});
+
+describe('a configure that changes where the plugin sends (#600)', () => {
+  const before = {
+    issuer: 'https://idp.example',
+    tokenEndpoint: 'https://idp.example/token',
+    clientId: 'qauth',
+    mtls: { certUrls: ['https://certs.example/a'] },
+  };
+
+  it('names each URL member that is new or names another origin', () => {
+    expect(
+      newUrlDestinations(before, { ...before, tokenEndpoint: 'https://attacker.example/token' })
+    ).toEqual(['tokenEndpoint']);
+    expect(newUrlDestinations(before, { ...before, jwksUri: 'http://idp.example/jwks' })).toEqual([
+      'jwksUri',
+    ]);
+    expect(
+      newUrlDestinations(before, {
+        ...before,
+        mtls: { certUrls: ['https://certs.example/a', 'https://other.example/b'] },
+      })
+    ).toEqual(['mtls.certUrls[1]']);
+    // A URL member that was not a URL before is new too.
+    expect(
+      newUrlDestinations(
+        { ...before, clientId: 'qauth' },
+        { ...before, clientId: 'https://x.example' }
+      )
+    ).toEqual(['clientId']);
+    // Two endpoints swapped each name another origin.
+    expect(
+      newUrlDestinations(
+        { a: 'https://one.example', b: 'https://two.example' },
+        { a: 'https://two.example', b: 'https://one.example' }
+      )
+    ).toEqual(['a', 'b']);
+  });
+
+  it('lets a configure keep the origins, change a path or a plain member, or drop a URL', () => {
+    expect(newUrlDestinations(before, before)).toEqual([]);
+    expect(
+      newUrlDestinations(before, {
+        ...before,
+        tokenEndpoint: 'https://idp.example/oauth2/token',
+        issuer: 'https://idp.example/',
+        clientId: 'other',
+      })
+    ).toEqual([]);
+    const without: Record<string, unknown> = { ...before };
+    delete without['tokenEndpoint'];
+    expect(newUrlDestinations(before, without)).toEqual([]);
+    // Not a destination: another scheme, or not a URL at all.
+    expect(
+      newUrlDestinations(before, { ...before, logo: 'data:image/png;base64,AA', note: 'see docs' })
+    ).toEqual([]);
   });
 });
 

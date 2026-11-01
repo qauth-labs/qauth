@@ -305,7 +305,11 @@ enable or a disable may carry `If-Match`.
 `data_at_rest` key, bound to that plugin and member, and answers the ciphertext. It changes
 nothing, so it is a write under `plugins.write`. A configure request then sends the plain members
 under `config` and names each secret member under `secrets`, by path: `{ sealed }` sets one to the
-sealed value, `null` clears it, and one it does not name keeps its value. So the request an
+sealed value, `null` clears it, and one it does not name keeps its value, unless the configure
+sends the plugin somewhere new: a configure that keeps a stored secret while a member whose value
+is an http(s) URL is added or changes origin is refused with `400`, naming the secrets to seal
+again, so a kept secret never follows a destination it was not set for (as the upstream OpenID
+Connect client refuses a changed issuer or token endpoint). So the request an
 approval stores until it is used, and the digests it is bound by, hold a ciphertext, never the
 value. The handler checks that each sealed value opens for its member of this plugin in this
 realm, and the whole config, secrets included, must pass the plugin's own schema; a plugin is

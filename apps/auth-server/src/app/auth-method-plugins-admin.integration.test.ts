@@ -453,6 +453,54 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(await rowsText('admin_approvals', realm.id)).not.toContain(SECRET);
   });
 
+  it('refuses a configure that keeps the stored secret while it sends the plugin elsewhere', async () => {
+    const realm = await tenant('alpha');
+    const requester = await adminWith(realm.id, 'security-admin');
+    await configure(realm.id, requester);
+    const stored = (await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp'))
+      ?.secrets['clientSecret'];
+
+    // The issuer moves to another origin, and the secret is not sent again.
+    const moved = { version: 1, config: { ...CONFIG, issuer: 'https://attacker.example' } };
+    const { approvalId } = await fileAndApprove(realm.id, requester, 'plugins.update', moved);
+    const refused = await send(
+      'POST',
+      pluginPath(realm.id, '/corp/config'),
+      requester.token,
+      moved,
+      { 'qauth-approval': approvalId }
+    );
+    expect(refused.statusCode).toBe(400);
+    expect(refused.headers['content-type']).toContain('application/problem+json');
+    expect(refused.json<{ detail?: string }>().detail).toContain(
+      'the stored secret "clientSecret" was set for the old one: seal it again'
+    );
+    expect(await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp')).toMatchObject({
+      version: 1,
+      config: CONFIG,
+      secrets: { clientSecret: stored },
+    });
+
+    // A plain member that names no destination keeps the secret.
+    const renamed = { version: 1, config: { ...CONFIG, clientId: 'qauth-2' } };
+    const kept = await approved(realm.id, requester, 'plugins.update', '/corp/config', renamed);
+    expect(kept.done.json()).toMatchObject({
+      version: 2,
+      secrets: [{ path: 'clientSecret', set: true }],
+    });
+
+    // Sealed again, the secret may go to the new issuer.
+    const resealed = await seal(realm.id, requester.token, 'a-secret-for-the-new-issuer');
+    await approved(realm.id, requester, 'plugins.update', '/corp/config', {
+      ...moved,
+      version: 2,
+      secrets: { clientSecret: { sealed: resealed.sealed } },
+    });
+    expect(
+      (await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp'))?.config
+    ).toEqual({ ...CONFIG, issuer: 'https://attacker.example' });
+  });
+
   it('seals a secret for a write admin, and refuses a sealed value of another realm', async () => {
     const alpha = await tenant('alpha');
     const beta = await tenant('beta');
