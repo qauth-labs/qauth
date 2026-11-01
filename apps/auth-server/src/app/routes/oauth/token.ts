@@ -37,7 +37,7 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
-import { isScopeSubset } from '../../helpers/consent';
+import { consentCovers } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { dpopEventReason, verifyTokenRequestProof } from '../../helpers/dpop';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
@@ -1041,12 +1041,16 @@ async function handleAuthorizationCode(
   // A refresh token is standing access, and the active consent row is the
   // user's only handle on it: `/consents` lists those rows, and consent
   // revocation reaches the refresh tokens through one. So a refresh token is
-  // minted only under a stored consent that covers the code's scopes. An
-  // approval given with "Remember this decision" unticked, a consent revoked
-  // since the code was issued, and a code of the legacy Bearer authorize path
-  // (retired by #524; it stored no consent) yield the access token (and ID
-  // token) alone; the client
-  // returns through /oauth/authorize when it expires.
+  // minted only under a stored consent that covers its scopes and resources:
+  // the code's scopes at every RFC 8707 resource the family is bound to
+  // (`consentCovers`, the consent skip's rule), since a consent stored for one
+  // resource server says nothing about another. Without a resource the scopes
+  // alone decide. An approval given with "Remember this decision" unticked, an
+  // administrative consent (ADR-017 Decision 9) that no stored consent covers,
+  // a consent revoked since the code was issued, and a code of the legacy
+  // Bearer authorize path (retired by #524; it stored no consent) yield the
+  // access token (and ID token) alone; the client returns through
+  // /oauth/authorize when it expires.
   const consent = await fastify.repositories.oauthConsents.findActive(
     ctx.realmId,
     user.id,
@@ -1054,7 +1058,7 @@ async function handleAuthorizationCode(
   );
   const familyCreatedAt = issuedAt;
   const refresh =
-    consent && isScopeSubset(authCode.scopes, consent.scopes)
+    consent && consentCovers(consent, authCode.scopes, effectiveResource)
       ? {
           ...fastify.jwtUtils.generateRefreshToken(),
           // The realm's `sso_max_lifespan` caps the family from its start,

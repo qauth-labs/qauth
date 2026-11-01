@@ -156,7 +156,8 @@ consent, an administrative consent:
   consent for the client on this screen, the client is not listed under
   `/consents`, and `/oauth/token` returns no `refresh_token` for such a code,
   as for an approval with **Remember this decision** unticked. A remembered
-  consent that covers the code's scopes still yields one.
+  consent that covers the code's scopes, at each resource indicator the code
+  is bound to, still yields one.
 - Every such code is recorded as a
   [`consent.administrative`](/reference/events/#consentadministrative-v1-rc0)
   event: the profile it rests on, the scopes and resource indicators it

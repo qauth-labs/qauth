@@ -2498,6 +2498,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refresh token needs a stored consent for its resources too** ([#633]).
+  `/oauth/token` minted a refresh token for an authorization code whenever the
+  active consent covered the code's scopes, whatever RFC 8707 resources the
+  code was bound to. So a user who remembered `read:x` at one resource server,
+  and later approved `read:x` at another without **Remember this decision** or
+  under a first-party client's administrative consent, gave the client a
+  refresh family at the second: standing access that no stored consent
+  records. A refresh token is now minted only when the stored consent covers
+  the code's scopes at every resource the family is bound to (the ones a
+  narrowing `resource` on the token request names, if it has one), the rule
+  the consent skip already applies; otherwise the client gets the access token,
+  and the ID token when `openid` was granted, without one. A code bound to no
+  resource is unaffected.
+
 - **A client that signs users in can be kept from minting tokens with no user
   for its users' scopes** ([#891]). `client_credentials` granted any scope in
   a client's `scopes`, so a relying party given the grant to manage its SSF

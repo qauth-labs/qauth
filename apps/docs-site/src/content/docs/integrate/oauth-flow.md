@@ -240,8 +240,9 @@ Notes:
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`refresh_token` is present only when the user has a stored consent** for
-  your client that covers the granted scopes — the row they can review and
-  revoke under `/consents`. If they untick **Remember this decision** on the
+  your client that covers the granted scopes at every `resource` the token is
+  bound to — the row they can review and revoke under `/consents`. A consent
+  remembered for one resource server does not cover another. If they untick **Remember this decision** on the
   consent screen, the approval is one-time: the member is absent, and you send
   them through `/oauth/authorize` again once the access token expires.
   Requesting `offline_access` does not change this either way.
