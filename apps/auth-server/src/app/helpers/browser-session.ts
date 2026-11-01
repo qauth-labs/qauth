@@ -12,9 +12,9 @@ import { accountCredentialRefusal } from './account-validity';
 import { requestRealm } from './request-realm';
 import {
   clearSessionCookie,
+  inspectSessionCookie,
   readCookie,
   SESSION_COOKIE_NAME,
-  verifySignedSessionId,
 } from './session-cookie';
 import { deleteSessionSideRecord, writeSessionSideRecord } from './session-side-record';
 
@@ -85,7 +85,10 @@ export async function createBrowserSession(
  * `__Host-qauth_session` cookie, through the session service. Returns `null`
  * when:
  *   - the cookie is absent
- *   - the signature is invalid
+ *   - the cookie does not verify with the request's realm's cookie keys
+ *     (#493): tampered, signed by a key the realm no longer holds, signed for
+ *     another realm, in the format of a release before the realm keys, or
+ *     signed with a key this process has not read yet
  *   - the service holds no live session with that `sid` in the request's
  *     realm: never created, revoked, past its absolute end or the realm's idle
  *     limit, or a session of another realm (ADR-019 Decision 1)
@@ -95,9 +98,12 @@ export async function createBrowserSession(
  *     not come back with it
  *
  * The caller is responsible for deciding what to do with a null result —
- * e.g. redirect to the login page, or render an error. When the cookie
- * signature is valid but the session is absent, the stale cookie is cleared
- * as a side-effect so the browser stops sending it. A session whose user is
+ * e.g. redirect to the login page, or render an error. A cookie that does not
+ * verify, or whose session is absent, is cleared as a side-effect so the
+ * browser stops sending it; one that names a key this process has not read
+ * yet, and may not read again yet, is left for the next request. A signer this
+ * process cannot reach is not an invalid cookie: that throws, and the cookie
+ * stays. A session whose user is
  * gone or disabled is revoked and its cookie cleared the same way: disabling
  * an account must end the sign-in it already holds, not only refuse the next
  * one (as `/ui/login` and every token grant already do).
@@ -108,10 +114,18 @@ export async function resolveBrowserSession(
   reply: FastifyReply
 ): Promise<BrowserSession | null> {
   const raw = readCookie(request, SESSION_COOKIE_NAME);
-  const sid = verifySignedSessionId(raw);
-  if (!sid) return null;
+  if (raw === undefined) return null;
+  const realmId = requestRealm(request).id;
+  const cookie = await inspectSessionCookie(fastify, realmId, raw);
+  if (cookie.contents === null) {
+    // A cookie this realm did not sign names nothing: stop the browser
+    // sending it. One that names a key this process has not read yet is left.
+    if (cookie.clear) clearSessionCookie(reply);
+    return null;
+  }
+  const sid = cookie.contents.activeSessionId;
 
-  const session = await fastify.sessionService.get({ realmId: requestRealm(request).id, sid });
+  const session = await fastify.sessionService.get({ realmId, sid });
   if (!session) {
     // Signature was valid but the session is absent — stale cookie.
     clearSessionCookie(reply);

@@ -6,7 +6,6 @@ import {
   authEnvSchema,
   baseEnvSchema,
   databaseEnvSchema,
-  DEV_SESSION_COOKIE_SECRET_DEFAULT,
   dpopEnvSchema,
   egressEnvSchema,
   emailEnvSchema,
@@ -14,13 +13,14 @@ import {
   eventRetentionEnvSchema,
   eventTelemetryEnvSchema,
   federationEnvSchema,
+  internalListenerEnvSchema,
+  isPublishedSessionCookieSecret,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
   observabilityEnvSchema,
   otlpExporterProblems,
   passwordEnvSchema,
   rateLimitEnvSchema,
-  readsSessionCookie,
   redisEnvSchema,
   serviceRolesEnvSchema,
   ssfEnvSchema,
@@ -71,6 +71,11 @@ export const envSchema = z
     // ADMIN_API_ENABLED (default off until #517 and #520), ADMIN_API_HOST
     // (default loopback) and ADMIN_API_PORT, for a process holding `admin`.
     ...adminApiEnvSchema.shape,
+    // The internal listener (ADR-019 Decision 8, #496): INTERNAL_HOST
+    // (default loopback), INTERNAL_PORT and INTERNAL_PEER_ROLES, for a process
+    // whose roles need it. Its TLS files are the service roles' above; the
+    // app checks them against the roles at boot.
+    ...internalListenerEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,
@@ -177,22 +182,24 @@ export const envSchema = z
       .transform((v) => (v === undefined ? undefined : v.toLowerCase() === 'true')),
   })
   .superRefine((env, ctx) => {
-    // F-12 — reject the dev-default SESSION_COOKIE_SECRET in production. The
-    // schema's own `.default()` ships a test-only value; without this guard a
-    // production deployment that forgets to set the env var silently signs
-    // session cookies with a publicly-known secret. Only a process whose roles
-    // read the cookie needs it (#495): `admin`, `signer` and `delivery` alone
-    // never sign or check one.
+    // F-12 — reject a published SESSION_COOKIE_SECRET in production. The
+    // cookies are signed with the realm's cookie key from the signer (#493),
+    // so the variable is optional; but while the key boot step still reads it,
+    // to import it or to replace the stored cookie key with it (until rotation
+    // through the store ships, #544 and #551), a value anyone can read in
+    // QAuth's examples must never reach a production key store. The boot step
+    // drops those values outside production too, and every role refuses them
+    // here, whether or not this process runs the boot step.
     if (
       env.NODE_ENV === 'production' &&
-      env.SESSION_COOKIE_SECRET === DEV_SESSION_COOKIE_SECRET_DEFAULT &&
-      readsSessionCookie(env.SERVICE_ROLES)
+      env.SESSION_COOKIE_SECRET !== undefined &&
+      isPublishedSessionCookieSecret(env.SESSION_COOKIE_SECRET)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['SESSION_COOKIE_SECRET'],
         message:
-          'SESSION_COOKIE_SECRET must be set to a strong secret of at least 32 characters in production on a process holding web or api (the dev default is not allowed).',
+          "SESSION_COOKIE_SECRET is set to a value QAuth's examples published, which production refuses: anyone can sign session cookies with it. Set it to a new strong secret of at least 32 characters, for example `openssl rand -base64 48`: at boot it replaces the realm's stored cookie key, which may be that published value. Remove the variable only after that boot.",
       });
     }
 

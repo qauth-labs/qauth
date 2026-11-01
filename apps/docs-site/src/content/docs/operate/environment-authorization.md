@@ -125,8 +125,11 @@ The profile table is deliberately coarse — it carries legible **tier labels**,
 magic numbers. The concrete values come from configuration so an operator tunes
 one place:
 
-- **Access-token lifespan** — `short` maps to `ACCESS_TOKEN_LIFESPAN` (default
-  `900` seconds); `long` is the development convenience.
+- **Access-token lifespan** — `short` maps to the realm's
+  `tokens.accessTokenLifespanSeconds` (default `900` seconds); `long`, the
+  development convenience, to its `tokens.developmentAccessTokenLifespanSeconds`
+  (default `28800`). Both are realm policies, which `ACCESS_TOKEN_LIFESPAN` and
+  `DEV_ACCESS_TOKEN_LIFESPAN` only seed for a new realm.
 - **Rate limits** — `strict` vs `lenient` select between configured per-window
   caps (`RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW` and the per-endpoint limits); only
   the cap moves with environment, the window is unchanged.

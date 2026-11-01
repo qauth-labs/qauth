@@ -39,6 +39,7 @@ import {
 import type {
   CookieSecret,
   CookieSecrets,
+  CookieSecretsOptions,
   DecryptRequest,
   EncryptRequest,
   JwsKeyAlgorithm,
@@ -187,6 +188,11 @@ interface Timed<T> {
   readonly readAt: number;
 }
 
+/** A realm's key list, and whether a forced read (a miss on a named key) read it. */
+interface KeyList extends Timed<readonly SignerKeyRecord[]> {
+  readonly forced: boolean;
+}
+
 /** The fields each operation's request takes. Any other field is refused. */
 const REQUEST_FIELDS = {
   signJws: ['realmId', 'purpose', 'scopeId', 'typ', 'algorithm', 'claims'],
@@ -250,7 +256,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   // key.
   const keys = new BoundedCache<string, LoadedKey>(keyCacheSize);
   const pendingKeys = new Map<string, Promise<LoadedKey>>();
-  const keyLists = new BoundedCache<string, Timed<readonly SignerKeyRecord[]>>(keyCacheSize);
+  const keyLists = new BoundedCache<string, KeyList>(keyCacheSize);
   const publicLists = new BoundedCache<string, Timed<readonly PublicKeyRecord[]>>(keyCacheSize);
   // Raised each time a key-list read drops a realm's published keys, so a
   // published-key read already running cannot store its older answer. A plain
@@ -295,7 +301,9 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
   /**
    * Every key of the realm's purpose and scope, read at most once per refresh
    * interval. `forceRead` reads again sooner, but not twice within
-   * {@link MIN_FORCED_READ_INTERVAL_MS}.
+   * {@link MIN_FORCED_READ_INTERVAL_MS}: only a list another forced read made
+   * is trusted for that long. A list any other read made, however young, may
+   * predate the key the caller names, so a forced read never takes it (#493).
    */
   async function listKeys(
     realmId: string,
@@ -307,9 +315,11 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     const cached = keyLists.get(slot);
     if (cached !== undefined) {
       const age = now() - cached.readAt;
-      const trusted = forceRead
-        ? Math.min(MIN_FORCED_READ_INTERVAL_MS, refreshIntervalMs)
-        : refreshIntervalMs;
+      const trusted = !forceRead
+        ? refreshIntervalMs
+        : cached.forced
+          ? Math.min(MIN_FORCED_READ_INTERVAL_MS, refreshIntervalMs)
+          : 0;
       if (age < trusted) {
         return cached.value;
       }
@@ -326,7 +336,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           publicLists.delete(realmId);
           publicGenerations.set(realmId, (publicGenerations.get(realmId) ?? 0) + 1);
         }
-        keyLists.set(slot, { value, readAt });
+        keyLists.set(slot, { value, readAt, forced: forceRead });
       }
       return value;
     });
@@ -757,17 +767,34 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       );
     },
 
-    async getCookieSecrets(caller: SignerCaller, realmIdInput: string): Promise<CookieSecrets> {
+    async getCookieSecrets(
+      caller: SignerCaller,
+      realmIdInput: string,
+      options?: CookieSecretsOptions
+    ): Promise<CookieSecrets> {
+      const fields = options === undefined ? {} : readRequest(options, ['kid']);
       authorize(caller, 'getCookieSecrets');
       const realmId = resolveRealmId(realmIdInput);
-      const records = await listKeys(realmId, 'cookie_hmac', null);
-      const current = records.filter((key) => key.status === 'active' && key.algorithm === 'HS256');
+      const wanted = fields['kid'];
+      if (wanted !== undefined && typeof wanted !== 'string') {
+        throw new SignerRequestRefusedError('INVALID_KID', 'A cookie key id is a string');
+      }
+      let { current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null));
+      // A cookie names a key that is neither the current nor the previous key
+      // of this list: another node may sign with a key this one has not read
+      // yet, or read only while it was still `next` (#493). Read the store
+      // again, unless a read for a missing key already did within the last
+      // second.
+      if (
+        wanted !== undefined &&
+        !current.some((key) => key.kid === wanted) &&
+        previous?.kid !== wanted
+      ) {
+        ({ current, previous } = cookieKeysOf(await listKeys(realmId, 'cookie_hmac', null, true)));
+      }
       if (current.length !== 1) {
         throw new SignerKeyNotFoundError(realmId, 'cookie_hmac', { algorithm: 'HS256' });
       }
-      const [previous] = records
-        .filter((key) => key.status === 'retired' && key.algorithm === 'HS256')
-        .sort(byMostRecentlyRetired);
 
       return Object.freeze({
         current: await secretOf(realmId, current[0]),
@@ -1009,6 +1036,21 @@ function sameKeys(a: readonly SignerKeyRecord[], b: readonly SignerKeyRecord[]):
 }
 
 /** Newest retirement first; a key without a retirement time, then the newest key, last. */
+/**
+ * A realm's cookie keys in a key list: every active HS256 key (one, unless the
+ * store is inconsistent) and the most recently retired one, the previous key.
+ */
+function cookieKeysOf(records: readonly SignerKeyRecord[]): {
+  current: SignerKeyRecord[];
+  previous: SignerKeyRecord | undefined;
+} {
+  const current = records.filter((key) => key.status === 'active' && key.algorithm === 'HS256');
+  const [previous] = records
+    .filter((key) => key.status === 'retired' && key.algorithm === 'HS256')
+    .sort(byMostRecentlyRetired);
+  return { current, previous };
+}
+
 function byMostRecentlyRetired(a: SignerKeyRecord, b: SignerKeyRecord): number {
   return (b.retireAt ?? -1) - (a.retireAt ?? -1) || b.createdAt - a.createdAt;
 }

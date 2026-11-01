@@ -152,12 +152,103 @@ describe('refresh-token rotation lock', () => {
     await repo.revokeAllForUser(USER_ID, 'logout');
 
     // Both hash the id as a uuid rendered to text, so an id string spelled
-    // differently (upper case) cannot land on a different lock.
-    const locks = texts(queries).filter((t) => t.includes('pg_advisory_xact_lock'));
+    // differently (upper case) cannot land on a different lock. (Rotation
+    // also takes its client's lock, #631, which has its own namespace.)
+    const locks = texts(queries).filter(
+      (t) => t.includes('pg_advisory_xact_lock') && !t.includes('qauth:client-tokens:')
+    );
     expect(locks).toHaveLength(2);
     for (const lock of locks) {
       expect(lock).toContain('::uuid::text');
     }
+  });
+});
+
+// #631: removing a client's first-party profile revokes every token of the
+// client. One lock keyed on the client, shared by every rotation and insert of
+// the client's tokens and exclusive for that revocation, replaces a lock per
+// token holder, which would fill Postgres's shared lock table.
+describe('the client token lock (#631)', () => {
+  const CLIENT_KEY = "'qauth:client-tokens:'";
+
+  it('rotation takes the client lock shared, after the user lock and before its UPDATE', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db).revokeIfActive('token-1', 'rotated', db);
+
+    const sql = texts(queries);
+    const userLock = sql.findIndex(
+      (t) => t.includes('pg_advisory_xact_lock_shared(') && !t.includes(CLIENT_KEY)
+    );
+    const clientLock = sql.findIndex(
+      (t) => t.includes('pg_advisory_xact_lock_shared(') && t.includes(CLIENT_KEY)
+    );
+    const update = sql.findIndex((t) => t.startsWith('update "refresh_tokens"'));
+    expect(userLock).toBeGreaterThanOrEqual(0);
+    expect(clientLock).toBeGreaterThan(userLock);
+    expect(update).toBeGreaterThan(clientLock);
+    // Keyed on the client of the token being rotated, read from the row.
+    expect(sql[clientLock]).toContain('"oauth_client_id"');
+    expect(sql[clientLock]).toContain('::uuid::text');
+    expect(queries[clientLock].values).toContain('token-1');
+  });
+
+  it('every insert takes the client lock shared first, in a transaction it opens when given none', async () => {
+    const token = {
+      userId: USER_ID,
+      oauthClientId: CLIENT_ID,
+      tokenHash: 'h'.repeat(64),
+      familyCreatedAt: 1,
+      familySessionExpiresAt: null,
+      expiresAt: 2,
+      scopes: [],
+    };
+    const own = createRecordingDb();
+    await createRefreshTokensRepository(own.db).create(token);
+    const ownSql = texts(own.queries);
+    const begin = ownSql.indexOf('begin');
+    const lock = ownSql.findIndex((t) => t.includes('pg_advisory_xact_lock_shared('));
+    const insert = ownSql.findIndex((t) => t.startsWith('insert into "refresh_tokens"'));
+    const commit = ownSql.indexOf('commit');
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeGreaterThan(begin);
+    expect(insert).toBeGreaterThan(lock);
+    expect(commit).toBeGreaterThan(insert);
+    expect(ownSql[lock]).toContain(CLIENT_KEY);
+    expect(own.queries[lock].values).toContain(CLIENT_ID);
+
+    const caller = createRecordingDb();
+    await createRefreshTokensRepository(caller.db).create(token, caller.db);
+    const callerSql = texts(caller.queries);
+    expect(callerSql).not.toContain('begin');
+    expect(callerSql[0]).toContain(CLIENT_KEY);
+    expect(callerSql[1].startsWith('insert into "refresh_tokens"')).toBe(true);
+  });
+
+  it('revokeAllForClient takes only the client lock, exclusive, before its UPDATE', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createRefreshTokensRepository(db).revokeAllForClient(
+      CLIENT_ID,
+      'first_party_profile_removed'
+    );
+
+    const sql = texts(queries);
+    const begin = sql.indexOf('begin');
+    const locks = sql.filter((t) => t.includes('pg_advisory_xact_lock'));
+    const lock = sql.findIndex((t) => /pg_advisory_xact_lock\(/.test(t));
+    const update = sql.findIndex((t) => t.startsWith('update "refresh_tokens"'));
+    const commit = sql.indexOf('commit');
+    // One lock, however many users hold the client's tokens.
+    expect(locks).toHaveLength(1);
+    expect(sql[lock]).toContain(CLIENT_KEY);
+    expect(queries[lock].values).toContain(CLIENT_ID);
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeGreaterThan(begin);
+    expect(update).toBeGreaterThan(lock);
+    expect(commit).toBeGreaterThan(update);
+    expect(sql[update]).toContain('"oauth_client_id" =');
+    expect(sql[update]).toContain('"revoked" =');
   });
 });
 

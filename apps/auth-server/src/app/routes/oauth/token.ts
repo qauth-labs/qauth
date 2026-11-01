@@ -20,6 +20,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { API_FAMILY_AUDIENCES } from '../../api-conventions/families';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
 import { accessTokenIssuedAt, accountCredentialRefusal } from '../../helpers/account-validity';
 import { resolveAcrClaims } from '../../helpers/acr-claims';
@@ -55,6 +56,7 @@ import {
   validateIdJagAssertion,
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
+import { type TokenLifetimes, tokenLifetimesOf } from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import {
@@ -363,6 +365,10 @@ export default async function (fastify: FastifyInstance) {
         // single-resolver pattern from ADR-008 §7. Fail-safe: an unset client
         // or realm resolves to the `production` profile (hardened default).
         const policy = resolveEnvironmentPolicy(client, realm);
+        // The realm's token lifetimes (ADR-019 Decision 10, #527), from the
+        // same row: no query of its own. Every grant below signs and answers
+        // with them, so two realms' tokens can live differently long.
+        const tokenLifetimes = tokenLifetimesOf(fastify, realm);
 
         // Route by grant type.
         if (body.grant_type === 'authorization_code') {
@@ -374,6 +380,7 @@ export default async function (fastify: FastifyInstance) {
             policy,
             realmId: realm.id,
             ssoMaxLifespan: realm.ssoMaxLifespan,
+            tokenLifetimes,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -388,6 +395,7 @@ export default async function (fastify: FastifyInstance) {
             policy,
             realmId: realm.id,
             ssoMaxLifespan: realm.ssoMaxLifespan,
+            tokenLifetimes,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -402,6 +410,7 @@ export default async function (fastify: FastifyInstance) {
             policy,
             realmId: realm.id,
             ssoMaxLifespan: realm.ssoMaxLifespan,
+            tokenLifetimes,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -416,6 +425,7 @@ export default async function (fastify: FastifyInstance) {
             policy,
             realmId: realm.id,
             ssoMaxLifespan: realm.ssoMaxLifespan,
+            tokenLifetimes,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -430,6 +440,7 @@ export default async function (fastify: FastifyInstance) {
             policy,
             realmId: realm.id,
             ssoMaxLifespan: realm.ssoMaxLifespan,
+            tokenLifetimes,
             dpopThumbprint,
           });
           return reply.send(responseBody);
@@ -498,6 +509,14 @@ type HandlerContext<TBody> = {
    * {@link realmId}, the realm resolver's.
    */
   ssoMaxLifespan: number | null;
+  /**
+   * The realm's token lifetimes (#527): its access, development access and
+   * refresh token lifetimes, read from the same row as {@link realmId} by
+   * `tokenLifetimesOf`. {@link accessTokenLifespanForPolicy} picks the access
+   * lifetime of the {@link policy}'s tier; an ID token gets the access
+   * lifetime, a new refresh token the refresh lifetime.
+   */
+  tokenLifetimes: TokenLifetimes;
   /**
    * The RFC 7638 thumbprint of the request's DPoP proof key (RFC 9449 §5,
    * #480), checked at dispatch; undefined when the request carried no proof or
@@ -571,19 +590,40 @@ function dpopBindingRefusal(
 
 /**
  * Map the policy's access-token lifespan TIER to a concrete number of seconds,
- * in ONE place (ADR-008 §5, #197). The concrete numbers stay in config: the
- * `short` tier (staging/production) is `ACCESS_TOKEN_LIFESPAN`, the `long` tier
- * (development) is `DEV_ACCESS_TOKEN_LIFESPAN`. `getAccessTokenLifespan()`
- * remains the source of truth for the strict baseline; the dev relaxation only
- * lengthens it for a `development`-profile token. Callers pass the returned
+ * in ONE place (ADR-008 §5, #197). The concrete numbers are the client's
+ * realm's (#527): the `short` tier (staging/production) is its
+ * `tokens.accessTokenLifespanSeconds`, the `long` tier (development) its
+ * `tokens.developmentAccessTokenLifespanSeconds`. Callers pass the returned
  * value as `signAccessToken({ expiresInOverride })` AND as the response
  * `expires_in` so the advertised lifetime matches the signed `exp`.
  */
-function accessTokenLifespanForPolicy(fastify: FastifyInstance, policy: EnvironmentPolicy): number {
+function accessTokenLifespanForPolicy(
+  lifetimes: TokenLifetimes,
+  policy: EnvironmentPolicy
+): number {
   return resolveAccessTokenLifespanSeconds(policy.accessTokenLifespanTier, {
-    shortSeconds: fastify.jwtUtils.getAccessTokenLifespan(),
-    longSeconds: env.DEV_ACCESS_TOKEN_LIFESPAN,
+    shortSeconds: lifetimes.accessTokenLifespanSeconds,
+    longSeconds: lifetimes.developmentAccessTokenLifespanSeconds,
   });
+}
+
+/**
+ * The access token lifetime of a token with `aud`: the tier's
+ * ({@link accessTokenLifespanForPolicy}), and for a token whose audience
+ * names the admin API at most the realm's `tokens.adminAccessTokenLifespanSeconds`
+ * (ADR-019 Decision 7: admin tokens are short-lived, at most 900 s), whatever
+ * the client's tier gives. Callers pass it as the signed `exp` override and as
+ * the response `expires_in`, as for the tier's.
+ */
+function accessTokenLifespanFor(
+  lifetimes: TokenLifetimes,
+  policy: EnvironmentPolicy,
+  aud: string | readonly string[]
+): number {
+  const tierSeconds = accessTokenLifespanForPolicy(lifetimes, policy);
+  return [aud].flat().includes(API_FAMILY_AUDIENCES.admin)
+    ? Math.min(tierSeconds, lifetimes.adminAccessTokenLifespanSeconds)
+    : tierSeconds;
 }
 
 /** What a replay's `token.request_failed` adds: the family it revoked, and how much of it. */
@@ -1003,8 +1043,9 @@ async function handleAuthorizationCode(
   // revocation reaches the refresh tokens through one. So a refresh token is
   // minted only under a stored consent that covers the code's scopes. An
   // approval given with "Remember this decision" unticked, a consent revoked
-  // since the code was issued, and the legacy Bearer authorize path (which
-  // stores no consent) yield the access token (and ID token) alone; the client
+  // since the code was issued, and a code of the legacy Bearer authorize path
+  // (retired by #524; it stored no consent) yield the access token (and ID
+  // token) alone; the client
   // returns through /oauth/authorize when it expires.
   const consent = await fastify.repositories.oauthConsents.findActive(
     ctx.realmId,
@@ -1021,7 +1062,7 @@ async function handleAuthorizationCode(
           // (ADR-019 Decision 3, #552).
           expiresAt: refreshTokenExpiresAt(
             familyCreatedAt,
-            fastify.jwtUtils.getRefreshTokenLifespan(),
+            ctx.tokenLifetimes.refreshTokenLifespanSeconds,
             refreshFamilyEnd(familyCreatedAt, ctx.ssoMaxLifespan, authCode.sessionExpiresAt ?? null)
           ),
           // Start a fresh refresh-token family. Every rotation (see
@@ -1035,13 +1076,14 @@ async function handleAuthorizationCode(
         }
       : undefined;
 
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
-  // `short` (staging/production baseline) vs `long` (development convenience),
-  // mapped to concrete seconds in one place. Passed both as the signed `exp`
-  // override and the response `expires_in` so they always agree.
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   // A QAuth API audience only when a `resource` named it (#509).
   const aud = resolveUserGrantAudience(client, effectiveResource);
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197):
+  // `short` (staging/production baseline) vs `long` (development convenience),
+  // mapped to concrete seconds in one place, and at most the admin ceiling for
+  // the admin API's audience. Passed both as the signed `exp` override and the
+  // response `expires_in` so they always agree.
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   // Not burned on a refusal, like a `resource` outside the binding: the client
   // may redeem the code again with a `resource` that names no such audience.
   await assertReservedAudiencesListed(ctx, aud, user.id);
@@ -1161,10 +1203,14 @@ async function handleAuthorizationCode(
           // ADR-019 Decisions 3 and 4 (#549): the browser session behind the
           // code, as back-channel logout will name it. The only place an ID
           // token gets `sid` (`id-token-sid.test.ts`). A code from the legacy
-          // Bearer path has none, and neither does one minted before
-          // migration 0042: the claim is then absent. Never on the access
+          // Bearer path (retired by #524) has none, and neither does one
+          // minted before migration 0042: the claim is then absent. Never on the access
           // token, the introspection response or the refresh row.
           sid: authCode.sessionId ?? undefined,
+          // The realm's access token lifetime (#527), the `short` tier's
+          // whatever the client's environment: an ID token is read once, at
+          // sign-in, and the development tier is for access tokens alone.
+          expiresInOverride: ctx.tokenLifetimes.accessTokenLifespanSeconds,
         })
       : undefined;
 
@@ -1262,10 +1308,9 @@ async function handleClientCredentials(
     }
   }
 
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-
   const aud = resolveAudience(client, requestedResource);
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   await assertReservedAudiencesListed(ctx, aud);
   // The token names no account, and admin grants belong to accounts (#510):
   // no admin scope, and no admin audience.
@@ -1568,14 +1613,14 @@ async function handleRefreshToken(
   // Never past the family's end (#552); the refresh lifespan from now otherwise.
   const newRefreshTokenExpiresAt = refreshTokenExpiresAt(
     now,
-    fastify.jwtUtils.getRefreshTokenLifespan(),
+    ctx.tokenLifetimes.refreshTokenLifespanSeconds,
     familyEnd
   );
 
-  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
   // A QAuth API audience only when a `resource` named it (#509).
   const aud = resolveUserGrantAudience(client, effectiveResource);
+  // Access-token lifespan under the environment policy (ADR-008 §5, #197).
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   await assertReservedAudiencesListed(ctx, aud, user.id);
   // Without the admin scopes the account holds no live grant for now (#510).
   // The rotated refresh token keeps `grantedScopes`, so a grant given again
@@ -2057,7 +2102,7 @@ async function handleTokenExchange(
   // #197): a `development` delegated token may match the longer dev TTL, but is
   // still clamped to the subject token's remaining lifetime (a HARD floor — the
   // delegated token can never outlive the authority it was derived from).
-  const configuredLifespan = accessTokenLifespanForPolicy(fastify, policy);
+  const configuredLifespan = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   const subjectRemaining =
     subjectPayload.exp !== undefined
       ? subjectPayload.exp - Math.floor(Date.now() / 1000)
@@ -2085,6 +2130,9 @@ async function handleTokenExchange(
     // above).
     ...dpopConfirmation(ctx),
     expiresInOverride: accessTokenExpiresIn,
+    // The clamp above read the clock before the awaits since; the signer reads
+    // it again, so the subject's own `exp` caps the delegated one there too.
+    ...(subjectPayload.exp !== undefined ? { expiresNotAfter: subjectPayload.exp } : {}),
   });
 
   // Per-agent action audit (ADR-007 §2, #186). The delegated token was minted
@@ -2550,14 +2598,14 @@ async function handleJwtBearer(
   // a GRANT, like an authorization code, and a grant's short single-use window
   // exists to bound REDEMPTION, not to bound what redemption produces. EMA §5.2
   // shows exactly this (a 300s assertion yielding an 86400s access token).
-  const accessTokenExpiresIn = accessTokenLifespanForPolicy(fastify, policy);
-
+  //
   // EMA §5.1, the profile's central MUST: the issued access token is
   // audience-restricted to the MCP server the assertion's `resource` claim
   // identifies — never the client's configured default audience, and never the
   // whole allowlist. `resolveAudience` collapses the single value to a string
   // `aud`, so the token names exactly one resource server.
   const aud = resolveAudience(client, [assertion.resource]);
+  const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   // The assertion's `jti` is already spent (GATE 2): a refusal here burns it.
   await assertReservedAudiencesListed(ctx, aud, user.id);
   // An admin token comes only from a sign-in at QAuth itself (ADR-019

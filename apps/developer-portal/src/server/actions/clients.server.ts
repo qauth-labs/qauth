@@ -13,7 +13,7 @@ import { UNAUTHENTICATED } from './clients';
 
 /**
  * Read the developer's access token from the signed, HttpOnly session cookie.
- * The token never leaves the server — every `/api/clients` call is proxied
+ * The token never leaves the server — every developer API call is proxied
  * through these server functions with `Authorization: Bearer <token>`.
  */
 function readAccessToken(): string | null {
@@ -74,11 +74,11 @@ export async function createClientHandler({
 export async function updateClientHandler({
   data,
 }: {
-  data: { id: string; patch: UpdateClientInput };
+  data: { id: string; patch: UpdateClientInput; ifMatch?: string };
 }): Promise<Result<OAuthClient>> {
   const token = readAccessToken();
   if (!token) return UNAUTHENTICATED;
-  return authServerClient.updateClient(token, data.id, data.patch);
+  return authServerClient.updateClient(token, data.id, data.patch, data.ifMatch);
 }
 
 // ---------------------------------------------------------------------------

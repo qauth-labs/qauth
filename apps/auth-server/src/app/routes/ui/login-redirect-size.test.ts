@@ -207,6 +207,7 @@ function makeFastify() {
       getIssuer: () => 'https://auth.example.com',
     },
     sessionService: sessions.service,
+    signer: sessions.signer,
     // The pending-authorization stash every login bounce parks the authorize
     // URL in, under its bare `pending-authz:<handle>` key.
     sessionUtils: {

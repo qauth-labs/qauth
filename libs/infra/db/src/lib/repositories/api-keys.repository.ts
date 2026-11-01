@@ -3,9 +3,9 @@ import {
   isUniqueConstraintError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, or } from 'drizzle-orm';
 
-import type { ApiKey, ApiKeysRepository, NewApiKey } from '../../types/repository';
+import type { ApiKey, ApiKeysRepository, KeysetPage, NewApiKey } from '../../types/repository';
 import { DbClient } from '../db';
 import { apiKeys } from '../schema/core';
 
@@ -72,6 +72,38 @@ export function createApiKeysRepository(defaultDb: DbClient): ApiKeysRepository 
         .from(apiKeys)
         .where(and(eq(apiKeys.realmId, realmId), eq(apiKeys.clientId, clientId)))
         .orderBy(desc(apiKeys.createdAt));
+    },
+
+    /**
+     * One page of a client's keys, newest first (#524): ordered by
+     * `created_at` and then `id`, both descending, starting after
+     * `page.after`.
+     */
+    async pageByClient(
+      realmId: string,
+      clientId: string,
+      page: KeysetPage,
+      tx?: DbClient
+    ): Promise<ApiKey[]> {
+      const invoker = tx ?? defaultDb;
+      const after = page.after;
+      return invoker
+        .select()
+        .from(apiKeys)
+        .where(
+          and(
+            eq(apiKeys.realmId, realmId),
+            eq(apiKeys.clientId, clientId),
+            after === undefined
+              ? undefined
+              : or(
+                  lt(apiKeys.createdAt, after.at),
+                  and(eq(apiKeys.createdAt, after.at), lt(apiKeys.id, after.id))
+                )
+          )
+        )
+        .orderBy(desc(apiKeys.createdAt), desc(apiKeys.id))
+        .limit(page.limit);
     },
 
     async revoke(realmId: string, id: string, tx?: DbClient): Promise<ApiKey | undefined> {

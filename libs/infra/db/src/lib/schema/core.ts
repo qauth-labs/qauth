@@ -25,6 +25,7 @@ import {
 import {
   agentModeEnum,
   environmentEnum,
+  firstPartyProfileEnum,
   GrantType,
   realmHostKindEnum,
   ResponseType,
@@ -670,6 +671,44 @@ export const oauthClients = pgTable(
      * it, and `UpdateOAuthClient` excludes it, so no client can verify itself.
      */
     verifiedDomain: varchar('verified_domain', { length: 253 }),
+    /**
+     * The client's first-party profile (ADR-017 Decision 2, issue #631):
+     * `web_redirect` for a web front-end on the redirect flow, such as the
+     * developer portal's system client, or `native_backend` for the backend
+     * of a native app. NULL (every row no operator flagged) means the client
+     * is not first party. Read only through `resolveFirstPartyProfile()` in
+     * shared-validation, which also fails closed on a policy that does not
+     * parse.
+     *
+     * OPERATOR-SET, NEVER SELF-ASSERTED, and held by the four CHECKs below: a
+     * profile only on a `private_key_jwt` client that no developer owns, that
+     * is not an agent and that neither dynamic registration nor a CIMD
+     * document created; a policy exactly on `native_backend`; and
+     * `native_backend` only with the `authorization_code` grant. The
+     * `db:seed-oauth-clients` manifest and the system-client provisioner write
+     * it, and later a `qauth:admin:security` operation (ADR-019 Decision 7).
+     * The repository's `create` and `upsertCimdClient` write NULL whatever
+     * they are given, and `UpdateOAuthClient` excludes it, so no route can set
+     * it. Removing a profile revokes every refresh family of the client.
+     */
+    firstPartyProfile: firstPartyProfileEnum('first_party_profile'),
+    /**
+     * A `native_backend` client's policy (ADR-017 Decision 2): the strict
+     * object `{ flows, email_code_after_password, pkce_required }` of
+     * `firstPartyPolicySchema` in shared-validation, stored with every member
+     * filled in. NULL on every other row. A stored value that does not parse
+     * makes the client not first party; one that is not a JSON object is
+     * refused (CHECK `oauth_clients_first_party_policy_object`).
+     */
+    firstPartyPolicy: jsonb('first_party_policy').$type<Record<string, unknown> | null>(),
+    /**
+     * The operator's written reason for the profile (ADR-017 Decision 2):
+     * why the entity that operates this server controls the app and users see
+     * it under that entity's brand. Set exactly with a profile, not blank and
+     * at most 1000 characters (CHECK `oauth_clients_first_party_reason`), and
+     * recorded in the `client.first_party_changed` event.
+     */
+    firstPartyReason: text('first_party_reason'),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -699,6 +738,43 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_verified_domain_form',
       sql`${t.verifiedDomain} IS NULL OR ${t.verifiedDomain} ~ ${sql.raw(`'${VERIFIED_DOMAIN_PATTERN}'`)}`
+    ),
+    // ADR-017 Decision 2 (#631): first-partyness is operator-set. These four
+    // hold on every write path, the admin API's included.
+    //
+    // 1. No profile on a client someone other than the operator wrote: a
+    //    developer-owned one, an agent, a dynamic registration or a CIMD
+    //    client.
+    check(
+      'oauth_clients_first_party_operator_only',
+      sql`${t.firstPartyProfile} IS NULL OR (${t.dynamicRegisteredAt} IS NULL AND ${t.developerId} IS NULL AND ${t.isAgent} = false AND coalesce(${t.metadata}->>'registrationType', '') NOT IN ('dynamic', 'cimd'))`
+    ),
+    // 2. A profile only on a client that authenticates with a private key.
+    check(
+      'oauth_clients_first_party_private_key_jwt',
+      sql`${t.firstPartyProfile} IS NULL OR ${t.tokenEndpointAuthMethod} = 'private_key_jwt'`
+    ),
+    // 3. A policy exactly on `native_backend`. Null-safe, so a policy on a row
+    //    with no profile is refused too.
+    check(
+      'oauth_clients_first_party_policy_native',
+      sql`(${t.firstPartyProfile} IS NOT DISTINCT FROM 'native_backend') = (${t.firstPartyPolicy} IS NOT NULL)`
+    ),
+    // 4. `native_backend` only with the `authorization_code` grant.
+    check(
+      'oauth_clients_first_party_native_authorization_code',
+      sql`${t.firstPartyProfile} IS DISTINCT FROM 'native_backend' OR ${t.grantTypes} ? 'authorization_code'`
+    ),
+    // And the stored forms the decision implies: a written reason exactly
+    // with a profile, not blank and no longer than the event that records it
+    // carries (1000 characters); a policy that is a JSON object.
+    check(
+      'oauth_clients_first_party_reason',
+      sql`(${t.firstPartyProfile} IS NULL) = (${t.firstPartyReason} IS NULL) AND (${t.firstPartyReason} IS NULL OR (char_length(${t.firstPartyReason}) <= 1000 AND ${t.firstPartyReason} ~ '\\S'))`
+    ),
+    check(
+      'oauth_clients_first_party_policy_object',
+      sql`${t.firstPartyPolicy} IS NULL OR jsonb_typeof(${t.firstPartyPolicy}) = 'object'`
     ),
   ]
 );

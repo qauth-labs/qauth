@@ -6,12 +6,16 @@
   "exports": {
     ".": "./src/index.ts",
     "./migrations": "./src/migrations.ts",
+    "./system-client": "./src/system-client.ts",
     "./package.json": "./package.json"
   },
   "typesVersions": {
     "*": {
       "migrations": [
         "src/migrations.ts"
+      ],
+      "system-client": [
+        "src/system-client.ts"
       ]
     }
   },

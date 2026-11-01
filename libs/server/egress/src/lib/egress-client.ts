@@ -417,7 +417,7 @@ function buildEgressClient(
             return {
               status: result.status,
               headers: result.headers,
-              // Bytes from a fetch process arrive as a plain Uint8Array.
+              // A transport may hand the body back as a plain Uint8Array.
               body: Buffer.isBuffer(bytes)
                 ? bytes
                 : Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength),

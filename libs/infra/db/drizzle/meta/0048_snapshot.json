@@ -1,5 +1,5 @@
 {
-  "id": "0ed063d0-cfb6-4b93-9a74-e7da6a58165a",
+  "id": "03705647-0cc8-4309-92f6-918149bf2092",
   "prevId": "06cea761-f8fd-4721-bdbd-6053d5adce65",
   "version": "7",
   "dialect": "postgresql",
@@ -1570,6 +1570,25 @@
           "primaryKey": false,
           "notNull": false
         },
+        "first_party_profile": {
+          "name": "first_party_profile",
+          "type": "first_party_profile",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_party_policy": {
+          "name": "first_party_policy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "first_party_reason": {
+          "name": "first_party_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "metadata": {
           "name": "metadata",
           "type": "jsonb",
@@ -1747,6 +1766,30 @@
         "oauth_clients_verified_domain_form": {
           "name": "oauth_clients_verified_domain_form",
           "value": "\"oauth_clients\".\"verified_domain\" IS NULL OR \"oauth_clients\".\"verified_domain\" ~ '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'"
+        },
+        "oauth_clients_first_party_operator_only": {
+          "name": "oauth_clients_first_party_operator_only",
+          "value": "\"oauth_clients\".\"first_party_profile\" IS NULL OR (\"oauth_clients\".\"dynamic_registered_at\" IS NULL AND \"oauth_clients\".\"developer_id\" IS NULL AND \"oauth_clients\".\"is_agent\" = false AND coalesce(\"oauth_clients\".\"metadata\"->>'registrationType', '') NOT IN ('dynamic', 'cimd'))"
+        },
+        "oauth_clients_first_party_private_key_jwt": {
+          "name": "oauth_clients_first_party_private_key_jwt",
+          "value": "\"oauth_clients\".\"first_party_profile\" IS NULL OR \"oauth_clients\".\"token_endpoint_auth_method\" = 'private_key_jwt'"
+        },
+        "oauth_clients_first_party_policy_native": {
+          "name": "oauth_clients_first_party_policy_native",
+          "value": "(\"oauth_clients\".\"first_party_profile\" IS NOT DISTINCT FROM 'native_backend') = (\"oauth_clients\".\"first_party_policy\" IS NOT NULL)"
+        },
+        "oauth_clients_first_party_native_authorization_code": {
+          "name": "oauth_clients_first_party_native_authorization_code",
+          "value": "\"oauth_clients\".\"first_party_profile\" IS DISTINCT FROM 'native_backend' OR \"oauth_clients\".\"grant_types\" ? 'authorization_code'"
+        },
+        "oauth_clients_first_party_reason": {
+          "name": "oauth_clients_first_party_reason",
+          "value": "(\"oauth_clients\".\"first_party_profile\" IS NULL) = (\"oauth_clients\".\"first_party_reason\" IS NULL) AND (\"oauth_clients\".\"first_party_reason\" IS NULL OR (char_length(\"oauth_clients\".\"first_party_reason\") <= 1000 AND \"oauth_clients\".\"first_party_reason\" ~ '\\S'))"
+        },
+        "oauth_clients_first_party_policy_object": {
+          "name": "oauth_clients_first_party_policy_object",
+          "value": "\"oauth_clients\".\"first_party_policy\" IS NULL OR jsonb_typeof(\"oauth_clients\".\"first_party_policy\") = 'object'"
         }
       },
       "isRLSEnabled": false
@@ -3817,78 +3860,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.realm_secrets": {
-      "name": "realm_secrets",
-      "schema": "",
-      "columns": {
-        "realm_id": {
-          "name": "realm_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "varchar(128)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "ciphertext": {
-          "name": "ciphertext",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "key_id": {
-          "name": "key_id",
-          "type": "varchar(255)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "(EXTRACT(EPOCH FROM NOW())::bigint * 1000)"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "realm_secrets_realm_id_realms_id_fk": {
-          "name": "realm_secrets_realm_id_realms_id_fk",
-          "tableFrom": "realm_secrets",
-          "tableTo": "realms",
-          "columnsFrom": ["realm_id"],
-          "columnsTo": ["id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "realm_secrets_pk": {
-          "name": "realm_secrets_pk",
-          "columns": ["realm_id", "name"]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "realm_secrets_name_form": {
-          "name": "realm_secrets_name_form",
-          "value": "\"realm_secrets\".\"name\" ~ '^[a-z][a-zA-Z0-9]*(\\.[a-z][a-zA-Z0-9]*)+$'"
-        },
-        "realm_secrets_value_and_key_together": {
-          "name": "realm_secrets_value_and_key_together",
-          "value": "(\"realm_secrets\".\"ciphertext\" IS NULL) = (\"realm_secrets\".\"key_id\" IS NULL)"
-        },
-        "realm_secrets_ciphertext_form": {
-          "name": "realm_secrets_ciphertext_form",
-          "value": "\"realm_secrets\".\"ciphertext\" IS NULL OR (\"realm_secrets\".\"ciphertext\" ~ '^v1\\.[A-Za-z0-9_-]{1,255}\\.[A-Za-z0-9_-]{16}\\.[A-Za-z0-9_-]{22,}$' AND split_part(\"realm_secrets\".\"ciphertext\", '.', 2) = \"realm_secrets\".\"key_id\")"
-        }
-      },
-      "isRLSEnabled": false
-    },
     "public.roles": {
       "name": "roles",
       "schema": "",
@@ -5349,6 +5320,11 @@
       "name": "environment",
       "schema": "public",
       "values": ["development", "staging", "production"]
+    },
+    "public.first_party_profile": {
+      "name": "first_party_profile",
+      "schema": "public",
+      "values": ["web_redirect", "native_backend"]
     },
     "public.grant_type": {
       "name": "grant_type",

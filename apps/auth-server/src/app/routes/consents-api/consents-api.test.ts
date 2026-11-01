@@ -94,6 +94,8 @@ function makeFastify() {
   const requireJwt = vi.fn();
 
   const fastify: any = {
+    // The module's own hooks: the deprecation headers since #524.
+    addHook: vi.fn(),
     withTypeProvider: () => ({
       get: (url: string, opts: any, handler: any) => {
         ctx.routes.push({ method: 'GET', url, preHandler: opts?.preHandler });

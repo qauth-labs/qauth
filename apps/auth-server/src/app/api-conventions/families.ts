@@ -13,6 +13,8 @@
  * `openapi-conventions.ts` enforces them over the generated OpenAPI document.
  */
 
+import { DEVELOPER_API_AUDIENCE } from '@qauth-labs/shared-validation';
+
 /** The callers of ADR-019 Decision 7: operators, end users, developers. */
 export const API_FAMILIES = ['admin', 'account', 'developer'] as const;
 
@@ -41,7 +43,7 @@ export const API_FAMILY_PREFIXES: Readonly<Record<ApiFamily, string>> = {
 export const API_FAMILY_AUDIENCES: Readonly<Record<ApiFamily, string>> = {
   admin: 'urn:qauth:aud:admin:v1-rc.0',
   account: 'urn:qauth:aud:account:v1-rc.0',
-  developer: 'urn:qauth:aud:developer:v1-rc.0',
+  developer: DEVELOPER_API_AUDIENCE,
 };
 
 /**

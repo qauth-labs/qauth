@@ -32,6 +32,15 @@ export interface WireConfig {
    * serves no SSF metadata.
    */
   readonly ssfTransmitter: boolean;
+  /**
+   * The HTTP API of the mail sink the target delivers to
+   * (`QAUTH_WIRE_MAIL_URL`, a Mailpit instance), or undefined. When set, every
+   * account the suite signs in is verified first, the way a person verifies
+   * it: the token from the mail, then `POST /auth/verify`. Leave it unset only
+   * for a target that signs in unverified accounts
+   * (`REQUIRE_VERIFIED_ACCOUNT=false`).
+   */
+  readonly mailUrl: string | undefined;
 }
 
 /** A configuration problem. The suite does not start when one is raised. */
@@ -95,6 +104,9 @@ export function readWireConfig(env: Environment = process.env): WireConfig {
     throw new WireConfigError(`QAUTH_WIRE_SSF_TRANSMITTER must be 1, 0 or unset: ${ssf}`);
   }
 
+  const mailValue = env['QAUTH_WIRE_MAIL_URL']?.trim();
+  const mailUrl = mailValue ? serverUrl('QAUTH_WIRE_MAIL_URL', mailValue) : undefined;
+
   return {
     baseUrl,
     adminUrl,
@@ -103,6 +115,7 @@ export function readWireConfig(env: Environment = process.env): WireConfig {
       secret: required(env, 'QAUTH_WIRE_CLIENT_SECRET'),
     },
     ssfTransmitter: ssf === '1',
+    mailUrl,
   };
 }
 

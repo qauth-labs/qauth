@@ -23,10 +23,17 @@ cookie/CSRF mechanics below.
 | `Secure`   | on by default; gated by `SESSION_COOKIE_SECURE` |
 | `Path`     | `/`                                             |
 | `Domain`   | none (forbidden by the `__Host-` prefix)        |
+| `Max-Age`  | the time left until the session's absolute end  |
 
-- The cookie carries only a signed session id (`<sessionId>.<HMAC-SHA256>`).
-  The authenticated user is bound to the id server-side in Redis, so logout /
-  revocation is a single key delete.
+- The cookie carries only signed session ids, `<kid>.<payload>.<mac>`: the
+  `kid` of the realm cookie key that signed it, the session ids as base64url
+  JSON, and an HMAC-SHA256 over the cookie's name, the realm id, the `kid` and
+  the payload. The key is the realm's `cookie_hmac` key from the key store
+  (#493), so a cookie verifies only in its own realm. The session itself lives
+  server-side, in Postgres with Redis in front, so logout and revocation end it
+  there. A cookie that does not verify, or names no live session, is cleared.
+- The login-CSRF and wallet-flow cookies are signed the same way, with the same
+  realm key.
 - The `__Host-` prefix is browser-enforced: the cookie is rejected unless it is
   `Secure`, `Path=/`, and has no `Domain`. This isolates it from sibling
   subdomains.

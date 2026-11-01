@@ -2,11 +2,17 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { bootRealmKeysWithKekEnv } from '@qauth-labs/fastify-plugin-signer';
-import { rotateRealmTokenKeys } from '@qauth-labs/fastify-plugin-signer/src/testing/database-key-rotation';
+import {
+  prepublishRealmTokenKeys,
+  rotateRealmTokenKeys,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/database-key-rotation';
 import type {
+  TokenKeyPrepublication,
+  TokenKeyPrepublicationOptions,
   TokenKeyRotation,
   TokenKeyRotationOptions,
 } from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
+import { ServiceRoleBootError } from '@qauth-labs/server-config';
 import {
   applyQauthMigrations,
   type StartedPostgres,
@@ -29,6 +35,7 @@ import {
   answerRouteNotFound,
   answerUnknownRouteBeforeBody,
 } from '../app/helpers/request-bounds';
+import type { InternalRouteModule } from '../app/internal/route-manifest';
 
 /**
  * TEST SUPPORT — booting the REAL auth-server against throwaway containers
@@ -72,7 +79,15 @@ export interface BootedAuthServer {
    * routes by host.
    */
   readonly admin?: FastifyInstance;
-  /** Close the server (and its pools), the admin listener with it. Containers survive. */
+  /**
+   * The internal listener (#496), listening on an ephemeral port of
+   * INTERNAL_HOST, when the suite asked for it with `internalListener`. Its
+   * URL is {@link internalUrl}: `https` with the internal TLS files, `http`
+   * without.
+   */
+  readonly internal?: FastifyInstance;
+  readonly internalUrl?: string;
+  /** Close the server (and its pools), the admin and internal listeners with it. Containers survive. */
   close(): Promise<void>;
 }
 
@@ -134,11 +149,12 @@ const tokenKeyRotations = new WeakMap<
 
 /**
  * Rotate a realm's `token_signing` keys in the database of a server
- * {@link bootAuthServer} booted (#492): a new key of the algorithm (with its
- * ML-DSA-65 partner under hybrid signing) becomes active, and the active one
+ * {@link bootAuthServer} booted (#492): the key of the algorithm that
+ * {@link prepublishRealmKeys} published, or else a new one (with its
+ * ML-DSA-65 partner under hybrid signing), becomes active, and the active one
  * moves to `retired`, published until its retention ends, 14 days unless
- * `retiredRetentionMs` says otherwise. The wait between publishing the new key
- * and activating it is skipped.
+ * `retiredRetentionMs` says otherwise. A new key is activated at once, without
+ * the wait between publishing a key and activating it.
  *
  * The server's signer reads key lists at most once a minute, so it keeps
  * signing and verifying with what it read before. Boot another server on the
@@ -154,6 +170,34 @@ export async function rotateRealmKeys(
     throw new Error('rotateRealmKeys: the server was not booted by bootAuthServer');
   }
   return rotate(realmName, options);
+}
+
+/** Per booted server: publish a realm's `next` token key, by name, with the server's KEK and database. */
+const tokenKeyPrepublications = new WeakMap<
+  FastifyInstance,
+  (realmName: string, options: TokenKeyPrepublicationOptions) => Promise<TokenKeyPrepublication>
+>();
+
+/**
+ * Publish a new `next` `token_signing` key of a realm in the database of a
+ * server {@link bootAuthServer} booted (#494): the first half of a rotation.
+ * The key is in the realm's JWKS from then on and signs nothing until
+ * {@link rotateRealmKeys} activates it, which it does instead of creating a
+ * key of its own.
+ *
+ * As for a rotation, the server's signer reads key lists at most once a
+ * minute: boot another server on the same containers to see the key.
+ */
+export async function prepublishRealmKeys(
+  app: FastifyInstance,
+  realmName: string,
+  options: TokenKeyPrepublicationOptions = {}
+): Promise<TokenKeyPrepublication> {
+  const prepublish = tokenKeyPrepublications.get(app);
+  if (prepublish === undefined) {
+    throw new Error('prepublishRealmKeys: the server was not booted by bootAuthServer');
+  }
+  return prepublish(realmName, options);
 }
 
 /**
@@ -285,6 +329,21 @@ export interface BootAuthServerOptions {
    * listening: `BootedAuthServer.admin.inject()` reaches it.
    */
   readonly adminListener?: () => AdminApiOptions | Promise<AdminApiOptions>;
+  /**
+   * Boot the internal listener beside the app (#496), as `main.ts` has it:
+   * from the environment's INTERNAL_* settings, its TLS files read at boot.
+   * Called once the boot reset the module registry, so it may import app
+   * modules. `modules` replaces the manifest's route modules (a fixture
+   * route), and `reloadIntervalMs` how often the TLS files are read again.
+   * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
+   */
+  readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+}
+
+/** What a suite gives the internal listener (#496). */
+export interface InternalListenerFixture {
+  readonly modules?: readonly InternalRouteModule[];
+  readonly reloadIntervalMs?: number;
 }
 
 /**
@@ -339,6 +398,8 @@ export async function bootAuthServer(
       key.startsWith('SMTP_') ||
       key.startsWith('RESEND_') ||
       key.startsWith('JWT_') ||
+      // A key variable too (#493): a boot that leaves it out boots without it.
+      key === 'SESSION_COOKIE_SECRET' ||
       key.startsWith('PQC_') ||
       key === 'HYBRID_SIGNING_ENABLED' ||
       key === 'SIGNING_ALGORITHM_MODE' ||
@@ -347,7 +408,8 @@ export async function bootAuthServer(
       // variable another boot left behind, one more reason the JWT keys go.
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
-      key.startsWith('INTERNAL_TLS_')
+      // The internal listener (#496): its address, its TLS files and its peers.
+      key.startsWith('INTERNAL_')
     ) {
       delete process.env[key];
     }
@@ -362,6 +424,9 @@ export async function bootAuthServer(
     await import('../app/app');
   const { seedDefaultRealmSecrets } = await import('../app/helpers/realm-secrets');
   const { createAdminServer } = await import('../app/admin/listener');
+  const { createInternalServer } = await import('../app/internal/listener');
+  const { readInternalTlsFiles } = await import('../app/internal/tls-files');
+  const { internalListenerPlan } = await import('../app/service-roles');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
   const { keyVariableSettings } = await import('../app/helpers/key-variables');
   // The same module instance the app just loaded, since the registry was reset.
@@ -408,8 +473,44 @@ export async function bootAuthServer(
     adminServer === undefined || options.adminListener === undefined
       ? undefined
       : { server: adminServer, ...(await options.adminListener()) };
+  // As in `main.ts`: the internal listener from the environment's settings,
+  // refused before the app when its roles split and its TLS files are missing.
+  let internalServer: FastifyInstance | undefined;
+  let internalFixture: InternalListenerFixture | undefined;
+  const internalPlan =
+    options.internalListener === undefined ? undefined : internalListenerPlan(env);
+  if (options.internalListener !== undefined && internalPlan !== undefined) {
+    if (!internalPlan.serves) {
+      throw new Error('bootAuthServer: these SERVICE_ROLES run no internal listener');
+    }
+    if (internalPlan.problems.length > 0) throw new ServiceRoleBootError(internalPlan.problems);
+    internalFixture = await options.internalListener();
+    internalServer = createInternalServer({
+      loggerInstance: server.log.child({ listener: 'internal' }),
+      peerRoles: internalPlan.peerRoles,
+      ...(internalPlan.tls === undefined
+        ? {}
+        : {
+            tls: {
+              files: internalPlan.tls,
+              material: readInternalTlsFiles(internalPlan.tls),
+              ...(internalFixture.reloadIntervalMs === undefined
+                ? {}
+                : { reloadIntervalMs: internalFixture.reloadIntervalMs }),
+            },
+          }),
+    });
+  }
   await server.register(fp(app), {
     ...(adminOptions === undefined ? {} : { adminListener: adminOptions }),
+    ...(internalServer === undefined
+      ? {}
+      : {
+          internalListener: {
+            server: internalServer,
+            ...(internalFixture?.modules === undefined ? {} : { modules: internalFixture.modules }),
+          },
+        }),
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined
       ? {}
@@ -427,6 +528,15 @@ export async function bootAuthServer(
   }
   await server.ready();
   await adminServer?.ready();
+  let internalUrl: string | undefined;
+  if (internalServer !== undefined && internalPlan?.serves === true) {
+    await internalServer.listen({ host: internalPlan.host, port: 0 });
+    const address = internalServer.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('bootAuthServer: the internal listener has no TCP address');
+    }
+    internalUrl = `${internalPlan.tls === undefined ? 'http' : 'https'}://${internalPlan.host}:${address.port}`;
+  }
   injectToRealmHost(server, new URL(env.JWT_ISSUER).host);
   if (defaultRealmBoot) {
     // The environment as this server booted with it: a later boot of another
@@ -477,26 +587,31 @@ export async function bootAuthServer(
       }
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
+    const keyDependencies = {
+      db: server.db,
+      kekEnv: bootEnvironment,
+      warn: () => undefined,
+      enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+      hybridSigning: env.HYBRID_SIGNING_ENABLED,
+    };
     tokenKeyRotations.set(server, async (realmName, rotation) => {
       const realm = await server.repositories.realms.findByName(realmName);
       if (realm === undefined) throw new Error(`rotateRealmKeys: no realm ${realmName}`);
-      return rotateRealmTokenKeys(
-        {
-          db: server.db,
-          kekEnv: bootEnvironment,
-          warn: () => undefined,
-          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
-          hybridSigning: env.HYBRID_SIGNING_ENABLED,
-        },
-        realm.id,
-        rotation
-      );
+      return rotateRealmTokenKeys(keyDependencies, realm.id, rotation);
+    });
+    tokenKeyPrepublications.set(server, async (realmName, prepublication) => {
+      const realm = await server.repositories.realms.findByName(realmName);
+      if (realm === undefined) throw new Error(`prepublishRealmKeys: no realm ${realmName}`);
+      return prepublishRealmTokenKeys(keyDependencies, realm.id, prepublication);
     });
   }
 
   return {
     app: server,
     ...(adminServer === undefined ? {} : { admin: adminServer }),
+    ...(internalServer === undefined || internalUrl === undefined
+      ? {}
+      : { internal: internalServer, internalUrl }),
     async close(): Promise<void> {
       await server.close();
     },

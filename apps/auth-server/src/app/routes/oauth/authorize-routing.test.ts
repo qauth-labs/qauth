@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
@@ -87,8 +88,10 @@ const QUERY = new URLSearchParams({
 }).toString();
 
 let server: FastifyInstance | undefined;
+let sessions: ReturnType<typeof createBrowserSessionFixture>;
 
 async function buildServer(): Promise<FastifyInstance> {
+  sessions = createBrowserSessionFixture();
   // Same router configuration as apps/auth-server/src/main.ts.
   const fastify = Fastify({ logger: false, routerOptions: { ignoreTrailingSlash: true } });
   fastify.setValidatorCompiler(validatorCompiler);
@@ -106,8 +109,17 @@ async function buildServer(): Promise<FastifyInstance> {
       upsertGrant: vi.fn(),
     },
     authorizationCodes: { create: vi.fn() },
-    // The Bearer path accepts only a user who is still enabled, of this realm.
-    users: { findById: vi.fn(async (id: string) => ({ id, enabled: true, realmId: REALM.id })) },
+    // The session path accepts only a user who is still enabled, of this realm.
+    users: {
+      findById: vi.fn(async (_realmId: string, id: string) => ({
+        id,
+        enabled: true,
+        realmId: REALM.id,
+      })),
+    },
+    // The client registry (#549): the session is live under the code's
+    // transaction.
+    sessions: { recordClient: vi.fn().mockResolvedValue(true) },
   } as never);
   // A nested `transaction()` is a savepoint of the same transaction.
   const tx = { transaction: (cb: (inner: unknown) => Promise<unknown>) => cb(tx) };
@@ -118,6 +130,11 @@ async function buildServer(): Promise<FastifyInstance> {
     extractFromHeader: vi.fn().mockReturnValue(null),
     verifyAccessToken: vi.fn(),
   } as never);
+  fastify.decorate('sessionService', sessions.service as never);
+  // The session cookie is verified with the realm cookie key the signer
+  // hands out (#493).
+  fastify.decorate('signer', sessions.signer as never);
+  fastify.decorate('redis', sessions.redis as never);
   fastify.decorate('sessionUtils', {
     getSession: vi.fn().mockResolvedValue(null),
     setSession: vi.fn().mockResolvedValue(undefined),
@@ -225,21 +242,18 @@ describe('GET /oauth/authorize routing', () => {
 });
 
 describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
-  /** The legacy Bearer path: the shortest route to a minted code in this harness. */
-  async function injectWithBearer(url: string) {
+  /**
+   * A signed-in browser whose stored consent covers the request: the
+   * shortest route to a minted code in this harness.
+   */
+  async function injectWithSession(url: string) {
     server = await buildServer();
     const doubles = server as unknown as {
-      jwtUtils: {
-        extractFromHeader: ReturnType<typeof vi.fn>;
-        verifyAccessToken: ReturnType<typeof vi.fn>;
-      };
       repositories: {
         authorizationCodes: { create: ReturnType<typeof vi.fn> };
         oauthConsents: { findActive: ReturnType<typeof vi.fn> };
       };
     };
-    // The Bearer path issues a code only under a stored consent that covers
-    // the request (it cannot show the consent screen).
     doubles.repositories.oauthConsents.findActive.mockResolvedValue({
       scopes: ['email'],
       // RFC 8707: the grant covers the resources these tests bind.
@@ -249,16 +263,11 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
       },
       revokedAt: null,
     });
-    doubles.jwtUtils.extractFromHeader.mockReturnValue('token');
-    // `findByClientId` answers every lookup with CLIENT, so it is also the
-    // "system" client whose `client_id` and `aud` the Bearer path pins the
-    // token to.
-    doubles.jwtUtils.verifyAccessToken.mockResolvedValue({
-      sub: '0190a5c8-0000-7000-8000-000000000001',
-      clientId: CLIENT.clientId,
-      aud: CLIENT.clientId,
+    const { cookie } = await sessions.signIn({
+      realmId: REALM.id,
+      userId: '0190a5c8-0000-7000-8000-000000000001',
     });
-    const response = await server.inject({ method: 'GET', url });
+    const response = await server.inject({ method: 'GET', url, headers: { cookie } });
     return { response, createCode: doubles.repositories.authorizationCodes.create };
   }
 
@@ -266,7 +275,7 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
     // The handler used to re-parse `request.url` on the belief that
     // fastify-type-provider-zod drops a union + transform field from
     // `request.query`. It does not; this pins that down with the real compiler.
-    const { response, createCode } = await injectWithBearer(
+    const { response, createCode } = await injectWithSession(
       `/oauth/authorize?${QUERY}&resource=https%3A%2F%2Fapi.example.com%2Fmcp`
     );
 
@@ -277,7 +286,7 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
   });
 
   it('binds every value of a repeated resource', async () => {
-    const { response, createCode } = await injectWithBearer(
+    const { response, createCode } = await injectWithSession(
       `/oauth/authorize?${QUERY}` +
         '&resource=https%3A%2F%2Fapi.example.com%2Fmcp&resource=https%3A%2F%2Fapi2.example.com%2Fmcp'
     );
@@ -289,7 +298,7 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
   });
 
   it('rejects a resource that is not an absolute URI', async () => {
-    const { response, createCode } = await injectWithBearer(
+    const { response, createCode } = await injectWithSession(
       `/oauth/authorize?resource=system&${QUERY}`
     );
 
@@ -300,9 +309,10 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
   it('never binds a resource the querystring schema did not see (`??resource=`)', async () => {
     // Fastify's parser names this key `?resource`, which the schema strips as
     // unknown; `URLSearchParams` drops the leading `?` and names it `resource`.
-    // `system` is the audience of the first-party token `/auth/login` mints, so
-    // binding it handed a third-party client a token the Bearer path accepts.
-    const { response, createCode } = await injectWithBearer(
+    // `system` was the audience of the first-party token `/auth/login` minted
+    // before #524, so binding it handed a third-party client a token the
+    // retired Bearer path accepted.
+    const { response, createCode } = await injectWithSession(
       `/oauth/authorize??resource=system&${QUERY}`
     );
 
@@ -311,12 +321,12 @@ describe('GET /oauth/authorize resource binding (RFC 8707)', () => {
   });
 });
 
-describe('/oauth/authorize Bearer path without a covering consent', () => {
-  // The first-party login token stands in for a browser session on this
-  // path, never for the user's consent: with no stored grant the browser flow
-  // shows /ui/consent, so a Bearer caller gets `access_denied` and no code.
+describe('/oauth/authorize — the retired Bearer path (#524)', () => {
+  // The developer portal's token no longer stands in for a browser session
+  // here: a request with only an `Authorization` header signs in first, and
+  // the token is never read.
   it.each(['GET', 'POST'] as const)(
-    '%s answers access_denied and mints nothing',
+    '%s with only a Bearer token goes to the login page and mints nothing',
     async (method) => {
       server = await buildServer();
       const doubles = server as unknown as {
@@ -324,36 +334,26 @@ describe('/oauth/authorize Bearer path without a covering consent', () => {
           extractFromHeader: ReturnType<typeof vi.fn>;
           verifyAccessToken: ReturnType<typeof vi.fn>;
         };
-        repositories: {
-          authorizationCodes: { create: ReturnType<typeof vi.fn> };
-          oauthConsents: { findActive: ReturnType<typeof vi.fn> };
-        };
+        repositories: { authorizationCodes: { create: ReturnType<typeof vi.fn> } };
       };
-      doubles.repositories.oauthConsents.findActive.mockResolvedValue(undefined);
       doubles.jwtUtils.extractFromHeader.mockReturnValue('token');
-      doubles.jwtUtils.verifyAccessToken.mockResolvedValue({
-        sub: '0190a5c8-0000-7000-8000-000000000001',
-        clientId: CLIENT.clientId,
-        aud: CLIENT.clientId,
-      });
+      const headers = { authorization: 'Bearer token' };
 
       const response =
         method === 'GET'
-          ? await server.inject({ method, url: `/oauth/authorize?${QUERY}` })
+          ? await server.inject({ method, url: `/oauth/authorize?${QUERY}`, headers })
           : await server.inject({
               method,
               url: '/oauth/authorize',
               // This harness registers no form parser; the handler reads the
               // validated body the same way whatever its content type.
-              headers: { 'content-type': 'application/json' },
+              headers: { ...headers, 'content-type': 'application/json' },
               payload: Object.fromEntries(new URLSearchParams(QUERY)),
             });
 
       expect(response.statusCode).toBe(302);
-      const location = response.headers.location as string;
-      expect(location.startsWith('https://example.com/cb?')).toBe(true);
-      expect(location).toContain('error=access_denied');
-      expect(location).not.toContain('code=');
+      expect(response.headers.location).toMatch(/^\/ui\/login\?return_to=/);
+      expect(doubles.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
       expect(doubles.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     }
   );

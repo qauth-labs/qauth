@@ -1,6 +1,9 @@
 import {
+  assertAuthMethod,
   assertCredentialStatusProvisioned,
   assertKeyStorageAssuranceProvisioned,
+  type AuthMethod,
+  authMethodSnapshot,
   createPasswordProvider,
   createWalletProvider,
   type CredentialProvider,
@@ -92,6 +95,25 @@ export interface VerifierCryptoCapabilities {
  * the only one whose omission is itself the fail-closed answer; see its doc.
  */
 export interface ConfiguredProvidersOptions {
+  /**
+   * The AuthMethods to register beside the built-in providers (#599,
+   * EXPERIMENTAL): the plugin runtime (#600) loads them. Each entry is held
+   * to the whole contract here, before anything is registered, so a broken
+   * one fails the boot: one with no `contract` member too, which the
+   * registry alone would take for a plain provider (a `{ type: 'wallet',
+   * verify, extractAttributes }` would then register as the wallet provider
+   * while wallet federation is off). They are appended after the password
+   * and wallet providers, and one whose `type` is taken fails the boot as
+   * well.
+   *
+   * Optional, like {@link provisionedVerifierMaterial} and for the same
+   * reason: leaving it out is the closed answer, no method beyond the
+   * built-in ones.
+   *
+   * @experimental
+   */
+  authMethods?: readonly AuthMethod[];
+
   /**
    * `WALLET_FEDERATION_ENABLED` (#232). When `false` — the default posture of
    * the env schema — the wallet provider is not constructed and not registered,
@@ -431,5 +453,11 @@ export function createConfiguredProviders(
     providers.push(createWalletProvider());
   }
 
+  for (const method of options.authMethods ?? []) {
+    // The snapshot the registry would keep, checked against the whole
+    // contract whether or not the entry declares one.
+    assertAuthMethod(authMethodSnapshot(method));
+    providers.push(method);
+  }
   return providers;
 }

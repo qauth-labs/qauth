@@ -83,6 +83,13 @@ const LEVELS = new Set([
 
 const STATUSES = new Set(['covered', 'manual', 'waived', 'n/a']);
 
+/**
+ * A test file of the black-box wire suite (#450): the suffix only that suite
+ * uses, and that the unit run excludes. A test from such a file proved its
+ * requirement against the built server over HTTP.
+ */
+const WIRE_TEST_FILE = /\.wire\.test\.ts$/;
+
 /** A section number as cited and as declared: dotted decimals, no `§`. */
 const SECTION_SHAPE = /^\d+(?:\.\d+)*$/;
 
@@ -615,7 +622,11 @@ function buildMatrix(specs, assertions, matcher) {
 
       rows.push({
         ...row,
-        provingTests: proving.map((c) => ({ fullName: c.fullName, file: c.file })),
+        provingTests: proving.map((c) => ({
+          fullName: c.fullName,
+          file: c.file,
+          wire: WIRE_TEST_FILE.test(c.file),
+        })),
         nonPassingTests: skipped.map((c) => ({
           fullName: c.fullName,
           file: c.file,
@@ -703,6 +714,12 @@ function escapeCell(text) {
   return String(text).replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
 }
 
+/** `, N over the wire` when wire-suite tests are among a row's proof, else nothing. */
+function wireEvidence(provingTests) {
+  const wire = provingTests.filter((test) => test.wire).length;
+  return wire === 0 ? '' : `, ${wire} over the wire`;
+}
+
 function renderMarkdown(matrix, meta) {
   const counts = tally(matrix);
   const out = [];
@@ -757,7 +774,8 @@ function renderMarkdown(matrix, meta) {
           ? `\`${row.evidenceRef}\``
           : row.provingTests.length === 0
             ? '**none**'
-            : `${row.provingTests.length} test(s), e.g. ${escapeCell(row.provingTests[0].fullName)}`;
+            : `${row.provingTests.length} test(s)${wireEvidence(row.provingTests)}, ` +
+              `e.g. ${escapeCell(row.provingTests[0].fullName)}`;
       out.push(
         `| §${row.section} | ${row.level} | ${STATUS_LABEL[row.status]} | ` +
           `${escapeCell(row.quote)} | ${escapeCell(evidence)} |`

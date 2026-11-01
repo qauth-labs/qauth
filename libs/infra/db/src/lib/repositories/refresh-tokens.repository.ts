@@ -59,6 +59,38 @@ async function lockUserTokens(
 }
 
 /**
+ * Serialise refresh-token issuance and rotation against the revocation of
+ * every token of one client (#631, removing its first-party profile).
+ *
+ * The client may hold tokens of thousands of users, so that revocation cannot
+ * take each holder's lock above: one advisory lock per user would fill
+ * Postgres's shared lock table. It takes one exclusive lock keyed on the
+ * client instead, and every path that adds a token to a client's families
+ * holds it shared until its transaction ends: rotation (`revokeIfActive`,
+ * after the user's lock) and every insert (`create`). So the revoking UPDATE
+ * takes its snapshot only after each rotation or new family in flight has
+ * committed, and one that starts afterwards waits for the revocation to
+ * commit: a rotation then loses its compare-and-set on the revoked parent.
+ *
+ * The key is namespaced, so it never meets a user's key, and the id is hashed
+ * as a `uuid` rendered to text, as `lockUserTokens` does.
+ *
+ * @param clientId - The client row's id, or a subquery resolving one
+ */
+async function lockClientTokens(
+  invoker: DbClient,
+  mode: 'issue' | 'revoke',
+  clientId: string | SQL
+): Promise<void> {
+  const key = sql`hashtextextended('qauth:client-tokens:' || (${clientId})::uuid::text, 0)`;
+  await invoker.execute(
+    mode === 'issue'
+      ? sql`select pg_advisory_xact_lock_shared(${key})`
+      : sql`select pg_advisory_xact_lock(${key})`
+  );
+}
+
+/**
  * Read refresh-token rows of one realm's clients (#489). `refresh_tokens` has
  * no realm column: the client the token was issued to pins the realm, so the
  * read joins it and filters on its realm. A token of another realm is then no
@@ -88,9 +120,17 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
      * @returns Created token
      */
     async create(data: NewRefreshToken, tx?: DbClient): Promise<RefreshToken> {
-      const invoker = tx ?? defaultDb;
-      const [token] = await invoker.insert(refreshTokens).values(data).returning();
-      return token;
+      // The client's issuance lock, held to the end of the transaction, so a
+      // revocation of every token of the client (`revokeAllForClient`) either
+      // sees this token or runs before it (#631). A caller with no
+      // transaction gets one opened here: in autocommit the lock would end
+      // before the insert.
+      const run = async (invoker: DbClient): Promise<RefreshToken> => {
+        await lockClientTokens(invoker, 'issue', data.oauthClientId);
+        const [token] = await invoker.insert(refreshTokens).values(data).returning();
+        return token;
+      };
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
     },
 
     /**
@@ -224,6 +264,13 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
         invoker,
         'rotate',
         sql`select ${refreshTokens.userId} from ${refreshTokens} where ${refreshTokens.id} = ${id}`
+      );
+      // And the client's (#631), after the user's: a revocation of every token
+      // of the client waits for this rotation, child included.
+      await lockClientTokens(
+        invoker,
+        'issue',
+        sql`select ${refreshTokens.oauthClientId} from ${refreshTokens} where ${refreshTokens.id} = ${id}`
       );
 
       const [token] = await invoker
@@ -412,6 +459,46 @@ export function createRefreshTokensRepository(defaultDb: DbClient): RefreshToken
           )
           .returning({ id: refreshTokens.id });
 
+        return updated.length;
+      };
+
+      return tx ? run(tx) : defaultDb.transaction((innerTx) => run(innerTx));
+    },
+
+    /**
+     * Revoke every refresh token of one client not already revoked, for every
+     * user: each family the client holds ends (#631, removing a client's
+     * first-party profile, ADR-017 Decision 2). Already-revoked rows keep their
+     * reason. Expired rows are revoked too: a refresh that read a token just
+     * before it expired must still lose its compare-and-set, which checks only
+     * `revoked`.
+     *
+     * Takes the client's exclusive lock (`lockClientTokens`) before the
+     * UPDATE, one lock however many users hold tokens: every rotation and
+     * every new token of the client in flight commits first and is revoked
+     * here, and one that starts afterwards waits for this transaction. A
+     * caller that also locks the client row must use `FOR NO KEY UPDATE`,
+     * which the foreign-key check of a token insert does not wait on.
+     *
+     * @param oauthClientId - The client row's id (`oauth_clients.id`)
+     * @param reason - Recorded as `revokedReason`
+     * @param tx - Optional transaction client
+     * @returns Count of rows revoked by this call
+     */
+    async revokeAllForClient(
+      oauthClientId: string,
+      reason: string,
+      tx?: DbClient
+    ): Promise<number> {
+      const run = async (invoker: DbClient): Promise<number> => {
+        await lockClientTokens(invoker, 'revoke', oauthClientId);
+        const updated = await invoker
+          .update(refreshTokens)
+          .set({ revoked: true, revokedAt: Date.now(), revokedReason: reason })
+          .where(
+            and(eq(refreshTokens.oauthClientId, oauthClientId), eq(refreshTokens.revoked, false))
+          )
+          .returning({ id: refreshTokens.id });
         return updated.length;
       };
 

@@ -30,6 +30,7 @@ import {
   problemCodeFor,
   type ProblemDocument,
 } from '../api-conventions/problem';
+import { UnprocessableContentError } from '../helpers/api-request-errors';
 
 /**
  * How a route answers an error (ADR-019 Decision 7, #506, #513):
@@ -317,8 +318,9 @@ function instanceOf(request: FastifyRequest): string {
  * code of the status for an error no entry lists. A framework code such as
  * `FST_ERR_VALIDATION` never reaches the wire. `trace_id` is the request id the
  * request logger carries as `reqId`, so an operator finds the log line by it.
- * A validation failure lists each field in `errors`, and a weak password lists
- * its feedback under `/password`.
+ * A validation failure lists each field in `errors`, a weak password lists
+ * its feedback under `/password`, and a merge patch whose result fails the
+ * resource's schema lists each failing field (#524).
  */
 export function problemDocument(
   error: FastifyError | Error,
@@ -347,7 +349,9 @@ export function problemDocument(
     ? projectValidationDetails(error.validation)
     : error instanceof WeakPasswordError
       ? (error.feedback ?? []).map((message) => ({ pointer: '/password', message }))
-      : [];
+      : error instanceof UnprocessableContentError
+        ? error.fields.map(({ pointer, message }) => ({ pointer, message }))
+        : [];
   if (errors.length > 0) document.errors = errors;
 
   return document;

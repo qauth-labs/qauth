@@ -13,12 +13,14 @@ import type {
 import type { FastifyInstance } from 'fastify';
 import { type Mock, vi } from 'vitest';
 
-import { SESSION_COOKIE_NAME, signSessionId } from '../app/helpers/session-cookie';
+import type { CookieKeyHolder } from '../app/helpers/cookie-keys';
+import { SESSION_COOKIE_NAME, signSessionCookie } from '../app/helpers/session-cookie';
 import {
   readSessionSideRecord,
   type SessionSideRecord,
   writeSessionSideRecord,
 } from '../app/helpers/session-side-record';
+import { createFakeCookieSigner, type FakeCookieSigner } from './cookie-keys';
 
 /** How long a session the fake creates lasts: an hour, as tests set `SESSION_COOKIE_TTL`. */
 export const FAKE_SESSION_LIFETIME_MS = 3_600_000;
@@ -378,14 +380,17 @@ export interface FakeSideRecordSeed {
 }
 
 /**
- * A fake session service and the Redis the side record and the logout index
- * live in, together: what a unit test of a route that reads the session
- * cookie needs. Put {@link service} on `fastify.sessionService` and spread
- * {@link redis} into `fastify.redis`.
+ * A fake session service, the Redis the side record and the logout index
+ * live in, and the signer the cookie keys come from (#493), together: what a
+ * unit test of a route that reads the session cookie needs. Put
+ * {@link service} on `fastify.sessionService`, {@link signer} on
+ * `fastify.signer`, and spread {@link redis} into `fastify.redis`.
  */
 export interface BrowserSessionFixture {
   service: FakeSessionService;
   redis: MemorySessionRedis;
+  /** The cookie keys' signer: every realm has one. */
+  signer: FakeCookieSigner;
   /**
    * A signed-in browser: a live session, its side record values, and the
    * `Cookie` header that names it.
@@ -401,10 +406,12 @@ export interface BrowserSessionFixture {
 export function createBrowserSessionFixture(): BrowserSessionFixture {
   const service = createFakeSessionService();
   const redis = createMemorySessionRedis();
+  const signer = createFakeCookieSigner();
   const fastify = { redis } as unknown as FastifyInstance;
   return {
     service,
     redis,
+    signer,
     async signIn({ side, ...seed }) {
       const session = service.seed(seed);
       if (side !== undefined) {
@@ -432,13 +439,19 @@ export function createBrowserSessionFixture(): BrowserSessionFixture {
           });
         }
       }
-      return { session, cookie: sessionCookie(session.sid) };
+      return { session, cookie: await sessionCookie({ signer }, session) };
     },
     sideRecord: (session) => readSessionSideRecord(fastify, session),
   };
 }
 
-/** The `Cookie` header that carries `sid` in a signed session cookie. */
-export function sessionCookie(sid: string): string {
-  return `${SESSION_COOKIE_NAME}=${signSessionId(sid)}`;
+/**
+ * The `Cookie` header that carries `session` in a session cookie signed with
+ * its realm's current cookie key from `fastify.signer` (#493).
+ */
+export async function sessionCookie(
+  fastify: CookieKeyHolder,
+  session: { readonly sid: string; readonly realmId: string }
+): Promise<string> {
+  return `${SESSION_COOKIE_NAME}=${await signSessionCookie(fastify, session)}`;
 }

@@ -7,6 +7,9 @@
  * knob (long lifespan), staging keeps the short lifespan, and the HARD FLOORS
  * (client secret hashed + verified, RFC 8707 audience binding, PKCE downgrade)
  * hold even for a development client.
+ *
+ * The two lifespans are the realm's (#527): its policies hold them, and the
+ * JWT plugin's environment lifespans, which differ here, go unused.
  */
 import { InvalidGrantError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
@@ -26,17 +29,23 @@ vi.mock('../../../config/env', () => ({
   env: {
     TOKEN_RATE_LIMIT: 60,
     TOKEN_RATE_WINDOW: 60,
-    // ADR-008 §5 (#197): short baseline (staging/production) vs the long
-    // development convenience. The handler selects between them by tier.
-    DEV_ACCESS_TOKEN_LIFESPAN: 28800, // 8h
   },
 }));
 
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import type { RealmRow } from '../../helpers/request-realm';
 import tokenRoute from './token';
 
+// ADR-008 §5 (#197): short baseline (staging/production) vs the long
+// development convenience, both the realm's (#527). The handler selects
+// between them by tier.
 const SHORT_LIFESPAN = 900;
+const LONG_LIFESPAN = 28_800; // 8h
+const REFRESH_LIFESPAN = 86_400;
+/** The JWT plugin's lifespans: what the environment gave it, for a realm with no policies. */
+const PLUGIN_ACCESS_LIFESPAN = 60;
+const PLUGIN_REFRESH_LIFESPAN = 604_800;
 
 /** The realm argument of every token the route signs: the request's (#491). */
 const IN_REQUEST_REALM = expect.objectContaining({ id: 'realm-1' });
@@ -75,6 +84,7 @@ function makeAuthCodeStub(opts: {
     name: 'default',
     // Unchecked on purpose: the fail-safe test hands in a value outside the enum.
     maxEnvironmentLaxity: opts.realmEnv as RealmRow['maxEnvironmentLaxity'],
+    policiesVersion: 1,
   });
   const fastify: any = {
     withTypeProvider: () => ({
@@ -161,9 +171,14 @@ function makeAuthCodeStub(opts: {
       generateRefreshToken: vi
         .fn()
         .mockReturnValue({ token: 'refresh-token', tokenHash: 'refresh-hash' }),
-      getAccessTokenLifespan: vi.fn().mockReturnValue(SHORT_LIFESPAN),
-      getRefreshTokenLifespan: vi.fn().mockReturnValue(604800),
+      getAccessTokenLifespan: vi.fn().mockReturnValue(PLUGIN_ACCESS_LIFESPAN),
+      getRefreshTokenLifespan: vi.fn().mockReturnValue(PLUGIN_REFRESH_LIFESPAN),
     },
+    policyStore: testPolicyStore({
+      accessTokenLifespanSeconds: SHORT_LIFESPAN,
+      developmentAccessTokenLifespanSeconds: LONG_LIFESPAN,
+      refreshTokenLifespanSeconds: REFRESH_LIFESPAN,
+    }),
     pkceUtils: {
       verifyCodeChallenge: vi.fn().mockReturnValue(true),
     },
@@ -218,12 +233,47 @@ describe('token endpoint — environment-aware access-token lifespan (#197)', ()
       createReply((b) => (body = b))
     );
 
-    expect(body.expires_in).toBe(28800);
+    expect(body.expires_in).toBe(LONG_LIFESPAN);
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       IN_REQUEST_REALM,
-      expect.objectContaining({ expiresInOverride: 28800 })
+      expect.objectContaining({ expiresInOverride: LONG_LIFESPAN })
     );
   });
+
+  it("gives a development client's ID token the realm's SHORT lifespan: the tier is for access tokens (#527)", async () => {
+    const { fastify, ctx } = makeAuthCodeStub({
+      realmEnv: 'development',
+      clientEnv: 'development',
+    });
+    await tokenRoute(fastify);
+    await ctx.handler!(authCodeRequest(), createReply());
+
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ expiresInOverride: SHORT_LIFESPAN })
+    );
+  });
+
+  it.each(['production', 'development'])(
+    "gives a %s client's refresh token the realm's refresh lifespan (#527)",
+    async (environment) => {
+      const { fastify, ctx } = makeAuthCodeStub({
+        realmEnv: environment,
+        clientEnv: environment,
+      });
+      await tokenRoute(fastify);
+      const before = Date.now();
+      await ctx.handler!(authCodeRequest(), createReply());
+
+      const stored = (fastify.repositories.refreshTokens.create as Mock).mock.calls[0][0] as {
+        familyCreatedAt: number;
+        expiresAt: number;
+      };
+      expect(stored.familyCreatedAt).toBeGreaterThanOrEqual(before);
+      expect(stored.expiresAt).toBe(stored.familyCreatedAt + REFRESH_LIFESPAN * 1000);
+      expect(fastify.jwtUtils.getRefreshTokenLifespan).not.toHaveBeenCalled();
+    }
+  );
 
   it('staging client keeps the SHORT lifespan (security/operational baseline)', async () => {
     const { fastify, ctx } = makeAuthCodeStub({ realmEnv: 'staging', clientEnv: 'staging' });

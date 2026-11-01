@@ -100,17 +100,38 @@ const ROUTES_BEFORE_THE_MANIFEST: readonly string[] = [
   'PUT /ssf/stream',
 ];
 
-/** Every operation of {@link ROUTES_BEFORE_THE_MANIFEST}, with Fastify's `HEAD` routes. */
-const PINNED_OPERATIONS: ReadonlySet<string> = new Set([
-  ...ROUTES_BEFORE_THE_MANIFEST,
-  ...ROUTES_BEFORE_THE_MANIFEST.filter((operation) => operation.startsWith('GET ')).map(
-    (operation) => `HEAD ${operation.slice('GET '.length)}`
-  ),
-]);
+/**
+ * The routes added since the manifest replaced the autoload: the account and
+ * developer APIs under their versioned prefixes (#524).
+ */
+const ROUTES_ADDED_SINCE: readonly string[] = [
+  'DELETE /account/v1-rc.0/consents/:consentId',
+  'DELETE /developer/v1-rc.0/clients/:clientId',
+  'DELETE /developer/v1-rc.0/clients/:clientId/api-keys/:keyId',
+  'DELETE /developer/v1-rc.0/consents/:consentId',
+  'GET /account/v1-rc.0/consents',
+  'GET /developer/v1-rc.0/clients',
+  'GET /developer/v1-rc.0/clients/:clientId',
+  'GET /developer/v1-rc.0/clients/:clientId/api-keys',
+  'GET /developer/v1-rc.0/consents',
+  'PATCH /developer/v1-rc.0/clients/:clientId',
+  'POST /developer/v1-rc.0/clients',
+  'POST /developer/v1-rc.0/clients/:clientId/api-keys',
+  'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',
+];
+
+/** Every operation of both lists, with Fastify's `HEAD` routes. */
+const PINNED_OPERATIONS: ReadonlySet<string> = new Set(
+  [...ROUTES_BEFORE_THE_MANIFEST, ...ROUTES_ADDED_SINCE].flatMap((operation) =>
+    operation.startsWith('GET ')
+      ? [operation, `HEAD ${operation.slice('GET '.length)}`]
+      : [operation]
+  )
+);
 
 /** The keys a boot sets or clears, restored after the file. */
 const BOOT_KEYS =
-  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_TLS_)/;
+  /^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|SSF_|JWT_|KEK|SERVICE_ROLES$|SIGNER_URL$|INTERNAL_)/;
 
 /** The environment of a deployment with every route-registering switch on. */
 function maximalEnvironment(serviceRoles: string): Record<string, string> {
@@ -122,7 +143,20 @@ function maximalEnvironment(serviceRoles: string): Record<string, string> {
     JWT_ISSUER: 'https://auth.example.com',
     JWT_PUBLIC_KEY: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     ...(holdsSigner
-      ? { JWT_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString() }
+      ? {
+          JWT_PRIVATE_KEY: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+          // A split process holding the signer serves it on the internal
+          // listener (#496), over mutual TLS: never read, as this boot passes
+          // the app no internal listener.
+          ...(serviceRoles === 'all'
+            ? {}
+            : {
+                INTERNAL_TLS_CERT_PATH: '/run/secrets/signer.crt',
+                INTERNAL_TLS_KEY_PATH: '/run/secrets/signer.key',
+                INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+                INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
+              }),
+        }
       : {
           // Never dialled or read: no request is sent.
           SIGNER_URL: 'https://signer.internal:3443',
@@ -166,22 +200,33 @@ interface BootedRoles {
 const savedEnv = new Map<string, string | undefined>();
 const booted = new Map<string, BootedRoles>();
 
-/** Boot the app under `serviceRoles`, with a fresh copy of its modules. */
-async function bootRoles(serviceRoles: string): Promise<BootedRoles> {
+/**
+ * Boot the app under `serviceRoles`, with a fresh copy of its modules:
+ * `overrides` changes the environment, and `collected` receives the routes
+ * as they register.
+ */
+async function bootRoles(
+  serviceRoles: string,
+  overrides: Record<string, string> = {},
+  collected: RouteOptions[] = []
+): Promise<BootedRoles> {
   for (const key of Object.keys(process.env)) {
     if (BOOT_KEYS.test(key)) {
       if (!savedEnv.has(key)) savedEnv.set(key, process.env[key]);
       delete process.env[key];
     }
   }
-  for (const [key, value] of Object.entries(maximalEnvironment(serviceRoles))) {
+  for (const [key, value] of Object.entries({
+    ...maximalEnvironment(serviceRoles),
+    ...overrides,
+  })) {
     if (!savedEnv.has(key)) savedEnv.set(key, process.env[key]);
     process.env[key] = value;
   }
   // `config/env.ts` parses the environment at load.
   vi.resetModules();
   const { app } = await import('./app');
-  const routes: RouteOptions[] = [];
+  const routes = collected;
   const server = Fastify({ logger: false, routerOptions: { ignoreTrailingSlash: true } });
   server.setValidatorCompiler(validatorCompiler);
   server.setSerializerCompiler(serializerCompiler);
@@ -330,6 +375,63 @@ describe("the issue's route criteria (#495)", () => {
     const server = bootOf('web').server;
     expect(server.hasRoute({ method: 'POST', url: '/oauth/token' })).toBe(false);
     expect(server.hasRoute({ method: 'GET', url: '/oauth/authorize' })).toBe(true);
+  });
+});
+
+describe('an internal route on the public listener (#496)', () => {
+  it('refuses to boot when a plugin of the app registers one, whatever roles it names', async () => {
+    vi.doMock('./plugins/security-headers', async (importOriginal) => {
+      const original = await importOriginal<{ securityHeadersPlugin: FastifyPluginAsync }>();
+      const withInternalRoute = fp(
+        async (fastify: FastifyInstance) => {
+          await fastify.register(original.securityHeadersPlugin);
+          fastify.post(
+            '/internal/signer/v1-rc.0/sign',
+            { config: { surface: 'api', serviceRoles: ['api'] } },
+            async () => ({})
+          );
+        },
+        { name: 'internal-route-fixture' }
+      );
+      return { ...original, securityHeadersPlugin: withInternalRoute, default: withInternalRoute };
+    });
+    try {
+      await expect(bootRoles('api')).rejects.toThrow(
+        'POST /internal/signer/v1-rc.0/sign is an internal route: it registers only on the internal listener'
+      );
+    } finally {
+      vi.doUnmock('./plugins/security-headers');
+    }
+  });
+
+  it('is never among the routes any role registers', () => {
+    for (const [roles, { routes }] of booted) {
+      expect(
+        routes.filter((route) => /^\/internal(?:\/|$)/.test(route.url)),
+        roles
+      ).toEqual([]);
+    }
+  });
+});
+
+describe('a split process holding the signer without mutual TLS (#496)', () => {
+  it('refuses to boot, naming each setting, and registers no route', async () => {
+    const routes: RouteOptions[] = [];
+    await expect(
+      bootRoles(
+        'api,signer',
+        {
+          INTERNAL_TLS_CERT_PATH: '',
+          INTERNAL_TLS_KEY_PATH: '',
+          INTERNAL_TLS_CA_PATH: '',
+          INTERNAL_PEER_ROLES: '',
+        },
+        routes
+      )
+    ).rejects.toThrow(
+      /INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so the signer routes are not registered without it/
+    );
+    expect(routes).toEqual([]);
   });
 });
 

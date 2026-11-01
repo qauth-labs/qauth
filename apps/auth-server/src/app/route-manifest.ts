@@ -20,9 +20,11 @@ import type { FastifyPluginAsync } from 'fastify';
  *   the legacy `/auth/*` routes (the `api` and `meta` surfaces).
  * - Every role registers `/health` and `/metrics`: each process answers for
  *   itself, whatever else it serves.
- * - `admin`, `signer` and `delivery` have no route of their own yet. The admin
- *   API (#511) and the signer service (#497) arrive on the internal listener
- *   (#496); delivery serves no inbound request.
+ * - `admin`, `signer` and `delivery` have no route here. The admin API runs
+ *   on its own listener (#511, `admin/listener.ts`), the signer service
+ *   (#497) on the internal listener, whose routes have a manifest of their
+ *   own (#496, `internal/route-manifest.ts`), and delivery serves no inbound
+ *   request.
  *
  * `route-manifest.test.ts` checks each entry against its module: the plugins
  * and repositories its code reaches, its prefix (the directory's name, or the
@@ -147,6 +149,21 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/well-known'),
   },
   {
+    module: 'account',
+    prefix: '/account/v1-rc.0',
+    roles: ['api'],
+    plugins: ['jwt'],
+    repositories: [
+      'authorizationCodes',
+      'events',
+      'oauthClients',
+      'oauthConsents',
+      'refreshTokens',
+      'users',
+    ],
+    load: () => import('./routes/account'),
+  },
+  {
     module: 'auth/link-wallet',
     prefix: '/auth',
     roles: ['web'],
@@ -166,7 +183,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'auth/logout',
     prefix: '/auth',
     roles: ['api'],
-    plugins: ['egress', 'jwt', 'password', 'sessions'],
+    plugins: ['jwt', 'sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthClients', 'refreshTokens', 'users'],
     load: () => import('./routes/auth/logout'),
   },
@@ -212,7 +229,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'clients',
     prefix: '/api/clients',
     roles: ['api'],
-    plugins: ['egress', 'jwt', 'password'],
+    plugins: ['jwt', 'password'],
     repositories: ['apiKeys', 'events', 'oauthClients', 'realms', 'users'],
     load: () => import('./routes/clients'),
   },
@@ -228,7 +245,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'consents-api',
     prefix: '/api/consents',
     roles: ['api'],
-    plugins: ['egress', 'jwt', 'password'],
+    plugins: ['jwt'],
     repositories: [
       'authorizationCodes',
       'events',
@@ -240,10 +257,27 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/consents-api'),
   },
   {
+    module: 'developer',
+    prefix: '/developer/v1-rc.0',
+    roles: ['api'],
+    plugins: ['jwt', 'password'],
+    repositories: [
+      'apiKeys',
+      'authorizationCodes',
+      'events',
+      'oauthClients',
+      'oauthConsents',
+      'realms',
+      'refreshTokens',
+      'users',
+    ],
+    load: () => import('./routes/developer'),
+  },
+  {
     module: 'oauth/authorize',
     prefix: '/oauth',
     roles: ['web'],
-    plugins: ['dpop', 'egress', 'jwt', 'password', 'sessions'],
+    plugins: ['dpop', 'egress', 'password', 'sessions'],
     repositories: [
       'authorizationCodes',
       'events',
@@ -266,7 +300,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'oauth/register',
     prefix: '/oauth',
     roles: ['api'],
-    plugins: ['egress', 'jwt', 'password'],
+    plugins: ['jwt', 'password'],
     repositories: ['events', 'oauthClients', 'realms', 'users'],
     load: () => import('./routes/oauth/register'),
   },
@@ -301,7 +335,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'oauth/userinfo',
     prefix: '/oauth',
     roles: ['api'],
-    plugins: ['jwt', 'password'],
+    plugins: ['jwt'],
     repositories: ['events', 'oauthClients', 'realms', 'userAttributes', 'users'],
     load: () => import('./routes/oauth/userinfo'),
   },

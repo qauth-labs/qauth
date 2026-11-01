@@ -4,7 +4,7 @@
  * Centralized enum definitions for type safety and database constraints
  */
 
-import { REALM_HOST_KINDS } from '@qauth-labs/shared-validation';
+import { FIRST_PARTY_PROFILES, REALM_HOST_KINDS } from '@qauth-labs/shared-validation';
 import { pgEnum } from 'drizzle-orm/pg-core';
 
 /**
@@ -116,6 +116,15 @@ const AGENT_MODES = [
 export const agentModeEnum = pgEnum('agent_mode', AGENT_MODES);
 
 export type AgentMode = (typeof AGENT_MODES)[number];
+
+/**
+ * First-party client profiles (ADR-017 Decision 2, issue #631), persisted on
+ * `oauth_clients.first_party_profile`. The list is `FIRST_PARTY_PROFILES` from
+ * `@qauth-labs/shared-validation`, the same list `resolveFirstPartyProfile()`
+ * and the seed manifest read, so the three cannot drift. ADR-017 phase F4 adds
+ * `native_attested`. Operator-set server state, never client input.
+ */
+export const firstPartyProfileEnum = pgEnum('first_party_profile', FIRST_PARTY_PROFILES);
 
 /**
  * Deployment environment / policy profile (ADR-008, issue #196).

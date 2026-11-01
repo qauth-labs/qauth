@@ -37,9 +37,9 @@ import { API_FAMILIES, API_FAMILY_AUDIENCES, type ApiFamily } from './api-conven
  *   it, and a user grant leaves a family audience out of its default.
  * - `POST /oauth/register` and a Client ID Metadata Document ignore a
  *   `urn:qauth:aud:` audience or resource, as they ignore a `qauth:` scope.
- * - The developer portal's token keeps the system client id as audience in
- *   this release, and a token with the developer audience is accepted where
- *   it is (expand, then contract: ADR-018 §5).
+ * - The developer portal's token carries the developer audience since #524,
+ *   the contract step after #509's expand (ADR-018 §5), and the token of
+ *   before, whose audience was the system client id, is refused.
  * - The guard resolves the subject in the realm of the request host.
  * - A bad token gets the RFC 6750 challenge; a missing scope 403 `forbidden`
  *   with the `insufficient_scope` challenge.
@@ -556,53 +556,54 @@ describe('one audience per API family and a guard for each (#509, real container
       return rows.map((row) => row.audience);
     }
 
-    // Expand, then contract (ADR-018 §5): this release does not mint the
-    // developer audience, so a node of the previous release accepts every
-    // portal token this one mints.
-    it('keeps the system client id as audience, and leaves the system client row alone', async () => {
+    // Expand, then contract (ADR-018 §5): #509 accepted the developer
+    // audience, and #524 mints it.
+    it('carries the developer audience, which the system client row lists', async () => {
       const { userId, token } = await signInPortal('portal-now@example.com');
       expect(decodeJwtClaims(token)).toMatchObject({
-        aud: 'system',
+        aud: API_FAMILY_AUDIENCES.developer,
         client_id: 'system',
         sub: userId,
       });
+      expect(await systemClientAudience()).toEqual([[API_FAMILY_AUDIENCES.developer]]);
 
-      expect((await call('/api/clients', token)).statusCode).toBe(200);
-      expect((await call('/oauth/userinfo', token)).json()).toEqual({ sub: userId });
-      // It is not a developer family token.
-      expect((await call(probePath('developer'), token)).statusCode).toBe(401);
-      expect(await systemClientAudience()).toEqual([null]);
-    });
-
-    it('with the developer audience, is accepted wherever the legacy one is', async () => {
-      const { userId } = await signInPortal('portal-next@example.com');
-      // What #524's release mints: the system client, the developer audience.
-      const next = await app().jwtUtils.signAccessToken(
-        { id: await realmId() },
-        {
-          sub: userId,
-          clientId: 'system',
-          aud: API_FAMILY_AUDIENCES.developer,
-        }
-      );
-
-      const clients = await call('/api/clients', next);
+      const clients = await call('/api/clients', token);
       expect(clients.statusCode).toBe(200);
       expect(clients.json()).toMatchObject({ clients: [] });
-      expect((await call('/api/consents', next)).statusCode).toBe(200);
-      expect((await call('/oauth/userinfo', next)).json()).toEqual({ sub: userId });
-      expect((await call(probePath('developer'), next)).statusCode).toBe(200);
-      expect((await call(probePath('account'), next)).statusCode).toBe(401);
+      expect((await call('/api/consents', token)).statusCode).toBe(200);
+      expect((await call('/oauth/userinfo', token)).json()).toEqual({ sub: userId });
+      expect((await call(probePath('developer'), token)).statusCode).toBe(200);
+      expect((await call(probePath('account'), token)).statusCode).toBe(401);
 
       // A sign-out through it ends the session.
       const logout = await app().inject({
         method: 'POST',
         url: '/auth/logout',
-        headers: { authorization: `Bearer ${next}` },
+        headers: { authorization: `Bearer ${token}` },
       });
       expect(logout.statusCode).toBe(200);
       expect(logout.json()).toMatchObject({ success: true });
-      expect(await systemClientAudience()).toEqual([null]);
+    });
+
+    it('of before #524, with the system client id as audience, is refused everywhere but at sign-out', async () => {
+      const { userId } = await signInPortal('portal-before@example.com');
+      const before = await app().jwtUtils.signAccessToken(
+        { id: await realmId() },
+        { sub: userId, clientId: 'system', aud: 'system' }
+      );
+
+      for (const path of ['/api/clients', '/api/consents', probePath('developer')]) {
+        expect((await call(path, before)).statusCode, path).toBe(401);
+      }
+      // For this release a live one still signs out, so a developer whose
+      // portal session began before the upgrade keeps no tokens (ADR-018 §5).
+      // Remove with the grace in the next release.
+      const logout = await app().inject({
+        method: 'POST',
+        url: '/auth/logout',
+        headers: { authorization: `Bearer ${before}` },
+      });
+      expect(logout.statusCode).toBe(200);
     });
   });
 

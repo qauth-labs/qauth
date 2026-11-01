@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { defineEventType } from '../definition';
 import { extensibleEnum } from '../envelope';
-import { FIRST_RELEASE, recordId } from './fields';
+import { FIRST_RELEASE, recordId, stepName } from './fields';
 
 /**
  * The browser ceremonies of the Interaction API (ADR-019 Decision 6, #592):
@@ -20,15 +20,6 @@ const interactionRef = () =>
   recordId(
     'The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds.'
   );
-
-/** A step name of the Interaction API, `urn:qauth:ia:<name>:v<N>` or a release candidate of it. */
-const stepName = (description: string) =>
-  z
-    .string()
-    .min(1)
-    .max(96)
-    .regex(/^urn:qauth:ia:[a-z][a-z0-9_]{0,62}:v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?$/)
-    .describe(description);
 
 /** Why an interaction began. */
 export const INTERACTION_PURPOSES = ['authorization'] as const;

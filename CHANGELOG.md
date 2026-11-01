@@ -94,8 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RealmSecretStore` names where secret fields go; the store itself comes with
   [#529], and until then a write that sets a secret is refused. The flows still
   read the environment until they move to the row ([#527], [#528], [#529],
-  [#534]). See **Realm policies move onto the realm row** in
-  `operate/upgrades`.
+  [#534]); the token lifetimes moved with [#527] (below). See **Realm policies move
+  onto the realm row** in `operate/upgrades`.
 - **Each realm sends its mail through its own transport and sender** ([#529],
   ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
   policies (transport, sender address and name, SMTP host, port, TLS and user)
@@ -672,9 +672,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`event_signing` and `data_at_rest`, and `token_signing` and `cookie_hmac`
   on a fresh deployment), and gives a fresh realm an RS256 signing key too.
   It is one transaction, so two nodes that boot together import once. A
-  warning at every boot names each key variable that is still set ([#491]
-  changes what it says for the token keys, above); the session cookie keeps
-  using its variable until it moves onto the signer. Until rotation through the store ships, a signing
+  warning at every boot names each key variable that is still set ([#491] and
+  [#493] change what it says, above). Until rotation through the store ships, a signing
   variable that holds a new key replaces the stored key of its algorithm, as
   changing the variable replaced the key before: the stored key is retired and
   leaves the JWKS at once, and the boot warns with both `kid`s.
@@ -889,8 +888,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `invalid_token` challenge, and a token that lacks a route's scope 403
   `forbidden` with the `insufficient_scope` challenge, whose `scope` names the
   scopes. `ForbiddenError`'s `requiredScope` takes a list for that, joined with
-  spaces in the challenge. No route uses the guards yet; the developer and
-  account routes move under their prefixes in [#524]. The token endpoint issues
+  spaces in the challenge. The developer and account routes moved under their
+  prefixes in [#524], behind these guards. The token endpoint issues
   an audience in the reserved `urn:qauth:aud:` namespace only to a client whose
   `audience` lists it, on every grant (`invalid_target` otherwise, at
   `/oauth/authorize` and `/ui/consent` too); a code refused this way is not
@@ -898,8 +897,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/oauth/register` lists none, whatever its row holds. On a user's grant
   (authorization code and refresh token) a family audience is issued only when a
   `resource` names it, so a client's default audience leaves it out there. The
-  Bearer path of `/oauth/authorize` refuses `access_denied` when the request or
-  the client's default audience holds one, and a family audience never makes a
+  Bearer path of `/oauth/authorize`, retired since by [#524], refused
+  `access_denied` when the request or the client's default audience held one,
+  and a family audience never makes a
   client authoritative at introspection. Self-registration never obtains one,
   by the rule the reserved `qauth:` scopes follow: dynamic registration and a
   Client ID Metadata Document ignore it in `audience` or `resource` metadata,
@@ -1048,6 +1048,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path, plain or percent-encoded (once or twice), whatever else in the URL is
   malformed, and a Redis error in the log names its command but no longer
   carries the command's arguments.
+- **The sign-in engine core** ([#614], ADR-017 Decisions 4 and 7, ADR-019
+  Decision 6). `libs/server/sign-in-engine`
+  (`@qauth-labs/server-sign-in-engine`) is the one engine both sign-in
+  transports will call, the Interaction API ([#616]) and the FiPA endpoint
+  ([#646]); no route calls it yet. Its entry point,
+  `advance(transaction, answer, context)`, answers the next step, a completed
+  sign-in (subject, `amr`, `auth_time`; the transport mints the session or the
+  code), a redirect or a refusal, and runs ADR-017's rules in order: the realm's
+  and client's MFA policy, read on every round through an interface (a policy
+  that cannot be read refuses the round; until it has storage, no second factor
+  is required), hooks for the limiters, the transport's request checks, the bot
+  challenge and the per-account ladder, the identifier, then the password.
+  Until a factor succeeds it reads only what the password check needs of the
+  account the identifier names, and answers an unknown, password-only,
+  passkey-only, disabled or locked account alike, with one Argon2id
+  computation per password (against a dummy hash when none is usable) and a
+  500 ms floor on every round. An answer counts only when its step is the next
+  one. A second identifier, another user's proof, or a passkey that proves
+  another account than the identifier names ends the transaction as
+  `subject_mismatch`. The transaction carries its realm, its client and when
+  it began, and one of another realm or client, or older than two hours, ends;
+  it is not sealed, so the transports keep it server-side. Every refusal is
+  audited, a limiter's, the request checks' and a malformed answer's included,
+  and a production server builds the engine only with a per-account ladder. A disabled user gets the ordinary invalid-credentials
+  answer and no subject; an unverified account under `REQUIRE_VERIFIED_ACCOUNT`
+  still does too. After a password, the downgrade rule (a disabled factor still
+  counts as bound) and the MFA policy answer a redirect until the steps that
+  meet them exist. Later steps (passkeys, TOTP, the email code) join through a
+  step-handler interface. `libs/fastify/plugins/sign-in-engine` holds the auth
+  server's adapters: the account directory over the repositories, Argon2id with
+  the dummy verification, an identifier HMAC keyed from the realm's cookie
+  secret, and the mapping of the engine's audit records onto events. A new
+  event, `user.sign_in_step_passed`, records each accepted step; refusals stay
+  `user.sign_in_failed`, with the person named by the identifier HMAC until a
+  user is resolved. The sign-in graph `graphs/flows/core/sign-in` now describes
+  the engine (proposed), and the captured graph of the `/ui/login` page moved
+  to `graphs/flows/core/sign-in-page`.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -1185,6 +1222,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+- **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
+  process that holds the `signer` role while the roles are split runs one more
+  HTTP server, on `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port
+  `3443`, by default; advanced keys), for the other roles' calls to the signer
+  service ([#497] adds its routes). A single process runs none. It serves
+  HTTP/1.1 over TLS 1.3 only and requires a client certificate that
+  `INTERNAL_TLS_CA_PATH` issued: a client with none, or one from another CA,
+  gets no HTTP answer. A CA file that holds a public root CA, as a system
+  bundle does, is refused, and one with no `CA:TRUE` certificate, or a key file
+  its group or others may read, is warned of. The new `INTERNAL_PEER_ROLES`
+  maps a subject alternative name of the peer's certificate (a DNS name, or a
+  URI such as a SPIFFE ID) to the role it calls as, `request.peerRole`, and
+  refuses `signer`, which never calls as a peer; a peer whose SANs it does not
+  map, or map to two roles, gets `403` `forbidden` on every path. Each internal
+  route module names the peer roles that may call it, and a peer of another
+  role gets `403` on its routes. A request on a connection whose peer
+  certificate has expired since the handshake, or that was made before the TLS
+  files were last reloaded, gets `403` too; every `403` closes its connection,
+  so the peer connects again. The certificate, key and CA files are read again
+  every five seconds and applied with no restart once a rotation is complete.
+  The listener holds at most 1024 connections at once. Its routes register by
+  role from an internal route manifest, all under `/internal/`, which the
+  public listener refuses to register. Such a process refuses to start without
+  the three TLS files and `INTERNAL_PEER_ROLES`, naming each, before it waits
+  for the database. The listener is not routed by host, shares the app's
+  database pool, cache and signer, and closes at the same time as the admin
+  listener. The admin API keeps its own listener and its own rule: a peer
+  certificate grants nothing there. `createInternalClient`
+  (`apps/auth-server/src/app/internal/client.ts`) is how the other roles call
+  it: `https` only, the server known by `expectedServerSan` rather than its
+  host name, every request kept below the base URL's path, a keep-alive pool
+  (a request whose pooled connection the server had just closed is sent once
+  more on a new one), a deadline and a cap on each answer, and credentials
+  that can be reloaded.
 - **Client display data and the verified domain** ([#593], ADR-019 Decision 6).
   One function in the auth server says who a client is from the server's own
   records, as the Interaction API's `ClientDisplay`: the host of a CIMD client's
@@ -1238,9 +1309,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
+- **Operator-set first-party client profiles** ([#631], ADR-017 Decision 2).
+  Migration 0048 adds `oauth_clients.first_party_profile` (`web_redirect`,
+  `native_backend`), `first_party_policy` and `first_party_reason`, nullable
+  with no default, and six CHECKs: no profile on a dynamic, CIMD, agent or
+  developer-owned client; a profile only with `private_key_jwt`; a policy
+  exactly on `native_backend`; `native_backend` only with the
+  `authorization_code` grant; a written reason (at most 1000 characters)
+  exactly with a profile; a policy that is a JSON object. `resolveFirstPartyProfile` in shared-validation
+  reads a row and fails closed on an unknown profile or a policy that does not
+  parse; the strict policy is `flows` (default `login`),
+  `email_code_after_password` (default `false`) and `pkce_required` (default
+  `true`). The `db:seed-oauth-clients` manifest sets the three fields, the
+  reason required; a native profile also needs the backend's keys, the
+  `authorization_code` grant and an `https`, private-use or loopback browser-leg
+  redirect URI. Dynamic registration, `/api/clients` and CIMD never write them.
+  A change is recorded as the new `client.first_party_changed` event, and
+  removing a profile revokes every refresh token of the client not yet revoked. Nothing
+  reads the profile yet: the consent waiver and the authorization challenge
+  endpoint come later.
+- **The system client is provisioned from operator configuration** ([#631],
+  ADR-017 phase F0). The migration runner reads `SYSTEM_CLIENT_REDIRECT_URI`,
+  `SYSTEM_CLIENT_JWKS_URI` or `SYSTEM_CLIENT_JWKS`, `SYSTEM_CLIENT_ID` and
+  `DEFAULT_REALM_NAME`, and after the migrations makes the system client a
+  `private_key_jwt` client with the `web_redirect` profile and the portal's
+  callback, keeping its id, scopes, audience and suspension. A realm the auth
+  server has not created yet is reported and skipped; a row that cannot be
+  first party exits `4`. The seed manifest's new `system_client` section does
+  the same.
+
+- **The AuthMethod contract, experimental** ([#599], ADR-003 as amended,
+  ADR-018 §4, ADR-019 Decision 12). The plugin API for sign-in methods, such as
+  an upstream OpenID Connect provider, versioned `qauth-auth-method/1-rc.0`
+  and outside the 1.0 stability promise (the experimental item `plugin-api`).
+  An AuthMethod extends `CredentialProvider` with an id, display data, a config
+  schema, the upstream step, the routes it mounts under `/upstream/<type>` and
+  `start()`. The engine checks every answer of a method: the redirect, the
+  transaction and its binding, which the host compares in constant time
+  before it takes the pending transaction, the identity (its assurance level
+  capped, `low` by default) and every attribute, whose source must be the
+  method's type. A method is handed its config, the egress client, the signer
+  role and a logger, never a database handle or a key, and `resolve(type)`
+  answers a fail-closed stand-in for it. The contract test kit
+  (`@qauth-labs/server-federation/testing`) checks a method against all of
+  it, PKCE with S256 included. Nothing registers a method in a running server
+  yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
+
+- **The developer API and the account API's consents, under versioned
+  prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
+  serves a developer's clients (list, create, read, merge-patch update,
+  delete, `regenerate-secret`), their static API keys and the developer's own
+  consents; `/account/v1-rc.0` serves the user's consents (list and revoke).
+  Each route is guarded by its family's token guard ([#509]) and follows the API
+  conventions: RFC 7591 names for registered client metadata, RFC 3339 times,
+  lists as `{ items, nextCursor }` with `limit` and `cursor` (`invalid_cursor`
+  for a cursor another list issued), an `ETag` on each read of a client and a
+  JSON Merge Patch update that needs `If-Match` (428 without it, 412 for a stale
+  one, 415 for another media type, 422 for `client_name` set to `null`), and
+  problem documents. A client of another developer is 404, as before. The
+  domain logic is shared with the deprecated paths, which keep their shapes.
 
 ### Changed
 
+- **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
+  ADR-008 §5). The access, development access and refresh token lifetimes are
+  each realm's `tokens` policies, so two realms of one deployment can issue
+  tokens that live differently long. The token endpoint reads them off the
+  realm row it already loads for the environment policy, with no query of its
+  own; the ADR-008 tiers are unchanged (`short` is the realm's
+  `tokens.accessTokenLifespanSeconds`, `long` its
+  `tokens.developmentAccessTokenLifespanSeconds`), an ID token gets the
+  realm's access lifetime, and a new or rotated refresh token its
+  `tokens.refreshTokenLifespanSeconds`. The legacy `POST /auth/login` signs
+  with the realm's access lifetime, which its `expires_in` names, and gives
+  its refresh token the realm's refresh lifetime. `ACCESS_TOKEN_LIFESPAN`,
+  `DEV_ACCESS_TOKEN_LIFESPAN` and `REFRESH_TOKEN_LIFESPAN` now only seed a new
+  realm, and a realm that had no policies at the first boot after the upgrade
+  ([#516]): a later change of them leaves an existing realm's tokens as they
+  are, and the boot warns that each one set is ignored. A realm a node of the
+  previous release created during a rolling upgrade runs on the keys until a
+  node of this release boots again and fills it. A realm policy change reaches
+  the realm's next token once the realm resolver reads the row again (its
+  cache time, 30 s), without a restart; until the admin API's realm policy
+  update ([#517]) ships, no route changes them. `signIdToken` of
+  `@qauth-labs/fastify-plugin-jwt` takes an `expiresInOverride`, as
+  `signAccessToken` does; the plugin's `accessTokenLifespan` and
+  `refreshTokenLifespan` stay the fallback. Each lifetime is bounded, in the
+  realm policies and in the keys that seed them: an access token (and so an ID
+  token) and a development access token at a day, so a token always expires
+  well inside the 14 days a retired signing key stays published, and a
+  refresh token at 90 days. A key above its bound refuses to boot; a realm row
+  written by hand above it is refused like any invalid policy, so the realm's
+  token requests fail rather than issue it. A token whose audience is the
+  admin API lives at most the realm's `tokens.adminAccessTokenLifespanSeconds`
+  (ADR-019 Decision 7, at most 900 s), whatever its client's tier gives. A
+  delegated token of token exchange is capped at its subject token's `exp`
+  when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
+  when its lifetime is computed.
+
+- **BREAKING (operators): the token lifetime keys are bounded** ([#527]).
+  `ACCESS_TOKEN_LIFESPAN` and `DEV_ACCESS_TOKEN_LIFESPAN` above 86400 s (a day),
+  or `REFRESH_TOKEN_LIFESPAN` above 7776000 s (90 days), now refuse to boot.
+  Lower them before upgrading; a realm row above the same bounds is refused
+  like any invalid policy (see the entry above).
+- **The developer portal's token carries the developer audience** ([#524]).
+  The system client is created with `urn:qauth:aud:developer:v1-rc.0`, and a
+  boot step gives it to the system client of every realm that has one, so
+  `POST /auth/login` mints the developer audience and the token reaches the
+  developer API. `/auth/logout` and the deprecated `/api/clients` and
+  `/api/consents` accept exactly that audience on a system-client token, but
+  for the sign-out grace of this release (under **Removed**).
+
+  **Action for operators**: developers sign in to the portal again when the
+  first node of this release boots: a portal token minted before carries the
+  system client's id as its audience, which no node of this release accepts any
+  more, except to sign out. This release carries both steps, accepting the new
+  token ([#509]) and minting it, so during a rolling upgrade from v0.1.x a
+  developer is signed out of the portal whenever a request reaches a node of
+  the other version, until the roll ends (a portal session lasts
+  `PORTAL_SESSION_TTL`, 15 minutes by default). A single-node deployment, or
+  one upgraded stop-start, is unaffected. See **Upgrades**
+  (`operate/upgrades`).
+
+- **The developer portal calls the developer API** ([#524]). Its server
+  functions reach `/developer/v1-rc.0` for clients, API keys and consents, read
+  each list page by page, and name the client's `ETag` in `If-Match` when they
+  save it, so an edit to a client changed in another tab is refused ("this
+  client was changed since you opened it") rather than overwriting it. A
+  secret regeneration changes the client too, and the page takes the `ETag`
+  its answer carries, so the next save is not refused as stale.
+
+- **The auth server no longer creates a secret-based system client** ([#631],
+  ADR-017 phase F0). When a realm has no system client yet, the first sign-in
+  creates a placeholder that holds no secret and no key (`private_key_jwt`
+  with no key set, no redirect URI, no first-party profile), instead of a
+  `client_secret_post` row with a random secret nobody held. An existing row is
+  read as it is, so management tokens keep working.
 - **An agent client always sees the consent screen** ([#845], ADR-015
   Decision 11, ADR-014 §11). A stored consent that covers the request no
   longer skips `/ui/consent` for a client with `is_agent`: every browser
@@ -1272,6 +1476,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user whose stored consent covers the request, but the consent screen answers
   a new user `invalid_request` (400). The upgrade guide (`operate/upgrades`)
   gives a query that finds such clients before you upgrade.
+- **A split process holding the signer needs the internal listener's TLS
+  files** ([#496]). A process whose `SERVICE_ROLES` names `signer` but not every
+  role, such as `api,admin,signer,delivery`, now refuses to start unless
+  `INTERNAL_TLS_CERT_PATH`, `INTERNAL_TLS_KEY_PATH`, `INTERNAL_TLS_CA_PATH` and
+  `INTERNAL_PEER_ROLES` are set, and listens on `INTERNAL_PORT` (`3443` by
+  default) besides `PORT`. A single process (`SERVICE_ROLES=all`, the default)
+  is unchanged and binds nothing new.
+- **The request log censors `code`, `id_token` and `access_token` in logged
+  URLs** ([#599]), as it censors `response_code` and `token`: an upstream
+  provider's authorization code rides in an AuthMethod's callback URL, and a
+  `form_post` bounce may carry a provider's tokens there.
 - **A process binds a second port only once the admin listener is turned
   on** ([#511]). An existing deployment binds nothing new: the listener is off
   by default. A process with `ADMIN_API_ENABLED=true` and the `admin` role
@@ -1310,6 +1525,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the previous release refuse the new tokens and the new nodes refuse the
   access tokens the old ones issued, until they expire
   (`ACCESS_TOKEN_LIFESPAN`): upgrade such a deployment all at once.
+- **BREAKING (browser sessions): the browser cookies are signed with the realm
+  cookie key** ([#493], ADR-019 Decisions 3 and 9). The session, login-CSRF and
+  wallet-flow cookies are no longer signed with `SESSION_COOKIE_SECRET` but with
+  the realm's `cookie_hmac` key, which the signer hands the browser-facing role;
+  each process keeps a realm's current and previous cookie keys in memory and
+  reads them again every 60 seconds. Each value is `<kid>.<payload>.<mac>`: it
+  names the key that signed it, so after a rotation a cookie of the previous key
+  keeps verifying while it is the previous key, and its HMAC-SHA256 covers
+  the cookie's name and the realm id, so a value never passes for another
+  cookie or for a cookie of another realm. The session payload lists the
+  session ids and the active one (`{ s: [sid], a: sid }`). The MAC is compared
+  in constant time, and a cookie that does not verify is now cleared, as one
+  whose session is gone already was. The session cookie's `Max-Age` is the time
+  left until the session's absolute end (the realm's `sso_max_lifespan`, or
+  `SESSION_COOKIE_TTL` without one) instead of `SESSION_COOKIE_TTL`. A cookie an
+  earlier release signed does not verify, so every user signed in to the hosted
+  pages signs in once more after the upgrade (sessions are not moved anyway).
+  During a rolling upgrade a browser whose requests reach old and new nodes in
+  turn is asked to sign in at each switch, not once: an old node refuses the
+  new cookie and sets one of the old format, which a new node clears. Send the
+  browser traffic to the new nodes only, or route each browser to one node,
+  until the roll ends (see **Upgrades**).
+  `SESSION_COOKIE_SECRET` is now optional: the key boot step imports it into
+  the default realm's store, and a value that differs from the stored cookie key
+  (compared in constant time, after opening the stored key with the KEK)
+  replaces it. The replaced key stays the realm's previous cookie key, so
+  nobody is signed out, until the next replacement: a time limit comes with
+  rotation through the store ([#542]), so a leaked secret is cut off by
+  replacing it twice. A value that matches a retired key changes nothing.
+  `NODE_ENV=production` refuses the values QAuth's examples published (the
+  `.env.example` development value and the old `.env.docker.example` one) on
+  every process, and no longer refuses an unset one. A process without the
+  signer role answers `503` on the browser routes that read or set a signed
+  cookie until it can call the signer service ([#497]): a split deployment
+  keeps `web` with the signer for now, and `/auth/logout` there still ends
+  everything but leaves the cookie for the next page to clear.
 - ID tokens are signed with RS256 when the realm's key store holds an RS256
   key, and discovery's `id_token_signing_alg_values_supported` lists what each
   realm holds: `["RS256","EdDSA"]` or `["EdDSA"]`. A fresh deployment generates
@@ -1449,11 +1700,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
   `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
   the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, beside
-  today's token, whose `aud` is the system client's id. Nothing mints it in
-  this release: `/auth/login` still mints today's token and the system client's
-  row is left as it is. [#524] mints it. Expand, then contract (ADR-018 §5): a
-  node of the previous release accepts every portal token this release mints,
-  so the upgrade is safe to roll. See **Upgrades** (`operate/upgrades`).
+  the token of before, whose `aud` is the system client's id. [#524] mints it
+  and retires the old token in the same release (above), so the two steps of
+  ADR-018 §5 ship together: see that entry for what a rolling upgrade from
+  v0.1.x does to portal sessions, and **Upgrades** (`operate/upgrades`).
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to
@@ -1660,6 +1910,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subject token, the Bearer path of `/oauth/authorize` and the API family
   guards (`requireFamilyToken`) name the request realm's issuer, which since
   [#491] is the `iss` of every token the realm issues (below).
+
+- **Discovery and the JWKS are the same on every node** ([#494], ADR-019
+  Decisions 1, 8 and 9). `/.well-known/oauth-authorization-server`,
+  `/.well-known/openid-configuration` and `/.well-known/jwks.json`, served per
+  realm since [#490] and [#491], are built from the realm's row, its published
+  keys (`realm_public_keys`) and the deployment's settings, and from nothing
+  else a node holds. So every node that serves them (the `api` role), with the
+  signer or without ([#495]), answers the same bytes for the same realm under
+  the same settings; after a key change a node may serve its previous key list
+  for up to a minute. The JWKS lists the realm's active keys, a next key from
+  its publication, before it signs, and a retired key while it stays published
+  ([#492]); `id_token_signing_alg_values_supported` follows its active keys. A
+  host that names no realm gets 421 for all three ([#486]). An endpoint host
+  gets its realm's documents unchanged, with the realm's issuer inside: a
+  server-side caller that fetches them there must configure that issuer
+  explicitly, since RFC 8414 §3.3 expects the issuer of the URL it fetched.
+  `CIMD_ENABLED`, `ID_JAG_ENABLED` and `DPOP_ENABLED` stay deployment
+  settings, which every realm advertises alike. The caching is unchanged:
+  `public, max-age=300` on the JWKS and `public, max-age=3600` on the
+  discovery documents.
 
 - **An id from another realm is an unknown id** ([#489], ADR-019 Decision 1).
   The lookups by an id that a request, a token or a code carries now take the
@@ -2009,7 +2279,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#490]: https://github.com/qauth-labs/qauth/issues/490
 [#491]: https://github.com/qauth-labs/qauth/issues/491
 [#493]: https://github.com/qauth-labs/qauth/issues/493
+[#494]: https://github.com/qauth-labs/qauth/issues/494
 [#495]: https://github.com/qauth-labs/qauth/issues/495
+[#496]: https://github.com/qauth-labs/qauth/issues/496
+[#497]: https://github.com/qauth-labs/qauth/issues/497
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
@@ -2031,6 +2304,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541
+[#542]: https://github.com/qauth-labs/qauth/issues/542
 [#545]: https://github.com/qauth-labs/qauth/issues/545
 [#549]: https://github.com/qauth-labs/qauth/issues/549
 [#550]: https://github.com/qauth-labs/qauth/issues/550
@@ -2044,14 +2318,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#593]: https://github.com/qauth-labs/qauth/issues/593
 [#595]: https://github.com/qauth-labs/qauth/issues/595
 [#596]: https://github.com/qauth-labs/qauth/issues/596
+[#599]: https://github.com/qauth-labs/qauth/issues/599
+[#600]: https://github.com/qauth-labs/qauth/issues/600
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
+[#639]: https://github.com/qauth-labs/qauth/issues/639
+[#614]: https://github.com/qauth-labs/qauth/issues/614
+[#616]: https://github.com/qauth-labs/qauth/issues/616
+[#627]: https://github.com/qauth-labs/qauth/issues/627
+[#628]: https://github.com/qauth-labs/qauth/issues/628
+[#646]: https://github.com/qauth-labs/qauth/issues/646
+[#631]: https://github.com/qauth-labs/qauth/issues/631
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
+[#857]: https://github.com/qauth-labs/qauth/issues/857
+
+### Deprecated
+
+- **`/api/clients`, `/api/consents` and the cookie-authenticated `/consents`**
+  ([#524]). Each operation is `deprecated: true` in the OpenAPI document, and
+  every answer, errors included, carries the RFC 9745 `Deprecation` header and
+  a `Link` to the API conventions page, whose Deprecations table names each
+  replacement under `/developer/v1-rc.0` or `/account/v1-rc.0`. They keep their
+  shapes until the release-candidate cleanup removes them.
+
+### Removed
+
+- **The Bearer path of `/oauth/authorize`** ([#524]). The developer portal's
+  access token no longer stands in for a sign-in there: an `Authorization`
+  header signs no one in, a request without a browser session goes to the
+  login page, and `prompt=none` answers `login_required`. Nothing QAuth ships
+  used it. A web-only process no longer loads the JWT plugin.
+- **The system client's id as a portal token's audience** ([#524]). Its
+  acceptance had no end date at `/auth/logout`, where an expired token still
+  passed. One grace stays for this release only: `/auth/logout` still takes a
+  live portal token that carries it, so a developer who signs out while the
+  upgrade rolls still has their refresh tokens, sessions and codes ended. An
+  expired one is refused, and the next release removes the grace.
 
 ### Fixed
 
+- **A fetch process can no longer exhaust the server's memory** ([#857]). The
+  egress client's fetch processes answer over a plain socket of size-capped
+  frames instead of Node's IPC channel, which deserialized a message whole
+  before any check ran. Each frame's cap depends on the process's state, a
+  frame over its cap is refused before its payload is read, and every header,
+  `location` and failure message is bounded before it is decoded. A process
+  that sends what it may not is killed and its call fails.
 - **A token signed by a retired key keeps verifying until the key's retention
   ends** ([#492], ADR-019 Decision 9, ADR-001). The server picks a token's key
   by its `kid` and `alg` together (`selectJwksKey`) among the realm's

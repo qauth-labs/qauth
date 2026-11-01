@@ -165,11 +165,11 @@ evidence for a condition.
 - Discovery members: none.
 - Spec: [The AuthMethod contract, ADR-018](https://docs.qauth.dev/reference/records/adr/018-1-0-scope-and-stability/), status `draft`.
 - Built: no. Stable: no.
-- Documented in: no page yet.
+- Documented in: [`/extend/auth-method-contract/`](/extend/auth-method-contract/).
 
-| Condition                                                     | Holds | Evidence and notes                                                    |
-| ------------------------------------------------------------- | ----- | --------------------------------------------------------------------- |
-| 1. The spec it implements is an RFC or a Final specification. | no    | QAuth defines the contract itself; ADR-018 §4 makes it stable in 1.x. |
-| 2. It has seen external use in a beta.                        | no    | No beta has run outside the project.                                  |
-| 3. The external audit covered it.                             | no    | The external audit of ADR-018 §8 has not taken place.                 |
-| 4. Conformance tests exist for it.                            | no    | —                                                                     |
+| Condition                                                     | Holds | Evidence and notes                                                                                                |
+| ------------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------- |
+| 1. The spec it implements is an RFC or a Final specification. | no    | QAuth defines the contract itself; ADR-018 §4 makes it stable in 1.x.                                             |
+| 2. It has seen external use in a beta.                        | no    | No beta has run outside the project.                                                                              |
+| 3. The external audit covered it.                             | no    | The external audit of ADR-018 §8 has not taken place.                                                             |
+| 4. Conformance tests exist for it.                            | no    | The contract test kit (#599) checks a method against the contract; no conformance test covers the plugin API yet. |

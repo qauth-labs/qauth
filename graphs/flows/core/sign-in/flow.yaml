@@ -1,985 +1,737 @@
-# GET and POST /ui/login, and GET /ui/resume/{handle}, as the code works today (capture mode, #613): the browser's
-# password sign-in, and the baseline that PRO-09 replaces with the sign-in engine. PRO-09, PRO-12 and SES-03 change this
-# flow later, and change this graph first. It has no UI graph: the ceremony app replaces the page, and CER-02 writes
-# that graph. Wallet sign-in (/ui/wallet-login) is a federation flow, which the federation beta graphs. The states run
-# in the order the server runs them: the realm resolver and the rate limiter (onRequest hooks), the route's schema,
-# then the handler, first for the GET that renders the page, then for the POST that carries the form, then for the GET
-# that resumes an authorization request the sign-in interrupted.
+# The sign-in engine (PRO-09, #614; ADR-017 Decisions 4 and 7, ADR-019 Decision 6): the one engine that decides every
+# step of a sign-in, whatever the transport. Written before the code (status: proposed), as ADR-021 Decision 4 asks of
+# a new core flow. It replaces the baseline that #613 captured here: that graph, of the server-rendered /ui/login page,
+# is now graphs/flows/core/sign-in-page, and keeps its own rules until the ceremony app serves the sign-in (#709).
 #
-# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees. A
-#   refusal of the handler is the form rendered again with its status. A refusal before the handler (the realm
-#   resolver, the rate limiter, the schema, a cookie the reader cannot decode) is the error handler's RFC 9457 problem
-#   document, sent as application/problem+json (apps/auth-server/src/app/plugins/error-handler.ts, #513), since
-#   /ui/login and /ui/resume are not OAuth protocol endpoints; <error> is then the document's code, but for a 500,
-#   whose code is internal_error. A client branches on the code; the detail wording may change.
-# - The four 401 exits answer the same, by design (ANT-2026-SPEMY9GU), the per-response CSP nonce aside: only the
-#   event they record, and the log line, tell them apart. They are four states because they are four causes, and a
-#   replay that sees one of them answer differently names the state that changed.
-# - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
-#   `source:` of the transition it decides: the line of the check.
-# - The three requests are separate, and the context describes the one in flight: the same variables (the host, the
-#   limit) are read again by each. A POST from idle is one whose page this walk did not render, such as a refused
-#   page sent again, a second tab or a forged form; a RESUME from idle is a handle used outside this walk's sign-in.
-# - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions (ADR-019
-#   Decision 3), the parked authorization requests in the cache, and the event store with its own writer (ADR-019
-#   Decision 8). The database reads and writes are domain actions (graphs/domain/).
+# - This flow has no screen and no HTTP route. A transport calls the engine once per round with the transaction it
+#   holds, the round's answer and the round's context: the Interaction API for browser ceremonies (#616) and the FiPA
+#   authorization challenge endpoint for native apps (#646). Each transport maps what the engine answers onto its own
+#   wire with the step grammar's mappers (#591), and keeps the transaction between rounds. So an exit here is the
+#   engine's answer, as data; the transport's checks (rule 1) and client authentication (rule 2) come before it, and the
+#   session or the code it mints after a completed sign-in, are the transport's own graphs.
+# - The states run in the order of ADR-017 Decision 4, from rule 3. Rules 3 to 5 are hooks that later issues fill: the
+#   limiters (PRO-13, #636), the request checks of the transport (#628, #665) and the bot challenge (PRO-19, #643). The
+#   per-account ladder (PRO-12, #615) is a hook too; its reservation is the last thing before a password is verified,
+#   so that every verified credential was reserved first.
+# - Only the identifier and password steps exist here. Passkeys (#651), TOTP (#653) and the email code (#638) are step
+#   handlers that later issues register; until then a sign-in that needs one of them is answered with a redirect.
+# - A round that ends in a step keeps the transaction live: the next round's answer is a new event from that state. A
+#   refused round (`throttled`, `lockedOut`, `unavailable`, `requestRefused`, `botChallengeDue`, `answerRefused`)
+#   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
+#   the next round starts from there; the graph ends the walk at the refusal, so that each refusal is one exit. A
+#   completed sign-in, a redirect and an ended transaction return no transaction: nothing can complete twice.
 schema: delurio-graph/0
 kind: flow
 id: core.sign-in
-status: captured
+status: proposed
 domain: qauth
-title: Sign in with a password in the browser
+title: Decide a sign-in, one round at a time
 summary: >-
-  The sign-in page QAuth renders itself, at /ui/login. /oauth/authorize and the consent screen send a browser here
-  with return_to=/ui/resume/<handle> when it has no session, after parking the authorization request under that
-  handle. The GET renders the form with a CSRF value, mirrored in a signed cookie. The POST checks the pair, refuses a
-  locked-out address, counts the attempt, checks the password, the verified-account gate and the enabled flag, and
-  refuses every failure with the same 401 page. On success it creates a new browser session, sets its cookie, clears
-  the CSRF cookie and redirects to return_to when it is a same-origin path, else to /. The resume step swaps the
-  handle back for the parked authorize URL, once.
+  A transport hands the engine a round: the transaction so far, an answer, and the realm, the client and the request
+  the round is for. The engine reads the realm's and the client's MFA policy, runs the hooks of the limiters, the
+  request checks and the bot challenge, takes the identifier from the request's login_hint or from an answer, and asks
+  for the password. Until a factor succeeds, every answer is the same for every account: an unknown identifier, a
+  password-only, passkey-only, disabled or locked account and an unverified one under REQUIRE_VERIFIED_ACCOUNT all get
+  the password step again with invalid_credentials, after one Argon2id verification and the 500 ms floor. A correct
+  password fixes the subject; the sign-in completes when the account's strongest bound factor and the MFA policy are
+  met, and the transport then mints the session or the code. A different identifier in a later round ends the
+  transaction.
 
 scope:
   shows: >-
-    GET and POST /ui/login and GET /ui/resume/{handle} from the request to the response, in the order the server runs
-    its checks
+    one sign-in transaction of the engine, round by round, from the transport's call to the engine's answer, with the
+    identifier and password steps
   world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
   outOfView:
-    - 'a store failure while the password is checked, the user is read, the session is created, the last sign-in is
-      written or the sign-in is recorded answers 500; a failure to record the event of a refusal
-      (request.csrf_rejected, user.sign_in_failed) turns that refusal into a 500'
-    - "Fastify's own answers before the schema check, as problem documents: a POST body of a media type no parser
-      takes is refused with 415 (unsupported_media_type), and one over the body limit with 413 (content_too_large); a
-      JSON body is parsed and checked like the form, and takes the same flow"
-    - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer, an endpoint host)
-      give one answer and are drawn as one exit'
-    - 'with RATE_LIMIT_ENABLED=false neither rate limit is applied'
-    - 'with FAILED_LOGIN_TRACKING_ENABLED=false no attempt is counted and no address is ever locked out; a cache
-      failure while an attempt is counted fails open: the attempt is let through, and what was counted stays counted'
-    - 'an attempt that reaches the threshold together with another one, which armed the lockout first, was counted on
-      its way in: it is refused as locked out and gives its count back best effort, so a cache failure at that moment
-      leaves it counted; its Retry-After is then the full FAILED_LOGIN_LOCKOUT_DURATION, not the seconds left'
-    - 'LOGIN_RATE_LIMIT must stay above FAILED_LOGIN_MAX_ATTEMPTS (the defaults are 5 and 5) for one client address to
-      meet the lockout: at or below it, the login limit refuses that address with its 429 by the request after its
-      last counted failure, and the lockout page is never shown to it, though the lockout still holds against
-      attempts on the same account from other addresses. binding.yaml sets the limit above the threshold'
-    - 'a password credential whose credential_data is malformed, or whose provider identity disagrees with its row,
-      answers like a wrong password and logs an error; one whose users row is missing answers like a disabled user
-      and logs an error. Neither happens in normal operation'
-    - 'the page offers "Sign in with your wallet" only when wallet federation is on and can serve the flow
-      (WALLET_FEDERATION_ENABLED, default off); that link starts the federation flow'
-    - 'when the pending-authorization store cannot be written, /oauth/authorize puts the authorize URL itself in
-      return_to instead of a handle: that is a same-origin path, and this flow redirects to it'
-    - 'GET /ui/resume reads no session: whoever holds a live handle may resume it, and /oauth/authorize then checks
-      the session, the client and the request again, as on a first visit'
-    - "the router's answers to GET /ui/resume before any hook, as problem documents: a handle over 100 characters
-      (the router's parameter limit) is refused with 414 (uri_too_long), one that is not valid percent-encoding with
-      400 (bad_request), and an empty one with 404 (not_found)"
-    - 'two resumes of one handle at the same instant can both read it before either deletes it (no GETDEL): the user
-      resumes their own request twice'
-    - 'the effects are not one transaction: a failure after the session is created leaves the session in place,
-      though the browser never receives its cookie'
+    - "the transport's own checks and client authentication (rules 1 and 2 of ADR-017 Decision 4), its wire, and
+      what it mints once the engine answers complete: a browser session (the Interaction API) or an authorization code
+      (the FiPA endpoint)"
+    - "what the hooks decide inside: the limiters (#636), the request checks (#628, #665), the bot challenge and its
+      captcha step (#643), the ladder's waits, counts and disable ceiling (#615); with no hook registered, each one lets
+      the round through"
+    - 'the steps later issues add through the step-handler interface: passkeys and passkey-first (#651), TOTP (#653),
+      the email code and inline verification (#638), registration (#640), reset (#642), recovery codes (#649); until
+      then the downgrade rule and an MFA policy that requires a second factor answer a redirect'
+    - 'the per-transaction budgets of the FiPA auth_session (#647): rounds and failures per step'
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+    - "a password answer outside the password step's answer schema (an empty password, one over 256 UTF-16 code units)
+      is refused as a request fault when the password step is next, and ignored like any other answer otherwise; it
+      verifies nothing and counts nothing"
+    - 'an answer to a step the engine did not ask for, a password_reset answer included, is ignored with its
+      login_hint; only the identifier and password answers carry one'
+    - "a failure of the password verifier or of the identifier key refuses the round as unavailable, alike for every
+      identifier; a failure to settle the ladder's reservation is reported and changes no answer; a failure to write
+      the identifier's audit record leaves the identifier unfixed, so the next round records it"
+    - "a later round of a transaction whose subject is fixed reads the account again: one that is gone, belongs to
+      another user or was disabled since ends the transaction, audited under the subject; another user's proof does
+      too, whatever that user's state"
+    - 'a step refused before the transaction holds any identifier (a bot challenge, a discoverable passkey from #651)
+      is audited naming nobody'
+    - 'the transaction is not sealed, so the transport keeps it server-side under an unguessable handle bound to the
+      realm and the client. Before anything else a round ends one that is not well formed, belongs to another realm or
+      client, begins more than a minute in the future or is older than two hours, audited as transaction_invalid or
+      transaction_expired naming nobody'
+    - 'a factor that names its account by itself (a discoverable passkey, #651), answered while the transaction holds
+      an identifier, must prove the account that identifier names; another account ends the transaction as
+      subject_mismatch'
 
 context:
-  # The checks before the password run in a fixed order and each refuses on its own, so one variable says which of
-  # them the request in flight fails first, if any. Each holds for the request in flight: the GET, the POST or the
-  # resume.
-  gate:
-    values:
-      - open
-      - unknownHost
-      - endpointHost
-      - rateLimited
-      - invalidInput
-      - malformedCookie
-      - csrfMismatch
-      - lockedOut
+  # The transport's authorization request carries a login_hint. It is frozen at round 0, so every round sees the same.
+  loginHint:
+    values: [absent, given]
     initial: any
     say:
-      open: >-
-        the host is the primary host of an enabled realm, the address is under its limit, the query or the form passes
-        the route schema, the login-CSRF cookie decodes, the posted csrf_token matches it, and neither the address
-        being signed in to nor the client address is locked out
-      unknownHost: 'the host names no realm, a disabled realm or a realm with no issuer'
-      endpointHost: "the host is one of the realm's endpoint hosts, which serve no browser route"
-      rateLimited: >-
-        the address has used up its requests for the window: the global limit for the two GETs, the login limit for
-        the POST
-      invalidInput: >-
-        the query (GET /ui/login) or the form (POST) does not pass the route schema, such as a repeated return_to, an
-        empty password or a missing csrf_token; GET /ui/resume has no schema that can fail
-      malformedCookie: >-
-        the request carries a login-CSRF cookie whose value is not valid percent-encoding, such as %zz, which the
-        cookie reader decodes without a catch; GET /ui/resume reads no cookie
-      csrfMismatch: >-
-        the POST carries no login-CSRF cookie, one whose signature does not verify, or one whose value is not the
-        posted csrf_token
-      lockedOut: >-
-        the address being signed in to, or the client address, is locked out: FAILED_LOGIN_MAX_ATTEMPTS attempts were
-        counted on it within FAILED_LOGIN_WINDOW seconds, and FAILED_LOGIN_LOCKOUT_DURATION seconds have not passed;
-        or this attempt reached the threshold together with another one, which armed the lockout first
+      absent: 'the authorization request carries no login_hint'
+      given: 'the authorization request carries a login_hint, a valid email address of at most 254 bytes'
+  # What the round's answer is. Set by the round's event.
+  answer:
+    values: [none, identifier, password, passwordWithHint, malformed]
+    initial: none
+  # The account the identifier names, if any. The engine never tells these apart before a factor succeeds.
   account:
-    values: [verified, unverified, disabled, disabledUnverified, unknown]
+    values:
+      - unknown
+      - passwordOnly
+      - passwordAndPasskey
+      - passkeyOnly
+      - passwordDisabled
+      - disabled
+      - unverified
     initial: any
     say:
-      verified: 'the address has a password credential in this realm, its address confirmed, and its user is enabled'
-      unverified: 'the address has a password credential whose address is not confirmed yet, and its user is enabled'
-      disabled: 'the address has a confirmed password credential, and its user is disabled'
-      disabledUnverified: 'the credential is not confirmed, and its user is disabled'
-      unknown: 'the address has no password credential in this realm'
+      unknown: 'no account in the realm holds the identifier'
+      passwordOnly: 'an enabled, verified account whose only factor is its password'
+      passwordAndPasskey: >-
+        an enabled, verified account with a password and a passkey; the passkey counts as bound even while it is
+        disabled
+      passkeyOnly: 'an enabled account with a passkey and no password'
+      passwordDisabled: >-
+        an enabled account whose password the ladder's hard action disabled (user_credentials.disabled_at, #615): it
+        is unusable, and still bound
+      disabled: 'an account whose users.enabled is false, with a password'
+      unverified: 'an enabled account with a password whose primary identity is not proven yet'
   password:
     values: [right, wrong]
     initial: any
     say:
-      right: "the posted password is the credential's"
+      right: "the answered password is the account's"
       wrong: 'it is another one'
   requireVerified:
     values: [true, false]
     initial: any
     say:
-      'true': 'REQUIRE_VERIFIED_ACCOUNT is on: unset, blank or true, the default'
-      'false': 'REQUIRE_VERIFIED_ACCOUNT=false, or its deprecated name REQUIRE_EMAIL_VERIFIED=false'
-  returnTo:
-    values: [resume, path, unsafe]
+      'true': 'REQUIRE_VERIFIED_ACCOUNT is on, the default'
+      'false': 'REQUIRE_VERIFIED_ACCOUNT=false'
+  # The realm's and the client's MFA policy as the engine reads it on this round, never from the transaction.
+  mfa:
+    values: [notRequired, required]
     initial: any
     say:
-      resume: 'return_to is /ui/resume/<handle>, as /oauth/authorize and the consent screen send it'
-      path: 'return_to is another same-origin relative path, such as /account'
-      unsafe: >-
-        return_to is absent, or not a same-origin relative path: another host, //host, /\host, a control character or
-        a space, more than 16 KiB; the page carries / in its place
-  handle:
-    values: [live, spent]
+      notRequired: >-
+        neither the realm nor the client requires a second factor for this account: the default until the policy has
+        its storage (Foundations, the admin console)
+      required: 'the realm or the client requires a second factor, or requires one for admins and the account is one'
+  # The checks of rules 3 to 5 run in a fixed order and each refuses on its own, so one variable says which of them a
+  # round fails first, if any; the ladder's check is the last before the password is verified.
+  gate:
+    values: [open, limited, requestRefused, botChallengeDue, lockedOut]
     initial: any
     say:
-      live: >-
-        the handle names an authorization request parked less than ten minutes ago that no request has resumed yet,
-        and the parked value is an /oauth/authorize URL
-      spent: >-
-        the handle, of 1 to 100 characters, is not 43 base64url characters, or names no parked request: unknown,
-        expired or already resumed; or its parked value is not an /oauth/authorize URL; or the store cannot be read
-  attemptCounted: { values: [false, true], initial: false }
-  # the 500 ms floor (MIN_RESPONSE_TIME_MS.LOGIN, counted from the request's arrival) was waited out
-  floorWaited: { values: [false, true], initial: false }
-  # Argon2id ran against the decoy hash, so an unknown address costs what a known one does
+      open: 'every hook lets the round through'
+      limited: 'a limiter refuses the round (per client, per end-user IP): a 429 with Retry-After'
+      requestRefused: >-
+        the transport's request checks refuse the round, such as acr_values, prompt=none or a frozen parameter at the
+        FiPA endpoint
+      botChallengeDue: 'a soft threshold asks for a bot challenge'
+      lockedOut: >-
+        the identifier's ladder is inside a wait: the identifier HMAC's counter, whether or not an account holds it
+  # Whether the identifiers a round brings differ: from the one the transaction holds, or from each other.
+  differentIdentifier:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'every identifier a round brings is the one the transaction holds, after normalisation'
+      'true': >-
+        a round brings another identifier than the one the transaction holds (another login_hint, another identifier
+        answer), or the request's login_hint and the answer's differ
+  identifierHeld: { values: [false, true], initial: false }
+  subjectFixed: { values: [false, true], initial: false }
+  # this round read the account the identifier names (its user, enabled flag and password)
+  accountRead: { values: [false, true], initial: false }
+  # this round read the whole account a factor proved (every factor, its admin role)
+  provenAccountRead: { values: [false, true], initial: false }
+  # this round ran Argon2id against the account's hash
+  hashVerified: { values: [false, true], initial: false }
+  # this round ran Argon2id against the dummy hash
   decoyVerified: { values: [false, true], initial: false }
-  sessionCreated: { values: [false, true], initial: false }
-  # the session's sid is a new one, never one the request named
-  freshSid: { values: [false, true], initial: false }
-  csrfCookieCleared: { values: [false, true], initial: false }
-  handleBurned: { values: [false, true], initial: false }
+  # this round reserved an attempt on the ladder, which counts it as a failure until it settles as a success
+  attemptReserved: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # an answer to a step that is not the next one was ignored this round
+  answerIgnored: { values: [false, true], initial: false }
+  # the audit record of this round named the person by the identifier HMAC, not by a user id
+  auditedByHmac: { values: [false, true], initial: false }
 
 guards:
-  hostUnknown: "gate == 'unknownHost'"
-  endpointHost: "gate == 'endpointHost'"
-  rateLimited: "gate == 'rateLimited'"
-  inputInvalid: "gate == 'invalidInput'"
-  cookieMalformed: "gate == 'malformedCookie'"
-  csrfMismatch: "gate == 'csrfMismatch'"
+  limited: "gate == 'limited'"
+  requestRefused: "gate == 'requestRefused'"
+  botChallengeDue: "gate == 'botChallengeDue'"
   lockedOut: "gate == 'lockedOut'"
-  noCredential: "account == 'unknown'"
+  malformedAnswer: "answer == 'malformed'"
+  roundBringsIdentifier: "loginHint == 'given' or answer in ['identifier', 'passwordWithHint']"
+  answerBringsIdentifier: "answer in ['identifier', 'passwordWithHint']"
+  identifierMismatch: >-
+    differentIdentifier and ((identifierHeld and roundBringsIdentifier) or (loginHint == 'given' and
+    answerBringsIdentifier))
+  noIdentifier: 'not identifierHeld and not roundBringsIdentifier'
+  passwordAnswered: "answer in ['password', 'passwordWithHint']"
+  noUsablePassword: "account in ['unknown', 'passkeyOnly', 'passwordDisabled']"
   wrongPassword: "password == 'wrong'"
-  # the verified-account gate (F-08), read before the users row
-  unverifiedUnderTheGate: "account in ['unverified', 'disabledUnverified'] and requireVerified"
-  userDisabled: "account in ['disabled', 'disabledUnverified']"
-  resumeReturn: "returnTo == 'resume'"
-  pathReturn: "returnTo == 'path'"
-  handleSpent: "handle == 'spent'"
+  userDisabled: "account == 'disabled'"
+  unverifiedUnderTheGate: "account == 'unverified' and requireVerified"
+  passkeyBound: "account == 'passwordAndPasskey'"
+  mfaRequired: "mfa == 'required'"
 
 effects:
-  countAttempt: { set: { attemptCounted: true } }
-  waitFloor: { set: { floorWaited: true } }
+  # each round starts with nothing done
+  newRound:
+    set:
+      accountRead: false
+      provenAccountRead: false
+      hashVerified: false
+      decoyVerified: false
+      attemptReserved: false
+      floorWaited: false
+      answerIgnored: false
+      auditedByHmac: false
+  answerNone: { set: { answer: none } }
+  answerIdentifier: { set: { answer: identifier } }
+  answerPassword: { set: { answer: password } }
+  answerPasswordWithHint: { set: { answer: passwordWithHint } }
+  answerMalformed: { set: { answer: malformed } }
+  holdIdentifier: { set: { identifierHeld: true } }
+  ignoreAnswer: { set: { answerIgnored: true } }
+  reserveAttempt: { set: { attemptReserved: true } }
+  readAccount: { set: { accountRead: true } }
+  readProvenAccount: { set: { provenAccountRead: true } }
+  verifyHash: { set: { hashVerified: true } }
   verifyDecoy: { set: { decoyVerified: true } }
-  createSession: { set: { sessionCreated: true, freshSid: true } }
-  clearCsrfCookie: { set: { csrfCookieCleared: true } }
-  burnHandle: { set: { handleBurned: true } }
+  fixSubject: { set: { subjectFixed: true } }
+  auditByHmac: { set: { auditedByHmac: true } }
+  waitFloor: { set: { floorWaited: true } }
 
 failures:
-  # each step fails only on a store error, which the error handler answers with 500
-  checkingPassword: { from: UserCredential.findByRealmProviderSub, server: [server_error] }
-  findingUser: { from: User.findById, server: [server_error] }
-  creatingSession: { from: browserSessionStore, server: [server_error] }
-  updatingLastLogin: { from: User.updateLastLogin, server: [server_error] }
-  recordingSignIn: { from: eventStore, server: [server_error] }
+  readingPolicy: { from: mfaPolicy, store: [unavailable] }
+  reservingAttempt: { from: ladder, store: [unavailable] }
+  readingAccount: { from: accountDirectory, store: [unavailable] }
+  readingProvenAccount: { from: accountDirectory, store: [unavailable] }
 
-# The main story: /oauth/authorize sent a browser with no session here; the user signs in with a verified account, and
-# the browser goes back to the authorization request it came from.
+# The main story: a browser ceremony with no login_hint; the person types the identifier, then the right password of an
+# enabled, verified, password-only account, with no second factor required.
 main:
   given:
-    gate: open
-    account: verified
+    loginHint: absent
+    account: passwordOnly
     password: right
     requireVerified: true
-    returnTo: resume
-    handle: live
-  events: [SHOW, SUBMIT, DONE, DONE, DONE, DONE, DONE, RESUME, DONE]
+    mfa: notRequired
+    gate: open
+    differentIdentifier: false
+  events: [ROUND, DONE, IDENTIFIER, DONE, PASSWORD, DONE, DONE, DONE]
 
 initial: idle
 states:
   idle:
-    title: Wait for a sign-in request
-    source: apps/auth-server/src/app/routes/ui/login.ts:219
+    title: Wait for the first round
+    description: >-
+      The transport starts a transaction: the Interaction API when /oauth/authorize starts an interaction, the FiPA
+      endpoint on its first request. The first round may already carry an answer (an eager answer).
     on:
-      SHOW:
-        target: showResolvingRealm
-        say: >-
-          GET /ui/login arrives: sent by /oauth/authorize or the consent screen with return_to=/ui/resume/<handle>, or
-          opened directly
-        source: apps/auth-server/src/app/routes/ui/login.ts:220
-      SUBMIT:
-        target: submitResolvingRealm
-        say: 'POST /ui/login arrives for a page this walk did not render'
-        source: apps/auth-server/src/app/routes/ui/login.ts:263
-      RESUME:
-        target: resumeResolvingRealm
-        say: 'GET /ui/resume/<handle> arrives for a handle this walk did not sign in for'
-        source: apps/auth-server/src/app/routes/ui/resume.ts:100
+      ROUND:
+        target: readingPolicy
+        effect: [newRound, answerNone]
+        say: 'the first round carries no answer'
+      IDENTIFIER:
+        target: readingPolicy
+        effect: [newRound, answerIdentifier]
+        say: 'the first round answers the identifier step'
+      PASSWORD:
+        target: readingPolicy
+        effect: [newRound, answerPassword]
+        say: 'the first round carries a password without a login_hint'
+      PASSWORD_WITH_HINT:
+        target: readingPolicy
+        effect: [newRound, answerPasswordWithHint]
+        say: 'the first round carries a password and its login_hint: the one-call path of ADR-017 Decision 3'
+      MALFORMED:
+        target: readingPolicy
+        effect: [newRound, answerMalformed]
+        say: 'the first round carries an answer whose login_hint is not an identifier'
 
-  # GET /ui/login
-
-  showResolvingRealm:
-    title: Find the realm of the host
+  readingPolicy:
+    title: Read the realm's and the client's MFA policy
     description: >-
-      The realm resolver's onRequest hook, before any route code. /ui/login is a browser route, so it answers on the
-      realm's primary host only. A request refused here is never counted by the rate limiter.
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
-    always:
-      - guard: hostUnknown
-        target: misdirected_request.host
-        say: 'the host names no enabled realm with an issuer'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
-      - guard: endpointHost
-        target: misdirected_request.host
-        say: "the host is one of the realm's endpoint hosts"
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:167
-      - target: showRateLimiting
-        say: 'the request has its realm'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
-
-  showRateLimiting:
-    title: Count the request against the global limit
-    description: >-
-      The GET has no limit of its own: RATE_LIMIT_MAX requests per RATE_LIMIT_WINDOW seconds, for each client address
-      and realm, shared with every route that sets none.
-    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-    always:
-      - guard: rateLimited
-        target: too_many_requests.global_limit
-        say: 'the address has used up its requests'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:26
-      - target: showValidatingQuery
-        say: 'the address is under its limit'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:27
-
-  showValidatingQuery:
-    title: Check the query against the page's schema
-    description: return_to is optional, and one string. A repeated return_to arrives as a list, which the schema refuses.
-    source: apps/auth-server/src/app/routes/ui/login.ts:231
-    always:
-      - guard: inputInvalid
-        target: validation_error.query
-        say: 'the query does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
-      - target: showReadingCsrfCookie
-        say: 'the query matches the schema'
-        source: apps/auth-server/src/app/routes/ui/login.ts:239
-
-  showReadingCsrfCookie:
-    title: Read the login-CSRF cookie
-    description: >-
-      A login-CSRF cookie whose signature verifies is reused, so a page refreshed or opened in a second tab keeps
-      matching the cookie; otherwise a new value of 32 random bytes is minted and set. return_to is checked here too,
-      and an unsafe one is replaced by / on the page.
-    source: apps/auth-server/src/app/routes/ui/login.ts:244
-    always:
-      - guard: cookieMalformed
-        target: server_error.malformed_cookie
-        say: 'the login-CSRF cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:93
-      - target: rendered
-        say: 'the page has its CSRF value'
-        source: apps/auth-server/src/app/routes/ui/login.ts:245
-
-  rendered:
-    title: Show the sign-in page
-    description: >-
-      The form asks for an email address and a password, and carries return_to and the CSRF value as hidden fields.
-      The same value is in the signed cookie, as <value>.<HMAC-SHA256 of it under SESSION_COOKIE_SECRET>, which a page
-      of another site can neither read nor forge.
-    source: apps/auth-server/src/app/routes/ui/login.ts:252
-    response:
-      status: 200
-      headers:
-        Content-Type: text/html; charset=utf-8
-        Cache-Control: no-store
-        Content-Security-Policy: the global policy, whose style-src carries this response's nonce
-        Set-Cookie: >-
-          __Host-qauth_login_csrf=<value>.<signature>; Path=/; HttpOnly; SameSite=Lax; Max-Age=SESSION_COOKIE_TTL, with
-          Secure when SESSION_COOKIE_SECURE is on; sent only when the request carried no validly signed one
-      body:
-        title: Sign in — QAuth
-        form:
-          method: post
-          action: /ui/login
-          fields:
-            return_to: "the query's return_to when it is safe, else / (hidden)"
-            csrf_token: "the cookie's CSRF value (hidden)"
-            email: 'type email, autocomplete username, empty'
-            password: 'type password, autocomplete current-password'
-        links: 'Sign in with your wallet, only when wallet federation can serve the flow'
+      On every round, through the policy interface, never from the transaction, so a change reaches a live
+      transaction. A policy that cannot be read refuses the round before anything else, as a store outage does.
+    invoke: { external: mfaPolicy }
     on:
-      SUBMIT:
-        target: submitResolvingRealm
-        say: 'the user types the address and the password, and the browser posts the form'
-        source: apps/auth-server/src/app/routes/ui/login.ts:168
+      DONE:
+        target: checkingLimits
+        say: 'the policy is read'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the policy cannot be read; the floor is waited out'
 
-  # POST /ui/login
-
-  submitResolvingRealm:
-    title: Find the realm of the host
-    description: The realm resolver's onRequest hook, as for the GET.
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
+  checkingLimits:
+    title: Ask the limiters (rule 3)
+    description: The per-client and per-end-user-IP limits of PRO-13. With no limiter registered, the round goes on.
     always:
-      - guard: hostUnknown
-        target: misdirected_request.host
-        say: 'the host names no enabled realm with an issuer'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
-      - guard: endpointHost
-        target: misdirected_request.host
-        say: "the host is one of the realm's endpoint hosts"
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:167
-      - target: submitRateLimiting
-        say: 'the request has its realm'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
+      - guard: limited
+        target: throttled
+        effect: [waitFloor]
+        say: 'a limiter refuses the round; the floor is waited out'
+      - target: checkingRequest
+        say: 'the limiters let the round through'
 
-  submitRateLimiting:
-    title: Count the request against the login limit
+  checkingRequest:
+    title: Ask the transport's request checks (rule 4)
     description: >-
-      LOGIN_RATE_LIMIT requests per LOGIN_RATE_WINDOW seconds, for each client address and realm, whatever the
-      request ends in. This is the limiter, not the lockout: it counts requests, before the form is read, and its
-      refusal is the error handler's problem document, not the page.
-    source: apps/auth-server/src/app/routes/ui/login.ts:275
+      response_type, PKCE, acr_values, prompt, scope, negotiation and frozen parameters, as each transport checks them.
+      With no check registered, the round goes on.
     always:
-      - guard: rateLimited
-        target: too_many_requests.login_limit
-        say: 'the address has used up its login requests'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-      - target: submitValidatingForm
-        say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/ui/login.ts:275
+      - guard: requestRefused
+        target: requestRefused
+        effect: [waitFloor]
+        say: 'the request checks refuse the round; the floor is waited out'
+      - target: checkingBotChallenge
+        say: 'the request checks let the round through'
 
-  submitValidatingForm:
-    title: Check the form against the login form schema
+  checkingBotChallenge:
+    title: Ask whether a bot challenge is due (rule 5)
     description: >-
-      loginFormSchema in apps/auth-server/src/app/schemas/auth.ts: email of 1 to 254 characters, with no format check,
-      so that the refusal page can show what was typed; a password of at least one character, bounded; return_to
-      optional; csrf_token of at least one character.
-    source: apps/auth-server/src/app/routes/ui/login.ts:271
+      PRO-19 decides when a soft threshold asks for one. A due challenge comes before every other step, so an eager
+      password is ignored and gives no password oracle.
     always:
-      - guard: inputInvalid
-        target: validation_error.form
-        say: 'the form does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:263
-      - target: readingCsrfCookie
-        say: 'the form matches the schema'
-        source: apps/auth-server/src/app/schemas/auth.ts:129
+      - guard: botChallengeDue
+        target: botChallengeDue
+        effect: [waitFloor]
+        say: 'a bot challenge is due; any other answer is ignored, and the floor is waited out'
+      - target: takingIdentifier
+        say: 'no bot challenge is due'
 
-  readingCsrfCookie:
-    title: Read the login-CSRF cookie
-    description: return_to is checked here too, and an unsafe one becomes /.
-    source: apps/auth-server/src/app/routes/ui/login.ts:292
-    always:
-      - guard: cookieMalformed
-        target: server_error.malformed_cookie
-        say: 'the login-CSRF cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:93
-      - target: checkingCsrf
-        say: 'the cookie is absent or decodes'
-        source: apps/auth-server/src/app/routes/ui/login.ts:292
-
-  checkingCsrf:
-    title: Check the posted CSRF value against the cookie
+  takingIdentifier:
+    title: Take the identifier (rule 6)
     description: >-
-      The signed double-submit defence against login CSRF: the cookie's signature, then a timing-safe comparison of
-      its value with csrf_token. It runs before anything reads the database, so a forged post never reaches a
-      password check; request.csrf_rejected is recorded.
-    source: apps/auth-server/src/app/routes/ui/login.ts:293
+      From the request's login_hint, else from the answer: an identifier answer, or the login_hint of a password
+      answer. It is checked (an email address of at most 254 bytes) and normalised. The first one is fixed for the
+      transaction; a different one later ends it. No account is read here.
     always:
-      - guard: csrfMismatch
-        target: forbidden.csrf_mismatch
-        say: 'the cookie is missing, forged or holds another value'
-        source: apps/auth-server/src/app/routes/ui/login.ts:293
-      - target: checkingLockout
-        say: "the posted value is the cookie's"
-        source: apps/auth-server/src/app/routes/ui/login.ts:318
-
-  checkingLockout:
-    title: Refuse a locked-out address, else count the attempt
-    description: >-
-      Two identifiers, both kept per realm and shared with POST /auth/login: the hash of the normalized address, and
-      the client address (an IPv6 one by its /64). A locked-out identifier refuses the attempt before anything is
-      counted. Otherwise the attempt is counted on both before the password is looked at, and the attempt that
-      reaches FAILED_LOGIN_MAX_ATTEMPTS arms the lockout on its way in, so that guesses sent at once cannot outrun the
-      counter.
-    source: apps/auth-server/src/app/helpers/failed-login.ts:83
-    always:
-      - guard: lockedOut
-        target: too_many_requests.locked_out
+      - guard: malformedAnswer
+        target: answerRefused
         effect: [waitFloor]
         say: >-
-          an identifier is locked out; the floor is waited out, then user.sign_in_failed is recorded with the reason
-          locked_out
-        source: apps/auth-server/src/app/routes/ui/login.ts:349
-      - target: checkingPassword
-        effect: [countAttempt]
-        say: 'the attempt is counted on the address being signed in to and on the client address'
-        source: apps/auth-server/src/app/helpers/failed-login.ts:104
-
-  checkingPassword:
-    title: Check the password
-    description: >-
-      The password credential of the normalized address in this realm, then Argon2id against its hash. With no
-      credential the password is verified against a decoy hash, so every outcome costs one verification.
-    source: apps/auth-server/src/app/routes/ui/login.ts:366
-    invoke: { action: UserCredential.findByRealmProviderSub }
-    on:
-      DONE:
-        - guard: noCredential
-          target: invalid_credentials.unknown_identifier
-          effect: [verifyDecoy, waitFloor]
-          say: 'no credential has this address; the decoy hash is verified, and the floor waited out'
-          source: apps/auth-server/src/app/helpers/credential-auth.ts:63
-        - guard: wrongPassword
-          target: invalid_credentials.wrong_password
-          effect: [waitFloor]
-          say: 'the password does not verify against the hash; the floor is waited out'
-          source: apps/auth-server/src/app/helpers/credential-auth.ts:84
-        - target: checkingVerified
-          say: 'the password is right'
-          source: apps/auth-server/src/app/helpers/credential-auth.ts:105
-      FAIL.server:
-        target: server_error.store
-        say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
-
-  checkingVerified:
-    title: Apply the verified-account gate
-    description: >-
-      F-08: under REQUIRE_VERIFIED_ACCOUNT, a password account is used only once its address is confirmed. It is read
-      from the credential, before the users row, so an unconfirmed disabled account is refused here.
-    source: apps/auth-server/src/app/routes/ui/login.ts:379
-    always:
-      - guard: unverifiedUnderTheGate
-        target: invalid_credentials.email_not_verified
+          the answer's login_hint is not an identifier (an email address of at most 254 bytes); nothing is verified or
+          counted
+      - guard: identifierMismatch
+        target: ended
+        effect: [auditByHmac, waitFloor]
+        say: >-
+          the round brings another identifier than the one the transaction holds, or the request's and the answer's
+          differ: the transaction ends, and subject_mismatch is audited under the identifier HMAC
+      - guard: noIdentifier
+        target: offeringIdentifier
         effect: [waitFloor]
-        say: 'the address is not confirmed, and the gate is on; the floor is waited out'
-        source: apps/auth-server/src/app/routes/ui/login.ts:395
-      - target: findingUser
-        say: 'the address is confirmed, or the gate is off'
-        source: apps/auth-server/src/app/routes/ui/login.ts:382
+        say: >-
+          no identifier is held and the round brings none; a password answer is ignored, with no verification and no
+          failure counted, and the floor is waited out
+      - target: choosingFirstFactor
+        effect: [holdIdentifier]
+        say: 'the transaction holds the identifier'
 
-  findingUser:
-    title: Read the user, for its enabled flag
-    source: apps/auth-server/src/app/routes/ui/login.ts:384
-    invoke: { action: User.findById }
-    on:
-      DONE:
-        - guard: userDisabled
-          target: invalid_credentials.account_disabled
-          effect: [waitFloor]
-          say: 'the user is disabled; the floor is waited out'
-          source: apps/auth-server/src/app/routes/ui/login.ts:395
-        - target: clearingFailures
-          say: 'the user is enabled'
-          source: apps/auth-server/src/app/routes/ui/login.ts:417
-      FAIL.server:
-        target: server_error.store
-        say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
-
-  clearingFailures:
-    title: Settle the counted attempt
+  choosingFirstFactor:
+    title: Pick the first factor (rule 7)
     description: >-
-      The address the password proved gets its counter and its lockout cleared. The client address gets back only
-      this attempt's own count, and the lockout if this attempt armed it: the failures other attempts left there stay
-      until the window expires, so signing in to an account of one's own does not wipe a password spray from the same
-      address. Best effort: a cache failure here is ignored.
-    source: apps/auth-server/src/app/helpers/failed-login.ts:152
+      The password in this issue, required; from #651 a passkey is offered beside it (ADR-017 Decision 4: the same
+      password-required shape for every account, with webauthn_get offered). An answer is verified only when its step
+      is the one the engine asks for next: here, a password answer.
     always:
-      - target: creatingSession
-        say: 'the attempt is settled'
-        source: apps/auth-server/src/app/routes/ui/login.ts:422
+      - guard: passwordAnswered
+        target: reservingAttempt
+        say: 'the round answers the password step, the one the engine asks for'
+      - target: offeringPassword
+        effect: [waitFloor]
+        say: 'the round answered the identifier, or nothing; the floor is waited out'
 
-  creatingSession:
-    title: Create a new browser session
+  reservingAttempt:
+    title: Reserve the attempt on the ladder
     description: >-
-      Always a new session with a new sid, whatever cookie the browser sent: the session-fixation defence. The
-      session service stores it in Postgres with the request's address and User-Agent and the sign-in time, records it
-      under the user for /auth/logout, and keeps the signed-in address in the session's side record for the consent
-      screen.
-    source: apps/auth-server/src/app/routes/ui/login.ts:422
-    invoke: { external: browserSessionStore }
+      The ladder hook of PRO-12, keyed on the identifier HMAC whether or not an account holds it: one atomic operation
+      reads the wait, refuses an attempt inside it, and otherwise counts the attempt as a failure until it settles. A
+      store error refuses the round before the password is checked.
+    invoke: { external: ladder }
     on:
       DONE:
-        target: updatingLastLogin
-        effect: [createSession]
-        say: 'the session is created, with a new sid; no cookie the request carried is read'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:60
-      FAIL.server:
-        target: server_error.store
-        say: 'the session store fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
-
-  updatingLastLogin:
-    title: Record the time of the sign-in on the user
-    source: apps/auth-server/src/app/routes/ui/login.ts:429
-    invoke: { action: User.updateLastLogin }
-    on:
-      DONE:
-        target: recordingSignIn
-        say: 'lastLoginAt is written'
-        source: libs/infra/db/src/lib/repositories/users.repository.ts:165
-      FAIL.server:
-        target: server_error.store
-        say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
-
-  recordingSignIn:
-    title: Record the sign-in
-    description: The event urn:qauth:event:user.signed_in:v1-rc.0, with the method password.
-    source: apps/auth-server/src/app/routes/ui/login.ts:430
-    invoke: { external: eventStore }
-    on:
-      DONE:
-        - guard: resumeReturn
-          target: redirectedToResume
-          effect: [clearCsrfCookie]
-          say: 'return_to resumes an authorization request; the session cookie is set and the login-CSRF one cleared'
-          source: apps/auth-server/src/app/routes/ui/login.ts:443
-        - guard: pathReturn
-          target: signed_in
-          effect: [clearCsrfCookie]
-          say: 'return_to is a same-origin path; the session cookie is set and the login-CSRF one cleared'
-          source: apps/auth-server/src/app/routes/ui/login.ts:443
-        - target: signed_in.to_root
-          effect: [clearCsrfCookie]
+        - guard: lockedOut
+          target: lockedOut
+          effect: [auditByHmac, waitFloor]
           say: >-
-            return_to is absent or unsafe, so the browser goes to /; the session cookie is set and the login-CSRF one
-            cleared
-          source: apps/auth-server/src/app/routes/ui/login.ts:285
-      FAIL.server:
-        target: server_error.store
-        say: 'the event store fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:600
+            the identifier is inside a wait: the round is refused, neither verified nor counted, and audited under the
+            identifier HMAC
+        - target: readingAccount
+          effect: [reserveAttempt]
+          say: 'the attempt is reserved'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the ladder store fails; the floor is waited out'
 
-  redirectedToResume:
-    title: Send the signed-in browser back to its authorization request
+  readingAccount:
+    title: Read what the password needs of the account the identifier names
     description: >-
-      The success answer of the POST, as for signed_in, with /ui/resume/<handle> as its Location. The browser follows
-      it at once.
-    source: apps/auth-server/src/app/routes/ui/login.ts:443
-    response:
-      status: 302
-      headers:
-        Location: /ui/resume/<handle>
-        Cache-Control: no-store
-        Set-Cookie: >-
-          two headers: __Host-qauth_session=<sid>.<signature>; Path=/; HttpOnly; SameSite=Lax;
-          Max-Age=SESSION_COOKIE_TTL, and __Host-qauth_login_csrf=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, each
-          with Secure when SESSION_COOKIE_SECURE is on
-    on:
-      RESUME:
-        target: resumeResolvingRealm
-        say: 'the browser follows the redirect to GET /ui/resume/<handle>'
-        source: apps/auth-server/src/app/routes/ui/resume.ts:100
-
-  # GET /ui/resume/{handle}
-
-  resumeResolvingRealm:
-    title: Find the realm of the host
-    description: The realm resolver's onRequest hook. /ui/resume is a browser route too.
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
-    always:
-      - guard: hostUnknown
-        target: misdirected_request.host
-        say: 'the host names no enabled realm with an issuer'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
-      - guard: endpointHost
-        target: misdirected_request.host
-        say: "the host is one of the realm's endpoint hosts"
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:167
-      - target: resumeRateLimiting
-        say: 'the request has its realm'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
-
-  resumeRateLimiting:
-    title: Count the request against the global limit
-    description: The resume has no limit of its own, as for GET /ui/login.
-    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-    always:
-      - guard: rateLimited
-        target: too_many_requests.global_limit
-        say: 'the address has used up its requests'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:26
-      - target: consumingHandle
-        say: 'the address is under its limit'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:27
-
-  consumingHandle:
-    title: Swap the handle for the parked authorize URL, and burn it
-    description: >-
-      A handle that is not 43 base64url characters is refused without reading the store. Otherwise the record is read
-      and deleted at once, before its value is looked at, so a handle resumes once; the value is then checked again to
-      be this server's own /oauth/authorize URL. Every miss that reaches the handler, a store failure included, is the
-      same 400 page: a distinct answer would tell which handles ever existed, and there is no safe place to redirect
-      to.
-    source: apps/auth-server/src/app/routes/ui/resume.ts:115
-    invoke: { external: pendingAuthorizationStore }
+      Its user, its enabled flag, whether its primary identity is proven, and its password. Nothing more, so an
+      account that exists costs and risks one read more than none, and nothing about it reaches the answer before a
+      factor succeeds.
+    invoke: { external: accountDirectory }
     on:
       DONE:
-        - guard: handleSpent
-          target: bad_request.handle_spent
-          say: 'the handle names no live authorization request'
-          source: apps/auth-server/src/app/routes/ui/resume.ts:118
-        - target: authorization_resumed
-          effect: [burnHandle]
-          say: 'the handle is deleted, and its authorize URL read back'
-          source: apps/auth-server/src/app/helpers/pending-authorization.ts:254
+        target: verifyingPassword
+        effect: [readAccount]
+        say: 'the account is read, or none holds the identifier'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; the reservation stays counted'
+
+  verifyingPassword:
+    title: Verify the password, at the cost of one Argon2id verification for every account
+    description: >-
+      With no usable password (no account, a passkey-only account, a disabled password) the answer is verified
+      against a dummy hash, so every outcome costs one verification. Every refusal is the same: the password step
+      again with invalid_credentials. A disabled user is refused after its password checked out, and nothing about it
+      changes.
+    always:
+      - guard: noUsablePassword
+        target: passwordRefused
+        effect: [verifyDecoy, auditByHmac, waitFloor]
+        say: >-
+          no usable password: the dummy hash is verified, the attempt settles as a failure, invalid_credentials is
+          audited under the identifier HMAC, and the floor is waited out
+      - guard: wrongPassword
+        target: passwordRefused
+        effect: [verifyHash, auditByHmac, waitFloor]
+        say: 'the password is wrong; the attempt settles as a failure, audited under the identifier HMAC'
+      - guard: userDisabled
+        target: passwordRefused
+        effect: [verifyHash, auditByHmac, waitFloor]
+        say: >-
+          the password is right and the user is disabled: refused like a wrong password, audited as account_disabled
+          under the identifier HMAC; no subject is fixed and the user is not changed
+      - guard: unverifiedUnderTheGate
+        target: passwordRefused
+        effect: [verifyHash, auditByHmac, waitFloor]
+        say: >-
+          the password is right, the account is unverified, and REQUIRE_VERIFIED_ACCOUNT is on: refused like a wrong
+          password (ANT-2026-SPEMY9GU), audited as email_not_verified under the identifier HMAC; PRO-15 (#638)
+          verifies it inline instead
+      - target: readingProvenAccount
+        effect: [verifyHash, fixSubject]
+        say: >-
+          the password is right: the attempt settles as a success, the subject is fixed, auth_time is now, and
+          the step is audited with the user as its subject
+
+  readingProvenAccount:
+    title: Read the whole account the password proved
+    description: >-
+      Every factor bound to it, disabled ones included, and whether it holds an admin role in the realm: what the
+      downgrade rule and the MFA policy need, read only once a factor proved the account.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        target: afterFirstFactor
+        effect: [readProvenAccount]
+        say: 'the account is read again, with every factor'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; the subject the round fixed stays in the transaction'
+
+  afterFirstFactor:
+    title: Apply the rules after a first factor (rule 8)
+    description: >-
+      The downgrade rule: the transaction must prove the account's strongest bound factor (a passkey above a password),
+      and a disabled factor still counts as bound. Then the MFA policy just read: when it requires a second factor, the
+      transaction's amr must carry mfa. The step that would meet either rule is a later issue's; until it exists, the
+      engine answers a redirect.
+    always:
+      - guard: passkeyBound
+        target: redirected
+        effect: [waitFloor]
+        say: 'the account has a passkey bound, and no passkey step exists yet (#651)'
+      - guard: mfaRequired
+        target: redirected
+        effect: [waitFloor]
+        say: 'the policy requires a second factor, and no second-factor step exists yet (#653)'
+      - target: completed
+        effect: [waitFloor]
+        say: 'every rule is met'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringIdentifier:
+    title: Ask for the identifier
+    description: >-
+      The same for everyone: no account was read. Try another way offers nothing before a factor succeeds but what
+      this first step offers every account, which in this issue is nothing.
+    response:
+      kind: step
+      body:
+        current: { step: identifier, params: {} }
+        alternatives: []
+        personal: {}
+    on:
+      ROUND:
+        target: readingPolicy
+        effect: [newRound, answerNone]
+        say: 'the next round carries no answer'
+      IDENTIFIER:
+        target: readingPolicy
+        effect: [newRound, answerIdentifier]
+        say: 'the person types the identifier'
+      PASSWORD:
+        target: readingPolicy
+        effect: [newRound, answerPassword]
+        say: 'the next round carries a password without a login_hint'
+      PASSWORD_WITH_HINT:
+        target: readingPolicy
+        effect: [newRound, answerPasswordWithHint]
+        say: 'the next round carries a password and its login_hint'
+      MALFORMED:
+        target: readingPolicy
+        effect: [newRound, answerMalformed]
+        say: 'the next round carries an answer whose login_hint is not an identifier'
+
+  offeringPassword:
+    title: Ask for the password
+    description: >-
+      The same for every account the identifier may name, and for none: no account was read. The personal data is
+      the identifier as the person gave it, normalised.
+    response:
+      kind: step
+      body:
+        current: { step: password, params: {} }
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: readingPolicy
+        effect: [newRound, answerNone]
+        say: 'the next round carries no answer'
+      IDENTIFIER:
+        target: readingPolicy
+        effect: [newRound, answerIdentifier]
+        say: 'the next round answers the identifier again'
+      PASSWORD:
+        target: readingPolicy
+        effect: [newRound, answerPassword]
+        say: 'the person types the password'
+      PASSWORD_WITH_HINT:
+        target: readingPolicy
+        effect: [newRound, answerPasswordWithHint]
+        say: 'the next round carries a password and a login_hint'
+      MALFORMED:
+        target: readingPolicy
+        effect: [newRound, answerMalformed]
+        say: 'the next round carries an answer whose login_hint is not an identifier'
+
+  passwordRefused:
+    title: Ask for the password again
+    description: >-
+      The same answer for an unknown identifier, a wrong password, a passkey-only account, a disabled password, a
+      disabled user and an unverified account under the gate, in body and in timing.
+    response:
+      kind: step
+      body:
+        current: { step: password, params: {}, error: invalid_credentials }
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: readingPolicy
+        effect: [newRound, answerNone]
+        say: 'the next round carries no answer'
+      IDENTIFIER:
+        target: readingPolicy
+        effect: [newRound, answerIdentifier]
+        say: 'the next round answers the identifier again'
+      PASSWORD:
+        target: readingPolicy
+        effect: [newRound, answerPassword]
+        say: 'the person tries another password'
+      PASSWORD_WITH_HINT:
+        target: readingPolicy
+        effect: [newRound, answerPasswordWithHint]
+        say: 'the next round carries a password and a login_hint'
+      MALFORMED:
+        target: readingPolicy
+        effect: [newRound, answerMalformed]
+        say: 'the next round carries an answer whose login_hint is not an identifier'
 
   # Exits
 
-  authorization_resumed:
+  completed:
     type: final
-    title: Resume the authorization request
+    title: Complete the sign-in
     description: >-
-      /oauth/authorize then checks the client, the redirect URI, the scopes, PKCE and the step-up from scratch, as on
-      a first visit, now with the new session: resuming grants nothing a fresh request would not.
-    source: apps/auth-server/src/app/routes/ui/resume.ts:129
+      The transport mints the session (the Interaction API) or the code (the FiPA endpoint) from what the engine
+      returns; the engine itself writes nothing to the account. The transaction ends with it, so nothing completes
+      twice.
     response:
-      status: 302
-      headers:
-        Location: '/oauth/authorize?<the parameters of the parked request>'
-        Cache-Control: no-store
-
-  signed_in:
-    type: final
-    title: Send the signed-in browser to return_to
-    description: The session cookie is set, and the login-CSRF cookie is cleared now that the sign-in succeeded.
-    source: apps/auth-server/src/app/routes/ui/login.ts:443
-    response:
-      status: 302
-      headers:
-        Location: return_to, as posted
-        Cache-Control: no-store
-        Set-Cookie: >-
-          two headers: __Host-qauth_session=<sid>.<signature>; Path=/; HttpOnly; SameSite=Lax;
-          Max-Age=SESSION_COOKIE_TTL, and __Host-qauth_login_csrf=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, each
-          with Secure when SESSION_COOKIE_SECURE is on
-
-  signed_in.to_root:
-    type: final
-    title: Send the signed-in browser to /
-    description: >-
-      return_to was absent, or isSafeReturnTo refused it: an absolute URL, a protocol-relative one (//host or /\host),
-      one with a character the URL parser drops, one that resolves to another origin, or one over 16 KiB. QAuth is
-      not an open redirector.
-    source: apps/auth-server/src/app/routes/ui/login.ts:285
-    response:
-      status: 302
-      headers:
-        Location: /
-        Cache-Control: no-store
-        Set-Cookie: >-
-          two headers: __Host-qauth_session=<sid>.<signature>; Path=/; HttpOnly; SameSite=Lax;
-          Max-Age=SESSION_COOKIE_TTL, and __Host-qauth_login_csrf=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, each
-          with Secure when SESSION_COOKIE_SECURE is on
-
-  forbidden.csrf_mismatch:
-    type: final
-    title: Refuse a form whose CSRF value is not the cookie's, and offer a fresh one
-    description: >-
-      The form is shown again with a new CSRF value, set in a new cookie, so the user can retry; the typed address is
-      kept and the password is not. No password is checked and nothing is counted.
-    source: apps/auth-server/src/app/routes/ui/login.ts:305
-    response:
-      status: 403
-      headers:
-        Content-Type: text/html; charset=utf-8
-        Cache-Control: no-store
-        Set-Cookie: >-
-          __Host-qauth_login_csrf=<a new value>.<signature>; Path=/; HttpOnly; SameSite=Lax;
-          Max-Age=SESSION_COOKIE_TTL, with Secure when SESSION_COOKIE_SECURE is on
-      body: >-
-        the sign-in form again, with the error "Your session expired. Please try again.", the typed address, return_to
-        (/ when unsafe) and the new CSRF value
-
-  too_many_requests.locked_out:
-    type: final
-    title: Refuse a locked-out address with the form
-    description: >-
-      Not counted, and no password is checked, even the right one. The answer waits out the 500 ms floor that every
-      refused credential waits, so it takes as long as a wrong password. Distinct from the login limit, which is the
-      rate limiter's problem document.
-    source: apps/auth-server/src/app/routes/ui/login.ts:361
-    response:
-      status: 429
-      headers:
-        Content-Type: text/html; charset=utf-8
-        Cache-Control: no-store
-        Retry-After: >-
-          the seconds left on the lockout; the full FAILED_LOGIN_LOCKOUT_DURATION for an attempt that lost the race to
-          arm it
-      body: >-
-        the sign-in form again, with the error "Too many failed sign-in attempts. Please try again later.", the typed
-        address, return_to (/ when unsafe) and the CSRF value of the cookie, which stays set
-
-  invalid_credentials.unknown_identifier:
-    type: final
-    title: Refuse an address with no account, like a wrong password
-    description: >-
-      user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
-      and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:411
-    response: &invalidCredentials
-      status: 401
-      headers:
-        Content-Type: text/html; charset=utf-8
-        Cache-Control: no-store
-      body: >-
-        the sign-in form again, with the typed address, return_to (/ when unsafe), the CSRF value of the cookie, which
-        stays set, and the error "Invalid email or password." While REQUIRE_VERIFIED_ACCOUNT is on, the error goes on:
-        "If you have just registered, confirm your email address first with the link we sent you."
-
-  invalid_credentials.wrong_password:
-    type: final
-    title: Refuse a wrong password
-    description: >-
-      user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
-      and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:411
-    response: *invalidCredentials
-
-  invalid_credentials.email_not_verified:
-    type: final
-    title: Refuse an unconfirmed account under the gate, like a wrong password
-    description: >-
-      user.sign_in_failed is recorded with the reason email_not_verified and the user as its subject; the answer is the
-      wrong password's (it was a 403 of its own until ANT-2026-SPEMY9GU, which let anyone tell a free address from a
-      registered one). The attempt stays counted, and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:411
-    response: *invalidCredentials
-
-  invalid_credentials.account_disabled:
-    type: final
-    title: Refuse a disabled user, like a wrong password
-    description: >-
-      The password was right. user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The
-      attempt stays counted, and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:411
-    response: *invalidCredentials
-
-  bad_request.handle_spent:
-    type: final
-    title: Tell the user the authorization request has expired
-    description: >-
-      Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, with no link
-      and no redirect: the user starts again from the application, which still holds the PKCE verifier.
-    source: apps/auth-server/src/app/routes/ui/resume.ts:123
-    response:
-      status: 400
-      headers:
-        Content-Type: text/html; charset=utf-8
-        Cache-Control: no-store
-      body: >-
-        a page titled "Sign-in request expired — QAuth" that says "This sign-in request has expired", that the user is
-        signed in but the authorization request is no longer valid, and to return to the application and start again
-
-  validation_error.query:
-    type: final
-    title: Refuse a query that does not match the page's schema
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
-    response:
-      status: 400
+      kind: complete
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#validation-error
-        title: Validation error
-        status: 400
-        detail: The request is not valid.
-        instance: /ui/login
-        code: validation_error
-        trace_id: the request id
-        errors:
-          - pointer: /return_to
-            message: "the schema's message, such as: Invalid input: expected string, received array"
+        transaction: null
+        subject: "the account's user id"
+        identifier: "the transaction's identifier, normalised"
+        amr: '["pwd"], from the step grammar''s transactionAmr over the verified steps'
+        authTime: 'when the password was verified, in epoch milliseconds'
 
-  validation_error.form:
+  redirected:
     type: final
-    title: Refuse a form that does not match the login form schema
-    description: The error handler's problem document, not the page; nothing is counted against the lockout.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:337
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#validation-error
-        title: Validation error
-        status: 400
-        detail: The request is not valid.
-        instance: /ui/login
-        code: validation_error
-        trace_id: the request id
-        errors:
-          - pointer: '/<the field>, such as /password'
-            message: "the schema's message"
-
-  misdirected_request.host:
-    type: final
-    title: Refuse a host that serves no browser route
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:149
-    response:
-      status: 421
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#misdirected-request
-        title: Misdirected request
-        status: 421
-        detail: This server does not answer for the requested host
-        instance: '/ui/login, or /ui/resume/<handle>'
-        code: misdirected_request
-        trace_id: the request id
-
-  too_many_requests.global_limit:
-    type: final
-    title: Refuse a GET over the global limit
-    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-    response:
-      status: 429
-      headers:
-        x-ratelimit-limit: RATE_LIMIT_MAX
-        x-ratelimit-remaining: '0'
-        x-ratelimit-reset: the seconds until the window resets
-        retry-after: the same seconds
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
-        title: Too many requests
-        status: 429
-        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 1 minute}'
-        instance: '/ui/login, or /ui/resume/<handle>'
-        code: too_many_requests
-        trace_id: the request id
-
-  too_many_requests.login_limit:
-    type: final
-    title: Refuse a POST over the login limit
-    description: The rate limiter's problem document, not the page; distinct from the lockout.
-    source: apps/auth-server/src/app/routes/ui/login.ts:275
-    response:
-      status: 429
-      headers:
-        x-ratelimit-limit: LOGIN_RATE_LIMIT
-        x-ratelimit-remaining: '0'
-        x-ratelimit-reset: the seconds until the window resets
-        retry-after: the same seconds
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
-        title: Too many requests
-        status: 429
-        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 15 minutes}'
-        instance: /ui/login
-        code: too_many_requests
-        trace_id: the request id
-
-  server_error.malformed_cookie:
-    type: final
-    title: Fail on a login-CSRF cookie that cannot be decoded
+    title: Continue elsewhere
     description: >-
-      The URIError reaches the error handler as an unknown error, logged at error level. The body says nothing of the
-      failure, in any NODE_ENV; its trace_id finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+      A rule after the first factor needs a step that does not exist yet or that the transport cannot serve. The FiPA
+      endpoint answers redirect_to_web; the Interaction API ends the interaction. The transaction ends with it, and
+      nothing is minted.
     response:
-      status: 500
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#internal-error
-        title: Internal error
-        status: 500
-        instance: /ui/login
-        code: internal_error
-        trace_id: the request id
+      kind: redirect
+      body: { reason: step_not_available, transaction: null }
 
-  server_error.store:
+  ended:
     type: final
-    title: Fail on a store error
+    title: End the transaction
     description: >-
-      The steps before the failing one stay done: a session created before a later failure stays, though the browser
-      never receives its cookie. The body says nothing of the failure, in any NODE_ENV; its trace_id finds the log
-      line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:600
+      One subject per transaction: a different identifier, or a factor of another user once one is proven, ends it.
+      The transport discards it; the FiPA endpoint answers invalid_session.
     response:
-      status: 500
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  throttled:
+    type: final
+    title: Refuse the round for a limiter
+    description: >-
+      Audited as rate_limited, under the identifier HMAC when the transaction holds one and naming nobody otherwise. The
+      transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the limiter's" }
+
+  lockedOut:
+    type: final
+    title: Refuse the round inside the ladder's wait
+    description: >-
+      The same answer for every identifier inside a wait, held by an account or not. Neither verified nor counted; the
+      transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the ladder's" }
+
+  requestRefused:
+    type: final
+    title: Refuse the round for the request checks
+    description: >-
+      Audited as request_refused, under the identifier HMAC when the transaction holds one and naming nobody otherwise.
+    response:
+      kind: refused
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#internal-error
-        title: Internal error
-        status: 500
-        instance: /ui/login
-        code: internal_error
-        trace_id: the request id
+        reason: request_refused
+        code: "the check's code, such as unmet_authentication_requirements"
+
+  botChallengeDue:
+    type: final
+    title: Hold the round for a bot challenge
+    description: >-
+      PRO-19 offers the captcha step alone when the transport serves it, and the pending step resumes after it; a
+      transport that cannot serve it gets the limiter's delay and 429, never a redirect.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the bot challenge's" }
+
+  answerRefused:
+    type: final
+    title: Refuse a malformed answer
+    description: >-
+      A fault of the request, audited as invalid_answer (under the identifier HMAC when the transaction holds one); the
+      transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: invalid_answer }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: >-
+      The policy, the ladder or the account directory cannot be read: the round is refused before any credential is
+      checked (fail closed), and the transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
 
 assertions:
-  - id: no-session-without-the-csrf-pair
-    never: "sessionCreated and gate != 'open'"
+  - id: same-first-response-for-every-account
+    never: "state in ['offeringIdentifier', 'offeringPassword'] and accountRead"
     say: >-
-      No session is created for a form that does not carry the cookie's own CSRF value, or that any earlier check
-      refuses: a page of another site cannot sign the browser in to an account of its choosing
-    source: apps/auth-server/src/app/routes/ui/login.ts:293
-  - id: no-session-for-a-refused-account
-    never: 'sessionCreated and (noCredential or wrongPassword or userDisabled or unverifiedUnderTheGate)'
-    say: >-
-      A session is created only for an existing, enabled account and its right password, and under the gate only for
-      a confirmed address
-    source: apps/auth-server/src/app/routes/ui/login.ts:395
-  - id: attempt-counted-before-the-password
-    never: "state == 'checkingPassword' and not attemptCounted"
-    say: 'Every password checked has been counted first, so guesses sent at once cannot outrun the lockout'
-    source: apps/auth-server/src/app/helpers/failed-login.ts:104
-  - id: locked-out-checks-no-password
-    never: "state == 'too_many_requests.locked_out' and attemptCounted"
-    say: >-
-      A locked-out attempt is refused before any password is checked, the right one too, and leaves no count behind:
-      one that lost the race to arm the lockout gives back what it counted
-    source: apps/auth-server/src/app/routes/ui/login.ts:349
-  - id: csrf-before-the-lockout-and-the-database
+      A step offered without an error never read the account, so before a factor succeeds it is the same for every
+      account the identifier may name, and for none; login_hint changes it for no account
+  - id: no-completion-without-a-usable-enabled-account
     never: >-
-      gate in ['malformedCookie', 'csrfMismatch'] and (attemptCounted or state in ['checkingLockout',
-      'checkingPassword', 'findingUser'])
+      state == 'completed' and (noUsablePassword or wrongPassword or userDisabled or unverifiedUnderTheGate)
     say: >-
-      The CSRF pair is checked before the lockout is read or the attempt counted, and before the database is read: a
-      forged post can neither lock an account out nor probe a password
-    source: apps/auth-server/src/app/routes/ui/login.ts:293
-  - id: every-refused-credential-waits-the-floor
+      A sign-in completes only for an enabled account, its right password and, under the gate, a verified account
+  - id: disabled-user-never-gets-a-subject
+    never: "subjectFixed and account == 'disabled'"
+    say: 'A disabled user is answered as a wrong password: no subject is fixed, so no transport mints anything for it'
+  - id: every-refused-password-costs-one-verification
+    never: "state == 'passwordRefused' and not (hashVerified or decoyVerified)"
+    say: 'Every refused password costs one Argon2id verification, against the dummy hash when no usable password exists'
+  - id: unknown-identifier-verifies-the-dummy-hash
+    never: "state == 'passwordRefused' and noUsablePassword and not decoyVerified"
+    say: 'An identifier no account holds, or an account with no usable password, runs the dummy hash'
+  - id: reserve-before-verify
+    never: '(hashVerified or decoyVerified) and not attemptReserved'
+    say: 'Every verified password was reserved on the ladder first'
+  - id: eager-answer-ignored
+    never: "state == 'offeringIdentifier' and (attemptReserved or hashVerified or decoyVerified)"
+    say: >-
+      A password sent while the identifier step is next is ignored: it is neither verified nor counted
+  - id: refused-rounds-verify-nothing
     never: >-
-      state in ['too_many_requests.locked_out', 'invalid_credentials.unknown_identifier',
-      'invalid_credentials.wrong_password', 'invalid_credentials.email_not_verified',
-      'invalid_credentials.account_disabled'] and not floorWaited
+      state in ['unavailable', 'throttled', 'lockedOut', 'requestRefused', 'botChallengeDue', 'answerRefused'] and
+      (hashVerified or decoyVerified) and not subjectFixed
     say: >-
-      Every refused credential and the lockout answer only once 500 ms have passed since the request arrived, so the
-      time of the answer does not tell the causes apart
-    source: apps/auth-server/src/app/routes/ui/login.ts:396
-  - id: unknown-address-verifies-the-decoy
-    never: "state == 'invalid_credentials.unknown_identifier' and not decoyVerified"
-    say: 'An address with no account still costs one Argon2id verification, against the decoy hash'
-    source: apps/auth-server/src/app/helpers/credential-auth.ts:64
-  - id: a-session-always-has-a-fresh-sid
-    never: 'sessionCreated and not freshSid'
+      A refused round, a store outage or an unreadable policy included, checks no credential, unless the credential
+      already proved the account: a store that fails after the proof keeps the subject in the transaction, so a
+      refusal never tells a right password from a wrong one
+  - id: subject-mismatch-is-audited
+    never: "state == 'ended' and not auditedByHmac"
     say: >-
-      A sign-in always creates a new session with a new sid, whatever session cookie the browser sent: the
-      session-fixation defence
-    source: apps/auth-server/src/app/routes/ui/login.ts:422
-  - id: success-clears-the-login-csrf-cookie
-    never: "state in ['redirectedToResume', 'signed_in', 'signed_in.to_root'] and not csrfCookieCleared"
-    say: 'A successful sign-in clears the login-CSRF cookie, so its value cannot be reused'
-    source: apps/auth-server/src/app/routes/ui/login.ts:441
-  - id: only-same-origin-redirects
-    never: "state in ['signed_in', 'redirectedToResume'] and returnTo == 'unsafe'"
-    say: 'A sign-in redirects only to a same-origin relative path, else to /'
-    source: apps/auth-server/src/app/routes/ui/login.ts:285
-  - id: resumed-handle-is-burned
-    never: "state == 'authorization_resumed' and not handleBurned"
-    say: 'A handle is deleted before its authorize URL is used, so it resumes once'
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:254
+      A round that brings another identifier than the one the transaction holds ends it, and the end is audited as
+      subject_mismatch
+  - id: no-completion-below-the-strongest-factor
+    never: "state == 'completed' and (passkeyBound or mfaRequired)"
+    say: >-
+      A sign-in never completes below the account's strongest bound factor, a disabled one included, or without the
+      second factor the policy requires
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringIdentifier', 'offeringPassword', 'passwordRefused', 'completed', 'redirected', 'ended', 'throttled', 'lockedOut',
+      'requestRefused', 'botChallengeDue', 'answerRefused', 'unavailable'] and not floorWaited
+    say: >-
+      Every round answers no earlier than 500 ms after it arrived: those that resolve an identifier or carry a
+      credential, as ADR-017 Decision 7 asks, and every other one, so that no answer is timed apart
+  - id: no-raw-identifier-before-a-subject
+    never: "state in ['passwordRefused', 'lockedOut', 'ended'] and not subjectFixed and not auditedByHmac"
+    say: >-
+      While no user is proven, the audit names the person only by the identifier HMAC, never by the identifier itself

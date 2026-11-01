@@ -693,6 +693,33 @@ describe('parseRealmPolicies', () => {
     ).toEqual(issuers);
   });
 
+  it('bounds the token lifetimes: a day for an access token, 90 days for a refresh token', () => {
+    const atBounds = parseRealmPolicies({
+      tokens: {
+        accessTokenLifespanSeconds: 86_400,
+        developmentAccessTokenLifespanSeconds: 86_400,
+        refreshTokenLifespanSeconds: 7_776_000,
+      },
+    }).tokens;
+    expect(atBounds).toMatchObject({
+      accessTokenLifespanSeconds: 86_400,
+      developmentAccessTokenLifespanSeconds: 86_400,
+      refreshTokenLifespanSeconds: 7_776_000,
+    });
+    // A row written by hand with a lifetime of years is refused, as any value
+    // the schema refuses: the realm's requests fail rather than issue it.
+    for (const tokens of [
+      { accessTokenLifespanSeconds: 86_401 },
+      { accessTokenLifespanSeconds: 315_360_000 },
+      { developmentAccessTokenLifespanSeconds: 86_401 },
+      { refreshTokenLifespanSeconds: 7_776_001 },
+    ]) {
+      expect(() => parseRealmPolicies({ tokens }), JSON.stringify(tokens)).toThrow(
+        PolicyValidationError
+      );
+    }
+  });
+
   it('refuses values outside the bounds the issue sets', () => {
     for (const document of [
       { tokens: { adminAccessTokenLifespanSeconds: 901 } },

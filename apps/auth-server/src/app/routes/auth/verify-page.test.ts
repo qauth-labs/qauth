@@ -81,7 +81,10 @@ describe('GET /auth/verify (the emailed link)', () => {
     expect(cookie).toContain('SameSite=Lax');
     const csrf = hiddenField(res.body, 'csrf_token');
     expect(csrf).toBeTruthy();
-    expect(cookie?.split(';', 1)[0]).toMatch(new RegExp(`^${LOGIN_CSRF_COOKIE_NAME}=${csrf}\\.`));
+    // `<kid>.<token>.<mac>` (#493).
+    expect(cookie?.split(';', 1)[0]).toMatch(
+      new RegExp(`^${LOGIN_CSRF_COOKIE_NAME}=[^.]+\\.${csrf}\\.`)
+    );
   });
 
   it('keeps a valid login-CSRF cookie the browser already has', async () => {

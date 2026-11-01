@@ -1,6 +1,9 @@
 import { REPOSITORY_NAMES, type RepositoryName } from '@qauth-labs/fastify-plugin-db';
 import {
+  DEFAULT_INTERNAL_HOST,
+  DEFAULT_INTERNAL_PORT,
   describeServiceRoles,
+  type InternalPeerRoles,
   isKeyMaterialVariable,
   isServiceRole,
   keyMaterialProblems,
@@ -10,6 +13,12 @@ import {
   type ServiceRoleProblem,
 } from '@qauth-labs/server-config';
 
+import {
+  INTERNAL_ROUTE_MODULES,
+  type InternalRouteModule,
+  internalRouteModulesFor,
+} from './internal/route-manifest';
+import type { InternalTlsFiles } from './internal/tls-files';
 import { SERVER_JOBS } from './jobs';
 import { ROLE_PLUGINS, type RolePlugin, routeModulesFor } from './route-manifest';
 
@@ -167,6 +176,33 @@ export function holdsSigner(roles: readonly ServiceRole[]): boolean {
 }
 
 /**
+ * Whether `roles` is every role: a single process, which is one trust domain
+ * (ADR-019 Decision 9). Any other list splits the roles across processes.
+ */
+export function isSingleProcess(roles: readonly ServiceRole[]): boolean {
+  return SERVICE_ROLE_NAMES.every((role) => roles.includes(role));
+}
+
+/**
+ * Whether a process with `roles` runs the internal listener (#496): only
+ * while the roles are split, one that holds `signer`, so that the processes
+ * without the signer reach the signer service there (#497), and one whose
+ * roles have a route module on the internal listener's manifest
+ * (`internal/route-manifest.ts`). A single process runs none, whatever the
+ * manifest holds: it is one trust domain, calls its own roles in-process, and
+ * no other process calls it.
+ */
+export function servesInternalListener(
+  roles: readonly ServiceRole[],
+  modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
+): boolean {
+  return (
+    !isSingleProcess(roles) &&
+    (holdsSigner(roles) || internalRouteModulesFor(roles, modules).length > 0)
+  );
+}
+
+/**
  * Whether a process with `roles` serves the Swagger UI and its spec routes
  * under `/docs` when ENABLE_SWAGGER is on: only one holding `api`, the role of
  * the API routes the document describes. The UI registers outside the app and
@@ -235,6 +271,17 @@ export interface ServiceRoleSettings {
   readonly INTERNAL_TLS_CERT_PATH?: string | undefined;
   readonly INTERNAL_TLS_KEY_PATH?: string | undefined;
   readonly INTERNAL_TLS_CA_PATH?: string | undefined;
+  /** The internal listener's address; `127.0.0.1` when unset. */
+  readonly INTERNAL_HOST?: string | undefined;
+  /** The internal listener's port; `3443` when unset. */
+  readonly INTERNAL_PORT?: number | undefined;
+  /** The roles of the internal listener's peers; none when unset. */
+  readonly INTERNAL_PEER_ROLES?: InternalPeerRoles | undefined;
+  /** The public listener's port, which the internal one must not take. */
+  readonly PORT?: number | undefined;
+  /** Whether the admin API's listener runs, on ADMIN_API_PORT (#511). */
+  readonly ADMIN_API_ENABLED?: boolean | undefined;
+  readonly ADMIN_API_PORT?: number | undefined;
 }
 
 /** What the role checks found: refusals, and lines for the boot log. */
@@ -249,6 +296,121 @@ const INTERNAL_TLS_SETTINGS = [
   'INTERNAL_TLS_KEY_PATH',
   'INTERNAL_TLS_CA_PATH',
 ] as const;
+
+/** How a process runs its internal listener, from {@link internalListenerPlan}. */
+export type InternalListenerPlan =
+  | { readonly serves: false }
+  | {
+      readonly serves: true;
+      /** Why it cannot start as configured; empty when it can. */
+      readonly problems: readonly ServiceRoleProblem[];
+      readonly host: string;
+      readonly port: number;
+      /** The TLS files of mutual TLS; unset only when `problems` names them. */
+      readonly tls?: InternalTlsFiles;
+      readonly peerRoles: InternalPeerRoles;
+    };
+
+/**
+ * Whether a process runs the internal listener ({@link servesInternalListener}),
+ * on which address, how, and why it cannot (#496).
+ *
+ * - With the three internal TLS files, it serves mutual TLS, and needs
+ *   INTERNAL_PEER_ROLES: without a known peer it would refuse every request.
+ * - With some of them only, or none, it cannot start: the missing ones are
+ *   named. The listener runs only while the roles are split, so it is never
+ *   served without mutual TLS.
+ * - INTERNAL_PORT must differ from PORT, and from ADMIN_API_PORT where the
+ *   admin listener runs.
+ *
+ * @param modules - the internal listener's route modules: the manifest's
+ *   unless a test names its own
+ */
+export function internalListenerPlan(
+  settings: ServiceRoleSettings,
+  modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
+): InternalListenerPlan {
+  const roles = settings.SERVICE_ROLES;
+  if (!servesInternalListener(roles, modules)) return { serves: false };
+  const named = `SERVICE_ROLES=${describeServiceRoles(roles)}`;
+  const host = settings.INTERNAL_HOST ?? DEFAULT_INTERNAL_HOST;
+  const port = settings.INTERNAL_PORT ?? DEFAULT_INTERNAL_PORT;
+  const peerRoles = settings.INTERNAL_PEER_ROLES ?? new Map<string, ServiceRole>();
+  const problems: ServiceRoleProblem[] = [];
+  const serving =
+    holdsSigner(roles) && !isSingleProcess(roles)
+      ? `${named} serves the signer to the other roles on the internal listener`
+      : `${named} runs the internal listener`;
+
+  const missing = INTERNAL_TLS_SETTINGS.filter((variable) => settings[variable] === undefined);
+  if (missing.length === 0) {
+    if (peerRoles.size === 0) {
+      problems.push({
+        variable: 'INTERNAL_PEER_ROLES',
+        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role; map each peer's SAN to its role, such as {"spiffe://example.org/qauth/web":"web"}`,
+      });
+    }
+  } else if (missing.length < INTERNAL_TLS_SETTINGS.length) {
+    for (const variable of missing) {
+      problems.push({
+        variable,
+        message: `${variable} is required: ${serving} over mutual TLS, which needs all three internal TLS files, and the others are set`,
+      });
+    }
+    if (peerRoles.size === 0) {
+      problems.push({
+        variable: 'INTERNAL_PEER_ROLES',
+        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
+      });
+    }
+  } else {
+    for (const variable of missing) {
+      problems.push({
+        variable,
+        message: `${variable} is required: ${serving}, over mutual TLS only while the roles are split, so the signer routes are not registered without it`,
+      });
+    }
+    if (peerRoles.size === 0) {
+      problems.push({
+        variable: 'INTERNAL_PEER_ROLES',
+        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
+      });
+    }
+  }
+
+  if (settings.PORT !== undefined && port === settings.PORT) {
+    problems.push({
+      variable: 'INTERNAL_PORT',
+      message: `INTERNAL_PORT must differ from PORT (${settings.PORT}): the internal listener runs on its own port, never on the public one`,
+    });
+  }
+  if (
+    servesAdminListener(roles, settings.ADMIN_API_ENABLED === true) &&
+    port === settings.ADMIN_API_PORT
+  ) {
+    problems.push({
+      variable: 'INTERNAL_PORT',
+      message: `INTERNAL_PORT must differ from ADMIN_API_PORT (${port}): the admin API keeps a listener of its own`,
+    });
+  }
+
+  return {
+    serves: true,
+    problems,
+    host,
+    port,
+    peerRoles,
+    ...(missing.length === 0
+      ? {
+          tls: {
+            certPath: settings.INTERNAL_TLS_CERT_PATH as string,
+            keyPath: settings.INTERNAL_TLS_KEY_PATH as string,
+            caPath: settings.INTERNAL_TLS_CA_PATH as string,
+          },
+        }
+      : {}),
+  };
+}
 
 /**
  * Check a process's roles against its environment.
@@ -265,7 +427,10 @@ const INTERNAL_TLS_SETTINGS = [
  * signer reads without a KEK.
  *
  * A process with the signer signs in-process, and a `SIGNER_URL` it is given
- * is reported as ignored.
+ * is reported as ignored. Where its roles are split, it serves the signer to
+ * the other processes on the internal listener, over mutual TLS only
+ * ({@link internalListenerPlan}): without the internal TLS files and
+ * INTERNAL_PEER_ROLES, it refuses to boot.
  *
  * @param settings - the parsed configuration
  * @param raw - the environment it was parsed from, for the variable names
@@ -278,6 +443,11 @@ export function checkServiceRoles(
   const named = `SERVICE_ROLES=${describeServiceRoles(roles)}`;
   const problems: ServiceRoleProblem[] = [];
   const warnings: ServiceRoleProblem[] = [];
+
+  // The internal listener's transport and ports (#496), whatever else the
+  // roles need.
+  const internal = internalListenerPlan(settings);
+  if (internal.serves) problems.push(...internal.problems);
 
   if (holdsSigner(roles)) {
     if (settings.SIGNER_URL !== undefined) {

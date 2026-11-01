@@ -31,6 +31,7 @@ describe('wire-suite configuration', () => {
       adminUrl: 'http://localhost:3000',
       confidentialClient: { id: 'wire-confidential', secret: 'secret' },
       ssfTransmitter: false,
+      mailUrl: undefined,
     });
     expect(readWireConfig({ ...COMPLETE, QAUTH_ADMIN_URL: 'http://localhost:3100' }).adminUrl).toBe(
       'http://localhost:3100'
@@ -45,6 +46,16 @@ describe('wire-suite configuration', () => {
       false
     );
     expect(() => readWireConfig({ ...COMPLETE, QAUTH_WIRE_SSF_TRANSMITTER: 'yes' })).toThrow(
+      WireConfigError
+    );
+  });
+
+  it('reads the mail sink URL only when QAUTH_WIRE_MAIL_URL is set, and refuses one that is not a URL', () => {
+    expect(
+      readWireConfig({ ...COMPLETE, QAUTH_WIRE_MAIL_URL: 'http://localhost:8025' }).mailUrl
+    ).toBe('http://localhost:8025');
+    expect(readWireConfig({ ...COMPLETE, QAUTH_WIRE_MAIL_URL: '' }).mailUrl).toBeUndefined();
+    expect(() => readWireConfig({ ...COMPLETE, QAUTH_WIRE_MAIL_URL: 'localhost:8025' })).toThrow(
       WireConfigError
     );
   });

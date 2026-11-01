@@ -35,6 +35,11 @@ import {
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
 
+import {
+  InvalidCursorError,
+  UnprocessableContentError,
+  UnsupportedMediaTypeError,
+} from '../helpers/api-request-errors';
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
 import { RealmPolicyRefusedError } from '../helpers/realm-policy-update';
@@ -232,6 +237,21 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   {
     errorClass: InteractionExpiredError,
     code: 'interaction_expired',
+    oauthError: 'invalid_request',
+  },
+  // The list and update conventions of the account and developer APIs
+  // (#506, #524): a cursor another list issued or that does not parse, and a
+  // merge patch whose result fails the resource's schema, and an update sent
+  // as another media type than a merge patch.
+  { errorClass: InvalidCursorError, code: 'invalid_cursor', oauthError: 'invalid_request' },
+  {
+    errorClass: UnprocessableContentError,
+    code: 'unprocessable_content',
+    oauthError: 'invalid_request',
+  },
+  {
+    errorClass: UnsupportedMediaTypeError,
+    code: 'unsupported_media_type',
     oauthError: 'invalid_request',
   },
   // A realm policy update the schema or a rule refuses (#529), such as the

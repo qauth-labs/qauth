@@ -169,7 +169,7 @@ export const EXPERIMENTAL_ITEMS = [
     switchValue: null,
     requires: [],
     discoveryMembers: [],
-    docsPage: null,
+    docsPage: '/extend/auth-method-contract/',
     spec: {
       name: 'The AuthMethod contract, ADR-018',
       url: 'https://docs.qauth.dev/reference/records/adr/018-1-0-scope-and-stability/',
@@ -181,7 +181,9 @@ export const EXPERIMENTAL_ITEMS = [
       'spec-final': open('QAuth defines the contract itself; ADR-018 §4 makes it stable in 1.x.'),
       'external-beta': NO_BETA,
       'external-audit': AUDIT_PENDING,
-      'conformance-tests': open(),
+      'conformance-tests': open(
+        'The contract test kit (#599) checks a method against the contract; no conformance test covers the plugin API yet.'
+      ),
     },
   },
 ] as const satisfies readonly ExperimentalItem[];

@@ -30,6 +30,15 @@ export const reason = () =>
     'Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.'
   );
 
+/** A step name of the Interaction API, `urn:qauth:ia:<name>:v<N>` or a release candidate of it. */
+export const stepName = (description: string) =>
+  z
+    .string()
+    .min(1)
+    .max(96)
+    .regex(/^urn:qauth:ia:[a-z][a-z0-9_]{0,62}:v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?$/)
+    .describe(description);
+
 /** A list of OAuth scope values. */
 export const scopeList = (description: string) =>
   z.array(z.string().min(1).max(255)).max(256).describe(description);

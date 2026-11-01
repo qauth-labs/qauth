@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-10-25'
+lastVerified: '2026-10-31'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -64,8 +64,9 @@ for the first, then finds nothing to do.
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                |
 | `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending. |
-| `2`       | Usage error: an unknown flag, or `DATABASE_URL` is not set.                                                                                         |
+| `2`       | Usage error: an unknown flag, `DATABASE_URL` is not set, or the system-client variables are incomplete or invalid. Nothing was done.                |
 | `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                      |
+| `4`       | Every migration is applied, but the system client set by `SYSTEM_CLIENT_REDIRECT_URI` could not be provisioned. The error names why.                |
 
 `--check` reports the pending migrations and changes nothing: it takes no lock
 and creates nothing, so a read-only database role can run it.
@@ -123,29 +124,69 @@ untouched, so an application that already holds tokens keeps working without
 the user. The old Redis session keys (`session:<id>`) are no longer read and
 expire on their own within `SESSION_COOKIE_TTL`; there is nothing to delete.
 
-During a rolling upgrade, a sign-in served by a node of the old version is not
-seen by a node of the new version, so a user can be asked to sign in twice
-until the last old node is gone.
+The session cookie changes too: v0.2 signs it with the realm's cookie key from
+the key store, and the cookie names that key
+([#493](https://github.com/qauth-labs/qauth/issues/493)). A cookie an earlier
+version signed with `SESSION_COOKIE_SECRET` does not verify, and the new version
+clears it. `SESSION_COOKIE_SECRET` becomes optional: at the first boot the key
+store imports it as the realm's cookie key, and later a different value in it
+replaces that key. See [the key store](/operate/keys/#the-key-store).
 
-### The developer portal's token: the new audience is accepted first
+During a rolling upgrade the two cookie formats do not mix. A node of the old
+version refuses the new cookie, and when the user signs in there it sets a
+cookie of the old format, which a node of the new version clears. A browser
+whose requests go to old and new nodes in turn is asked to sign in again at
+each switch, not once, until the last old node is gone. Send the browser
+traffic (`/ui/*`, `/oauth/authorize`, the consent screen) to the new nodes only
+as soon as the first one is up, or route each browser to one node for the
+duration of the roll (sticky sessions); a single-node deployment, or one
+upgraded stop-start, is unaffected.
+
+### The developer portal's token moves to the developer API's audience
 
 The developer portal's token moves to the developer API's audience,
-`urn:qauth:aud:developer:v1-rc.0`, in two releases, expand then contract
-(ADR-018 §5; [#509](https://github.com/qauth-labs/qauth/issues/509),
-[API conventions](/reference/api-conventions/#issuing-a-family-audience)):
+`urn:qauth:aud:developer:v1-rc.0`. ADR-018 §5 would take that in two releases,
+expand then contract
+([API conventions](/reference/api-conventions/#issuing-a-family-audience)),
+but v0.2 carries both steps at once:
 
-- **v0.2 accepts it.** `/api/clients`, `/api/consents`, `/auth/logout`, the
-  Bearer path of `/oauth/authorize` and userinfo accept a system-client token
-  whose `aud` is the developer audience, beside today's token, whose `aud` is
-  the system client's id. Nothing mints the new token yet: `POST /auth/login`
-  still mints today's, and the system client's row is not changed.
-- **A later release mints it** ([#524](https://github.com/qauth-labs/qauth/issues/524)).
-  Every v0.2 node accepts the tokens such a node mints.
+- **Accepted** ([#509](https://github.com/qauth-labs/qauth/issues/509)).
+  `/api/clients`, `/api/consents`, `/auth/logout` and userinfo accept a
+  system-client token whose `aud` is the developer audience.
+- **Minted, and the old token retired**
+  ([#524](https://github.com/qauth-labs/qauth/issues/524)). As each node of v0.2
+  boots, it gives the system client of every realm the developer audience, so
+  `POST /auth/login` mints the new token from then on, on every node, since
+  each one reads the client's row. The deprecated `/api/clients` and
+  `/api/consents` accept only the new token. `/auth/logout` still accepts a
+  live old one, whose `aud` is the system client's id, for this release only,
+  so a developer whose portal session began before the upgrade can still sign
+  out: the call ends their sessions, refresh tokens and codes, and grants
+  nothing. An expired old token is refused, and the next release removes the
+  grace. The Bearer path of `/oauth/authorize` is
+  gone: an `Authorization` header there signs no one in, and a request without
+  a browser session goes to the login page.
 
-The upgrade to v0.2 is safe to roll: a node of the previous release accepts
-every portal token a v0.2 node mints, because it is the same token. There is no
-migration and nothing to run. Upgrade every node to v0.2 before the release
-that mints the new token, so no node that refuses it is left.
+What an operator sees when v0.2 rolls out:
+
+- **Developers sign in to the portal again.** A portal token minted before the
+  first node of v0.2 booted carries the system client's id as its `aud`, and
+  every v0.2 node refuses it, except to sign out (a token lives
+  `ACCESS_TOKEN_LIFESPAN`, 15 minutes by default). The portal answers the
+  refusal by sending the developer to its login page.
+- **During a rolling upgrade from v0.1.x, more than once.** A v0.1.x node
+  does not accept the new token: it refuses userinfo to it, so a developer
+  whose request reaches an old node is signed out of the portal, and a token an
+  old node minted is refused by the new ones. Until the roll ends, a developer
+  is signed out whenever a request reaches a node of the other version than the
+  one that signed them in; a portal session lasts `PORTAL_SESSION_TTL`
+  (15 minutes by default). A single-node deployment, or one upgraded
+  stop-start, is unaffected.
+- **A caller of `/oauth/authorize` with a Bearer token stops getting codes.** No
+  shipped component used that path; anything that did must send the user through
+  the browser flow, as every other client does.
+- There is no migration and nothing to run: the boot step changes one row per
+  realm and logs `Gave the system client the developer API audience` when it does.
 
 ### Refresh tokens pause while migration 0038 runs
 
@@ -296,12 +337,17 @@ ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
-flows move to the stored values one area at a time: the token lifetimes
-([#527](https://github.com/qauth-labs/qauth/issues/527)), the sign-in policy
+flows move to the stored values one area at a time: the sign-in policy
 ([#528](https://github.com/qauth-labs/qauth/issues/528)), the verification
 link's lifetime and resend rule, and CIMD
-([#534](https://github.com/qauth-labs/qauth/issues/534)). The mail transport and
-sender come from the row
+([#534](https://github.com/qauth-labs/qauth/issues/534)) still read the
+environment. The token lifetimes
+([#527](https://github.com/qauth-labs/qauth/issues/527)) come from the row:
+`ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN` and
+`REFRESH_TOKEN_LIFESPAN` set the lifetimes of a realm only while it has no
+policies (one a node of the previous release created during a rolling
+upgrade, until a node of this release boots again). The mail transport and
+sender come from the row too
 ([#529](https://github.com/qauth-labs/qauth/issues/529), see
 [Mail secrets move into the realm](#mail-secrets-move-into-the-realm)). The dynamic
 registration allowlist and the environment ceiling come from the row too:
@@ -330,9 +376,11 @@ first boot stored the value each key had then. Change a key whose area has not
 moved yet, and the server applies the new value while it reads the area from
 the environment; the release that moves the area to the row applies the
 stored value instead, whatever the key says by then. A key tightened in the
-meantime, such as a shorter `REFRESH_TOKEN_LIFESPAN` or `CIMD_ENABLED=false`,
-would loosen again at that upgrade. So change the stored policy along with
-the key, not the key alone.
+meantime, such as `CIMD_ENABLED=false`, would loosen again at that upgrade. So
+change the stored policy along with the key, not the key alone. The token
+lifetimes moved in the same release as the policies themselves: a deployment
+that upgrades from 0.1 stores the lifetime keys as they are at its first boot,
+and issues the stored lifetimes from then on.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
@@ -467,6 +515,39 @@ error: run it again. A lock taken at the start of 0047 would not change the
 order, since `realms` is held by then. To avoid the retry, run the migration
 runner when no client is being registered, such as before the first node of
 the new release starts and with open registration quiet.
+
+### The operator provisions the system client
+
+From this release the auth server no longer creates the developer portal's
+system client as a secret-based client
+([#631](https://github.com/qauth-labs/qauth/issues/631),
+[ADR-017](/reference/records/adr/017-first-party-login/) phase F0). The operator
+provisions it: a `private_key_jwt` client with the portal's public keys, the
+first-party profile `web_redirect` and the portal's callback. Give the
+migration runner `SYSTEM_CLIENT_REDIRECT_URI` and one of
+`SYSTEM_CLIENT_JWKS_URI` and `SYSTEM_CLIENT_JWKS`, with the auth server's
+`SYSTEM_CLIENT_ID` and `DEFAULT_REALM_NAME`, and the run that applies the
+migrations provisions it too (see
+[The system client](/operate/docker/#the-system-client)). The seed manifest's
+`system_client` section does the same.
+
+Nothing breaks if you do not, yet. An existing system client row is kept as
+it is, except that a row without the developer API's audience is given it
+(see [the developer portal's token](#the-developer-portals-token-moves-to-the-developer-apis-audience)),
+and the portal's sign-in keeps working through it; a realm that has none gets a
+placeholder that holds no secret and no key, with that audience. The portal's
+move to the redirect flow needs the provisioned row.
+
+Migration 0048 adds `oauth_clients.first_party_profile`,
+`first_party_policy` and `first_party_reason`, nullable with no default, and
+six CHECKs that every existing row passes. The previous release keeps
+creating and updating clients on the new schema.
+
+Remove a client's first-party profile only after every node runs this
+release. The removal revokes the client's refresh tokens under a lock that a
+token write of this release waits for; a node of the previous release does not
+take it, so a refresh token it commits while the profile is removed survives
+the removal.
 
 ### The delivery role reads `realms.issuer`
 

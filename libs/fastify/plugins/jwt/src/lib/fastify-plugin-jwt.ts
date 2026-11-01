@@ -128,14 +128,22 @@ function verificationKeyFor(
   return key?.algorithm === selector.alg ? key : undefined;
 }
 
-/** The registered claims the plugin adds to a token's claims: `aud`, `iat` and `exp`. */
+/**
+ * The registered claims the plugin adds to a token's claims: `aud`, `iat` and
+ * `exp`. `notAfter`, in epoch seconds, caps `exp`: the clock is read here, at
+ * signing, so a cap the caller computed earlier from a lifetime in seconds
+ * cannot drift past it.
+ */
 function withLifetime(
   claims: Record<string, unknown>,
   audience: string | string[],
-  expiresIn: number
+  expiresIn: number,
+  notAfter?: number
 ): Record<string, unknown> {
   const issuedAt = Math.floor(Date.now() / 1000);
-  return { ...claims, aud: audience, iat: issuedAt, exp: issuedAt + expiresIn };
+  const exp =
+    notAfter === undefined ? issuedAt + expiresIn : Math.min(issuedAt + expiresIn, notAfter);
+  return { ...claims, aud: audience, iat: issuedAt, exp };
 }
 
 /**
@@ -316,17 +324,23 @@ export const jwtPlugin = fp<JwtPluginOptions>(
 
     const jwtUtils: JwtUtils = {
       async signAccessToken(realm, payload) {
-        // `expiresInOverride` lets callers shorten a token below the configured
-        // lifespan (e.g. RFC 8693 token-exchange clamps to the subject token's
-        // remaining lifetime). It can only narrow — the value is passed through
-        // verbatim and callers compute the clamped seconds. Never widens here.
-        const { expiresInOverride, ...fields } = payload;
+        // `expiresInOverride` replaces the configured lifespan, verbatim: the
+        // token endpoint passes the lifetime of the token's realm (#527), or
+        // a shorter one it computed (RFC 8693 token-exchange clamps to the
+        // subject token's remaining lifetime). The configured lifespan is the
+        // fallback for a caller that passes none.
+        const { expiresInOverride, expiresNotAfter, ...fields } = payload;
         const { claims, audience } = buildAccessTokenClaims(fields);
         return signer.signJws(SIGNER_CALLER, {
           realmId: realm.id,
           purpose: 'token_signing',
           typ: ACCESS_TOKEN_TYP,
-          claims: withLifetime(claims, audience, expiresInOverride ?? options.accessTokenLifespan),
+          claims: withLifetime(
+            claims,
+            audience,
+            expiresInOverride ?? options.accessTokenLifespan,
+            expiresNotAfter
+          ),
         });
       },
       isHybridSigningEnabled() {
@@ -337,15 +351,20 @@ export const jwtPlugin = fp<JwtPluginOptions>(
           throw new Error('Hybrid signing is not enabled on this server.');
         }
         // Same lifespan semantics as the classical signer: `expiresInOverride`
-        // may only NARROW the configured lifespan (RFC 8693 clamping). The
-        // claims are shaped by the same `buildAccessTokenClaims`, so the bearer
-        // token is indistinguishable from a classical one.
-        const { expiresInOverride, ...fields } = payload;
+        // replaces the configured lifespan (the realm's, or an RFC 8693
+        // clamp). The claims are shaped by the same `buildAccessTokenClaims`,
+        // so the bearer token is indistinguishable from a classical one.
+        const { expiresInOverride, expiresNotAfter, ...fields } = payload;
         const { claims, audience } = buildAccessTokenClaims(fields);
         return signer.signHybrid(SIGNER_CALLER, {
           realmId: realm.id,
           typ: ACCESS_TOKEN_TYP,
-          claims: withLifetime(claims, audience, expiresInOverride ?? options.accessTokenLifespan),
+          claims: withLifetime(
+            claims,
+            audience,
+            expiresInOverride ?? options.accessTokenLifespan,
+            expiresNotAfter
+          ),
         });
       },
       async verifyHybridAccessToken(realm, hybrid, verifyOptions) {
@@ -401,22 +420,26 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         return claims as unknown as JWTPayload;
       },
       async signIdToken(realm, payload) {
-        // OIDC ID tokens share the lifespan of access tokens. `aud` is the
-        // client_id; identity claims + nonce are passed through verbatim.
+        // OIDC ID tokens share the lifespan of access tokens: the token
+        // endpoint passes its realm's access token lifetime as
+        // `expiresInOverride` (#527), and the configured lifespan is the
+        // fallback. `aud` is the client_id; identity claims + nonce are
+        // passed through verbatim.
         //
         // #309: a realm with an active RS256 key signs its ID tokens with
         // RS256 (what the OIDC Basic/Config certification suite, #286,
         // requires to verify); otherwise with its EdDSA key. Access tokens
         // always stay EdDSA. Either way the signer stamps the key's `kid`, so
         // the ID token resolves unambiguously against the realm's JWKS.
-        const { claims, audience } = buildIdTokenClaims(payload);
+        const { expiresInOverride, ...fields } = payload;
+        const { claims, audience } = buildIdTokenClaims(fields);
         const algorithm = (await activeTokenAlgorithms(realm)).has('RS256') ? 'RS256' : 'EdDSA';
         return signer.signJws(SIGNER_CALLER, {
           realmId: realm.id,
           purpose: 'token_signing',
           typ: ID_TOKEN_TYP,
           algorithm,
-          claims: withLifetime(claims, audience, options.accessTokenLifespan),
+          claims: withLifetime(claims, audience, expiresInOverride ?? options.accessTokenLifespan),
         });
       },
       generateRefreshToken() {

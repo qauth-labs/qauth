@@ -15,7 +15,7 @@ import {
   clearSessionCookie,
   readCookie,
   SESSION_COOKIE_NAME,
-  verifySignedSessionId,
+  verifySessionCookie,
 } from '../../helpers/session-cookie';
 import { revokeJti } from '../../helpers/token-revocation';
 import { inactiveSubjectError } from '../../helpers/token-subject';
@@ -108,9 +108,14 @@ export default async function (fastify: FastifyInstance) {
         // first-party token `/auth/login` mints, expired or not, so a token
         // issued to another client or audience cannot end the user's sessions.
         // A disabled user may still sign out: logout only ends access. The
-        // token must still be one of this host's realm (#487).
+        // token must still be one of this host's realm (#487). A live portal
+        // token minted before #524, with the system client's id as audience,
+        // still signs out for this release, so a developer whose portal
+        // session began on a node of the previous release keeps no tokens
+        // when the upgrade rolls. REMOVE IN THE NEXT RELEASE.
         await assertManagementToken(fastify, realm, claims, {
           requireActiveUser: false,
+          acceptPreDeveloperAudience: !isExpired,
         });
         // RFC 9449 §7.2 (#480): this route reads a Bearer token, and a
         // DPoP-bound token is never one.
@@ -147,7 +152,23 @@ export default async function (fastify: FastifyInstance) {
         // found through the per-user index, not a cookie; the request's own
         // cookie is cleared when it names one of them.
         const endedSessions = await endBrowserSessions(fastify, user.realmId, userId);
-        const requestSessionId = verifySignedSessionId(readCookie(request, SESSION_COOKIE_NAME));
+        // Best effort (#493): the cookie verifies only with the realm's cookie
+        // keys, and a process that cannot read them (no signer role, a signer
+        // outage) must still end everything below. The cookie then names an
+        // ended session, and the next page that reads it clears it.
+        let requestSessionId: string | null = null;
+        try {
+          requestSessionId = await verifySessionCookie(
+            fastify,
+            user.realmId,
+            readCookie(request, SESSION_COOKIE_NAME)
+          );
+        } catch (error) {
+          request.log.warn(
+            { reason: error instanceof Error ? error.name : 'unknown_error' },
+            'the session cookie could not be checked at logout; the next page that reads it clears it'
+          );
+        }
         if (requestSessionId && endedSessions.includes(requestSessionId)) {
           clearSessionCookie(reply);
         }

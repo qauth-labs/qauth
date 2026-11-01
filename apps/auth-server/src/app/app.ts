@@ -57,6 +57,7 @@ import {
   eventTelemetrySettings,
 } from './helpers/event-telemetry';
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
+import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
@@ -68,9 +69,12 @@ import {
 } from './helpers/realm-secrets';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
+import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-boot';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
+import { installInternalApi, type InternalApiOptions } from './internal/listener';
+import { publicInternalRouteProblem } from './internal/route-manifest';
 import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
@@ -88,6 +92,7 @@ import {
   repositoriesFor,
   routeRolesProblem,
   servesAdminListener,
+  servesInternalListener,
   ServiceRoleBootError,
 } from './service-roles';
 
@@ -221,6 +226,15 @@ export interface AppOptions {
    * other members are test support.
    */
   adminListener?: AdminApiOptions & { readonly server: FastifyInstance };
+  /**
+   * The internal listener (ADR-019 Decision 8, #496): the Fastify instance
+   * `createInternalServer` built, on which the app installs the internal
+   * routes of this process's roles once its own plugins are registered
+   * (`internal/listener.ts`), and which it closes when it closes. `main.ts`
+   * passes one when the process's roles need it (`servesInternalListener`);
+   * the app refuses one otherwise. `modules` is test support.
+   */
+  internalListener?: Omit<InternalApiOptions, 'roles'> & { readonly server: FastifyInstance };
 }
 
 declare module 'fastify' {
@@ -520,6 +534,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     eventDeliveryRoutes,
     egressClientFactory,
     adminListener,
+    internalListener,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -651,6 +666,22 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
   }
 
+  // The developer portal's token carries the developer API's audience since
+  // #524: every realm's system client gets it as the process boots, after
+  // the default realm's step. A process that does not sign developers in
+  // (`/auth/login` is an `api` route) reads no client.
+  if (defaultRealmBoot && roles.includes('api')) {
+    fastify.addHook('onReady', async () => {
+      const changed = await giveSystemClientsTheDeveloperAudience(fastify);
+      if (changed > 0) {
+        fastify.log.info(
+          { changed, audience: SYSTEM_CLIENT_AUDIENCE },
+          'Gave the system client the developer API audience'
+        );
+      }
+    });
+  }
+
   // The signer's wiring (ADR-019 Decision 9, #464). The plugin loads the KEK:
   // NODE_ENV=production refuses to start without one. Every token is signed
   // through it, with the keys of the request's realm (#491), so it registers
@@ -662,10 +693,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // creates the realm: under the realm's key lock it imports each key variable
   // the realm's encrypted store lacks, creates the standard keys still missing
   // (an RS256 signing key too on a fresh deployment), and warns about every key
-  // variable still set. A signing variable that holds a new key replaces the
+  // variable still set. A signing variable that holds a new key, or a
+  // SESSION_COOKIE_SECRET that differs from the stored cookie key, replaces the
   // stored key until rotation through the store ships (#544, #551); otherwise
-  // tokens never read the variables. The session cookie keeps its variable
-  // until it moves onto the signer (#493).
+  // nothing reads the variables: tokens and the browser cookies are signed
+  // with the realm's keys (#491, #493).
   //
   // Only a process that holds the `signer` role loads it (#495). Any other
   // holds no KEK and no key: its `fastify.signer` refuses every signature,
@@ -1010,10 +1042,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   // Over every route of the app, a plugin's as well as a route module's: an
-  // admin route registers only on the admin listener (#511), and every route
-  // names its roles.
+  // admin route registers only on the admin listener (#511), an internal one
+  // only on the internal listener (#496), and every route names its roles.
   const unplaced = registeredRoutes
-    .map((route) => publicRouteProblem(route) ?? routeRolesProblem(route, roles))
+    .map(
+      (route) =>
+        publicRouteProblem(route) ??
+        publicInternalRouteProblem(route) ??
+        routeRolesProblem(route, roles)
+    )
     .filter((problem) => problem !== undefined);
   if (unplaced.length > 0) {
     throw new Error(unplaced.join('\n'));
@@ -1030,5 +1067,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     }
     const { server: adminServer, ...adminOptions } = adminListener;
     await installAdminApi(adminServer, fastify, adminOptions);
+  }
+
+  // The internal listener (ADR-019 Decision 8, #496), on a process whose
+  // roles need it: it shares the database, cache and signer plugins above,
+  // registers the internal routes of this process's roles, and closes before
+  // the plugins it shares.
+  if (internalListener !== undefined) {
+    if (!servesInternalListener(roles, internalListener.modules)) {
+      throw new Error(
+        `The internal listener runs only on a process that holds the signer while the roles are split, or whose roles serve an internal route (SERVICE_ROLES=${describeServiceRoles(roles)})`
+      );
+    }
+    const { server: internalServer, ...internalOptions } = internalListener;
+    await installInternalApi(internalServer, fastify, { ...internalOptions, roles });
   }
 }

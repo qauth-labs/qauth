@@ -25,6 +25,9 @@ export function clientErrorMessage(error: ApiError): string {
       if (typeof error.details === 'string') return error.details;
       return error.message || 'Some fields are invalid. Please review and try again.';
     }
+    case 'CONFLICT':
+      // A client changed since the form read it (412 on its If-Match, #524).
+      return 'This client was changed since you opened it. Reload the page and make your change again.';
     case 'NETWORK_ERROR':
       return 'Could not reach the server. Check your connection and try again.';
     default:

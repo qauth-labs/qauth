@@ -296,8 +296,39 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists the bearer values that ride in a query string: response_code and token', () => {
-    expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual(['response_code', 'token']);
+  it('lists the bearer values that ride in a query string', () => {
+    expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual([
+      'code',
+      'id_token',
+      'access_token',
+      'response_code',
+      'token',
+    ]);
+  });
+
+  it('censors an id_token or access_token a form_post bounce carried into a callback URL (#599)', () => {
+    expect(
+      redactLoggedUrl(
+        '/upstream/oidc_corp/callback?state=xyz&id_token=eyJh.eyJz.c2ln&access_token=at-1'
+      )
+    ).toBe(
+      `/upstream/oidc_corp/callback?state=xyz&id_token=${LOG_REDACT_CENSOR}&access_token=${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl('/upstream/oidc_corp/callback?access%5Ftoken=at-2')).toBe(
+      `/upstream/oidc_corp/callback?access%5Ftoken=${LOG_REDACT_CENSOR}`
+    );
+  });
+
+  it("censors an upstream provider's code at an AuthMethod callback, and leaves other names alone (#599)", () => {
+    expect(
+      redactLoggedUrl('/upstream/oidc_corp/callback?code=SplxlOBeZQQYbYS6WxSbIA&state=xyz')
+    ).toBe(`/upstream/oidc_corp/callback?code=${LOG_REDACT_CENSOR}&state=xyz`);
+    expect(redactLoggedUrl('/upstream/oidc_corp/callback?state=xyz&%63ode=abc')).toBe(
+      `/upstream/oidc_corp/callback?state=xyz&%63ode=${LOG_REDACT_CENSOR}`
+    );
+    expect(redactLoggedUrl('/device?user_code=WDJB-MJHT&code_challenge=abc')).toBe(
+      '/device?user_code=WDJB-MJHT&code_challenge=abc'
+    );
   });
 
   it('censors the verification token of a mailed link, on any path (#490)', () => {

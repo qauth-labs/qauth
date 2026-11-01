@@ -207,6 +207,13 @@ export default async function (fastify: FastifyInstance) {
         // one, on a client the operator provisioned; pinned like
         // `provisionedByOperator`, and the request schema defines no such field.
         verifiedDomain: null,
+        // ADR-017 Decision 2 (#631): never first party. First-partyness is the
+        // operator's to set, never self-asserted; pinned NULL like
+        // `verifiedDomain`, written NULL by the repository whatever it is
+        // given, and refused by the database on a dynamically registered row.
+        firstPartyProfile: null,
+        firstPartyPolicy: null,
+        firstPartyReason: null,
         // Stamp the dyn-reg timestamp so the consent screen (issue #150)
         // can surface the "Newly registered" phishing-defense badge
         // within DYNAMIC_CLIENT_BADGE_DAYS of registration.

@@ -1,3 +1,7 @@
+// The AuthMethod contract (#599): EXPERIMENTAL, the plugin API of ADR-018 §4.
+// Mounting a method's routes under `/upstream/<type>` lives here, since it
+// needs Fastify; the contract itself is re-exported below.
+export * from './lib/auth-method-routes';
 export * from './lib/configured-providers';
 // Credential revocation (#297/#378): turning OID4VP_STATUS_LIST_* into a wired
 // `CredentialStatusChecker`, plus the boot-time refusal for a half-configured
@@ -12,6 +16,55 @@ export * from './lib/federation-plugin';
 // precisely the object a caller in a hurry would use. See the module JSDoc.
 export * from './lib/wallet-credential-verification';
 export type * from './types';
+
+// The AuthMethod contract surface (#599, EXPERIMENTAL), for the plugin
+// runtime (#600) and the upstream sign-in flow (#639) in `apps/auth-server`,
+// which reach `scope:server` libs only through here.
+export type {
+  AuthMethod,
+  AuthMethodBounce,
+  AuthMethodBounceRoute,
+  AuthMethodCallbackRequest,
+  AuthMethodCallbackRoute,
+  AuthMethodClientAssertionRequest,
+  AuthMethodContext,
+  AuthMethodContextParts,
+  AuthMethodDisplay,
+  AuthMethodEgress,
+  AuthMethodEgressRequest,
+  AuthMethodEgressResponse,
+  AuthMethodHostEgress,
+  AuthMethodHostSigner,
+  AuthMethodIcon,
+  AuthMethodLogger,
+  AuthMethodParameters,
+  AuthMethodRoute,
+  AuthMethodRouteRequest,
+  AuthMethodSigner,
+  AuthMethodStepUrn,
+  PendingUpstreamTransaction,
+  UpstreamCallbackOutcome,
+  UpstreamFailureReason,
+  UpstreamStart,
+  UpstreamStartRequest,
+  UpstreamStepCompletion,
+  UpstreamStepCompletionOptions,
+  UpstreamStepFailureReason,
+} from '@qauth-labs/server-federation';
+export {
+  AUTH_METHOD_CONTRACT,
+  AUTH_METHOD_ROUTE_ROOT,
+  AUTH_METHOD_STABILITY,
+  AuthMethodConfigError,
+  AuthMethodContractError,
+  AuthMethodFaultError,
+  authMethodRoutePrefix,
+  completeUpstreamStep,
+  createAuthMethodContext,
+  isAuthMethod,
+  startUpstreamStep,
+  UPSTREAM_STEP_URN,
+} from '@qauth-labs/server-federation';
 
 // Re-exported provider surface: app code (scope:app) may only depend on
 // fastify plugins (scope:fastify), never on server libs directly — routes and

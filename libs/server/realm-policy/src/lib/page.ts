@@ -157,9 +157,10 @@ realm representation, the realm file, the diff of two configurations and the rul
 which changes are security operations all come from it, and so does this page.
 
 Today most of them are still read from the environment, for every realm. Some already live on the
-realm row: the environment ceiling, the scopes a dynamically registered client may hold, and the
-mail transport and sender. Nothing reads the \`admin\` group yet. Once the policies live on the realm
-row, the environment only seeds a new realm's values, and the realm row owns them from then on.
+realm row: the access, development access and refresh token lifetimes, the environment ceiling, the
+scopes a dynamically registered client may hold, and the mail transport and sender. Nothing reads
+the \`admin\` group yet. Once the policies live on the realm row, the environment only seeds a new
+realm's values, and the realm row owns them from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
 its secret store, encrypted with the realm's data-at-rest key, and the representation shows only

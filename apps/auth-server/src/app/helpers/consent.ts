@@ -118,9 +118,9 @@ export function filterRequestedScopes(
  *
  * Every caller that would issue a code without the screen asks this
  * question: the browser fast path and `prompt=none` on `/oauth/authorize`,
- * its legacy Bearer path, which can show no screen and so never issues a code
- * to an agent, and the re-check of a skip under the consent row's lock in the
- * transaction that mints the code.
+ * and the re-check of a skip under the consent row's lock in the transaction
+ * that mints the code. (The legacy Bearer path, which asked it too, was
+ * retired by #524.)
  */
 export function canSkipConsent(
   consent: OAuthConsentLike | undefined,
