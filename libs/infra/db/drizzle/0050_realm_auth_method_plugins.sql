@@ -8,7 +8,9 @@
 -- The CHECKs hold the stored forms: a plugin id under the contract's id rule,
 -- a config and a secrets map that are JSON objects, every secret a
 -- v1.<kid>.<iv>.<ciphertext> string (a value of any other form would be one in
--- the clear), and a version above zero.
+-- the clear), and a version above zero. The ciphertext CHECK passes a secrets
+-- value that is no object, which secrets_object refuses: its strict jsonpath
+-- would raise an error on an array or a scalar, and it runs first.
 CREATE TABLE "realm_auth_method_plugins" (
 	"realm_id" uuid NOT NULL,
 	"plugin_id" varchar(63) NOT NULL,
@@ -22,7 +24,7 @@ CREATE TABLE "realm_auth_method_plugins" (
 	CONSTRAINT "realm_auth_method_plugins_plugin_id_form" CHECK ("realm_auth_method_plugins"."plugin_id" ~ '^[a-z][a-z0-9_-]{0,62}$'),
 	CONSTRAINT "realm_auth_method_plugins_config_object" CHECK (jsonb_typeof("realm_auth_method_plugins"."config") = 'object'),
 	CONSTRAINT "realm_auth_method_plugins_secrets_object" CHECK (jsonb_typeof("realm_auth_method_plugins"."secrets") = 'object'),
-	CONSTRAINT "realm_auth_method_plugins_secrets_ciphertext" CHECK (NOT jsonb_path_exists("realm_auth_method_plugins"."secrets", 'strict $.* ? (@.type() != "string" || !(@ like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"))')),
+	CONSTRAINT "realm_auth_method_plugins_secrets_ciphertext" CHECK (jsonb_typeof("realm_auth_method_plugins"."secrets") <> 'object' OR NOT jsonb_path_exists("realm_auth_method_plugins"."secrets", 'strict $.* ? (@.type() != "string" || !(@ like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"))')),
 	CONSTRAINT "realm_auth_method_plugins_version_positive" CHECK ("realm_auth_method_plugins"."version" > 0)
 );
 --> statement-breakpoint

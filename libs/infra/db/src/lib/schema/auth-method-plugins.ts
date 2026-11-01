@@ -63,10 +63,13 @@ export const realmAuthMethodPlugins = pgTable(
     check('realm_auth_method_plugins_config_object', sql`jsonb_typeof(${t.config}) = 'object'`),
     check('realm_auth_method_plugins_secrets_object', sql`jsonb_typeof(${t.secrets}) = 'object'`),
     // Every secret is a data-at-rest ciphertext, `v1.<kid>.<iv>.<ciphertext>`:
-    // a value of any other form would be one stored in the clear.
+    // a value of any other form would be one stored in the clear. A `secrets`
+    // that is no object passes here and fails `secrets_object`: the strict
+    // `$.*` would raise a jsonpath error on an array or a scalar, and
+    // Postgres runs the CHECKs in name order, this one first.
     check(
       'realm_auth_method_plugins_secrets_ciphertext',
-      sql`NOT jsonb_path_exists(${t.secrets}, 'strict $.* ? (@.type() != "string" || !(@ like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"))')`
+      sql`jsonb_typeof(${t.secrets}) <> 'object' OR NOT jsonb_path_exists(${t.secrets}, 'strict $.* ? (@.type() != "string" || !(@ like_regex "^v1[.][^.]+[.][^.]+[.][^.]+$"))')`
     ),
     check('realm_auth_method_plugins_version_positive', sql`${t.version} > 0`),
   ]

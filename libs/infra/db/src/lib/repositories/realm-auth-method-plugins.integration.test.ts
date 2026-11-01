@@ -130,6 +130,27 @@ describe('realm AuthMethod plugin state (real Postgres, #600)', () => {
   });
 
   it.each([
+    ['an array', `'["v1.kid-1.aXY.Y2lwaGVydGV4dA"]'`],
+    ['a string', `'"v1.kid-1.aXY.Y2lwaGVydGV4dA"'`],
+    ['a number', `'42'`],
+    ['null', `'null'`],
+  ])(
+    'refuses secrets that are %s by the object CHECK, never with a jsonpath error',
+    async (_case, secrets) => {
+      const realmId = await realm('alpha');
+      await expect(
+        database().pool.query(
+          `INSERT INTO realm_auth_method_plugins (realm_id, plugin_id, secrets) VALUES ($1, 'corp', ${secrets}::jsonb)`,
+          [realmId]
+        )
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'realm_auth_method_plugins_secrets_object',
+      });
+    }
+  );
+
+  it.each([
     [
       'a plugin id outside the contract rule',
       `'Corp SSO'`,

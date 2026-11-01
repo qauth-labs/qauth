@@ -1,5 +1,5 @@
 {
-  "id": "efded0ad-9aed-418e-88c2-780a80590a0c",
+  "id": "96b5887e-05c3-4ed1-99b1-91c20f95eea7",
   "prevId": "609ae559-dcb8-456d-a082-71f2d14a01aa",
   "version": "7",
   "dialect": "postgresql",
@@ -1128,7 +1128,7 @@
         },
         "realm_auth_method_plugins_secrets_ciphertext": {
           "name": "realm_auth_method_plugins_secrets_ciphertext",
-          "value": "NOT jsonb_path_exists(\"realm_auth_method_plugins\".\"secrets\", 'strict $.* ? (@.type() != \"string\" || !(@ like_regex \"^v1[.][^.]+[.][^.]+[.][^.]+$\"))')"
+          "value": "jsonb_typeof(\"realm_auth_method_plugins\".\"secrets\") <> 'object' OR NOT jsonb_path_exists(\"realm_auth_method_plugins\".\"secrets\", 'strict $.* ? (@.type() != \"string\" || !(@ like_regex \"^v1[.][^.]+[.][^.]+[.][^.]+$\"))')"
         },
         "realm_auth_method_plugins_version_positive": {
           "name": "realm_auth_method_plugins_version_positive",
