@@ -16,8 +16,29 @@ export interface PolicyRuleContext {
   /**
    * Whether the secret field at `path` holds a value after the update: set
    * by it, or left set by an earlier one. Never the value.
+   *
+   * @throws PolicySecretStoreUnavailableError when the update leaves the
+   *   secret alone and the store has no secret store to ask
    */
   readonly isSet: (path: string) => boolean;
+  /**
+   * The parsed document before the update: the realm's policies as they
+   * read now. A rule compares it with the document it checks, so it can
+   * leave alone what the update does not change, and refuse only what the
+   * update brings in.
+   */
+  readonly previous: Readonly<Record<string, unknown>>;
+  /**
+   * Whether the secret field at `path` held a value before the update.
+   *
+   * @throws PolicySecretStoreUnavailableError as {@link isSet} does
+   */
+  readonly wasSet: (path: string) => boolean;
+  /**
+   * What the update does to the secret field at `path`: `set` gives it a
+   * value, `cleared` removes its value, and `undefined` leaves it alone.
+   */
+  readonly written: (path: string) => 'set' | 'cleared' | undefined;
 }
 
 /**

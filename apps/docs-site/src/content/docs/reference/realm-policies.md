@@ -26,7 +26,8 @@ its secret store, encrypted with the realm's data-at-rest key, and the represent
 whether it is set (`passwordSet`). The environment seeds the first realm's secrets once, at the
 first boot that can encrypt them. A policy update that selects the `smtp` transport without its
 host, port, user, sender address and password, or `resend` without its sender address and API key,
-is refused.
+is refused, and so is one that selects `smtp` or changes its host, port or TLS mode without giving
+the password again.
 
 Schema version: `1-rc.0`.
 

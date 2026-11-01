@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import { z } from 'zod';
 
 import { groupDocsLink } from '../docs';
@@ -200,13 +202,18 @@ interface MailTransportFields {
   readonly smtp: {
     readonly host: string | null;
     readonly port: number | null;
+    readonly secure: boolean;
     readonly user: string | null;
   };
 }
 
+/** The secret fields of the mail transports. */
+const MAIL_SECRET_PATHS = ['mail.smtp.password', 'mail.resend.apiKey'] as const;
+
 /**
- * The realm policy rule of the mail transport (#529): a policy update that
- * selects a transport must give it what it sends with.
+ * What the mail transport of `policies` lacks to send (#529), with the
+ * secrets `isSet` says hold a value: one issue per missing path, never a
+ * value.
  *
  * - `smtp` needs `mail.smtp.host`, `mail.smtp.port` and `mail.smtp.user`, and
  *   `mail.smtp.password` set;
@@ -214,11 +221,13 @@ interface MailTransportFields {
  * - both need `mail.fromAddress`, the address every mail is sent from;
  * - `mock` sends nothing, and needs nothing.
  *
- * Until #529 the boot refused such an environment; the check moved to the
- * update, since the realm row holds the transport now. The issues name the
- * missing paths, never a value.
+ * The boot names these for the default realm; {@link mailTransportIssues}
+ * refuses an update that brings one in.
  */
-export const mailTransportIssues: PolicyRule = (policies, { isSet }) => {
+export function mailTransportGaps(
+  policies: Readonly<Record<string, unknown>>,
+  isSet: (path: string) => boolean
+): PolicyIssue[] {
   const mail = policies['mail'] as MailTransportFields | undefined;
   if (mail === undefined || mail.provider === 'mock') return [];
   const why = `is required when mail.provider is ${mail.provider}`;
@@ -239,6 +248,72 @@ export const mailTransportIssues: PolicyRule = (policies, { isSet }) => {
       path: 'mail.resend.apiKey',
       message: `must be set when mail.provider is resend`,
     });
+  }
+  return issues;
+}
+
+/**
+ * The fields of the smtp transport that say where its password goes: a
+ * change of any of them, or a move to smtp, sends the stored password to a
+ * server it was not given for, unless the same update gives it again.
+ */
+function smtpDestinationChanges(before: MailTransportFields, after: MailTransportFields): string[] {
+  if (after.provider !== 'smtp') return [];
+  const changed: string[] = [];
+  if (before.provider !== 'smtp') changed.push('mail.provider');
+  if (before.smtp.host !== after.smtp.host) changed.push('mail.smtp.host');
+  if (before.smtp.port !== after.smtp.port) changed.push('mail.smtp.port');
+  if (before.smtp.secure !== after.smtp.secure) changed.push('mail.smtp.secure');
+  return changed;
+}
+
+/**
+ * The realm policy rule of the mail transport (#529): a policy update must
+ * leave the realm's transport able to send, and must not send its password
+ * to a server it was not given for.
+ *
+ * - An update that changes nothing of `mail` and writes no mail secret is not
+ *   checked: a realm whose transport lacks something (filled from an
+ *   incomplete environment) can still change its other policies.
+ * - Otherwise it is refused for each gap of {@link mailTransportGaps} it
+ *   brings in. A gap the realm had before the update is not its doing.
+ * - An update that selects smtp, or changes `mail.smtp.host`, `port` or
+ *   `secure` while the transport is smtp, and leaves a password stored must
+ *   set `mail.smtp.password` too: the stored password would otherwise go to
+ *   the new server on the next mail.
+ *
+ * Until #529 the boot refused an incomplete environment; the check moved to
+ * the update, since the realm row holds the transport now. The issues name
+ * paths, never a value.
+ */
+export const mailTransportIssues: PolicyRule = (policies, context) => {
+  const after = policies['mail'] as MailTransportFields | undefined;
+  const before = context.previous['mail'] as MailTransportFields | undefined;
+  if (after === undefined) return [];
+  const writesSecret = MAIL_SECRET_PATHS.some((path) => context.written(path) !== undefined);
+  if (!writesSecret && isDeepStrictEqual(before, after)) return [];
+
+  const known = (issue: PolicyIssue, list: readonly PolicyIssue[]) =>
+    list.some((other) => other.path === issue.path && other.message === issue.message);
+  const previousGaps =
+    before === undefined ? [] : mailTransportGaps(context.previous, context.wasSet);
+  const issues = mailTransportGaps(policies, context.isSet).filter(
+    (issue) => !known(issue, previousGaps)
+  );
+
+  const changed = before === undefined ? [] : smtpDestinationChanges(before, after);
+  // Only a password the update carries over can reach the new server: one
+  // the realm lacks is the gap above.
+  if (
+    changed.length > 0 &&
+    context.written('mail.smtp.password') !== 'set' &&
+    context.isSet('mail.smtp.password')
+  ) {
+    const issue = {
+      path: 'mail.smtp.password',
+      message: `must be given again when ${changed.join(', ')} ${changed.length === 1 ? 'changes' : 'change'}`,
+    };
+    if (!known(issue, issues)) issues.push(issue);
   }
   return issues;
 };

@@ -1,6 +1,6 @@
 import type { RealmMailRead, RealmMailSource } from '@qauth-labs/fastify-plugin-email';
 import {
-  mailTransportIssues,
+  mailTransportGaps,
   type RealmPolicyStoreOfRealms,
   type RealmSecretCipher,
   realmSecretPaths,
@@ -138,9 +138,7 @@ export async function seedDefaultRealmSecrets(
   for (const path of realmSecretPaths()) {
     if (await deps.secrets.isSet(realm.id, path)) set.add(path);
   }
-  const issues = mailTransportIssues(deps.policies.ofRealm(realm).policies, {
-    isSet: (path) => set.has(path),
-  });
+  const issues = mailTransportGaps(deps.policies.ofRealm(realm).policies, (path) => set.has(path));
   for (const issue of issues) {
     deps.log.warn(
       { realm: realm.name, realmId: realm.id, policy: issue.path },

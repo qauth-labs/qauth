@@ -238,11 +238,12 @@ describe('each realm sends through its own mail transport (#529)', () => {
     await serverB.waitForMessages(2);
     expect(serverB.logins.map((login) => login.password)).toEqual([PASSWORD_B, PASSWORD_B_ROTATED]);
 
-    // Another server: the next mail goes there.
+    // Another server: the next mail goes there. The update gives the
+    // password again, which a change of the server must (review of #937).
     const moved = await app.policyStore.get(realm.id);
     await app.policyStore.update(
       realm.id,
-      { mail: { smtp: { port: serverA.port } } },
+      { mail: { smtp: { port: serverA.port, password: PASSWORD_B_ROTATED } } },
       { expectedVersion: moved?.version ?? 0 }
     );
     await register(app, 'dave@example.com', HOST_B);

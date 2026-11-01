@@ -660,35 +660,52 @@ export function createPolicyStore<Row, Tx>(
 
   /**
    * Run the store's rules on `document`, the parsed document an update would
-   * store, with the secrets it would leave set: those `writes` sets, and those
-   * set before that it leaves alone.
+   * store, against `previous`, the realm's document before it, with the
+   * secrets each leaves set: before, those the secret store holds; after,
+   * those `writes` sets, and those set before that it leaves alone.
    *
    * @throws PolicyValidationError naming each issue's path
    */
   async function checkRules(
     realmId: string,
+    previous: Readonly<Record<string, unknown>>,
     document: Readonly<Record<string, unknown>>,
     writes: readonly { readonly path: string; readonly value: string | null }[],
     tx: Tx
   ): Promise<void> {
     if (rules.length === 0) return;
-    // What each secret holds after the update: what the update writes, or
-    // what the secret store holds. Without a store, a secret the update does
-    // not write is unknown, and a rule that asks about one fails closed: the
-    // store cannot say the secret is unset when it may be set.
-    const state = new Map<string, boolean>();
+    // What each secret holds before and after the update: what the secret
+    // store holds, and after it what the update writes. Without a store (and
+    // so with no write: `update` refuses a write without one), a secret is
+    // unknown, and a rule that asks about one fails closed: the store cannot
+    // say the secret is unset when it may be set.
+    const before = new Map<string, boolean>();
+    const after = new Map<string, boolean>();
     for (const entry of secretFields) {
+      if (secrets !== undefined) {
+        before.set(entry.path, await secrets.isSet(realmId, entry.path, tx));
+      }
       const write = writes.find((candidate) => candidate.path === entry.path);
-      if (write !== undefined) state.set(entry.path, write.value !== null);
-      else if (secrets !== undefined)
-        state.set(entry.path, await secrets.isSet(realmId, entry.path, tx));
+      if (write !== undefined) after.set(entry.path, write.value !== null);
+      else if (before.has(entry.path)) after.set(entry.path, before.get(entry.path) === true);
     }
-    const isSet = (path: string) => {
+    const reader = (state: ReadonlyMap<string, boolean>) => (path: string) => {
       const known = state.get(path);
       if (known === undefined) throw new PolicySecretStoreUnavailableError([path]);
       return known;
     };
-    const issues = rules.flatMap((rule) => rule(document, { isSet }));
+    const written = (path: string) => {
+      const write = writes.find((candidate) => candidate.path === path);
+      if (write === undefined) return undefined;
+      return write.value === null ? ('cleared' as const) : ('set' as const);
+    };
+    const context = {
+      isSet: reader(after),
+      previous,
+      wasSet: reader(before),
+      written,
+    };
+    const issues = rules.flatMap((rule) => rule(document, context));
     if (issues.length > 0) {
       throw new PolicyValidationError('The realm policies are not valid', issues);
     }
@@ -772,7 +789,7 @@ export function createPolicyStore<Row, Tx>(
         // The `input` view takes the representation's `<name>Set` members and
         // drops them, so a representation sent back changes nothing.
         const next = registry.parse(merged, 'input');
-        await checkRules(realmId, next, writes, inner);
+        await checkRules(realmId, current.document, next, writes, inner);
         const written = await storage.write(
           realmId,
           {
