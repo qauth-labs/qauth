@@ -62,6 +62,7 @@ describe('the plugin operations (#600)', () => {
       params: { realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b', plugin: 'corp' },
       query: {},
       body: {
+        version: 3,
         config: { issuer: 'https://idp.example', clientId: 'qauth' },
         secrets: { clientSecret: { sealed: SEALED }, oldKey: null },
       },
@@ -69,6 +70,7 @@ describe('the plugin operations (#600)', () => {
     expect(rendered).toEqual({
       title: 'Replace the configuration of the sign-in plugin corp in the realm',
       fields: [
+        { label: 'replaces the state of version', value: '3' },
         { label: 'config.issuer', value: '"https://idp.example"' },
         { label: 'config.clientId', value: '"qauth"' },
         { label: 'secret clientSecret', value: 'set to a new sealed value (not shown)' },
@@ -105,26 +107,31 @@ describe('the configure body (#600)', () => {
     const schema = pluginConfigBodySchema(await installed());
     expect(
       schema.safeParse({
+        version: 0,
         config: { issuer: 'https://idp.example', clientId: 'qauth' },
         secrets: { clientSecret: { sealed: SEALED } },
       }).success
     ).toBe(true);
-    expect(schema.safeParse({ config: {}, secrets: { clientSecret: null } }).success).toBe(true);
+    expect(
+      schema.safeParse({ version: 2, config: {}, secrets: { clientSecret: null } }).success
+    ).toBe(true);
+    // The version it replaces is part of the request an approval binds.
+    expect(schema.safeParse({ config: {}, secrets: { clientSecret: null } }).success).toBe(false);
   });
 
   it('refuses a secret in the clear, so the request an approval stores holds none', async () => {
     const schema = pluginConfigBodySchema(await installed());
     for (const value of [SECRET, { sealed: SECRET }, { sealed: SEALED, value: SECRET }]) {
-      expect(schema.safeParse({ config: {}, secrets: { clientSecret: value } }).success).toBe(
-        false
-      );
+      expect(
+        schema.safeParse({ version: 0, config: {}, secrets: { clientSecret: value } }).success
+      ).toBe(false);
     }
   });
 
   it("refuses an installed plugin's secret member under config, so no approval holds one in the clear", async () => {
     const schema = pluginConfigBodySchema(await installed());
     for (const config of [{ clientSecret: SECRET }, { clientSecret: SECRET, a: 1 }]) {
-      const parsed = schema.safeParse({ config });
+      const parsed = schema.safeParse({ version: 0, config });
       expect(parsed.success).toBe(false);
       expect(parsed.error?.issues.map((issue) => issue.message)).toEqual([
         'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets',
@@ -133,11 +140,15 @@ describe('the configure body (#600)', () => {
   });
 
   it.each([
-    ['a member other than config and secrets', { config: {}, code: 'x' }],
-    ['an empty sealed value', { config: {}, secrets: { clientSecret: { sealed: '' } } }],
-    ['a secret that is not sealed', { config: {}, secrets: { clientSecret: 42 } }],
-    ['a config that is not an object', { config: ['a'] }],
-    ['a config too large', { config: { blob: 'x'.repeat(17 * 1024) } }],
+    ['a member other than version, config and secrets', { version: 0, config: {}, code: 'x' }],
+    [
+      'an empty sealed value',
+      { version: 0, config: {}, secrets: { clientSecret: { sealed: '' } } },
+    ],
+    ['a secret that is not sealed', { version: 0, config: {}, secrets: { clientSecret: 42 } }],
+    ['a config that is not an object', { version: 0, config: ['a'] }],
+    ['a config too large', { version: 0, config: { blob: 'x'.repeat(17 * 1024) } }],
+    ['a negative version', { version: -1, config: {} }],
   ])('refuses %s', async (_case, body) => {
     expect(pluginConfigBodySchema(await installed()).safeParse(body).success).toBe(false);
   });

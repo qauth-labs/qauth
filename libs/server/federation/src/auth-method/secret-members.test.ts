@@ -75,26 +75,53 @@ describe('authMethodSecretPaths (#600)', () => {
     expect(() => authMethodSecretPaths(withSchema(notZod))).toThrow(/has no JSON Schema form/);
   });
 
-  it('reads a mark on the output side of a pipe, as on its input side', () => {
+  it('reads a mark on the output side of a pipe that keeps the path and the string', () => {
     const schema = z.object({
       trimmed: z
         .string()
         .trim()
         .pipe(z.string().min(8).meta({ writeOnly: true })),
-      reshaped: z
-        .string()
-        .transform((value) => ({ s: value }))
-        .pipe(z.object({ s: z.string().meta({ writeOnly: true }) })),
       inputSide: z.string().meta({ writeOnly: true }).pipe(z.string().min(1)),
+      transformed: z
+        .string()
+        .transform((value) => value.trim())
+        .meta({ writeOnly: true }),
     });
-    // `reshaped.s` is on the output side only, and is no member a request can
-    // send: its path still counts, so the plugin is not stored in the clear.
+    // Input-side marks first, then those only the output side shows.
     expect(authMethodSecretPaths(withSchema(schema))).toEqual([
       'inputSide',
+      'transformed',
       'trimmed',
-      'reshaped.s',
     ]);
   });
+
+  it.each<[string, z.ZodType]>([
+    [
+      'reshapes the value into an object',
+      z.object({
+        reshaped: z
+          .string()
+          .transform((value) => ({ s: value }))
+          .pipe(z.object({ s: z.string().meta({ writeOnly: true }) })),
+      }),
+    ],
+    [
+      'renames the value',
+      z.object({
+        raw: z
+          .object({ rawSecret: z.string() })
+          .transform(({ rawSecret }) => ({ secret: rawSecret }))
+          .pipe(z.object({ secret: z.string().meta({ writeOnly: true }) })),
+      }),
+    ],
+  ])(
+    'refuses a mark behind a pipe that %s: its value could only be sent in the clear',
+    (_case, schema) => {
+      expect(() => authMethodSecretPaths(withSchema(schema))).toThrow(
+        /on its output side, where its input takes no string member/
+      );
+    }
+  );
 
   it.each<[string, z.ZodType]>([
     ['a Set', z.object({ keys: z.set(z.string().meta({ writeOnly: true })) })],
@@ -119,6 +146,33 @@ describe('authMethodSecretPaths (#600)', () => {
       z.object({ label: z.string(), children: z.array(node) })
     );
     expect(authMethodSecretPaths(withSchema(z.object({ tree: node })))).toEqual([]);
+  });
+
+  it.each<[string, (node: z.ZodType) => z.ZodType]>([
+    ['a list', (node) => z.array(node)],
+    ['a nullable', (node) => node.nullable()],
+    ['a record', (node) => z.record(z.string(), node)],
+  ])('refuses a mark inside a part that recurses through %s', (_case, wrap) => {
+    interface Node {
+      readonly secret: string;
+      readonly next?: unknown;
+    }
+    const node: z.ZodType<Node> = z.lazy(() =>
+      z.object({ secret: z.string().meta({ writeOnly: true }), next: wrap(node).optional() })
+    );
+    expect(() => authMethodSecretPaths(withSchema(z.object({ tree: node })))).toThrow(
+      AuthMethodContractError
+    );
+  });
+
+  it("refuses a schema whose marks the server's Zod cannot see", () => {
+    // A Zod copy that keeps a registry of its own answers its own marks
+    // through `.meta()`, and the server's registry knows none of them.
+    const foreign = z.string();
+    Object.defineProperty(foreign, 'meta', { value: () => ({ writeOnly: true }) });
+    expect(() => authMethodSecretPaths(withSchema(z.object({ clientSecret: foreign })))).toThrow(
+      /a Zod copy whose metadata this server cannot read/
+    );
   });
 
   it('refuses a mark inside a recursive part', () => {

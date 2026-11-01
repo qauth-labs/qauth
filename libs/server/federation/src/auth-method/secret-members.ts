@@ -10,16 +10,19 @@ import { AuthMethodContractError } from './errors';
  * one, the server stores it encrypted at rest, and no response, event or log
  * shows its value.
  *
- * The marks are read from the schema's JSON Schema, which Zod writes with
- * the metadata of every Zod copy of the same major version (Zod keeps one
- * registry for all of them), so a plugin that bundles its own Zod 4 is read
- * the same way.
+ * The marks are read from the schema's JSON Schema, input and output side.
+ * Zod 4.6 keeps one metadata registry for every copy that shares it
+ * (`globalThis.__zod_globalRegistry`); a schema built with a copy that keeps
+ * its own, whose marks the server would not see, is refused.
  *
  * Supported: a secret is a string member (or a nullable one) of the config
- * object, at any depth of nested objects. A config whose schema is not an
- * object, or that marks a member inside a list, a union, a record or a
- * recursive schema, cannot be split into members safely: the method is
- * refused, so the boot fails rather than store a secret in the clear.
+ * object, at any depth of nested objects, marked on the input side or on the
+ * output side of a pipe that keeps its path and its string. A config whose
+ * schema is not an object, holds a part JSON Schema cannot describe, or
+ * marks a member inside a list, a union, a record or a recursive part, or
+ * behind a pipe that reshapes it, cannot be split into members safely: the
+ * method is refused, so the boot fails rather than store a secret in the
+ * clear.
  *
  * @experimental
  */
@@ -152,9 +155,27 @@ function holdsMark(
   );
 }
 
-/** The secret paths one document marks, and the problems it shows. */
-function walkDocument(document: SchemaDocument): { paths: string[]; problems: string[] } {
+/** What one walk of a document found. */
+interface DocumentWalk {
+  /** The secret paths it marks. */
+  readonly paths: string[];
+  /** The paths of every string member (a leaf whose values are strings or null). */
+  readonly stringPaths: string[];
+  readonly problems: string[];
+}
+
+/**
+ * The secret paths one document marks, its string members, and the problems
+ * it shows. For the output form, `inputStrings` holds the string members of
+ * the input form: a member marked on the output side counts only where the
+ * input takes a string at the same path, the value a request names as a
+ * secret. A mark on the output of a pipe that reshapes or renames the value
+ * has no such member, and is refused: its value could only be sent among the
+ * plain members.
+ */
+function walkDocument(document: SchemaDocument, inputStrings?: ReadonlySet<string>): DocumentWalk {
   const paths: string[] = [];
+  const stringPaths: string[] = [];
   const problems: string[] = [];
   const walk = (
     given: JsonSchemaNode,
@@ -191,7 +212,9 @@ function walkDocument(document: SchemaDocument): { paths: string[]; problems: st
       const rest = Object.fromEntries(
         Object.entries(node).filter(([key]) => key !== 'properties' && key !== '$defs')
       );
-      if (holdsMark(rest, document, new Set(inside))) {
+      // A fresh set: an ancestor's `$ref` met again below (recursion through
+      // a list, a record or a nullable) is looked into, not skipped.
+      if (holdsMark(rest, document, new Set())) {
         problems.push(
           `configSchema marks a secret member${path.length > 0 ? ` under ${path.join('.')}` : ''} that is not a named member of an object`
         );
@@ -204,21 +227,78 @@ function walkDocument(document: SchemaDocument): { paths: string[]; problems: st
         problems.push(
           `the secret member ${at} has a member name outside ${AUTH_METHOD_SECRET_SEGMENT_PATTERN.source}`
         );
+      } else if (inputStrings !== undefined) {
+        if (inputStrings.has(at)) paths.push(at);
+        else {
+          problems.push(
+            `configSchema marks ${at} as a secret on its output side, where its input takes no string member at that path (a pipe that reshapes or renames the value): such a secret could only be sent in the clear`
+          );
+        }
       } else if (!isStringMember(node)) {
         problems.push(`the secret member ${at} must be a string (or a nullable string)`);
       } else {
         paths.push(at);
+        stringPaths.push(at);
       }
       return;
     }
-    if (holdsMark(node, document, new Set(inside))) {
+    if (isStringMember(node) && path.length > 0) stringPaths.push(path.join('.'));
+    if (holdsMark(node, document, new Set())) {
       problems.push(
         `configSchema marks a secret member inside ${path.join('.') || 'the config'} (a list, a union or a record), which cannot be kept write-only`
       );
     }
   };
   walk(document.root, [], new Set());
-  return { paths, problems };
+  return { paths, stringPaths, problems };
+}
+
+/**
+ * Whether a schema of `config`'s tree carries a `writeOnly` mark that the
+ * server's Zod cannot see: its own `.meta()` (the registry of the Zod copy
+ * that built it) says so, and the registry the server reads does not. A
+ * plugin that bundles a Zod copy keeping a registry of its own would have
+ * every mark invisible here, and every secret would read as plain.
+ */
+function holdsForeignMark(schema: unknown): boolean {
+  const seen = new Set<object>();
+  let budget = 20_000;
+  const visit = (value: unknown, depth: number): boolean => {
+    if (typeof value !== 'object' || value === null || depth > 64 || budget-- <= 0) return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+    if (Array.isArray(value)) return value.some((item) => visit(item, depth + 1));
+    const zod = (value as { _zod?: { def?: unknown } })._zod;
+    if (zod !== undefined) {
+      const meta = (value as { meta?: unknown }).meta;
+      let own: unknown;
+      try {
+        own = typeof meta === 'function' ? (meta as () => unknown).call(value) : undefined;
+      } catch {
+        own = undefined;
+      }
+      const ours = z.globalRegistry.get(value as z.ZodType) as { writeOnly?: unknown } | undefined;
+      if (
+        (own as { writeOnly?: unknown } | undefined)?.writeOnly === true &&
+        ours?.writeOnly !== true
+      ) {
+        return true;
+      }
+      const def = zod.def as Record<string, unknown> | undefined;
+      if (def === undefined) return false;
+      // A lazy schema names its inner schema through a getter.
+      if (typeof def['getter'] === 'function') {
+        try {
+          if (visit((def['getter'] as () => unknown)(), depth + 1)) return true;
+        } catch {
+          return false;
+        }
+      }
+      return Object.entries(def).some(([key, item]) => key !== 'getter' && visit(item, depth + 1));
+    }
+    return Object.values(value).some((item) => visit(item, depth + 1));
+  };
+  return visit(schema, 0);
 }
 
 /**
@@ -226,10 +306,13 @@ function walkDocument(document: SchemaDocument): { paths: string[]; problems: st
  *
  * The marks are read twice: from the JSON Schema of what the config schema
  * takes (its input) and from the one of what it gives (its output), so a mark
- * on either side of a pipe counts. The input form must exist whole: a config
- * schema with a part JSON Schema cannot describe (a `Set`, a `Map`, a date, a
- * custom check) is refused, since a mark inside it could not be seen. A
- * transform's output, which no schema describes, holds no mark.
+ * on either side of a pipe counts, as long as the input takes a string member
+ * at the marked path (a pipe that reshapes or renames a marked value is
+ * refused). The input form must exist whole: a config schema with a part
+ * JSON Schema cannot describe (a `Set`, a `Map`, a date, a custom check) is
+ * refused, since a mark inside it could not be seen. A transform's output,
+ * which no schema describes, holds no mark. And a schema built with a Zod
+ * copy whose metadata the server cannot read is refused.
  *
  * @throws AuthMethodContractError when the schema has no JSON Schema form, is
  *   not an object, or marks a member it cannot be split by: inside a list, a
@@ -262,6 +345,11 @@ export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configS
       'configSchema must describe an object of members: the realm stores it member by member',
     ]);
   }
+  if (holdsForeignMark(method.configSchema)) {
+    throw new AuthMethodContractError(subject, [
+      "configSchema was built with a Zod copy whose metadata this server cannot read, so its secret members would read as plain: build the plugin against the server's Zod (a peer dependency)",
+    ]);
+  }
 
   const fromInput = walkDocument(schemaDocument(input));
   const outputDocument = schemaDocument(output);
@@ -269,9 +357,10 @@ export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configS
   // member path; it may hold no mark either.
   const fromOutput =
     output['type'] === 'object'
-      ? walkDocument(outputDocument)
+      ? walkDocument(outputDocument, new Set(fromInput.stringPaths))
       : {
           paths: [],
+          stringPaths: [],
           problems: holdsMark(output, outputDocument, new Set())
             ? [
                 'configSchema marks a secret member in the output of a transform of the whole config',

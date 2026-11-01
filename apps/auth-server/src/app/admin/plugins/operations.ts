@@ -61,8 +61,10 @@ function shownValue(value: unknown): string {
  * refuses a secret member under `config`), so no secret value is shown.
  */
 function renderUpdate(request: RenderInput) {
-  const body = (request.body ?? {}) as { config?: unknown; secrets?: unknown };
-  const fields: RenderedField[] = [];
+  const body = (request.body ?? {}) as { version?: unknown; config?: unknown; secrets?: unknown };
+  const fields: RenderedField[] = [
+    { label: 'replaces the state of version', value: shownValue(body.version) },
+  ];
   if (typeof body.config === 'object' && body.config !== null && !Array.isArray(body.config)) {
     for (const [member, value] of Object.entries(body.config)) {
       fields.push({ label: `config.${member}`, value: shownValue(value) });

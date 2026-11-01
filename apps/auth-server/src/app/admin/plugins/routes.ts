@@ -6,12 +6,7 @@ import {
   withConfigMembers,
   withoutConfigMembers,
 } from '@qauth-labs/fastify-plugin-federation';
-import {
-  BadRequestError,
-  NotFoundError,
-  PreconditionFailedError,
-  PreconditionRequiredError,
-} from '@qauth-labs/shared-errors';
+import { BadRequestError, NotFoundError, PreconditionFailedError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -43,17 +38,19 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  *   for the realm (`plugins.secrets.seal`): it changes nothing, and answers
  *   the value encrypted;
  * - `POST …/plugins/{plugin}/config` replaces its config and sets or clears
- *   its secret members (`plugins.update`), with `If-Match`;
+ *   its secret members (`plugins.update`), naming the version it replaces;
  * - `POST …/plugins/{plugin}/enable` and `…/disable` turn it on and off
  *   (`plugins.enable`, `plugins.disable`).
  *
  * `{plugin}` is the plugin's name, its AuthMethod id.
  *
  * The three writes are security operations: each runs only with an approval
- * filed for exactly that request. Each may carry `If-Match` with the `ETag`
- * of the state it was written against, and is refused with 412 when the
- * plugin's state moved; the write itself is conditional on the version it
- * read in its transaction, so two admins never overwrite each other unseen.
+ * filed for exactly that request. A configure names the version of the state
+ * it replaces in its body (`version`), so the approval binds it and the
+ * approver sees it, and a configure over a state that moved since is refused
+ * with 412: two approved configures never overwrite each other unseen. An
+ * enable or a disable may carry `If-Match`. Every write is conditional on
+ * the version it read in its transaction.
  *
  * SECRETS. A plugin's config schema marks its secret members
  * (`writeOnly`). A secret's value reaches the server in one place only: the
@@ -89,20 +86,20 @@ const MAX_CONFIG_BYTES = 16 * 1024;
 /** A data-at-rest ciphertext, `v1.<kid>.<iv>.<ciphertext>`, as the signer writes one. */
 const SEALED_PATTERN = /^v1\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
-/** The longest sealed value: a secret of the longest length, encrypted. */
-const MAX_SEALED_LENGTH = 16 * 1024;
+/**
+ * The longest sealed value: a secret of the longest length (8192 UTF-16
+ * units, at most 24 KiB as UTF-8), encrypted and base64url-encoded, with room
+ * for its key id and IV.
+ */
+const MAX_SEALED_LENGTH = 48 * 1024;
 
 /** A secret member's path, as a request names it. */
 const secretPathSchema = z.string().min(1).max(260);
 
 /** A sealed value, as `plugins.secrets.seal` answered it. */
-const sealedSchema = z
-  .string()
-  .max(MAX_SEALED_LENGTH)
-  .regex(SEALED_PATTERN)
-  .meta({
-    description: 'A secret value sealed for this member, as plugins.secrets.seal answered it.',
-  });
+const sealedSchema = z.string().max(MAX_SEALED_LENGTH).regex(SEALED_PATTERN).meta({
+  description: 'A secret value sealed for this member, as plugins.secrets.seal answered it.',
+});
 
 /**
  * A plugin's name in this API: its AuthMethod id, as the contract defines it
@@ -116,6 +113,21 @@ const pluginNameSchema = z
 
 const realmParams = z.object({ realmId: z.uuid() });
 const pluginParams = z.object({ realmId: z.uuid(), plugin: pluginNameSchema });
+
+/**
+ * The path parameters of a configure: a plugin this process loaded, so an
+ * approval is never filed, with a body checked against no plugin's secret
+ * members, for a plugin this node does not have (a rolling upgrade).
+ */
+function installedPluginParams(installed: readonly InstalledAuthMethodPlugin[]) {
+  const names = new Set(installed.map((plugin) => plugin.id));
+  return z.object({
+    realmId: z.uuid(),
+    plugin: pluginNameSchema.refine((name) => names.has(name), {
+      message: 'names no plugin this server loaded',
+    }),
+  });
+}
 
 /** A plugin as the admin API shows it in a realm. */
 const pluginSchema = z
@@ -217,6 +229,10 @@ export function pluginConfigBodySchema(installed: readonly InstalledAuthMethodPl
   const secretPaths = [...new Set(installed.flatMap((plugin) => plugin.secretPaths))];
   return z
     .strictObject({
+      version: z.int().min(0).max(2_147_483_647).meta({
+        description:
+          "The version of the realm's state of the plugin this configure replaces, as its read gave it (`0` before it was first configured). The approval binds it; a state that moved since answers 412.",
+      }),
       config: z
         .record(z.string().min(1).max(64), z.unknown())
         .refine((config) => Object.keys(config).length <= MAX_CONFIG_MEMBERS, {
@@ -295,7 +311,8 @@ const NOT_SEALED_HERE: ReadonlySet<unknown> = new Set([
 /**
  * The plaintext of a sealed value, which must open for `path` of `plugin` in
  * the realm: one sealed for another member, plugin or realm, or changed, is
- * refused with 400. Any other failure (the signer unreachable) passes.
+ * refused with 400. Any other failure (the signer unreachable) is thrown on,
+ * and the request fails.
  */
 async function openSealed(
   fastify: FastifyInstance,
@@ -447,6 +464,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
   const operations = pluginOperations(fastify);
   if (operations === undefined) return;
   const configBody = pluginConfigBodySchema(fastify.authMethodPlugins.installed);
+  const configParams = installedPluginParams(fastify.authMethodPlugins.installed);
   const common = {
     'x-qauth-stability': 'experimental' as const,
     security: [{ bearerAuth: [] }],
@@ -552,7 +570,9 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       const plugin = installedPlugin(fastify, request.params.plugin);
       const { path, value } = request.body;
       if (!plugin.secretPaths.includes(path)) {
-        throw new BadRequestError(`The plugin has no secret member ${JSON.stringify(path)}`);
+        // The path is not echoed: a client that swapped the path and the value
+        // would get the value back, and the log would keep it.
+        throw new BadRequestError('path names no secret member of the plugin');
       }
       const sealed = await fastify.signer.encrypt(AUTH_METHOD_PLUGIN_SIGNER_CALLER, {
         realmId: requestAdminCaller(request).targetRealm.id,
@@ -572,32 +592,32 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         ...common,
         summary: "Replace an AuthMethod plugin's configuration in the realm",
         description:
-          'Needs If-Match with the ETag of the state it replaces. Secret members are named under secrets with values plugins.secrets.seal sealed, never in the clear.',
-        'x-qauth-errors': [400, 401, 403, 404, 412, 428],
-        params: pluginParams,
+          'Names the version of the state it replaces in its body (412 when the state moved). Secret members are named under secrets with values plugins.secrets.seal sealed, never in the clear.',
+        'x-qauth-errors': [400, 401, 403, 404, 412],
+        params: configParams,
         body: configBody,
         response: { 200: pluginSchema },
       },
     },
     async (request, reply) => {
       const plugin = installedPlugin(fastify, request.params.plugin);
-      // A configure replaces the whole config: it names the state it was
-      // written against, so an approved change never overwrites another
-      // unseen.
-      if (request.headers['if-match'] === undefined) {
-        throw new PreconditionRequiredError({ operation: operations.update.id });
-      }
       const realmId = requestAdminCaller(request).targetRealm.id;
       const row = await rowOf(request, plugin);
+      // A configure replaces the whole config: it names, in the body the
+      // approval binds, the version it replaces, so an approved change never
+      // overwrites another unseen.
+      if (request.body.version !== stateOf(row).version) {
+        throw new PreconditionFailedError({ operation: operations.update.id });
+      }
       requireCurrent(request, operations.update.id, row);
       const { config, secrets: changes = {} } = request.body;
 
       const named = Object.keys(changes);
       const unknown = named.filter((path) => !plugin.secretPaths.includes(path));
       if (unknown.length > 0) {
-        throw new BadRequestError(
-          `The plugin has no secret member ${unknown.map((path) => JSON.stringify(path)).join(', ')}`
-        );
+        // The name is not echoed: a client that swapped a path and its value
+        // would get the value back, and the log would keep it.
+        throw new BadRequestError('secrets names a member that is no secret member of the plugin');
       }
       if (configSpellsMemberOf(config, plugin.secretPaths)) {
         throw new BadRequestError(
@@ -658,7 +678,8 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       );
       const written = await writeState(request, operations.enable.id, plugin, row, {
         enabled: true,
-        config: state.config,
+        // A member the plugin now marks secret leaves the plain config.
+        config: withoutConfigMembers(state.config, plugin.secretPaths),
         secrets: state.secrets,
       });
       return answer(request, reply, plugin, row, written);
@@ -686,7 +707,8 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       if (row === undefined || !row.enabled) return answer(request, reply, plugin, row, row);
       const written = await writeState(request, operations.disable.id, plugin, row, {
         enabled: false,
-        config: row.config,
+        // A member the plugin now marks secret leaves the plain config.
+        config: withoutConfigMembers(row.config, plugin.secretPaths),
         secrets: row.secrets,
       });
       return answer(request, reply, plugin, row, written);

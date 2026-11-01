@@ -258,14 +258,11 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     value = SECRET
   ) {
     const sealed = await seal(realmId, requester.token, value);
-    const result = await approved(
-      realmId,
-      requester,
-      'plugins.update',
-      '/corp/config',
-      { config: CONFIG, secrets: { clientSecret: { sealed: sealed.sealed } } },
-      { 'if-match': `"${version}"` }
-    );
+    const result = await approved(realmId, requester, 'plugins.update', '/corp/config', {
+      version,
+      config: CONFIG,
+      secrets: { clientSecret: { sealed: sealed.sealed } },
+    });
     return { ...result, responses: [sealed.response, ...result.responses] };
   }
 
@@ -434,6 +431,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     const requester = await adminWith(realm.id, 'security-admin');
     const { sealed } = await seal(realm.id, requester.token);
     const body = {
+      version: 0,
       config: { issuer: 'not a url', clientId: 'qauth' },
       secrets: { clientSecret: { sealed } },
     };
@@ -444,7 +442,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       pluginPath(realm.id, '/corp/config'),
       requester.token,
       body,
-      { 'qauth-approval': approvalId, 'if-match': '"0"' }
+      { 'qauth-approval': approvalId }
     );
     expect(refused.statusCode).toBe(400);
     expect(refused.json<{ detail?: string }>().detail).toContain('issuer: invalid_format');
@@ -482,11 +480,10 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
 
     // Alpha's sealed value does not open in beta.
     const requester = await adminWith(beta.id, 'security-admin');
-    const body = { config: CONFIG, secrets: { clientSecret: { sealed } } };
+    const body = { version: 0, config: CONFIG, secrets: { clientSecret: { sealed } } };
     const { approvalId } = await fileAndApprove(beta.id, requester, 'plugins.update', body);
     const foreign = await send('POST', pluginPath(beta.id, '/corp/config'), requester.token, body, {
       'qauth-approval': approvalId,
-      'if-match': '"0"',
     });
     expect(foreign.statusCode).toBe(400);
     expect(await app().repositories.realmAuthMethodPlugins.find(beta.id, 'corp')).toBeUndefined();
@@ -555,30 +552,48 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(elsewhere.statusCode).toBe(404);
   });
 
-  it('refuses a write named against a state that moved with 412, and a configure that names none with 428', async () => {
+  it('refuses a configure approved for a state that moved, and an enable named against one, with 412', async () => {
     const realm = await tenant('alpha');
     const requester = await adminWith(realm.id, 'security-admin');
-    await configure(realm.id, requester);
 
-    // A second configure written against version 0, which moved to 1.
-    const { sealed } = await seal(realm.id, requester.token, 'another-client-secret-value');
-    const body = { config: CONFIG, secrets: { clientSecret: { sealed } } };
-    const update = await fileAndApprove(realm.id, requester, 'plugins.update', body);
-    const unnamed = await send(
+    // Two configures written against version 0, both approved.
+    const first = await seal(realm.id, requester.token, 'first-client-secret-value');
+    const second = await seal(realm.id, requester.token, 'second-client-secret-value');
+    const bodyOf = (sealed: string) => ({
+      version: 0,
+      config: CONFIG,
+      secrets: { clientSecret: { sealed } },
+    });
+    const one = await fileAndApprove(realm.id, requester, 'plugins.update', bodyOf(first.sealed));
+    const two = await fileAndApprove(realm.id, requester, 'plugins.update', bodyOf(second.sealed));
+    const ran = await send(
       'POST',
       pluginPath(realm.id, '/corp/config'),
       requester.token,
-      body,
-      {
-        'qauth-approval': update.approvalId,
-      }
+      bodyOf(first.sealed),
+      { 'qauth-approval': one.approvalId }
     );
-    expect(unnamed.statusCode).toBe(428);
-    const moved = await send('POST', pluginPath(realm.id, '/corp/config'), requester.token, body, {
-      'qauth-approval': update.approvalId,
-      'if-match': '"0"',
-    });
-    expect(moved.statusCode).toBe(412);
+    expect(ran.statusCode, ran.body).toBe(200);
+    // The second still names version 0, which moved to 1: whatever its
+    // If-Match says, it never replaces the first unseen.
+    for (const ifMatch of [undefined, '*', '"1"']) {
+      const moved = await send(
+        'POST',
+        pluginPath(realm.id, '/corp/config'),
+        requester.token,
+        bodyOf(second.sealed),
+        {
+          'qauth-approval': two.approvalId,
+          ...(ifMatch === undefined ? {} : { 'if-match': ifMatch }),
+        }
+      );
+      expect(moved.statusCode).toBe(412);
+    }
+    expect(
+      (await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp'))?.secrets[
+        'clientSecret'
+      ]
+    ).toBe(first.sealed);
 
     const { approvalId } = await fileAndApprove(realm.id, requester, 'plugins.enable');
 

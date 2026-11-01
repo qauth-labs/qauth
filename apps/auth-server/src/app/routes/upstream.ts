@@ -3,7 +3,7 @@ import {
   completeUpstreamStep,
 } from '@qauth-labs/fastify-plugin-federation';
 import { BadRequestError } from '@qauth-labs/shared-errors';
-import type { FastifyPluginAsync } from 'fastify';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import { authMethodPluginContext, authMethodPluginEnabledIn } from '../helpers/auth-method-plugins';
 import { answerRouteNotFound } from '../helpers/request-bounds';
@@ -16,9 +16,13 @@ import { requestRealm } from '../helpers/request-realm';
  *
  * A route of a plugin the request's realm has not enabled answers as a path
  * no route serves: the `not_found` problem document, from a `preParsing`
- * hook, before the body is read, so neither its status nor a validation
- * error gives the plugin away. It runs after the request ceiling, so a
- * flood of such requests is limited before it reaches the database.
+ * hook, before the body is read, without the request ceiling's headers, so
+ * neither its status, its body nor a validation error says whether the realm
+ * has the plugin on. It runs after the request ceiling, so a flood of such
+ * requests is limited before it reaches the database; a flood past the
+ * ceiling answers 429 where an unknown path answers 404, which tells that a
+ * plugin of that type is installed in the deployment, never which realms
+ * have it on.
  *
  * The upstream step that sends a browser to a provider, and keeps its
  * transaction, comes with the upstream sign-in flow (#639). Until then no
@@ -27,6 +31,9 @@ import { requestRealm } from '../helpers/request-realm';
  * with a 400; a fault of the method (a bounce route that throws) ends as the
  * generic error.
  */
+
+/** The headers the request ceiling sets before a route answers. */
+const RATE_LIMIT_HEADERS = ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'];
 
 /** The `<type>` segment of a mounted route's path, `/upstream/<type>/...`. */
 function routeType(url: string | undefined): string | undefined {
@@ -42,6 +49,7 @@ const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
   // `onRequest` hook) and before the body is read: a flood of requests to an
   // installed plugin's paths meets the rate limit before it reaches the
   // database.
+  const refused = new WeakSet<FastifyRequest>();
   fastify.addHook('preParsing', async (request, reply, payload) => {
     const type = routeType(request.routeOptions.url);
     const plugin = type === undefined ? undefined : fastify.authMethodPlugins.ofType(type);
@@ -51,7 +59,20 @@ const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
     ) {
       return payload;
     }
+    refused.add(request);
+    // A path no route serves is answered before the limiter, with none of
+    // its headers: the answer for an off plugin carries none either.
+    for (const header of RATE_LIMIT_HEADERS) reply.removeHeader(header);
     return answerRouteNotFound(request, reply);
+  });
+  // A request refused above never reaches a handler, even when its client
+  // closed the connection before the answer was written.
+  fastify.addHook('preHandler', async (request) => {
+    if (refused.has(request)) {
+      throw new Error(
+        'A request to an AuthMethod plugin route the realm has off reached its handler'
+      );
+    }
   });
 
   await fastify.register(authMethodRoutesPlugin, {

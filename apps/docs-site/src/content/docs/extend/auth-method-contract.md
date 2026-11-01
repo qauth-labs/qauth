@@ -232,11 +232,15 @@ same across versions of the package; its `type` is the segment of its routes,
 `/upstream/<type>/…`, and the value written to `user_credentials.provider_type`.
 
 **Secret members.** A member of the config schema marked `.meta({ writeOnly: true })` is a secret,
-such as a client secret. The runtime reads the marks from the schema's JSON Schema, which Zod 4
-writes with the metadata of every Zod copy (a plugin that bundles its own Zod is read the same
-way). A secret is a string, or a nullable one, at any depth of nested objects. A schema that is
-not an object, or that marks a member inside a list, a union, a record or a recursive part, or one
-that is not a string, is refused at boot: the runtime could not keep it write-only.
+such as a client secret. The runtime reads the marks from the schema's JSON Schema, from its input
+side and from its output side. A secret is a string, or a nullable one, at any depth of nested
+objects, marked on the input side or on the output side of a pipe that keeps its path and its
+string. A schema that is not an object, that holds a part JSON Schema cannot describe (a `Set`, a
+`Map`, a date, a custom check), or that marks a member inside a list, a union, a record or a
+recursive part, behind a pipe that reshapes or renames it, or one that is not a string, is refused
+at boot: the runtime could not keep it write-only. So is a schema built with a Zod copy that keeps
+a metadata registry of its own (Zod 4.6 shares one between copies): build a plugin against the
+server's Zod, as a peer dependency.
 
 ## Installing and enabling a plugin
 
@@ -273,8 +277,10 @@ plugin's config (`plugins.update`, `POST …/plugins/{plugin}/config`) and turn 
 which upstream credentials sign users in, so each is a
 [security operation](/reference/security-operations/) with the effect `credential-path`: it needs
 `qauth:admin:security` (the permission `plugins.security`) and an approval, and
-`qauth:admin:write` reaches none of them. A configure needs `If-Match` with the `ETag` its read
-gave (428 without it); an enable or a disable may carry one; a state that moved since answers 412.
+`qauth:admin:write` reaches none of them. A configure names in its body the `version` of the
+state it replaces, as its read gave it, so the approval binds it and the approver sees it, and a
+state that moved since answers 412: two approved configures never overwrite each other unseen. An
+enable or a disable may carry `If-Match`.
 
 **Secrets.** A secret's value reaches the server in one request only: `plugins.secrets.seal`
 (`POST …/plugins/{plugin}/secrets/seal`, `{ path, value }`), which encrypts it with the realm's
@@ -288,7 +294,8 @@ realm, and the whole config, secrets included, must pass the plugin's own schema
 enabled only with a config that does. A secret member sent under `config`, however it is spelled,
 is refused. No response, audit row, event or log line holds a value: the representation says only
 which secret members hold one, and the audit row of a configure names the secrets it set or
-cleared.
+cleared. A member that a newer version of a plugin marks secret is never shown or handed to the
+plugin from the plain config an older version stored, and leaves it at the next write.
 
 ```http
 POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/secrets/seal
@@ -296,14 +303,16 @@ POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/secrets/seal
 → 200 { "path": "clientSecret", "sealed": "v1.…" }
 
 POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/config
-If-Match: "0"
 QAuth-Approval: {approvalId}
-{ "config": { "issuer": "https://idp.example", "clientId": "qauth" },
+{ "version": 0,
+  "config": { "issuer": "https://idp.example", "clientId": "qauth" },
   "secrets": { "clientSecret": { "sealed": "v1.…" } } }
 ```
 
 **A disabled plugin's routes** answer `404` with the `not_found` document of a path no route
-serves, before the request's body is read; disabling keeps the config.
+serves, before the request's body is read and without the rate limit's headers; disabling keeps
+the config. They are checked after the rate limit, so a flood past it answers 429 where an unknown
+path answers 404: that tells a plugin of that type is installed, never which realms have it on.
 
 ## Checking a method: the contract test kit
 

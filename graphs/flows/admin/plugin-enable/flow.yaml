@@ -30,7 +30,7 @@ scope:
   outOfView:
     - 'loading the plugin at boot (AUTH_METHOD_PLUGINS, the PLUGIN_API_ENABLED switch, the first-party list): a plugin
       the boot did not load is not installed, and the admin API answers 404 for it'
-    - 'configuring the plugin (plugins.update, with If-Match): its secret members, sealed first by
+    - 'configuring the plugin (plugins.update, naming the version it replaces): its secret members, sealed first by
       plugins.secrets.seal with the realm data_at_rest key and named apart from the plain ones, so no approval holds a
       value in the clear, and the schema check of the whole config'
     - 'filing and giving the approval (approvals.create, the approval page, the factor), and the token guard and
@@ -101,7 +101,7 @@ states:
     description: >-
       Every installed plugin starts off in every realm: a realm with no row for it has it off. Its config, if the
       realm set one, is kept.
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:157
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:169
     on:
       ENABLE:
         target: authorizingEnable
@@ -109,7 +109,7 @@ states:
       ROUTE_REQUEST:
         target: routeAbsent
         say: "a browser requests one of the plugin's routes under /upstream/<type> on the realm host"
-        source: apps/auth-server/src/app/routes/upstream.ts:45
+        source: apps/auth-server/src/app/routes/upstream.ts:53
 
   authorizingEnable:
     title: Check the permission and the approval of the enable
@@ -117,7 +117,7 @@ states:
       plugins.enable is a security operation with the effect credential-path: it needs plugins.security, a permission
       of class security, which a token uses only with qauth:admin:security. A security operation runs only with the
       approval its request names.
-    source: apps/auth-server/src/app/admin/plugins/operations.ts:121
+    source: apps/auth-server/src/app/admin/plugins/operations.ts:123
     always:
       - guard: roleLacksPermission
         target: forbidden
@@ -136,33 +136,33 @@ states:
 
   enabling:
     title: Check the plugin, its state and its config, and turn it on
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:647
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:667
     always:
       - guard: pluginUnknown
         target: notFound
         say: 'the path names no installed plugin'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:246
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:262
       - guard: stateMoved
         target: preconditionFailed
         say: 'the state moved since the caller read it; the write would be conditional on the version it read anyway'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:253
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:269
       - guard: configInvalid
         target: configRefused
         say: "the realm's config does not pass the plugin's schema: a plugin is on only with a config it accepts"
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:654
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:674
       - target: pluginOn
         effect: [turnOn]
         say: 'the row is written enabled, conditional on its version, and the audit row records the change'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:660
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:680
 
   pluginOn:
     title: The plugin is on in the realm
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:660
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:680
     on:
       ROUTE_REQUEST:
         target: routeServed
         say: "a browser requests one of the plugin's routes on the realm host"
-        source: apps/auth-server/src/app/routes/upstream.ts:50
+        source: apps/auth-server/src/app/routes/upstream.ts:58
       DISABLE:
         target: authorizingDisable
         say: 'an admin sends POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable'
@@ -172,7 +172,7 @@ states:
     description: >-
       plugins.disable changes which upstream credentials sign users in too: a security operation with credential-path
       and the same permission, so a token with qauth:admin:write cannot switch a sign-in method off either.
-    source: apps/auth-server/src/app/admin/plugins/operations.ts:132
+    source: apps/auth-server/src/app/admin/plugins/operations.ts:134
     always:
       - guard: roleLacksPermission
         target: forbiddenWhileOn
@@ -191,29 +191,29 @@ states:
 
   disabling:
     title: Check the plugin and its state, and turn it off
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:683
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:704
     always:
       - guard: pluginUnknown
         target: notFoundWhileOn
         say: 'the path names no installed plugin'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:246
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:262
       - guard: stateMoved
         target: preconditionFailedWhileOn
         say: 'the state moved since the caller read it'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:253
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:269
       - target: pluginOffAgain
         effect: [turnOff]
         say: 'the row is written off, its config kept, conditional on its version'
-        source: apps/auth-server/src/app/admin/plugins/routes.ts:688
+        source: apps/auth-server/src/app/admin/plugins/routes.ts:709
 
   pluginOffAgain:
     title: The plugin is off again, its config kept
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:688
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:709
     on:
       ROUTE_REQUEST:
         target: routeAbsentAgain
         say: "a browser requests one of the plugin's routes on the realm host"
-        source: apps/auth-server/src/app/routes/upstream.ts:45
+        source: apps/auth-server/src/app/routes/upstream.ts:53
 
   # Exits of the plugin's routes.
 
@@ -221,15 +221,17 @@ states:
     type: final
     title: "Answer the plugin's route as a path no route serves"
     description: >-
-      The route's preParsing hook answers before the body is read, after the rate limit, with the not_found document an unknown path gets:
-      neither its status nor a validation error tells the plugin is installed.
-    source: apps/auth-server/src/app/routes/upstream.ts:54
+      The route's preParsing hook answers before the body is read, after the rate limit and without its headers, with
+      the not_found document an unknown path gets: neither its status, its body nor a validation error tells whether
+      the realm has the plugin on. Past the rate limit it answers 429 where an unknown path answers 404, which tells a
+      plugin of that type is installed, never which realms have it on.
+    source: apps/auth-server/src/app/routes/upstream.ts:66
     response: { status: 404, code: not_found }
 
   routeAbsentAgain:
     type: final
     title: "Answer the plugin's route as a path no route serves, once it is off again"
-    source: apps/auth-server/src/app/routes/upstream.ts:54
+    source: apps/auth-server/src/app/routes/upstream.ts:66
     response: { status: 404, code: not_found }
 
   routeServed:
@@ -239,7 +241,7 @@ states:
       The route mount runs: the host checks the callback's binding against the pending transaction before the
       plugin runs (#599). Until the sign-in flow offers the upstream step (#639) no transaction is pending, and the
       callback is answered 400.
-    source: apps/auth-server/src/app/routes/upstream.ts:67
+    source: apps/auth-server/src/app/routes/upstream.ts:88
     response: { status: 400, code: bad_request }
 
   # Exits of the admin API.
@@ -269,20 +271,20 @@ states:
   notFound:
     type: final
     title: Refuse a plugin the deployment did not load
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:246
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:262
     response: { status: 404, code: not_found }
 
   preconditionFailed:
     type: final
     title: Refuse a request written against another state
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:253
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:269
     response: { status: 412, code: precondition_failed }
 
   configRefused:
     type: final
     title: Refuse to enable a plugin whose config its schema refuses
     description: The problem names each failing member and the schema's code, never a value.
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:328
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:345
     response: { status: 400, code: bad_request }
 
   forbiddenWhileOn:
@@ -310,20 +312,20 @@ states:
   notFoundWhileOn:
     type: final
     title: Refuse a plugin the deployment did not load
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:246
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:262
     response: { status: 404, code: not_found }
 
   preconditionFailedWhileOn:
     type: final
     title: Refuse a disable written against another state; the plugin stays on
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:253
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:269
     response: { status: 412, code: precondition_failed }
 
 assertions:
   - id: write-scope-never-enables
     never: 'enabled and scopeLacksSecurity'
     say: 'A token that carries qauth:admin:write but not qauth:admin:security never turns a plugin on'
-    source: apps/auth-server/src/app/admin/plugins/operations.ts:124
+    source: apps/auth-server/src/app/admin/plugins/operations.ts:126
   - id: no-enable-without-approval
     never: 'enabled and noApproval'
     say: 'A plugin is turned on only by a request an approval was given for'
@@ -331,12 +333,12 @@ assertions:
   - id: no-enable-with-a-refused-config
     never: 'enabled and configInvalid'
     say: 'A plugin is on only with a config its own schema accepts'
-    source: apps/auth-server/src/app/admin/plugins/routes.ts:654
+    source: apps/auth-server/src/app/admin/plugins/routes.ts:674
   - id: an-off-plugin-runs-nothing
     never: "state == 'routeServed' and not enabled"
     say: "A plugin's route reaches the plugin only while the realm has it on"
-    source: apps/auth-server/src/app/routes/upstream.ts:50
+    source: apps/auth-server/src/app/routes/upstream.ts:58
   - id: a-refused-disable-leaves-it-on
     never: "state == 'pluginOffAgain' and (roleLacksPermission or scopeLacksSecurity or noApproval)"
     say: 'Only an authorized, approved request turns a plugin off'
-    source: apps/auth-server/src/app/admin/plugins/operations.ts:135
+    source: apps/auth-server/src/app/admin/plugins/operations.ts:137
