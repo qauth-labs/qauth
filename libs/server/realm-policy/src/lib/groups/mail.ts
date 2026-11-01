@@ -1,5 +1,7 @@
+import { isIP } from 'node:net';
 import { isDeepStrictEqual } from 'node:util';
 
+import { isCloudMetadataAddress, isPublicUnicastAddress } from '@qauth-labs/server-egress';
 import { z } from 'zod';
 
 import { groupDocsLink } from '../docs';
@@ -195,6 +197,43 @@ export const MAIL_POLICY_GROUP = {
   }),
 } as const;
 
+/** An SMTP host as the checks compare it: lower case, no trailing dot, an IPv6 literal without brackets. */
+export function normalizeSmtpHost(host: string): string {
+  return host
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, '')
+    .replace(/^\[(.*)\]$/, '$1');
+}
+
+/** Whether `host` (normalized) names the local machine by name: `localhost` or a name under it. */
+function isLocalhostName(host: string): boolean {
+  return host === 'localhost' || host.endsWith('.localhost');
+}
+
+/**
+ * Why a realm may not name `host` as its SMTP server (review of #937), or
+ * `undefined` when it may. A realm admin sets the host, so it is held to what
+ * a destination a realm admin sets may be (ADR-019 Decision 8): `localhost`,
+ * or an IP literal that is not a public unicast address, is refused unless
+ * `allowedHosts` (`SMTP_ALLOWED_HOSTS`, normalized) names it, and a cloud
+ * metadata address always. A name is resolved, and its addresses held to the
+ * same, only when the transport connects.
+ */
+export function smtpHostRefusal(
+  host: string,
+  allowedHosts: ReadonlySet<string> = new Set()
+): string | undefined {
+  const normalized = normalizeSmtpHost(host);
+  const literal = isIP(normalized) !== 0;
+  if (literal && isCloudMetadataAddress(normalized)) return 'must not be a cloud metadata address';
+  if (allowedHosts.has(normalized)) return undefined;
+  if (isLocalhostName(normalized) || (literal && !isPublicUnicastAddress(normalized))) {
+    return 'must be a public host: localhost and loopback, private, link-local and unique-local addresses are refused unless SMTP_ALLOWED_HOSTS names the host';
+  }
+  return undefined;
+}
+
 /** The mail group as {@link mailTransportIssues} reads it from a parsed document. */
 interface MailTransportFields {
   readonly provider: 'mock' | 'resend' | 'smtp';
@@ -281,39 +320,69 @@ function smtpDestinationChanges(before: MailTransportFields, after: MailTranspor
  *   `secure` while the transport is smtp, and leaves a password stored must
  *   set `mail.smtp.password` too: the stored password would otherwise go to
  *   the new server on the next mail.
+ * - An update that brings in an smtp host must name one a realm may
+ *   ({@link smtpHostRefusal}): not `localhost`, a non-public IP literal or a
+ *   cloud metadata address, unless the operator allows the host
+ *   (`options.allowedSmtpHosts`, never for a metadata address).
  *
  * Until #529 the boot refused an incomplete environment; the check moved to
  * the update, since the realm row holds the transport now. The issues name
  * paths, never a value.
  */
-export const mailTransportIssues: PolicyRule = (policies, context) => {
-  const after = policies['mail'] as MailTransportFields | undefined;
-  const before = context.previous['mail'] as MailTransportFields | undefined;
-  if (after === undefined) return [];
-  const writesSecret = MAIL_SECRET_PATHS.some((path) => context.written(path) !== undefined);
-  if (!writesSecret && isDeepStrictEqual(before, after)) return [];
+export function createMailTransportRule(options: MailTransportRuleOptions = {}): PolicyRule {
+  const allowedSmtpHosts = new Set([...(options.allowedSmtpHosts ?? [])].map(normalizeSmtpHost));
+  return (policies, context) => {
+    const after = policies['mail'] as MailTransportFields | undefined;
+    const before = context.previous['mail'] as MailTransportFields | undefined;
+    if (after === undefined) return [];
+    const writesSecret = MAIL_SECRET_PATHS.some((path) => context.written(path) !== undefined);
+    if (!writesSecret && isDeepStrictEqual(before, after)) return [];
 
-  const known = (issue: PolicyIssue, list: readonly PolicyIssue[]) =>
-    list.some((other) => other.path === issue.path && other.message === issue.message);
-  const previousGaps =
-    before === undefined ? [] : mailTransportGaps(context.previous, context.wasSet);
-  const issues = mailTransportGaps(policies, context.isSet).filter(
-    (issue) => !known(issue, previousGaps)
-  );
+    const known = (issue: PolicyIssue, list: readonly PolicyIssue[]) =>
+      list.some((other) => other.path === issue.path && other.message === issue.message);
+    const previousGaps =
+      before === undefined ? [] : mailTransportGaps(context.previous, context.wasSet);
+    const issues = mailTransportGaps(policies, context.isSet).filter(
+      (issue) => !known(issue, previousGaps)
+    );
 
-  const changed = before === undefined ? [] : smtpDestinationChanges(before, after);
-  // Only a password the update carries over can reach the new server: one
-  // the realm lacks is the gap above.
-  if (
-    changed.length > 0 &&
-    context.written('mail.smtp.password') !== 'set' &&
-    context.isSet('mail.smtp.password')
-  ) {
-    const issue = {
-      path: 'mail.smtp.password',
-      message: `must be given again when ${changed.join(', ')} ${changed.length === 1 ? 'changes' : 'change'}`,
-    };
-    if (!known(issue, issues)) issues.push(issue);
-  }
-  return issues;
-};
+    const changed = before === undefined ? [] : smtpDestinationChanges(before, after);
+    // Only a password the update carries over can reach the new server: one
+    // the realm lacks is the gap above.
+    if (
+      changed.length > 0 &&
+      context.written('mail.smtp.password') !== 'set' &&
+      context.isSet('mail.smtp.password')
+    ) {
+      const issue = {
+        path: 'mail.smtp.password',
+        message: `must be given again when ${changed.join(', ')} ${changed.length === 1 ? 'changes' : 'change'}`,
+      };
+      if (!known(issue, issues)) issues.push(issue);
+    }
+    // A new smtp server, set by a realm admin, is held to what such a
+    // destination may be; the environment's, filled at boot, is not
+    // re-checked here, and every connection checks the addresses again.
+    if (
+      after.provider === 'smtp' &&
+      after.smtp.host !== null &&
+      (before === undefined || before.provider !== 'smtp' || before.smtp.host !== after.smtp.host)
+    ) {
+      const refusal = smtpHostRefusal(after.smtp.host, allowedSmtpHosts);
+      if (refusal !== undefined) issues.push({ path: 'mail.smtp.host', message: refusal });
+    }
+    return issues;
+  };
+}
+
+/** What {@link createMailTransportRule} takes. */
+export interface MailTransportRuleOptions {
+  /**
+   * `SMTP_ALLOWED_HOSTS`: the SMTP hosts the operator lets a realm name
+   * although they are not public. Never a cloud metadata address.
+   */
+  readonly allowedSmtpHosts?: Iterable<string>;
+}
+
+/** The mail rule with no host the operator allows: what the store runs unless the server passes its own. */
+export const mailTransportIssues: PolicyRule = createMailTransportRule();

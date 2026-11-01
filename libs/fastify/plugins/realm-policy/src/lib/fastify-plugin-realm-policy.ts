@@ -9,6 +9,7 @@ import {
   createPolicyStore,
   createRealmSecretStore,
   type RealmPolicies,
+  realmPolicyRules,
   type RealmPolicyStore,
   type RealmSecretCipher,
   type RealmSecretStoreWithSeed,
@@ -107,6 +108,13 @@ export interface RealmPolicyPluginOptions {
    * every write of a secret.
    */
   readonly secrets?: FullRealmSecretStoreOfRealms;
+  /**
+   * `SMTP_ALLOWED_HOSTS` (review of #937): the SMTP hosts the operator lets a
+   * realm name although they are not public. A policy update that names
+   * `localhost`, a non-public IP literal or a cloud metadata address as
+   * `mail.smtp.host` is refused otherwise, and a metadata address always.
+   */
+  readonly allowedSmtpHosts?: readonly string[];
 }
 
 /**
@@ -130,6 +138,7 @@ export const realmPolicyPlugin = fp(
       createPolicyStore({
         storage: createRealmPolicyStorage(fastify.db, options.realms),
         seeds: options.seeds,
+        rules: realmPolicyRules({ allowedSmtpHosts: options.allowedSmtpHosts ?? [] }),
         ...(secrets === null ? {} : { secrets }),
       })
     );

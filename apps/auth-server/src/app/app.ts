@@ -471,6 +471,13 @@ async function registerEmail(
   // before, during a rolling upgrade.
   await fastify.register(emailPlugin, {
     source: realmMailSource(fastify, secrets, secretSeedsFromEnv(process.env)),
+    // The operator's switches for every realm's smtp transport (review of
+    // #937): STARTTLS is required, and only a public address is dialled,
+    // unless these say otherwise; no realm policy can change them.
+    smtp: {
+      allowPlaintext: env.SMTP_ALLOW_PLAINTEXT,
+      allowedHosts: env.SMTP_ALLOWED_HOSTS,
+    },
     serviceConfig: {
       // No link base here: a mail's links start at the issuer of the realm
       // the account belongs to, passed with each mail (ADR-019 Decision 1,
@@ -662,6 +669,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     seeds: realmPolicySeeds,
     realms: fastify.repositories.realms,
     ...(realmSecrets === null ? {} : { secrets: realmSecrets }),
+    // The SMTP hosts a realm may name although they are not public: the
+    // operator's alone (review of #937).
+    allowedSmtpHosts: env.SMTP_ALLOWED_HOSTS,
   });
 
   // The default realm's boot step (ADR-019 Decision 1, #484): find or create

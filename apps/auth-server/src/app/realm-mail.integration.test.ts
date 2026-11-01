@@ -61,6 +61,11 @@ const HOST_B = 'beta.example.com';
 /** The mail keys these tests set; the harness clears SMTP_* and RESEND_* itself. */
 const MAIL_KEYS = ['EMAIL_PROVIDER'] as const;
 
+/** `env` without `keys`. */
+function without(env: Record<string, string>, ...keys: string[]): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !keys.includes(key)));
+}
+
 interface LogLine {
   readonly msg: string;
   readonly variable?: string;
@@ -130,6 +135,10 @@ describe('each realm sends through its own mail transport (#529)', () => {
       SMTP_SECURE: 'false',
       SMTP_USER: 'mailer-a',
       SMTP_PASSWORD: password,
+      // The fixtures are plaintext relays on loopback, which only the
+      // operator's switches let a realm reach (review of #937).
+      SMTP_ALLOW_PLAINTEXT: 'true',
+      SMTP_ALLOWED_HOSTS: fixture.host,
     };
   }
 
@@ -314,6 +323,37 @@ describe('each realm sends through its own mail transport (#529)', () => {
     expect(JSON.stringify(representation)).not.toContain(PASSWORD_B);
   });
 
+  it("refuses a realm's local SMTP host the operator does not list, and a plaintext relay without the switch", async () => {
+    const serverA = await smtpFixture();
+    const app = await boot(without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOWED_HOSTS'));
+    const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm) throw new Error('no default realm');
+    // The policy update refuses the loopback host...
+    const current = await app.policyStore.get(realm.id);
+    await expect(
+      app.policyStore.update(
+        realm.id,
+        { mail: { smtp: { host: '127.0.0.1', port: serverA.port, password: PASSWORD_B } } },
+        { expectedVersion: current?.version ?? 0 }
+      )
+    ).rejects.toMatchObject({ issues: [expect.objectContaining({ path: 'mail.smtp.host' })] });
+    // ...and the environment's, filled at boot, is refused when it connects:
+    // the registration still answers, and no mail reaches the relay.
+    await register(app, 'henry@example.com');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(serverA.messages).toEqual([]);
+    expect(serverA.logins).toEqual([]);
+    for (const server of servers.splice(0)) await server.close();
+
+    // Listed, but with STARTTLS required: the plaintext relay is not used.
+    const strictApp = await boot(
+      without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOW_PLAINTEXT')
+    );
+    await register(strictApp, 'iris@example.com');
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(serverA.logins).toEqual([]);
+  });
+
   it('seeds the default realm from SMTP_PASSWORD at the first boot, once and never again', async () => {
     const serverA = await smtpFixture();
     const first: LogLine[] = [];
@@ -368,8 +408,7 @@ describe('each realm sends through its own mail transport (#529)', () => {
 
   it('seeds the password at a later boot when the first boot lacked it and the transport needs it', async () => {
     const serverA = await smtpFixture();
-    const { SMTP_PASSWORD: _unset, ...withoutPassword } = smtpEnvironment(serverA, PASSWORD_A);
-    const firstApp = await boot(withoutPassword);
+    const firstApp = await boot(without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_PASSWORD'));
     const realm = await firstApp.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('no default realm');
     const rows = async () =>

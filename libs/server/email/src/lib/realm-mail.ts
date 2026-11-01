@@ -8,6 +8,7 @@ import type {
 } from '../types';
 import { createEmailService } from './email-service';
 import { createEmailProvider, formatMailbox, type MailTransport } from './provider-factory';
+import type { SmtpConnectionPolicy } from './smtp-destination';
 
 /**
  * Each realm's mail sender (ADR-019 Decision 10, issue #529).
@@ -111,6 +112,11 @@ export interface RealmMailServiceOptions {
   readonly serviceConfig?: Omit<EmailServiceConfig, 'defaultFrom'>;
   /** Builds the provider of a transport; {@link createEmailProvider} unless a test passes its own. */
   readonly createProvider?: (transport: MailTransport) => EmailProvider;
+  /**
+   * How an smtp transport may connect: the operator's `SMTP_ALLOWED_HOSTS`
+   * and `SMTP_ALLOW_PLAINTEXT`. Strict when absent.
+   */
+  readonly smtp?: SmtpConnectionPolicy;
   /** How many realms' senders to keep; the one used longest ago goes first. 256 by default. */
   readonly maxRealms?: number;
 }
@@ -171,7 +177,9 @@ async function transportOf(realmId: string, read: RealmMailRead): Promise<MailTr
  */
 export function createRealmMailService(options: RealmMailServiceOptions): RealmEmailService {
   const { source } = options;
-  const createProvider = options.createProvider ?? createEmailProvider;
+  const createProvider =
+    options.createProvider ??
+    ((transport: MailTransport) => createEmailProvider(transport, options.smtp));
   const maxRealms = options.maxRealms ?? DEFAULT_MAX_REALMS;
   /** By realm id, in the order they were last used. */
   const senders = new Map<

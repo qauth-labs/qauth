@@ -4,6 +4,7 @@ import {
   generateVerificationToken,
   hashToken,
   isValidTokenFormat,
+  normalizeSmtpHost,
   type RealmEmailService,
 } from '@qauth-labs/server-email';
 import type { FastifyInstance } from 'fastify';
@@ -55,6 +56,10 @@ export const emailPlugin = fp<EmailPluginOptions>(
       createRealmMailService({
         source: options.source,
         ...(options.serviceConfig === undefined ? {} : { serviceConfig: options.serviceConfig }),
+        smtp: {
+          allowPlaintext: options.smtp?.allowPlaintext === true,
+          allowedHosts: new Set((options.smtp?.allowedHosts ?? []).map(normalizeSmtpHost)),
+        },
       })
     );
     fastify.decorate('emailVerificationTokenUtils', {

@@ -158,8 +158,14 @@ async function buildServer() {
     seeds: defaultsFromEnv({}),
     realms: tables.realms as never,
     secrets,
+    // The SMTP fixture is a plaintext relay on loopback: only the operator's
+    // switches let a realm reach it (review of #937).
+    allowedSmtpHosts: ['127.0.0.1'],
   });
-  await app.register(emailPlugin, { source: realmMailSource(app, secrets, new Map()) });
+  await app.register(emailPlugin, {
+    source: realmMailSource(app, secrets, new Map()),
+    smtp: { allowPlaintext: true, allowedHosts: ['127.0.0.1'] },
+  });
 
   app.patch('/admin/v1-rc.0/realms/:realmId/policies', async (request) => {
     // On purpose: a handler that logs the patch it was sent.

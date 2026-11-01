@@ -2,6 +2,7 @@ import type { EmailProvider } from '../types';
 import { MockEmailProvider } from './providers/mock.provider';
 import { ResendEmailProvider } from './providers/resend.provider';
 import { SmtpEmailProvider } from './providers/smtp.provider';
+import { type SmtpConnectionPolicy, STRICT_SMTP_CONNECTION_POLICY } from './smtp-destination';
 
 /**
  * A mail transport with everything it sends with (#529): what a realm's
@@ -25,9 +26,14 @@ export type MailTransportProvider = MailTransport['provider'];
 /**
  * The provider that sends through `transport`. The password or API key goes
  * to the transport's client only: the provider never returns it, and nothing
- * here logs it.
+ * here logs it. An smtp transport connects as `connection` lets it: strict
+ * (public addresses, STARTTLS required) unless the operator's switches say
+ * otherwise.
  */
-export function createEmailProvider(transport: MailTransport): EmailProvider {
+export function createEmailProvider(
+  transport: MailTransport,
+  connection: SmtpConnectionPolicy = STRICT_SMTP_CONNECTION_POLICY
+): EmailProvider {
   switch (transport.provider) {
     case 'mock':
       return new MockEmailProvider();
@@ -37,6 +43,7 @@ export function createEmailProvider(transport: MailTransport): EmailProvider {
         port: transport.port,
         secure: transport.secure,
         auth: { user: transport.user, pass: transport.password },
+        connection,
       });
     case 'resend':
       return new ResendEmailProvider({ apiKey: transport.apiKey });

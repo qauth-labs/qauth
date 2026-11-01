@@ -4,6 +4,8 @@
   "private": true,
   "main": "src/index.ts",
   "dependencies": {
+    "@qauth-labs/server-egress": "workspace:*",
+    "@qauth-labs/server-realm-policy": "workspace:*",
     "@react-email/render": "catalog:",
     "nodemailer": "catalog:",
     "react": "catalog:",

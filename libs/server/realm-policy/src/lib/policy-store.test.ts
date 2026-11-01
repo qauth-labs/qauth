@@ -13,7 +13,12 @@ import {
   type RealmPolicyStorage,
   type RealmPolicyWrite,
 } from './policy-store';
-import { defaultsFromEnv, REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
+import {
+  defaultsFromEnv,
+  REALM_POLICY_ENV,
+  REALM_POLICY_REGISTRY,
+  realmPolicyRules,
+} from './realm-policies';
 import { createPolicyRegistry, PolicyValidationError } from './registry';
 import { createRealmSecretStore, type RealmSecretStore } from './secret-store';
 
@@ -1105,6 +1110,82 @@ describe('createPolicyStore — the mail transport rule on every update (#529)',
         )
       )
     ).toEqual([{ path: 'mail.smtp.user', message: 'is required when mail.provider is smtp' }]);
+  });
+
+  it.each([
+    ['a loopback address', '127.0.0.1'],
+    ['a private address', '10.0.0.25'],
+    ['a cloud metadata address', '169.254.169.254'],
+    ['localhost', 'localhost'],
+    ['a unique-local address', '[fd12:3456::25]'],
+  ])('refuses %s as the smtp host a realm names', async (_kind, host) => {
+    const { secrets } = workingSecrets();
+    const { store, writes } = storeOver([realmWithPolicies()], secrets);
+
+    const issues = await refusedIssues(
+      store.update(
+        'realm-a',
+        { mail: { ...SMTP_TRANSPORT, smtp: { ...SMTP_TRANSPORT.smtp, host, password: SECRET } } },
+        { expectedVersion: 3 }
+      )
+    );
+
+    expect(issues.map((issue) => issue.path)).toEqual(['mail.smtp.host']);
+    expect(issues[0]?.message).toMatch(/^must (be a public host|not be a cloud metadata address)/);
+    expect(writes).toEqual([]);
+  });
+
+  it('takes a host the operator lists, but never a cloud metadata address', async () => {
+    const { secrets } = workingSecrets();
+    const memory = memoryStorage([realmWithPolicies()]);
+    const store = createPolicyStore({
+      storage: memory.storage,
+      seeds: SEEDS,
+      secrets,
+      rules: realmPolicyRules({ allowedSmtpHosts: ['LocalHost', '169.254.169.254'] }),
+    });
+    const transport = (host: string) => ({
+      mail: { ...SMTP_TRANSPORT, smtp: { ...SMTP_TRANSPORT.smtp, host, password: SECRET } },
+    });
+
+    await store.update('realm-a', transport('localhost'), { expectedVersion: 3 });
+    expect(
+      await refusedIssues(
+        store.update('realm-a', transport('169.254.169.254'), { expectedVersion: 4 })
+      )
+    ).toEqual([{ path: 'mail.smtp.host', message: 'must not be a cloud metadata address' }]);
+    // Another host than the listed one is still refused.
+    expect(
+      (
+        await refusedIssues(store.update('realm-a', transport('127.0.0.1'), { expectedVersion: 4 }))
+      ).map((issue) => issue.path)
+    ).toEqual(['mail.smtp.host']);
+  });
+
+  it('checks the host only when an update brings it in', async () => {
+    // A realm the environment filled with a local relay: its other mail fields
+    // still change; the connection checks the host each time it sends.
+    const { secrets } = workingSecrets();
+    const { store } = storeOver(
+      [
+        realmWithPolicies({
+          document: {
+            ...(structuredClone(SEEDS) as unknown as Record<string, unknown>),
+            mail: {
+              ...structuredClone(SEEDS.mail),
+              ...SMTP_TRANSPORT,
+              smtp: { ...SEEDS.mail.smtp, ...SMTP_TRANSPORT.smtp, host: 'localhost' },
+            },
+          },
+        }),
+      ],
+      secrets
+    );
+    await store.update(
+      'realm-a',
+      { mail: { fromName: 'Example', smtp: { password: SECRET } } },
+      { expectedVersion: 3 }
+    );
   });
 
   it('fails closed on a server without a secret store: it cannot tell a secret unset', async () => {

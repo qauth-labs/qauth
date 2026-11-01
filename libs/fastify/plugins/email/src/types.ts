@@ -26,6 +26,17 @@ export interface EmailPluginOptions extends FastifyPluginOptions {
   source: RealmMailSource;
   /** What every realm's mail shares; the sender comes from the realm's policies. */
   serviceConfig?: Omit<Partial<EmailServiceConfig>, 'defaultFrom'>;
+  /**
+   * The operator's switches for every realm's smtp transport (review of
+   * #937): `allowPlaintext` (`SMTP_ALLOW_PLAINTEXT`) lets a transport with
+   * `mail.smtp.secure` off send without STARTTLS, and `allowedHosts`
+   * (`SMTP_ALLOWED_HOSTS`) lets it reach those hosts although they are not
+   * public. Both off when absent: public addresses only, STARTTLS required.
+   */
+  smtp?: {
+    readonly allowPlaintext?: boolean;
+    readonly allowedHosts?: readonly string[];
+  };
 }
 
 /**

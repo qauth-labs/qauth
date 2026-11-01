@@ -83,25 +83,41 @@ function recordingProviders() {
 }
 
 describe('createEmailProvider', () => {
-  it('builds each transport QAuth sends through', () => {
+  it('builds each transport QAuth sends through', async () => {
     expect(createEmailProvider({ provider: 'mock' })).toBeInstanceOf(MockEmailProvider);
     expect(createEmailProvider({ provider: 'resend', apiKey: 're_key' })).toBeInstanceOf(
       ResendEmailProvider
     );
-    const provider = createEmailProvider({
-      provider: 'smtp',
-      host: 'smtp.example.com',
-      port: 587,
-      secure: false,
-      user: 'mailer',
-      password: PASSWORD_A,
-    });
-    expect(provider).toBeInstanceOf(SmtpEmailProvider);
-    expect(nodemailer.createTransport).toHaveBeenLastCalledWith(
-      expect.objectContaining({
+    const provider = createEmailProvider(
+      {
+        provider: 'smtp',
         host: 'smtp.example.com',
         port: 587,
         secure: false,
+        user: 'mailer',
+        password: PASSWORD_A,
+      },
+      {
+        allowPlaintext: false,
+        allowedHosts: new Set(),
+        lookup: async () => [{ address: '93.184.216.34' }],
+      }
+    );
+    expect(provider).toBeInstanceOf(SmtpEmailProvider);
+    // The transport is built for each mail, to the address checked then.
+    await provider.sendEmail({
+      to: 'user@example.com',
+      from: 'no-reply@example.com',
+      subject: 'Hi',
+      text: 'Body',
+    });
+    expect(nodemailer.createTransport).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        host: '93.184.216.34',
+        servername: 'smtp.example.com',
+        port: 587,
+        secure: false,
+        requireTLS: true,
         auth: { user: 'mailer', pass: PASSWORD_A },
       })
     );

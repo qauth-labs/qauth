@@ -27,7 +27,8 @@ whether it is set (`passwordSet`). The environment seeds the first realm's secre
 first boot that can encrypt them. A policy update that selects the `smtp` transport without its
 host, port, user, sender address and password, or `resend` without its sender address and API key,
 is refused, and so is one that selects `smtp` or changes its host, port or TLS mode without giving
-the password again.
+the password again, or that names `localhost`, a non-public IP address or a cloud metadata address as
+its SMTP host when the operator's `SMTP_ALLOWED_HOSTS` does not list it (a metadata address never).
 
 Schema version: `1-rc.0`.
 

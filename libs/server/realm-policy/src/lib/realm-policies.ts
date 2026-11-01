@@ -11,7 +11,12 @@ import {
 import type { z } from 'zod';
 
 import type { PolicyField } from './field';
-import { BUILT_IN_POLICY_GROUPS, mailTransportIssues } from './groups';
+import {
+  BUILT_IN_POLICY_GROUPS,
+  createMailTransportRule,
+  mailTransportIssues,
+  type MailTransportRuleOptions,
+} from './groups';
 import {
   createPolicyRegistry,
   type JsonSchemaObject,
@@ -103,9 +108,15 @@ for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
 
 /**
  * The rules over a whole document that every policy update of a realm must
- * pass (#529): the mail transport has what it sends with
- * ({@link mailTransportIssues}).
+ * pass (#529): the mail transport has what it sends with, and its SMTP host
+ * is one a realm may name ({@link createMailTransportRule}), with the hosts
+ * `options.allowedSmtpHosts` lets a realm name although they are not public.
  */
+export function realmPolicyRules(options: MailTransportRuleOptions = {}): readonly PolicyRule[] {
+  return Object.freeze([createMailTransportRule(options)]);
+}
+
+/** {@link realmPolicyRules} with no SMTP host the operator allows. */
 export const REALM_POLICY_RULES: readonly PolicyRule[] = Object.freeze([mailTransportIssues]);
 
 /**
