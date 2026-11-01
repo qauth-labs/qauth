@@ -480,16 +480,13 @@ describe('AuthMethod routes', () => {
     });
     const [request] = callbackHandle.mock.calls[0];
     expect(Object.getPrototypeOf(request.query)).toBeNull();
-    // Built with defineProperty: an own member named __proto__, as the query
-    // the handler sees holds it.
-    const expected = Object.defineProperty(Object.create(null), '__proto__', {
-      value: 'x',
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    }) as Record<string, string>;
-    expected['state'] = BINDING;
-    expect(request.query).toEqual(expected);
+    // An own member named __proto__, as the query the handler sees holds it;
+    // compared as entries, so the test never builds such an object itself.
+    expect(Object.hasOwn(request.query, '__proto__')).toBe(true);
+    expect(Object.entries(request.query)).toEqual([
+      ['__proto__', 'x'],
+      ['state', BINDING],
+    ]);
   });
 
   it('registers a method beside the password provider through the single registration point', () => {
