@@ -640,6 +640,28 @@ describe('the internal client', () => {
       await expect(pinned.request({ method: 'GET', path })).rejects.toThrow(TypeError);
     }
   });
+
+  it("keeps every request below the base URL's path, refusing dot segments plain or encoded", async () => {
+    const below = client(peers.web, { url: `${url}${FIXTURE_PREFIX}` });
+    for (const path of [
+      '/../../x',
+      '/a/../../../x',
+      '/./peer',
+      '/%2e%2e/%2E%2e/x',
+      '/.%2e/x',
+      '/%2e./x',
+      '/%2E/peer',
+      '/peer/..',
+    ]) {
+      await expect(below.request({ method: 'GET', path }), path).rejects.toThrow(
+        'no . or .. segment'
+      );
+    }
+    expect(seen.requests).toBe(0);
+    // A dot elsewhere in a segment, or in the query, is no dot segment.
+    const response = await below.request({ method: 'GET', path: '/peer?next=../x' });
+    expect(JSON.parse(response.body.toString())).toEqual({ peerRole: 'web' });
+  });
 });
 
 describe('certificate reload', () => {

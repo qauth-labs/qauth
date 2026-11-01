@@ -30,7 +30,9 @@ import { INTERNAL_TLS_VERSION } from './tls-files';
  *   on a new connection: so an internal route must take a repeated request
  *   as harmless;
  * - every request has a deadline and a cap on the size of its response;
- * - no redirect is followed, and the request never leaves the URL's origin.
+ * - no redirect is followed, and the request never leaves the URL's origin
+ *   nor its path: a `.` or `..` segment, plain or percent-encoded, is
+ *   refused.
  *
  * Errors carry a code and say nothing of the request's or the response's
  * contents.
@@ -191,15 +193,26 @@ function baseUrl(text: string): URL {
   return url;
 }
 
-/** The URL of `path` below `base`, on `base`'s origin only. */
+/**
+ * A `.` or `..` path segment, written plainly or with `%2e`: the URL parser
+ * resolves each, so `/../x` would leave the base URL's path.
+ */
+const DOT_SEGMENT = /^(?:\.|%2e){1,2}$/i;
+
+/** The URL of `path` below `base`, on `base`'s origin and below its path only. */
 function targetOf(base: URL, path: string): URL {
   if (!path.startsWith('/') || path.startsWith('//') || /[\s\\\p{Cc}]/u.test(path)) {
     throw new TypeError(
       'InternalClient.request: path must start with a single / and hold no white space'
     );
   }
-  const target = new URL(`${base.pathname.replace(/\/+$/, '')}${path}`, base.origin);
-  if (target.origin !== base.origin) {
+  const [pathPart = ''] = path.split(/[?#]/, 1);
+  if (pathPart.split('/').some((segment) => DOT_SEGMENT.test(segment))) {
+    throw new TypeError('InternalClient.request: path must hold no . or .. segment');
+  }
+  const basePath = base.pathname.replace(/\/+$/, '');
+  const target = new URL(`${basePath}${path}`, base.origin);
+  if (target.origin !== base.origin || !target.pathname.startsWith(`${basePath}/`)) {
     throw new TypeError('InternalClient.request: path must stay on the base URL');
   }
   return target;
