@@ -1,4 +1,5 @@
 import { UnauthorizedClientError } from '@qauth-labs/shared-errors';
+import { resolveFirstPartyProfile } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -18,7 +19,13 @@ import {
 } from '../../helpers/client-auth';
 import { resolveClient, unresolvedClientError } from '../../helpers/client-resolution';
 import { isClientUsable, unusableClientError } from '../../helpers/client-status';
-import { canSkipConsent, filterRequestedScopes } from '../../helpers/consent';
+import {
+  administrativeConsentFor,
+  administrativeConsentScopes,
+  canSkipConsent,
+  filterRequestedScopes,
+  forcesLoginPrompt,
+} from '../../helpers/consent';
 import { MALFORMED_DPOP_JKT_DESCRIPTION, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
 import {
@@ -96,6 +103,12 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  * no prior consent covering the requested scopes, or an agent client
  * (ADR-015 Decision 11) → redirect to the consent screen at /ui/consent.
  * Otherwise issue a code directly.
+ *
+ * An operator-flagged first-party client (ADR-017 Decision 9) skips the
+ * screen without a stored consent for its non-dangerous scopes: the
+ * administrative consent, audited on every code as `consent.administrative`.
+ * A `native_backend` client's request is treated as `prompt=login` whatever
+ * it says, so its browser leg always meets a visible login.
  *
  * The legacy Bearer path, which authenticated the user from the developer
  * portal's access token with no sign-in and no consent screen, is retired
@@ -404,6 +417,13 @@ export default async function (fastify: FastifyInstance) {
       client.id
     );
 
+    // ADR-017 Decision 9: an operator-flagged first-party client's
+    // administrative consent. It stands for a stored consent to the requested
+    // scopes when none of them is dangerous, and writes no `oauth_consents`
+    // row; `null` for every other client and request. Every code it lets
+    // through is audited below, in the transaction that mints the code.
+    const administrativeConsent = administrativeConsentFor(client, scopes);
+
     // Show the consent screen unless a previous grant already covers the
     // requested scopes. An agent client always sees it (ADR-015 Decision
     // 11): `canSkipConsent` is false for an agent.
@@ -415,11 +435,27 @@ export default async function (fastify: FastifyInstance) {
     // prior consent silently. We re-authenticate and/or re-consent. The
     // decision is default-deny: a dangerous elevation forces a fresh login
     // with no client opt-in required.
-    const prompt = parsePromptMode(query.prompt);
+    //
+    // ADR-017 Decision 9: a first-party client's prior-consent scopes are its
+    // administrative consent set, the requested scopes minus dangerous ones,
+    // and never its stored consent, so a dangerous scope is always an
+    // elevation: the consent screen shows it, however it was granted before.
+    // A `native_backend` client's request is treated as `prompt=login`,
+    // whatever its own `prompt` says (`prompt=none` is answered below), so
+    // its browser leg never completes from a live session without a visible
+    // login; the backend builds that URL, and QAuth does not rely on the
+    // parameter arriving intact.
+    const requestedPrompt = parsePromptMode(query.prompt);
+    const forcedLogin = forcesLoginPrompt(client);
+    const prompt = forcedLogin && requestedPrompt !== 'none' ? 'login' : requestedPrompt;
+    const firstParty = resolveFirstPartyProfile(client) !== null;
     const stepUp = evaluateStepUp({
       requestedScopes: scopes,
-      priorConsentScopes:
-        existingConsent && existingConsent.revokedAt === null ? existingConsent.scopes : [],
+      priorConsentScopes: firstParty
+        ? administrativeConsentScopes(client, scopes)
+        : existingConsent && existingConsent.revokedAt === null
+          ? existingConsent.scopes
+          : [],
       prompt,
       maxAgeSeconds: query.max_age ?? null,
       authTimeMs: browserSession.authTime,
@@ -444,16 +480,24 @@ export default async function (fastify: FastifyInstance) {
     // A fresh-login requirement still answers `login_required` first.
     // "Covering" includes the RFC 8707 resources: a grant remembered for
     // one resource server is no consent to tokens for another.
+    //
+    // A `native_backend` client always needs the login page (its request is
+    // `prompt=login` whatever it says), which `prompt=none` forbids, so it
+    // answers `login_required` however fresh the session is (ADR-017
+    // Decision 9; OpenID Connect Core 1.0 §3.1.2.6).
     if (prompt === 'none') {
-      const oidcError =
-        stepUpErrorForPromptNone(stepUp) ??
-        (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required');
+      const oidcError = forcedLogin
+        ? 'login_required'
+        : (stepUpErrorForPromptNone(stepUp) ??
+          (canSkipConsent(existingConsent, client, scopes, resources) ? null : 'consent_required'));
       if (oidcError) {
         await emitUserEvent(
           request,
           'urn:qauth:event:step_up.required:v1-rc.0',
           {
-            reason: 'prompt_none_interaction_required',
+            reason: forcedLogin
+              ? 'native_profile_login_required'
+              : 'prompt_none_interaction_required',
             error: oidcError,
             elevatedScopes: stepUp.elevated,
             dangerousScopes: stepUp.dangerous,
@@ -478,14 +522,17 @@ export default async function (fastify: FastifyInstance) {
       // max_age / scope / PKCE) is preserved so the round-trip is lossless —
       // stashed server-side under a handle, same as the no-session branch
       // above (#316 follow-up), so this path cannot regrow the header either.
+      //
+      // The event names the request's own `prompt`; the reason says when the
+      // client's `native_backend` profile asked for the login instead.
       await emitUserEvent(
         request,
         'urn:qauth:event:step_up.required:v1-rc.0',
         {
-          reason: 'fresh_authentication_required',
+          reason: forcedLogin ? 'native_profile_login_required' : 'fresh_authentication_required',
           elevatedScopes: stepUp.elevated,
           dangerousScopes: stepUp.dangerous,
-          ...(prompt === null ? {} : { prompt }),
+          ...(requestedPrompt === null ? {} : { prompt: requestedPrompt }),
           ...(query.max_age === undefined ? {} : { maxAge: query.max_age }),
         },
         userEvent
@@ -524,7 +571,9 @@ export default async function (fastify: FastifyInstance) {
     }
 
     // Every path that reaches this point skipped the consent screen on the
-    // strength of `existingConsent`. That read is only a snapshot: a
+    // strength of `existingConsent`, or of the administrative consent of a
+    // first-party client, which needs no row and is recorded below with the
+    // code (`consent.administrative`). The row read is only a snapshot: a
     // revocation can commit between it and the insert, and the code would be
     // issued on a consent that no longer exists (DELETE /api/consents/:id
     // already answered 204). So the decision is taken again on the row,
@@ -589,6 +638,24 @@ export default async function (fastify: FastifyInstance) {
         tx
       );
       if (minted === 'session_ended') return minted;
+      // ADR-017 Decision 9: every code the administrative consent let through
+      // is audited, in the transaction that mints it: the profile it rests
+      // on, the scopes and resources it covered, and the endpoint. The
+      // waiver comes first in `canSkipConsent`, so a first-party client's
+      // stored consent never stands in for it unrecorded.
+      if (administrativeConsent !== null) {
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:consent.administrative:v1-rc.0',
+          {
+            basis: administrativeConsent.basis,
+            scopes: [...administrativeConsent.scopes],
+            ...(resources.length > 0 ? { resources: [...resources] } : {}),
+            path: '/oauth/authorize',
+          },
+          { ...userEvent, tx }
+        );
+      }
       await emitUserEvent(
         request,
         'urn:qauth:event:authorization.completed:v1-rc.0',

@@ -26,6 +26,7 @@ import {
   canSkipConsent,
   describeScope,
   filterRequestedScopes,
+  forcesLoginPrompt,
 } from '../../helpers/consent';
 import { malformedDpopJktError, readAuthorizationDpopJkt } from '../../helpers/dpop';
 import { resolveEnvironmentPolicy } from '../../helpers/environment-policy';
@@ -900,7 +901,16 @@ export default async function (fastify: FastifyInstance) {
       // `requiresConsent` — always true here given `priorConsentScopes: []` —
       // is irrelevant. We just need to confirm the authentication is fresh
       // enough for whatever (incl. dangerous) scopes are about to be granted.
-      const prompt = parsePromptMode(body.prompt);
+      //
+      // ADR-017 Decision 9: a `native_backend` client's request counts as
+      // `prompt=login` here as on /oauth/authorize, whatever the posted
+      // `prompt` says, so a page reached without /oauth/authorize (a direct
+      // GET of this screen) cannot mint a code for a native app's browser leg
+      // without a visible login either. `prompt=none` included: this screen
+      // is already the UI that `none` forbids.
+      const requestedPrompt = parsePromptMode(body.prompt);
+      const forcedLogin = forcesLoginPrompt(client);
+      const prompt = forcedLogin ? 'login' : requestedPrompt;
       const stepUp = evaluateStepUp({
         requestedScopes: scopes,
         priorConsentScopes: [],
@@ -936,9 +946,9 @@ export default async function (fastify: FastifyInstance) {
           request,
           'urn:qauth:event:step_up.required:v1-rc.0',
           {
-            reason: 'fresh_authentication_required',
+            reason: forcedLogin ? 'native_profile_login_required' : 'fresh_authentication_required',
             ...(stepUp.dangerous.length > 0 ? { dangerousScopes: stepUp.dangerous } : {}),
-            ...(prompt === null ? {} : { prompt }),
+            ...(requestedPrompt === null ? {} : { prompt: requestedPrompt }),
             ...(body.max_age === undefined ? {} : { maxAge: body.max_age }),
           },
           { realmId: realm.id, userId: session.userId, clientId: client.clientId, actor: 'user' }
