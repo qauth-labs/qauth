@@ -8,8 +8,11 @@
  * (403), so losing the cache makes CI slower and never red. Each case runs the
  * proxy against a scripted upstream on loopback.
  */
+import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -90,13 +93,15 @@ beforeEach(() => {
 
 async function withProxy(
   fn: (run: { base: string; stats: Stats; warnings: string[] }) => Promise<void>,
-  upstreamOverride?: string
+  upstreamOverride?: string,
+  onStats?: (stats: Stats) => void
 ) {
   const warnings: string[] = [];
   const { server, stats } = createProxy({
     upstream: upstreamOverride ?? upstreamUrl,
     token: TOKEN,
     warn: (message: string) => warnings.push(message),
+    onStats,
     idleMs: 300,
     readDeadlineMs: 1000,
     writeDeadlineMs: 1000,
@@ -233,6 +238,29 @@ describe('giving up', () => {
     });
   });
 
+  it('counts a throttled server (429) toward giving up', async () => {
+    behave = answer(429);
+    await withProxy(async ({ base, stats }) => {
+      for (const hash of ['1', '2', '3']) expect((await get(base, hash)).status).toBe(404);
+      expect(stats.gaveUp).toBe(true);
+    });
+  });
+
+  it('keeps serving when the stats file cannot be written', async () => {
+    behave = answer(200, 'cached bytes');
+    await withProxy(
+      async ({ base, stats }) => {
+        expect((await get(base, '1')).status).toBe(200);
+        expect((await get(base, '2')).status).toBe(200);
+        expect(stats.hits).toBe(2);
+      },
+      undefined,
+      () => {
+        throw new Error('ENOSPC: no space left on device');
+      }
+    );
+  });
+
   it('gives up at once on a refused token', async () => {
     behave = answer(401, 'unauthorized', { 'Content-Type': 'text/plain' });
     await withProxy(async ({ base, stats }) => {
@@ -262,6 +290,18 @@ describe('probe', () => {
     expect(seen[0].url).toBe('/v1/stats');
   });
 
+  it('refuses stats without a namespace or an access', async () => {
+    for (const body of [
+      {},
+      { namespace: 'qauth' },
+      { access: 'read' },
+      { namespace: '', access: 'read' },
+    ]) {
+      behave = answer(200, JSON.stringify(body));
+      expect((await probe(upstreamUrl, TOKEN)).error).toMatch(/not its stats/);
+    }
+  });
+
   it('says why when the server refuses the token', async () => {
     behave = answer(401);
     expect((await probe(upstreamUrl, TOKEN)).error).toMatch(/HTTP 401/);
@@ -283,6 +323,22 @@ describe('probe', () => {
 });
 
 describe('summary', () => {
+  it('says the job used the local cache when no proxy ran', () => {
+    const proxy = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '../../.github/actions/nx-remote-cache/proxy.mjs'
+    );
+    const run = spawnSync(
+      process.execPath,
+      [proxy, 'summary', '--stats-file', '/nonexistent/stats.json'],
+      {
+        encoding: 'utf8',
+      }
+    );
+    expect(run.status).toBe(0);
+    expect(run.stdout).toContain('Nx used the local cache only');
+  });
+
   it('reports the hit rate', () => {
     const text = summary(
       {

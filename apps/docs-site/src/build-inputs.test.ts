@@ -22,23 +22,85 @@ const repoRoot = resolveRepoRoot();
 const RECORD_DIRS = ['docs/adr', 'docs/security'];
 const DECLARED = ['{workspaceRoot}/docs/**/*', '{workspaceRoot}/*.md'];
 
-/** The repo-relative targets of a record's relative links, fragments dropped. */
-function relativeTargets(file: string): string[] {
-  const text = readFileSync(file, 'utf8');
+/**
+ * The text with every fenced code block blanked, line for line. A link inside a
+ * fence is an example, never a link the remark plugin rewrites. A fence closes
+ * only on the opener's character, at least as many of them, and nothing else on
+ * the line (CommonMark).
+ */
+function withoutFences(text: string): string {
+  let fence: { char: string; length: number } | null = null;
+  return text
+    .split('\n')
+    .map((line) => {
+      const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (fence === null) {
+        // A backtick fence's info string may not contain a backtick.
+        if (marker && !(marker[1][0] === '`' && marker[2].includes('`'))) {
+          fence = { char: marker[1][0], length: marker[1].length };
+          return '';
+        }
+        return line;
+      }
+      if (
+        marker &&
+        marker[1][0] === fence.char &&
+        marker[1].length >= fence.length &&
+        marker[2].trim() === ''
+      ) {
+        fence = null;
+      }
+      return '';
+    })
+    .join('\n');
+}
+
+/** The relative link targets in a record's text, fragments dropped. */
+function linkTargets(text: string): string[] {
+  const live = withoutFences(text);
   const urls = [
-    ...[...text.matchAll(/\]\(\s*<?([^)\s>]+)>?/g)].map((m) => m[1]),
-    ...[...text.matchAll(/^\s*\[[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)/gm)].map((m) => m[1]),
+    ...[...live.matchAll(/\]\(\s*<?([^)\s>]+)>?/g)].map((m) => m[1]),
+    ...[...live.matchAll(/^\s*\[[^\]]+\]:\s*<?(\S+?)>?(?:\s|$)/gm)].map((m) => m[1]),
   ];
   return urls
     .filter((url) => !/^(?:[a-z][a-z0-9+.-]*:|#|\/)/i.test(url))
     .map((url) => url.split('#')[0])
-    .filter((path) => path.length > 0)
-    .map((path) => relative(repoRoot, resolve(dirname(file), path)).replace(/\\/g, '/'));
+    .filter((path) => path.length > 0);
+}
+
+/** The repo-relative targets of a record file's relative links. */
+function relativeTargets(file: string): string[] {
+  return linkTargets(readFileSync(file, 'utf8')).map((path) =>
+    relative(repoRoot, resolve(dirname(file), path)).replace(/\\/g, '/')
+  );
 }
 
 function covered(repoRelative: string): boolean {
   return repoRelative.startsWith('docs/') || /^[^/]+\.md$/.test(repoRelative);
 }
+
+describe('link scan', () => {
+  it('skips links inside fenced code, closed only by a matching fence', () => {
+    const text = [
+      'See [ADR](./001-x.md).',
+      '````md',
+      '[example](../../examples/a.md)',
+      '```',
+      '[still inside](../../examples/b.md)',
+      '````',
+      '~~~',
+      '[tilde](../../examples/c.md)',
+      '~~~',
+      '[ref]: ../security/threat-model.md',
+    ].join('\n');
+    expect(linkTargets(text)).toEqual(['./001-x.md', '../security/threat-model.md']);
+  });
+
+  it('drops fragments, absolute paths and URLs', () => {
+    const text = '[a](./x.md#y) [b](/docs/z.md) [c](https://e.com/x.md) [d](#top)';
+    expect(linkTargets(text)).toEqual(['./x.md']);
+  });
+});
 
 describe('docs-site build inputs', () => {
   it('declares the globs this guard checks against', () => {

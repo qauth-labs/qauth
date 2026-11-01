@@ -12,8 +12,10 @@
 //
 // A read is buffered whole before Nx sees a 200, so a connection that drops
 // mid-body is a miss, not a broken tarball. After three failures in a row (no
-// connection, a timeout, a 5xx, a 401), the proxy stops calling the server for
-// the rest of the run and answers every read with a miss at once.
+// connection, a timeout, a 5xx, a 429, a 401), the proxy stops calling the server
+// for the rest of the run and answers every read with a miss at once. An error in
+// the proxy itself answers that one request with a miss or a refusal; the proxy
+// keeps serving.
 //
 // Node's standard library only, no install step.
 //
@@ -21,8 +23,12 @@
 //       --ready-file ready.json --stats-file stats.json [--port 0]
 //   node proxy.mjs summary --stats-file stats.json
 //
-// `serve` first asks the server who the token is (GET /v1/stats). If that fails it
-// exits 3 with one line saying why, and the caller runs Nx without a remote cache.
+// `serve` first asks the server who the token is: GET /v1/stats, answered with
+// JSON {"namespace", "access"}. That endpoint is not part of Nx's spec; the server
+// this proxy is written for has it (Nx's spec alone could not tell a server that
+// holds nothing yet from a mistyped URL, which answers 404 everywhere too). If the
+// probe fails, it exits 3 with one line saying why, and the caller runs Nx without
+// a remote cache.
 // Otherwise it writes {"port", "namespace", "access"} to the ready file and serves
 // until killed. The token is never printed.
 
@@ -129,9 +135,12 @@ function readAll(req) {
   });
 }
 
-/** A failure that counts toward giving up: no answer, a server error, or a refused token. */
+/**
+ * A failure that counts toward giving up: no answer, a server error, throttling,
+ * or a refused token.
+ */
 function isFailure(status) {
-  return status === 0 || status === 401 || status >= 500;
+  return status === 0 || status === 401 || status === 429 || status >= 500;
 }
 
 /**
@@ -183,11 +192,15 @@ export function createProxy({
     }
   };
 
-  const server = http.createServer(async (req, res) => {
+  const handle = async (req, res) => {
     const reply = (status, body) => {
       res.writeHead(status, { 'Content-Type': body ? 'application/octet-stream' : 'text/plain' });
       res.end(body ?? '');
-      onStats(stats);
+      try {
+        onStats(stats);
+      } catch {
+        // A full or missing stats directory costs the counters, never the request.
+      }
     };
     const match = CACHE_PATH.exec(req.url ?? '');
     const hash = match?.[1];
@@ -232,6 +245,21 @@ export function createProxy({
       return reply(403);
     }
     return reply(404);
+  };
+
+  // Whatever goes wrong inside the proxy, Nx gets an answer it carries on from,
+  // and the proxy stays up for the next request.
+  const server = http.createServer((req, res) => {
+    handle(req, res).catch((err) => {
+      stats.errors += 1;
+      stats.lastError = `proxy: ${err?.message ?? err}`;
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
+      res.writeHead(req.method === 'PUT' ? 403 : 404, { 'Content-Type': 'text/plain' });
+      res.end('');
+    });
   });
   server.on('close', () => opts.agent.destroy());
   return { server, stats };
@@ -251,12 +279,17 @@ export async function probe(upstream, token, overrides = {}) {
           : `the cache server answered HTTP ${result.status}`,
     };
   }
+  const notStats = { error: 'the cache server answered something that is not its stats' };
+  let body;
   try {
-    const body = JSON.parse(result.body.toString('utf8'));
-    return { namespace: String(body.namespace), access: String(body.access) };
+    body = JSON.parse(result.body.toString('utf8'));
   } catch {
-    return { error: 'the cache server answered something that is not its stats' };
+    return notStats;
   }
+  if (typeof body?.namespace !== 'string' || !body.namespace || typeof body?.access !== 'string') {
+    return notStats;
+  }
+  return { namespace: body.namespace, access: body.access };
 }
 
 function writeJson(path, value) {
@@ -314,7 +347,11 @@ async function main(argv) {
     try {
       stats = JSON.parse(readFileSync(statsFile, 'utf8'));
     } catch {
-      return 0; // no proxy ran in this job: nothing to report
+      // No proxy ran in this job: say so, rather than leave the summary silent.
+      process.stdout.write(
+        '### Nx remote cache\n\nNot used in this job (no cache URL or token, or the server did not answer at the start): Nx used the local cache only.\n'
+      );
+      return 0;
     }
     let ready = null;
     try {

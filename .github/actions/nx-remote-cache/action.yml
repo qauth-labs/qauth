@@ -7,8 +7,10 @@ description: >-
 inputs:
   url:
     description: >-
-      Base URL of the cache server, https. Empty: the run uses the local cache
-      only.
+      Base URL of the cache server, https. Besides Nx's spec (GET and PUT
+      /v1/cache/{hash}) the server must answer GET /v1/stats with JSON
+      {"namespace", "access"} for the token; the proxy checks the token there
+      before it starts. Empty: the run uses the local cache only.
     required: false
     default: ''
   token:
