@@ -29,7 +29,7 @@ create a user, log in for tokens, then call a Bearer-protected endpoint
 (`GET /api/clients`).
 
 Registration answers every address with the same `202`, and a new account can
-log in only once its address is verified (the realm's
+log in only once it is verified (the realm's
 `accounts.requireVerifiedAccount`, on by default). So run the script once with `QAUTH_REGISTER=1`, open the link in the
 email and confirm with the password, then run it again without the variable.
 

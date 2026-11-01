@@ -395,7 +395,7 @@ export default async function (fastify: FastifyInstance) {
       // from a registered one (ANT-2026-SPEMY9GU). Only the event keeps the
       // reason.
       const unverified =
-        check.status === 'ok' && !check.emailVerified && policies.requireVerifiedAccount;
+        check.status === 'ok' && !check.accountVerified && policies.requireVerifiedAccount;
 
       // The session's issue time, taken before the account is read (#748): a
       // disablement that commits after the read is not seen by it.

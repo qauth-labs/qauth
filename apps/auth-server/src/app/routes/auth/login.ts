@@ -122,7 +122,7 @@ export default async function (fastify: FastifyInstance) {
         // registered one (the owner's password: 401). ANT-2026-SPEMY9GU.
         // Only the server-side log line and event keep the reason.
         const unverified =
-          check.status === 'ok' && !check.emailVerified && policies.requireVerifiedAccount;
+          check.status === 'ok' && !check.accountVerified && policies.requireVerifiedAccount;
 
         // The users row supplies the stable subject id plus session/event/log
         // fields. The row must exist for any live credential (FK), so a miss
