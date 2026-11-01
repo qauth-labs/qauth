@@ -1318,7 +1318,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and outside the 1.0 stability promise (the experimental item `plugin-api`).
   An AuthMethod extends `CredentialProvider` with an id, display data, a config
   schema, the upstream step, the routes it mounts under `/upstream/<type>` and
-  `start()`. The engine checks every answer of a method: the redirect, the
+  `start(request, context)`, which takes its arguments in the order a route's
+  `handle(request, context)` does. The engine checks every answer of a method: the redirect, the
   transaction and its binding, which the host compares in constant time
   before it takes the pending transaction, the identity (its assurance level
   capped, `low` by default) and every attribute, whose source must be the
@@ -1326,8 +1327,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role and a logger, never a database handle or a key, and `resolve(type)`
   answers a fail-closed stand-in for it. The contract test kit
   (`@qauth-labs/server-federation/testing`) checks a method against all of
-  it, PKCE with S256 included. Nothing registers a method in a running server
-  yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
+  it, PKCE with S256 included. The plugin runtime ([#600], below) loads
+  methods into a running server; the upstream sign-in flow is [#639].
+
+- **The plugin runtime for AuthMethod plugins, experimental** ([#600],
+  ADR-019 Decision 12, ADR-018 §4 and §5). A plugin is an npm package the
+  operator installs with the deployment and lists in `AUTH_METHOD_PLUGINS`
+  (package names only: a path or URL stops the boot). At boot a process that
+  serves the sign-in pages or the admin API imports each one, checks the
+  contract version its `authMethod` export declares, holds it to the whole
+  contract and registers it; a package that is not installed, exports no
+  method, is built for another contract version or repeats another plugin's
+  id or type stops the boot. A plugin outside the first-party list, a fixed
+  list in the server's code that is empty until the first-party plugins ship,
+  loads only while `PLUGIN_API_ENABLED=true`, the switch of the experimental
+  item `plugin-api`, which now warns at boot while on; with it off the
+  package is never imported and the boot logs why. Each realm keeps its state
+  of each plugin in `realm_auth_method_plugins` (migration 0049): off by
+  default, its config's plain members, and each secret member (marked
+  `writeOnly` in the plugin's schema) as a ciphertext under the realm's
+  `data_at_rest` key. The admin API lists and reads the installed plugins
+  (`plugins.list`, `plugins.get`, the permission `plugins.read`) and
+  configures, enables and disables one per realm (`plugins.update`,
+  `plugins.enable`, `plugins.disable`): security operations with
+  `credential-path`, under the new permission `plugins.security`, so they need
+  `qauth:admin:security` and an approval. A config must pass the plugin's own
+  schema; secrets are write-only, sent apart from the plain members and never
+  shown in a response, an audit row or a log. A disabled plugin's routes
+  under `/upstream/<type>` answer the `not_found` document of a path no route
+  serves, and plugin routes are left out of the OpenAPI documents. A plugin's
+  context holds its realm config, the egress client, the signer bound to the
+  realm and the plugin, and a logger: no database handle and no key.
 
 - **The developer API and the account API's consents, under versioned
   prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`

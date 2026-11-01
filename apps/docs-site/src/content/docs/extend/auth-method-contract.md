@@ -21,10 +21,12 @@ verification. The contract lives in `libs/server/federation/src/auth-method/`.
 
 ## What exists today
 
-The contract, the registry entries, the route mount and the test kit. Nothing registers an
-AuthMethod in a running server yet: the plugin runtime that loads installed methods is #600, the
-generic OpenID Connect upstream client is #601, and the upstream sign-in flow that offers the
-step and acts on its outcome is #639. `WalletProvider` is not an AuthMethod and stays a plain
+The contract, the registry entries, the route mount, the test kit and the plugin runtime: a
+deployment installs plugin packages, the server loads them at boot, and an admin enables,
+configures and disables each one per realm ([below](#installing-and-enabling-a-plugin)). The
+generic OpenID Connect upstream client is #601, and the upstream sign-in flow that offers the step
+and acts on its outcome is #639: until it lands, a plugin's routes answer, but no sign-in sends a
+browser to a provider, so a callback is answered as one with no pending sign-in. `WalletProvider` is not an AuthMethod and stays a plain
 provider whose `verify()` rejects; wallet sign-in keeps its own seam.
 
 ## The contract
@@ -150,6 +152,13 @@ can hand over its whole egress client, signer and logger and the method still re
 more. No database or cache handle, no private key, no Fastify instance, no request header and no
 cookie.
 
+The plugin runtime builds the context for the request's realm
+(`apps/auth-server/src/app/helpers/auth-method-plugins.ts`): the realm's stored config with its
+secret members decrypted back into place, the method's `type` as the signer's provider, and the
+request's logger with the plugin's name. In a single deployment the signer is called as `local`,
+the caller inside its own process; a deployment that runs the signer apart gives the role that
+serves the sign-in pages a grant of its own when the signer service lands (#497).
+
 ## Routes
 
 A method declares its routes as data and never touches Fastify. `authMethodRoutesPlugin`
@@ -198,7 +207,85 @@ method written against another contract version, with a route that could leave i
 under a reserved type, fails the boot, and so does a duplicate `type`.
 `createConfiguredProviders` takes the methods to register (`authMethods`), holds every entry to the
 whole contract (one with no `contract` member too, which the registry alone would take for a plain
-provider) and appends them after the built-in providers; leaving them out registers none.
+provider) and appends them after the built-in providers; leaving them out registers none. The
+auth server passes the methods of the plugins it loaded at boot.
+
+## Packaging a plugin
+
+A plugin is an npm package that exports its method as `authMethod`
+(`AUTH_METHOD_PLUGIN_EXPORT`; a CommonJS package may put it under `default`):
+
+```ts
+// index.ts of @example/qauth-plugin-corp-sso
+import type { AuthMethod } from '@qauth-labs/server-federation';
+
+export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = {
+  contract: 'qauth-auth-method/1-rc.0',
+  type: 'corp_sso',
+  id: 'corp-sso',
+  // display, configSchema, steps, routes, start, verify, extractAttributes
+};
+```
+
+One package holds one method. Its `id` is the name the admin API gives the plugin, and stays the
+same across versions of the package; its `type` is the segment of its routes,
+`/upstream/<type>/…`, and the value written to `user_credentials.provider_type`.
+
+**Secret members.** A member of the config schema marked `.meta({ writeOnly: true })` is a secret,
+such as a client secret. The runtime reads the marks from the schema's JSON Schema, which Zod 4
+writes with the metadata of every Zod copy (a plugin that bundles its own Zod is read the same
+way). A secret is a string, or a nullable one, at any depth of nested objects. A schema that is
+not an object, or that marks a member inside a list, a union, a record or a recursive part, or one
+that is not a string, is refused at boot: the runtime could not keep it write-only.
+
+## Installing and enabling a plugin
+
+**Installing.** The operator installs the package with the deployment, as any other dependency
+of the auth server, and lists it in `AUTH_METHOD_PLUGINS` by package name, comma-separated. A
+path, a URL or a `file:` or `git+` specifier is refused: the server never fetches code, and the
+admin console never uploads or edits it.
+
+```sh
+AUTH_METHOD_PLUGINS=@example/qauth-plugin-corp-sso
+PLUGIN_API_ENABLED=true
+```
+
+**At boot**, a process that serves the sign-in pages or the admin API imports each listed package,
+checks the contract version its method declares first (a plugin built for another version says
+so, whatever else it breaks), holds the method to the whole contract, reads its secret members and
+registers it after the built-in providers. A package that is not installed, throws as it is
+imported, exports no `authMethod`, is written against another contract version, or repeats another
+plugin's `id` or `type` stops the boot. The boot logs one line per plugin it loads.
+
+**The switch.** A plugin outside QAuth's first-party list loads only while
+`PLUGIN_API_ENABLED=true`, and then the server logs the experimental warning of `plugin-api` at
+every boot. With it off, such a package is never imported, and the boot logs a warning saying why.
+QAuth's own provider plugins are first-party: they load whatever the switch says. The first-party
+list is fixed in the server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting; it is
+empty until the first-party plugins ship. Discovery has no member for plugins, and their routes
+are left out of the OpenAPI documents.
+
+**Per realm**, every plugin starts off. The admin API's plugin operations, under
+`/admin/v1-rc.0/realms/{realmId}/plugins`, list the installed plugins with the realm's state of
+each (`plugins.list`, `plugins.get`), replace a plugin's config (`plugins.update`,
+`POST …/plugins/{plugin}/config`) and turn it on and off (`plugins.enable`, `plugins.disable`).
+`{plugin}` is the plugin's `id`. The three writes change which upstream credentials sign users in,
+so each is a [security operation](/reference/security-operations/) with the effect
+`credential-path`: it needs `qauth:admin:security` (the permission `plugins.security`) and an
+approval, and `qauth:admin:write` reaches none of them. A write may carry `If-Match` with the
+`ETag` its read gave, and a state that moved since answers 412.
+
+A configure request sends the plain members under `config` and the secret members under
+`secrets`, by path: a string sets one, `null` clears it, and one it does not name keeps its value.
+The whole config, secrets included, must pass the plugin's own schema, and a plugin is enabled
+only with a config that does. A secret member sent under `config` is refused, before an approval
+could store it. The server encrypts each secret with the realm's `data_at_rest` key before it
+stores it; no response, audit row, event or log line holds one, and the representation says only
+which secret members hold a value. An approval keeps the request it was filed for, secrets
+included, only until it is used, withdrawn or denied, as for every security operation.
+
+**A disabled plugin's routes** answer `404` with the `not_found` document of a path no route
+serves, before the request's body is read; disabling keeps the config.
 
 ## Checking a method: the contract test kit
 
