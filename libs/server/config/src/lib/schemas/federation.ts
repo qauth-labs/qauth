@@ -402,7 +402,12 @@ export interface VerifierSigningEnvLike {
  * @returns the PKCS#8 PEM, or `undefined` when the deployment configured none —
  * which is the default posture and the one that leaves `ES256` unclaimed.
  */
-export function resolveVerifierSigningKeyPem(env: VerifierSigningEnvLike): string | undefined {
+export function resolveVerifierSigningKeyPem(
+  env: Pick<
+    VerifierSigningEnvLike,
+    'OID4VP_VERIFIER_SIGNING_KEY' | 'OID4VP_VERIFIER_SIGNING_KEY_PATH'
+  >
+): string | undefined {
   return env.OID4VP_VERIFIER_SIGNING_KEY_PATH ?? env.OID4VP_VERIFIER_SIGNING_KEY;
 }
 
@@ -420,7 +425,10 @@ export function resolveVerifierSigningKeyPem(env: VerifierSigningEnvLike): strin
  * deployment configured none.
  */
 export function resolveVerifierCertificateChainPems(
-  env: VerifierSigningEnvLike
+  env: Pick<
+    VerifierSigningEnvLike,
+    'OID4VP_VERIFIER_CERTIFICATE_CHAIN' | 'OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH'
+  >
 ): readonly string[] {
   return env.OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH.length > 0
     ? env.OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH
@@ -440,7 +448,12 @@ export function resolveVerifierCertificateChainPems(
  * @returns every configured anchor PEM, inline first. Empty when none is
  * configured, which makes any configured chain fail to validate at boot.
  */
-export function resolveVerifierTrustAnchorPems(env: VerifierSigningEnvLike): readonly string[] {
+export function resolveVerifierTrustAnchorPems(
+  env: Pick<
+    VerifierSigningEnvLike,
+    'OID4VP_VERIFIER_TRUST_ANCHORS' | 'OID4VP_VERIFIER_TRUST_ANCHORS_PATH'
+  >
+): readonly string[] {
   return Object.freeze([
     ...env.OID4VP_VERIFIER_TRUST_ANCHORS,
     ...env.OID4VP_VERIFIER_TRUST_ANCHORS_PATH,

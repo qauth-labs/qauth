@@ -39,7 +39,6 @@ import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
-  resolveVerifierSigningKeyPem,
 } from '@qauth-labs/server-config';
 import type { FastifyInstance, RouteOptions } from 'fastify';
 
@@ -81,7 +80,11 @@ import { requestRealm } from './helpers/request-realm';
 import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-boot';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
-import { provisionedVerifierMaterial } from './helpers/verifier-identity';
+import {
+  assertStoredVerifierKeyMatchesChain,
+  provisionedVerifierMaterial,
+  verifierSigningMaterial,
+} from './helpers/verifier-identity';
 import { installInternalApi, type InternalApiOptions } from './internal/listener';
 import { publicInternalRouteProblem } from './internal/route-manifest';
 import { defaultRealmPlugin } from './plugins/default-realm';
@@ -124,18 +127,23 @@ import {
  * and why response encryption — which needs no operator key — is the one entry
  * answered by the build rather than by the configuration (#377 Phase C).
  *
- * The token keys are the default realm's, as its key store holds them (#491),
- * never the key variables. `tokenSigningAlgorithms` names the algorithms of its
- * active `token_signing` keys.
+ * The token keys and the OID4VP request key are the default realm's, as its
+ * key store holds them (#491, #546), never the key variables.
+ * `tokenSigningAlgorithms` names the algorithms of its active `token_signing`
+ * keys, and `verifierRequestSigningAlgorithms` those of its active
+ * `oid4vp_request_signing` keys that the configured chain names.
  */
-function cryptoCapabilities(tokenSigningAlgorithms: readonly string[]): VerifierCryptoCapabilities {
+function cryptoCapabilities(
+  tokenSigningAlgorithms: readonly string[],
+  verifierRequestSigningAlgorithms: readonly string[]
+): VerifierCryptoCapabilities {
   return deriveCryptoCapabilities({
     tokenSigningAlgorithms,
-    // The OID4VP verifier's own key and chain (#377). Read here as CONFIGURED
-    // rather than as validated: validation happens inside `app()` below and is a
-    // boot refusal, so a deployment that reaches a request with this descriptor
-    // has already had its chain accepted.
-    verifierEs256PrivateKey: resolveVerifierSigningKeyPem(env),
+    verifierRequestSigningAlgorithms,
+    // The OID4VP verifier's chain (#377). Read here as CONFIGURED rather than
+    // as validated: validation happens inside `app()` below and is a boot
+    // refusal, so a deployment that reaches a request with this descriptor has
+    // already had its chain accepted.
     verifierCertificateChainPems: resolveVerifierCertificateChainPems(env),
   });
 }
@@ -148,6 +156,17 @@ function cryptoCapabilities(tokenSigningAlgorithms: readonly string[]): Verifier
  * the keys the store holds.
  */
 const BOOT_TOKEN_SIGNING_ALGORITHMS: readonly string[] = Object.freeze(['EdDSA']);
+
+/**
+ * The request-key algorithms the gate is first checked against, while the
+ * server registers (#546): `ES256` when a certificate chain is configured, as
+ * the key store is read only once the key boot step has run. Then the gate is
+ * checked again against the stored request keys, and a chain no stored key
+ * matches refuses the boot (`assertStoredVerifierKeyMatchesChain`).
+ */
+function bootVerifierRequestSigningAlgorithms(): readonly string[] {
+  return resolveVerifierCertificateChainPems(env).length > 0 ? ['ES256'] : [];
+}
 
 /**
  * The settings the default realm's boot step (#484) reads, from the
@@ -339,9 +358,10 @@ async function registerFederation(
 
   // The VERIFIER identity (#377), and the same posture again for the third
   // trust direction: the two calls above validate material QAuth will BELIEVE,
-  // this one validates the material QAuth will PRESENT. It parses the chain,
-  // checks it terminates at a configured anchor with the anchor itself excluded,
-  // and confirms the signing key belongs to the leaf — every one of which is an
+  // this one validates the material QAuth will PRESENT. It parses the chain and
+  // checks it terminates at a configured anchor with the anchor itself
+  // excluded; once the key boot step has run, the hook below confirms the
+  // stored request key belongs to the leaf (#546) — every one of which is an
   // operator mistake whose only runtime symptom is a wallet rejecting 100% of
   // requests with nothing in QAuth's logs naming the cause.
   //
@@ -378,18 +398,23 @@ async function registerFederation(
   // NOT gated on WALLET_FEDERATION_ENABLED, for the reason given twice above.
   assertAttestingIssuersUsable(env.OID4VP_ATTESTING_ISSUERS);
 
-  // The at-rest secret for the per-request `direct_post.jwt` decryption key
-  // (#377 Phase C), the same posture once more. `OID4VP_RESPONSE_KEY_SECRET` is
-  // OPTIONAL — unset stores the key in the clear, which is the default — but a
-  // value that is set and does not decode to exactly one AES-256 key is a
-  // misconfiguration whose only runtime symptom would be every wallet sign-in
-  // failing at the moment the request state is written. The helper memoises,
-  // so this is the one decode the process ever performs.
+  // The pre-#546 at-rest secret for the per-request `direct_post.jwt`
+  // decryption key (#377 Phase C), the same posture once more. Since #546 the
+  // signer seals every new key with the realm's `data_at_rest` key, and
+  // `OID4VP_RESPONSE_KEY_SECRET` only opens rows the previous release wrote,
+  // which expire within 15 minutes. A value that is set and does not decode to
+  // exactly one AES-256 key would fail every one of them, so it still refuses
+  // the boot; a valid one gets a warning to remove it.
   //
   // NOT gated on WALLET_FEDERATION_ENABLED or on the selected profile, for the
   // reason given repeatedly above: a mis-pasted secret is mis-pasted whether or
   // not the profile that would use it is selected today.
-  oid4vpResponseKeySecret();
+  if (oid4vpResponseKeySecret() !== undefined) {
+    fastify.log.warn(
+      { variable: 'OID4VP_RESPONSE_KEY_SECRET' },
+      "OID4VP_RESPONSE_KEY_SECRET is read only to open OID4VP request states written before this release: the signer now seals each response key with the realm's data_at_rest key (#546). Remove it once every node runs this release and 15 minutes have passed."
+    );
+  }
 
   // Subject resolution (#300/#238/#379, ADR-010 §6), the fourth gate in this
   // group and the one that IS flag-gated. #300 and #238 each deferred it "to
@@ -424,8 +449,8 @@ async function registerFederation(
     // needs the same certificate surface #233 owes the line below.
     keyStorageAssuranceProvisioned: keyStorageAssuranceProvisioningOf(env.OID4VP_ATTESTING_ISSUERS),
     // What the operator provisioned for the VERIFIER identity (#377) — the
-    // ES256 key and the X.509 chain a wallet establishes QAuth's identity
-    // from. Derived from the material that VALIDATED above rather than from
+    // X.509 chain a wallet establishes QAuth's identity from, which names the
+    // stored ES256 key (#546). Derived from the material that VALIDATED above rather than from
     // the raw variables, so the marker set the gate reads can never claim a
     // capability the chain did not earn: a chain that failed to anchor took
     // the boot down before this line, and a deployment that configured
@@ -437,13 +462,18 @@ async function registerFederation(
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
       ...providerSettings,
-      cryptoCapabilities: cryptoCapabilities(BOOT_TOKEN_SIGNING_ALGORITHMS),
+      cryptoCapabilities: cryptoCapabilities(
+        BOOT_TOKEN_SIGNING_ALGORITHMS,
+        bootVerifierRequestSigningAlgorithms()
+      ),
     }),
   });
   // The gate again, once the key boot step has run (its hook is earlier):
-  // against the token algorithms of the default realm's stored keys (#491),
-  // which refuses the boot when they cannot meet the profile. A process
-  // without the signer role reads them from the published keys (#495).
+  // against the token algorithms of the default realm's stored keys (#491)
+  // and its stored OID4VP request key (#546), which refuses the boot when
+  // they cannot meet the profile or the configured chain names no stored key.
+  // A process without the signer role reads them from the published keys
+  // (#495).
   if (defaultRealmBoot) {
     fastify.addHook('onReady', async () => {
       const realm = await fastify.repositories.realms.findByName(env.DEFAULT_REALM_NAME);
@@ -451,10 +481,23 @@ async function registerFederation(
         throw new Error(`The default realm "${env.DEFAULT_REALM_NAME}" does not exist`);
       }
       const keys = await fastify.signer.getVerificationKeys('local', realm.id, 'token_signing');
+      const requestKeys = await fastify.signer.getVerificationKeys(
+        'local',
+        realm.id,
+        'oid4vp_request_signing'
+      );
+      const material = verifierSigningMaterial();
+      if (material === undefined && requestKeys.some((key) => key.status === 'active')) {
+        fastify.log.warn(
+          { realm: env.DEFAULT_REALM_NAME },
+          'The default realm holds an OID4VP request key, but no OID4VP verifier certificate chain is configured: request objects are not signed (#546).'
+        );
+      }
       createConfiguredProviders({
         ...providerSettings,
         cryptoCapabilities: cryptoCapabilities(
-          keys.filter((key) => key.status === 'active').map((key) => key.algorithm)
+          keys.filter((key) => key.status === 'active').map((key) => key.algorithm),
+          assertStoredVerifierKeyMatchesChain(material, requestKeys)
         ),
       });
     });

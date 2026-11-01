@@ -1,6 +1,6 @@
 import { X509Certificate } from 'node:crypto';
 
-import { compactVerify, decodeJwt, decodeProtectedHeader, importSPKI } from 'jose';
+import { compactVerify, decodeJwt, decodeProtectedHeader, importSPKI, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 
 import type { VerifierProfile } from '../profiles/verifier-profile.types';
@@ -17,7 +17,9 @@ import {
   DEFAULT_REQUEST_OBJECT_LIFETIME_SECONDS,
   OID4VP_REQUEST_OBJECT_MEDIA_TYPE,
   OID4VP_REQUEST_OBJECT_TYP,
+  type RequestObjectSigningInput,
   signOid4vpRequestObject,
+  type SignRequestObject,
 } from './request-object';
 
 /**
@@ -69,14 +71,44 @@ function buildMaterial(leafOverrides: { notBefore?: Date; notAfter?: Date } = {}
     anchor,
     intermediate,
     leaf,
-    material: createVerifierSigningMaterial({
-      privateKeyPem: leaf.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    material: withSigner(leaf, {
       certificateChainPems: [leaf.pem, intermediate.pem],
       trustAnchorPems: [anchor.pem],
       // The chain is minted seconds ago; validation is at "now" either way.
       now: new Date(),
     }),
   };
+}
+
+/**
+ * Each material's stand-in for the signer's `signRequestObject` (#546): it
+ * signs as the signer does, with the leaf's key, the header the signer sets
+ * and `iss` from `client_id`. What this module owns is the claims and the
+ * chain it hands over.
+ */
+const SIGNERS = new WeakMap<VerifierSigningMaterial, SignRequestObject>();
+
+function withSigner(
+  leaf: TestCertificate,
+  options: Parameters<typeof createVerifierSigningMaterial>[0]
+): VerifierSigningMaterial {
+  const material = createVerifierSigningMaterial(options);
+  SIGNERS.set(material, async ({ claims, certificateChain }) =>
+    new SignJWT({ iss: claims['client_id'] as string, ...claims })
+      .setProtectedHeader({
+        alg: 'ES256',
+        typ: OID4VP_REQUEST_OBJECT_TYP,
+        x5c: [...certificateChain],
+      })
+      .sign(leaf.keys.privateKey)
+  );
+  return material;
+}
+
+function signerOf(material: VerifierSigningMaterial): SignRequestObject {
+  const sign = SIGNERS.get(material);
+  if (sign === undefined) throw new Error('no signer for this material');
+  return sign;
 }
 
 function buildRequest(material: VerifierSigningMaterial) {
@@ -99,6 +131,7 @@ describe('signOid4vpRequestObject — the protected header', () => {
       await signOid4vpRequestObject({
         request: buildRequest(material),
         material,
+        sign: signerOf(material),
       })
     );
 
@@ -109,7 +142,11 @@ describe('signOid4vpRequestObject — the protected header', () => {
 
   it('carries leaf + intermediates in x5c, leaf FIRST, anchor EXCLUDED', async () => {
     const header = decodeProtectedHeader(
-      await signOid4vpRequestObject({ request: buildRequest(material), material })
+      await signOid4vpRequestObject({
+        request: buildRequest(material),
+        material,
+        sign: signerOf(material),
+      })
     );
 
     expect(header.x5c).toEqual([leaf.x5c, intermediate.x5c]);
@@ -120,7 +157,11 @@ describe('signOid4vpRequestObject — the protected header', () => {
     // `x5c` is standard-alphabet base64 of DER (RFC 7515 §4.1.6), not base64url
     // and not PEM. A wallet decodes it exactly this way.
     const header = decodeProtectedHeader(
-      await signOid4vpRequestObject({ request: buildRequest(material), material })
+      await signOid4vpRequestObject({
+        request: buildRequest(material),
+        material,
+        sign: signerOf(material),
+      })
     );
     const entries = header.x5c as string[];
 
@@ -135,7 +176,9 @@ describe('signOid4vpRequestObject — the claims', () => {
 
   it('carries every request parameter as a claim (RFC 9101 §4)', async () => {
     const request = buildRequest(material);
-    const claims = decodeJwt(await signOid4vpRequestObject({ request, material }));
+    const claims = decodeJwt(
+      await signOid4vpRequestObject({ request, material, sign: signerOf(material) })
+    );
 
     expect(claims['client_id']).toBe(request.client_id);
     expect(claims['response_type']).toBe('vp_token');
@@ -149,7 +192,9 @@ describe('signOid4vpRequestObject — the claims', () => {
 
   it('sets iss to the client_id, so the header and the claim name one identity', async () => {
     const request = buildRequest(material);
-    const claims = decodeJwt(await signOid4vpRequestObject({ request, material }));
+    const claims = decodeJwt(
+      await signOid4vpRequestObject({ request, material, sign: signerOf(material) })
+    );
 
     expect(claims.iss).toBe(request.client_id);
     expect(request.client_id.startsWith('x509_hash:')).toBe(true);
@@ -157,7 +202,11 @@ describe('signOid4vpRequestObject — the claims', () => {
 
   it('bounds the lifetime, defaulting to the request state TTL', async () => {
     const claims = decodeJwt(
-      await signOid4vpRequestObject({ request: buildRequest(material), material })
+      await signOid4vpRequestObject({
+        request: buildRequest(material),
+        material,
+        sign: signerOf(material),
+      })
     );
 
     expect(claims.exp).toBe((claims.iat as number) + DEFAULT_REQUEST_OBJECT_LIFETIME_SECONDS);
@@ -165,7 +214,11 @@ describe('signOid4vpRequestObject — the claims', () => {
 
   it('OMITS aud by default — OID4VP names no universal wallet audience', async () => {
     const claims = decodeJwt(
-      await signOid4vpRequestObject({ request: buildRequest(material), material })
+      await signOid4vpRequestObject({
+        request: buildRequest(material),
+        material,
+        sign: signerOf(material),
+      })
     );
 
     expect(claims.aud).toBeUndefined();
@@ -176,6 +229,7 @@ describe('signOid4vpRequestObject — the claims', () => {
       await signOid4vpRequestObject({
         request: buildRequest(material),
         material,
+        sign: signerOf(material),
         audience: 'https://wallet.example/authorize',
       })
     );
@@ -185,17 +239,78 @@ describe('signOid4vpRequestObject — the claims', () => {
 
   it('never carries a redirect_uri parameter (§8.2)', async () => {
     const claims = decodeJwt(
-      await signOid4vpRequestObject({ request: buildRequest(material), material })
+      await signOid4vpRequestObject({
+        request: buildRequest(material),
+        material,
+        sign: signerOf(material),
+      })
     );
 
     expect(Object.keys(claims)).not.toContain('redirect_uri');
   });
 });
 
+describe('signOid4vpRequestObject — what the signer gets (#546)', () => {
+  it('hands over the request, iat and exp without iss, and the validated chain', async () => {
+    const { material, leaf, intermediate } = buildMaterial();
+    const request = buildRequest(material);
+    const seen: RequestObjectSigningInput[] = [];
+    const now = new Date(material.leafNotAfter.getTime() - 60_000);
+
+    const jwt = await signOid4vpRequestObject({
+      request,
+      material,
+      now,
+      audience: 'https://wallet.example/authorize',
+      sign: async (input) => {
+        seen.push(input);
+        return 'signed';
+      },
+    });
+
+    expect(jwt).toBe('signed');
+    const issuedAt = Math.floor(now.getTime() / 1000);
+    expect(seen).toEqual([
+      {
+        claims: {
+          ...request,
+          iat: issuedAt,
+          exp: issuedAt + DEFAULT_REQUEST_OBJECT_LIFETIME_SECONDS,
+          aud: 'https://wallet.example/authorize',
+        },
+        certificateChain: [leaf.x5c, intermediate.x5c],
+      },
+    ]);
+    expect(seen[0]?.claims).not.toHaveProperty('iss');
+  });
+
+  it('never calls the signer for an expired leaf', async () => {
+    const { material } = buildMaterial();
+    let calls = 0;
+
+    await expect(
+      signOid4vpRequestObject({
+        request: buildRequest(material),
+        material,
+        now: new Date(material.leafNotAfter.getTime() + 1_000),
+        sign: async () => {
+          calls += 1;
+          return 'signed';
+        },
+      })
+    ).rejects.toThrow(/leaf certificate has expired/);
+    expect(calls).toBe(0);
+  });
+});
+
 describe('signOid4vpRequestObject — the signature', () => {
   it("verifies under the leaf's public key and no other", async () => {
     const { material, leaf, intermediate } = buildMaterial();
-    const jwt = await signOid4vpRequestObject({ request: buildRequest(material), material });
+    const jwt = await signOid4vpRequestObject({
+      request: buildRequest(material),
+      material,
+      sign: signerOf(material),
+    });
 
     const leafKey = await importSPKI(
       leaf.keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
@@ -212,7 +327,11 @@ describe('signOid4vpRequestObject — the signature', () => {
 
   it('is rejected by a verifier pinned to another algorithm', async () => {
     const { material, leaf } = buildMaterial();
-    const jwt = await signOid4vpRequestObject({ request: buildRequest(material), material });
+    const jwt = await signOid4vpRequestObject({
+      request: buildRequest(material),
+      material,
+      sign: signerOf(material),
+    });
     const leafKey = await importSPKI(
       leaf.keys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
       'ES256'
@@ -233,6 +352,7 @@ describe('signOid4vpRequestObject — an expired certificate', () => {
       signOid4vpRequestObject({
         request,
         material,
+        sign: signerOf(material),
         now: new Date(material.leafNotAfter.getTime() + 1_000),
       })
     ).rejects.toThrow(/leaf certificate has expired/);
@@ -245,6 +365,7 @@ describe('signOid4vpRequestObject — an expired certificate', () => {
       signOid4vpRequestObject({
         request: buildRequest(material),
         material,
+        sign: signerOf(material),
         now: new Date(material.leafNotAfter.getTime() - 1_000),
       })
     ).resolves.toBeTypeOf('string');

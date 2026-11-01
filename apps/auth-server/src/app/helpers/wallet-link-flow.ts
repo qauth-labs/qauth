@@ -199,7 +199,7 @@ export async function startWalletLinkFlow(
       : {
           responseEncryptionKid: invocation.responseEncryption.kid,
           responseEncryptionPrivateJwk: invocation.responseEncryption.privateJwk,
-          responseEncryptionKeyProtection: invocation.responseEncryption.protection,
+          responseEncryptionSealingKid: invocation.responseEncryption.sealingKid,
         }),
   });
 

@@ -1052,7 +1052,7 @@ export default async function (fastify: FastifyInstance) {
             : {
                 responseEncryptionKid: invocation.responseEncryption.kid,
                 responseEncryptionPrivateJwk: invocation.responseEncryption.privateJwk,
-                responseEncryptionKeyProtection: invocation.responseEncryption.protection,
+                responseEncryptionSealingKid: invocation.responseEncryption.sealingKid,
               }),
         });
 

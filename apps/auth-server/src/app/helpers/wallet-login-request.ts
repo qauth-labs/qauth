@@ -12,7 +12,6 @@ import {
   hashOid4vpState,
   isSignedOid4vpRequest,
   type Oid4vpAuthorizationRequest,
-  type Oid4vpEphemeralKeyProtection,
   resolveOid4vpExpiry,
   resolveVerifierProfile,
   SD_JWT_VC_FORMAT,
@@ -26,8 +25,9 @@ import type { FastifyInstance } from 'fastify';
 import type { JWK } from 'jose';
 
 import { env } from '../../config/env';
-import { oid4vpResponseKeySecret, protectOid4vpResponseKey } from './oid4vp-response-key';
+import { sealOid4vpResponseKey } from './oid4vp-response-key';
 import { buildRealmUrl, type RealmUrlSource } from './realm-url';
+import type { RealmRow } from './request-realm';
 import { provisionedVerifierMaterial, verifierSigningMaterial } from './verifier-identity';
 import { storeWalletRequestObject } from './wallet-login-flow';
 
@@ -69,13 +69,21 @@ import { storeWalletRequestObject } from './wallet-login-flow';
  * asks for `direct_post.jwt`, and this helper MINTS the per-request ECDH-ES
  * pair the wallet encrypts to — HAIP §5: *"ephemeral encryption public keys
  * specific to each Authorization Request"*. The public half goes to the builder
- * for `client_metadata`; the private half is serialized, protected for the row
- * (plain by default, AES-256-GCM under `OID4VP_RESPONSE_KEY_SECRET`) and
- * returned on {@link WalletLoginInvocation.responseEncryption} for the caller
- * to PERSIST beside the state hash — it has to be, because the response arrives
- * on a different HTTP request than the one that minted it. Nothing about it is
+ * for `client_metadata`; the private half is serialized, sealed for the row by
+ * the signer with the realm's `data_at_rest` key (#546) and returned on
+ * {@link WalletLoginInvocation.responseEncryption} for the caller to PERSIST
+ * beside the state hash — it has to be, because the response arrives on a
+ * different HTTP request than the one that minted it. Nothing about it is
  * operator material, which is why the gate above has no clause for it: a
  * deployment can always encrypt, so encryption never makes the button vanish.
+ *
+ * ## The signed request (#377, #546)
+ *
+ * The request object is signed by the signer, as the `web` role, with the
+ * request realm's `oid4vp_request_signing` key (`signRequestObject`). This
+ * process holds the certificate chain, which is public, and never the PEM.
+ * The key boot step imports `OID4VP_VERIFIER_SIGNING_KEY` into the default
+ * realm; a realm without the key fails the sign-in with the uniform refusal.
  *
  * ## The same-device return leg (#405, ADR-013)
  *
@@ -142,8 +150,8 @@ export interface WalletLoginCapability {
   /** What the Verifier asks for — derived from `OID4VP_REQUESTED_VCT`. */
   readonly credentials: readonly CredentialRequestSpec[];
   /**
-   * The verifier's validated ES256 key and chain (#377), or `undefined` when
-   * the deployment provisioned none.
+   * The verifier's validated certificate chain (#377), or `undefined` when the
+   * deployment provisioned none. The key it names is in the key store (#546).
    *
    * Carried on the CAPABILITY rather than looked up at build time so the gate
    * and the builder read one value: a page that offered a wallet login because
@@ -185,8 +193,8 @@ export interface WalletLoginInvocation {
    *
    * Three values that go into the row TOGETHER (the schema's CHECK insists):
    * the `kid` the wallet will echo in the JWE header and the intake will look
-   * the row up by, the serialized private half, and the marker saying how it
-   * was serialized. The caller copies them onto the request-state row and
+   * the row up by, the sealed private half, and the `kid` of the
+   * `data_at_rest` key that sealed it (#546). The caller copies them onto the request-state row and
    * nowhere else — not onto the browser's flow record, which is read under a
    * cookie the wallet never holds and has no business carrying a private key.
    */
@@ -197,10 +205,10 @@ export interface WalletLoginInvocation {
 export interface WalletLoginResponseEncryption {
   /** `response_encryption_kid` — the `kid` published in `client_metadata.jwks`. */
   readonly kid: string;
-  /** `response_encryption_private_jwk` — the private half, as stored. */
+  /** `response_encryption_private_jwk` — the private half, sealed by the signer. */
   readonly privateJwk: string;
-  /** `response_encryption_key_protection` — how {@link privateJwk} was written. */
-  readonly protection: Oid4vpEphemeralKeyProtection;
+  /** `response_encryption_sealing_kid` — the `data_at_rest` key that sealed {@link privateJwk}. */
+  readonly sealingKid: string;
 }
 
 /**
@@ -265,22 +273,6 @@ export function resolveWalletLoginCapability(
     fastify.log.error(
       { err: error },
       'wallet login unavailable: the selected VerifierProfile declares a response posture its permitted modes contradict'
-    );
-    return undefined;
-  }
-
-  // The at-rest secret for the per-request decryption key, when the deployment
-  // opted into one. Resolved here so a MISCONFIGURED secret refuses the button
-  // rather than the sign-in: a wrong-length value throws at first use, and
-  // first use must not be a user's POST. A deployment that configured nothing
-  // resolves to `undefined` and stores the key in the clear, which is the
-  // default and needs no clause.
-  try {
-    oid4vpResponseKeySecret();
-  } catch (error) {
-    fastify.log.error(
-      { err: error },
-      'wallet login unavailable: OID4VP_RESPONSE_KEY_SECRET is misconfigured'
     );
     return undefined;
   }
@@ -394,30 +386,33 @@ function resolveSigningMaterial(fastify: FastifyInstance): VerifierSigningMateri
  * request is signed, which follows from the Client Identifier Prefix the profile
  * presents and is not decided here.
  *
- * Asynchronous since #377, for the signed path — producing a JWS needs a key
- * import, and parking it for the wallet to fetch needs the session store — and,
- * since Phase C, for the encrypted one, where minting the ECDH-ES pair is a key
- * generation. An unsigned, unencrypted request does neither and takes the same
+ * Asynchronous since #377, for the signed path — producing a JWS is a signer
+ * call (#546), and parking it for the wallet to fetch needs the session store —
+ * and, since Phase C, for the encrypted one, where minting the ECDH-ES pair is a
+ * key generation and sealing it a signer call. An unsigned, unencrypted request does neither and takes the same
  * shape it always had.
  *
  * @param fastify - server instance; the signed path parks the request object on
  * the session store this owns.
  * @param capability - the resolved capability, carrying the signing material.
  * @param realm - the realm the browser's request was resolved to; the
- * `response_uri` and the `request_uri` are built on its issuer (#490).
+ * `response_uri` and the `request_uri` are built on its issuer (#490), and the
+ * signer signs and seals with its keys (#546).
  * @param clientName - optional human-readable Verifier name.
  * @throws Error when the active profile forbids something the request needs, or
- * when the request object cannot be parked. The caller renders the uniform
- * refusal — an operator misconfiguration must not be spelled out to a user.
+ * when the request object cannot be parked; the signer's errors when the realm
+ * has no request key or `data_at_rest` key, or the leaf names another key. The
+ * caller renders the uniform refusal — an operator misconfiguration must not be
+ * spelled out to a user.
  */
 export async function buildWalletLoginInvocation(
   fastify: FastifyInstance,
   capability: WalletLoginCapability,
-  realm: RealmUrlSource,
+  realm: WalletLoginRealm,
   clientName?: string
 ): Promise<WalletLoginInvocation> {
   const secrets = generateOid4vpRequestSecrets();
-  const encryption = await mintResponseEncryption(capability.profile);
+  const encryption = await mintResponseEncryption(fastify, capability.profile, realm.id);
 
   const request = buildOid4vpAuthorizationRequest({
     profile: capability.profile,
@@ -451,6 +446,9 @@ export async function buildWalletLoginInvocation(
   };
 }
 
+/** The realm a wallet-login request is built for: its issuer and its id. */
+export type WalletLoginRealm = RealmUrlSource & Pick<RealmRow, 'id'>;
+
 /** What {@link mintResponseEncryption} produced for one request. */
 interface MintedResponseEncryption {
   /** The public half, `kid` stamped, for `client_metadata.jwks`. */
@@ -472,32 +470,35 @@ interface MintedResponseEncryption {
  * The `kid` is the one `generateEphemeralEncryptionKeyPair` minted — 128 bits
  * of CSPRNG output, base64url — and it is used for THREE things that must
  * agree: the `kid` member of the published JWK (§5.1, the value the wallet
- * echoes per §8.3), the row's lookup column, and the AAD of the at-rest
- * envelope. Stamped once and read three times, never re-derived.
+ * echoes per §8.3), the row's lookup column, and the context the signer seals
+ * the private half under (#546). Stamped once and read three times, never
+ * re-derived.
  *
  * `extractable: true` is required to serialize the private half at all. The
  * crypto layer defaults it to `false` and says why: a single-instance
  * deployment could keep the pair in memory. QAuth cannot — the response
  * arrives on a different HTTP request, possibly a different instance — so the
- * key leaves the runtime, and how it is written is the at-rest decision
- * `protectOid4vpResponseKey` implements.
+ * key leaves the runtime, sealed by the signer with the realm's `data_at_rest`
+ * key (`sealOid4vpResponseKey`, #546).
  */
 async function mintResponseEncryption(
-  profile: VerifierProfile
+  fastify: FastifyInstance,
+  profile: VerifierProfile,
+  realmId: string
 ): Promise<MintedResponseEncryption | undefined> {
   if (selectOid4vpResponseMode(profile) !== DIRECT_POST_JWT_RESPONSE_MODE) return undefined;
 
   const pair = await generateEphemeralEncryptionKeyPair({ extractable: true });
   const publicJwk = await exportEncryptionPublicJwk(pair);
   const privateJwk = await exportEncryptionPrivateJwk(pair);
-  const protectedKey = protectOid4vpResponseKey(privateJwk, pair.kid);
+  const sealed = await sealOid4vpResponseKey(fastify.signer, realmId, privateJwk, pair.kid);
 
   return {
     publicJwk,
     stored: {
       kid: pair.kid,
-      privateJwk: protectedKey.value,
-      protection: protectedKey.protection,
+      privateJwk: sealed.value,
+      sealingKid: sealed.sealingKid,
     },
   };
 }
@@ -532,7 +533,7 @@ interface RequestDelivery {
 async function deliverRequest(
   fastify: FastifyInstance,
   capability: WalletLoginCapability,
-  realm: RealmUrlSource,
+  realm: WalletLoginRealm,
   request: Oid4vpAuthorizationRequest
 ): Promise<RequestDelivery> {
   if (!isSignedOid4vpRequest(request)) {
@@ -552,9 +553,17 @@ async function deliverRequest(
     );
   }
 
+  // Signed by the signer with the realm's request key, as the web role
+  // (#546); it refuses a chain whose leaf names another key.
   const requestObject = await signOid4vpRequestObject({
     request,
     material: capability.signingMaterial,
+    sign: ({ claims, certificateChain }) =>
+      fastify.signer.signRequestObject('web', {
+        realmId: realm.id,
+        certificateChain,
+        claims,
+      }),
   });
 
   const handle = await storeWalletRequestObject(fastify, requestObject);

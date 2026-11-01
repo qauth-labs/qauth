@@ -24,7 +24,7 @@ import type { JWK } from 'jose';
 
 import { env } from '../../../config/env';
 import { WALLET_RETURN_CODE_TTL_MS } from '../../constants/security';
-import { unprotectOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
+import { openOid4vpResponseKey } from '../../helpers/oid4vp-response-key';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
@@ -588,8 +588,10 @@ function transportAcknowledgement(
  * consumed the row, so a failure here is final rather than retryable — which
  * is the point.
  *
- *  1. Read the private half back. A row with no key, an unrecognised
- *     protection marker, or an envelope the configured secret cannot open is a
+ *  1. Read the private half back: through the signer for a row it sealed
+ *     (#546), with the row's marker for one written before. A row with no
+ *     key, a sealing key the signer cannot use, an unrecognised protection
+ *     marker, or an envelope the configured secret cannot open is a
  *     SERVER data or configuration failure, and would be a 500 in isolation.
  *     It is rendered as the one refusal for the reason the stored `dcql_query`
  *     case gives in the handler: it is reachable only through a real, live,
@@ -624,11 +626,15 @@ async function openEncryptedResponse(
       throw new Error('redeemed row carries no ephemeral encryption key');
     }
 
-    privateJwk = unprotectOid4vpResponseKey(
-      redeemed.responseEncryptionPrivateJwk,
-      redeemed.responseEncryptionKeyProtection,
-      redeemed.responseEncryptionKid
-    );
+    // Sealed by the signer since #546 and opened by it here, as the api
+    // role; a row written before #546 opens with its own marker.
+    privateJwk = await openOid4vpResponseKey(fastify.signer, {
+      realmId: redeemed.realmId,
+      kid: redeemed.responseEncryptionKid,
+      value: redeemed.responseEncryptionPrivateJwk,
+      protection: redeemed.responseEncryptionKeyProtection,
+      sealingKid: redeemed.responseEncryptionSealingKid,
+    });
   } catch (error) {
     fastify.log.error(
       { err: error, requestStateId: redeemed.id, realmId: redeemed.realmId },

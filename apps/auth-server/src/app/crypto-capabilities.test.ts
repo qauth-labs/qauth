@@ -29,7 +29,7 @@ const PEM = (label: string) => `-----BEGIN ${label}-----\nplaceholder\n-----END 
 /** The default posture: an EdDSA token key only, no RS256 key, no verifier identity. */
 const NOTHING_OPTIONAL: ProvisionedSigningKeys = {
   tokenSigningAlgorithms: ['EdDSA'],
-  verifierEs256PrivateKey: undefined,
+  verifierRequestSigningAlgorithms: [],
   verifierCertificateChainPems: [],
 };
 
@@ -41,14 +41,15 @@ const WITH_RS256: ProvisionedSigningKeys = {
 
 /**
  * A deployment that provisioned the OID4VP verifier identity (#377): an ES256
- * key AND the certificate chain a wallet establishes that identity from.
+ * request key in the default realm's key store (#546) AND the certificate
+ * chain a wallet establishes that identity from.
  *
  * Both halves, because the ES256 predicate reads both. That is the point of the
  * two single-half fixtures below.
  */
 const WITH_VERIFIER_IDENTITY: ProvisionedSigningKeys = {
   ...NOTHING_OPTIONAL,
-  verifierEs256PrivateKey: PEM('PRIVATE KEY'),
+  verifierRequestSigningAlgorithms: ['ES256'],
   verifierCertificateChainPems: [PEM('CERTIFICATE'), PEM('CERTIFICATE')],
 };
 
@@ -87,8 +88,8 @@ describe('deriveCryptoCapabilities (#298 F1, #377)', () => {
     ).toEqual(['EdDSA']);
   });
 
-  // The #377 acceptance criterion, stated as a test on the pure function.
-  it('claims ES256 when an ES256 key AND a certificate chain are provisioned', () => {
+  // The #377 and #546 acceptance criterion, stated as a test on the pure function.
+  it('claims ES256 when the key store holds an ES256 request key AND a chain is configured (#546)', () => {
     expect(deriveCryptoCapabilities(WITH_VERIFIER_IDENTITY).signingAlgs).toContain('ES256');
   });
 
@@ -106,22 +107,39 @@ describe('deriveCryptoCapabilities (#298 F1, #377)', () => {
     ).not.toContain('ES256');
   });
 
-  it('does NOT claim ES256 on a certificate chain with no key', () => {
+  it('does NOT claim ES256 on a certificate chain when the key store holds no request key (#546)', () => {
     expect(
       deriveCryptoCapabilities({
         ...WITH_VERIFIER_IDENTITY,
-        verifierEs256PrivateKey: undefined,
+        verifierRequestSigningAlgorithms: [],
       }).signingAlgs
     ).not.toContain('ES256');
   });
 
-  it('treats a blank ES256 key as unprovisioned', () => {
+  it('does NOT claim ES256 from an ES256 token key or another request algorithm', () => {
+    // The two key sets are not interchangeable (#298): an ES256 key of another
+    // purpose signs no request object.
     expect(
       deriveCryptoCapabilities({
         ...WITH_VERIFIER_IDENTITY,
-        verifierEs256PrivateKey: '   ',
+        tokenSigningAlgorithms: ['EdDSA', 'ES256'],
+        verifierRequestSigningAlgorithms: [],
       }).signingAlgs
     ).not.toContain('ES256');
+    expect(
+      deriveCryptoCapabilities({
+        ...WITH_VERIFIER_IDENTITY,
+        verifierRequestSigningAlgorithms: ['EdDSA'],
+      }).signingAlgs
+    ).not.toContain('ES256');
+  });
+
+  it('reads no key variable: its inputs are the stored algorithms and the public chain', () => {
+    expect(Object.keys(WITH_VERIFIER_IDENTITY).sort()).toEqual([
+      'tokenSigningAlgorithms',
+      'verifierCertificateChainPems',
+      'verifierRequestSigningAlgorithms',
+    ]);
   });
 
   it('does NOT claim ES256 for a deployment that provisioned no verifier identity', () => {
@@ -157,8 +175,8 @@ describe('deriveCryptoCapabilities (#298 F1, #377)', () => {
 
   it('claims response encryption without the at-rest secret — it changes storage, not capability', () => {
     // `OID4VP_RESPONSE_KEY_SECRET` is not among the inputs at all: the pure
-    // function cannot read it, and it must not, because a deployment that
-    // configured nothing stores the key in the clear and still decrypts.
+    // function cannot read it, and it must not. Since #546 the key is sealed
+    // with the realm's data_at_rest key, which every realm holds.
     expect(Object.keys(NOTHING_OPTIONAL)).not.toContain('responseKeySecret');
     expect(deriveCryptoCapabilities(NOTHING_OPTIONAL).responseEncryption).toBe(true);
   });

@@ -93,6 +93,36 @@ describe('keyVariableSettings', () => {
     ).toEqual({ value: SECRET, variables: ['SESSION_COOKIE_SECRET'] });
   });
 
+  it('passes the OID4VP verifier key as the request key, the _PATH form winning (#546)', () => {
+    expect(
+      keyVariableSettings(
+        { ...BASE, OID4VP_VERIFIER_SIGNING_KEY: 'inline-pem' },
+        { OID4VP_VERIFIER_SIGNING_KEY: 'inline-pem' }
+      ).oid4vpRequestSigning
+    ).toEqual({
+      privateKey: { value: 'inline-pem', variables: ['OID4VP_VERIFIER_SIGNING_KEY'] },
+    });
+    expect(
+      keyVariableSettings(
+        {
+          ...BASE,
+          OID4VP_VERIFIER_SIGNING_KEY: 'inline-pem',
+          OID4VP_VERIFIER_SIGNING_KEY_PATH: 'file-pem',
+        },
+        {
+          OID4VP_VERIFIER_SIGNING_KEY: 'inline-pem',
+          OID4VP_VERIFIER_SIGNING_KEY_PATH: '/run/secrets/verifier',
+        }
+      ).oid4vpRequestSigning
+    ).toEqual({
+      privateKey: {
+        value: 'file-pem',
+        variables: ['OID4VP_VERIFIER_SIGNING_KEY', 'OID4VP_VERIFIER_SIGNING_KEY_PATH'],
+      },
+    });
+    expect(keyVariableSettings(BASE, {}).oid4vpRequestSigning).toBeUndefined();
+  });
+
   it('passes nothing for a key whose variable is unset', () => {
     expect(
       keyVariableSettings(

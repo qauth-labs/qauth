@@ -39,9 +39,9 @@ import type { JwsAlgorithm } from '@qauth-labs/core-crypto';
 import type { VerifierCryptoCapabilities } from '@qauth-labs/fastify-plugin-federation';
 
 /**
- * The signing key material the deployment actually holds: the token keys as
- * the default realm's key store holds them, and the OID4VP verifier's key and
- * chain as the parsed env configures them.
+ * The signing key material the deployment actually holds: the token keys and
+ * the OID4VP verifier's request key as the default realm's key store holds
+ * them, and the verifier's certificate chain as the parsed env configures it.
  *
  * Passed in rather than read from `../config/env` or the store here so this
  * stays a pure function: the boot gate's behaviour is then provable in a unit
@@ -57,22 +57,25 @@ export interface ProvisionedSigningKeys {
    */
   readonly tokenSigningAlgorithms: readonly string[];
   /**
-   * `OID4VP_VERIFIER_SIGNING_KEY` / `_PATH` after resolution (#377) — the ES256
-   * key QAuth signs an OID4VP Authorization Request with.
+   * The algorithms of the default realm's active `oid4vp_request_signing`
+   * keys, as its key store holds them (#546): `ES256` once the key boot step
+   * imported `OID4VP_VERIFIER_SIGNING_KEY`, or an operator created the key.
+   * Read from the published keys, so a process without a private key answers
+   * too; never from the key variable, which only the key boot step reads.
    *
    * A DIFFERENT key set from the token keys above, and deliberately named as
    * such. Those are TOKEN-ISSUANCE keys whose public halves are published in
    * `GET /.well-known/jwks.json`; this one proves QAuth's identity
-   * to a WALLET and is published nowhere. #298's risk note: *"the two key sets
-   * must not be interchangeable."*
+   * to a WALLET and is never in that key set. #298's risk note: *"the two key
+   * sets must not be interchangeable."*
    */
-  readonly verifierEs256PrivateKey: string | undefined;
+  readonly verifierRequestSigningAlgorithms: readonly string[];
   /**
    * `OID4VP_VERIFIER_CERTIFICATE_CHAIN` / `_PATH` after resolution (#377), as
    * individual PEM certificates.
    *
-   * Read alongside the key because a key with no chain cannot sign anything a
-   * wallet can act on: the Verifier identity is established from the `x5c`
+   * Read alongside the stored key because a key with no chain cannot sign
+   * anything a wallet can act on: the Verifier identity is established from the `x5c`
    * header, so a signature under a certificate nobody received identifies
    * nobody. Whether the chain VALIDATES is `createVerifierSigningMaterial`'s
    * answer at boot — a deployment whose chain does not validate never reaches a
@@ -113,24 +116,25 @@ export function deriveCryptoCapabilities(keys: ProvisionedSigningKeys): Verifier
     // — claiming it unconditionally was the same category of error as
     // claiming ES256.
     RS256: keys.tokenSigningAlgorithms.includes('RS256'),
-    // OPTIONAL and env-provisioned (#377), and the ONLY entry whose predicate
-    // reads two variables rather than one. #298 landed `sign(..., 'ES256', ...)`
-    // years before anything could use it; what was missing was never the
-    // algorithm but the MATERIAL, and the material is a pair. A P-256 key with
-    // no certificate chain can produce a signature no wallet can attribute to
-    // anyone — OID4VP 1.0 §5.9.3 establishes the Verifier identity from the
-    // `x5c` header — so claiming ES256 on the key alone would lift the gate for
-    // a deployment that still cannot present a verifiable request.
+    // OPTIONAL (#377), and the ONLY entry whose predicate reads two things
+    // rather than one. #298 landed `sign(..., 'ES256', ...)` years before
+    // anything could use it; what was missing was never the algorithm but the
+    // MATERIAL, and the material is a pair: the stored request key (#546) and
+    // the configured chain. A P-256 key with no certificate chain can produce a
+    // signature no wallet can attribute to anyone — OID4VP 1.0 §5.9.3
+    // establishes the Verifier identity from the `x5c` header — so claiming
+    // ES256 on the key alone would lift the gate for a deployment that still
+    // cannot present a verifiable request.
     //
-    // Both halves are read as CONFIGURED, not as VALID. Validity is
-    // `createVerifierSigningMaterial`'s answer, and it is a boot REFUSAL rather
-    // than a capability downgrade: a deployment whose chain does not anchor
-    // never finishes starting, so it never reaches this descriptor with a false
-    // claim. Re-deriving validity here would need this pure function to parse
-    // certificates, which is exactly the layering the module JSDoc rejects.
+    // The chain is read as CONFIGURED, not as VALID. Validity, and whether its
+    // leaf names the stored key, are boot REFUSALS in `app.ts` rather than a
+    // capability downgrade: a deployment whose chain does not anchor, or names
+    // another key, never finishes starting, so it never reaches this
+    // descriptor with a false claim. Re-deriving them here would need this pure
+    // function to parse certificates, which is exactly the layering the module
+    // JSDoc rejects.
     ES256:
-      keys.verifierEs256PrivateKey !== undefined &&
-      keys.verifierEs256PrivateKey.trim().length > 0 &&
+      keys.verifierRequestSigningAlgorithms.includes('ES256') &&
       keys.verifierCertificateChainPems.length > 0,
   } satisfies Record<JwsAlgorithm, boolean>;
 
@@ -155,9 +159,9 @@ export function deriveCryptoCapabilities(keys: ProvisionedSigningKeys): Verifier
     // existed and nothing called them, so a descriptor claiming the capability
     // would have asked wallets for a response QAuth had nowhere to hand to.
     // What changed is the code path, not the configuration, and that is why
-    // this entry reads no key. `OID4VP_RESPONSE_KEY_SECRET` is NOT a
-    // precondition: it changes how the private half is stored, not whether the
-    // path works, and a misconfigured value is a boot refusal in `app.ts`.
+    // this entry reads no key. The realm's `data_at_rest` key, which seals the
+    // private half since #546, is a standard key every realm holds, so it is
+    // no precondition either.
     responseEncryption: true,
   };
 }
