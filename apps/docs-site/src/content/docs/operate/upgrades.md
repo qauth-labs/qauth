@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -121,7 +121,8 @@ upgrade is refused when it is submitted and shown again after that sign-in.
 
 Nothing else is lost. Access tokens, refresh tokens and stored consents are
 untouched, so an application that already holds tokens keeps working without
-the user. The old Redis session keys (`session:<id>`) are no longer read and
+the user. The old Redis session keys (`session:<id>`, and the per-user lists
+`user-browser-sessions:<user id>` that logout read) are no longer read and
 expire on their own within `SESSION_COOKIE_TTL`; there is nothing to delete.
 
 The session cookie changes too: v0.2 signs it with the realm's cookie key from

@@ -2433,8 +2433,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the session service's `revokeAllForUser`, then drops their side
   records; the authorization codes and refresh tokens are swept after it as
   before. A Redis failure while the side records are dropped is logged and
-  no longer stops the sweep. Sign-in still writes the index for one more
-  release, for the previous release's logout during a rolling upgrade.
+  no longer stops the sweep. Nothing needs the index any more, so sign-in no
+  longer writes it: an index an earlier version left in Redis is never read
+  and expires on its own.
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped
   frames instead of Node's IPC channel, which deserialized a message whole
