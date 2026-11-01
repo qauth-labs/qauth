@@ -338,6 +338,12 @@ export interface BootAuthServerOptions {
    * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
    */
   readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+  /**
+   * Replace the `import()` of an AuthMethod plugin package and the
+   * first-party list (#600), so a suite boots with fixture plugins. The app
+   * refuses it outside NODE_ENV=test.
+   */
+  readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
 }
 
 /** What a suite gives the internal listener (#496). */
@@ -405,7 +411,10 @@ export async function bootAuthServer(
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
       // The internal listener (#496): its address, its TLS files and its peers.
-      key.startsWith('INTERNAL_')
+      key.startsWith('INTERNAL_') ||
+      // The plugin runtime (#600): a boot that lists no plugin loads none.
+      key === 'AUTH_METHOD_PLUGINS' ||
+      key === 'PLUGIN_API_ENABLED'
     ) {
       delete process.env[key];
     }
@@ -515,6 +524,9 @@ export async function bootAuthServer(
     ...(options.egressClientFactory === undefined
       ? {}
       : { egressClientFactory: options.egressClientFactory }),
+    ...(options.authMethodPlugins === undefined
+      ? {}
+      : { authMethodPlugins: options.authMethodPlugins }),
   });
   const { routes } = options;
   if (routes !== undefined) {

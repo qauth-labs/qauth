@@ -127,6 +127,8 @@ describe('what each role loads (the boot-time list)', () => {
       'adminAuditLog',
       'adminApprovals',
       'realmPublicKeys',
+      // The plugin operations (#600).
+      'realmAuthMethodPlugins',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.
     expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt']);

@@ -155,6 +155,9 @@ export function mountAuthMethodRoutes(
       // No HEAD twin: a HEAD request would run the callback and take the
       // transaction without ever showing the person the outcome.
       exposeHeadRoute: false,
+      // Not part of QAuth's API: a deployment's sign-in callbacks, which its
+      // OpenAPI document does not list (#600).
+      schema: { hide: true },
       handler: async (request, reply) => handle(mounted, request, reply),
     });
   }

@@ -125,7 +125,14 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // operations arrive on the same listener (#496).
     summary: 'the admin API and key operations, on the internal listener',
     plugins: ['jwt'],
-    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals'],
+    // The plugin operations (#600) read and write `realmAuthMethodPlugins`.
+    repositories: [
+      'users',
+      'adminGrants',
+      'adminAuditLog',
+      'adminApprovals',
+      'realmAuthMethodPlugins',
+    ],
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role

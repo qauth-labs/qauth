@@ -288,6 +288,9 @@ export async function installAdminApi(
   admin.decorate('dpop', source.dpop);
   admin.decorate('jwtUtils', source.jwtUtils);
   admin.decorate('verifyRequestAccessToken', source.verifyRequestAccessToken);
+  // The AuthMethod plugins the process loaded (#600), which the plugin
+  // operations list, enable and configure.
+  admin.decorate('authMethodPlugins', source.authMethodPlugins);
   // The realm of a request: the one its token's issuer names while the token
   // guard runs, then the one its path names. Never a host's.
   admin.decorateRequest('realm', null);
