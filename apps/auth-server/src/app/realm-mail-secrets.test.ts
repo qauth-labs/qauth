@@ -6,6 +6,7 @@ import {
   createRealmSecretStoreOfRealms,
   defaultsFromEnv,
   diffPolicies,
+  PolicyValidationError,
   REALM_POLICY_SCHEMA_VERSION,
   realmPolicyPlugin,
 } from '@qauth-labs/fastify-plugin-realm-policy';
@@ -19,7 +20,8 @@ vi.mock('../config/env', () => ({ env: { NODE_ENV: 'test' } }));
 
 import { buildLoggerOptions } from '../config/logger';
 import { type SmtpFixture, startSmtpFixture } from '../testing/smtp-fixture';
-import { RealmPolicyRefusedError, updateRealmPolicies } from './helpers/realm-policy-update';
+import { UnprocessableContentError } from './helpers/api-request-errors';
+import { unprocessablePolicyField, updateRealmPolicies } from './helpers/realm-policy-update';
 import { realmMailSource } from './helpers/realm-secrets';
 import errorHandler from './plugins/error-handler';
 
@@ -208,7 +210,10 @@ describe('realm mail secrets stay out of logs, errors and diffs (#529)', () => {
     });
     expect(refused.statusCode).toBe(422);
     expect(refused.json()).toMatchObject({ status: 422, code: 'unprocessable_content' });
-    expect(refused.json().detail).toContain('mail.smtp.user');
+    expect(refused.json().errors).toContainEqual({
+      pointer: '/mail/smtp/user',
+      message: 'mail.smtp.user is required when mail.provider is smtp',
+    });
 
     // smtp without any password: refused, naming it.
     const noPassword = await app.inject({
@@ -222,7 +227,12 @@ describe('realm mail secrets stay out of logs, errors and diffs (#529)', () => {
       },
     });
     expect(noPassword.statusCode).toBe(422);
-    expect(noPassword.json().detail).toContain('mail.smtp.password');
+    expect(noPassword.json().errors).toEqual([
+      {
+        pointer: '/mail/smtp/password',
+        message: 'mail.smtp.password must be set when mail.provider is smtp',
+      },
+    ]);
     expect(tables.version()).toBe(1);
 
     await app.close();
@@ -335,13 +345,29 @@ describe('realm mail secrets stay out of logs, errors and diffs (#529)', () => {
     expect(leaksIn(JSON.stringify(auditDiff))).toEqual([]);
   });
 
-  it('refuses through the error class the error handler answers with 422', () => {
-    const error = new RealmPolicyRefusedError([
-      { path: 'mail.smtp.password', message: 'must be set when mail.provider is smtp' },
+  it('refuses through the merge patch convention: 422 with a pointer per refused field', async () => {
+    const policyStore = {
+      update: vi.fn(async () => {
+        throw new PolicyValidationError('The realm policies are not valid', [
+          { path: 'mail.smtp.password', message: 'must be set when mail.provider is smtp' },
+          { path: '', message: 'a policy patch is a JSON object' },
+        ]);
+      }),
+    } as unknown as FastifyInstance['policyStore'];
+
+    const refused = await updateRealmPolicies({ policyStore }, REALM_ID, {}, { expectedVersion: 1 })
+      .then(() => undefined)
+      .catch((error: unknown) => error);
+
+    expect(refused).toBeInstanceOf(UnprocessableContentError);
+    expect((refused as UnprocessableContentError).statusCode).toBe(422);
+    expect((refused as UnprocessableContentError).fields).toEqual([
+      {
+        pointer: '/mail/smtp/password',
+        message: 'mail.smtp.password must be set when mail.provider is smtp',
+      },
+      { pointer: '', message: 'a policy patch is a JSON object' },
     ]);
-    expect(error.statusCode).toBe(422);
-    expect(error.message).toBe(
-      'The realm policies are not valid: mail.smtp.password must be set when mail.provider is smtp'
-    );
+    expect(unprocessablePolicyField({ path: 'a~b.c/d', message: 'x' }).pointer).toBe('/a~0b/c~1d');
   });
 });

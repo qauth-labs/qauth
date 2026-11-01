@@ -5,40 +5,36 @@ import {
 } from '@qauth-labs/fastify-plugin-realm-policy';
 import type { FastifyInstance } from 'fastify';
 
-/**
- * A realm policy update the policy schema or one of its rules refuses (#529),
- * such as one that selects the smtp mail transport without a password: 422,
- * `unprocessable_content`. The message lists each issue's path and what is
- * wrong, never a value, so a refused secret reaches neither the response nor
- * the log.
- */
-export class RealmPolicyRefusedError extends Error {
-  override readonly name = 'RealmPolicyRefusedError';
-  readonly statusCode = 422;
+import { UnprocessableContentError, type UnprocessableField } from './api-request-errors';
 
-  constructor(
-    readonly issues: readonly PolicyIssue[] = [],
-    options?: { cause?: unknown }
-  ) {
-    super(
-      issues.length === 0
-        ? 'The realm policies are not valid'
-        : `The realm policies are not valid: ${issues
-            .map((issue) => `${issue.path || '(document)'} ${issue.message}`)
-            .join('; ')}`,
-      options
-    );
-  }
+/** The message of a realm policy update the schema or a rule refuses. */
+export const REALM_POLICIES_REFUSED_MESSAGE = 'The realm policies are not valid.';
+
+/**
+ * A policy issue as a field of the `unprocessable_content` problem document
+ * (#506): an RFC 6901 JSON Pointer into the policy document, from the issue's
+ * dotted path, and what is wrong. An issue names a path, never a value.
+ */
+export function unprocessablePolicyField(issue: PolicyIssue): UnprocessableField {
+  const segments = issue.path === '' ? [] : issue.path.split('.');
+  return {
+    pointer: segments
+      .map((segment) => `/${segment.replaceAll('~', '~0').replaceAll('/', '~1')}`)
+      .join(''),
+    message: issue.path === '' ? issue.message : `${issue.path} ${issue.message}`,
+  };
 }
 
 /**
  * Update a realm's policies through the policy store (#516), answering a
- * refused update with a {@link RealmPolicyRefusedError} (422). Every other
- * error of the store passes through as it is. The admin API's realm policy
- * update (#517) calls this.
+ * refused update with an {@link UnprocessableContentError} (422,
+ * `unprocessable_content`), whose `errors` name each refused field, as every
+ * merge patch of the account and developer APIs is answered (#506). Every
+ * other error of the store passes through as it is. The admin API's realm
+ * policy update (#517) calls this.
  *
- * @throws RealmPolicyRefusedError when the patch or the document it gives is
- *   refused, by its schema or a rule, such as the mail transport's
+ * @throws UnprocessableContentError when the patch or the document it gives
+ *   is refused, by its schema or a rule, such as the mail transport's
  */
 export async function updateRealmPolicies(
   fastify: Pick<FastifyInstance, 'policyStore'>,
@@ -50,7 +46,10 @@ export async function updateRealmPolicies(
     return await fastify.policyStore.update(realmId, patch, options);
   } catch (error) {
     if (error instanceof PolicyValidationError) {
-      throw new RealmPolicyRefusedError(error.issues, { cause: error });
+      throw new UnprocessableContentError(
+        error.issues.map(unprocessablePolicyField),
+        REALM_POLICIES_REFUSED_MESSAGE
+      );
     }
     throw error;
   }

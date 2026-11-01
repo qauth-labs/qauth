@@ -42,7 +42,6 @@ import {
 } from '../helpers/api-request-errors';
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
-import { RealmPolicyRefusedError } from '../helpers/realm-policy-update';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
 import type { OAuthErrorCode } from './oauth-error';
@@ -241,8 +240,9 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   },
   // The list and update conventions of the account and developer APIs
   // (#506, #524): a cursor another list issued or that does not parse, and a
-  // merge patch whose result fails the resource's schema, and an update sent
-  // as another media type than a merge patch.
+  // merge patch whose result fails the resource's schema (a realm policy
+  // update the schema or a rule refuses too, #529), and an update sent as
+  // another media type than a merge patch.
   { errorClass: InvalidCursorError, code: 'invalid_cursor', oauthError: 'invalid_request' },
   {
     errorClass: UnprocessableContentError,
@@ -252,13 +252,6 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   {
     errorClass: UnsupportedMediaTypeError,
     code: 'unsupported_media_type',
-    oauthError: 'invalid_request',
-  },
-  // A realm policy update the schema or a rule refuses (#529), such as the
-  // smtp transport without a password. Its message names paths, never values.
-  {
-    errorClass: RealmPolicyRefusedError,
-    code: 'unprocessable_content',
     oauthError: 'invalid_request',
   },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
