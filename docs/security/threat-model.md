@@ -156,8 +156,9 @@ A break of any of these is a finding:
   `POST /auth/register` answers every address with the same `202`; the owner
   of an address that already has an account hears of the attempt by mail,
   within the per-address mail caps. The login routes refuse an unverified
-  account exactly as they refuse a wrong password. This holds with `REQUIRE_VERIFIED_ACCOUNT` on, the default:
-  an operator who turns it off lets an unverified account sign in, and then
+  account exactly as they refuse a wrong password. This holds while the realm requires verified
+  accounts (`accounts.requireVerifiedAccount`, the default, which `REQUIRE_VERIFIED_ACCOUNT` seeds
+  in a new realm): an operator who turns it off for a realm lets an unverified account sign in, and then
   registering an address and logging in with the chosen password tells a free
   address from a registered one.
 - Every cookie-authenticated state change is CSRF-protected.

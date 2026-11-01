@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SIGNER_OPERATIONS } from './signer';
 import {
+  AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
@@ -108,21 +109,25 @@ describe('SIGNER_POLICY', () => {
     ]);
   });
 
-  it("lets api decrypt only a realm's mail secret and an upstream client secret (#529, #601)", () => {
+  it("lets api decrypt only a realm's mail secret, an upstream client secret and a plugin secret (#529, #601, #600)", () => {
     // Pinned as strings: server-realm-policy makes the mail contexts without
     // importing this library, and a changed prefix must fail here.
     expect(REALM_MAIL_SECRET_CONTEXT_PREFIX).toBe('realm_secrets:mail.');
     expect(UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX).toBe('upstream-oidc:client-secret:');
+    expect(AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX).toBe('auth-method-plugin:');
     expect(SIGNER_POLICY.api.decrypt).toEqual([
       REALM_MAIL_SECRET_CONTEXT_PREFIX,
       UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+      AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
     ]);
-    // The contexts `realmSecretContext` of server-realm-policy and
-    // `upstreamClientSecretContext` of server-upstream-oidc make.
+    // The contexts `realmSecretContext` of server-realm-policy,
+    // `upstreamClientSecretContext` of server-upstream-oidc and
+    // `authMethodPluginSecretContext` of the auth server make.
     for (const context of [
       'realm_secrets:mail.smtp.password',
       'realm_secrets:mail.resend.apiKey',
       `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
+      'auth-method-plugin:corp:clientSecret',
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
     }
@@ -136,16 +141,38 @@ describe('SIGNER_POLICY', () => {
       'upstream-oidc:client-secretx',
       'upstream-oidc:other:realm-1',
       'Upstream-oidc:client-secret:realm-1:oidc_corp',
+      'auth-method-pluginx:corp:clientSecret',
+      'Auth-method-plugin:corp:clientSecret',
       'oid4vp_request_states.key:1',
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), String(context)).toBe(false);
     }
-    // Neither the browser-facing role nor delivery opens a provider's secret.
+    // Neither the browser-facing role nor delivery opens a provider's or a plugin's secret.
     for (const caller of ['web', 'delivery', 'admin'] as const) {
-      expect(
-        isSignerCallAllowed(caller, 'decrypt', 'upstream-oidc:client-secret:realm-1:oidc_corp'),
-        caller
-      ).toBe(false);
+      for (const context of [
+        'upstream-oidc:client-secret:realm-1:oidc_corp',
+        'auth-method-plugin:corp:clientSecret',
+      ]) {
+        expect(isSignerCallAllowed(caller, 'decrypt', context), `${caller} ${context}`).toBe(false);
+      }
+    }
+  });
+
+  it("grants no role a decrypt prefix that is the start of another role's", () => {
+    const granted = SIGNER_CALLERS.flatMap((caller) => {
+      const { decrypt } = SIGNER_POLICY[caller];
+      return Array.isArray(decrypt) ? decrypt.map((prefix: string) => ({ caller, prefix })) : [];
+    });
+    expect(granted.length).toBeGreaterThan(0);
+    for (const one of granted) {
+      expect(one.prefix, one.caller).not.toBe('');
+      for (const other of granted) {
+        if (other.caller === one.caller) continue;
+        expect(
+          other.prefix.startsWith(one.prefix),
+          `${one.caller}'s ${one.prefix} starts ${other.caller}'s ${other.prefix}`
+        ).toBe(false);
+      }
     }
   });
 

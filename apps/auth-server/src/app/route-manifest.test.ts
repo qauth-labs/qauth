@@ -48,7 +48,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   requireJwt: 'jwt',
   verifyRequestAccessToken: 'jwt',
   passwordHasher: 'password',
-  passwordValidator: 'password',
+  passwordValidators: 'password',
   pkceUtils: 'pkce',
   providerRegistry: 'federation',
   emailService: 'email',
@@ -56,6 +56,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   sessionService: 'sessions',
   ssf: 'ssf',
   egress: 'egress',
+  passwordAttempts: 'failureLadder',
 };
 
 /** What the files reached from one module read. */

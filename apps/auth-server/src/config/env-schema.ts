@@ -20,6 +20,7 @@ import {
   observabilityEnvSchema,
   otlpExporterProblems,
   passwordEnvSchema,
+  pluginsEnvSchema,
   rateLimitEnvSchema,
   redisEnvSchema,
   serviceRolesEnvSchema,
@@ -157,6 +158,10 @@ export const envSchema = z
     // The Shared Signals Framework transmitter (ADR-018 §3, #410):
     // SSF_TRANSMITTER_ENABLED, off by default; each realm has its own switch too.
     ...ssfEnvSchema.shape,
+    // AuthMethod plugins (ADR-019 Decision 12, #600): AUTH_METHOD_PLUGINS, the
+    // packages to load at boot, and PLUGIN_API_ENABLED, the switch of the
+    // experimental plugin API that a plugin outside the first-party list needs.
+    ...pluginsEnvSchema.shape,
     // The egress allowlist (ADR-019 Decision 8, #481): EGRESS_ALLOWLIST_PATH,
     // the file of non-public hosts and ranges that operator- and admin-set
     // destinations may reach, per realm. The egress plugin reads it at boot.

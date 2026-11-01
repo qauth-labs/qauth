@@ -213,6 +213,11 @@ function setEphemeralEnv(surface: FlagSurface): void {
     // Every role (#495), the default; pinned so that a caller's
     // `SERVICE_ROLES=api` cannot drop the browser routes from either export.
     SERVICE_ROLES: 'all',
+
+    // No AuthMethod plugin (#600) in either export: a plugin's routes are the
+    // sign-in pages' callbacks of one deployment, not part of QAuth's API, and
+    // a caller's `AUTH_METHOD_PLUGINS` cannot add any.
+    AUTH_METHOD_PLUGINS: '',
   });
 
   // The committed documents are no release's: a caller's `QAUTH_VERSION`
@@ -227,6 +232,9 @@ function setEphemeralEnv(surface: FlagSurface): void {
       WEBAUTHN_ANDROID_APPS: '',
       // No SSF transmitter, so none of its routes is registered (#410).
       SSF_TRANSMITTER_ENABLED: 'false',
+      // The plugin API stays off (#600): the default surface turns on no
+      // experimental item.
+      PLUGIN_API_ENABLED: 'false',
     });
     return;
   }
@@ -265,6 +273,9 @@ function setEphemeralEnv(surface: FlagSurface): void {
     // The Shared Signals Framework transmitter (#410): its metadata and its
     // stream management routes are registered only when it is on.
     SSF_TRANSMITTER_ENABLED: 'true',
+    // The plugin API (#600), a built experimental item: on, as every one is
+    // here. With no plugin listed it registers no route.
+    PLUGIN_API_ENABLED: 'true',
   });
 }
 

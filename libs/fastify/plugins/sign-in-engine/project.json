@@ -8,10 +8,10 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts libs/fastify/plugins/sign-in-engine",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
-      "description": "Run the sign-in engine against the auth server's adapters and the migrated schema (testcontainers Postgres): a disabled user never completes a sign-in and nothing about it changes. Requires a running Docker daemon."
+      "description": "Run the sign-in engine against the auth server's adapters and the migrated schema (testcontainers Postgres and Redis): a disabled user never completes a sign-in and nothing about it changes, and the per-account failure ladder holds parallel guesses, waits, its hard action, known IPs and a stopped Redis as #615 asks. Requires a running Docker daemon."
     }
   },
   "// targets": "to see all targets run: nx show project fastify-plugin-sign-in-engine --web"

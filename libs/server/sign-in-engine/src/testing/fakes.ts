@@ -50,7 +50,7 @@ export interface FakeAccount {
   readonly verified: boolean;
   readonly admin: boolean;
   /** The password, as `SignInCandidate` holds it; `null` for an account without one. */
-  readonly password: { readonly disabled: boolean; readonly hash: string | null } | null;
+  readonly password: SignInCandidate['password'];
   /** Every other bound factor: passkeys, TOTP. */
   readonly others: readonly BoundFactor[];
 }

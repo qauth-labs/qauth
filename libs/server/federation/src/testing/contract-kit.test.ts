@@ -193,8 +193,11 @@ describe('checkAuthMethod, the contract test kit', () => {
       const method = createSampleAuthMethod();
       const fixed = {
         ...method,
-        start: async (context: Parameters<typeof method.start>[0]) => {
-          const start = await method.start(context, { uiLocales: [] });
+        start: async (
+          request: Parameters<typeof method.start>[0],
+          context: Parameters<typeof method.start>[1]
+        ) => {
+          const start = await method.start(request, context);
           const url = new URL(start.redirectTo);
           const value = 'fixed-fixed-fixed-fixed';
           url.searchParams.set('state', value);
@@ -218,8 +221,11 @@ describe('checkAuthMethod, the contract test kit', () => {
       const loose = handWritten(() => true);
       const stateless = {
         ...loose,
-        start: async (context: Parameters<typeof loose.start>[0]) => {
-          const start = await loose.start(context, { uiLocales: [] });
+        start: async (
+          request: Parameters<typeof loose.start>[0],
+          context: Parameters<typeof loose.start>[1]
+        ) => {
+          const start = await loose.start(request, context);
           const url = new URL(start.redirectTo);
           url.searchParams.delete('state');
           return { redirectTo: url.href, transaction: start.transaction, binding: start.binding };
@@ -247,8 +253,11 @@ describe('checkAuthMethod, the contract test kit', () => {
       const method = createSampleAuthMethod();
       const plain = {
         ...method,
-        start: async (context: Parameters<typeof method.start>[0]) => {
-          const start = await method.start(context, { uiLocales: [] });
+        start: async (
+          request: Parameters<typeof method.start>[0],
+          context: Parameters<typeof method.start>[1]
+        ) => {
+          const start = await method.start(request, context);
           const url = new URL(start.redirectTo);
           url.searchParams.delete('code_challenge');
           url.searchParams.delete('code_challenge_method');
@@ -267,8 +276,11 @@ describe('checkAuthMethod, the contract test kit', () => {
       const method = createSampleAuthMethod();
       const plain = {
         ...method,
-        start: async (context: Parameters<typeof method.start>[0]) => {
-          const start = await method.start(context, { uiLocales: [] });
+        start: async (
+          request: Parameters<typeof method.start>[0],
+          context: Parameters<typeof method.start>[1]
+        ) => {
+          const start = await method.start(request, context);
           const url = new URL(start.redirectTo);
           url.searchParams.set('code_challenge', start.transaction.codeVerifier);
           url.searchParams.set('code_challenge_method', 'plain');
@@ -487,8 +499,11 @@ describe('checkAuthMethod, the contract test kit', () => {
       const method = createSampleAuthMethod();
       const echoing = {
         ...method,
-        start: async (context: Parameters<typeof method.start>[0]) => {
-          const start = await method.start(context, { uiLocales: [] });
+        start: async (
+          request: Parameters<typeof method.start>[0],
+          context: Parameters<typeof method.start>[1]
+        ) => {
+          const start = await method.start(request, context);
           const url = new URL(start.redirectTo);
           url.searchParams.set('scope', 'openid email');
           url.searchParams.set('prompt', 'login');
@@ -518,7 +533,10 @@ describe('checkAuthMethod, the contract test kit', () => {
       const pushedState = new Map<string, string>();
       const pushing = {
         ...method,
-        start: async (context: Parameters<typeof method.start>[0]) => {
+        start: async (
+          _request: Parameters<typeof method.start>[0],
+          context: Parameters<typeof method.start>[1]
+        ) => {
           const state = randomBytes(16).toString('base64url');
           const codeVerifier = randomBytes(32).toString('base64url');
           const answer = await context.egress.request({
@@ -611,8 +629,11 @@ describe('checkAuthMethod, the contract test kit', () => {
       let count = 0;
       const counting = {
         ...method,
-        start: async (context: Parameters<typeof method.start>[0]) => {
-          const start = await method.start(context, { uiLocales: [] });
+        start: async (
+          request: Parameters<typeof method.start>[0],
+          context: Parameters<typeof method.start>[1]
+        ) => {
+          const start = await method.start(request, context);
           count += 1;
           const state = String(count);
           const url = new URL(start.redirectTo);

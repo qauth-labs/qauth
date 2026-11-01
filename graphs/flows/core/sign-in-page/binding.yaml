@@ -20,6 +20,8 @@ server:
   # QAuth's settings for every replay of this flow, over the shared binding's. Each is set explicitly, the defaults
   # included, so that a changed default cannot change what the replay proves. A scenario's `server` is merged over
   # this one, and the replay starts a server of its own for a scenario that changes it.
+  # The four account keys seed the realm policies of a fresh database's default realm (#528): a realm that already
+  # has its policies keeps its own, so a scenario that changes one starts on a fresh database.
   env:
     REQUIRE_VERIFIED_ACCOUNT: 'true' # the default: unset or blank also mean true. Its deprecated name,
     # REQUIRE_EMAIL_VERIFIED, stays unset: the boot fails when the two names disagree.
@@ -484,8 +486,51 @@ scenarios:
         save: { returnTo: { from: header, name: Location, query: return_to } } # /ui/resume/<handle>
     data: { resumePath: '{returnTo}' }
 
+  insideTheLadderWait:
+    # ladderWait: five wrong passwords on one account, then the right one. The lock is raised above them so that the
+    # account's failure ladder (#615) refuses first. The fifth failure sets a one-second wait from its arrival; its
+    # answer takes the 500 ms floor, and the walk follows it inside that second.
+    given:
+      gate: ladderWait
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    server: { env: { FAILED_LOGIN_MAX_ATTEMPTS: '8' } }
+    walks: [[SHOW, SUBMIT]]
+    as: lockout
+    setup:
+      - request: { method: GET, path: /ui/login, follow: false }
+        save:
+          csrfToken: { from: body, css: 'input[name="csrf_token"]', attribute: value }
+          csrfCookie: { from: cookie, name: __Host-qauth_login_csrf }
+      - request:
+          method: POST
+          path: /ui/login
+          form:
+            email: '{account.email}'
+            password: not-the-password
+            csrf_token: '{csrfToken}'
+          headers: { Cookie: '__Host-qauth_login_csrf={csrfCookie}' }
+          # counted on the lock and on the ladder, then refused with 401
+        repeat: 5
+
+  # A replay over HTTP cannot make the failure ladder's Redis fail; apps/auth-server/src/app/routes/ui/login.test.ts
+  # reaches this exit with a failing ladder.
+  ladderUnavailable:
+    given:
+      gate: ladderUnavailable
+      account: verified
+      password: right
+      requireVerified: true
+      returnTo: path
+      handle: live
+    skip: the replay cannot make the failure ladder's store fail
+
   # A replay over HTTP cannot make a store fail, and apps/auth-server/src/app/routes/ui/login.test.ts does not reach
-  # this exit either: server_error.store is drawn from the code alone.
+  # this exit either: server_error.store is drawn from the code alone. consumingHandle's FAIL.store is reached by
+  # apps/auth-server/src/app/routes/ui/resume.test.ts for a failed read; no test covers a failed delete.
   storeFailure:
     given:
       gate: open
@@ -494,4 +539,4 @@ scenarios:
       requireVerified: true
       returnTo: path
       handle: live
-    skip: the replay cannot make the database, the session store or the event store fail
+    skip: the replay cannot make the database, the session store, the event store or the parked-request store fail

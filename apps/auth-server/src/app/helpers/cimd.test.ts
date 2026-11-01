@@ -662,6 +662,20 @@ describe('toCimdClientInsert — client JWKS (CIMD §6.2 / RFC 7591 §2, #384)',
     ).toBe(false);
   });
 
+  // #935: the RSA primes without `d` were dropped and the key registered.
+  it('rejects a document whose RSA key carries p and q but no d', () => {
+    const result = cimdDocumentSchema.safeParse(
+      validDoc({
+        token_endpoint_auth_method: 'private_key_jwt',
+        jwks: { keys: [{ kty: 'RSA', n: 'bg', e: 'AQAB', kid: 'r1', p: 'cA', q: 'cQ' }] },
+      })
+    );
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.message)).toContainEqual(
+      expect.stringContaining('private member "p", "q" present')
+    );
+  });
+
   it('rejects a document whose jwks carries a symmetric key', () => {
     expect(
       cimdDocumentSchema.safeParse(validDoc({ jwks: { keys: [{ kty: 'oct', k: 'secret' }] } }))

@@ -2,6 +2,7 @@ import {
   EmailAlreadyVerifiedError,
   InvalidCredentialsError,
   InvalidTokenError,
+  TemporarilyUnavailableError,
   TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
 import { passwordSchema } from '@qauth-labs/shared-validation';
@@ -10,6 +11,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { verifyEmailAddress } from '../../helpers/email-verification';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
@@ -127,9 +129,12 @@ export default async function (fastify: FastifyInstance) {
         });
 
       try {
+        const realm = requestRealm(request);
         const { email } = await verifyEmailAddress(fastify, request, reply, {
-          // The token is looked up in the realm the host named only (#489).
-          realmId: requestRealm(request).id,
+          // The token is looked up in the realm the host named only (#489),
+          // and the password check counts under its brute-force policy (#528).
+          realmId: realm.id,
+          bruteForce: accountPoliciesOf(fastify, realm).bruteForce,
           token: body.token,
           password: body.password,
         });
@@ -147,6 +152,11 @@ export default async function (fastify: FastifyInstance) {
         if (error instanceof TooManyRequestsError) {
           // `Retry-After` is already on the reply.
           return formWithError(error.statusCode, VERIFY_FORM_ERRORS.lockedOut);
+        }
+        if (error instanceof TemporarilyUnavailableError) {
+          // The failure ladder's store failed (#615); already logged.
+          reply.header('Retry-After', String(error.retryAfterSeconds));
+          return formWithError(error.statusCode, VERIFY_FORM_ERRORS.unavailable);
         }
         throw error;
       }

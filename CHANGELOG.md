@@ -94,9 +94,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RealmSecretStore` names where secret fields go; the store itself comes with
   [#529], and until then a write that sets a secret is refused. The flows still
   read the environment until they move to the row ([#527], [#528], [#529],
-  [#534]); the token lifetimes moved with [#527] and CIMD with [#534] (below).
-  See **Realm policies move
-  onto the realm row** in `operate/upgrades`.
+  [#534]); the token lifetimes moved with [#527], the sign-in policy with [#528],
+  the mail transport and sender with [#529] and CIMD with [#534] (below). See
+  **Realm policies move onto the realm row** in `operate/upgrades`.
+- **Stored realm policies of an earlier schema version are upgraded** ([#908],
+  ADR-018 §5). A release that changes `REALM_POLICY_SCHEMA_VERSION` ships an
+  upgrade from the version before it in `REALM_POLICY_UPGRADES` (none yet: the
+  version is still `1-rc.0`). The policy store reads a document stored under an
+  older `policy_schema_version` through those upgrades, an update stores the
+  upgraded document under the current version, and the boot writes it once
+  (`realm policies of an earlier schema version upgraded to this release's`).
+  A document of an older version that no upgrade reaches is refused on read
+  and on write rather than read with the new schema, where a renamed field
+  would read as its possibly looser seed, and the boot warns about it. A document of a
+  later version, during a rolling upgrade, is still read and never written.
+  `version.ts` lists what a version change ships, and a contract test fails
+  while the upgrades do not lead from `1-rc.0` to the current version.
 - **Each realm sends its mail through its own transport and sender** ([#529],
   ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
   policies (transport, sender address and name, SMTP host, port, TLS and user)
@@ -1047,9 +1060,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport ([#616]) must submit credential steps by `fetch` or guard a form
   against a double submit. A user switch ends the interaction and
   starts a new one for the same request at the identifier step, with nothing
-  proved carried over and the request's absolute expiry kept. An unknown,
-  expired or finished interaction and a wrong cookie get one
-  `interaction_expired` answer (410), the same bytes whatever the cause. Every
+  proved carried over and the request's absolute expiry kept. A switch made
+  after the person signed in also ends, as a sign-out by the first user, the
+  browser session that sign-in started and the session the browser's cookie
+  names when it is a later one of the same user (a sign-in again in another
+  tab), and clears that cookie ([#896]); `interaction.cancelled` records it
+  with `sessionEnded: true`. A cookie session of another user stays, and when
+  the cookie keys cannot be read only the session the sign-in started ends. A
+  switch before anyone signed in ends no session, so a browser that was
+  already signed in when the interaction started stays signed in ([#964]). An
+  unknown, expired or finished interaction and a wrong cookie get one
+  `interaction_expired` answer (410), the same bytes whatever the cause, and so
+  does a finish after the session its sign-in started has ended, by a sign-out
+  in another tab, a revoke or its own end ([#963]): no request completes under
+  a session that was signed out, and the interaction stays at its step. Every
   problem document on an `/interaction/<version>/` path, `404` included, carries
   no `instance`, `detail` or `errors`. Four new events, `interaction.created`,
   `.answered`, `.cancelled` and `.expired`, name an interaction by a random
@@ -1098,6 +1122,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user is resolved. The sign-in graph `graphs/flows/core/sign-in` now describes
   the engine (proposed), and the captured graph of the `/ui/login` page moved
   to `graphs/flows/core/sign-in-page`.
+- **The per-account failure ladder** ([#615], ADR-017 Decisions 5 and 7,
+  ADR-020 §3, NIST SP 800-63B-4 §3.2.2). Wrong passwords are counted per
+  account in Redis, before the password is checked: one Redis script reads the
+  account's wait, refuses an attempt that falls inside it, and otherwise counts
+  the attempt and sets the next wait, so 200 guesses sent in parallel reach the
+  password check no more often than the same guesses sent one at a time. From
+  5 consecutive failures the next attempt waits 2^(n−5) seconds, capped at 15
+  minutes; an attempt inside the wait gets `429` with `Retry-After`, is not
+  verified and is not counted. A correct password clears the password's
+  counter and no other. An end-user IP with a successful sign-in to the
+  account in the last 30 days skips the wait (up to 16 per account) and still
+  counts toward the hard action. A run of failures is kept 30 days after its
+  last counted failure. The counter is keyed on a keyed HMAC of the realm and
+  the normalised identifier, whether or not an account holds it, and known IPs
+  are kept as keyed HMACs too, so no Redis key or value holds an address; both
+  keys are derived with HKDF from the realm's cookie HMAC secret under labels
+  of their own (`urn:qauth:key-use:end-user-ip-hmac:v1-rc.0` for the IPs), and
+  no new secret is added. A rotation of that secret starts every run afresh. A
+  Redis error or a call slower than 2 s refuses the attempt with `503` and
+  `Retry-After: 5` before any credential is checked. `POST /auth/login` and
+  `POST /ui/login`, and the password check of the email verification
+  (`POST /auth/verify`, `POST /ui/verify`), reserve and count on the ladder
+  beside their own lock (the realm's `bruteForce` policy, unchanged), and the
+  sign-in engine's `ladder` hook is the same ladder. At 100 consecutive counted
+  failures the hard action disables the password
+  (`user_credentials.disabled_at`, migration `0052`), alerts the
+  operator (the error log `password disabled by the failure ladder`) and
+  notifies the owner, but only while it is armed: while the realm's hosted
+  password reset is on ([#642]) and the deployment can send the notice
+  ([#637]), asked at run time. Neither ships yet, so the hard action stays
+  unarmed: each failure from the 100th on logs a warning, the credential
+  lookup ignores a disabled mark, and the next successful sign-in clears it.
+  The notice is sent without being awaited, so a slow mail transport cannot
+  tell, by the answer's timing, an account from a made-up address. The two
+  sign-in flow graphs (`graphs/flows/core/sign-in-page`, `sign-in-token`)
+  draw the reservation, the wait and the unavailable store.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -1338,9 +1398,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `authorization_code` grant and an `https`, private-use or loopback browser-leg
   redirect URI. Dynamic registration, `/api/clients` and CIMD never write them.
   A change is recorded as the new `client.first_party_changed` event, and
-  removing a profile revokes every refresh token of the client not yet revoked. Nothing
-  reads the profile yet: the consent waiver and the authorization challenge
-  endpoint come later.
+  removing a profile revokes every refresh token of the client not yet revoked.
+  The consent waiver reads the profile ([#633]); the authorization challenge
+  endpoint comes later.
 - **The system client is provisioned from operator configuration** ([#631],
   ADR-017 phase F0). The migration runner reads `SYSTEM_CLIENT_REDIRECT_URI`,
   `SYSTEM_CLIENT_JWKS_URI` or `SYSTEM_CLIENT_JWKS`, `SYSTEM_CLIENT_ID` and
@@ -1350,6 +1410,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server has not created yet is reported and skipped; a row that cannot be
   first party exits `4`. The seed manifest's new `system_client` section does
   the same.
+- **Administrative consent for first-party clients, and a fresh login for
+  native profiles** ([#633], ADR-017 Decision 9). `/oauth/authorize` issues a
+  code without the consent screen to a client whose operator-set first-party
+  profile resolves, when none of the requested scopes is dangerous and the
+  request does not carry `prompt=consent`. No consent row is written: unless
+  the user once remembered a consent for the client on the consent screen, it
+  is not listed under `/consents` and `/oauth/token` returns no
+  `refresh_token` for such a code. Every such code is recorded as the new
+  `consent.administrative` event (the profile, the scopes, the resource
+  indicators, the endpoint) in the transaction that mints it. A dangerous scope
+  or `prompt=consent` shows the screen even under a stored consent. Every
+  request of a `native_backend` client counts as `prompt=login`, on
+  `/oauth/authorize` and on `POST /ui/consent`, whatever it says: a session
+  signed in more than two minutes earlier meets the login page (the window
+  `prompt=login` gives every client), and `prompt=none` answers
+  `login_required`; the request's own `prompt=consent` still shows the screen.
+  A client without a profile is unaffected; no client has one until an
+  operator sets it. The system client is the first an upgrade reaches: once
+  the operator provisions it from `SYSTEM_CLIENT_*` or the seed manifest's
+  `system_client` section ([#631]), which give it the `web_redirect` profile,
+  its `/oauth/authorize` requests skip the screen too.
 
 - **The AuthMethod contract, experimental** ([#599], ADR-003 as amended,
   ADR-018 §4, ADR-019 Decision 12). The plugin API for sign-in methods, such as
@@ -1357,7 +1438,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and outside the 1.0 stability promise (the experimental item `plugin-api`).
   An AuthMethod extends `CredentialProvider` with an id, display data, a config
   schema, the upstream step, the routes it mounts under `/upstream/<type>` and
-  `start()`. The engine checks every answer of a method: the redirect, the
+  `start(request, context)`, which takes its arguments in the order a route's
+  `handle(request, context)` does. The engine checks every answer of a method: the redirect, the
   transaction and its binding, which the host compares in constant time
   before it takes the pending transaction, the identity (its assurance level
   capped, `low` by default) and every attribute, whose source must be the
@@ -1365,8 +1447,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   role and a logger, never a database handle or a key, and `resolve(type)`
   answers a fail-closed stand-in for it. The contract test kit
   (`@qauth-labs/server-federation/testing`) checks a method against all of
-  it, PKCE with S256 included. Nothing registers a method in a running server
-  yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
+  it, PKCE with S256 included. The plugin runtime ([#600], below) loads
+  methods into a running server; the upstream sign-in flow is [#639].
+
+- **The plugin runtime for AuthMethod plugins, experimental** ([#600],
+  ADR-019 Decision 12, ADR-018 §4 and §5). A plugin is an npm package the
+  operator installs with the deployment and lists in `AUTH_METHOD_PLUGINS`
+  (package names only: a path or URL stops the boot). At boot a process that
+  serves the sign-in pages or the admin API imports each one, checks the
+  contract version its `authMethod` export declares, holds it to the whole
+  contract and registers it; a package that is not installed, exports no
+  method, is built for another contract version or repeats another plugin's
+  id or type stops the boot. A plugin outside the first-party list, a fixed
+  list in the server's code that is empty until the first-party plugins ship,
+  loads only while `PLUGIN_API_ENABLED=true`, the switch of the experimental
+  item `plugin-api`, which now warns at boot while on; with it off the
+  package is never imported and the boot logs why. Each realm keeps its state
+  of each plugin in `realm_auth_method_plugins` (migration 0050): off by
+  default, its config's plain members, and each secret member (marked
+  `writeOnly` in the plugin's schema) as a ciphertext under the realm's
+  `data_at_rest` key. The admin API lists and reads the installed plugins
+  (`plugins.list`, `plugins.get`, the permission `plugins.read`), seals a
+  secret value for one member (`plugins.secrets.seal`, under the new write
+  permission `plugins.write`; it changes nothing) and configures, enables and
+  disables one per realm (`plugins.update`, `plugins.enable`,
+  `plugins.disable`, each of which names in its body the version of the
+  state it acts on, so an approval binds it): security operations with
+  `credential-path`, under the new permission `plugins.security`, so they need
+  `qauth:admin:security` and an approval. A configure carries only sealed
+  values, so the request an approval stores never holds a secret in the
+  clear. A config must pass the plugin's own schema; secrets are write-only
+  and never shown in a response, an audit row or a log. A disabled plugin's routes
+  under `/upstream/<type>` answer the `not_found` document of a path no route
+  serves, and plugin routes are left out of the OpenAPI documents. A plugin's
+  context holds its realm config, the egress client, the signer bound to the
+  realm and the plugin, and a logger: no database handle and no key.
 
 - **The generic upstream OpenID Connect client, experimental** ([#601],
   ADR-018 §3, ADR-019 Decisions 8 and 9). The new library
@@ -1412,6 +1527,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   problem documents. A client of another developer is 404, as before. The
   domain logic is shared with the deprecated paths, which keep their shapes.
 
+- **`graphs:check`, delurio's check of the flow graphs** ([#560], ADR-021).
+  `graphs/` is now an Nx project, `graphs`, whose `check` target runs
+  `delurio check graphs --strict` with `@delurio/cli`, a root development
+  dependency pinned to 0.5.0: a graph that cannot be loaded, a graph file that
+  does not follow its kind's JSON Schema (which holds every state but an exit to
+  camelCase), a broken assertion or a main story that cannot be walked fails
+  it. The five `graphs/domain/*.yaml` files are read as one domain and checked
+  too. It needs no server and no database, and is cached on `graphs/**`; no app
+  or lib depends on delurio, and no shipped image carries it. `graphs/README.md` now states QAuth's flow
+  conventions: an effect ends in `DONE` or `FAIL.<class>`, a protocol flow has
+  one exit per cause, named `<error>.<cause>`, every protocol exit declares its
+  response, and every flow is complete (no unreachable state, no transition
+  never taken, no dead end, no effect without a failure path). delurio does not
+  enforce those structural rules yet, so they are review items until it does.
+  `flows/admin/plugin-enable` now names its exits that way too, one exit per
+  cause for a refused enable and a refused disable alike. CI does not run the
+  target yet; [#568] will.
+
 ### Changed
 
 - **CIMD comes from the realm row** ([#534], ADR-019 Decisions 1 and 10,
@@ -1441,6 +1574,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   containers, and a test refuses any read of a migrated seed key outside the
   boot steps.
 
+- **The verified-account gate, the password score and the failed-login lockout
+  come from the realm row** ([#528], ADR-019 Decision 10). Each realm's
+  `accounts.requireVerifiedAccount`, `password.minScore` and `bruteForce`
+  policies apply to it, so two realms of one deployment can differ: one may
+  let an unverified account sign in while another refuses it, accept a weaker
+  new password, or lock an address out after another number of failures, or
+  never. `POST /auth/login`, `POST /ui/login` and the email verification read
+  the gate and the lockout off the realm row the realm resolver already loaded,
+  with no query of their own, and `POST /auth/register` checks a new password
+  against the realm's lowest score. The failed-login counters and lockouts were
+  already kept per realm ([#487]), so the failures of one realm never lock the
+  same address in another. `REQUIRE_VERIFIED_ACCOUNT` (and its old name
+  `REQUIRE_EMAIL_VERIFIED`), `PASSWORD_MIN_SCORE` and the four
+  `FAILED_LOGIN_*` keys now only seed a new realm, and a realm that had no
+  policies at the first boot after the upgrade ([#516]): a later change of them
+  leaves an existing realm as it is, and the boot warns that each one set is
+  ignored. In particular `REQUIRE_VERIFIED_ACCOUNT=false` set on a deployment
+  that already ran this release no longer lets the existing realms' unverified
+  accounts sign in. A realm a node of the previous release created during a
+  rolling upgrade runs on the keys until a node of this release boots again
+  and fills it. A realm policy change reaches the realm's next request once the
+  realm resolver reads the row again (its cache time, 30 s), without a restart.
+  With the seeded defaults nothing changes. The password plugin
+  (`@qauth-labs/fastify-plugin-password`) no longer takes a `validationConfig`:
+  it decorates `fastify.passwordValidators`, whose `forMinScore(score)` builds a
+  validator per score on first use and keeps it (`createPasswordValidators` of
+  `@qauth-labs/shared-validation`), in place of `fastify.passwordValidator`.
 - **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
   ADR-008 §5). The access, development access and refresh token lifetimes are
   each realm's `tokens` policies, so two realms of one deployment can issue
@@ -2332,6 +2492,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the workspace's TypeScript 6.0 or at TypeScript 7: TypeScript 5 rejects
   `"bundler"` with the libraries' `module: commonjs` (TS5095).
 
+- CI's `affected` legs use a self-hosted Nx remote cache ([#960]), a server
+  speaking Nx's HTTP cache spec. A push to main reads and writes it with a
+  write token only main can reach (the `protected` environment); every other
+  run reads at most, with a token the server refuses to store with, so a pull
+  request replays what main built and checked and never stores its own
+  results. Nx talks to the server through a local proxy
+  (`.github/actions/nx-remote-cache`) that turns an unreachable or failing
+  server into cache misses, so losing the cache makes CI slower and never red.
+  The docs site's `build` is now cacheable, with the docs records and the
+  root-level Markdown files as declared inputs.
+
+  **Action for contributors**: nothing. Local runs do not use the remote cache.
+
+- A newer push to the same pull request or branch now cancels the CI run of
+  the push it supersedes. Merging a stack pushes main once per pull request,
+  and each push started a full run; together they filled the account's
+  concurrent-job limit, so the last run, the one whose result counts, waited
+  for runners.
+
 [#359]: https://github.com/qauth-labs/qauth/issues/359
 [#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
@@ -2402,6 +2581,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#550]: https://github.com/qauth-labs/qauth/issues/550
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
+[#560]: https://github.com/qauth-labs/qauth/issues/560
+[#568]: https://github.com/qauth-labs/qauth/issues/568
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
@@ -2423,10 +2604,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
+[#615]: https://github.com/qauth-labs/qauth/issues/615
+[#633]: https://github.com/qauth-labs/qauth/issues/633
+[#637]: https://github.com/qauth-labs/qauth/issues/637
+[#642]: https://github.com/qauth-labs/qauth/issues/642
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
+[#891]: https://github.com/qauth-labs/qauth/issues/891
+[#896]: https://github.com/qauth-labs/qauth/issues/896
+[#908]: https://github.com/qauth-labs/qauth/issues/908
+[#960]: https://github.com/qauth-labs/qauth/issues/960
+[#963]: https://github.com/qauth-labs/qauth/issues/963
+[#964]: https://github.com/qauth-labs/qauth/issues/964
 
 ### Deprecated
 
@@ -2452,6 +2643,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expired one is refused, and the next release removes the grace.
 
 ### Fixed
+
+- **A client key set that carries an RSA private key is refused** ([#935]).
+  The key sets a client publishes, in its Client ID Metadata Document's `jwks`
+  or at its `jwks_uri`, were refused only for a `d` or `k` member. An RSA key
+  carrying its primes or CRT values (`p`, `q`, `dp`, `dq`, `qi`, `oth`)
+  without `d`, or an ML-DSA key's `priv`, had those members dropped and was
+  trusted, although the client had published its private key. Such a set is
+  now refused, and so is a key of a known type without the public members it
+  needs (EC `crv`, `x` and `y`; OKP `crv` and `x`; RSA `n` and `e`). This is
+  the seed manifest's rule, now `publicJwkProblem` in
+  `@qauth-labs/shared-validation`, which both use. The token endpoint still
+  answers a bare `invalid_client`; the operator's log names the key, its
+  private members and that the client must rotate it. Keys fetched before the
+  upgrade are trusted until their cache entry expires.
+
+- **Signing out everywhere ends every session, whatever Redis has lost**
+  ([#912], found in the review of [#550]). `/auth/logout` found the user's
+  browser sessions through a per-user index in Redis, so a session the index
+  no longer named (an eviction, a restart without persistence, a failover)
+  survived the sign-out. It now ends them in Postgres, in one transaction,
+  through the session service's `revokeAllForUser`, then drops their side
+  records; the authorization codes and refresh tokens are swept after it as
+  before. A Redis failure while the side records are dropped is logged and
+  no longer stops the sweep. Nothing needs the index any more, so sign-in no
+  longer writes it: an index an earlier version left in Redis is never read
+  and expires on its own.
+
+- **A refresh token needs a stored consent for its resources too** ([#633]).
+  `/oauth/token` minted a refresh token for an authorization code whenever the
+  active consent covered the code's scopes, whatever RFC 8707 resources the
+  code was bound to. So a user who remembered `read:x` at one resource server,
+  and later approved `read:x` at another without **Remember this decision** or
+  under a first-party client's administrative consent, gave the client a
+  refresh family at the second: standing access that no stored consent
+  records. A refresh token is now minted only when the stored consent covers
+  the code's scopes at every resource the family is bound to (the ones a
+  narrowing `resource` on the token request names, if it has one), the rule
+  the consent skip already applies; otherwise the client gets the access token,
+  and the ID token when `openid` was granted, without one. A code bound to no
+  resource is unaffected.
+
+- **A client that signs users in can be kept from minting tokens with no user
+  for its users' scopes** ([#891]). `client_credentials` granted any scope in
+  a client's `scopes`, so a relying party given the grant to manage its SSF
+  stream could also get a token whose `sub` is its own `client_id` for a scope
+  its users grant it (`notes:read`, say), which a resource server that did not
+  check `sub` acted on app-wide. Migration 0051 adds
+  `oauth_clients.client_credentials_scopes`, the scopes that grant may issue,
+  out of `scopes`; the seed manifest's `client_credentials_scopes` is the only
+  way to set it, and no owner route can change it. With a list, the token
+  endpoint refuses any other scope on `client_credentials` with `invalid_scope`
+  (event reason `scope_not_allowed_for_grant`); without one the grant is as
+  before. The manifest refuses a listed scope `scopes` does not hold, an empty
+  list, and the list on a client without the grant, and `--rotate` refuses an
+  entry without the list for a client whose row has one, so a rotation cannot
+  lift it unnoticed. The admin API's reserved `clients.update` cases count
+  lifting or widening the list as `token-content`. The **SSF transmitter**
+  page's receiver example now lists `["ssf:stream"]` there, and its warning
+  covers only a client without the list.
+
+  **Action for operators**: give every client that signs users in and holds
+  `client_credentials` a `client_credentials_scopes`, an SSF receiver's
+  `["ssf:stream"]`, in its manifest entry, and keep an SSF receiver's
+  `audience` to the realm's issuer alone: the list narrows the token's scopes,
+  not its `aud`. The seeder writes an existing client only with `--rotate`;
+  without rotating, also set the column with an `UPDATE` (see the SSF
+  transmitter page and the upgrade guide). The list takes effect on a node
+  once that node runs this release; until every node does, a node of the
+  previous release, which ignores the column, still issues every scope of
+  `scopes`. Setting it during the roll does no harm, since such a node's
+  writes leave the column as it is. Rolling back to an earlier release without
+  restoring the backup lifts every list, because older code ignores the
+  column; the column and its values are kept, and the lists apply again after
+  upgrading.
 
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped
@@ -2560,6 +2825,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
+[#912]: https://github.com/qauth-labs/qauth/issues/912
+[#935]: https://github.com/qauth-labs/qauth/issues/935
 
 ## [0.1.3] - 2026-10-21
 

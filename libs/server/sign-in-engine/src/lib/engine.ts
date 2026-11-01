@@ -30,6 +30,8 @@ import {
   MFA_MODES,
   type MfaPolicy,
   type MfaPolicyReader,
+  NO_HARD_ACTION,
+  type PasswordHardAction,
   type PasswordVerifier,
   type SignInAccount,
   type SignInAuditReason,
@@ -109,6 +111,14 @@ export interface SignInEngineDependencies {
   readonly requireVerifiedAccount: boolean;
   readonly hooks?: SignInHooks;
   /**
+   * The password ladder's hard action (#615): called when a failure counts at
+   * the ladder's hard ceiling, and when a password proves an account whose
+   * ignored disabled mark must be cleared. None by default; the plugin of
+   * `@qauth-labs/fastify-plugin-sign-in-engine` refuses a production engine
+   * without one.
+   */
+  readonly passwordHardAction?: PasswordHardAction;
+  /**
    * The steps later issues add (passkeys, TOTP, the bot challenge), in the
    * order they are preferred. The identifier and password steps are the
    * engine's own.
@@ -169,6 +179,7 @@ function buildHandlers(deps: SignInEngineDependencies) {
     accounts: deps.accounts,
     passwords: deps.passwords,
     ladder: deps.hooks?.ladder ?? NO_LADDER,
+    hardAction: deps.passwordHardAction ?? NO_HARD_ACTION,
     requireVerifiedAccount: deps.requireVerifiedAccount,
     ...(deps.onUnavailable === undefined ? {} : { onSettleFailure: deps.onUnavailable }),
   });
@@ -385,6 +396,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         ...(state.transaction.identifier === undefined
           ? {}
           : { identifier: state.transaction.identifier }),
+        ...(context.endUserIp === undefined ? {} : { endUserIp: context.endUserIp }),
         identifierHmac,
       });
 

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { verifyEmailAddress } from '../../helpers/email-verification';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
@@ -41,7 +42,7 @@ export default async function (fastify: FastifyInstance) {
           'Verify email address using the token sent via email, in the request body. Single-use; marks token as used. POST so no link fetch or prefetch can verify an address on its own.',
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
-        'x-qauth-errors': [400, 401, 409],
+        'x-qauth-errors': [400, 401, 409, 503],
         body: verifyBodySchema,
         response: {
           200: verifyResponseSchema,
@@ -60,9 +61,12 @@ export default async function (fastify: FastifyInstance) {
       const { token, password } = request.body as VerifyBody;
 
       // The realm of the host the request named (#487): the token is looked up
-      // in it only (#489).
+      // in it only (#489), and the password check counts under its
+      // brute-force policy (#528).
+      const realm = requestRealm(request);
       const { email } = await verifyEmailAddress(fastify, request, reply, {
-        realmId: requestRealm(request).id,
+        realmId: realm.id,
+        bruteForce: accountPoliciesOf(fastify, realm).bruteForce,
         token,
         password,
       });

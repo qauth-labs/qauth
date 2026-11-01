@@ -11,6 +11,7 @@ import { createEmailVerificationTokensRepository } from './email-verification-to
 import { createOAuthClientsRepository } from './oauth-clients.repository';
 import { createOAuthConsentsRepository } from './oauth-consents.repository';
 import { createOid4vpRequestStatesRepository } from './oid4vp-request-states.repository';
+import { createRealmAuthMethodPluginsRepository } from './realm-auth-method-plugins.repository';
 import { createRefreshTokensRepository } from './refresh-tokens.repository';
 import { createSessionsRepository } from './sessions.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
@@ -70,6 +71,12 @@ export function requiredRealmArgument(db: DbClient): void {
   const walletRequests = createOid4vpRequestStatesRepository(db);
   const adminGrants = createAdminGrantsRepository(db);
   const adminRoles = createAdminRolesRepository(db);
+  const realmPlugins = createRealmAuthMethodPluginsRepository(db);
+
+  // @ts-expect-error a plugin's state is a realm's (#600)
+  void realmPlugins.find('corp');
+  // @ts-expect-error a plugin's state is written for a realm (#600)
+  void realmPlugins.save('corp', { enabled: true, config: {}, secrets: {} }, 1);
 
   // @ts-expect-error an admin grant is looked up in a realm (#489, #510)
   void adminGrants.findById(ID);
@@ -173,6 +180,24 @@ const CALLS: readonly RealmScopedCall[] = [
   ['adminGrants.revoke', (db) => createAdminGrantsRepository(db).revoke(REALM_ID, ID)],
   ['adminRoles.findById', (db) => createAdminRolesRepository(db).findById(REALM_ID, ID)],
   ['adminRoles.listByRealm', (db) => createAdminRolesRepository(db).listByRealm(REALM_ID)],
+  [
+    'realmAuthMethodPlugins.listByRealm',
+    (db) => createRealmAuthMethodPluginsRepository(db).listByRealm(REALM_ID),
+  ],
+  [
+    'realmAuthMethodPlugins.find',
+    (db) => createRealmAuthMethodPluginsRepository(db).find(REALM_ID, 'corp'),
+  ],
+  [
+    'realmAuthMethodPlugins.save',
+    (db) =>
+      createRealmAuthMethodPluginsRepository(db).save(
+        REALM_ID,
+        'corp',
+        { enabled: true, config: {}, secrets: {} },
+        3
+      ),
+  ],
   ['users.findById', (db) => createUsersRepository(db).findById(REALM_ID, ID)],
   ['users.findByIdOrThrow', (db) => createUsersRepository(db).findByIdOrThrow(REALM_ID, ID)],
   ['users.update', (db) => createUsersRepository(db).update(REALM_ID, ID, { firstName: 'x' })],
@@ -257,6 +282,16 @@ const CALLS: readonly RealmScopedCall[] = [
   ],
   ['apiKeys.revoke', (db) => createApiKeysRepository(db).revoke(REALM_ID, ID)],
   ['userCredentials.findById', (db) => createUserCredentialsRepository(db).findById(REALM_ID, ID)],
+  [
+    'userCredentials.setDisabledAt',
+    (db) =>
+      createUserCredentialsRepository(db).setDisabledAt(REALM_ID, 'password', 'a@example.com', 1),
+  ],
+  [
+    'userCredentials.clearDisabledAt',
+    (db) =>
+      createUserCredentialsRepository(db).clearDisabledAt(REALM_ID, 'password', 'a@example.com'),
+  ],
   [
     'refreshTokens.findByTokenHash',
     (db) => createRefreshTokensRepository(db).findByTokenHash(REALM_ID, 'a'.repeat(64)),

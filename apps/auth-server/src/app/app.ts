@@ -50,6 +50,11 @@ import { publicRouteProblem } from './admin/route-placement';
 import { deriveCryptoCapabilities } from './crypto-capabilities';
 import { ADMIN_ROLE_CATALOG } from './helpers/admin-roles';
 import { assertSubjectResolutionProvisioned } from './helpers/assert-subject-resolution';
+import {
+  authMethodPluginRuntime,
+  type AuthMethodPluginTestSupport,
+  loadDeploymentAuthMethodPlugins,
+} from './helpers/auth-method-plugins';
 import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
@@ -61,6 +66,7 @@ import {
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
 import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
+import { createServerPasswordAttempts } from './helpers/password-attempts';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { logRefusedMailTransports } from './helpers/realm-mail-transport';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
@@ -241,6 +247,12 @@ export interface AppOptions {
    * the app refuses one otherwise. `modules` is test support.
    */
   internalListener?: Omit<InternalApiOptions, 'roles'> & { readonly server: FastifyInstance };
+  /**
+   * TEST SUPPORT — replaces the `import()` of an AuthMethod plugin package
+   * and the first-party list (#600), for a suite that boots with fixture
+   * plugins. Refused unless NODE_ENV is `test`; `main.ts` never sets it.
+   */
+  authMethodPlugins?: AuthMethodPluginTestSupport;
 }
 
 declare module 'fastify' {
@@ -264,6 +276,10 @@ async function registerFederation(
   fastify: FastifyInstance,
   defaultRealmBoot: boolean
 ): Promise<void> {
+  // The AuthMethod plugins this process loaded (#600), which join the
+  // registry after the built-in providers: each is checked against the whole
+  // contract again there, and a type that is taken fails the boot.
+  const authMethods = fastify.authMethodPlugins.installed.map((plugin) => plugin.method);
   // Credential-provider registry (ADR-003, #228). The bootstrap remains the
   // single registration point, but WHICH providers exist is now a pure function
   // of config (`createConfiguredProviders`) so the decision is unit-testable
@@ -416,6 +432,7 @@ async function registerFederation(
     // nothing yields `NO_VERIFIER_MATERIAL`, which is what makes a profile
     // requiring a WRPAC refuse.
     provisionedVerifierMaterial: provisioned,
+    authMethods,
   };
   await fastify.register(federationPlugin, {
     providers: createConfiguredProviders({
@@ -566,6 +583,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     egressClientFactory,
     adminListener,
     internalListener,
+    authMethodPlugins: authMethodPluginTestSupport,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -616,9 +634,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   // ADR-018 §5: an experimental feature may change in a minor release, so a
   // deployment that turns one on is told so at every boot: one `warn` line per
-  // item, with its id and docs link. Logged here rather than in `main.ts`, so
-  // every boot of the app, a test harness's included, says it.
-  logExperimentalFeatures(fastify.log);
+  // item, with its id and docs link, and one if plugins run beside the signer.
+  // Logged here, not in `main.ts`, so every boot, a harness's too, says it.
+  logExperimentalFeatures(fastify.log, env, roles);
 
   // The OpenTelemetry log export of events (ADR-018 §3, #541), before the
   // database: the event store hands each event to it once the event's
@@ -861,15 +879,44 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         // with 503 and `Retry-After` (#751); see `helpers/client-auth.ts`.
         queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
       },
-      validationConfig: {
-        minScore: env.PASSWORD_MIN_SCORE,
-      },
+      // No password strength score here: each realm sets its own lowest
+      // score (`password.minScore`, #528), which registration reads from the
+      // realm row; PASSWORD_MIN_SCORE only seeds it in a new realm.
     });
+  }
+
+  // The per-account failure ladder (#615, ADR-017 Decision 7): the legacy
+  // login routes reserve each attempt on it before a password is read, over
+  // the cache plugin's Redis, keyed on HMACs derived from the realm's cookie
+  // key. Any error of it refuses the attempt before a credential is checked.
+  // Its hard action writes `userCredentials`, which every login route that
+  // needs the plugin reads anyway (the route manifest lists it).
+  if (plugins.has('failureLadder')) {
+    fastify.decorate('passwordAttempts', createServerPasswordAttempts(fastify));
   }
 
   if (plugins.has('pkce')) {
     await fastify.register(pkcePlugin);
   }
+
+  // The AuthMethod plugins (ADR-019 Decision 12, #600), on a process that
+  // serves the sign-in pages, where their routes mount, or the admin API,
+  // which enables and configures them. A package that cannot be loaded stops
+  // the boot; one the experimental switch keeps out is logged and skipped.
+  fastify.decorate(
+    'authMethodPlugins',
+    roles.includes('web') || roles.includes('admin')
+      ? await loadDeploymentAuthMethodPlugins(
+          fastify.log,
+          {
+            packages: env.AUTH_METHOD_PLUGINS,
+            pluginApiEnabled: env.PLUGIN_API_ENABLED,
+            nodeEnv: env.NODE_ENV,
+          },
+          authMethodPluginTestSupport
+        )
+      : authMethodPluginRuntime([])
+  );
 
   if (plugins.has('federation')) {
     await registerFederation(fastify, defaultRealmBoot);

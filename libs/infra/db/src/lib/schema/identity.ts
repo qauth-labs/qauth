@@ -84,6 +84,20 @@ export const userCredentials = pgTable(
       .$type<Record<string, unknown>>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
+    /**
+     * When the per-account failure ladder's hard action disabled this
+     * authenticator, in epoch ms (ADR-017 Decision 7, #615); NULL while it is
+     * usable. Authenticator-generic: the password's 100 consecutive counted
+     * failures set it today, a second factor's later (#653).
+     *
+     * The mark counts only while the hard action is armed (the hosted reset
+     * is on and the deployment can send the notices, checked at run time):
+     * then every credential lookup returns the credential as unusable, and it
+     * still counts as bound for the downgrade rule and the MFA policy. While
+     * the hard action is unarmed the mark is ignored, and a successful
+     * sign-in clears it, as the owner's next reset does.
+     */
+    disabledAt: bigint('disabled_at', { mode: 'number' }),
   },
   (t) => [
     uniqueIndex('idx_user_credentials_realm_provider_sub_unique').on(

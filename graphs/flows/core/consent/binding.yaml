@@ -928,6 +928,36 @@ scenarios:
       - run: [sleep, '{freshAuthWindowSeconds}'] # the shared binding: STEP_UP_FRESH_AUTH_WINDOW_MS in seconds, plus one
     request: { query: { prompt: login }, form: { prompt: login } }
 
+  nativeProfileOnAnOldSignIn:
+    # needsFreshLogin: consent-native is a native_backend first-party client (ADR-017 Decision 9), whose request counts
+    # as prompt=login whatever it says: no prompt in the form, on a sign-in older than the two-minute window. The page
+    # is reached directly, as /oauth/authorize would send the browser to /ui/login first.
+    given:
+      gate: open
+      returnUrl: fits
+      params: valid
+      agentScope: withinCap
+      audience: listed
+      clientIsAgent: false
+      environment: production
+      csrf: matches
+      decision: allow
+      posted: shown
+      stepUp: promptLogin
+      allowForever: true
+    walks: [[SHOW, SUBMIT]]
+    as: user
+    setup:
+      - signIn: browser
+      - run: [sleep, '{freshAuthWindowSeconds}']
+    request:
+      query:
+        client_id: consent-native
+        redirect_uri: https://consent-native.example/callback
+      form:
+        client_id: consent-native
+        redirect_uri: https://consent-native.example/callback
+
   dangerousScopeOnAnOldSignIn:
     # needsFreshLogin: write:notes for a production client, on a sign-in older than the two-minute window
     given:

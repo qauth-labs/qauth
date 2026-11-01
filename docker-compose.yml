@@ -133,9 +133,11 @@ services:
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
       SESSION_LAST_SEEN_INTERVAL: ${SESSION_LAST_SEEN_INTERVAL:-60}
       SESSION_RETENTION_DAYS: ${SESSION_RETENTION_DAYS:-30}
-      # Require a verified account before password login (default: true). For a
-      # password account, verified means its address was confirmed. Keep it on:
-      # off, register-then-login tells a free address from a registered one.
+      # Require a verified account before password login (default: true), as
+      # the seed of a new realm's accounts.requireVerifiedAccount: an existing
+      # realm keeps its own. For a password account, verified means its
+      # address was confirmed. Keep it on: off, register-then-login tells a
+      # free address from a registered one.
       # EMAIL_PROVIDER=mock delivers no mail, so a sign-up cannot be verified.
       # REQUIRE_EMAIL_VERIFIED is the deprecated name. It still works, with a
       # boot warning, and the boot fails if the two disagree. Both are forwarded

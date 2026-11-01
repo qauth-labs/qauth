@@ -436,7 +436,7 @@ See `.env.docker.example` for all available variables. Key variables:
 | `JWT_ISSUER`                   | No       | JWT issuer URL (default: http://localhost:3000). At first boot it becomes the default realm's permanent issuer; a later boot with another value refuses to start |
 | `DEFAULT_REALM_ENDPOINT_HOSTS` | No       | Names server-side callers reach the auth-server by (default: `auth-server`, the developer portal's)                                                              |
 | `EMAIL_PROVIDER`               | No       | Email provider of a new realm: mock, resend, smtp (default: mock); the realm row decides afterwards                                                              |
-| `REQUIRE_VERIFIED_ACCOUNT`     | No       | Refuse password login until the address is verified (`true`)                                                                                                     |
+| `REQUIRE_VERIFIED_ACCOUNT`     | No       | Refuse password login until the account is verified (`true`), in a new realm; the realm row decides afterwards                                                   |
 | `NODE_ENV`                     | No       | `production` (default) or `development` for dev                                                                                                                  |
 | `LOG_LEVEL`                    | No       | `info` (default); use `debug` for development                                                                                                                    |
 
@@ -446,8 +446,11 @@ See `.env.docker.example` for all available variables. Key variables:
 > with the chosen password would tell a free address from a registered one. A
 > stack on `EMAIL_PROVIDER=mock` therefore cannot complete a sign-up. Point
 > `smtp` at a real server or a local mail catcher. For a throwaway local trial
-> only, `REQUIRE_VERIFIED_ACCOUNT=false` in `.env` lets unverified accounts sign
-> in, and gives that answer back.
+> only, `REQUIRE_VERIFIED_ACCOUNT=false` in `.env` before the first start lets
+> unverified accounts sign in, and gives that answer back. It seeds the default
+> realm's `accounts.requireVerifiedAccount` when the realm is created: on a stack
+> that already started once, the realm keeps its stored value, so remove the
+> volumes (`docker-compose down -v`, which deletes all data) to start over with it.
 
 #### Developer Portal
 
@@ -705,12 +708,12 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
 }
 ```
 
-| Manifest field        | Meaning                                                                                                                                                                                                                                                                                      |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `first_party_profile` | `web_redirect`: a web front-end on the redirect flow; it earns only the consent waiver at `/oauth/authorize`. `native_backend`: the backend of a native app, for the authorization challenge endpoint.                                                                                       |
-| `first_party_policy`  | `native_backend` only: `flows` (a non-empty set of `login`, `register`, `reset`; default `["login"]`), `email_code_after_password` (default `false`) and `pkce_required` (default `true`). No other member is accepted.                                                                      |
-| `first_party_reason`  | Required with a profile, refused without one: why the app is first party. It is stored with the client and recorded in the change's event.                                                                                                                                                   |
-| `system_client`       | The developer portal's system client, as the migration runner provisions it: `redirect_uris`, `jwks` or `jwks_uri`, and optionally `client_id` (by default the seed's `SYSTEM_CLIENT_ID` when it is set, else `system`: the auth server's id) and `first_party_reason`. It always converges. |
+| Manifest field        | Meaning                                                                                                                                                                                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `first_party_profile` | `web_redirect`: a web front-end on the redirect flow; it earns only the consent waiver at `/oauth/authorize`. `native_backend`: the backend of a native app, for the authorization challenge endpoint; at `/oauth/authorize` it gets the same waiver, and every request of it counts as `prompt=login`. |
+| `first_party_policy`  | `native_backend` only: `flows` (a non-empty set of `login`, `register`, `reset`; default `["login"]`), `email_code_after_password` (default `false`) and `pkce_required` (default `true`). No other member is accepted.                                                                                 |
+| `first_party_reason`  | Required with a profile, refused without one: why the app is first party. It is stored with the client and recorded in the change's event.                                                                                                                                                              |
+| `system_client`       | The developer portal's system client, as the migration runner provisions it: `redirect_uris`, `jwks` or `jwks_uri`, and optionally `client_id` (by default the seed's `SYSTEM_CLIENT_ID` when it is set, else `system`: the auth server's id) and `first_party_reason`. It always converges.            |
 
 - A profile needs `token_endpoint_auth_method: "private_key_jwt"` and is refused
   on an agent. `native_backend` also needs `jwks` or `jwks_uri`, the

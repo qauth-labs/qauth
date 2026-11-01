@@ -170,7 +170,7 @@ describe('registration does not reveal whether an address is registered (real co
       sent.mockRestore();
     }
     // Time passes: the per-address mail interval the sign-up claimed runs out.
-    await app.redis.flushall();
+    await app.redis.flushdb();
   }
 
   it('answers a registered and a free address identically, at registration and at login', async () => {
@@ -230,7 +230,7 @@ describe('registration does not reveal whether an address is registered (real co
   it('sends an unverified account its verification link again, and creates nothing', async () => {
     await withDeployment(async (app) => {
       expect((await register(app, FREE, ATTACKER_PASSWORD)).statusCode).toBe(202);
-      await app.redis.flushall();
+      await app.redis.flushdb();
       const links = vi.spyOn(app.emailService, 'sendVerificationEmail');
 
       const again = await register(app, FREE, 'Another-Long-Passphrase-31!');

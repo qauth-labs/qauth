@@ -127,6 +127,9 @@ export const EXPERIMENTAL_MEMBER_VALUES: {
   // A verifier profile changes how a wallet presentation is requested and
   // checked. No discovery member describes it.
   'oid4vp-1.0-base': () => ({}),
+  // A plugin's routes are the sign-in pages' callbacks under /upstream/<type>;
+  // no discovery member describes them.
+  'plugin-api': () => ({}),
 };
 
 /**

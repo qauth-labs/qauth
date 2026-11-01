@@ -1,3 +1,4 @@
+import { SignInStoreUnavailableError } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import Fastify, {
   type FastifyInstance,
   type LightMyRequestResponse,
@@ -209,6 +210,37 @@ describe('POST /ui/verify (the form of the emailed link)', () => {
     const json = await postJson();
     expect(json.statusCode).toBe(res.statusCode);
     expect(json.headers['retry-after']).toBe('300');
+  });
+
+  it("refuses inside the failure ladder's wait (#615): 429 with Retry-After, nothing compared", async () => {
+    stubs.attempts.reserve.mockResolvedValueOnce({ kind: 'wait', retryAfterSeconds: 4 });
+
+    const res = await submitForm();
+
+    expect(res.statusCode).toBe(429);
+    expect(res.headers['retry-after']).toBe('4');
+    expect(res.body).toContain(VERIFY_FORM_ERRORS.lockedOut);
+    expect(hiddenField(res.body, 'token')).toBe(TOKEN);
+    expect(stubs.verifyPassword).not.toHaveBeenCalled();
+  });
+
+  it("answers 503 with Retry-After when the failure ladder's store fails (#615), as the API does", async () => {
+    const down = () => new SignInStoreUnavailableError('ladder', new Error('redis down'));
+    stubs.attempts.reserve.mockRejectedValueOnce(down()).mockRejectedValueOnce(down());
+
+    const res = await submitForm();
+
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['retry-after']).toBe('5');
+    expectPageHeaders(res);
+    expect(res.body).toContain(VERIFY_FORM_ERRORS.unavailable);
+    expect(hiddenField(res.body, 'token')).toBe(TOKEN);
+    expect(stubs.verifyPassword).not.toHaveBeenCalled();
+    expect(stubs.markUsed).not.toHaveBeenCalled();
+
+    const json = await postJson();
+    expect(json.statusCode).toBe(res.statusCode);
+    expect(stubs.verifyPassword).not.toHaveBeenCalled();
   });
 
   it('counts wrong passwords from the form and the API on one account', async () => {

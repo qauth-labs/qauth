@@ -137,6 +137,12 @@
 > and `new_password` carries its `purpose` on this endpoint too. Decisions 3 and 4 are edited in
 > place, and the URNs of Decision 3's wire examples now carry the `-rc.0` label as the amendment
 > of 2026-10-24 required.
+>
+> **Amended 2026-11-01** with #633, which builds Decision 9's administrative consent at
+> `/oauth/authorize` (F0). Each waiver is recorded as the registered type
+> `urn:qauth:event:consent.administrative:v1-rc.0`, in the transaction that mints the code.
+> `oauth.consent.administrative` predates the event contract of ADR-018 §3 and is not a type.
+> Decision 9 is edited in place. No rule changed.
 
 ## Context
 
@@ -1189,7 +1195,8 @@ every other path requires consent.**
   the user cannot meaningfully revoke.
 - The waiver covers the administrative consent set of Decision 4. Dangerous scopes and
   `prompt=consent` always get the consent screen (`redirect_to_web` at the new endpoint). Every
-  waiver is audited as `oauth.consent.administrative` (basis, client, scopes, path).
+  waiver is recorded as `urn:qauth:event:consent.administrative:v1-rc.0` (basis, client, scopes,
+  resources, path; amended 2026-11-01).
 - The waiver needs no switch: it is inert until an operator sets a profile, as with
   [ADR-011 §7](./011-enterprise-managed-authorization.md) "`private_key_jwt` (#384) — additive, no
   flag". So the portal can move in F0 without enabling headless login. At `/oauth/authorize`, QAuth

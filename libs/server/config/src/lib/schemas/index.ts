@@ -73,6 +73,13 @@ export {
 } from './key-attestation';
 export { type ObservabilityEnv, observabilityEnvSchema } from './observability';
 export { type PasswordEnv, passwordEnvSchema } from './password';
+export {
+  MAX_AUTH_METHOD_PLUGINS,
+  MAX_PLUGIN_PACKAGE_NAME_LENGTH,
+  PLUGIN_PACKAGE_NAME_PATTERN,
+  type PluginsEnv,
+  pluginsEnvSchema,
+} from './plugins';
 export { type RateLimitEnv, rateLimitEnvSchema } from './rate-limit';
 export { parseRealmEndpointHosts } from './realm-endpoint-hosts';
 export {

@@ -4,7 +4,7 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import type { NewUserCredential, UserCredential, UserCredentialsRepository } from '../../types';
 import { DbClient } from '../db';
@@ -211,6 +211,63 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
       if (!credential) {
         throw new NotFoundError('UserCredential', id);
       }
+      return credential;
+    },
+
+    /**
+     * Set the failure ladder's disabled mark (ADR-017 Decision 7, #615) on
+     * the credential the unique `(realm_id, provider_type, external_sub)`
+     * names, in one statement that changes only an unmarked row: of two
+     * callers at once, one sets the mark and gets the row back, the other
+     * gets `undefined`, so the hard action fires once per mark.
+     */
+    async setDisabledAt(
+      realmId: string,
+      providerType: string,
+      externalSub: string,
+      disabledAt: number,
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [credential] = await invoker
+        .update(userCredentials)
+        .set({ disabledAt, updatedAt: Date.now() })
+        .where(
+          and(
+            eq(userCredentials.realmId, realmId),
+            eq(userCredentials.providerType, providerType),
+            eq(userCredentials.externalSub, externalSub),
+            isNull(userCredentials.disabledAt)
+          )
+        )
+        .returning();
+      return credential;
+    },
+
+    /**
+     * Clear the disabled mark (#615) of the credential `(realm_id,
+     * provider_type, external_sub)` names, in one statement that changes
+     * only a marked row.
+     */
+    async clearDisabledAt(
+      realmId: string,
+      providerType: string,
+      externalSub: string,
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [credential] = await invoker
+        .update(userCredentials)
+        .set({ disabledAt: null, updatedAt: Date.now() })
+        .where(
+          and(
+            eq(userCredentials.realmId, realmId),
+            eq(userCredentials.providerType, providerType),
+            eq(userCredentials.externalSub, externalSub),
+            isNotNull(userCredentials.disabledAt)
+          )
+        )
+        .returning();
       return credential;
     },
   };

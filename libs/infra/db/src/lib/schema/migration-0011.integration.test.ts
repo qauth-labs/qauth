@@ -13,7 +13,7 @@
  *      NOT NULL enforced, and users.id survives unchanged (epic #224 AC).
  *
  * Requires Docker; self-skips without it. Each case rebuilds the schema from
- * scratch (DROP SCHEMA CASCADE) inside one shared container.
+ * scratch (DROP SCHEMA CASCADE) inside the suite's one database.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';

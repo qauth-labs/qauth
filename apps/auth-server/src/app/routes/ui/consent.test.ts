@@ -2494,6 +2494,96 @@ describe('UI /ui/consent — step-up authentication (ADR-007 §2, #185)', () => 
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
   });
+
+  // ADR-017 Decision 9 (#633): a native_backend client's request is
+  // `prompt=login` whatever it says, on the consent POST as on
+  // /oauth/authorize, so a page reached without /oauth/authorize cannot mint
+  // a code for its browser leg from a stale session.
+  describe('a native_backend client (ADR-017 Decision 9, #633)', () => {
+    const NATIVE = {
+      ...CLIENT,
+      grantTypes: ['authorization_code', 'refresh_token'],
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      firstPartyProfile: 'native_backend',
+      firstPartyPolicy: { flows: ['login'] },
+      developerId: null,
+      isAgent: false,
+      metadata: null,
+    };
+
+    it('bounces a stale session to /ui/login whatever prompt the form posts', async () => {
+      for (const prompt of [undefined, 'none', 'consent']) {
+        vi.clearAllMocks();
+        const { fastify, ctx, sessions } = makeFastify();
+        await consentRoute(fastify);
+        const { cookie } = await signInAt(sessions, Date.now() - 10 * MINUTE, 'email');
+        (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+          NATIVE
+        );
+
+        const { reply, state } = createReply();
+        await ctx.post!(
+          {
+            body: postBody({ scope: 'email', ...(prompt === undefined ? {} : { prompt }) }),
+            headers: { cookie },
+            ip: '127.0.0.1',
+          },
+          reply
+        );
+
+        expect(state.redirected).toContain('/ui/login?return_to=');
+        expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+        expect(fastify.repositories.oauthConsents.upsertGrant).not.toHaveBeenCalled();
+        // The event names the posted prompt, and the reason the profile.
+        expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          {
+            reason: 'native_profile_login_required',
+            ...(prompt === undefined ? {} : { prompt }),
+          },
+          expect.objectContaining({ userId: 'user-1', clientId: 'app-123' })
+        );
+      }
+    });
+
+    it('mints on a fresh session, right after the login', async () => {
+      const { fastify, ctx, sessions } = makeFastify();
+      await consentRoute(fastify);
+      const { cookie } = await signInAt(sessions, Date.now() - 5000, 'email');
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        NATIVE
+      );
+
+      const { reply, state } = createReply();
+      await ctx.post!(
+        { body: postBody({ scope: 'email' }), headers: { cookie }, ip: '127.0.0.1' },
+        reply
+      );
+
+      expect(state.redirected).toContain('code=');
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+    });
+
+    it('leaves a web_redirect client to the ordinary rule: no forced login', async () => {
+      const { fastify, ctx, sessions } = makeFastify();
+      await consentRoute(fastify);
+      const { cookie } = await signInAt(sessions, Date.now() - 10 * MINUTE, 'email');
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...NATIVE,
+        firstPartyProfile: 'web_redirect',
+        firstPartyPolicy: null,
+      });
+
+      const { reply, state } = createReply();
+      await ctx.post!(
+        { body: postBody({ scope: 'email' }), headers: { cookie }, ip: '127.0.0.1' },
+        reply
+      );
+
+      expect(state.redirected).toContain('code=');
+    });
+  });
 });
 
 /**

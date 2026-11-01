@@ -32,7 +32,7 @@ function header(response: Response, name: string): number {
 
 /**
  * Runs in the `wire-budget` project, after every other wire test
- * (`sequence.groupOrder` in vitest.wire.config.ts): it spends the registration
+ * (`sequence.groupOrder` in vitest.wire.config.mts): it spends the registration
  * budget of the address the suite connects from, and anything that registered
  * a user after it would be refused for the rest of the window.
  */

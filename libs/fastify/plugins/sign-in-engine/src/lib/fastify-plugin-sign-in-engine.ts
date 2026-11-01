@@ -24,7 +24,7 @@ export type SignInEnginePluginOptions = FastifyPluginOptions &
     /**
      * Whether the server runs in production. Defaults to
      * `NODE_ENV === 'production'`. In production the engine is built only
-     * with a `ladder` hook.
+     * with a `ladder` hook and a `passwordHardAction`.
      */
     readonly production?: boolean;
   };
@@ -37,11 +37,13 @@ export const SIGN_IN_ENGINE_PLUGIN_NAME = packageJson.name;
  * #646) register it with the adapters of this library over the server's
  * repositories, password hasher and signer.
  *
- * In production it refuses to register without a `ladder` hook: the
- * engine's default ladder counts nothing, so a password could be guessed
- * without limit until the per-account ladder (#615) is passed in.
+ * In production it refuses to register without a `ladder` hook (the
+ * per-account ladder of `createRedisFailureLadder`, #615): the engine's
+ * default ladder counts nothing, so a password could be guessed without
+ * limit. It refuses without a `passwordHardAction` too: the default never
+ * disables a password at the ladder's hard ceiling, whatever arms it.
  *
- * @throws Error in production when `hooks.ladder` is absent
+ * @throws Error in production when `hooks.ladder` or `passwordHardAction` is absent
  */
 export const signInEnginePlugin = fp(
   async (fastify: FastifyInstance, options: SignInEnginePluginOptions) => {
@@ -50,6 +52,12 @@ export const signInEnginePlugin = fp(
       throw new Error(
         'sign-in engine: a production server needs a ladder hook (#615); without one a ' +
           'password could be guessed without limit'
+      );
+    }
+    if (production && dependencies.passwordHardAction === undefined) {
+      throw new Error(
+        'sign-in engine: a production server needs the password hard action (#615); without ' +
+          'it the ladder never disables a password at its hard ceiling'
       );
     }
     fastify.decorate('signInEngine', createSignInEngine(dependencies));

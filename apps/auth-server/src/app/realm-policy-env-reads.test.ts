@@ -93,6 +93,20 @@ function sourceFiles(dir: string): string[] {
 describe('environment keys of policies read from the realm row (#528, #534)', () => {
   const keys = keysReadFromRealmRow();
 
+  it("covers the verified-account, password and brute-force keys (#528), the old name of the gate's key included", () => {
+    for (const [key, path] of [
+      ['REQUIRE_VERIFIED_ACCOUNT', 'accounts.requireVerifiedAccount'],
+      ['REQUIRE_EMAIL_VERIFIED', 'accounts.requireVerifiedAccount'],
+      ['PASSWORD_MIN_SCORE', 'password.minScore'],
+      ['FAILED_LOGIN_TRACKING_ENABLED', 'bruteForce.enabled'],
+      ['FAILED_LOGIN_MAX_ATTEMPTS', 'bruteForce.maxAttempts'],
+      ['FAILED_LOGIN_WINDOW', 'bruteForce.windowSeconds'],
+      ['FAILED_LOGIN_LOCKOUT_DURATION', 'bruteForce.lockoutSeconds'],
+    ]) {
+      expect(keys.get(key), key).toBe(path);
+    }
+  });
+
   it('covers the client registration keys (#534), and not the CIMD fetch tuning, which stays a deployment setting', () => {
     for (const [key, path] of [
       ['DEFAULT_DYNAMIC_REGISTRATION_SCOPES', 'registration.dynamicRegistrationAllowedScopes'],

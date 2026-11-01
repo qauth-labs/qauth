@@ -4,16 +4,26 @@ import {
   SELF_REPORTED_SOURCE,
 } from '@qauth-labs/fastify-plugin-federation';
 import {
+  type PasswordAttempt,
+  SignInStoreUnavailableError,
+} from '@qauth-labs/fastify-plugin-sign-in-engine';
+import {
   EmailAlreadyVerifiedError,
   InvalidCredentialsError,
   InvalidTokenError,
+  TemporarilyUnavailableError,
   TooManyRequestsError,
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
+import type { BruteForcePolicy } from './account-policies';
 import { hashEmail } from './auth-events';
 import { clientAddressKey, type ClientAddressSource } from './client-address';
 import { recordSuccessfulLogin, registerLoginAttempt } from './failed-login';
+import { ladderEndUserIp } from './password-attempts';
+
+/** The `Retry-After` of a verification refused because the failure ladder's store failed (#615). */
+const LADDER_UNAVAILABLE_RETRY_SECONDS = 5;
 
 /** What a verification request carries: the mailed token and the account's password. */
 export interface EmailVerificationInput {
@@ -23,6 +33,12 @@ export interface EmailVerificationInput {
    * a token mailed for another realm's account is an unknown token here.
    */
   readonly realmId: string;
+  /**
+   * That realm's brute-force policy (`accountPoliciesOf`, #528): the password
+   * check here counts against the login routes' lockout, under the policy
+   * they count with.
+   */
+  readonly bruteForce: BruteForcePolicy;
   /** The 64-hex-character token from the verification mail, already format-checked. */
   readonly token: string;
   /** The password chosen at registration. */
@@ -94,7 +110,7 @@ export async function verifyEmailAddress(
   fastify: FastifyInstance,
   request: ClientAddressSource,
   reply: RetryAfterReply,
-  { realmId, token, password }: EmailVerificationInput
+  { realmId, bruteForce, token, password }: EmailVerificationInput
 ): Promise<EmailVerificationResult> {
   // Token format already validated by the caller's Zod schema (64-char hex
   // string). This prevents CVE-2025-12374 style attacks at schema level.
@@ -160,7 +176,7 @@ export async function verifyEmailAddress(
   // the realm the login routes count it in. The attempt is counted before
   // the password is compared; a wrong one stays counted.
   const emailIdentifier = `email:${hashEmail(credential.externalSub)}`;
-  const lockout = await registerLoginAttempt(fastify.redis, credential.realmId, [
+  const lockout = await registerLoginAttempt(fastify.redis, credential.realmId, bruteForce, [
     emailIdentifier,
     `ip:${clientAddressKey(request)}`,
   ]);
@@ -171,15 +187,54 @@ export async function verifyEmailAddress(
     throw new TooManyRequestsError('Too many failed attempts. Please try again later.');
   }
 
+  // 4c. The per-account failure ladder (#615, ADR-017 Decision 7), as the
+  // login routes reserve on it: this compare checks the account's password
+  // too, so it is reserved before the compare, refused inside the account's
+  // wait (neither compared nor counted) and settled after. A store that
+  // fails refuses it before the password is read.
+  let attempt: PasswordAttempt;
+  try {
+    attempt = await fastify.passwordAttempts.reserve({
+      realmId: credential.realmId,
+      identifier: credential.externalSub,
+      ...ladderEndUserIp(request),
+    });
+  } catch (error) {
+    if (!(error instanceof SignInStoreUnavailableError)) throw error;
+    fastify.log.error({ err: error, port: error.port }, 'sign-in failure ladder unavailable');
+    throw new TemporarilyUnavailableError(LADDER_UNAVAILABLE_RETRY_SECONDS, {
+      reason: 'sign_in_store_unavailable',
+      port: error.port,
+    });
+  }
+  if (attempt.kind === 'wait') {
+    reply.header('Retry-After', String(attempt.retryAfterSeconds));
+    throw new TooManyRequestsError('Too many failed attempts. Please try again later.');
+  }
+
+  // The ladder's disabled mark, honoured only while its hard action is armed
+  // (#615), as the login routes' lookup does: the password is not compared.
+  const marked = credential.disabledAt !== null && credential.disabledAt !== undefined;
+  if (marked && (await fastify.passwordAttempts.hardActionArmed(credential.realmId))) {
+    await attempt.failed(async () => null);
+    throw new InvalidCredentialsError('Incorrect password for this account');
+  }
+
   const passwordValid = await fastify.passwordHasher.verifyPassword(
     parsed.data.password_hash,
     password
   );
   if (!passwordValid) {
+    // Counted on the ladder; at its hard ceiling the hard action may disable
+    // this password (the user is enabled, checked above).
+    await attempt.failed(async () => ({ userId: credential.userId }));
     throw new InvalidCredentialsError('Incorrect password for this account');
   }
   // The password is proved: settle the attempt as a successful login does.
-  await recordSuccessfulLogin(fastify.redis, credential.realmId, lockout, [emailIdentifier]);
+  await recordSuccessfulLogin(fastify.redis, credential.realmId, bruteForce, lockout, [
+    emailIdentifier,
+  ]);
+  await attempt.succeeded({ userId: credential.userId, ignoredMark: marked });
 
   // 5.-6. Completion write set (one transaction): consume the token and
   // flip credential_data.email_verified + the attribute's verified flag —

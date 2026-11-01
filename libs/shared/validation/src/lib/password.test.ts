@@ -14,6 +14,7 @@ import matching from 'zxcvbn/lib/matching';
 
 import {
   createPasswordValidator,
+  createPasswordValidators,
   PASSWORD_MAX_LENGTH,
   passwordSchema,
   ZXCVBN_MAX_INPUT_LENGTH,
@@ -177,5 +178,59 @@ describe('passwordSchema', () => {
       type: 'string',
       maxLength: PASSWORD_MAX_LENGTH,
     });
+  });
+});
+
+describe('createPasswordValidators (#528)', () => {
+  // zxcvbn scores 'qwerty123' 0 and 'correct horse battery' 4.
+  const WEAK = 'qwerty123';
+  const STRONG = 'correct horse battery';
+
+  it('builds a validator that accepts a password from the given score up', () => {
+    const validators = createPasswordValidators();
+    const score = validators.forMinScore(0).validatePasswordStrength(WEAK).score;
+
+    expect(score).toBeLessThan(1);
+    expect(validators.forMinScore(0).validatePasswordStrength(WEAK).valid).toBe(true);
+    expect(validators.forMinScore(1).validatePasswordStrength(WEAK).valid).toBe(false);
+    expect(validators.forMinScore(3).validatePasswordStrength(WEAK).valid).toBe(false);
+    expect(validators.forMinScore(4).validatePasswordStrength(STRONG).valid).toBe(true);
+  });
+
+  it('builds one validator per score and hands it out again', () => {
+    const validators = createPasswordValidators();
+
+    const two = validators.forMinScore(2);
+
+    expect(validators.forMinScore(2)).toBe(two);
+    expect(validators.forMinScore(3)).not.toBe(two);
+    expect(validators.forMinScore(3)).toBe(validators.forMinScore(3));
+  });
+
+  it('judges a password as createPasswordValidator does with the same score', () => {
+    const validators = createPasswordValidators();
+
+    for (const minScore of [0, 1, 2, 3, 4]) {
+      for (const password of [WEAK, 'Tr0ub4dor&3', STRONG]) {
+        expect(validators.forMinScore(minScore).validatePasswordStrength(password)).toEqual(
+          createPasswordValidator({ minScore }).validatePasswordStrength(password)
+        );
+      }
+    }
+  });
+
+  it('refuses a score outside 0 to 4, and keeps nothing for it', () => {
+    const validators = createPasswordValidators();
+
+    for (const minScore of [-1, 5, 2.5, Number.NaN]) {
+      expect(() => validators.forMinScore(minScore)).toThrow(z.ZodError);
+      expect(() => validators.forMinScore(minScore)).toThrow(z.ZodError);
+    }
+  });
+
+  it('keeps no state between two sets of validators', () => {
+    expect(createPasswordValidators().forMinScore(2)).not.toBe(
+      createPasswordValidators().forMinScore(2)
+    );
   });
 });

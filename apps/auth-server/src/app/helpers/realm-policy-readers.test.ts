@@ -30,8 +30,13 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
     }
   });
 
-  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the mail transport and sender (#529) and CIMD (#534)', () => {
+  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the account policies (#528), the mail transport and sender (#529) and CIMD (#534)', () => {
     expect([...POLICIES_READ_FROM_REALM_ROW].sort()).toEqual([
+      'accounts.requireVerifiedAccount',
+      'bruteForce.enabled',
+      'bruteForce.lockoutSeconds',
+      'bruteForce.maxAttempts',
+      'bruteForce.windowSeconds',
       'mail.fromAddress',
       'mail.fromName',
       'mail.provider',
@@ -39,6 +44,7 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
       'mail.smtp.port',
       'mail.smtp.secure',
       'mail.smtp.user',
+      'password.minScore',
       'posture.maxEnvironmentLaxity',
       'registration.cimd.enabled',
       'registration.cimd.trustPolicy',

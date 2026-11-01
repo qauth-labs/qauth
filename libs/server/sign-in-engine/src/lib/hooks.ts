@@ -48,11 +48,29 @@ export type BotChallengeVerdict =
    */
   | { readonly kind: 'due'; readonly retryAfterSeconds: number };
 
+/** What settling a reserved attempt found. */
+export interface LadderSettlement {
+  /**
+   * Whether this failure counted at or past the ladder's hard ceiling, in a
+   * run no success has ended since: the caller's hard action is due (it is
+   * idempotent, so a later failure of the same run may say so again). Always
+   * `false` for a success, and for a ladder with no hard ceiling.
+   */
+  readonly ceilingReached: boolean;
+}
+
+/** A settlement that fires nothing. */
+export const NOTHING_DUE: LadderSettlement = Object.freeze({ ceilingReached: false });
+
 /** One reserved attempt of the ladder, settled once the credential is checked. */
 export interface LadderReservation {
   readonly kind: 'reserved';
-  /** `success` clears the counter of the factor it proved; `failure` keeps the attempt counted. */
-  settle(outcome: 'success' | 'failure'): Promise<void>;
+  /**
+   * `success` clears the counter of the factor it proved, and no other, and
+   * makes the attempt's end-user IP known to the account; `failure` keeps the
+   * attempt counted, and says whether the hard action is due. Settled once.
+   */
+  settle(outcome: 'success' | 'failure'): Promise<LadderSettlement>;
 }
 
 /** The ladder's answer to a reservation. */
@@ -73,6 +91,12 @@ export interface LadderHook {
     readonly realmId: string;
     readonly identifierHmac: string;
     readonly factor: FactorType;
+    /**
+     * The end-user IP, as the limiters key it (an IPv6 address by its /64):
+     * one with a successful sign-in to the account in the ladder's known-IP
+     * window skips the wait and still counts. Absent: no exemption.
+     */
+    readonly endUserIp?: string;
   }): Promise<LadderVerdict>;
 }
 
@@ -83,11 +107,16 @@ export interface SignInHooks {
   readonly ladder?: LadderHook;
 }
 
-/** The ladder while #615 is not built: every attempt is reserved, and settling does nothing. */
+/**
+ * The engine's default ladder, which counts nothing: every attempt is
+ * reserved and settling does nothing. For tests only: the plugin of
+ * `@qauth-labs/fastify-plugin-sign-in-engine` refuses a production engine
+ * without a real one (#615).
+ */
 export const NO_LADDER: LadderHook = Object.freeze({
   reserve: async () =>
     Object.freeze({
       kind: 'reserved' as const,
-      settle: async () => undefined,
+      settle: async () => NOTHING_DUE,
     }) as LadderReservation,
 });

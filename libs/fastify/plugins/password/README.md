@@ -6,7 +6,8 @@ Fastify plugin for password hashing and validation in QAuth. This plugin provide
 
 The `@qauth-labs/fastify-plugin-password` plugin integrates password hashing and validation into your Fastify application by:
 
-- Decorating the Fastify instance with `passwordHasher` and `passwordValidator` properties
+- Decorating the Fastify instance with `passwordHasher` and `passwordValidators` properties
+- Building a password strength validator per minimum score, cached by score, so each realm can set its own lowest score (`password.minScore` of its policies)
 - Using factory pattern for configuration (no direct `process.env` access)
 - Providing type-safe password operations
 - Enabling different password configurations per Fastify instance
@@ -37,9 +38,6 @@ await fastify.register(passwordPlugin, {
   hashConfig: {
     memoryCost: 65536, // Only override memoryCost, others use defaults
   },
-  validationConfig: {
-    minScore: 2, // Only override minScore
-  },
 });
 
 // Start the server
@@ -64,9 +62,6 @@ await fastify.register(passwordPlugin, {
     timeCost: env.PASSWORD_TIME_COST,
     parallelism: env.PASSWORD_PARALLELISM,
     queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
-  },
-  validationConfig: {
-    minScore: env.PASSWORD_MIN_SCORE,
   },
 });
 
@@ -110,8 +105,9 @@ async function verifyAgainstDecoyHash(password: string): Promise<void> {
 fastify.post('/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
-  // Validate password strength
-  const strength = fastify.passwordValidator.validatePasswordStrength(password);
+  // Validate password strength against the lowest score your realm sets
+  // (QAuth reads its realm's `password.minScore`).
+  const strength = fastify.passwordValidators.forMinScore(2).validatePasswordStrength(password);
   if (!strength.valid) {
     return reply.code(422).send({
       error: 'Weak password',
@@ -176,17 +172,12 @@ interface PasswordPluginOptions {
     parallelism?: number; // Parallelism / threads (default: 4)
     queueLimit?: number; // Waiting Argon2 jobs before a shed verification is refused (default: 32)
   };
-  /**
-   * Configuration for password strength validation
-   * All fields are optional - missing values will use defaults
-   */
-  validationConfig?: {
-    minScore?: number; // Minimum password strength score 0-4 (default: 2 = Fair)
-  };
 }
 ```
 
-**Note**: Both `hashConfig` and `validationConfig` are optional. If not provided, defaults will be used. Individual fields within each config are also optional.
+**Note**: `hashConfig` is optional. If not provided, defaults will be used. Individual fields are also optional.
+
+No password strength score is set at registration: each realm sets its own lowest score (`password.minScore` of its policies, #528), which the caller passes to `passwordValidators.forMinScore` where a password is chosen.
 
 ### Fastify Instance Decorators
 
@@ -211,19 +202,25 @@ const hashed = await fastify.passwordHasher.hashPassword('mySecurePassword123');
 const isValid = await fastify.passwordHasher.verifyPassword(hashed, 'mySecurePassword123');
 ```
 
-#### `fastify.passwordValidator`
+#### `fastify.passwordValidators`
 
-Type: `PasswordValidator`
+Type: `PasswordValidators` (from `@qauth-labs/shared-validation`)
 
-The password validator instance with methods:
+The password validators, one per minimum score:
+
+- `forMinScore(minScore: number): PasswordValidator` - The validator that accepts a password scoring at least `minScore` (0-4). Built on first use and cached by score, so every realm with one score shares one validator. Throws a `ZodError` for a score outside 0-4.
+
+A `PasswordValidator` has one method:
 
 - `validatePasswordStrength(password: string): PasswordStrengthResult` - Validate password strength using zxcvbn
 
 **Example**:
 
 ```typescript
-// Validate password strength
-const result = fastify.passwordValidator.validatePasswordStrength('mySecurePassword123');
+// Validate password strength against the realm's lowest score
+const result = fastify.passwordValidators
+  .forMinScore(realmMinScore)
+  .validatePasswordStrength('mySecurePassword123');
 
 if (!result.valid) {
   console.log('Password is too weak:', result.feedback);
@@ -234,15 +231,15 @@ if (!result.valid) {
 
 ## TypeScript Support
 
-The plugin includes TypeScript type definitions. Both `fastify.passwordHasher` and `fastify.passwordValidator` are automatically typed:
+The plugin includes TypeScript type definitions. Both `fastify.passwordHasher` and `fastify.passwordValidators` are automatically typed:
 
 ```typescript
 import { FastifyInstance } from 'fastify';
 
 async function myRoute(fastify: FastifyInstance) {
-  // TypeScript knows about fastify.passwordHasher and fastify.passwordValidator
+  // TypeScript knows about fastify.passwordHasher and fastify.passwordValidators
   const hashed = await fastify.passwordHasher.hashPassword('password');
-  const strength = fastify.passwordValidator.validatePasswordStrength('password');
+  const strength = fastify.passwordValidators.forMinScore(2).validatePasswordStrength('password');
 }
 ```
 
@@ -263,9 +260,6 @@ await fastify.register(passwordPlugin, {
     parallelism: env.PASSWORD_PARALLELISM,
     queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
-  validationConfig: {
-    minScore: env.PASSWORD_MIN_SCORE,
-  },
 });
 ```
 
@@ -278,7 +272,8 @@ PASSWORD_TIME_COST=3        # Time cost / iterations (default: 3)
 PASSWORD_PARALLELISM=4      # Parallelism / threads (default: 4)
 PASSWORD_HASH_QUEUE_LIMIT=32 # Waiting Argon2id jobs before a client-secret check is refused with 503 (default: 32; 0 = whenever every thread is busy)
 
-# Password validation configuration
+# Password validation: seeds the lowest score of a new realm (password.minScore);
+# the plugin does not read it
 PASSWORD_MIN_SCORE=2        # Minimum strength score 0-4 (default: 2 = Fair)
 ```
 
@@ -286,7 +281,7 @@ PASSWORD_MIN_SCORE=2        # Minimum strength score 0-4 (default: 2 = Fair)
 
 - **0**: Very weak
 - **1**: Weak
-- **2**: Fair (default minimum)
+- **2**: Fair (default minimum of a realm seeded without `PASSWORD_MIN_SCORE`)
 - **3**: Good
 - **4**: Strong
 
@@ -303,14 +298,16 @@ This plugin uses the factory pattern from `@qauth-labs/server-password` and `@qa
 const productionApp = Fastify();
 await productionApp.register(passwordPlugin, {
   hashConfig: { memoryCost: 65536, timeCost: 3, parallelism: 4 },
-  validationConfig: { minScore: 2 },
 });
 
 const testApp = Fastify();
 await testApp.register(passwordPlugin, {
   hashConfig: { memoryCost: 32768, timeCost: 2, parallelism: 2 }, // Faster for tests
-  validationConfig: { minScore: 1 }, // More lenient for tests
 });
+
+// The strength score is per call, so one instance serves realms with different scores
+productionApp.passwordValidators.forMinScore(3); // a strict realm
+productionApp.passwordValidators.forMinScore(1); // a lenient one
 ```
 
 ## Integration with Other Plugins
@@ -356,9 +353,6 @@ await fastify.register(passwordPlugin, {
     parallelism: env.PASSWORD_PARALLELISM,
     queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
-  validationConfig: {
-    minScore: env.PASSWORD_MIN_SCORE,
-  },
 });
 ```
 
@@ -388,7 +382,7 @@ fastify.post('/register', async (request, reply) => {
 
 4. **Never Return Password Hashes**: Always remove `passwordHash` from API responses. Use a helper function like `sanitizeUser()` to exclude sensitive fields.
 
-5. **Password Strength**: Use appropriate `minScore` values based on your security requirements (2 = Fair is a good default).
+5. **Password Strength**: Pass the `minScore` of the realm the password is chosen in to `passwordValidators.forMinScore` (2 = Fair is a good default).
 
 6. **Argon2 Configuration**: Adjust `memoryCost`, `timeCost`, and `parallelism` based on your server capabilities and security requirements.
 
@@ -450,9 +444,6 @@ await fastify.register(passwordPlugin, {
     parallelism: env.PASSWORD_PARALLELISM,
     queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
   },
-  validationConfig: {
-    minScore: env.PASSWORD_MIN_SCORE,
-  },
 });
 
 // Since ADR-002 (#230) the `users` row holds no password hash — the secret
@@ -489,8 +480,9 @@ async function verifyAgainstDecoyHash(password: string): Promise<void> {
 fastify.post('/auth/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
-  // Validate password strength
-  const strength = fastify.passwordValidator.validatePasswordStrength(password);
+  // Validate password strength against the realm's lowest score
+  // (QAuth reads `password.minScore` from the realm's policies)
+  const strength = fastify.passwordValidators.forMinScore(2).validatePasswordStrength(password);
   if (!strength.valid) {
     return reply.code(422).send({
       error: 'Password does not meet strength requirements',

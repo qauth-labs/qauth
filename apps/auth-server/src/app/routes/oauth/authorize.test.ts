@@ -1848,6 +1848,271 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
     });
   });
+
+  // ADR-017 Decision 9 (#633): the administrative consent of an operator-
+  // flagged first-party client, and the fresh login of a native profile.
+  describe('a first-party client (ADR-017 Decision 9, #633)', () => {
+    const PORTAL = {
+      ...DANGEROUS_CLIENT,
+      clientId: 'portal',
+      tokenEndpointAuthMethod: 'private_key_jwt',
+      firstPartyProfile: 'web_redirect',
+      firstPartyPolicy: null,
+      developerId: null,
+      isAgent: false,
+      metadata: null,
+    } as unknown as typeof CLIENT;
+    const NATIVE = {
+      ...PORTAL,
+      clientId: 'notes-backend',
+      grantTypes: ['authorization_code', 'refresh_token'],
+      firstPartyProfile: 'native_backend',
+      firstPartyPolicy: { flows: ['login'], email_code_after_password: false, pkce_required: true },
+    } as unknown as typeof CLIENT;
+
+    function administrativeEvents() {
+      return emitUserEventMock.mock.calls.filter(
+        ([, type]) => type === 'urn:qauth:event:consent.administrative:v1-rc.0'
+      );
+    }
+
+    it('issues a code with no stored consent and audits the waiver once, in the code transaction', async () => {
+      const { fastify, state } = await run({
+        client: PORTAL,
+        scope: 'read:foo email',
+        priorConsent: null,
+        authTime: Date.now() - 10 * MINUTE,
+        sid: 'sid-fp-1',
+      });
+      expect(state.redirected).toContain('https://example.com/cb?code=');
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+      const [, tx] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+        .calls[0];
+      expect(administrativeEvents()).toEqual([
+        [
+          expect.anything(),
+          'urn:qauth:event:consent.administrative:v1-rc.0',
+          { basis: 'web_redirect', scopes: ['read:foo', 'email'], path: '/oauth/authorize' },
+          expect.objectContaining({ userId: 'user-1', clientId: 'portal', actor: 'user', tx }),
+        ],
+      ]);
+      // The waiver needs no session freshness and no step-up event.
+      expect(emitUserEventMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:step_up.required:v1-rc.0',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('records the resource indicators the waiver covered', async () => {
+      const { fastify, ctx, sessions } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        PORTAL
+      );
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+        undefined
+      );
+      const { cookie } = await sessions.signIn({
+        sid: 'sid-fp-res',
+        realmId: REALM.id,
+        userId: 'user-1',
+      });
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, client_id: 'portal', resource: ['https://rs.example/'] },
+          url: '/oauth/authorize?client_id=portal&resource=https%3A%2F%2Frs.example%2F',
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+      expect(state.redirected).toContain('code=');
+      expect(administrativeEvents()).toEqual([
+        [
+          expect.anything(),
+          'urn:qauth:event:consent.administrative:v1-rc.0',
+          {
+            basis: 'web_redirect',
+            scopes: ['email'],
+            resources: ['https://rs.example/'],
+            path: '/oauth/authorize',
+          },
+          expect.anything(),
+        ],
+      ]);
+    });
+
+    it('shows the consent screen for a dangerous scope, even under a covering stored consent', async () => {
+      for (const priorConsent of [null, ['read:foo', 'write:foo', 'email']]) {
+        const { fastify, state } = await run({
+          client: PORTAL,
+          scope: 'read:foo write:foo',
+          priorConsent,
+          // Fresh, so the dangerous scope's own login requirement is met.
+          authTime: Date.now() - 1000,
+          sid: `sid-fp-danger-${priorConsent === null ? 'none' : 'covering'}`,
+        });
+        expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+        expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+        expect(administrativeEvents()).toEqual([]);
+        emitUserEventMock.mockClear();
+      }
+    });
+
+    it('shows the consent screen under prompt=consent', async () => {
+      const { fastify, state } = await run({
+        client: PORTAL,
+        scope: 'email',
+        priorConsent: null,
+        authTime: Date.now() - 1000,
+        prompt: 'consent',
+        sid: 'sid-fp-consent',
+      });
+      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(administrativeEvents()).toEqual([]);
+    });
+
+    it('answers prompt=none with a code when the waiver covers the request', async () => {
+      const { fastify, state } = await run({
+        client: PORTAL,
+        scope: 'email',
+        priorConsent: null,
+        authTime: Date.now() - 10 * MINUTE,
+        prompt: 'none',
+        sid: 'sid-fp-none',
+      });
+      expect(state.redirected).toContain('code=');
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+      expect(administrativeEvents()).toHaveLength(1);
+    });
+
+    it('answers prompt=none with consent_required for a dangerous scope', async () => {
+      const { state } = await run({
+        client: PORTAL,
+        scope: 'write:foo',
+        priorConsent: ['write:foo'],
+        authTime: Date.now() - 1000,
+        prompt: 'none',
+        sid: 'sid-fp-none-danger',
+      });
+      expect(new URL(state.redirected as string).searchParams.get('error')).toBe(
+        'consent_required'
+      );
+    });
+
+    it('grants no waiver to a row the profile resolver refuses: the stored-consent rule applies', async () => {
+      const refused = { ...PORTAL, developerId: 'dev-1' } as unknown as typeof CLIENT;
+      const { fastify, state } = await run({
+        client: refused,
+        scope: 'email',
+        priorConsent: null,
+        authTime: Date.now() - 1000,
+        sid: 'sid-fp-refused',
+      });
+      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    });
+
+    it('sends a native_backend client with a live session and no prompt to the login page', async () => {
+      const { fastify, state } = await run({
+        client: NATIVE,
+        scope: 'email',
+        priorConsent: ['email'],
+        authTime: Date.now() - 10 * MINUTE,
+        sid: 'sid-native-1',
+      });
+      expect(state.redirected).toContain('/ui/login?return_to=');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:step_up.required:v1-rc.0',
+        { reason: 'native_profile_login_required', elevatedScopes: [], dangerousScopes: [] },
+        expect.objectContaining({ actor: 'user', clientId: 'notes-backend' })
+      );
+    });
+
+    it('treats every request of a native_backend client as prompt=login, whatever it says', async () => {
+      for (const prompt of ['consent', 'login']) {
+        const { state } = await run({
+          client: NATIVE,
+          scope: 'email',
+          priorConsent: null,
+          authTime: Date.now() - 10 * MINUTE,
+          prompt,
+          sid: `sid-native-${prompt}`,
+        });
+        expect(state.redirected).toContain('/ui/login?return_to=');
+      }
+    });
+
+    it('answers prompt=none from a native_backend client with login_required, however fresh the session', async () => {
+      for (const authTime of [Date.now() - 10 * MINUTE, Date.now() - 1000]) {
+        const { fastify, state } = await run({
+          client: NATIVE,
+          scope: 'email',
+          priorConsent: ['email'],
+          authTime,
+          prompt: 'none',
+          sid: `sid-native-none-${authTime}`,
+        });
+        const location = new URL(state.redirected as string);
+        expect(`${location.origin}${location.pathname}`).toBe('https://example.com/cb');
+        expect(location.searchParams.get('error')).toBe('login_required');
+        expect(location.searchParams.get('code')).toBeNull();
+        expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+        expect(emitUserEventMock).toHaveBeenCalledWith(
+          expect.anything(),
+          'urn:qauth:event:step_up.required:v1-rc.0',
+          expect.objectContaining({
+            reason: 'native_profile_login_required',
+            error: 'login_required',
+          }),
+          expect.anything()
+        );
+        emitUserEventMock.mockClear();
+      }
+    });
+
+    it('shows a native_backend client the consent screen under prompt=consent, after a fresh login', async () => {
+      // The reviewer's case: rewriting prompt=consent into prompt=login lost
+      // the consent request, and the waiver issued a code.
+      const { fastify, state } = await run({
+        client: NATIVE,
+        scope: 'email',
+        priorConsent: ['email'],
+        authTime: Date.now() - 1000,
+        prompt: 'consent',
+        sid: 'sid-native-consent-fresh',
+      });
+      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(administrativeEvents()).toEqual([]);
+    });
+
+    it("completes a native_backend client's leg right after the login, under the waiver", async () => {
+      const { fastify, state } = await run({
+        client: NATIVE,
+        scope: 'email',
+        priorConsent: null,
+        authTime: Date.now() - 1000,
+        sid: 'sid-native-fresh',
+      });
+      expect(state.redirected).toContain('code=');
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+      expect(administrativeEvents()).toEqual([
+        [
+          expect.anything(),
+          'urn:qauth:event:consent.administrative:v1-rc.0',
+          { basis: 'native_backend', scopes: ['email'], path: '/oauth/authorize' },
+          expect.anything(),
+        ],
+      ]);
+    });
+  });
 });
 
 describe('GET /oauth/authorize — the retired Bearer path (#524)', () => {

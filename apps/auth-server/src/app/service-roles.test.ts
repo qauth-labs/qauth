@@ -130,6 +130,8 @@ describe('what each role loads (the boot-time list)', () => {
       'adminApprovals',
       'realmPublicKeys',
       'realmSecrets',
+      // The plugin operations (#600).
+      'realmAuthMethodPlugins',
     ]);
     // The token guard verifies with the JWT plugin, which reads `fastify.dpop`.
     expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt']);
@@ -166,6 +168,7 @@ describe('what each role loads (the boot-time list)', () => {
       'email',
       'sessions',
       'egress',
+      'failureLadder',
     ]);
   });
 
@@ -184,6 +187,16 @@ describe('what each role loads (the boot-time list)', () => {
     }
     expect(pluginsFor(['api']).has('eventDelivery')).toBe(false);
     expect(pluginsFor(['api']).has('pkce')).toBe(true);
+  });
+
+  it('loads the failure ladder where a login route counts on it, and nowhere else (#615)', () => {
+    for (const role of SERVICE_ROLE_NAMES) {
+      expect(pluginsFor([role]).has('failureLadder'), role).toBe(role === 'web' || role === 'api');
+    }
+    // Its hard action writes the password's disabled mark, in the repository
+    // the login routes it serves read anyway.
+    expect(repositoriesFor(['web'])).toContain('userCredentials');
+    expect(repositoriesFor(['api'])).toContain('userCredentials');
   });
 
   it('loads the DPoP plugin wherever the JWT plugin loads', () => {

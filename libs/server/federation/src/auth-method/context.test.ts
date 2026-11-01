@@ -285,6 +285,38 @@ describe('createAuthMethodContext', () => {
       }
     );
 
+    it('never labels a destination by a URL among the secret members', async () => {
+      // A secret that parses as a URL is not a destination the config names.
+      const config = { ...SAMPLE_CONFIG, clientSecret: 'https://internal.corp.example/s3cret' };
+      for (const secrets of [
+        new Map([['clientSecret', config.clientSecret]]),
+        // The value alone is enough, wherever the schema put it.
+        new Map([['elsewhere', config.clientSecret]]),
+      ]) {
+        const { host, parts: given } = parts({ config, secrets });
+        const context = createAuthMethodContext(createSampleAuthMethod(), given);
+        await context.egress.request({
+          method: 'GET',
+          url: 'https://internal.corp.example/metadata',
+          purpose: 'upstream-discovery',
+          source: 'admin',
+        });
+        expect((host.egress.request.mock.calls[0][0] as { source: string }).source).toBe(
+          'remote_document'
+        );
+      }
+      // Without the secrets named, the same config would open the origin.
+      const { host, parts: given } = parts({ config });
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      await context.egress.request({
+        method: 'GET',
+        url: 'https://internal.corp.example/metadata',
+        purpose: 'upstream-discovery',
+        source: 'admin',
+      });
+      expect((host.egress.request.mock.calls[0][0] as { source: string }).source).toBe('admin');
+    });
+
     it('keeps remote_document as it is', async () => {
       expect(await sentSource('https://provider.example/jwks', 'remote_document')).toBe(
         'remote_document'
@@ -366,6 +398,72 @@ describe('createAuthMethodContext', () => {
         type: 'Error',
         message: 'token call failed',
         body: { access_token: '[Redacted]' },
+      });
+    });
+
+    it("redacts the method's own secret members by name and by value", () => {
+      const apiKey = 'plugin-api-key-0f3c9b2e';
+      const keyPassword = 'plugin-key-password-71a4';
+      const { host, parts: given } = parts({
+        secrets: new Map([
+          ['clientSecret', SAMPLE_CONFIG.clientSecret],
+          ['apiKey', apiKey],
+          ['mtls.keyPassword', keyPassword],
+        ]),
+      });
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      context.log.warn(
+        {
+          clientSecret: 'by-name-1',
+          apiKey: 'by-name-2',
+          'api-key': 'by-name-3',
+          keyPassword: 'by-name-4',
+          header: `Bearer ${apiKey}`,
+          echoed: [`the password was ${keyPassword}`],
+          err: new Error(`upstream refused ${apiKey}`),
+        },
+        `calling with ${SAMPLE_CONFIG.clientSecret}`
+      );
+      const [fields, message] = host.log.warn.mock.calls[0] as [
+        { authMethod: Record<string, unknown> },
+        string,
+      ];
+      const line = JSON.stringify(fields) + message;
+      for (const secret of [SAMPLE_CONFIG.clientSecret, apiKey, keyPassword]) {
+        expect(line).not.toContain(secret);
+      }
+      for (const named of ['by-name-1', 'by-name-2', 'by-name-3', 'by-name-4']) {
+        expect(line).not.toContain(named);
+      }
+      expect(fields.authMethod).toMatchObject({
+        clientSecret: '[Redacted]',
+        apiKey: '[Redacted]',
+        header: 'Bearer [Redacted]',
+        echoed: ['the password was [Redacted]'],
+        err: { message: 'upstream refused [Redacted]' },
+      });
+      expect(message).toBe('calling with [Redacted]');
+    });
+
+    it('matches a redacted field without regard to case, _ or -', () => {
+      const { host, parts: given } = parts();
+      const context = createAuthMethodContext(createSampleAuthMethod(), given);
+      context.log.info(
+        {
+          clientSecret: 'a',
+          codeVerifier: 'b',
+          'Access-Token': 'c',
+          grantType: 'authorization_code',
+        },
+        'm'
+      );
+      expect(host.log.info.mock.calls[0][0]).toEqual({
+        authMethod: {
+          clientSecret: '[Redacted]',
+          codeVerifier: '[Redacted]',
+          'Access-Token': '[Redacted]',
+          grantType: 'authorization_code',
+        },
       });
     });
 

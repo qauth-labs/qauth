@@ -74,13 +74,6 @@ export const REDIS_KEYS = {
    */
   REFRESH_FAMILY_ACCESS_TOKENS: (familyId: string) => `refresh-family-access-tokens:${familyId}`,
   /**
-   * Set of the hosted browser session ids (`sid`) of one user, so
-   * `/auth/logout` can end every session the user holds, not only one whose
-   * cookie happens to accompany the request. Expires with the newest session
-   * in it.
-   */
-  USER_BROWSER_SESSIONS: (userId: string) => `user-browser-sessions:${userId}`,
-  /**
    * A browser session's side record (#488): a hash of the per-session values
    * that are not the session and never reach Postgres. The consent screen's
    * CSRF token and the scopes and resources it bound, the consent API's CSRF

@@ -59,7 +59,7 @@ evidence for a condition.
 | [`oid4vp-1.0-base`](#oid4vp-10-base)                  | yes   | `OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base`, with `WALLET_FEDERATION_ENABLED=true` | final |
 | [`attestation-client-auth`](#attestation-client-auth) | no    | none named yet                                                                   | draft |
 | [`pass-through-leg`](#pass-through-leg)               | no    | `PASS_THROUGH_LEG_ENABLED=true`, with `AUTHORITY_TREE_ENABLED=true`              | draft |
-| [`plugin-api`](#plugin-api)                           | no    | none named yet                                                                   | draft |
+| [`plugin-api`](#plugin-api)                           | yes   | `PLUGIN_API_ENABLED=true`                                                        | draft |
 
 ### fipa-challenge-endpoint
 
@@ -161,10 +161,10 @@ evidence for a condition.
 
 - Decided in [ADR-018](/reference/records/adr/018-1-0-scope-and-stability/).
 - Runs in: the auth server.
-- Switch: none named yet.
+- Switch: `PLUGIN_API_ENABLED=true`.
 - Discovery members: none.
 - Spec: [The AuthMethod contract, ADR-018](https://docs.qauth.dev/reference/records/adr/018-1-0-scope-and-stability/), status `draft`.
-- Built: no. Stable: no.
+- Built: yes. Stable: no.
 - Documented in: [`/extend/auth-method-contract/`](/extend/auth-method-contract/).
 
 | Condition                                                     | Holds | Evidence and notes                                                                                                |

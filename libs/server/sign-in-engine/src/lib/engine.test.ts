@@ -16,13 +16,21 @@ import {
   passwordAccount,
   recordingAudit,
 } from '../testing/fakes';
+import { createMemoryLadder } from '../testing/memory-ladder';
 import {
   createSignInEngine,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInEngineDependencies,
 } from './engine';
-import type { LadderHook, SignInHooks } from './hooks';
-import { type Clock, type MfaPolicy, type SignInAccount, SYSTEM_CLOCK } from './ports';
+import { type LadderHook, NOTHING_DUE, type SignInHooks } from './hooks';
+import { PASSWORD_LADDER_POLICY } from './ladder';
+import {
+  type Clock,
+  type MfaPolicy,
+  type PasswordHardAction,
+  type SignInAccount,
+  SYSTEM_CLOCK,
+} from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
 import type { AnyStepHandler, StepHandler, StepVerdict } from './steps/handler';
 import { SIGN_IN_TRANSACTION_MAX_AGE_MS, type SignInTransaction } from './transaction';
@@ -1248,7 +1256,10 @@ describe('the hooks', () => {
         events.push(`reserve:${factor}:${identifierHmac.length}`);
         return {
           kind: 'reserved',
-          settle: async (outcome) => void events.push(`settle:${outcome}`),
+          settle: async (outcome) => {
+            events.push(`settle:${outcome}`);
+            return NOTHING_DUE;
+          },
         };
       },
     };
@@ -1712,3 +1723,189 @@ function fakeFactorStep(
   };
   return handler as unknown as AnyStepHandler;
 }
+
+describe('the failure ladder (#615)', () => {
+  /** A ladder whose every failure settles at the hard ceiling. */
+  const atCeiling: LadderHook = {
+    reserve: async () => ({ kind: 'reserved', settle: async () => ({ ceilingReached: true }) }),
+  };
+  const recordingHardAction = () => {
+    const calls: string[] = [];
+    const action: PasswordHardAction = {
+      ceilingReached: async (input) => {
+        calls.push(`ceiling:${input.realmId}:${input.userId}:${input.identifier}`);
+      },
+      clearIgnoredMark: async (input) => {
+        calls.push(`clear:${input.realmId}:${input.userId}:${input.identifier}`);
+      },
+    };
+    return { calls, action };
+  };
+
+  it('hands the round’s end-user IP to the reservation', async () => {
+    const reserve = vi.fn<LadderHook['reserve']>(async () => ({
+      kind: 'reserved',
+      settle: async () => NOTHING_DUE,
+    }));
+    const built = build(undefined, { hooks: { ladder: { reserve } } });
+    await signIn(built, WRONG, context({ loginHint: IDENTIFIER, endUserIp: '203.0.113.9' }));
+    expect(reserve).toHaveBeenCalledWith({
+      realmId: REALM,
+      identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+      factor: 'password',
+      endUserIp: '203.0.113.9',
+    });
+  });
+
+  it('fires the hard action at the ceiling for an enabled account whose password is usable', async () => {
+    const { calls, action } = recordingHardAction();
+    const built = build(undefined, { hooks: { ladder: atCeiling }, passwordHardAction: action });
+    const { second } = await signIn(built, WRONG);
+    expect(second).toMatchObject({ offer: { current: { error: 'invalid_credentials' } } });
+    expect(calls).toEqual([`ceiling:${REALM}:${USER}:${IDENTIFIER}`]);
+  });
+
+  it('never fires it for no account, a disabled user, a disabled, missing or unreadable password, and answers each alike', async () => {
+    const answers = new Set<string>();
+    for (const kind of ['unknown', 'disabled', 'locked', 'passkeyOnly', 'unreadable'] as const) {
+      const { calls, action } = recordingHardAction();
+      const built = build(
+        { [IDENTIFIER]: accountKinds()[kind] },
+        { hooks: { ladder: atCeiling }, passwordHardAction: action }
+      );
+      const { second } = await signIn(built, PASSWORD);
+      answers.add(wire(second));
+      expect(calls, kind).toEqual([]);
+    }
+    expect(answers.size).toBe(1);
+  });
+
+  it('fires nothing below the ceiling', async () => {
+    const { calls, action } = recordingHardAction();
+    const built = build(undefined, { passwordHardAction: action });
+    await signIn(built, WRONG);
+    expect(calls).toEqual([]);
+  });
+
+  it('clears a mark the lookup ignored once the password proves the account, and only then', async () => {
+    const { calls, action } = recordingHardAction();
+    const marked = passwordAccount(USER, PASSWORD, {
+      password: { disabled: false, hash: fakeHash(PASSWORD), ignoredMark: true },
+    });
+    const built = build({ [IDENTIFIER]: marked }, { passwordHardAction: action });
+    await signIn(built, WRONG);
+    expect(calls).toEqual([]);
+    const { second } = await signIn(built, PASSWORD);
+    expect(second).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+    expect(calls).toEqual([`clear:${REALM}:${USER}:${IDENTIFIER}`]);
+  });
+
+  it('keeps the answer when the hard action fails, and reports it', async () => {
+    const onUnavailable = vi.fn();
+    const failing: PasswordHardAction = {
+      ceilingReached: async () => Promise.reject(new Error('database down')),
+      clearIgnoredMark: async () => Promise.reject(new Error('database down')),
+    };
+    const built = build(undefined, {
+      hooks: { ladder: atCeiling },
+      passwordHardAction: failing,
+      onUnavailable,
+    });
+    const { second } = await signIn(built, WRONG);
+    expect(second).toMatchObject({ offer: { current: { error: 'invalid_credentials' } } });
+    expect(onUnavailable).toHaveBeenCalledWith(expect.objectContaining({ port: 'hardAction' }));
+  });
+
+  describe('on the memory ladder', () => {
+    const answerOnce = (built: Built, ip?: string) =>
+      built.engine.advance(
+        null,
+        passwordAnswer(WRONG, IDENTIFIER),
+        context(ip === undefined ? {} : { endUserIp: ip })
+      );
+
+    it('lets parallel attempts, each in its own transaction, reach the verifier no more often than one at a time', async () => {
+      const sequential = build();
+      const ladderA = createMemoryLadder(sequential.clock.now);
+      const one = build(undefined, { hooks: { ladder: ladderA } });
+      for (let i = 0; i < 200; i += 1) await answerOnce(one);
+      const parallel = build();
+      const ladderB = createMemoryLadder(parallel.clock.now);
+      const many = build(undefined, { hooks: { ladder: ladderB } });
+      await Promise.all(Array.from({ length: 200 }, () => answerOnce(many)));
+      expect(many.passwords.verifications).toBeLessThanOrEqual(one.passwords.verifications);
+      expect(many.passwords.verifications).toBe(PASSWORD_LADDER_POLICY.freeFailures);
+    });
+
+    it('refuses an attempt inside a wait, unverified and uncounted', async () => {
+      const clock = { now: () => T0 };
+      const ladder = createMemoryLadder(() => clock.now());
+      const built = build(undefined, { hooks: { ladder } });
+      for (let i = 0; i < 5; i += 1) await answerOnce(built);
+      const hmac = await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER });
+      expect(ladder.counter(REALM, hmac, 'password')).toMatchObject({ failures: 5 });
+      const result = await answerOnce(built);
+      expect(result).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 1 });
+      expect(built.passwords.verifications).toBe(5);
+      expect(ladder.counter(REALM, hmac, 'password')).toMatchObject({ failures: 5 });
+    });
+
+    it('clears the password counter on a correct password, and no other counter', async () => {
+      const ladder = createMemoryLadder(() => T0);
+      const built = build(undefined, { hooks: { ladder } });
+      const hmac = await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER });
+      // A second factor's counter under the same identifier (#653 reuses the primitive).
+      const totp = await ladder.reserve({ realmId: REALM, identifierHmac: hmac, factor: 'totp' });
+      if (totp.kind !== 'reserved') throw new Error('totp reservation refused');
+      await totp.settle('failure');
+      for (let i = 0; i < 3; i += 1) await answerOnce(built);
+      expect(ladder.counter(REALM, hmac, 'password')).toMatchObject({ failures: 3 });
+      const result = await built.engine.advance(
+        null,
+        passwordAnswer(PASSWORD, IDENTIFIER),
+        context()
+      );
+      expect(result.kind).toBe('complete');
+      expect(ladder.counter(REALM, hmac, 'password')).toBeUndefined();
+      expect(ladder.counter(REALM, hmac, 'totp')).toMatchObject({ failures: 1 });
+    });
+
+    it('lets a known IP skip the wait, still counting toward the ceiling', async () => {
+      let now = T0;
+      const ladder = createMemoryLadder(() => now);
+      const built = build(undefined, { hooks: { ladder } });
+      const hmac = await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER });
+      const known = '198.51.100.7';
+      const right = await built.engine.advance(
+        null,
+        passwordAnswer(PASSWORD, IDENTIFIER),
+        context({ endUserIp: known })
+      );
+      expect(right.kind).toBe('complete');
+      now += 1_000;
+      for (let i = 0; i < 5; i += 1) await answerOnce(built, known);
+      expect(await answerOnce(built, '192.0.2.1')).toMatchObject({ reason: 'throttled' });
+      expect(await answerOnce(built, known)).toMatchObject({
+        kind: 'step',
+        offer: { current: { error: 'invalid_credentials' } },
+      });
+      expect(ladder.counter(REALM, hmac, 'password')).toMatchObject({ failures: 6 });
+      // Past the known-IP window (the run is still kept) the address waits like any other.
+      now = T0 + PASSWORD_LADDER_POLICY.knownIpMs;
+      await answerOnce(built, known);
+      expect(await answerOnce(built, known)).toMatchObject({ reason: 'throttled' });
+    });
+
+    it('fires the hard action once the run reaches 100 counted failures, and not before', async () => {
+      let now = T0;
+      const ladder = createMemoryLadder(() => now);
+      const { calls, action } = recordingHardAction();
+      const built = build(undefined, { hooks: { ladder }, passwordHardAction: action });
+      for (let i = 1; i <= 100; i += 1) {
+        await answerOnce(built);
+        expect(calls.length, `failure ${i}`).toBe(i === 100 ? 1 : 0);
+        now += PASSWORD_LADDER_POLICY.maxWaitMs;
+      }
+    });
+  });
+});

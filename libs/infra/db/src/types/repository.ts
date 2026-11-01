@@ -49,7 +49,9 @@ export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
  * manifest writes a client's ID-JAG targets. `webauthnAllowedOrigins` is left
  * out too (#467): the operator sets a client's passkey origins through the
  * same manifest. So is `dpopBoundAccessTokens` (#480): a client that could
- * clear it could obtain the bearer tokens its operator meant to refuse.
+ * clear it could obtain the bearer tokens its operator meant to refuse. And
+ * `clientCredentialsScopes` (#891): an owner who could clear it could mint
+ * tokens without a user for the scopes its users grant it.
  */
 export type UpdateOAuthClient = Partial<
   Omit<
@@ -62,6 +64,7 @@ export type UpdateOAuthClient = Partial<
     | 'idJagTargets'
     | 'webauthnAllowedOrigins'
     | 'dpopBoundAccessTokens'
+    | 'clientCredentialsScopes'
     // #593: the verified domain is admin state (`clients.update`, a security
     // operation), so no owner or self-registration path may write it.
     | 'verifiedDomain'
@@ -176,6 +179,35 @@ export interface UserCredentialsRepository {
     tx?: DbClient
   ): Promise<UserCredential>;
   setEmailVerified(id: string, tx?: DbClient): Promise<UserCredential>;
+  /**
+   * Set the hard action's disabled mark on the credential `(realm,
+   * provider type, external_sub)` names (ADR-017 Decision 7, #615), only
+   * when it has none.
+   *
+   * @returns the credential when this call set the mark; `undefined` when no
+   *   such credential exists or it was marked already
+   */
+  setDisabledAt(
+    realmId: string,
+    providerType: string,
+    externalSub: string,
+    disabledAt: number,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
+  /**
+   * Clear the disabled mark of the credential `(realm, provider type,
+   * external_sub)` names (#615): a successful sign-in while the hard action
+   * is unarmed, or the owner's reset (#642).
+   *
+   * @returns the credential when this call cleared a mark; `undefined` when
+   *   no such credential exists or it held none
+   */
+  clearDisabledAt(
+    realmId: string,
+    providerType: string,
+    externalSub: string,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
 }
 
 /**

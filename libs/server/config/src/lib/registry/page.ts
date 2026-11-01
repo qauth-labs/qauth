@@ -9,7 +9,7 @@ export const CONFIGURATION_PAGE_PATH = 'apps/docs-site/src/content/docs/operate/
  * The page's `lastVerified` date. The registry test regenerates and checks the
  * page on every run, so this changes only when the page's own prose does.
  */
-const LAST_VERIFIED = '2026-10-24';
+const LAST_VERIFIED = '2026-11-01';
 
 /** The areas, in the order each tier's section lists them. */
 const OWNER_HEADINGS: Readonly<Record<KeyOwner, string>> = {
@@ -28,6 +28,7 @@ const OWNER_HEADINGS: Readonly<Record<KeyOwner, string>> = {
   'id-jag': 'Enterprise-managed authorization (ID-JAG)',
   passkeys: 'Passkeys',
   'wallet-federation': 'Wallet federation',
+  plugins: 'Plugins',
   'rate-limits': 'Rate limits',
   'developer-portal': 'Developer portal',
   testing: 'Testing',

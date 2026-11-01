@@ -46,6 +46,8 @@ export const VERIFY_FORM_ERRORS = {
   lockedOut: 'Too many failed attempts. Please try again later.',
   /** The CSRF pair was missing or did not match. */
   sessionExpired: 'Your session expired. Please try again.',
+  /** The failure ladder's store failed (#615): nothing was checked. */
+  unavailable: 'Verification is unavailable right now. Please try again shortly.',
 } as const;
 
 function content(state: VerifyEmailPageState): { title: string; body: SafeHtml } {

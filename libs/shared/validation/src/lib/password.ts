@@ -65,8 +65,23 @@ export interface PasswordValidator {
 }
 
 /**
- * Default password validation configuration
+ * Password validators by minimum score (#528): one per zxcvbn score from 0 to
+ * 4, for a server whose realms each set their own lowest score
+ * (`password.minScore`).
  */
+export interface PasswordValidators {
+  /**
+   * The validator that accepts a password scoring at least `minScore`. Built
+   * on first use and cached by score, so every realm with one score shares one
+   * validator, and a realm's change of score needs no restart.
+   *
+   * @param minScore - The lowest zxcvbn score a password may have, 0 to 4.
+   * @throws {z.ZodError} If `minScore` is not a whole number from 0 to 4;
+   *   nothing is cached then.
+   */
+  forMinScore(minScore: number): PasswordValidator;
+}
+
 /**
  * Longest password accepted anywhere, in UTF-16 code units (JavaScript string
  * length). NIST SP 800-63B-4 §3.1.1.2 asks verifiers to accept at least 64
@@ -148,6 +163,9 @@ matching.enumerate_l33t_subs = function (table) {
   return enumerateL33tSubs.call(this, table).slice(0, ZXCVBN_MAX_L33T_SUBSTITUTIONS);
 };
 
+/**
+ * Default password validation configuration
+ */
 export const DEFAULT_PASSWORD_VALIDATION_CONFIG: PasswordValidationConfig = {
   minScore: 2, // Fair
 };
@@ -224,4 +242,31 @@ export function createPasswordValidator(
       };
     },
   };
+}
+
+/**
+ * Create the password validators of {@link PasswordValidators}: a validator
+ * per minimum score, built with {@link createPasswordValidator} on first use
+ * and kept. At most five are ever built, one per valid score; a score the
+ * configuration schema refuses throws and is not kept.
+ *
+ * @example
+ * ```typescript
+ * const validators = createPasswordValidators();
+ *
+ * // The lowest score of the realm the password is chosen in.
+ * const result = validators.forMinScore(realmMinScore).validatePasswordStrength(password);
+ * ```
+ */
+export function createPasswordValidators(): PasswordValidators {
+  const byScore = new Map<number, PasswordValidator>();
+  return Object.freeze({
+    forMinScore(minScore: number): PasswordValidator {
+      const cached = byScore.get(minScore);
+      if (cached !== undefined) return cached;
+      const validator = createPasswordValidator({ minScore });
+      byScore.set(minScore, validator);
+      return validator;
+    },
+  });
 }
