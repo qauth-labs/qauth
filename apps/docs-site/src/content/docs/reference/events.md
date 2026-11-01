@@ -223,6 +223,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                                  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.administrative:v1-rc.0`](#consentadministrative-v1-rc0)                      | user     | info     | v0.2.0 |
 | [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                                      | user     | info     | v0.2.0 |
 | [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                          | user     | info     | v0.2.0 |
@@ -449,6 +450,22 @@ A user granted a client the scopes it asked for.
 | `scopes`          | array of string | yes      | The scopes granted.                                                 |
 | `remembered`      | boolean         | yes      | Whether the user chose to remember the decision for later requests. |
 | `dangerousScopes` | array of string | no       | The granted scopes classed as dangerous.                            |
+
+### consent.administrative v1-rc.0
+
+The consent screen was skipped for an operator-flagged first-party client (ADR-017 Decision 9): the client's first-party profile stood for the user's consent to the requested scopes in its allowlist, none of them dangerous. QAuth stores no consent for the user; an authorization code was issued.
+
+- Identifier: `urn:qauth:event:consent.administrative:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [consent.administrative.v1-rc.0.json](/schemas/events/consent.administrative.v1-rc.0.json)
+
+| Member      | Type                                                      | Required | Meaning                                                                                                                                                                         |
+| ----------- | --------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `basis`     | one of `web_redirect`, `native_backend`, or a later value | yes      | The first-party profile an operator set on the client (ADR-017 Decision 2), which the waiver rests on: `web_redirect` or `native_backend`. The set may grow in a minor release. |
+| `scopes`    | array of string                                           | yes      | The scopes the waiver covered: the requested scopes in the client’s allowlist. A dangerous scope is never among them; it shows the consent screen.                              |
+| `resources` | array of string                                           | no       | The RFC 8707 resource indicators of the request, which the code is bound to. Absent when the request named none.                                                                |
+| `path`      | one of `/oauth/authorize`, or a later value               | yes      | The endpoint that skipped the screen: `/oauth/authorize`. The set may grow in a minor release.                                                                                  |
 
 ### consent.denied v1-rc.0
 

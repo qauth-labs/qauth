@@ -16,7 +16,7 @@ import ts from 'typescript';
 const NON_SHIPPED_FILES = [
   '{projectRoot}/vite.config.ts',
   '{projectRoot}/vite.config.mts',
-  '{projectRoot}/vitest.config.ts',
+  '{projectRoot}/vitest.config.mts',
   // Tooling beside src/ that Nx 23's typecheck inputs (the tsconfig includes)
   // left out and Nx 24's `default` input takes in: wire-suite's runner config,
   // infra-db's drizzle-kit config, crypto-native's packaging script and

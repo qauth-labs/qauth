@@ -14,7 +14,6 @@ import type {
 } from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
 import { ServiceRoleBootError } from '@qauth-labs/server-config';
 import {
-  applyQauthMigrations,
   type StartedPostgres,
   type StartedRedis,
   startPostgresContainer,
@@ -38,7 +37,7 @@ import {
 import type { InternalRouteModule } from '../app/internal/route-manifest';
 
 /**
- * TEST SUPPORT — booting the REAL auth-server against throwaway containers
+ * TEST SUPPORT — booting the REAL auth-server against throwaway Postgres and Redis
  * (issue #240).
  *
  * The E2E suites in this app need the whole server, not a slice of it: the
@@ -57,11 +56,18 @@ import type { InternalRouteModule } from '../app/internal/route-manifest';
  * the fail-closed test (#296 Q1) expressible at all: it is a different
  * deployment, not a different request.
  *
- * ## Containers are shared, databases are not
+ * ## Servers are shared, databases are not
  *
- * One Postgres and one Redis per FILE (`vitest.integration.config.ts` runs files
- * serially). Between tests the domain tables are truncated and Redis is flushed,
- * so a leaked row or a stale flow record cannot make the next test pass.
+ * Files run side by side (`vitest.integration.config.mts`) on servers the
+ * integration global setup starts once
+ * (`libs/shared/testing/src/integration-global-setup.ts`): a Postgres server
+ * per worker slot and one Redis server. Each file gets a database of its own
+ * on its slot's Postgres server, copied from the migrated template, and a
+ * pair of logical databases on the Redis server, so no file sees another's
+ * rows or keys. Between tests the domain tables are truncated and the file's
+ * Redis database is flushed (`FLUSHDB`, never `FLUSHALL`, which would empty
+ * every file's), so a leaked row or a stale flow record cannot make the next
+ * test pass.
  */
 
 /** A running QAuth server plus everything needed to reset and stop it. */
@@ -87,28 +93,29 @@ export interface BootedAuthServer {
    */
   readonly internal?: FastifyInstance;
   readonly internalUrl?: string;
-  /** Close the server (and its pools), the admin and internal listeners with it. Containers survive. */
+  /** Close the server (and its pools), the admin and internal listeners with it. Databases survive. */
   close(): Promise<void>;
 }
 
-/** Containers shared by every deployment a suite boots. */
+/** The databases shared by every deployment a suite boots. */
 export interface E2eInfrastructure {
   readonly postgres: StartedPostgres;
   readonly redis: StartedRedis;
-  /** Stop and remove both containers. */
+  /** Drop the suite's Postgres database and empty its Redis databases. */
   teardown(): Promise<void>;
 }
 
 /**
- * Start Postgres + Redis and apply QAuth's generated migrations.
+ * A Postgres database with QAuth's generated migrations applied, and a Redis
+ * keyspace, both the suite's own on the servers the run shares.
  *
  * Call from `beforeAll` behind `requireDockerOrSkip()`.
  */
 export async function startE2eInfrastructure(): Promise<E2eInfrastructure> {
-  const postgres = await startPostgresContainer();
-  const redis = await startRedisContainer();
-
-  await applyQauthMigrations(postgres.connectionString);
+  const [postgres, redis] = await Promise.all([
+    startPostgresContainer({ schema: 'migrated' }),
+    startRedisContainer(),
+  ]);
 
   return {
     postgres,
@@ -158,7 +165,7 @@ const tokenKeyRotations = new WeakMap<
  *
  * The server's signer reads key lists at most once a minute, so it keeps
  * signing and verifying with what it read before. Boot another server on the
- * same containers to see the rotation, as a node that starts after it does.
+ * same databases to see the rotation, as a node that starts after it does.
  */
 export async function rotateRealmKeys(
   app: FastifyInstance,
@@ -186,7 +193,7 @@ const tokenKeyPrepublications = new WeakMap<
  * key of its own.
  *
  * As for a rotation, the server's signer reads key lists at most once a
- * minute: boot another server on the same containers to see the key.
+ * minute: boot another server on the same databases to see the key.
  */
 export async function prepublishRealmKeys(
   app: FastifyInstance,
@@ -201,9 +208,9 @@ export async function prepublishRealmKeys(
 }
 
 /**
- * Truncate every domain table and flush Redis, through the SERVER's own
- * connections, then put the default realm and its keys back as the boot steps
- * made them.
+ * Truncate every domain table and flush the suite's Redis database, through
+ * the SERVER's own connections, then put the default realm and its keys back
+ * as the boot steps made them.
  *
  * Deliberately not a second pool: the app already holds the only clients this
  * needs, and opening another would mean a test could reset a database the
@@ -211,7 +218,9 @@ export async function prepublishRealmKeys(
  */
 export async function resetE2eState(app: FastifyInstance): Promise<void> {
   await app.dbPool.query(truncateDomainTablesStatement());
-  await app.redis.flushall();
+  // FLUSHDB, not FLUSHALL: the Redis server is shared with the files that run
+  // at the same time, each in logical databases of its own.
+  await app.redis.flushdb();
   // The truncation took the default realm and its hosts with it, and every
   // request is routed by host (#486): put back what the boot step made, and
   // forget the hosts the resolver cached.

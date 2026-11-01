@@ -56,7 +56,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["build"],
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts apps/migration-runner",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the built migration runner against testcontainers Postgres (#474): a fresh database, a second run, two runners at once and --check. Requires a running Docker daemon."

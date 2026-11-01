@@ -1337,9 +1337,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `authorization_code` grant and an `https`, private-use or loopback browser-leg
   redirect URI. Dynamic registration, `/api/clients` and CIMD never write them.
   A change is recorded as the new `client.first_party_changed` event, and
-  removing a profile revokes every refresh token of the client not yet revoked. Nothing
-  reads the profile yet: the consent waiver and the authorization challenge
-  endpoint come later.
+  removing a profile revokes every refresh token of the client not yet revoked.
+  The consent waiver reads the profile ([#633]); the authorization challenge
+  endpoint comes later.
 - **The system client is provisioned from operator configuration** ([#631],
   ADR-017 phase F0). The migration runner reads `SYSTEM_CLIENT_REDIRECT_URI`,
   `SYSTEM_CLIENT_JWKS_URI` or `SYSTEM_CLIENT_JWKS`, `SYSTEM_CLIENT_ID` and
@@ -1349,6 +1349,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   server has not created yet is reported and skipped; a row that cannot be
   first party exits `4`. The seed manifest's new `system_client` section does
   the same.
+- **Administrative consent for first-party clients, and a fresh login for
+  native profiles** ([#633], ADR-017 Decision 9). `/oauth/authorize` issues a
+  code without the consent screen to a client whose operator-set first-party
+  profile resolves, when none of the requested scopes is dangerous and the
+  request does not carry `prompt=consent`. No consent row is written: unless
+  the user once remembered a consent for the client on the consent screen, it
+  is not listed under `/consents` and `/oauth/token` returns no
+  `refresh_token` for such a code. Every such code is recorded as the new
+  `consent.administrative` event (the profile, the scopes, the resource
+  indicators, the endpoint) in the transaction that mints it. A dangerous scope
+  or `prompt=consent` shows the screen even under a stored consent. Every
+  request of a `native_backend` client counts as `prompt=login`, on
+  `/oauth/authorize` and on `POST /ui/consent`, whatever it says: a session
+  signed in more than two minutes earlier meets the login page (the window
+  `prompt=login` gives every client), and `prompt=none` answers
+  `login_required`; the request's own `prompt=consent` still shows the screen.
+  A client without a profile is unaffected; no client has one until an
+  operator sets it. The system client is the first an upgrade reaches: once
+  the operator provisions it from `SYSTEM_CLIENT_*` or the seed manifest's
+  `system_client` section ([#631]), which give it the `web_redirect` profile,
+  its `/oauth/authorize` requests skip the screen too.
 
 - **The AuthMethod contract, experimental** ([#599], ADR-003 as amended,
   ADR-018 §4, ADR-019 Decision 12). The plugin API for sign-in methods, such as
@@ -2449,6 +2470,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
+[#633]: https://github.com/qauth-labs/qauth/issues/633
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
@@ -2479,6 +2501,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   expired one is refused, and the next release removes the grace.
 
 ### Fixed
+
+- **A refresh token needs a stored consent for its resources too** ([#633]).
+  `/oauth/token` minted a refresh token for an authorization code whenever the
+  active consent covered the code's scopes, whatever RFC 8707 resources the
+  code was bound to. So a user who remembered `read:x` at one resource server,
+  and later approved `read:x` at another without **Remember this decision** or
+  under a first-party client's administrative consent, gave the client a
+  refresh family at the second: standing access that no stored consent
+  records. A refresh token is now minted only when the stored consent covers
+  the code's scopes at every resource the family is bound to (the ones a
+  narrowing `resource` on the token request names, if it has one), the rule
+  the consent skip already applies; otherwise the client gets the access token,
+  and the ID token when `openid` was granted, without one. A code bound to no
+  resource is unaffected.
 
 - **A client that signs users in can be kept from minting tokens with no user
   for its users' scopes** ([#891]). `client_credentials` granted any scope in

@@ -26,7 +26,7 @@ ARG PNPM_VERSION=12.14.0
 RUN npm install --global pnpm@${PNPM_VERSION}
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY nx.json tsconfig.base.json ./
-COPY vitest.config.ts ./
+COPY vitest.config.mts ./
 COPY libs ./libs
 COPY apps ./apps
 

@@ -1669,6 +1669,8 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       userId: user.id,
       oauthClientId: client.id,
       scopes: ['read:foo'],
+      // The column's default: a consent stored for no RFC 8707 resource.
+      resourceScopes: {},
       revokedAt: null,
     });
     (fastify.repositories.refreshTokens.create as unknown as Mock).mockResolvedValue(undefined);
@@ -1721,6 +1723,7 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       id: 'consent-uuid-1',
       scopes: ['openid', 'read:foo'],
+      resourceScopes: { [resource]: ['openid', 'read:foo'] },
       revokedAt: null,
     });
     await tokenRoute(fastify);
@@ -1969,6 +1972,124 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(fastify.repositories.authorizationCodes.markUsed).toHaveBeenCalledWith(
       authCode.id,
       expect.anything()
+    );
+  });
+
+  // #633: a consent stored for one resource server says nothing about
+  // another (RFC 8707), so the refresh family a code starts is bound to
+  // resources the stored consent covers, as the consent skip requires. A code
+  // approved for a second resource without "Remember this decision", or under
+  // an administrative consent, gets the access token alone.
+  describe('the stored consent covers the resources the refresh family is bound to (#633)', () => {
+    const API_A = 'https://api-a.example.com/v1';
+    const API_B = 'https://api-b.example.com/v1';
+
+    function withCodeAndConsent(
+      fastify: FastifyInstance,
+      authCode: object,
+      codeResource: string[] | undefined,
+      resourceScopes: Record<string, string[]>
+    ) {
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({ ...authCode, resource: codeResource });
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        id: 'consent-uuid-1',
+        scopes: ['read:foo'],
+        resourceScopes,
+        revokedAt: null,
+      });
+    }
+
+    it.each([
+      ['the stored consent names another resource', { [API_A]: ['read:foo'] }],
+      ['the stored consent names the resource for other scopes', { [API_B]: ['write:foo'] }],
+      ['the stored consent names no resource', {}],
+    ])(
+      'issues the access token but NO refresh token when the scopes are covered and %s',
+      async (_label, resourceScopes) => {
+        const { fastify, ctx, authCode } = setupAuthCodeStub();
+        withCodeAndConsent(fastify, authCode, [API_B], resourceScopes);
+        await tokenRoute(fastify);
+        if (!ctx.handler) throw new Error('Handler missing');
+
+        const result = await ctx.handler(baseRequest(), createReply());
+
+        expect(result).toMatchObject({ access_token: 'signed.jwt.token', scope: 'read:foo' });
+        expect(result).not.toHaveProperty('refresh_token');
+        expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+        expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+          IN_REQUEST_REALM,
+          expect.objectContaining({ aud: API_B })
+        );
+      }
+    );
+
+    it('issues a refresh token bound to the resource when the stored consent covers the scopes there', async () => {
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      withCodeAndConsent(fastify, authCode, [API_B], {
+        [API_A]: ['read:foo'],
+        [API_B]: ['read:foo', 'write:foo'],
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(baseRequest(), createReply());
+
+      expect(result).toMatchObject({ refresh_token: 'refresh-token-plain' });
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ resource: [API_B], scopes: ['read:foo'] }),
+        expect.anything()
+      );
+    });
+
+    it('checks the resources the redemption binds the family to, after a narrowing resource', async () => {
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      withCodeAndConsent(fastify, authCode, [API_A, API_B], { [API_A]: ['read:foo'] });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const narrowed = await ctx.handler(baseRequest({ resource: [API_A] }), createReply());
+
+      expect(narrowed).toMatchObject({ refresh_token: 'refresh-token-plain' });
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ resource: [API_A] }),
+        expect.anything()
+      );
+    });
+
+    it('refuses the family when the redemption keeps a resource the stored consent does not cover', async () => {
+      const { fastify, ctx, authCode } = setupAuthCodeStub();
+      withCodeAndConsent(fastify, authCode, [API_A, API_B], { [API_A]: ['read:foo'] });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const whole = await ctx.handler(baseRequest(), createReply());
+
+      expect(whole).not.toHaveProperty('refresh_token');
+      expect(fastify.repositories.refreshTokens.create).not.toHaveBeenCalled();
+    });
+
+    // Without a resource the scopes alone decide, as before #633.
+    it.each([
+      ['a stored consent for no resource', {}],
+      ['a stored consent for some resource', { [API_A]: ['read:foo'] }],
+    ])(
+      'issues a refresh token for a code that binds no resource, under %s',
+      async (_label, resourceScopes) => {
+        const { fastify, ctx, authCode } = setupAuthCodeStub();
+        withCodeAndConsent(fastify, authCode, undefined, resourceScopes);
+        await tokenRoute(fastify);
+        if (!ctx.handler) throw new Error('Handler missing');
+
+        const result = await ctx.handler(baseRequest(), createReply());
+
+        expect(result).toMatchObject({ refresh_token: 'refresh-token-plain' });
+        expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+          expect.objectContaining({ resource: [] }),
+          expect.anything()
+        );
+      }
     );
   });
 
@@ -3449,6 +3570,13 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     ).mockResolvedValue({
       ...authCode,
       resource: ['https://api.example.com/v1'],
+    });
+    // The user remembered the consent for that resource, so a family starts.
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      scopes: ['read:foo'],
+      resourceScopes: { 'https://api.example.com/v1': ['read:foo'] },
+      revokedAt: null,
     });
     await tokenRoute(fastify);
     const handler = ctx.handler;
