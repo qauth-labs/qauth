@@ -6,4 +6,6 @@ export * from './contract';
 export * from './engine';
 export * from './errors';
 export * from './parameters';
+export * from './plugin-loader';
+export * from './secret-members';
 export * from './validate';
