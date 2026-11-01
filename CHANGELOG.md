@@ -2563,6 +2563,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A client key set that carries an RSA private key is refused** ([#935]).
+  The key sets a client publishes, in its Client ID Metadata Document's `jwks`
+  or at its `jwks_uri`, were refused only for a `d` or `k` member. An RSA key
+  carrying its primes or CRT values (`p`, `q`, `dp`, `dq`, `qi`, `oth`)
+  without `d`, or an ML-DSA key's `priv`, had those members dropped and was
+  trusted, although the client had published its private key. Such a set is
+  now refused, and so is a key of a known type without the public members it
+  needs (EC `crv`, `x` and `y`; OKP `crv` and `x`; RSA `n` and `e`). This is
+  the seed manifest's rule, now `publicJwkProblem` in
+  `@qauth-labs/shared-validation`, which both use. The token endpoint still
+  answers a bare `invalid_client`; the operator's log names the key, its
+  private members and that the client must rotate it. Keys fetched before the
+  upgrade are trusted until their cache entry expires.
+
 - **Signing out everywhere ends every session, whatever Redis has lost**
   ([#912], found in the review of [#550]). `/auth/logout` found the user's
   browser sessions through a per-user index in Redis, so a session the index
@@ -2731,6 +2745,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
 [#912]: https://github.com/qauth-labs/qauth/issues/912
+[#935]: https://github.com/qauth-labs/qauth/issues/935
 
 ## [0.1.3] - 2026-10-21
 

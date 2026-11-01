@@ -518,6 +518,13 @@ Rules that are load-bearing rather than incidental:
   Key material carried _by_ the assertion — `jwk`, `jku`, `x5u` headers — is
   rejected outright; honouring it would let anyone sign their own credential and
   supply the key to check it against.
+- **Public keys only.** A key set holding any private member (`d`, the RSA
+  primes and CRT values `p`, `q`, `dp`, `dq`, `qi` and `oth`, an ML-DSA `priv`
+  or a symmetric `k`) is refused whole, and so is a key without the public
+  members its type needs (EC `crv`, `x` and `y`; OKP `crv` and `x`; RSA `n` and
+  `e`). The assertion is refused with `invalid_client`. A key whose private
+  members were published is exposed: replace it with a new key, not a trimmed
+  copy of the old one.
 - **Asymmetric algorithms only.** `alg` is intersected with the same list
   discovery advertises, which contains no `none` and no `HS*`. An HS256
   assertion verified against a public JWK is the classic algorithm-confusion
