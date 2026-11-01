@@ -499,7 +499,7 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-error.ts:102
       - target: bindingScopes
         say: 'every QAuth API audience among the resources is one the client lists'
-        source: apps/auth-server/src/app/helpers/client-auth.ts:673
+        source: apps/auth-server/src/app/helpers/client-auth.ts:682
 
   bindingScopes:
     title: Bind the shown scopes and resources, and the CSRF value, to the session
