@@ -383,6 +383,12 @@ plus the standard OIDC `prompt` / `max_age` request parameters:
   (`max_age=0` demands a brand-new authentication; second-granularity flooring
   makes the post-login round-trip terminate instead of looping).
 
+For an operator-flagged first-party client the prior consent is its
+administrative consent, the requested scopes minus the dangerous ones, so a
+dangerous scope always asks for re-consent; a `native_backend` client's request
+counts as `prompt=login` whatever it says
+([Hosted UI](/integrate/hosted-ui/#a-first-party-client)).
+
 ### The 403 → re-authorize → retry loop
 
 ```
