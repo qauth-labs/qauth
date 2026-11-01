@@ -52,9 +52,15 @@ jobs:
       matrix:
         target: [lint, typecheck, build]
     steps:
+      # Full history for nx-set-shas, without file contents. The build leg
+      # also keeps every tree: Starlight runs `git log --name-status` over the
+      # docs directory's whole history on every `astro build` (its last-updated
+      # dates, computed even with `lastUpdated` off), and in a treeless clone
+      # git fetches each commit's tree from the remote one at a time. That was
+      # about 850 fetches and 9 minutes of a 9.5-minute docs-site build.
       - uses: actions/checkout@v7
         with:
-          filter: tree:0
+          filter: ${{ matrix.target == 'build' && 'blob:none' || 'tree:0' }}
           fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
@@ -72,6 +78,27 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: nrwl/nx-set-shas@v5
 
+      # The docs site's own Astro caches: the content layer's data store and
+      # processed assets (cacheDir, node_modules/.astro) and the generated
+      # content types (.astro). Both `astro build` (build leg) and `astro
+      # check` (typecheck leg) sync the content collections first, and a cold
+      # sync is most of a cold build. Astro checks every entry's digest, so a
+      # cache from an older commit is safe: only changed entries are processed
+      # again. Restored after the install, which would otherwise own
+      # node_modules. GitHub scopes a pull request's saved cache to that pull
+      # request, so one cannot reach main or another branch.
+      - name: Restore the docs site's Astro cache
+        id: astro-cache
+        if: matrix.target != 'lint'
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            apps/docs-site/node_modules/.astro
+            apps/docs-site/.astro
+          key: docs-astro-${{ matrix.target }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            docs-astro-${{ matrix.target }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
       - name: Remote cache
         uses: ./.github/actions/nx-remote-cache
         with:
@@ -80,9 +107,22 @@ jobs:
 
       # The targets reach the script through the environment, not by
       # interpolation into it. Nx takes a comma-separated list.
-      - run: pnpm exec nx affected -t "$TARGETS"
+      # `--output-style=static` prints every task's output, not only a failed
+      # one's, so a slow task shows where its time went.
+      - run: pnpm exec nx affected -t "$TARGETS" --output-style=static
         env:
           TARGETS: ${{ matrix.target == 'lint' && 'lint,dependency-checks' || matrix.target }}
+
+      # Only when the docs site ran in this leg: an unaffected docs site
+      # leaves no cache to save.
+      - name: Save the docs site's Astro cache
+        if: matrix.target != 'lint' && steps.astro-cache.outputs.cache-hit != 'true' && hashFiles('apps/docs-site/node_modules/.astro/**') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            apps/docs-site/node_modules/.astro
+            apps/docs-site/.astro
+          key: ${{ steps.astro-cache.outputs.cache-primary-key }}
 
       # Reads, hits and writes of this leg, in the job summary: the measure of
       # what the cache saves.

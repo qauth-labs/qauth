@@ -11,7 +11,7 @@
  * session rows, and come out with the new columns, constraints and indexes.
  *
  * Requires Docker; self-skips without it. Each case rebuilds the schema from
- * scratch (DROP SCHEMA CASCADE) inside one shared container, and upgrades to
+ * scratch (DROP SCHEMA CASCADE) inside the suite's one database, and upgrades to
  * 0030 itself, not to the newest migration, so a later migration cannot change
  * what this suite pins.
  */
