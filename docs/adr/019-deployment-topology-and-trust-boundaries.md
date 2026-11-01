@@ -784,7 +784,8 @@ listener is not an outbound call to a configured third party and stays outside t
 internal client reaches only a role of the same deployment, such as the signer service at
 `SIGNER_URL`, over mutual TLS with the server's identity pinned (amendment of 2026-11-01). A realm's
 SMTP connection is outside it as well, because the client speaks HTTP only; it applies the same
-destination rules itself, with STARTTLS required (second amendment of 2026-11-01). The client:
+destination rules itself, with STARTTLS required unless the operator sets `SMTP_ALLOW_PLAINTEXT`
+(second amendment of 2026-11-01). The client:
 
 - serves every HTTP method, not only `GET`;
 - uses `https` only, with no credentials in the URL;

@@ -133,7 +133,11 @@ signer cannot sign anything, and warns at boot:
   signed cookie (the sign-in, consent and wallet pages), answers `503` with
   `temporarily_unavailable`;
 - an event delivery waits: the `delivery` role holds it without spending an
-  attempt and offers it again every 30 seconds, until a signer answers.
+  attempt and offers it again every 30 seconds, until a signer answers;
+- a mail of a realm whose transport needs a stored secret (`mail.smtp.password`
+  or `mail.resend.apiKey`) is not sent, since the secret is decrypted through
+  the signer: the request answers as it would otherwise, and the log names the
+  realm. Send such mail from a process that holds the signer.
 
 Token verification (with each realm's published keys), the realm JWKS,
 `/ssf/jwks.json`, discovery and the endpoints that sign nothing keep working.
