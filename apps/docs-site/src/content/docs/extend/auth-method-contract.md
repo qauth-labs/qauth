@@ -133,7 +133,11 @@ the contract hands it only what it needs. `createAuthMethodContext`
   user chose), and adds the realm's name itself: a method cannot pick another realm's allowlist
   entries or lift the client's caps. `operator` and `admin` are the labels the realm's allowlist
   applies to, for non-public addresses, so the adapter keeps them only for a URL whose origin is
-  the origin of a URL in the method's parsed config; any other call goes as `remote_document`;
+  the origin of a URL in the method's parsed config; any other call goes as `remote_document`.
+  `redirect: 'error'` makes a redirect answer reject the call before anything goes to its target
+  (the host client's `maxRedirects: 0`, the one cap a method may set, since it can only tighten);
+  a call that carries a credential in its body uses it, or a `307` would send that body on.
+  `follow`, the default, follows each redirect after the same checks as the first URL;
 - `signer`: `signClientAssertion()` and `getUpstreamJwks()` over the signer role, with the realm,
   the provider and the caller role fixed by the host. Signatures, never a key (ADR-019 Decision 9).
   An assertion gets `iat` when its claims carry none (a future one is refused), and its `exp` is

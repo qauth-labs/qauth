@@ -571,8 +571,12 @@ function kitContext(
           if (scenario.egress === undefined) {
             throw new Error('egress refused: the scenario answers no outbound call');
           }
-          const { realm: _realm, ...asMethodSent } = request;
-          return scenario.egress(asMethodSent);
+          // The scenario sees the call as the method sent it: no realm, and
+          // `redirect: 'error'` for the zero redirect cap it asked for.
+          const { realm: _realm, limits, ...rest } = request;
+          return scenario.egress(
+            limits?.maxRedirects === 0 ? { ...rest, redirect: 'error' } : rest
+          );
         },
       },
       signer: {
