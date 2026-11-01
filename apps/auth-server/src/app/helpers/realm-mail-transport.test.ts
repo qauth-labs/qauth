@@ -1,4 +1,8 @@
-import { defaultsFromEnv, type RealmPolicySnapshot } from '@qauth-labs/fastify-plugin-realm-policy';
+import {
+  defaultsFromEnv,
+  PolicyValidationError,
+  type RealmPolicySnapshot,
+} from '@qauth-labs/fastify-plugin-realm-policy';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -39,7 +43,12 @@ function run(
       policies: {
         get: vi.fn(async (realmId: string) => {
           const realm = realms.find((candidate) => candidate.id === realmId);
-          if (realm?.name === 'broken') throw new Error('refused policies');
+          if (realm?.name === 'broken') {
+            throw new PolicyValidationError('The stored realm policies are not valid', [
+              { path: 'mail.smtp.port', message: 'is not a port' },
+            ]);
+          }
+          if (realm?.name === 'unreadable') throw new TypeError('connection lost');
           return realm === undefined
             ? undefined
             : ({ policies: defaultsFromEnv(realm.env) } as unknown as RealmPolicySnapshot);
@@ -132,5 +141,18 @@ describe('logRefusedMailTransports (review of #937)', () => {
     await done;
     expect(error.mock.calls.map(([fields]) => fields.realm)).toEqual(['last']);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('names a realm whose policies it could not read for another reason, and goes on', async () => {
+    const { done, error } = run([
+      { id: 'r0', name: 'unreadable', env: {} },
+      { id: 'r1', name: 'last', env: smtp('127.0.0.1') },
+    ]);
+    await done;
+    expect(error.mock.calls[0]).toEqual([
+      { realm: 'unreadable', realmId: 'r0', error: 'TypeError' },
+      'could not read the stored mail policies of the realm "unreadable" at boot; its SMTP check was skipped',
+    ]);
+    expect(error.mock.calls.map(([fields]) => fields.realm)).toEqual(['unreadable', 'last']);
   });
 });

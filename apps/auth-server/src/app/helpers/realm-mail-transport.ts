@@ -1,5 +1,6 @@
 import {
   normalizeSmtpHost,
+  PolicyValidationError,
   type RealmPolicyStoreOfRealms,
   smtpHostRefusal,
 } from '@qauth-labs/fastify-plugin-realm-policy';
@@ -57,8 +58,9 @@ export function plaintextRelayError(realmName: string, host: string): string {
  * It resolves no name: a name is checked only when a mail connects, so one
  * that resolves to a private address is named then, in that mail's failure.
  * A public host whose transport starts in the clear is not named: STARTTLS
- * on port 587 is the usual setup. It never refuses the boot, so a deployment
- * that sends no mail still serves.
+ * on port 587 is the usual setup. A realm whose policies cannot be read is
+ * named and skipped. It never refuses the boot, so a deployment that sends no
+ * mail still serves.
  */
 export async function logRefusedMailTransports(
   deps: RefusedMailTransportDependencies,
@@ -69,9 +71,20 @@ export async function logRefusedMailTransports(
     let mail;
     try {
       mail = (await deps.policies.get(record.realmId))?.policies.mail;
-    } catch {
+    } catch (error) {
       // A realm whose stored policies this release refuses is named by the
-      // default realm's boot step and the secret seed.
+      // default realm's boot step and the secret seed. Any other failure is
+      // named here, since this realm's check is skipped.
+      if (!(error instanceof PolicyValidationError)) {
+        deps.log.error(
+          {
+            realm: record.realmName,
+            realmId: record.realmId,
+            error: error instanceof Error ? error.name : 'unknown',
+          },
+          `could not read the stored mail policies of the realm "${record.realmName}" at boot; its SMTP check was skipped`
+        );
+      }
       continue;
     }
     if (mail === undefined || mail.provider !== 'smtp' || mail.smtp.host === null) continue;
