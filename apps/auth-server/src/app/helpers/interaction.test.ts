@@ -1,6 +1,6 @@
 import { Writable } from 'node:stream';
 
-import { InvalidRequestError } from '@qauth-labs/shared-errors';
+import { InvalidRequestError, TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -23,6 +23,7 @@ vi.mock('./user-events', async (importOriginal) => {
 
 import { buildLoggerOptions } from '../../config/logger';
 import { createBrowserSessionFixture, sessionCookie } from '../../testing/browser-sessions';
+import { createFakeCookieSigner } from '../../testing/cookie-keys';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
 import {
@@ -624,18 +625,7 @@ describe('answers (#592)', () => {
     const id = await owner.start();
     harness.app.log.level = 'fatal';
     // The connection drops on the delete's MULTI: Redis ran none of it.
-    const multi = harness.redis.multi;
-    harness.redis.multi = () => {
-      harness.redis.multi = multi;
-      const failing = {
-        del: () => failing,
-        zrem: () => failing,
-        exec: async () => {
-          throw new Error('redis down');
-        },
-      };
-      return failing as unknown as ReturnType<typeof multi>;
-    };
+    failNextMulti();
 
     const failed = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`);
     expect(failed.statusCode).toBe(500);
@@ -916,6 +906,375 @@ describe('the user switch (#592)', () => {
   });
 });
 
+/** Start an interaction and sign USER_A in on it: its id and the session it holds. */
+async function signedInInteraction(owner: Browser): Promise<{ id: string; sid: string }> {
+  const id = await owner.start();
+  await owner.answer(id, 0, {
+    kind: 'authenticated',
+    userId: USER_A,
+    amr: ['pwd'],
+    step: CONSENT_STEP,
+  });
+  const sid = await verifySessionCookie(
+    harness.app,
+    REALM.id,
+    owner.cookies.get(SESSION_COOKIE_NAME)
+  );
+  if (sid === null) throw new Error('the authentication set no session cookie');
+  return { id, sid };
+}
+
+/**
+ * Make the next `MULTI` fail as a dropped connection does, Redis running none
+ * of it: the one an interaction's delete sends.
+ */
+function failNextMulti(): void {
+  const multi = harness.redis.multi;
+  harness.redis.multi = () => {
+    harness.redis.multi = multi;
+    const failing = {
+      del: () => failing,
+      zrem: () => failing,
+      exec: async () => {
+        throw new Error('redis down');
+      },
+    };
+    return failing as unknown as ReturnType<typeof multi>;
+  };
+}
+
+describe("the user switch ends the first user's browser session (#896)", () => {
+  function switchUser(owner: Browser, id: string) {
+    return owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+  }
+
+  /** The `interaction.cancelled` events emitted so far, oldest first. */
+  function cancelledEvents() {
+    return vi
+      .mocked(emitUserEvent)
+      .mock.calls.filter(([, type]) => type === 'urn:qauth:event:interaction.cancelled:v1-rc.0')
+      .map(([, , data, options]) => ({ data, options }));
+  }
+
+  it('ends the session the interaction holds, clears its cookie, and records it on the cancelled event', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    // Ended as a sign-out by the session's own user, and only that user's.
+    expect(harness.sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid,
+      reason: 'sign_out',
+      actor: { type: 'user', id: USER_A },
+      userId: USER_A,
+    });
+    expect(await harness.sessions.service.get({ realmId: REALM.id, sid })).toBeNull();
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ reason: 'user_switch', sessionEnded: true }),
+        options: expect.objectContaining({ userId: USER_A, actor: 'user' }),
+      },
+    ]);
+  });
+
+  it('ends no session on a switch before anyone authenticated in the interaction', async () => {
+    const owner = new Browser();
+    // The browser holds a session from before this interaction, which the
+    // interaction never used: the switch leaves it.
+    const { session } = await harness.sessions.signIn({ realmId: REALM.id, userId: USER_B });
+    owner.cookies.set(
+      SESSION_COOKIE_NAME,
+      (await sessionCookie(harness.app, session)).split('=')[1]
+    );
+    const id = await owner.start();
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.revoke).not.toHaveBeenCalled();
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(true);
+    expect(String(switched.headers['set-cookie'])).not.toContain(SESSION_COOKIE_NAME);
+    expect(cancelledEvents()[0]?.data).not.toHaveProperty('sessionEnded');
+  });
+
+  it("leaves a cookie that names a later session of another user alone, and still ends the interaction's", async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    // Another tab signed someone else in since: the cookie names that session now.
+    const { session: later } = await harness.sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_B,
+    });
+    owner.cookies.set(SESSION_COOKIE_NAME, (await sessionCookie(harness.app, later)).split('=')[1]);
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(true);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(
+      await verifySessionCookie(harness.app, REALM.id, owner.cookies.get(SESSION_COOKIE_NAME))
+    ).toBe(later.sid);
+  });
+
+  it('ends a later session of the first user that the cookie names too, and clears the cookie (#964)', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    // The first user signed in again in another tab: the cookie names that session now.
+    const { session: later } = await harness.sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_A,
+    });
+    owner.cookies.set(SESSION_COOKIE_NAME, (await sessionCookie(harness.app, later)).split('=')[1]);
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    for (const ended of [sid, later.sid]) {
+      expect(harness.sessions.service.revoke).toHaveBeenCalledWith({
+        realmId: REALM.id,
+        sid: ended,
+        reason: 'sign_out',
+        actor: { type: 'user', id: USER_A },
+        userId: USER_A,
+      });
+      expect(harness.sessions.service.sessions.has(ended)).toBe(false);
+    }
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ reason: 'user_switch', sessionEnded: true }),
+        options: expect.objectContaining({ userId: USER_A }),
+      },
+    ]);
+  });
+
+  it("keeps the interaction when the cookie's later session cannot be read, so a retry switches and ends it", async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    const { session: later } = await harness.sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_A,
+    });
+    owner.cookies.set(SESSION_COOKIE_NAME, (await sessionCookie(harness.app, later)).split('=')[1]);
+    harness.app.log.level = 'fatal';
+    harness.sessions.service.get.mockRejectedValueOnce(new Error('session store down'));
+
+    const failed = await switchUser(owner, id);
+
+    expect(failed.statusCode).toBe(500);
+    // The switch did not go on: the interaction waits at its step, the later
+    // session is live and the browser keeps its cookie.
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+      step: CONSENT_STEP,
+      revision: 1,
+    });
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(true);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
+    expect(cancelledEvents()).toEqual([]);
+
+    const retry = await switchUser(owner, id);
+    expect(retry.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(false);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+  });
+
+  it('keeps the interaction and its session when the session cannot be ended, so a retry switches', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    harness.app.log.level = 'fatal';
+    harness.sessions.service.revoke.mockRejectedValueOnce(new Error('session store down'));
+
+    const failed = await switchUser(owner, id);
+
+    expect(failed.statusCode).toBe(500);
+    // Nothing moved: the interaction waits at its step with its session, and
+    // the browser keeps both cookies.
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+      step: CONSENT_STEP,
+      revision: 1,
+    });
+    expect(harness.sessions.service.sessions.has(sid)).toBe(true);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
+    expect(cancelledEvents()).toEqual([]);
+
+    const retry = await switchUser(owner, id);
+    expect(retry.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+  });
+
+  it('ends the session when the cookie keys cannot be read, and leaves the cookie for the next page that reads it', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    // A signer outage (#493): the cookie's MAC cannot be checked.
+    const down = createFakeCookieSigner();
+    down.getCookieSecrets.mockRejectedValue(new TemporarilyUnavailableError(60));
+    (harness.app as { signer: unknown }).signer = down;
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+    // The cookie names an ended session now: it opens nothing.
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
+    expect(harness.logs.join('')).toContain(
+      'the session cookie could not be checked at a user switch'
+    );
+    expect(cancelledEvents()[0]?.data).toMatchObject({ sessionEnded: true });
+  });
+});
+
+describe('a finish needs the browser session its sign-in started (#963)', () => {
+  /** An administrator, who ends another user's session as a `user` naming its owner. */
+  const ADMIN = '44444444-4444-4444-8444-444444444444';
+
+  /** Answer the consent step a sign-in led to with a finish. */
+  function finish(owner: Browser, id: string) {
+    return owner.answer(id, 1, { kind: 'finished' });
+  }
+
+  /** The outcomes of the `interaction.answered` events emitted so far, oldest first. */
+  function outcomes() {
+    return vi
+      .mocked(emitUserEvent)
+      .mock.calls.filter(([, type]) => type === 'urn:qauth:event:interaction.answered:v1-rc.0')
+      .map(([, , data]) => (data as { outcome: string }).outcome);
+  }
+
+  /** Change the session the fake service holds for `sid`. */
+  function alterSession(sid: string, change: object): void {
+    const { sessions } = harness.sessions.service;
+    const session = sessions.get(sid);
+    if (session === undefined) throw new Error('no such session');
+    sessions.set(sid, { ...session, ...change });
+  }
+
+  it('finishes while the session is live, read in the realm', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+
+    const finished = await finish(owner, id);
+
+    expect(finished.json()).toMatchObject({
+      kind: 'finished',
+      transaction: { userId: USER_A, sid },
+    });
+    expect(harness.sessions.service.get).toHaveBeenCalledWith({ realmId: REALM.id, sid });
+  });
+
+  it('finishes with no session to check when nobody signed in', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+
+    expect((await owner.answer(id, 0, { kind: 'finished' })).json()).toMatchObject({
+      kind: 'finished',
+    });
+    expect(harness.sessions.service.get).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, (sid: string) => Promise<unknown> | void]>([
+    [
+      'signed out in another tab',
+      (sid) =>
+        harness.sessions.service.revoke({
+          realmId: REALM.id,
+          sid,
+          reason: 'sign_out',
+          actor: { type: 'user', id: USER_A },
+          userId: USER_A,
+        }),
+    ],
+    [
+      'signed out everywhere',
+      () =>
+        harness.sessions.service.revokeAllForUser({
+          realmId: REALM.id,
+          userId: USER_A,
+          reason: 'sign_out_everywhere',
+          actor: { type: 'user', id: USER_A },
+        }),
+    ],
+    [
+      'revoked by an administrator',
+      (sid) =>
+        harness.sessions.service.revoke({
+          realmId: REALM.id,
+          sid,
+          reason: 'admin',
+          actor: { type: 'user', id: ADMIN },
+          userId: USER_A,
+        }),
+    ],
+    ['past its end', (sid) => alterSession(sid, { expiresAt: Date.now() - 1 })],
+    [
+      'gone from the store',
+      (sid) => {
+        harness.sessions.service.sessions.delete(sid);
+      },
+    ],
+    ['held for another user', (sid) => alterSession(sid, { userId: USER_B })],
+  ])(
+    'refuses a finish after the session was %s, as an ended interaction, and keeps the interaction at its step',
+    async (_how, end) => {
+      const owner = new Browser();
+      const { id, sid } = await signedInInteraction(owner);
+      await end(sid);
+
+      const refused = await finish(owner, id);
+
+      expect(refused.statusCode).toBe(410);
+      expect(refused.json()).toMatchObject({ code: 'interaction_expired' });
+      expect(harness.logs.join('')).toContain('"interactionRefused":"session_ended"');
+      expect(outcomes()).toEqual(['authenticated']);
+      // Nothing was written and the turn is back: the interaction waits at
+      // its step, every finish is refused, and a cancel still ends it.
+      expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+        step: CONSENT_STEP,
+        revision: 1,
+      });
+      expect((await finish(owner, id)).statusCode).toBe(410);
+      expect(
+        (await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`)).json()
+      ).toMatchObject({ kind: 'cancelled' });
+    }
+  );
+
+  it('refuses a finish after a user switch ended the session and then could not delete the interaction', async () => {
+    const owner = new Browser();
+    const { id, sid } = await signedInInteraction(owner);
+    harness.app.log.level = 'fatal';
+    failNextMulti();
+
+    const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    expect(switched.statusCode).toBe(500);
+    expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+
+    expect((await finish(owner, id)).statusCode).toBe(410);
+    expect(outcomes()).toEqual(['authenticated']);
+  });
+
+  it('fails closed when the session service cannot answer: no finish, the turn comes back, and a retry finishes', async () => {
+    const owner = new Browser();
+    const { id } = await signedInInteraction(owner);
+    harness.app.log.level = 'fatal';
+    harness.sessions.service.get.mockRejectedValueOnce(new Error('session store down'));
+
+    const failed = await finish(owner, id);
+
+    expect(failed.statusCode).toBe(500);
+    expect(outcomes()).toEqual(['authenticated']);
+    expect((await finish(owner, id)).json()).toMatchObject({ kind: 'finished' });
+    expect(outcomes()).toEqual(['authenticated', 'finished']);
+  });
+});
+
 describe('audit and logs (#592)', () => {
   it('audits create, answer and cancel by reference, and never logs or audits the id or the cookie', async () => {
     const owner = new Browser();
@@ -952,7 +1311,7 @@ describe('audit and logs (#592)', () => {
     ]);
     expect(calls[1]?.data).toMatchObject({ outcome: 'authenticated', step: PASSWORD_STEP.name });
     expect(calls[1]?.options).toMatchObject({ userId: USER_A, clientId: 'notes-app' });
-    expect(calls[2]?.data).toMatchObject({ reason: 'user_switch' });
+    expect(calls[2]?.data).toMatchObject({ reason: 'user_switch', sessionEnded: true });
     expect(calls[3]?.data).toMatchObject({
       step: IDENTIFIER_STEP,
       replaces: (calls[0]?.data as { interaction: string } | undefined)?.interaction,
