@@ -1338,10 +1338,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   developer API. `/auth/logout` and the deprecated `/api/clients` and
   `/api/consents` accept exactly that audience on a system-client token.
 
-  **Action for operators**: developers sign in to the portal again once, when
-  the first node of this release boots: a portal token minted before carries
-  the system client's id as its audience, which no node accepts any more. Roll
-  from a release that accepts the new token ([#509]). See **Upgrades**
+  **Action for operators**: developers sign in to the portal again when the
+  first node of this release boots: a portal token minted before carries the
+  system client's id as its audience, which no node of this release accepts any
+  more, except to sign out. This release carries both steps, accepting the new
+  token ([#509]) and minting it, so during a rolling upgrade from v0.1.x a
+  developer is signed out of the portal whenever a request reaches a node of
+  the other version, until the roll ends (a portal session lasts
+  `PORTAL_SESSION_TTL`, 15 minutes by default). A single-node deployment, or
+  one upgraded stop-start, is unaffected. See **Upgrades**
   (`operate/upgrades`).
 
 - **The developer portal calls the developer API** ([#524]). Its server
@@ -1446,6 +1451,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SESSION_COOKIE_TTL` without one) instead of `SESSION_COOKIE_TTL`. A cookie an
   earlier release signed does not verify, so every user signed in to the hosted
   pages signs in once more after the upgrade (sessions are not moved anyway).
+  During a rolling upgrade a browser whose requests reach old and new nodes in
+  turn is asked to sign in at each switch, not once: an old node refuses the
+  new cookie and sets one of the old format, which a new node clears. Send the
+  browser traffic to the new nodes only, or route each browser to one node,
+  until the roll ends (see **Upgrades**).
   `SESSION_COOKIE_SECRET` is now optional: the key boot step imports it into
   the default realm's store, and a value that differs from the stored cookie key
   (compared in constant time, after opening the stored key with the KEK)
@@ -1599,10 +1609,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
   `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
   the developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, beside
-  the token of before, whose `aud` is the system client's id. [#524] then mints
-  it and retires the old token (below). Expand, then contract (ADR-018 §5): a
-  node that accepts the new token must run everywhere before a node mints it.
-  See **Upgrades** (`operate/upgrades`).
+  the token of before, whose `aud` is the system client's id. [#524] mints it
+  and retires the old token in the same release (above), so the two steps of
+  ADR-018 §5 ship together: see that entry for what a rolling upgrade from
+  v0.1.x does to portal sessions, and **Upgrades** (`operate/upgrades`).
 
 - **`@qauth-labs/mcp-guard` is now `@qauth-labs/resource-guard`** ([#595],
   ADR-018 §6). It has never been published, so there is no alias. It moved to

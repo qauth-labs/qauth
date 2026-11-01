@@ -132,42 +132,55 @@ clears it. `SESSION_COOKIE_SECRET` becomes optional: at the first boot the key
 store imports it as the realm's cookie key, and later a different value in it
 replaces that key. See [the key store](/operate/keys/#the-key-store).
 
-During a rolling upgrade, a sign-in served by a node of the old version is not
-seen by a node of the new version, so a user can be asked to sign in twice
-until the last old node is gone.
+During a rolling upgrade the two cookie formats do not mix. A node of the old
+version refuses the new cookie, and when the user signs in there it sets a
+cookie of the old format, which a node of the new version clears. A browser
+whose requests go to old and new nodes in turn is asked to sign in again at
+each switch, not once, until the last old node is gone. Send the browser
+traffic (`/ui/*`, `/oauth/authorize`, the consent screen) to the new nodes only
+as soon as the first one is up, or route each browser to one node for the
+duration of the roll (sticky sessions); a single-node deployment, or one
+upgraded stop-start, is unaffected.
 
-### The developer portal's token: the new audience is accepted first, then minted
+### The developer portal's token moves to the developer API's audience
 
 The developer portal's token moves to the developer API's audience,
-`urn:qauth:aud:developer:v1-rc.0`, in two steps, expand then contract
-(ADR-018 §5; [API conventions](/reference/api-conventions/#issuing-a-family-audience)):
+`urn:qauth:aud:developer:v1-rc.0`. ADR-018 §5 would take that in two releases,
+expand then contract
+([API conventions](/reference/api-conventions/#issuing-a-family-audience)),
+but v0.2 carries both steps at once:
 
 - **Accepted** ([#509](https://github.com/qauth-labs/qauth/issues/509)).
-  `/api/clients`, `/api/consents`, `/auth/logout`, the Bearer path of
-  `/oauth/authorize` and userinfo accept a system-client token whose `aud` is
-  the developer audience, beside the old token, whose `aud` is the system
-  client's id. Nothing mints the new token yet.
+  `/api/clients`, `/api/consents`, `/auth/logout` and userinfo accept a
+  system-client token whose `aud` is the developer audience.
 - **Minted, and the old token retired**
-  ([#524](https://github.com/qauth-labs/qauth/issues/524)). As each node of this
-  release boots, it gives the system client of every realm the developer
-  audience, so `POST /auth/login` mints the new token from then on, on every
-  node, since each one reads the client's row. The deprecated `/api/clients`,
-  `/api/consents` and `/auth/logout` accept only the new token, and the Bearer
-  path of `/oauth/authorize` is gone: an `Authorization` header there signs no
-  one in, and a request without a browser session goes to the login page.
+  ([#524](https://github.com/qauth-labs/qauth/issues/524)). As each node of v0.2
+  boots, it gives the system client of every realm the developer audience, so
+  `POST /auth/login` mints the new token from then on, on every node, since
+  each one reads the client's row. The deprecated `/api/clients` and
+  `/api/consents` accept only the new token. `/auth/logout` still accepts the
+  old one, whose `aud` is the system client's id, for this release only, so a
+  developer whose portal session began before the upgrade can still sign out:
+  the call ends their sessions, refresh tokens and codes, and grants nothing.
+  The next release removes that grace. The Bearer path of `/oauth/authorize` is
+  gone: an `Authorization` header there signs no one in, and a request without
+  a browser session goes to the login page.
 
-What an operator sees when the second step rolls out:
+What an operator sees when v0.2 rolls out:
 
-- **Developers sign in to the portal again, once.** A portal token minted before
-  the first node of the new release booted carries the system client's id as its
-  `aud`, and every node refuses it from that boot on (a token lives
+- **Developers sign in to the portal again.** A portal token minted before the
+  first node of v0.2 booted carries the system client's id as its `aud`, and
+  every v0.2 node refuses it, except to sign out (a token lives
   `ACCESS_TOKEN_LIFESPAN`, 15 minutes by default). The portal answers the
   refusal by sending the developer to its login page.
-- **Roll from a release that accepts the new token.** A node that does not, one
-  older than the first step, refuses userinfo to the new token, so a developer
-  whose request reaches it is signed out of the portal until that node is
-  upgraded. Upgrade every node to a release with the first step before the one
-  with the second.
+- **During a rolling upgrade from v0.1.x, more than once.** A v0.1.x node
+  does not accept the new token: it refuses userinfo to it, so a developer
+  whose request reaches an old node is signed out of the portal, and a token an
+  old node minted is refused by the new ones. Until the roll ends, a developer
+  is signed out whenever a request reaches a node of the other version than the
+  one that signed them in; a portal session lasts `PORTAL_SESSION_TTL`
+  (15 minutes by default). A single-node deployment, or one upgraded
+  stop-start, is unaffected.
 - **A caller of `/oauth/authorize` with a Bearer token stops getting codes.** No
   shipped component used that path; anything that did must send the user through
   the browser flow, as every other client does.
@@ -455,15 +468,23 @@ migrations provisions it too (see
 [The system client](/operate/docker/#the-system-client)). The seed manifest's
 `system_client` section does the same.
 
-Nothing breaks if you do not, yet. An existing system client row is read as it
-is, and the portal's sign-in keeps working through it; a realm that has none
-gets a placeholder that holds no secret and no key. The portal's move to the
-redirect flow needs the provisioned row.
+Nothing breaks if you do not, yet. An existing system client row is kept as
+it is, except that a row without the developer API's audience is given it
+(see [the developer portal's token](#the-developer-portals-token-moves-to-the-developer-apis-audience)),
+and the portal's sign-in keeps working through it; a realm that has none gets a
+placeholder that holds no secret and no key, with that audience. The portal's
+move to the redirect flow needs the provisioned row.
 
 Migration 0048 adds `oauth_clients.first_party_profile`,
 `first_party_policy` and `first_party_reason`, nullable with no default, and
 six CHECKs that every existing row passes. The previous release keeps
 creating and updating clients on the new schema.
+
+Remove a client's first-party profile only after every node runs this
+release. The removal revokes the client's refresh tokens under a lock that a
+token write of this release waits for; a node of the previous release does not
+take it, so a refresh token it commits while the profile is removed survives
+the removal.
 
 ### The delivery role reads `realms.issuer`
 
