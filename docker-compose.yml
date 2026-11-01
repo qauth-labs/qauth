@@ -178,9 +178,10 @@ services:
       # SMTP_USER: ${SMTP_USER}
       # SMTP_PASSWORD: ${SMTP_PASSWORD}
       # Operator-only: a relay without STARTTLS, or a non-public SMTP host such
-      # as a relay container on this network, needs these.
-      # SMTP_ALLOW_PLAINTEXT: ${SMTP_ALLOW_PLAINTEXT:-false}
-      # SMTP_ALLOWED_HOSTS: ${SMTP_ALLOWED_HOSTS:-}
+      # as a relay container on this network, needs these. Forwarded with the
+      # defaults (off, none), so setting them in .env reaches the container.
+      SMTP_ALLOW_PLAINTEXT: ${SMTP_ALLOW_PLAINTEXT:-false}
+      SMTP_ALLOWED_HOSTS: ${SMTP_ALLOWED_HOSTS:-}
 
       # CORS — fail-closed in production when unset (no wildcard default). Set
       # CORS_ORIGIN explicitly to allow cross-origin callers (e.g. the portal).
