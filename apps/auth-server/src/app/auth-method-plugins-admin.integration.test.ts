@@ -1,5 +1,5 @@
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import type { FastifyInstance, FastifyRequest, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { TestApprovalFactor } from '../testing/approval-factor';
@@ -468,6 +468,24 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(await rowsText('admin_approvals', realm.id)).not.toContain(SECRET);
   });
 
+  it('hands an enabled plugin its config with the sealed secret decrypted, as the api signer caller', async () => {
+    const realm = await tenant('alpha');
+    const requester = await adminWith(realm.id, 'security-admin');
+    await configure(realm.id, requester);
+    await approved(realm.id, requester, 'plugins.enable', '/corp/enable', { version: 1 });
+
+    // Imported once the boot reset the modules, as the engine is.
+    const { authMethodPluginContext } = await import('./helpers/auth-method-plugins');
+    const realmRow = await app().repositories.realms.findById(realm.id);
+    const method = app().authMethodPlugins.ofType('corp_sso')?.method;
+    if (realmRow === undefined || method === undefined) throw new Error('realm or plugin missing');
+    // The context the plugin's routes build for a request on the realm's host.
+    const request = { realm: realmRow, log: app().log } as unknown as FastifyRequest;
+    const context = await authMethodPluginContext(app(), request, method);
+
+    expect(context.config).toEqual({ ...CONFIG, clientSecret: SECRET });
+  });
+
   it('refuses a configure that keeps the stored secret while it sends the plugin elsewhere', async () => {
     const realm = await tenant('alpha');
     const requester = await adminWith(realm.id, 'security-admin');
@@ -568,6 +586,13 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     // The not_found document echoes the path it was asked for: compare with
     // the path written out of it, and without the trace id.
     const comparable = (response: LightMyRequestResponse, path: string) => {
+      // Neither answer carries the request ceiling's headers: an off
+      // plugin's route is answered as a path no route serves, before the
+      // limiter.
+      expect(
+        Object.keys(response.headers).filter((name) => name.startsWith('x-ratelimit-')),
+        `${response.statusCode} ${path}`
+      ).toEqual([]);
       const body = { ...response.json<Record<string, unknown>>() };
       delete body['trace_id'];
       if (body['instance'] === path) body['instance'] = '<path>';
