@@ -10,7 +10,7 @@ import {
   type UpstreamStart,
 } from '@qauth-labs/server-federation';
 import { checkAuthMethod } from '@qauth-labs/server-federation/testing';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createFakeProvider,
@@ -22,6 +22,7 @@ import { TEST_ORIGIN, TEST_REALM_ID, type TestHost, testHost } from '../testing/
 import type { UpstreamOidcConfig } from './config';
 import {
   createUpstreamOidcMethod,
+  UPSTREAM_DISCOVERY_FAILURE_TTL_MS,
   UPSTREAM_OIDC_TYPE_PATTERN,
   upstreamOidcRedirectUri,
   type UpstreamOidcTransaction,
@@ -219,6 +220,63 @@ describe('start()', () => {
     await expect(startUpstreamStep(s.method, s.host.context, { uiLocales: [] })).rejects.toThrow(
       /issuer/
     );
+  });
+
+  describe('discovery calls, which anyone who opens the sign-in page causes', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const discoveryCalls = (s: Setup) =>
+      s.host.egressCalls.filter((call) => call.purpose === 'upstream-discovery').length;
+
+    /** Discovery fails while `down.value` is set: the provider cannot be reached. */
+    function withOutage(s: Setup) {
+      const down = { value: true };
+      const realAnswer = s.provider.answer.bind(s.provider);
+      (s.provider as { answer: FakeProvider['answer'] }).answer = async (request) => {
+        if (down.value && request.url.endsWith('/.well-known/openid-configuration')) {
+          throw new Error('egress failed: connect timeout');
+        }
+        return realAnswer(request);
+      };
+      return down;
+    }
+
+    const start = (s: Setup) => startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+
+    it('shares one call among concurrent starts', async () => {
+      const s = await setup();
+      await Promise.all([start(s), start(s), start(s), start(s)]);
+      expect(discoveryCalls(s)).toBe(1);
+    });
+
+    it('shares one failed call among concurrent starts while the provider is down', async () => {
+      const s = await setup();
+      withOutage(s);
+      const outcomes = await Promise.allSettled([start(s), start(s), start(s), start(s)]);
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(Array(4).fill('rejected'));
+      expect(discoveryCalls(s)).toBe(1);
+    });
+
+    it('answers a failed discovery from the cache for 30 seconds, then reads again', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      const s = await setup();
+      const down = withOutage(s);
+      await expect(start(s)).rejects.toMatchObject({ reason: 'upstream_unavailable' });
+      expect(UPSTREAM_DISCOVERY_FAILURE_TTL_MS).toBe(30_000);
+      vi.setSystemTime(Date.now() + UPSTREAM_DISCOVERY_FAILURE_TTL_MS - 1);
+      for (let i = 0; i < 3; i += 1) {
+        await expect(start(s)).rejects.toMatchObject({ reason: 'upstream_unavailable' });
+      }
+      expect(discoveryCalls(s)).toBe(1);
+
+      // The provider is back; the next start after the 30 seconds reads it.
+      down.value = false;
+      vi.setSystemTime(Date.now() + 2);
+      await expect(start(s)).resolves.toMatchObject({ redirectTo: expect.any(String) });
+      expect(discoveryCalls(s)).toBe(2);
+    });
   });
 });
 

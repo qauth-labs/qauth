@@ -130,6 +130,15 @@ export interface UpstreamOidcMethodOptions {
 /** How long a discovery document is used before it is read again, in milliseconds. */
 export const UPSTREAM_DISCOVERY_TTL_MS = 5 * 60 * 1000;
 
+/**
+ * How long a failed discovery read is answered from the cache before the
+ * document is read again, in milliseconds. `start()` runs for anyone who
+ * opens the sign-in page, so while a provider is down every start in this
+ * time shares one failure instead of making its own call of up to the
+ * discovery deadline.
+ */
+export const UPSTREAM_DISCOVERY_FAILURE_TTL_MS = 30 * 1000;
+
 /** How many discovery documents one method keeps. */
 const MAX_CACHED_DOCUMENTS = 256;
 
@@ -168,7 +177,8 @@ export function createUpstreamOidcMethod(
   const issued = new WeakSet<object>();
   const documents = new TtlCache<Record<string, unknown>>(
     UPSTREAM_DISCOVERY_TTL_MS,
-    MAX_CACHED_DOCUMENTS
+    MAX_CACHED_DOCUMENTS,
+    UPSTREAM_DISCOVERY_FAILURE_TTL_MS
   );
   const keySets = new UpstreamJwksCache();
 
@@ -176,6 +186,9 @@ export function createUpstreamOidcMethod(
    * The provider's metadata for this realm's config. The discovery document
    * is kept per realm (by the callback URL, which names the realm's host)
    * and issuer: whether its fetch may use the allowlist depends on the realm.
+   * Concurrent readers share one fetch, and a failed fetch is kept for
+   * {@link UPSTREAM_DISCOVERY_FAILURE_TTL_MS}. Only the fetch is kept: the
+   * checks against the config run at every use.
    */
   const metadataFor = (
     context: AuthMethodContext<UpstreamOidcConfig>

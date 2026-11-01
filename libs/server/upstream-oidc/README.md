@@ -24,7 +24,9 @@ const method = createUpstreamOidcMethod({ type: 'oidc_corp', display: { name: 'E
   document's `issuer` must equal the configured one byte for byte. Every URL it names goes out as
   a `remote_document` destination, which the deployment's egress allowlist never opens, so a
   discovered endpoint never reaches a private or loopback address. The document is kept five
-  minutes per realm and issuer, and checked against the config at every use.
+  minutes per realm and issuer, and checked against the config at every use. Concurrent starts
+  share one read, and a failed read is kept 30 seconds (`UPSTREAM_DISCOVERY_FAILURE_TTL_MS`), so a
+  provider that is down costs one outbound call per 30 seconds, not one per visitor.
 - **Endpoints by hand** (`endpoints`), for a provider on a private address: no discovery document
   is read, and the endpoints are `admin` destinations, which an allowlist entry naming the realm may
   open.
