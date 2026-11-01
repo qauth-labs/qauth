@@ -12,6 +12,7 @@ import type {
   TokenKeyRotation,
   TokenKeyRotationOptions,
 } from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
+import { ServiceRoleBootError } from '@qauth-labs/server-config';
 import {
   applyQauthMigrations,
   type StartedPostgres,
@@ -34,6 +35,7 @@ import {
   answerRouteNotFound,
   answerUnknownRouteBeforeBody,
 } from '../app/helpers/request-bounds';
+import type { InternalRouteModule } from '../app/internal/route-manifest';
 
 /**
  * TEST SUPPORT — booting the REAL auth-server against throwaway containers
@@ -77,7 +79,15 @@ export interface BootedAuthServer {
    * routes by host.
    */
   readonly admin?: FastifyInstance;
-  /** Close the server (and its pools), the admin listener with it. Containers survive. */
+  /**
+   * The internal listener (#496), listening on an ephemeral port of
+   * INTERNAL_HOST, when the suite asked for it with `internalListener`. Its
+   * URL is {@link internalUrl}: `https` with the internal TLS files, `http`
+   * without.
+   */
+  readonly internal?: FastifyInstance;
+  readonly internalUrl?: string;
+  /** Close the server (and its pools), the admin and internal listeners with it. Containers survive. */
   close(): Promise<void>;
 }
 
@@ -319,6 +329,21 @@ export interface BootAuthServerOptions {
    * listening: `BootedAuthServer.admin.inject()` reaches it.
    */
   readonly adminListener?: () => AdminApiOptions | Promise<AdminApiOptions>;
+  /**
+   * Boot the internal listener beside the app (#496), as `main.ts` has it:
+   * from the environment's INTERNAL_* settings, its TLS files read at boot.
+   * Called once the boot reset the module registry, so it may import app
+   * modules. `modules` replaces the manifest's route modules (a fixture
+   * route), and `reloadIntervalMs` how often the TLS files are read again.
+   * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
+   */
+  readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+}
+
+/** What a suite gives the internal listener (#496). */
+export interface InternalListenerFixture {
+  readonly modules?: readonly InternalRouteModule[];
+  readonly reloadIntervalMs?: number;
 }
 
 /**
@@ -368,6 +393,10 @@ export async function bootAuthServer(
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
+      // The mail transport's seeds (#529): SMTP_PASSWORD or RESEND_API_KEY
+      // left by one boot would seed the next one's realm.
+      key.startsWith('SMTP_') ||
+      key.startsWith('RESEND_') ||
       key.startsWith('JWT_') ||
       // A key variable too (#493): a boot that leaves it out boots without it.
       key === 'SESSION_COOKIE_SECRET' ||
@@ -379,7 +408,8 @@ export async function bootAuthServer(
       // variable another boot left behind, one more reason the JWT keys go.
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
-      key.startsWith('INTERNAL_TLS_')
+      // The internal listener (#496): its address, its TLS files and its peers.
+      key.startsWith('INTERNAL_')
     ) {
       delete process.env[key];
     }
@@ -390,8 +420,12 @@ export async function bootAuthServer(
   // first import's parsed `env` would be reused for every later boot.
   vitest.vi.resetModules();
 
-  const { app, defaultRealmBootSettings } = await import('../app/app');
+  const { app, defaultRealmBootSettings, realmSecretSeedSettings } = await import('../app/app');
+  const { seedRealmSecrets } = await import('../app/helpers/realm-secrets');
   const { createAdminServer } = await import('../app/admin/listener');
+  const { createInternalServer } = await import('../app/internal/listener');
+  const { readInternalTlsFiles } = await import('../app/internal/tls-files');
+  const { internalListenerPlan } = await import('../app/service-roles');
   const { bootDefaultRealm } = await import('../app/helpers/default-realm-boot');
   const { keyVariableSettings } = await import('../app/helpers/key-variables');
   // The same module instance the app just loaded, since the registry was reset.
@@ -438,8 +472,44 @@ export async function bootAuthServer(
     adminServer === undefined || options.adminListener === undefined
       ? undefined
       : { server: adminServer, ...(await options.adminListener()) };
+  // As in `main.ts`: the internal listener from the environment's settings,
+  // refused before the app when its roles split and its TLS files are missing.
+  let internalServer: FastifyInstance | undefined;
+  let internalFixture: InternalListenerFixture | undefined;
+  const internalPlan =
+    options.internalListener === undefined ? undefined : internalListenerPlan(env);
+  if (options.internalListener !== undefined && internalPlan !== undefined) {
+    if (!internalPlan.serves) {
+      throw new Error('bootAuthServer: these SERVICE_ROLES run no internal listener');
+    }
+    if (internalPlan.problems.length > 0) throw new ServiceRoleBootError(internalPlan.problems);
+    internalFixture = await options.internalListener();
+    internalServer = createInternalServer({
+      loggerInstance: server.log.child({ listener: 'internal' }),
+      peerRoles: internalPlan.peerRoles,
+      ...(internalPlan.tls === undefined
+        ? {}
+        : {
+            tls: {
+              files: internalPlan.tls,
+              material: readInternalTlsFiles(internalPlan.tls),
+              ...(internalFixture.reloadIntervalMs === undefined
+                ? {}
+                : { reloadIntervalMs: internalFixture.reloadIntervalMs }),
+            },
+          }),
+    });
+  }
   await server.register(fp(app), {
     ...(adminOptions === undefined ? {} : { adminListener: adminOptions }),
+    ...(internalServer === undefined
+      ? {}
+      : {
+          internalListener: {
+            server: internalServer,
+            ...(internalFixture?.modules === undefined ? {} : { modules: internalFixture.modules }),
+          },
+        }),
     defaultRealmBoot,
     ...(options.eventTelemetryLimits === undefined
       ? {}
@@ -457,12 +527,21 @@ export async function bootAuthServer(
   }
   await server.ready();
   await adminServer?.ready();
+  let internalUrl: string | undefined;
+  if (internalServer !== undefined && internalPlan?.serves === true) {
+    await internalServer.listen({ host: internalPlan.host, port: 0 });
+    const address = internalServer.server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('bootAuthServer: the internal listener has no TCP address');
+    }
+    internalUrl = `${internalPlan.tls === undefined ? 'http' : 'https'}://${internalPlan.host}:${address.port}`;
+  }
   injectToRealmHost(server, new URL(env.JWT_ISSUER).host);
   if (defaultRealmBoot) {
     // The environment as this server booted with it: a later boot of another
     // server rewrites `process.env`.
     const bootEnvironment = { ...process.env };
-    const quiet = { info: () => undefined, warn: () => undefined };
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
     const bootRealmKeys = (realmName: string, withVariables: boolean) =>
       bootRealmKeysWithKekEnv(
         {
@@ -478,6 +557,8 @@ export async function bootAuthServer(
           environmentKeys: withVariables ? keyVariableSettings(env, bootEnvironment) : {},
         }
       );
+    // Read now: a later boot of another server rewrites `process.env`.
+    const secretSeedSettings = realmSecretSeedSettings();
     defaultRealmReboots.set(server, async () => {
       await bootDefaultRealm(
         {
@@ -489,6 +570,20 @@ export async function bootAuthServer(
         defaultRealmBootSettings()
       );
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
+      // The realms' secrets (#529), as the boot seeds them once the default
+      // realm's keys exist.
+      const secrets = server.realmSecretStore;
+      if (secrets !== null) {
+        await seedRealmSecrets(
+          {
+            realms: server.repositories.realms,
+            policies: server.policyStore,
+            secrets,
+            log: quiet,
+          },
+          secretSeedSettings
+        );
+      }
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
     const keyDependencies = {
@@ -513,6 +608,9 @@ export async function bootAuthServer(
   return {
     app: server,
     ...(adminServer === undefined ? {} : { admin: adminServer }),
+    ...(internalServer === undefined || internalUrl === undefined
+      ? {}
+      : { internal: internalServer, internalUrl }),
     async close(): Promise<void> {
       await server.close();
     },
@@ -852,9 +950,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, link, options) => {
+  emailService.sendVerificationEmail = async (realmId, to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, link, options);
+    return original.call(emailService, realmId, to, token, link, options);
   };
   try {
     const response = await app.inject({

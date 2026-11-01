@@ -96,6 +96,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read the environment until they move to the row ([#527], [#528], [#529],
   [#534]); the token lifetimes moved with [#527] (below). See **Realm policies move
   onto the realm row** in `operate/upgrades`.
+- **Each realm sends its mail through its own transport and sender** ([#529],
+  ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
+  policies (transport, sender address and name, SMTP host, port, TLS and user)
+  from its row for every mail, and builds the realm's provider on its first
+  mail after a change, keyed by realm id and `policies_version`, so a change
+  reaches the next mail without a restart; app.ts no longer builds one provider
+  for the process. The SMTP password and the Resend API key go to the new
+  realm secret store: migration 0049 adds `realm_secrets`, which holds each
+  value encrypted with the realm's data-at-rest key by the signer, under a
+  context that names the field, and CHECKs refuse anything but that ciphertext.
+  The representation (`policyStore.representation`) shows only `passwordSet`
+  and `apiKeySet`; logs, errors and the audit diff never carry a value. Only
+  the mail sender is handed the store's reader of a value (no decorator holds
+  one), and the signer lets the `api` role decrypt only a context under
+  `realm_secrets:mail.`. The first boot that can encrypt stores
+  `SMTP_PASSWORD` or `RESEND_API_KEY` in the default realm, once, and records
+  an unset one, unless the realm's stored transport needs it: then a later
+  boot whose environment sets it still stores it. Every other realm whose
+  stored transport is the environment's and needs the secret (as the
+  upgrade's fill leaves each realm) gets it too, and nothing is recorded
+  there; `SMTP_PASSWORD` goes to no realm whose stored SMTP host, port or user
+  is not `SMTP_HOST`, `SMTP_PORT` and `SMTP_USER`, which is logged as an error.
+  Later boots ignore both keys for a realm that has the secret and warn while
+  they are set. A policy update that selects `smtp` without its host, port,
+  user, sender address and password, or `resend` without its sender address
+  and API key, is refused (422 `unprocessable_content`, with a JSON Pointer
+  per refused field in `errors`), and so is one that selects `smtp` or changes
+  its host, port or TLS mode without giving the password again; an update
+  that changes nothing of `mail` is not checked, and a gap the realm already
+  had does not refuse an update. The boot no longer refuses an incomplete
+  environment, and warns for each setting or secret the default realm's
+  stored transport lacks. Until the admin API's policy update ([#517]) ships, a mail secret is
+  replaced by deleting its `realm_secrets` row and restarting with the new
+  value, as `operate/upgrades` describes. Mail is
+  sent from `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>`, as the realm stores them.
+  Each boot also warns when a seed key of a policy the server reads from the row
+  is stricter than the stored value, or, for a policy with no order, differs
+  from it. See **Mail secrets move into the realm** in `operate/upgrades`.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).
@@ -1196,6 +1234,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+- **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
+  process that holds the `signer` role while the roles are split runs one more
+  HTTP server, on `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port
+  `3443`, by default; advanced keys), for the other roles' calls to the signer
+  service ([#497] adds its routes). A single process runs none. It serves
+  HTTP/1.1 over TLS 1.3 only and requires a client certificate that
+  `INTERNAL_TLS_CA_PATH` issued: a client with none, or one from another CA,
+  gets no HTTP answer. A CA file that holds a public root CA, as a system
+  bundle does, is refused, and one with no `CA:TRUE` certificate, or a key file
+  its group or others may read, is warned of. The new `INTERNAL_PEER_ROLES`
+  maps a subject alternative name of the peer's certificate (a DNS name, or a
+  URI such as a SPIFFE ID) to the role it calls as, `request.peerRole`, and
+  refuses `signer`, which never calls as a peer; a peer whose SANs it does not
+  map, or map to two roles, gets `403` `forbidden` on every path. Each internal
+  route module names the peer roles that may call it, and a peer of another
+  role gets `403` on its routes. A request on a connection whose peer
+  certificate has expired since the handshake, or that was made before the TLS
+  files were last reloaded, gets `403` too; every `403` closes its connection,
+  so the peer connects again. The certificate, key and CA files are read again
+  every five seconds and applied with no restart once a rotation is complete.
+  The listener holds at most 1024 connections at once. Its routes register by
+  role from an internal route manifest, all under `/internal/`, which the
+  public listener refuses to register. Such a process refuses to start without
+  the three TLS files and `INTERNAL_PEER_ROLES`, naming each, before it waits
+  for the database. The listener is not routed by host, shares the app's
+  database pool, cache and signer, and closes at the same time as the admin
+  listener. The admin API keeps its own listener and its own rule: a peer
+  certificate grants nothing there. `createInternalClient`
+  (`apps/auth-server/src/app/internal/client.ts`) is how the other roles call
+  it: `https` only, the server known by `expectedServerSan` rather than its
+  host name, every request kept below the base URL's path, a keep-alive pool
+  (a request whose pooled connection the server had just closed is sent once
+  more on a new one), a deadline and a cap on each answer, and credentials
+  that can be reloaded.
 - **Client display data and the verified domain** ([#593], ADR-019 Decision 6).
   One function in the auth server says who a client is from the server's own
   records, as the Interaction API's `ClientDisplay`: the host of a CIMD client's
@@ -1372,6 +1444,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
   when its lifetime is computed.
 
+- **BREAKING (operators): SMTP needs TLS and a public host, unless the operator
+  allows otherwise** ([#529]). A realm's smtp transport whose `mail.smtp.secure`
+  is off now requires STARTTLS (nodemailer `requireTLS`), with the certificate
+  checked against the host name, and connects only to a public unicast address
+  its host resolves to, never to `localhost`, a private, loopback, link-local,
+  unique-local or cloud metadata address; each mail resolves the host, checks
+  the address and dials that address with the host name as its TLS server name,
+  so DNS cannot point the connection elsewhere. A policy update that names
+  `localhost` or such an IP address as `mail.smtp.host` is refused. Two
+  operator-only keys, which no realm policy can change, relax this:
+  `SMTP_ALLOW_PLAINTEXT=true` lets a transport send without STARTTLS, and
+  `SMTP_ALLOWED_HOSTS` lists the hosts a realm may name and reach although they
+  are not public (a metadata address never). **Action for operators**: a local
+  plaintext SMTP relay, such as Mailpit on `localhost:1025` or a relay
+  container on a private network, needs `SMTP_ALLOW_PLAINTEXT=true` and its
+  host in `SMTP_ALLOWED_HOSTS`, or its mail fails, logged with the refused
+  host. Each boot logs an error, and still serves, for every realm whose
+  stored SMTP host is `localhost`, a non-public IP address not in
+  `SMTP_ALLOWED_HOSTS` or a cloud metadata address, or a listed relay that
+  starts in the clear while `SMTP_ALLOW_PLAINTEXT` is off, naming the realm,
+  the host and the key to set; a host name is checked when a mail connects,
+  not at boot. See **Mail secrets move into the realm** in `operate/upgrades`.
 - **BREAKING (operators): the token lifetime keys are bounded** ([#527]).
   `ACCESS_TOKEN_LIFESPAN` and `DEV_ACCESS_TOKEN_LIFESPAN` above 86400 s (a day),
   or `REFRESH_TOKEN_LIFESPAN` above 7776000 s (90 days), now refuse to boot.
@@ -1441,6 +1535,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user whose stored consent covers the request, but the consent screen answers
   a new user `invalid_request` (400). The upgrade guide (`operate/upgrades`)
   gives a query that finds such clients before you upgrade.
+- **A split process holding the signer needs the internal listener's TLS
+  files** ([#496]). A process whose `SERVICE_ROLES` names `signer` but not every
+  role, such as `api,admin,signer,delivery`, now refuses to start unless
+  `INTERNAL_TLS_CERT_PATH`, `INTERNAL_TLS_KEY_PATH`, `INTERNAL_TLS_CA_PATH` and
+  `INTERNAL_PEER_ROLES` are set, and listens on `INTERNAL_PORT` (`3443` by
+  default) besides `PORT`. A single process (`SERVICE_ROLES=all`, the default)
+  is unchanged and binds nothing new.
 - **The request log censors `code`, `id_token` and `access_token` in logged
   URLs** ([#599]), as it censors `response_code` and `token`: an upstream
   provider's authorization code rides in an AuthMethod's callback URL, and a
@@ -2239,6 +2340,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#493]: https://github.com/qauth-labs/qauth/issues/493
 [#494]: https://github.com/qauth-labs/qauth/issues/494
 [#495]: https://github.com/qauth-labs/qauth/issues/495
+[#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508

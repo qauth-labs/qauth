@@ -1,92 +1,67 @@
 import {
   constantTimeCompare,
-  createEmailService,
-  type EmailProvider,
-  type EmailService,
+  createRealmMailService,
   generateVerificationToken,
   hashToken,
   isValidTokenFormat,
-  MockEmailProvider,
-  ResendEmailProvider,
-  type ResendProviderConfig,
-  SmtpEmailProvider,
-  type SmtpProviderConfig,
+  normalizeSmtpHost,
+  type RealmEmailService,
 } from '@qauth-labs/server-email';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
 import packageJson from '../../package.json';
-import type {
-  EmailPluginOptions,
-  EmailProviderConfig,
-  EmailProviderType,
-  EmailVerificationTokenUtils,
-} from '../types';
+import type { EmailPluginOptions, EmailVerificationTokenUtils } from '../types';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    emailService: EmailService;
+    /**
+     * The mail service of every realm (#529): each mail names its realm and
+     * goes out through that realm's transport, from its sender.
+     */
+    emailService: RealmEmailService;
     emailVerificationTokenUtils: EmailVerificationTokenUtils;
   }
 }
 
 /**
- * Create an email provider based on the provider type
+ * Fastify plugin for the email service. Decorates the instance with
+ * `emailService`, the mail service of every realm (ADR-019 Decision 10,
+ * #529), and `emailVerificationTokenUtils`.
  *
- * @param providerType - Type of provider to create
- * @param config - Provider-specific configuration
- * @returns Email provider instance
- */
-function createProvider(
-  providerType: EmailProviderType = 'mock',
-  config?: EmailProviderConfig
-): EmailProvider {
-  switch (providerType) {
-    case 'mock':
-      return new MockEmailProvider();
-    case 'resend': {
-      if (!config || !('apiKey' in config)) {
-        throw new Error('Resend provider requires apiKey in providerConfig');
-      }
-      return new ResendEmailProvider(config as ResendProviderConfig);
-    }
-    case 'smtp': {
-      if (!config || !('host' in config)) {
-        throw new Error('SMTP provider requires host, port, secure, and auth in providerConfig');
-      }
-      return new SmtpEmailProvider(config as SmtpProviderConfig);
-    }
-    default:
-      throw new Error(`Unknown email provider type: ${providerType}`);
-  }
-}
-
-/**
- * Fastify plugin for email service
- * Decorates fastify instance with emailService
+ * Each realm's mail goes through the transport its policies select
+ * (`mail.provider`: `mock`, `smtp` or `resend`), from the sender they name,
+ * with the password or API key its secret store holds. Every mail reads the
+ * realm's policies through `options.source`; the transport built for the
+ * policy counter it read is kept until the counter moves, so a change takes
+ * effect on the next mail without a restart.
  *
  * @example
  * ```typescript
  * await fastify.register(emailPlugin, {
- *   provider: 'mock',
- *   serviceConfig: {
- *     defaultFrom: 'noreply@example.com',
- *   },
+ *   source: { read: (realmId) => readRealmMailPolicies(realmId) },
+ *   serviceConfig: { verificationTokenExpiry: 86400 },
  * });
  *
  * // Use in routes; the link starts at the issuer of the account's realm
- * await fastify.emailService.sendVerificationEmail('user@example.com', token, {
+ * await fastify.emailService.sendVerificationEmail(realm.id, 'user@example.com', token, {
  *   baseUrl: 'https://auth.example.com',
  * });
  * ```
  */
 export const emailPlugin = fp<EmailPluginOptions>(
   async (fastify: FastifyInstance, options: EmailPluginOptions) => {
-    const providerType = options.provider || 'mock';
-    const provider = createProvider(providerType, options.providerConfig);
-    const emailService = createEmailService(provider, options.serviceConfig);
-
-    fastify.decorate('emailService', emailService);
+    fastify.decorate(
+      'emailService',
+      createRealmMailService({
+        source: options.source,
+        ...(options.serviceConfig === undefined ? {} : { serviceConfig: options.serviceConfig }),
+        smtp: {
+          allowPlaintext: options.smtp?.allowPlaintext === true,
+          allowedHosts: new Set((options.smtp?.allowedHosts ?? []).map(normalizeSmtpHost)),
+        },
+      })
+    );
     fastify.decorate('emailVerificationTokenUtils', {
       generateVerificationToken,
       hashToken,
@@ -94,7 +69,7 @@ export const emailPlugin = fp<EmailPluginOptions>(
       constantTimeCompare,
     });
 
-    fastify.log.debug({ provider: providerType }, 'Email plugin registered');
+    fastify.log.debug('Email plugin registered: each realm sends through its own transport');
   },
   {
     name: packageJson.name,

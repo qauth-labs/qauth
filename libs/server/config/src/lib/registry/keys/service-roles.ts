@@ -4,6 +4,7 @@ import { defineKeys } from '../types';
  * Service roles (ADR-019 Decision 8, issue #495): the keys of
  * `serviceRolesEnvSchema`. ADR-018 §5 puts the role switch in the stable
  * subset; the signer's address and the internal TLS files are advanced keys.
+ * The internal TLS files serve the internal listener too (#496).
  */
 export const SERVICE_ROLE_KEYS = defineKeys([
   {
@@ -31,7 +32,7 @@ export const SERVICE_ROLE_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: "A PEM file with this process's certificate for internal traffic over mutual TLS, such as calls to the signer service; required where `SIGNER_URL` is.",
+    docs: "A PEM file with this process's certificate for internal traffic over mutual TLS: the one it presents on calls to the signer service, and the one its internal listener serves, which the listener reloads when the file changes; required where `SIGNER_URL` is, and where the internal listener runs while the roles are split.",
   },
   {
     name: 'INTERNAL_TLS_KEY_PATH',
@@ -40,7 +41,7 @@ export const SERVICE_ROLE_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: 'A PEM file with the private key of `INTERNAL_TLS_CERT_PATH`; required where `SIGNER_URL` is.',
+    docs: 'A PEM file with the private key of `INTERNAL_TLS_CERT_PATH`, reloaded with it; required where `SIGNER_URL` is, and where the internal listener runs while the roles are split.',
   },
   {
     name: 'INTERNAL_TLS_CA_PATH',
@@ -49,6 +50,6 @@ export const SERVICE_ROLE_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: "A PEM file with the CA certificates that issue internal peers' certificates; required where `SIGNER_URL` is.",
+    docs: "A PEM file with the CA certificates that issue internal peers' certificates, which the internal listener requires of every client and reloads when the file changes; a file that holds a public root CA, such as a system bundle, is refused; required where `SIGNER_URL` is, and where the internal listener runs while the roles are split.",
   },
 ]);

@@ -15,6 +15,7 @@ import {
   type PemKeyPair,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { SIGNER_LISTENER } from '../testing/service-role-env';
 import { SERVICE_ROLE_NAMES } from './service-roles';
 
 /**
@@ -152,8 +153,9 @@ describe('service roles (#495)', () => {
   function environmentFor(serviceRoles: string): Record<string, string> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
     const base = baseEnvironment(infra, jwt);
-    if (serviceRoles === 'all' || serviceRoles.split(',').includes('signer')) {
-      return { ...base, SERVICE_ROLES: serviceRoles };
+    if (serviceRoles === 'all') return { ...base, SERVICE_ROLES: serviceRoles };
+    if (serviceRoles.split(',').includes('signer')) {
+      return { ...base, ...SIGNER_LISTENER, SERVICE_ROLES: serviceRoles };
     }
     const { KEK: _kek, JWT_PRIVATE_KEY: _privateKey, ...withoutKeys } = base;
     return { ...withoutKeys, ...SIGNER_SERVICE, SERVICE_ROLES: serviceRoles };

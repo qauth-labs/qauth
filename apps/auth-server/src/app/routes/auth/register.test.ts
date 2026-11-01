@@ -288,9 +288,14 @@ describe('POST /auth/register', () => {
     expect(reply.state.headers).toEqual({ 'Cache-Control': 'no-store' });
 
     await drainBackground(ctx);
-    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain', {
-      baseUrl: REALM.issuer,
-    });
+    expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
+      REALM.id,
+      ADDRESS,
+      'plain',
+      {
+        baseUrl: REALM.issuer,
+      }
+    );
     expect(fastify.emailService.sendAccountExistsEmail).not.toHaveBeenCalled();
   });
 
@@ -345,7 +350,10 @@ describe('POST /auth/register', () => {
         'password',
         ADDRESS
       );
-      expect(fastify.emailService.sendAccountExistsEmail).toHaveBeenCalledExactlyOnceWith(ADDRESS);
+      expect(fastify.emailService.sendAccountExistsEmail).toHaveBeenCalledExactlyOnceWith(
+        REALM.id,
+        ADDRESS
+      );
       expect(fastify.emailService.sendVerificationEmail).not.toHaveBeenCalled();
       expect(fastify.repositories.emailVerificationTokens.create).not.toHaveBeenCalled();
     });
@@ -366,6 +374,7 @@ describe('POST /auth/register', () => {
         expect.objectContaining({ credentialId: 'cred-existing', tokenHash: 'hashed', used: false })
       );
       expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledExactlyOnceWith(
+        REALM.id,
         ADDRESS,
         'plain',
         { baseUrl: REALM.issuer }
@@ -508,9 +517,14 @@ describe('POST /auth/register', () => {
       });
       await drainBackground(ctx);
 
-      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(ADDRESS, 'plain', {
-        baseUrl: REALM.issuer,
-      });
+      expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledWith(
+        REALM.id,
+        ADDRESS,
+        'plain',
+        {
+          baseUrl: REALM.issuer,
+        }
+      );
     });
   });
 
@@ -523,7 +537,9 @@ describe('POST /auth/register', () => {
     await ctx.handler({ ...requestFixture(), realm: realmB }, createReply());
     await drainBackground(ctx);
 
+    // ...and goes out through realm B's own transport (#529).
     expect(fastify.emailService.sendVerificationEmail).toHaveBeenCalledExactlyOnceWith(
+      'realm-b',
       ADDRESS,
       'plain',
       { baseUrl: 'https://b.example.com' }

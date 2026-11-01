@@ -175,6 +175,20 @@ async function until(check: () => boolean): Promise<void> {
   }
 }
 
+/**
+ * That the pool killed `child`, and it has exited. Not its `signalCode`: the
+ * pool destroys the channel and sends SIGKILL together, and the hostile
+ * program exits on its own when its channel ends, so either may end the
+ * process first. `killed` is set only when the pool's `kill('SIGKILL')`
+ * reached a process that had not been reaped yet, which the pool's call
+ * right after the destroy always does: a pool that stopped killing leaves it
+ * `false`.
+ */
+function expectKilledByPool(child: ChildProcess): void {
+  expect(child.killed).toBe(true);
+  expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+}
+
 /** The pool's end of the channel to `child`. */
 const channelOf = (child: ChildProcess): Socket => {
   const channel = child.stdio[FETCH_PROCESS_CHANNEL_FD];
@@ -209,7 +223,7 @@ describe(
       // header, without waiting for a byte of the frame.
       expect(channelOf(child).bytesRead).toBe(OPENING_BYTES + FRAME_HEADER_BYTES);
       await until(() => fetches.stats().processes === 0);
-      expect(child.signalCode).toBe('SIGKILL');
+      expectKilledByPool(child);
       expect(fetches.stats().deadlineKills).toBe(0);
     });
 
@@ -221,7 +235,7 @@ describe(
       ).resolves.toEqual(refused('huge.hostile.test', OVERSIZED));
       await until(() => fetches.stats().processes === 0);
       const [child] = hostile.children;
-      expect(child.signalCode).toBe('SIGKILL');
+      expectKilledByPool(child);
       // What the pool read from the process: the frames before the header and,
       // at most, the rest of the one read (64 KiB) the header arrived in. The
       // process kept writing until it was killed; nothing of that was read or
@@ -242,7 +256,7 @@ describe(
         refused(host, what)
       );
       await until(() => fetches.stats().processes === 0);
-      expect(hostile.children[0].signalCode).toBe('SIGKILL');
+      expectKilledByPool(hostile.children[0]);
     });
 
     it('kills a process that sends a frame while it runs no exchange', async () => {
@@ -254,7 +268,7 @@ describe(
       ).resolves.toEqual(refused('idle.hostile.test', 'refused'));
       // Then it speaks out of turn, and is killed long before its idle minute.
       await until(() => fetches.stats().processes === 0);
-      expect(hostile.children[0].signalCode).toBe('SIGKILL');
+      expectKilledByPool(hostile.children[0]);
       expect(fetches.stats().deadlineKills).toBe(0);
     });
   }

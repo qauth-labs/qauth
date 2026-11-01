@@ -1359,6 +1359,12 @@ importers:
 
   libs/server/email:
     dependencies:
+      '@qauth-labs/server-egress':
+        specifier: workspace:*
+        version: link:../egress
+      '@qauth-labs/server-realm-policy':
+        specifier: workspace:*
+        version: link:../realm-policy
       '@react-email/render':
         specifier: 'catalog:'
         version: 2.1.1(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -1570,6 +1576,9 @@ importers:
       '@qauth-labs/server-config':
         specifier: workspace:*
         version: link:../config
+      '@qauth-labs/server-egress':
+        specifier: workspace:*
+        version: link:../egress
       '@qauth-labs/shared-validation':
         specifier: workspace:*
         version: link:../../shared/validation
@@ -1672,7 +1681,7 @@ importers:
         version: link:../../shared/validation
       ajv-formats:
         specifier: 'catalog:'
-        version: 3.0.1(ajv@8.20.0)
+        version: 3.0.1
       tslib:
         specifier: 'catalog:'
         version: 2.8.1
@@ -1764,7 +1773,7 @@ importers:
         version: 8.20.0
       ajv-formats:
         specifier: 'catalog:'
-        version: 3.0.1(ajv@8.20.0)
+        version: 3.0.1
       tsx:
         specifier: 'catalog:'
         version: 4.23.15
@@ -6142,11 +6151,6 @@ packages:
 
   ajv-formats@3.0.1:
     resolution: {integrity: sha512-8iUql50EUR+uUcdRQ3HDqa6EVyo3docL8g5WJ3FNcWmu62IbkGUue/pEyLBW8VGKKucTPgqeks4fIU1DA4yowQ==}
-    peerDependencies:
-      ajv: ^8.0.0
-    peerDependenciesMeta:
-      ajv:
-        optional: true
 
   ajv-i18n@4.2.0:
     resolution: {integrity: sha512-v/ei2UkCEeuKNXh8RToiFsUclmU+G57LO1Oo22OagNMENIw+Yb8eMwvHu7Vn9fmkjJyv6XclhJ8TbuigSglPkg==}
@@ -11897,7 +11901,7 @@ snapshots:
   '@fastify/ajv-compiler@4.0.5':
     dependencies:
       ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
+      ajv-formats: 3.0.1
       fast-uri: 3.1.9
 
   '@fastify/cors@11.3.1':
@@ -14738,9 +14742,7 @@ snapshots:
     optionalDependencies:
       ajv: 8.20.0
 
-  ajv-formats@3.0.1(ajv@8.20.0):
-    optionalDependencies:
-      ajv: 8.20.0
+  ajv-formats@3.0.1: {}
 
   ajv-i18n@4.2.0(ajv@8.20.0):
     dependencies:
@@ -15882,7 +15884,7 @@ snapshots:
     dependencies:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
+      ajv-formats: 3.0.1
       fast-uri: 3.1.9
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1
@@ -15891,7 +15893,7 @@ snapshots:
     dependencies:
       '@fastify/merge-json-schemas': 0.2.1
       ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
+      ajv-formats: 3.0.1
       fast-uri: 3.1.9
       json-schema-ref-resolver: 3.0.0
       rfdc: 1.4.1

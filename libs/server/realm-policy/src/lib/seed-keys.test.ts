@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { REALM_POLICY_REGISTRY } from './realm-policies';
 import { realmSecretPaths } from './secret-store';
-import { seedKeysSetIn } from './seed-keys';
+import { compareSeedWithStored, seedKeysSetIn } from './seed-keys';
 
 /**
  * The seed keys an environment sets (#516): what the boot step names when a
@@ -55,5 +55,46 @@ describe('seedKeysSetIn', () => {
 describe('realmSecretPaths', () => {
   it('lists the secret fields of the built-in groups', () => {
     expect(realmSecretPaths()).toEqual(['mail.smtp.password', 'mail.resend.apiKey']);
+  });
+});
+
+describe('compareSeedWithStored (#529)', () => {
+  it('finds the same value, a set in any order included', () => {
+    expect(compareSeedWithStored('tokens.accessTokenLifespanSeconds', 600, 600)).toBe('same');
+    expect(
+      compareSeedWithStored(
+        'registration.dynamicRegistrationAllowedScopes',
+        ['openid', 'profile'],
+        ['profile', 'openid']
+      )
+    ).toBe('same');
+    expect(compareSeedWithStored('mail.smtp.host', 'smtp.example.com', 'smtp.example.com')).toBe(
+      'same'
+    );
+  });
+
+  it('says which way an ordered field moves, from the stored value to the environment', () => {
+    // A shorter lifetime is stricter.
+    expect(compareSeedWithStored('tokens.accessTokenLifespanSeconds', 300, 900)).toBe('stricter');
+    expect(compareSeedWithStored('tokens.accessTokenLifespanSeconds', 900, 300)).toBe('looser');
+    // Fewer allowed scopes is stricter.
+    expect(
+      compareSeedWithStored(
+        'registration.dynamicRegistrationAllowedScopes',
+        ['openid'],
+        ['openid', 'profile']
+      )
+    ).toBe('stricter');
+  });
+
+  it('calls a change of a field with no order different', () => {
+    expect(compareSeedWithStored('mail.smtp.host', 'new.example.com', 'old.example.com')).toBe(
+      'different'
+    );
+    expect(compareSeedWithStored('mail.provider', 'smtp', 'mock')).toBe('different');
+  });
+
+  it('refuses a path that is not a field', () => {
+    expect(() => compareSeedWithStored('mail.nothing', 1, 2)).toThrow(TypeError);
   });
 });

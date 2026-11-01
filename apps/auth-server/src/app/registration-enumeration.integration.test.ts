@@ -157,9 +157,9 @@ describe('registration does not reveal whether an address is registered (real co
     try {
       expect((await register(app, VICTIM, VICTIM_PASSWORD)).statusCode).toBe(202);
       await vi.waitFor(() =>
-        expect(sent).toHaveBeenCalledWith(VICTIM, expect.any(String), MAIL_LINK)
+        expect(sent).toHaveBeenCalledWith(expect.any(String), VICTIM, expect.any(String), MAIL_LINK)
       );
-      const token = sent.mock.calls.at(-1)?.[1];
+      const token = sent.mock.calls.at(-1)?.[2];
       const verified = await app.inject({
         method: 'POST',
         url: '/auth/verify',
@@ -221,7 +221,7 @@ describe('registration does not reveal whether an address is registered (real co
       expect(metrics.body).not.toContain('email_not_verified');
 
       // What did happen reaches only the mailbox, and the victim is unharmed.
-      await vi.waitFor(() => expect(notices).toHaveBeenCalledWith(VICTIM));
+      await vi.waitFor(() => expect(notices).toHaveBeenCalledWith(expect.any(String), VICTIM));
       expect((await login(app, VICTIM, VICTIM_PASSWORD)).statusCode).toBe(200);
       notices.mockRestore();
     });
@@ -237,7 +237,7 @@ describe('registration does not reveal whether an address is registered (real co
 
       expect(again.statusCode).toBe(202);
       await vi.waitFor(() =>
-        expect(links).toHaveBeenCalledWith(FREE, expect.any(String), MAIL_LINK)
+        expect(links).toHaveBeenCalledWith(expect.any(String), FREE, expect.any(String), MAIL_LINK)
       );
       const realm = await app.repositories.realms.findByName(REALM);
       if (!realm) throw new Error('no realm');
@@ -249,7 +249,7 @@ describe('registration does not reveal whether an address is registered (real co
       expect(credential).toBeDefined();
       // Still the first registration's account, password unchanged: the new
       // link verifies only with the password chosen first.
-      const token = links.mock.calls.at(-1)?.[1];
+      const token = links.mock.calls.at(-1)?.[2];
       const wrong = await app.inject({
         method: 'POST',
         url: '/auth/verify',

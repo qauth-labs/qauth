@@ -19,6 +19,7 @@ export * from './oid4vp-request-states.repository';
 export * from './realm-keys.repository';
 export * from './realm-policy-record';
 export * from './realm-public-keys.repository';
+export * from './realm-secrets.repository';
 export * from './realms.repository';
 export * from './refresh-tokens.repository';
 export * from './sessions.repository';

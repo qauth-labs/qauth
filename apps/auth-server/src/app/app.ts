@@ -1,10 +1,10 @@
 import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
+import { databasePlugin, hasRepository } from '@qauth-labs/fastify-plugin-db';
 import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
 import { egressPlugin, type EgressPluginOptions } from '@qauth-labs/fastify-plugin-egress';
-import { emailPlugin, type EmailProviderConfig } from '@qauth-labs/fastify-plugin-email';
+import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 import { type DeliveryRoute, eventDeliveryPlugin } from '@qauth-labs/fastify-plugin-event-delivery';
 import {
   assertAttestingIssuersUsable,
@@ -21,9 +21,13 @@ import { jwtPlugin } from '@qauth-labs/fastify-plugin-jwt';
 import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import { pkcePlugin } from '@qauth-labs/fastify-plugin-pkce';
 import {
+  createRealmSecretStoreOfRealms,
   defaultsFromEnv,
   REALM_POLICY_SCHEMA_VERSION,
   realmPolicyPlugin,
+  type RealmSecretReader,
+  secretSeedKeys,
+  secretSeedsFromEnv,
   seedKeysSetIn,
 } from '@qauth-labs/fastify-plugin-realm-policy';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
@@ -58,13 +62,22 @@ import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables
 import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
+import { logRefusedMailTransports } from './helpers/realm-mail-transport';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
+import {
+  realmMailSource,
+  realmSecretCipher,
+  type RealmSecretSeedSettings,
+  seedRealmSecrets,
+} from './helpers/realm-secrets';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
 import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-boot';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
+import { installInternalApi, type InternalApiOptions } from './internal/listener';
+import { publicInternalRouteProblem } from './internal/route-manifest';
 import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
@@ -82,6 +95,7 @@ import {
   repositoriesFor,
   routeRolesProblem,
   servesAdminListener,
+  servesInternalListener,
   ServiceRoleBootError,
 } from './service-roles';
 
@@ -153,6 +167,26 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
       ...seedKey,
       readFromRealmRow: POLICIES_READ_FROM_REALM_ROW.has(seedKey.path),
     })),
+    // What each set key seeds, compared with the stored value of a policy
+    // the server reads from the row (#529): a stricter or another value is
+    // logged, so a key changed in the environment does not go unseen.
+    environmentSeeds: defaultsFromEnv(env),
+  };
+}
+
+/**
+ * The settings of the realms' secret seed (#529), from the raw environment:
+ * the secret values it sets, each one's key, and the smtp server and user
+ * `SMTP_PASSWORD` belongs to. Exported for the E2E harness, which seeds
+ * again after it empties the database.
+ */
+export function realmSecretSeedSettings(): RealmSecretSeedSettings {
+  const { smtp } = defaultsFromEnv(process.env).mail;
+  return {
+    realmName: env.DEFAULT_REALM_NAME,
+    seeds: secretSeedsFromEnv(process.env),
+    seedKeys: secretSeedKeys(),
+    environmentSmtp: { host: smtp.host, port: smtp.port, user: smtp.user },
   };
 }
 
@@ -198,6 +232,15 @@ export interface AppOptions {
    * other members are test support.
    */
   adminListener?: AdminApiOptions & { readonly server: FastifyInstance };
+  /**
+   * The internal listener (ADR-019 Decision 8, #496): the Fastify instance
+   * `createInternalServer` built, on which the app installs the internal
+   * routes of this process's roles once its own plugins are registered
+   * (`internal/listener.ts`), and which it closes when it closes. `main.ts`
+   * passes one when the process's roles need it (`servesInternalListener`);
+   * the app refuses one otherwise. `modules` is test support.
+   */
+  internalListener?: Omit<InternalApiOptions, 'roles'> & { readonly server: FastifyInstance };
 }
 
 declare module 'fastify' {
@@ -402,41 +445,11 @@ async function registerFederation(
 }
 
 /** The mail service, for a process whose roles send mail (#495: `api`). */
-async function registerEmail(fastify: FastifyInstance): Promise<void> {
-  // Configure email provider from environment variables
-  const emailProvider = env.EMAIL_PROVIDER;
-
-  // Build provider-specific configuration
-  let providerConfig: EmailProviderConfig | undefined;
-  if (emailProvider === 'resend') {
-    if (!env.RESEND_API_KEY) {
-      throw new Error(
-        'RESEND_API_KEY is required when EMAIL_PROVIDER is "resend". Please set it in your environment variables.'
-      );
-    }
-    providerConfig = {
-      apiKey: env.RESEND_API_KEY,
-      fromAddress: env.EMAIL_FROM_ADDRESS,
-    };
-  } else if (emailProvider === 'smtp') {
-    if (!env.SMTP_HOST || !env.SMTP_PORT || !env.SMTP_USER || !env.SMTP_PASSWORD) {
-      throw new Error(
-        'SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD are required when EMAIL_PROVIDER is "smtp". Please set them in your environment variables.'
-      );
-    }
-    providerConfig = {
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure: env.SMTP_SECURE,
-      auth: {
-        user: env.SMTP_USER,
-        pass: env.SMTP_PASSWORD,
-      },
-      fromAddress: env.EMAIL_FROM_ADDRESS,
-    };
-  }
-  // For 'mock' provider, providerConfig is undefined (no config needed)
-
+async function registerEmail(
+  fastify: FastifyInstance,
+  secrets: RealmSecretReader | null,
+  defaultRealmBoot: boolean
+): Promise<void> {
   // EMAIL_BASE_URL is optional and no longer read (#490). Say so when it is
   // set to another base than the default realm's issuer, where the links went.
   const emailBaseUrlIgnored = emailBaseUrlWarning(env.EMAIL_BASE_URL, env.JWT_ISSUER);
@@ -447,11 +460,27 @@ async function registerEmail(fastify: FastifyInstance): Promise<void> {
     );
   }
 
+  // Each realm sends through its own transport, from its own sender (ADR-019
+  // Decision 10, #529): `mail.*` of its policies, read anew for every mail,
+  // and the SMTP password or Resend API key of its secret store. The
+  // transport built for a realm is kept until its policy counter moves, so a
+  // change reaches the next mail without a restart. EMAIL_PROVIDER, SMTP_*,
+  // RESEND_API_KEY and EMAIL_FROM_* only seed: the policies of a new realm,
+  // and the realms' secrets once (`seedRealmSecrets`). A
+  // transport that lacks what it sends with no longer stops the boot: the
+  // policy update refuses it, and a mail through it fails, naming the path.
+  // The environment's secrets serve only a realm with no policies yet, as
+  // before, during a rolling upgrade.
   await fastify.register(emailPlugin, {
-    provider: emailProvider,
-    providerConfig,
+    source: realmMailSource(fastify, secrets, secretSeedsFromEnv(process.env)),
+    // The operator's switches for every realm's smtp transport (review of
+    // #937): STARTTLS is required, and only a public address is dialled,
+    // unless these say otherwise; no realm policy can change them.
+    smtp: {
+      allowPlaintext: env.SMTP_ALLOW_PLAINTEXT,
+      allowedHosts: env.SMTP_ALLOWED_HOSTS,
+    },
     serviceConfig: {
-      defaultFrom: env.EMAIL_FROM_ADDRESS,
       // No link base here: a mail's links start at the issuer of the realm
       // the account belongs to, passed with each mail (ADR-019 Decision 1,
       // #490). EMAIL_BASE_URL is no longer read.
@@ -460,6 +489,20 @@ async function registerEmail(fastify: FastifyInstance): Promise<void> {
       verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
     },
   });
+
+  // A realm whose stored smtp transport the switches above now refuse (a
+  // local or private relay not in SMTP_ALLOWED_HOSTS, one in the clear
+  // without SMTP_ALLOW_PLAINTEXT) would stop sending with nothing said: each
+  // boot names it as an error, with the key to set, and serves on. After the
+  // default realm's boot step, whose `onReady` hook registered first.
+  if (defaultRealmBoot) {
+    fastify.addHook('onReady', async () => {
+      await logRefusedMailTransports(
+        { realms: fastify.repositories.realms, policies: fastify.policyStore, log: fastify.log },
+        { allowPlaintext: env.SMTP_ALLOW_PLAINTEXT, allowedHosts: env.SMTP_ALLOWED_HOSTS }
+      );
+    });
+  }
 }
 
 /**
@@ -522,6 +565,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     eventDeliveryRoutes,
     egressClientFactory,
     adminListener,
+    internalListener,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -625,9 +669,25 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // The realm policy store (#516): `fastify.policyStore`, which the default
   // realm's boot step below fills realms through, and the flows read a
   // realm's policies from, off the realm row they already loaded.
+  //
+  // The realm secret store (#529) comes with it where this process's roles
+  // read or seed a realm's secrets: values encrypted with the realm's
+  // data-at-rest key through the signer, in `realm_secrets`.
+  // Only `isSet` and the seed are decorated: the store itself, which reads a
+  // value, stays here and goes to the mail sender alone (`registerEmail`).
+  const realmSecrets = hasRepository(fastify.repositories, 'realmSecrets')
+    ? createRealmSecretStoreOfRealms({
+        repository: fastify.repositories.realmSecrets,
+        cipher: realmSecretCipher(fastify),
+      })
+    : null;
   await fastify.register(realmPolicyPlugin, {
     seeds: realmPolicySeeds,
     realms: fastify.repositories.realms,
+    ...(realmSecrets === null ? {} : { secrets: realmSecrets }),
+    // The SMTP hosts a realm may name although they are not public: the
+    // operator's alone (review of #937).
+    allowedSmtpHosts: env.SMTP_ALLOWED_HOSTS,
   });
 
   // The default realm's boot step (ADR-019 Decision 1, #484): find or create
@@ -694,6 +754,27 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
           }
         : {}),
     });
+    // The realms' secrets (#529), once the key boot step above gave the
+    // default realm a data-at-rest key: SMTP_PASSWORD or RESEND_API_KEY is
+    // stored encrypted in the default realm, and in each realm whose stored
+    // transport is the environment's and needs it, the first time a node
+    // can, and never again. An `onReady` hook registered after the signer's,
+    // so it runs after it.
+    if (defaultRealmBoot) {
+      fastify.addHook('onReady', async () => {
+        const secrets = fastify.realmSecretStore;
+        if (secrets === null) return;
+        await seedRealmSecrets(
+          {
+            realms: fastify.repositories.realms,
+            policies: fastify.policyStore,
+            secrets,
+            log: fastify.log,
+          },
+          realmSecretSeedSettings()
+        );
+      });
+    }
   } else {
     fastify.decorate(
       'signer',
@@ -795,7 +876,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   if (plugins.has('email')) {
-    await registerEmail(fastify);
+    await registerEmail(fastify, realmSecrets, defaultRealmBoot);
   }
 
   if (plugins.has('jwt')) {
@@ -998,10 +1079,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   // Over every route of the app, a plugin's as well as a route module's: an
-  // admin route registers only on the admin listener (#511), and every route
-  // names its roles.
+  // admin route registers only on the admin listener (#511), an internal one
+  // only on the internal listener (#496), and every route names its roles.
   const unplaced = registeredRoutes
-    .map((route) => publicRouteProblem(route) ?? routeRolesProblem(route, roles))
+    .map(
+      (route) =>
+        publicRouteProblem(route) ??
+        publicInternalRouteProblem(route) ??
+        routeRolesProblem(route, roles)
+    )
     .filter((problem) => problem !== undefined);
   if (unplaced.length > 0) {
     throw new Error(unplaced.join('\n'));
@@ -1018,5 +1104,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     }
     const { server: adminServer, ...adminOptions } = adminListener;
     await installAdminApi(adminServer, fastify, adminOptions);
+  }
+
+  // The internal listener (ADR-019 Decision 8, #496), on a process whose
+  // roles need it: it shares the database, cache and signer plugins above,
+  // registers the internal routes of this process's roles, and closes before
+  // the plugins it shares.
+  if (internalListener !== undefined) {
+    if (!servesInternalListener(roles, internalListener.modules)) {
+      throw new Error(
+        `The internal listener runs only on a process that holds the signer while the roles are split, or whose roles serve an internal route (SERVICE_ROLES=${describeServiceRoles(roles)})`
+      );
+    }
+    const { server: internalServer, ...internalOptions } = internalListener;
+    await installInternalApi(internalServer, fastify, { ...internalOptions, roles });
   }
 }
