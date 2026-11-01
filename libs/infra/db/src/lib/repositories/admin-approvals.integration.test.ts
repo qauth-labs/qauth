@@ -447,11 +447,16 @@ describe('approval requests (real Postgres)', () => {
     expect(await approvals.findById(realm.id, approval.id)).toBeUndefined();
   });
 
-  /** Backends of this database inside a transaction that touched admin_approvals. */
+  /**
+   * Backends of this database inside a transaction that touched
+   * admin_approvals. `l.database` keeps out the server's other databases:
+   * copied from one template, their tables have the same OIDs.
+   */
   async function openTransactionsOnApprovals(): Promise<number> {
     const { rows } = await db().database.pool.query<{ count: string }>(
       `SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation
-        WHERE c.relname = 'admin_approvals' AND l.mode = 'RowExclusiveLock' AND l.granted`
+        WHERE c.relname = 'admin_approvals' AND l.mode = 'RowExclusiveLock' AND l.granted
+          AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`
     );
     return Number(rows[0].count);
   }

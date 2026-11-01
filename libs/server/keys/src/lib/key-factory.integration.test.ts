@@ -14,7 +14,6 @@ import { createPrivateKey } from 'node:crypto';
 
 import { deriveMlDsaPublicKey, getSignatureBackend } from '@qauth-labs/core-crypto';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -97,8 +96,7 @@ describe('key creation integration (real Postgres)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     pool = new Pool({ connectionString: container.connectionString });
   }, 180_000);
 

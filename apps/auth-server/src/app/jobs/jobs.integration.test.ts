@@ -2,7 +2,6 @@ import { randomBytes, randomUUID } from 'node:crypto';
 
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -58,8 +57,7 @@ describe('job runner on a real Postgres', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    postgres = await startPostgresContainer();
-    await applyQauthMigrations(postgres.connectionString);
+    postgres = await startPostgresContainer({ schema: 'migrated' });
     admin = Fastify({ logger: false });
     await admin.register(databasePlugin, {
       config: { connectionString: postgres.connectionString },
@@ -116,10 +114,16 @@ describe('job runner on a real Postgres', () => {
     return node;
   }
 
-  /** The sessions holding an advisory lock right now. */
+  /**
+   * The sessions of this database holding an advisory lock right now. Only
+   * this database: the server holds other suites' databases too, and a pid
+   * found here is terminated.
+   */
   async function lockHolders(): Promise<number[]> {
     const { rows } = await database().dbPool.query<{ pid: number }>(
-      "SELECT pid FROM pg_locks WHERE locktype = 'advisory' AND granted"
+      `SELECT pid FROM pg_locks
+        WHERE locktype = 'advisory' AND granted
+          AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`
     );
     return rows.map((row) => row.pid);
   }
