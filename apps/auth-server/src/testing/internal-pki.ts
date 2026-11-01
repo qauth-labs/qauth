@@ -31,6 +31,8 @@ export interface InternalPki {
     readonly subject?: string;
     readonly dnsNames?: readonly string[];
     readonly uris?: readonly string[];
+    readonly notBefore?: Date;
+    readonly notAfter?: Date;
   }): IssuedCredentials;
 }
 
@@ -50,6 +52,8 @@ export function createInternalPki(name = 'QAuth internal test CA'): InternalPki 
         issuer: ca,
         ...(options.dnsNames === undefined ? {} : { dnsNames: options.dnsNames }),
         ...(options.uris === undefined ? {} : { uris: options.uris }),
+        ...(options.notBefore === undefined ? {} : { notBefore: options.notBefore }),
+        ...(options.notAfter === undefined ? {} : { notAfter: options.notAfter }),
       });
       return { cert: certificate.pem, key: toPkcs8Pem(certificate.privateKey), certificate };
     },

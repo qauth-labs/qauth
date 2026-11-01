@@ -1024,7 +1024,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // registers the internal routes of this process's roles, and closes before
   // the plugins it shares.
   if (internalListener !== undefined) {
-    if (!servesInternalListener(roles)) {
+    if (!servesInternalListener(roles, internalListener.modules)) {
       throw new Error(
         `The internal listener runs only on a process that holds the signer while the roles are split, or whose roles serve an internal route (SERVICE_ROLES=${describeServiceRoles(roles)})`
       );

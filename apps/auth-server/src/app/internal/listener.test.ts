@@ -429,6 +429,33 @@ describe('the internal client', () => {
     expect(JSON.parse(after.body.toString())).toEqual({ peerRole: 'delivery' });
   });
 
+  it("refuses credentials whose key is not the certificate's own, and keeps the ones in use", async () => {
+    const mismatched = { cert: peers.web.cert, key: peers.api.key, ca: pki.caPem };
+    expect(() =>
+      createInternalClient({ url, ...mismatched, expectedServerSan: SIGNER_URI })
+    ).toThrow('do not make a TLS identity');
+    const kept = client(peers.web);
+    expect(() => kept.reloadCredentials(mismatched)).toThrow('do not make a TLS identity');
+    const response = await kept.request({ method: 'GET', path: `${FIXTURE_PREFIX}/peer` });
+    expect(JSON.parse(response.body.toString())).toEqual({ peerRole: 'web' });
+  });
+
+  it('fails the requests in flight and those queued for a connection when closed', async () => {
+    const closing = client(peers.web, { maxSockets: 1 });
+    const outcomes = [0, 1, 2].map(() =>
+      closing
+        .request({ method: 'GET', path: `${FIXTURE_PREFIX}/slow` })
+        .then(() => 'answered')
+        .catch((caught: unknown) => (caught as InternalClientError).code)
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    closing.close();
+    expect(await Promise.all(outcomes)).toEqual(['closed', 'closed', 'closed']);
+    // Nothing was sent once the client closed.
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+    expect(seen.requests).toBeLessThanOrEqual(1);
+  });
+
   it('refuses requests once closed', async () => {
     const closed = client(peers.web);
     closed.close();

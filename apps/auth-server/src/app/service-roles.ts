@@ -353,6 +353,12 @@ export function internalListenerPlan(
         message: `${variable} is required: ${serving} over mutual TLS, which needs all three internal TLS files, and the others are set`,
       });
     }
+    if (peerRoles.size === 0) {
+      problems.push({
+        variable: 'INTERNAL_PEER_ROLES',
+        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
+      });
+    }
   } else if (!isSingleProcess(roles)) {
     for (const variable of missing) {
       problems.push({

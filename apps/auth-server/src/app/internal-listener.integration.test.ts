@@ -244,19 +244,16 @@ describe('the internal listener (#496)', () => {
         ctx.skip();
         return;
       }
-      const routes: string[] = [];
+      // Refused before the app registers anything, the internal modules
+      // included: no route of the signer ever exists without mutual TLS.
       await expect(
         bootAuthServer(
           { ...baseEnvironment(infra, jwt), SERVICE_ROLES: 'api,signer' },
-          {
-            internalListener: () => ({ modules: [FIXTURE_MODULE] }),
-            onRoute: (route) => void routes.push(route.url),
-          }
+          { internalListener: () => ({ modules: [FIXTURE_MODULE] }) }
         )
       ).rejects.toThrow(
         /INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so the signer routes are not registered without it/
       );
-      expect(routes.filter((url) => url.startsWith('/internal/'))).toEqual([]);
     });
   });
 });

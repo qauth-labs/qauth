@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import { Agent, request as httpsRequest } from 'node:https';
-import type { PeerCertificate } from 'node:tls';
+import { createSecureContext, type PeerCertificate, type SecureContext } from 'node:tls';
 
 import { parsePeerSan, type PeerSan } from '@qauth-labs/server-config';
 
@@ -137,9 +137,12 @@ export interface InternalClient {
    * Use new credentials, such as a rotated certificate, for every request
    * from now on. The requests in flight finish on their connections, which
    * close then.
+   *
+   * @throws TypeError when the key is not the certificate's own, or the
+   *   material does not parse; the credentials in use stay
    */
   reloadCredentials(credentials: InternalClientCredentials): void;
-  /** Close every connection. A later request fails with `closed`. */
+  /** Close every connection: a request not answered yet, and any later one, fails with `closed`. */
   close(): void;
 }
 
@@ -218,17 +221,34 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
           `The internal server's certificate does not hold the expected SAN ${expected.type}:${expected.value}`
         );
 
+  /**
+   * The secure context of `credentials`, built once per pool: a key that is
+   * not the certificate's own, or material that does not parse, is refused
+   * here, before any request, and never replaces credentials that work.
+   */
+  const secureContextOf = (credentials: InternalClientCredentials): SecureContext => {
+    try {
+      return createSecureContext({
+        cert: credentials.cert,
+        key: credentials.key,
+        ca: credentials.ca,
+        minVersion: INTERNAL_TLS_VERSION,
+        maxVersion: INTERNAL_TLS_VERSION,
+      });
+    } catch {
+      throw new TypeError(
+        "createInternalClient: the certificate, key and CA do not make a TLS identity: the key must be the certificate's own"
+      );
+    }
+  };
+
   const createPool = (credentials: InternalClientCredentials): Pool => ({
     agent: new Agent({
       keepAlive: true,
       maxSockets,
       maxFreeSockets: maxSockets,
       timeout: IDLE_SOCKET_TIMEOUT_MS,
-      cert: credentials.cert,
-      key: credentials.key,
-      ca: credentials.ca,
-      minVersion: INTERNAL_TLS_VERSION,
-      maxVersion: INTERNAL_TLS_VERSION,
+      secureContext: secureContextOf(credentials),
       rejectUnauthorized: true,
       checkServerIdentity,
       // Every connection checks the server's certificate in full: no
@@ -241,6 +261,8 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
 
   let pool = createPool(options);
   const retired = new Set<Pool>();
+  /** The requests not settled yet, each with the way to fail it: `close()` fails them all. */
+  const pending = new Set<(error: InternalClientError) => void>();
   let closed = false;
 
   const release = (used: Pool): void => {
@@ -259,20 +281,34 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
         return;
       }
       const body = request.body === undefined ? undefined : Buffer.from(request.body);
-      const outgoing = httpsRequest(target, {
-        method: request.method,
-        agent: used.agent,
-        headers: {
-          ...request.headers,
-          ...(body === undefined ? {} : { 'content-length': String(body.length) }),
-        },
-      });
+      let outgoing: ReturnType<typeof httpsRequest>;
+      try {
+        outgoing = httpsRequest(target, {
+          method: request.method,
+          agent: used.agent,
+          headers: {
+            ...request.headers,
+            ...(body === undefined ? {} : { 'content-length': String(body.length) }),
+          },
+        });
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        reject(
+          new InternalClientError(
+            'unreachable',
+            `The internal request could not be started${code === undefined ? '' : ` (${code})`}`,
+            code
+          )
+        );
+        return;
+      }
       let settled = false;
       const finish = (outcome: () => void): void => {
         if (settled) return;
         settled = true;
         clearTimeout(deadline);
         request.signal?.removeEventListener('abort', onAbort);
+        pending.delete(fail);
         outcome();
       };
       const fail = (error: InternalClientError): void => {
@@ -292,6 +328,7 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
         );
       }, timeoutMs);
       request.signal?.addEventListener('abort', onAbort, { once: true });
+      pending.add(fail);
 
       outgoing.on('error', (error: NodeJS.ErrnoException) => {
         if (error instanceof InternalClientError) {
@@ -373,6 +410,8 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
     reloadCredentials(credentials: InternalClientCredentials): void {
       if (closed) return;
       const previous = pool;
+      // Throws for credentials that do not make a TLS identity, and the
+      // pool in use stays.
       pool = createPool(credentials);
       previous.retired = true;
       if (previous.active === 0) previous.agent.destroy();
@@ -381,6 +420,11 @@ export function createInternalClient(options: InternalClientOptions): InternalCl
 
     close(): void {
       closed = true;
+      // The requests in flight, and those queued in the pool for a socket,
+      // which destroying the agent alone would still send.
+      for (const fail of [...pending]) {
+        fail(new InternalClientError('closed', 'The internal client is closed'));
+      }
       pool.agent.destroy();
       for (const old of retired) old.agent.destroy();
       retired.clear();

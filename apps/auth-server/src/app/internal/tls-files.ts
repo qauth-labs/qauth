@@ -67,18 +67,30 @@ export function internalSecureContextOptions(material: InternalTlsMaterial): Sec
 }
 
 /**
- * Check that `material` makes a usable identity: the certificate and the CA
- * file parse, and the private key belongs to the certificate. The message
- * names the files, never their contents.
+ * Check that `material` makes a usable identity: the certificate parses and
+ * has not expired, the CA file parses, and the private key belongs to the
+ * certificate. The message names the files, never their contents.
  *
  * @throws InternalTlsFileError
  */
-export function checkInternalTlsMaterial(material: InternalTlsMaterial): void {
+export function checkInternalTlsMaterial(
+  material: InternalTlsMaterial,
+  now: Date = new Date()
+): void {
+  let certificate: X509Certificate;
   try {
-    new X509Certificate(material.cert);
+    certificate = new X509Certificate(material.cert);
   } catch {
     throw new InternalTlsFileError(
       `${VARIABLES.certPath} does not hold a PEM certificate: the internal listener and the internal client present it`
+    );
+  }
+  // An expired certificate would fail every peer's handshake. One not valid
+  // yet is let through: a fresh certificate's start may sit a few seconds
+  // ahead of this clock, and peers check it themselves.
+  if (new Date(certificate.validTo).getTime() <= now.getTime()) {
+    throw new InternalTlsFileError(
+      `${VARIABLES.certPath} holds a certificate that expired on ${certificate.validTo}`
     );
   }
   try {
@@ -198,6 +210,7 @@ export function watchInternalTlsFiles(
       options.onError?.(error as InternalTlsFileError);
       return;
     }
+    if (stopped) return;
     try {
       onChange(next);
     } catch (error) {
@@ -215,9 +228,13 @@ export function watchInternalTlsFiles(
   const timer = setInterval(() => {
     if (reading) return;
     reading = true;
-    void check().finally(() => {
-      reading = false;
-    });
+    void check()
+      // A callback that throws must not take the process down: the files in
+      // use stay, and the next read tries again.
+      .catch(() => undefined)
+      .finally(() => {
+        reading = false;
+      });
   }, options.intervalMs ?? DEFAULT_TLS_RELOAD_INTERVAL_MS);
   timer.unref();
 

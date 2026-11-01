@@ -283,7 +283,7 @@ describe('the internal listener of src/main.ts (#496, testcontainers)', () => {
       20_000,
       250
     );
-    expect(logged(server, 'Reloaded the internal TLS files')()).toBe(true);
+    await until(logged(server, 'Reloaded the internal TLS files'), 'the reload log line', server);
     expect(server.child.exitCode).toBeNull();
 
     server.child.kill('SIGTERM');

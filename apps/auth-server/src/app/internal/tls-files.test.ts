@@ -80,6 +80,25 @@ describe('readInternalTlsFiles', () => {
     expect(message).not.toContain('PRIVATE KEY');
   });
 
+  it('refuses an expired certificate, and lets one through that starts a moment from now', () => {
+    const { pki, directory } = files();
+    const expired = pki.issue({
+      dnsNames: ['signer.qauth.internal'],
+      notBefore: new Date(Date.now() - 2 * 86_400_000),
+      notAfter: new Date(Date.now() - 86_400_000),
+    });
+    directory.replace(expired, pki.caPem);
+    expect(() => readInternalTlsFiles(directory.files)).toThrow(
+      /^INTERNAL_TLS_CERT_PATH holds a certificate that expired on /
+    );
+    const early = pki.issue({
+      dnsNames: ['signer.qauth.internal'],
+      notBefore: new Date(Date.now() + 30_000),
+    });
+    directory.replace(early, pki.caPem);
+    expect(() => readInternalTlsFiles(directory.files)).not.toThrow();
+  });
+
   it('refuses files that hold no PEM certificate', () => {
     const { directory } = files();
     writeFileSync(directory.files.caPath, 'not a certificate');

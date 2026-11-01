@@ -187,6 +187,44 @@ const unknownRoutePlugin = fp(
   { name: '@qauth-labs/internal-unknown-route' }
 );
 
+/** How long a connection may take to complete its TLS handshake. */
+export const INTERNAL_HANDSHAKE_TIMEOUT_MS = 10_000;
+
+/** The shortest time between two log lines about refused handshakes. */
+const REFUSAL_LOG_INTERVAL_MS = 60_000;
+
+/** The most refusal reasons {@link LogSampler} keeps a count for. */
+const MAX_SAMPLED_REASONS = 32;
+
+/**
+ * Lets one event per reason through per interval and counts the others, so
+ * a stream of the same refusal writes one line a minute, with how many it
+ * stands for, while a new reason is still logged at once. The reasons are
+ * the TLS layer's error codes, a closed set; past {@link MAX_SAMPLED_REASONS}
+ * they share one count.
+ */
+class LogSampler {
+  private readonly reasons = new Map<string, { last: number; skipped: number }>();
+
+  constructor(private readonly intervalMs: number) {}
+
+  /** The count of events of `reason` skipped since the last one let through, or `undefined` to skip this one. */
+  take(reason: string, now: number): number | undefined {
+    const key =
+      this.reasons.has(reason) || this.reasons.size < MAX_SAMPLED_REASONS ? reason : 'other';
+    const entry = this.reasons.get(key) ?? { last: Number.NEGATIVE_INFINITY, skipped: 0 };
+    this.reasons.set(key, entry);
+    if (now - entry.last < this.intervalMs) {
+      entry.skipped += 1;
+      return undefined;
+    }
+    const skipped = entry.skipped;
+    entry.last = now;
+    entry.skipped = 0;
+    return skipped;
+  }
+}
+
 /**
  * A refused connection about the client's certificate, rather than a dropped
  * one: no certificate, or one the CA file did not issue. For the second,
@@ -223,6 +261,7 @@ function isCertificateRefusal(
  */
 export function createInternalServer(options: InternalServerOptions): FastifyInstance {
   const { tls } = options;
+  const deadline = requestDeadlineOptions(env.REQUEST_TIMEOUT_MS);
   const server = Fastify({
     ...(options.loggerInstance === undefined
       ? { logger: false }
@@ -234,6 +273,12 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
             ...internalSecureContextOptions(tls.material),
             requestCert: true,
             rejectUnauthorized: true,
+            // Node's default is 120 s: a connection that never completes its
+            // handshake is dropped within this.
+            handshakeTimeout: INTERNAL_HANDSHAKE_TIMEOUT_MS,
+            // With `https` set, Fastify reads the headers timeout here, not
+            // from `http` (`requestDeadlineOptions`).
+            headersTimeout: deadline.http.headersTimeout,
           },
         }),
     requestIdHeader: false,
@@ -242,7 +287,7 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
     trustProxy: false,
     routerOptions: { ignoreTrailingSlash: true },
     exposeHeadRoutes: false,
-    ...requestDeadlineOptions(env.REQUEST_TIMEOUT_MS),
+    ...deadline,
     frameworkErrors: answerFrameworkError,
     clientErrorHandler: answerClientError,
   }).withTypeProvider<ZodTypeProvider>() as unknown as FastifyInstance;
@@ -261,6 +306,7 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
 
   if (tls !== undefined) {
     const tlsServer = server.server as unknown as TlsServer;
+    const refusalLog = new LogSampler(REFUSAL_LOG_INTERVAL_MS);
     tlsServer.on('tlsClientError', (error, socket) => {
       const fields = {
         err: { code: (error as NodeJS.ErrnoException).code, message: error.message },
@@ -269,7 +315,18 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
           : { authorizationError: String(socket.authorizationError) }),
       };
       if (isCertificateRefusal(error, socket)) {
-        server.log.warn(fields, 'Refused an internal TLS connection at the handshake');
+        // At most one line a minute per reason: a TLS health check that
+        // presents no certificate would otherwise write one per probe.
+        const reason = String(
+          socket.authorizationError ?? (error as NodeJS.ErrnoException).code ?? 'unknown'
+        );
+        const suppressed = refusalLog.take(reason, Date.now());
+        if (suppressed !== undefined) {
+          server.log.warn(
+            { ...fields, suppressed },
+            'Refused an internal TLS connection at the handshake'
+          );
+        }
       } else {
         server.log.debug(fields, 'An internal TLS connection failed at the handshake');
       }
@@ -280,8 +337,12 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
         tls.files,
         tls.material,
         (material) => {
-          // A new context for new connections; open ones keep theirs.
+          // A new context for new connections. Idle keep-alive connections
+          // close, so their peers connect again under the new files; a
+          // connection busy with a request keeps its context until it is
+          // idle at a later reload, or closes.
           tlsServer.setSecureContext(internalSecureContextOptions(material));
+          server.server.closeIdleConnections();
           server.log.info(
             { certificate: describeCertificate(material.cert) },
             'Reloaded the internal TLS files'

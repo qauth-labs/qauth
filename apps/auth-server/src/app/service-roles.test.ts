@@ -443,6 +443,12 @@ describe('the internal listener (#496)', () => {
     const check = checkServiceRoles(settings, {});
     expect(check.problems.map((problem) => problem.variable)).toEqual(['INTERNAL_TLS_KEY_PATH']);
     expect(check.problems[0]?.message).toContain('needs all three internal TLS files');
+    // Every missing setting in one boot.
+    expect(
+      checkServiceRoles({ ...settings, INTERNAL_PEER_ROLES: new Map() }, {}).problems.map(
+        (problem) => problem.variable
+      )
+    ).toEqual(['INTERNAL_TLS_KEY_PATH', 'INTERNAL_PEER_ROLES']);
   });
 
   it('refuses mutual TLS with no peer it could admit', () => {
