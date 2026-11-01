@@ -383,8 +383,9 @@ created later gets its own password through a policy update.
 `EMAIL_PROVIDER=smtp` without `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` or
 `SMTP_PASSWORD`, or `resend` without `RESEND_API_KEY`, used to refuse to start.
 Now the realm's policy update refuses such a transport (422), the boot warns
-when the default realm's stored transport lacks its secret, and a mail through
-it fails, logging the missing path.
+for each setting or secret the default realm's stored transport lacks
+(`the realm "master" cannot send mail: its mail.smtp.host is required ...`), and
+a mail through it fails, logging the missing path.
 
 **The `From` header carries the sender name.** Mail is now sent from
 `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>` as the realm stores them (`QAuth
@@ -393,7 +394,20 @@ it fails, logging the missing path.
 Until the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)) ships, no route changes
 a realm's mail transport, sender or password, and the environment keys no longer
-do.
+do. To replace a leaked or rotated `SMTP_PASSWORD` or `RESEND_API_KEY` of the
+default realm meanwhile, set the new value in the environment, delete the
+realm's row for it, and restart every node:
+
+```sql
+DELETE FROM realm_secrets
+ WHERE name = 'mail.smtp.password' -- or 'mail.resend.apiKey'
+   AND realm_id = (SELECT id FROM realms WHERE name = 'master'); -- DEFAULT_REALM_NAME
+```
+
+The next boot of a node that holds the signer stores the new value, as at the
+first boot. Restart every node, not one: a running node keeps the transport it
+built for the realm until the realm's policies change, and deleting the row
+changes none of them.
 
 ### Redirect URIs the consent screen cannot show
 

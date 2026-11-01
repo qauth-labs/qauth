@@ -114,7 +114,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   without its host, port, user, sender address and password, or `resend`
   without its sender address and API key, is refused (`RealmPolicyRefusedError`,
   422 `unprocessable_content`); the boot no longer refuses such an environment,
-  and warns when the default realm's stored transport lacks its secret. Mail is
+  and warns for each setting or secret the default realm's stored transport
+  lacks. Until the admin API's policy update ([#517]) ships, a mail secret is
+  replaced by deleting its `realm_secrets` row and restarting with the new
+  value, as `operate/upgrades` describes. Mail is
   sent from `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>`, as the realm stores them.
   Each boot also warns when a seed key of a policy the server reads from the row
   is stricter than the stored value, or, for a policy with no order, differs
