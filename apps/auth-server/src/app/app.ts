@@ -861,9 +861,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         // with 503 and `Retry-After` (#751); see `helpers/client-auth.ts`.
         queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
       },
-      validationConfig: {
-        minScore: env.PASSWORD_MIN_SCORE,
-      },
+      // No password strength score here: each realm sets its own lowest
+      // score (`password.minScore`, #528), which registration reads from the
+      // realm row; PASSWORD_MIN_SCORE only seeds it in a new realm.
     });
   }
 
