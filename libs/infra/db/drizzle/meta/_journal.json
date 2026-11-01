@@ -351,6 +351,13 @@
       "when": 1793500699227,
       "tag": "0049_realm_secrets",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793507395176,
+      "tag": "0050_oauth_client_client_credentials_scopes",
+      "breakpoints": true
     }
   ]
 }
