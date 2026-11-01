@@ -51,7 +51,9 @@ const method = createUpstreamOidcMethod({ type: 'oidc_corp', display: { name: 'E
   `acr`, `amr`, `auth_time`, `sid`, `cnf`) come from the signed ID token alone: userinfo's are
   dropped, so it never adds an `acr` or `auth_time` the ID token lacks.
 - **Caps on every call**: no redirect is followed (`redirect: 'error'`), and each call has its own
-  deadline and response size cap (`UPSTREAM_OIDC_CALL_CAPS`), under the egress client's.
+  deadline and response size cap (`UPSTREAM_OIDC_CALL_CAPS`). These two only stop the method
+  waiting and reading; the host egress client's own limits bound the underlying call (see "Caps"
+  below).
 
 ## Stored config
 
@@ -100,9 +102,11 @@ client's address checks on every endpoint without calling it, and reports one fi
 - **One client id.** For `private_key_jwt` the form's `client_id` is the config's `clientId`, and
   the assertion's `iss` and `sub` are the client id the signer's upstream-provider record names;
   the two must agree.
-- **Caps.** Each call's deadline and size cap apply on top of the egress client's own: a call
-  past its deadline is abandoned (the egress client still bounds it), and an answer over its
-  cap is refused after the egress client has read it, within its own cap.
+- **Caps.** The per-call deadline and size cap only stop the method waiting and reading: past
+  its deadline the method gives up on the call, and an answer over its cap is refused after the
+  egress client has read it. Neither aborts the call or limits what the egress client fetches.
+  The host egress client's own limits, `totalTimeoutMs` and `maxResponseBytes`, bound the
+  underlying call, so they are what holds a slow or oversized provider in check.
 - **Discovery is lenient where the document is silent.** A document that omits
   `token_endpoint_auth_methods_supported`, `response_modes_supported`,
   `response_types_supported` or (for `private_key_jwt`)

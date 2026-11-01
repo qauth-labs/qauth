@@ -258,8 +258,10 @@ What it does:
   are plain text; `email` and `phone_number` are verified only when the provider's own
   `*_verified` claim is `true`.
 - **Every call** asks for `redirect: 'error'` (no redirect is followed) and has its own deadline
-  and response cap under the egress client's: 5 seconds and 64 KiB for discovery, the key set and
-  userinfo, 10 seconds and 64 KiB for the token request.
+  and response cap: 5 seconds and 64 KiB for discovery, the key set and userinfo, 10 seconds and
+  64 KiB for the token request. These only stop the method waiting and reading: they abort no
+  call and limit nothing the egress client fetches. The host egress client's own limits,
+  `totalTimeoutMs` and `maxResponseBytes`, bound the underlying call.
 
 **The stored client secret.** `sealUpstreamOidcConfig` encrypts it with the realm's
 `data_at_rest` key through the signer role, under the context
