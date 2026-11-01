@@ -72,10 +72,10 @@ export const REALM_MAIL_SECRET_CONTEXT_PREFIX = 'realm_secrets:mail.';
 
 /**
  * The `context` prefix of an upstream OpenID Provider's client secret
- * (`upstream-oidc:client-secret:<realm id>:<provider type>`, #601): the
- * other kind of `data_at_rest` ciphertext the `api` role may decrypt, so the
- * host can open a provider's stored config for the code exchange, as it
- * already signs that provider's client assertions (#547).
+ * (`upstream-oidc:client-secret:<realm id>:<provider type>:<destination>`,
+ * #601): the other kind of `data_at_rest` ciphertext the `api` role may
+ * decrypt, so the host can open a provider's stored config for the code
+ * exchange, as it already signs that provider's client assertions (#547).
  * `@qauth-labs/server-upstream-oidc` builds its contexts from this constant.
  */
 export const UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX = 'upstream-oidc:client-secret:';

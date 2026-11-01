@@ -122,7 +122,7 @@ describe('SIGNER_POLICY', () => {
     for (const context of [
       'realm_secrets:mail.smtp.password',
       'realm_secrets:mail.resend.apiKey',
-      'upstream-oidc:client-secret:realm-1:oidc_corp',
+      `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
     }

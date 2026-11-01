@@ -51,9 +51,20 @@ const method = createUpstreamOidcMethod({ type: 'oidc_corp', display: { name: 'E
 ## Stored config
 
 `sealUpstreamOidcConfig` encrypts the client secret with the realm's data-at-rest key through the
-signer role (`Signer.encrypt`, context `upstream-oidc:client-secret:<realm id>:<type>`);
-`openUpstreamOidcConfig` decrypts it for the method's context; `describeUpstreamOidcConfig` is
-the view an API or event may carry, with neither the secret nor its ciphertext.
+signer role (`Signer.encrypt`, context
+`upstream-oidc:client-secret:<realm id>:<type>:<destination>`); `openUpstreamOidcConfig` decrypts
+it for the method's context; `describeUpstreamOidcConfig` is the view an API or event may carry,
+with neither the secret nor its ciphertext.
+
+**The secret is bound to where it is sent.** `<destination>` is the SHA-256 (hex) of the issuer
+and, when the endpoints are set by hand, the token endpoint (`upstreamClientSecretDestination`).
+The stored form records it as `clientSecretDestination`. An admin who cannot read the write-only
+secret therefore cannot send it to a host they control by changing `issuer` or `endpoints.token`:
+`openUpstreamOidcConfig` refuses such a config with `UpstreamClientSecretDestinationChangedError`
+and decrypts nothing, and a row whose recorded destination was edited to match still does not
+decrypt, since the context names the destination. Switching between discovery and endpoints set by
+hand changes it too. The provider administration (#714) must ask for the client secret again
+whenever the issuer or the token endpoint set by hand changes, and seal it with the new config.
 
 The context's prefix is `UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX` of `@qauth-labs/server-keys`. The
 signer's policy lets the `api` role decrypt a context under it (besides a realm's mail secret), so

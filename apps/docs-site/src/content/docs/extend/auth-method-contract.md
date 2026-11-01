@@ -262,12 +262,17 @@ What it does:
 
 **The stored client secret.** `sealUpstreamOidcConfig` encrypts it with the realm's
 `data_at_rest` key through the signer role, under the context
-`upstream-oidc:client-secret:<realm id>:<type>` (so a ciphertext moved to another provider or
-realm does not decrypt). The signer lets the `api` role decrypt a context under
-`upstream-oidc:client-secret:`, and neither `web` nor `delivery`; `openUpstreamOidcConfig`
-decrypts it for the method's context; and
-`describeUpstreamOidcConfig` is the view an API or event may carry, with neither the secret nor its
-ciphertext. Where the stored form lives is #714's and #600's.
+`upstream-oidc:client-secret:<realm id>:<type>:<destination>`, where `<destination>` is the
+SHA-256 of the issuer and, for endpoints set by hand, the token endpoint. So a ciphertext moved to
+another provider or realm does not decrypt, and neither does one whose config was pointed at
+another host: an admin who cannot read the write-only secret cannot send it elsewhere by changing
+`issuer` or `endpoints.token`. `openUpstreamOidcConfig` refuses such a config with
+`UpstreamClientSecretDestinationChangedError`, and provider administration (#714) asks for the
+secret again whenever either value changes. The signer lets the `api` role decrypt a context under
+`upstream-oidc:client-secret:`, and neither `web` nor `delivery`. `openUpstreamOidcConfig` decrypts
+the secret for the method's context, and `describeUpstreamOidcConfig` is the view an API or event
+may carry, with neither the secret nor its ciphertext. Where the stored form lives is #714's and
+#600's.
 
 **What the sign-in flow must add.** `externalSub` is the provider's bare `sub`, and the type
 `oidc_<alias>` does not name the issuer, while only `iss` and `sub` together identify a person

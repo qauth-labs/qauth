@@ -28,6 +28,8 @@ import {
   openUpstreamOidcConfig,
   sealUpstreamOidcConfig,
   type StoredUpstreamOidcConfig,
+  upstreamClientSecretDestination,
+  UpstreamClientSecretDestinationChangedError,
 } from '@qauth-labs/server-upstream-oidc';
 import {
   createFakeProvider,
@@ -685,5 +687,26 @@ describe('the stored client secret', () => {
     await expect(
       openUpstreamOidcConfig(signer.signer, { realmId, providerId: TYPE, caller: 'api' }, stored)
     ).resolves.toMatchObject({ clientAuthentication: { clientSecret: CLIENT_SECRET } });
+  });
+
+  it('does not open once the issuer points elsewhere, even with the recorded destination edited', async () => {
+    const stored = await seal(TYPE, configFor('client_secret_post'));
+    const owner = { realmId, providerId: TYPE, caller: 'api' };
+    const repointed = { ...stored, issuer: PRIVATE_ISSUER };
+    await expect(openUpstreamOidcConfig(signer.signer, owner, repointed)).rejects.toBeInstanceOf(
+      UpstreamClientSecretDestinationChangedError
+    );
+    // The row edited by hand to claim the new destination: the signer's
+    // context names it, so the ciphertext sealed for the old one fails.
+    const forged = {
+      ...repointed,
+      clientAuthentication: {
+        ...(stored.clientAuthentication as { method: 'client_secret_post' }),
+        clientSecretDestination: upstreamClientSecretDestination({ issuer: PRIVATE_ISSUER }),
+      },
+    };
+    await expect(openUpstreamOidcConfig(signer.signer, owner, forged)).rejects.toMatchObject({
+      code: 'DATA_DECRYPTION_FAILED',
+    });
   });
 });
