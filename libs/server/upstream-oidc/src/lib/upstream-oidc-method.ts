@@ -64,8 +64,9 @@ import { TtlCache } from './ttl-cache';
  *    `GET /callback` on the same origin, which brings it.
  * 4. `verify()` turns a result of its own callback, once, into the identity:
  *    `externalSub` is the provider's `sub`, `rawClaims` the ID token's
- *    claims over the userinfo claims (the ID token's win), `iss` among
- *    them, so the flow can tie the subject to the issuer.
+ *    claims over the userinfo claims (the ID token's win, and the protocol
+ *    claims, such as `acr` and `auth_time`, come from it alone), `iss`
+ *    among them, so the flow can tie the subject to the issuer.
  *
  * EXPERIMENTAL, like the contract it implements.
  *
@@ -404,6 +405,33 @@ function ownTransaction(
 }
 
 /**
+ * The claims only the ID token may carry: its own validity (`iss`, `aud`,
+ * `azp`, `exp`, `iat`, `nbf`, `jti`, `nonce`, the hashes) and the facts of
+ * the authentication (`acr`, `amr`, `auth_time`, `sid`, `cnf`). A userinfo
+ * answer is not signed, so one of these from it is dropped, never merged
+ * where the ID token lacks it. `sub` is not here: userinfo's must equal the
+ * ID token's, which `readUserinfo` checks.
+ */
+const ID_TOKEN_ONLY_CLAIMS: readonly string[] = [
+  'iss',
+  'aud',
+  'azp',
+  'exp',
+  'iat',
+  'nbf',
+  'jti',
+  'nonce',
+  'at_hash',
+  'c_hash',
+  's_hash',
+  'acr',
+  'amr',
+  'auth_time',
+  'sid',
+  'cnf',
+];
+
+/**
  * Claims whose truth another claim of the same source vouches for: a value
  * and its `*_verified` flag (OpenID Connect Core 1.0 §5.1).
  */
@@ -415,14 +443,18 @@ const VERIFIED_CLAIM_PAIRS: readonly (readonly [value: string, flag: string])[] 
 /**
  * The identity's claims: the ID token's over the userinfo answer's. The ID
  * token's win: they are signed, and `iss`, `sub` and `aud` stay the checked
- * ones. A value and its `*_verified` flag are taken together, from the source
- * that holds the value: an ID token's unverified `email` never takes a
- * userinfo answer's `email_verified` for another address.
+ * ones. The protocol claims ({@link ID_TOKEN_ONLY_CLAIMS}) come from the ID
+ * token alone: an `acr` or `auth_time` the ID token lacks is not filled in
+ * from userinfo. A value and its `*_verified` flag are taken together, from
+ * the source that holds the value: an ID token's unverified `email` never
+ * takes a userinfo answer's `email_verified` for another address.
  */
 function mergedClaims(
   idToken: Readonly<Record<string, unknown>>,
-  userinfo: Readonly<Record<string, unknown>>
+  answer: Readonly<Record<string, unknown>>
 ): Record<string, unknown> {
+  const userinfo: Record<string, unknown> = { ...answer };
+  for (const name of ID_TOKEN_ONLY_CLAIMS) delete userinfo[name];
   const claims: Record<string, unknown> = { ...userinfo, ...idToken };
   for (const [value, flag] of VERIFIED_CLAIM_PAIRS) {
     const source = Object.hasOwn(idToken, value)

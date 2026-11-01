@@ -534,6 +534,51 @@ describe('the callback', () => {
       });
     });
 
+    it('takes the protocol claims from the ID token alone, never from userinfo', async () => {
+      const s = await setup('client_secret_basic', { fetchUserinfo: true });
+      // The ID token carries no acr, amr, auth_time or sid; userinfo,
+      // unsigned, offers them and every other ID-token-only claim.
+      const offered = {
+        iss: 'https://evil.example.com',
+        aud: 'another-client',
+        azp: 'another-client',
+        exp: 4102444800,
+        iat: 1,
+        nbf: 1,
+        jti: 'from-userinfo',
+        nonce: 'from-userinfo',
+        at_hash: 'from-userinfo',
+        c_hash: 'from-userinfo',
+        s_hash: 'from-userinfo',
+        acr: 'urn:example:loa:high',
+        amr: ['hwk', 'mfa'],
+        auth_time: 1,
+        sid: 'from-userinfo',
+        cnf: { jkt: 'from-userinfo' },
+      };
+      const { outcome } = await signIn(s, {
+        sub: 'user-1',
+        claims: { name: 'Ada' },
+        userinfo: { ...offered, given_name: 'Ada' },
+      });
+      const completion = await completeUpstreamStep(s.method, outcome);
+      if (completion.kind !== 'identity') throw new Error(completion.kind);
+      const claims = completion.identity.rawClaims;
+      for (const name of ['acr', 'amr', 'auth_time', 'sid', 'azp', 'nbf', 'jti', 'cnf']) {
+        expect(claims, name).not.toHaveProperty(name);
+      }
+      for (const name of ['at_hash', 'c_hash', 's_hash']) {
+        expect(claims, name).not.toHaveProperty(name);
+      }
+      // The ID token's own, checked values stay.
+      expect(claims).toMatchObject({ iss: ISSUER, sub: 'user-1', aud: CLIENT_ID, name: 'Ada' });
+      expect(claims['nonce']).not.toBe('from-userinfo');
+      expect(claims['exp']).not.toBe(offered.exp);
+      expect(claims['iat']).not.toBe(offered.iat);
+      // A profile claim from userinfo is still taken.
+      expect(claims['given_name']).toBe('Ada');
+    });
+
     it('is not read unless the config asks for it', async () => {
       const s = await setup();
       const { outcome } = await signIn(s);

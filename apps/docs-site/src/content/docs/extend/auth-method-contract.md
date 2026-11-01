@@ -253,7 +253,8 @@ What it does:
   `exp`, `iat` (at most ten minutes old) and `nonce`, with 30 seconds of clock tolerance.
 - **Userinfo**, when `fetchUserinfo` is set, must carry the ID token's `sub`. The identity's
   `externalSub` is the provider's `sub`, and its `rawClaims` are the ID token's claims over the
-  userinfo claims, `iss` among them. `extractAttributes()` takes the standard profile claims that
+  userinfo claims, `iss` among them. The protocol claims (`acr`, `amr`, `auth_time`, `sid`, `nonce`,
+  the validity claims and the hashes) come from the signed ID token alone; userinfo's are dropped. `extractAttributes()` takes the standard profile claims that
   are plain text; `email` and `phone_number` are verified only when the provider's own
   `*_verified` claim is `true`.
 - **Every call** asks for `redirect: 'error'` (no redirect is followed) and has its own deadline

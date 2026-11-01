@@ -46,7 +46,10 @@ const method = createUpstreamOidcMethod({ type: 'oidc_corp', display: { name: 'E
   allowlist of asymmetric algorithms (never `none`, never `HS*`), `iss`, `aud`, `azp`, `exp`,
   `iat` and `nonce`.
 - **Userinfo** when `fetchUserinfo` is set; its `sub` must equal the ID token's. The identity's
-  `rawClaims` are the ID token's claims over the userinfo claims, `iss` among them.
+  `rawClaims` are the ID token's claims over the userinfo claims, `iss` among them. The protocol
+  claims (`iss`, `aud`, `azp`, `exp`, `iat`, `nbf`, `jti`, `nonce`, `at_hash`, `c_hash`, `s_hash`,
+  `acr`, `amr`, `auth_time`, `sid`, `cnf`) come from the signed ID token alone: userinfo's are
+  dropped, so it never adds an `acr` or `auth_time` the ID token lacks.
 - **Caps on every call**: no redirect is followed (`redirect: 'error'`), and each call has its own
   deadline and response size cap (`UPSTREAM_OIDC_CALL_CAPS`), under the egress client's.
 
