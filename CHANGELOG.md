@@ -1295,6 +1295,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, PKCE with S256 included. Nothing registers a method in a running server
   yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
 
+- **The developer API and the account API's consents, under versioned
+  prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
+  serves a developer's clients (list, create, read, merge-patch update,
+  delete, `regenerate-secret`), their static API keys and the developer's own
+  consents; `/account/v1-rc.0` serves the user's consents (list and revoke).
+  Each route is guarded by its family's token guard ([#509]) and follows the API
+  conventions: RFC 7591 names for registered client metadata, RFC 3339 times,
+  lists as `{ items, nextCursor }` with `limit` and `cursor` (`invalid_cursor`
+  for a cursor another list issued), an `ETag` on each read of a client and a
+  JSON Merge Patch update that needs `If-Match` (428 without it, 412 for a stale
+  one, 415 for another media type, 422 for `client_name` set to `null`), and
+  problem documents. A client of another developer is 404, as before. The
+  domain logic is shared with the deprecated paths, which keep their shapes.
+
 ### Changed
 
 - **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
@@ -1332,21 +1346,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   delegated token of token exchange is capped at its subject token's `exp`
   when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
   when its lifetime is computed.
-- **The developer API and the account API's consents, under versioned
-  prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
-  serves a developer's clients (list, create, read, merge-patch update,
-  delete, `regenerate-secret`), their static API keys and the developer's own
-  consents; `/account/v1-rc.0` serves the user's consents (list and revoke).
-  Each route is guarded by its family's token guard ([#509]) and follows the API
-  conventions: RFC 7591 names for registered client metadata, RFC 3339 times,
-  lists as `{ items, nextCursor }` with `limit` and `cursor` (`invalid_cursor`
-  for a cursor another list issued), an `ETag` on each read of a client and a
-  JSON Merge Patch update that needs `If-Match` (428 without it, 412 for a stale
-  one, 415 for another media type, 422 for `client_name` set to `null`), and
-  problem documents. A client of another developer is 404, as before. The
-  domain logic is shared with the deprecated paths, which keep their shapes.
-
-### Changed
 
 - **The developer portal's token carries the developer audience** ([#524]).
   The system client is created with `urn:qauth:aud:developer:v1-rc.0`, and a
