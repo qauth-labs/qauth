@@ -253,19 +253,36 @@ function walkDocument(document: SchemaDocument, inputStrings?: ReadonlySet<strin
   return { paths, stringPaths, problems };
 }
 
+/** How many objects of a config schema's tree {@link foreignMarkOf} reads at most. */
+const FOREIGN_MARK_VISIT_BUDGET = 20_000;
+
+/** How deep into a config schema's tree {@link foreignMarkOf} reads at most. */
+const FOREIGN_MARK_MAX_DEPTH = 64;
+
 /**
  * Whether a schema of `config`'s tree carries a `writeOnly` mark that the
  * server's Zod cannot see: its own `.meta()` (the registry of the Zod copy
  * that built it) says so, and the registry the server reads does not. A
  * plugin that bundles a Zod copy keeping a registry of its own would have
  * every mark invisible here, and every secret would read as plain.
+ *
+ * It fails closed: a tree it cannot read whole, because it runs past
+ * {@link FOREIGN_MARK_VISIT_BUDGET} objects or {@link FOREIGN_MARK_MAX_DEPTH}
+ * levels, or because a lazy part's getter or a `.meta()` throws, answers
+ * `unreadable`, and the method is refused as for a foreign mark.
  */
-function holdsForeignMark(schema: unknown): boolean {
+function foreignMarkOf(schema: unknown): 'foreign' | 'unreadable' | undefined {
   const seen = new Set<object>();
-  let budget = 20_000;
+  let budget = FOREIGN_MARK_VISIT_BUDGET;
+  let unreadable = false;
+  // `true` stops the walk: a foreign mark found, or a part that cannot be read.
   const visit = (value: unknown, depth: number): boolean => {
-    if (typeof value !== 'object' || value === null || depth > 64 || budget-- <= 0) return false;
+    if (typeof value !== 'object' || value === null) return false;
     if (seen.has(value)) return false;
+    if (depth > FOREIGN_MARK_MAX_DEPTH || budget-- <= 0) {
+      unreadable = true;
+      return true;
+    }
     seen.add(value);
     if (Array.isArray(value)) return value.some((item) => visit(item, depth + 1));
     const zod = (value as { _zod?: { def?: unknown } })._zod;
@@ -275,7 +292,8 @@ function holdsForeignMark(schema: unknown): boolean {
       try {
         own = typeof meta === 'function' ? (meta as () => unknown).call(value) : undefined;
       } catch {
-        own = undefined;
+        unreadable = true;
+        return true;
       }
       const ours = z.globalRegistry.get(value as z.ZodType) as { writeOnly?: unknown } | undefined;
       if (
@@ -288,17 +306,21 @@ function holdsForeignMark(schema: unknown): boolean {
       if (def === undefined) return false;
       // A lazy schema names its inner schema through a getter.
       if (typeof def['getter'] === 'function') {
+        let inner: unknown;
         try {
-          if (visit((def['getter'] as () => unknown)(), depth + 1)) return true;
+          inner = (def['getter'] as () => unknown)();
         } catch {
-          return false;
+          unreadable = true;
+          return true;
         }
+        if (visit(inner, depth + 1)) return true;
       }
       return Object.entries(def).some(([key, item]) => key !== 'getter' && visit(item, depth + 1));
     }
     return Object.values(value).some((item) => visit(item, depth + 1));
   };
-  return visit(schema, 0);
+  if (!visit(schema, 0)) return undefined;
+  return unreadable ? 'unreadable' : 'foreign';
 }
 
 /**
@@ -312,7 +334,9 @@ function holdsForeignMark(schema: unknown): boolean {
  * JSON Schema cannot describe (a `Set`, a `Map`, a date, a custom check) is
  * refused, since a mark inside it could not be seen. A transform's output,
  * which no schema describes, holds no mark. And a schema built with a Zod
- * copy whose metadata the server cannot read is refused.
+ * copy whose metadata the server cannot read is refused, as is one too large
+ * or too deep to read whole for such marks, or whose lazy part or metadata
+ * throws.
  *
  * @throws AuthMethodContractError when the schema has no JSON Schema form, is
  *   not an object, or marks a member it cannot be split by: inside a list, a
@@ -345,9 +369,15 @@ export function authMethodSecretPaths(method: Pick<AuthMethod, 'type' | 'configS
       'configSchema must describe an object of members: the realm stores it member by member',
     ]);
   }
-  if (holdsForeignMark(method.configSchema)) {
+  const foreign = foreignMarkOf(method.configSchema);
+  if (foreign === 'foreign') {
     throw new AuthMethodContractError(subject, [
       "configSchema was built with a Zod copy whose metadata this server cannot read, so its secret members would read as plain: build the plugin against the server's Zod (a peer dependency)",
+    ]);
+  }
+  if (foreign === 'unreadable') {
+    throw new AuthMethodContractError(subject, [
+      `configSchema cannot be read whole for its secret marks (it is larger than ${FOREIGN_MARK_VISIT_BUDGET} parts or deeper than ${FOREIGN_MARK_MAX_DEPTH} levels, or a lazy part or its metadata throws), so its secret members cannot be told apart`,
     ]);
   }
 

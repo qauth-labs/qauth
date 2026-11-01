@@ -175,6 +175,52 @@ describe('authMethodSecretPaths (#600)', () => {
     );
   });
 
+  it('fails closed on a schema it cannot read whole for foreign marks', () => {
+    const unreadable = /cannot be read whole for its secret marks/;
+
+    // A lazy part whose getter throws on the last call of a read: the mark
+    // reader's, which comes after Zod has written both JSON Schema forms
+    // (Zod calls the getter there too, so a getter that always throws is
+    // refused before).
+    const inner = z.object({ label: z.string() });
+    let calls = 0;
+    let throwAt = Number.POSITIVE_INFINITY;
+    const flaky = z.lazy(() => {
+      calls += 1;
+      if (calls === throwAt) throw new Error('the getter throws');
+      return inner;
+    });
+    const withFlaky = withSchema(z.object({ part: flaky }));
+    expect(authMethodSecretPaths(withFlaky)).toEqual([]);
+    calls = 0;
+    expect(authMethodSecretPaths(withFlaky)).toEqual([]);
+    throwAt = calls;
+    calls = 0;
+    expect(() => authMethodSecretPaths(withFlaky)).toThrow(unreadable);
+
+    // A `.meta()` that throws.
+    const throwing = z.string();
+    Object.defineProperty(throwing, 'meta', {
+      value: () => {
+        throw new Error('meta throws');
+      },
+    });
+    expect(() => authMethodSecretPaths(withSchema(z.object({ clientId: throwing })))).toThrow(
+      unreadable
+    );
+
+    // Deeper than the walk reads.
+    let deep: z.ZodType = z.object({ leaf: z.string() });
+    for (let level = 0; level < 40; level += 1) deep = z.object({ next: deep });
+    expect(() => authMethodSecretPaths(withSchema(z.object({ deep })))).toThrow(unreadable);
+
+    // More parts than the walk reads.
+    const wide = Object.fromEntries(
+      Array.from({ length: 20_001 }, (_, index) => [`m${index}`, z.string()])
+    );
+    expect(() => authMethodSecretPaths(withSchema(z.object(wide)))).toThrow(unreadable);
+  });
+
   it('refuses a mark inside a recursive part', () => {
     interface Node {
       readonly secret: string;
