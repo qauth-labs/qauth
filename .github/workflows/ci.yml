@@ -10,6 +10,15 @@ permissions:
   actions: read
   contents: read
 
+# A newer push to the same pull request or branch cancels the run it
+# supersedes. Merging a stack pushes main once per pull request, and each push
+# started a full run; together the runs outgrew the account's concurrent-job
+# limit, so the jobs of the last run, the only result that counts, waited in
+# the queue. Pull requests are grouped by number, pushes by branch.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The affected Nx targets, one matrix leg per target, so lint, typecheck
   # and build run side by side instead of one after another in a single

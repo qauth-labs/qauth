@@ -2401,6 +2401,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   **Action for contributors**: nothing. Local runs do not use the remote cache.
 
+- A newer push to the same pull request or branch now cancels the CI run of
+  the push it supersedes. Merging a stack pushes main once per pull request,
+  and each push started a full run; together they filled the account's
+  concurrent-job limit, so the last run, the one whose result counts, waited
+  for runners.
+
 [#359]: https://github.com/qauth-labs/qauth/issues/359
 [#410]: https://github.com/qauth-labs/qauth/issues/410
 [#433]: https://github.com/qauth-labs/qauth/issues/433
