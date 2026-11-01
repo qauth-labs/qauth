@@ -1,11 +1,11 @@
 import { InvalidClientError } from '@qauth-labs/shared-errors';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+// The deployment's CIMD tuning keys only: the switch and the trust policy are
+// the realm's (#534), passed as `POLICY`, so a read of them from the
+// environment would find nothing here.
 const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
-    CIMD_ENABLED: true,
-    CIMD_TRUST_POLICY: 'accept-any-https' as 'accept-any-https' | 'allowlist',
-    CIMD_TRUSTED_DOMAINS: [] as string[],
     CIMD_CACHE_DEFAULT_TTL: 300,
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
@@ -20,6 +20,7 @@ vi.mock('../../config/env', () => ({ env: ENV }));
 vi.mock('./egress-get', () => ({ egressGet }));
 
 import { blockedEgress } from '../../testing/egress';
+import type { CimdPolicy } from './cimd-policy';
 import {
   cimdDocumentSchema,
   fetchAndValidateCimdDocument,
@@ -29,6 +30,13 @@ import {
 } from './cimd';
 
 const CLIENT_ID = 'https://app.example.com/oauth/client-metadata.json';
+
+/** The realm's CIMD policy (#534); the seeded defaults before each test. */
+const POLICY: { -readonly [K in keyof CimdPolicy]: CimdPolicy[K] } = {
+  enabled: true,
+  trustPolicy: 'accept-any-https',
+  trustedDomains: [],
+};
 
 function validDoc(overrides: Record<string, unknown> = {}) {
   return {
@@ -59,9 +67,9 @@ function ok(body: unknown, headers: Record<string, string> = {}) {
 
 beforeEach(() => {
   egressGet.mockReset();
-  ENV.CIMD_ENABLED = true;
-  ENV.CIMD_TRUST_POLICY = 'accept-any-https';
-  ENV.CIMD_TRUSTED_DOMAINS = [];
+  POLICY.enabled = true;
+  POLICY.trustPolicy = 'accept-any-https';
+  POLICY.trustedDomains = [];
 });
 
 describe('isCimdClientId', () => {
@@ -135,7 +143,7 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'max-age=600' }));
 
-    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
 
     expect(doc.client_id).toBe(CLIENT_ID);
     expect(doc.client_name).toBe('Example MCP Client');
@@ -157,7 +165,7 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc({ client_id: 'https://evil.example/other.json' })));
 
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
   });
@@ -166,7 +174,7 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok({ client_id: CLIENT_ID })); // no client_name / redirect_uris
 
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
   });
@@ -175,7 +183,7 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue({ status: 200, body: '<<not json>>', headers: {} });
 
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
   });
@@ -184,7 +192,7 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockRejectedValue(blockedEgress('resolves to 169.254.169.254'));
 
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
     expect(fastify.redis.set).not.toHaveBeenCalled();
@@ -194,7 +202,7 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue({ status: 404, body: '', headers: {} });
 
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
   });
@@ -203,10 +211,10 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'max-age=600' }));
 
-    await fetchAndValidateCimdDocument(fastify, CLIENT_ID); // populate cache
+    await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY); // populate cache
     expect(egressGet).toHaveBeenCalledTimes(1);
 
-    const second = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    const second = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
     expect(second.client_id).toBe(CLIENT_ID);
     // No second network fetch — served from cache.
     expect(egressGet).toHaveBeenCalledTimes(1);
@@ -216,52 +224,97 @@ describe('fetchAndValidateCimdDocument', () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc(), { 'cache-control': 'no-store' }));
 
-    await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
-    await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+    await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
 
     expect(fastify.redis.set).not.toHaveBeenCalled();
     expect(egressGet).toHaveBeenCalledTimes(2);
   });
 
   it('rejects when CIMD is disabled', async () => {
-    ENV.CIMD_ENABLED = false;
+    POLICY.enabled = false;
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc()));
 
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
     expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('enforces the allowlist trust policy', async () => {
-    ENV.CIMD_TRUST_POLICY = 'allowlist';
-    ENV.CIMD_TRUSTED_DOMAINS = ['trusted.example'];
+    POLICY.trustPolicy = 'allowlist';
+    POLICY.trustedDomains = ['trusted.example'];
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc()));
 
     // app.example.com is not allowlisted → rejected before any fetch.
-    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID)).rejects.toBeInstanceOf(
+    await expect(fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY)).rejects.toBeInstanceOf(
       InvalidClientError
     );
     expect(egressGet).not.toHaveBeenCalled();
   });
 
   it('accepts a wildcard-allowlisted subdomain', async () => {
-    ENV.CIMD_TRUST_POLICY = 'allowlist';
-    ENV.CIMD_TRUSTED_DOMAINS = ['*.example.com'];
+    POLICY.trustPolicy = 'allowlist';
+    POLICY.trustedDomains = ['*.example.com'];
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc()));
 
-    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
     expect(doc.client_id).toBe(CLIENT_ID);
   });
+
+  it('trusts no host under the allowlist policy with no domains (#534)', async () => {
+    const fastify = fastifyStub();
+    egressGet.mockResolvedValue(ok(validDoc()));
+
+    await expect(
+      fetchAndValidateCimdDocument(fastify, CLIENT_ID, {
+        enabled: true,
+        trustPolicy: 'allowlist',
+        trustedDomains: [],
+      })
+    ).rejects.toMatchObject({
+      errorDescription: 'client_id host is not in the CIMD trust allowlist',
+    });
+    expect(egressGet).not.toHaveBeenCalled();
+  });
+
+  // The cache holds a URL's document for every realm; each realm's switch and
+  // trust policy run before it is read (#534), so a document one realm
+  // resolved never serves a realm that refuses its host or CIMD itself.
+  it.each([
+    [
+      'an allowlist with no domains',
+      { enabled: true, trustPolicy: 'allowlist', trustedDomains: [] },
+    ],
+    ['CIMD switched off', { enabled: false, trustPolicy: 'accept-any-https', trustedDomains: [] }],
+  ] as const)(
+    'refuses a document another realm cached, for a realm with %s (#534)',
+    async (_label, other) => {
+      const fastify = fastifyStub();
+      egressGet.mockResolvedValue(ok(validDoc()));
+      await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+      expect(fastify.redis.set).toHaveBeenCalledOnce();
+
+      await expect(
+        fetchAndValidateCimdDocument(fastify, CLIENT_ID, {
+          ...other,
+          trustedDomains: [...other.trustedDomains],
+        })
+      ).rejects.toBeInstanceOf(InvalidClientError);
+      // Refused before the cache was read, and with no second fetch.
+      expect(fastify.redis.get).toHaveBeenCalledOnce();
+      expect(egressGet).toHaveBeenCalledOnce();
+    }
+  );
 
   it('recognises the is_agent indicator in the metadata document (ADR-007 §2)', async () => {
     const fastify = fastifyStub();
     egressGet.mockResolvedValue(ok(validDoc({ is_agent: true })));
 
-    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
     expect(doc.is_agent).toBe(true);
   });
 });
@@ -308,8 +361,8 @@ describe('toCimdClientInsert — the reserved urn:qauth:aud: namespace (#509)', 
         'cache-control': 'max-age=600',
       })
     );
-    await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
-    const cached = await fetchAndValidateCimdDocument(fastify, CLIENT_ID);
+    await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+    const cached = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
     expect(egressGet).toHaveBeenCalledTimes(1);
     expect(() => toCimdClientInsert('realm-1', CLIENT_ID, cached, 'sentinel')).not.toThrow();
   });

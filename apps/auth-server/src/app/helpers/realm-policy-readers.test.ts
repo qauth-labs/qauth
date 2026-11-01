@@ -30,7 +30,7 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
     }
   });
 
-  it('holds the two policies the server read from the row before #516, the token lifetimes (#527) and the mail transport and sender (#529)', () => {
+  it('holds the two policies the server read from the row before #516, the token lifetimes (#527), the mail transport and sender (#529) and CIMD (#534)', () => {
     expect([...POLICIES_READ_FROM_REALM_ROW].sort()).toEqual([
       'mail.fromAddress',
       'mail.fromName',
@@ -40,6 +40,9 @@ describe('POLICIES_READ_FROM_REALM_ROW (#516)', () => {
       'mail.smtp.secure',
       'mail.smtp.user',
       'posture.maxEnvironmentLaxity',
+      'registration.cimd.enabled',
+      'registration.cimd.trustPolicy',
+      'registration.cimd.trustedDomains',
       'registration.dynamicRegistrationAllowedScopes',
       'tokens.accessTokenLifespanSeconds',
       'tokens.adminAccessTokenLifespanSeconds',

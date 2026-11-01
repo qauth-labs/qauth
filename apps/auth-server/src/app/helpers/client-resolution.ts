@@ -4,6 +4,8 @@ import { InvalidClientError, InvalidRequestError } from '@qauth-labs/shared-erro
 import type { FastifyInstance } from 'fastify';
 
 import { fetchAndValidateCimdDocument, isCimdClientId, toCimdClientInsert } from './cimd';
+import { cimdPolicyOf } from './cimd-policy';
+import type { RealmRow } from './request-realm';
 import type { AgentMode } from './scope-modes';
 
 /**
@@ -222,18 +224,28 @@ export function unresolvedClientError(): InvalidRequestError {
 }
 
 /**
- * Resolve a client_id to a client record, honouring the pre-registered →
- * CIMD priority. Returns `{ client: null, reason }` when no client can be
+ * Resolve a client_id to a client record of `realm`, the realm the request
+ * resolved to (ADR-019 Decision 1), honouring the pre-registered → CIMD
+ * priority. Returns `{ client: null, reason }` when no client can be
  * resolved so the caller controls the audit-log shape and error mapping.
  * CIMD-specific validation/SSRF/trust failures surface as
  * {@link InvalidClientError} from {@link fetchAndValidateCimdDocument}; they
  * are caught here and converted to a null + reason.
+ *
+ * The CIMD branch follows the realm's CIMD policy (`cimdPolicyOf`, #534),
+ * read off the row the caller holds: a realm that switched CIMD off resolves
+ * a URL `client_id` as it does any unknown one.
+ *
+ * @throws PolicyValidationError when the CIMD branch runs and the realm's
+ *   stored policies are not a valid policy document: a server error, as for
+ *   the token lifetimes (#527), not an unknown client
  */
 export async function resolveClient(
   fastify: FastifyInstance,
-  realmId: string,
+  realm: RealmRow,
   clientId: string
 ): Promise<{ client: ResolvedClient | null; reason?: string }> {
+  const realmId = realm.id;
   // 1. Pre-registered (DB) — highest priority.
   const persisted = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
   if (persisted && !isCimdClient(persisted)) {
@@ -245,13 +257,17 @@ export async function resolveClient(
   //    document is the management surface). A materialised row is only a
   //    cache of the document. Serving it without re-resolving would freeze the
   //    client at its first authorize: document edits, key rotation, a host
-  //    removed from the trust allowlist and `CIMD_ENABLED=false` would never
-  //    take effect, because all of those live in
+  //    removed from the realm's trust allowlist and CIMD switched off in the
+  //    realm would never take effect, because all of those live in
   //    `fetchAndValidateCimdDocument`. That call is cheap within the cache
   //    TTL: the switch and trust policy run first, then a cache read.
   if (isCimdClientId(clientId) || persisted) {
+    // The realm's switch and trust policy (#534), read outside the `try`: a
+    // stored policy document the schema refuses is the server's error, not
+    // a reason to call the client unknown.
+    const policy = cimdPolicyOf(fastify, realm);
     try {
-      const doc = await fetchAndValidateCimdDocument(fastify, clientId);
+      const doc = await fetchAndValidateCimdDocument(fastify, clientId, policy);
 
       // Public client → no usable secret. Store a non-verifiable sentinel
       // shaped like a real argon2id hash so the NOT-NULL column is satisfied

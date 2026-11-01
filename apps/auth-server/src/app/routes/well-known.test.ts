@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Mutable env stand-in so a test can flip a discovery feature flag
- * (`CIMD_ENABLED`, `ID_JAG_ENABLED`) without re-importing the route module.
+ * (`ID_JAG_ENABLED`) without re-importing the route module.
  * Starts EMPTY on purpose: every flag reads as `undefined`, which must behave
  * exactly like `false` — that is the fail-closed default the ADR-011 gating
  * relies on.
@@ -16,7 +16,9 @@ vi.mock('../../config/env', () => ({
 
 import { EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
 
+import { testPolicyStore } from '../../testing/realm-policies';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
+import type { CimdPolicy } from '../helpers/cimd-policy';
 import { ID_JAG_GRANT_PROFILE, JWT_BEARER_GRANT_TYPE } from '../schemas/oauth';
 import wellKnownRoutes from './well-known';
 
@@ -37,6 +39,8 @@ async function buildApp(overrides?: {
   /** The issuer of the request's realm. */
   realmIssuer?: string;
   idTokenSigningAlgValuesSupported?: string[];
+  /** The request realm's CIMD policy (#534); the seeded defaults (on) when absent. */
+  cimd?: CimdPolicy;
 }) {
   const app = Fastify({ logger: false });
 
@@ -60,6 +64,13 @@ async function buildApp(overrides?: {
       async () => overrides?.idTokenSigningAlgValuesSupported ?? ['EdDSA']
     ),
   } as unknown as never);
+  app.decorate(
+    'policyStore',
+    testPolicyStore(
+      {},
+      overrides?.cimd === undefined ? {} : { registration: { cimd: overrides.cimd } }
+    ) as never
+  );
   supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: overrides?.realmIssuer ?? ISSUER }));
 
   await app.register(wellKnownRoutes);
@@ -196,6 +207,63 @@ describe('GET /.well-known/oauth-authorization-server', () => {
       expect(res.body).not.toContain('spoofed');
     } finally {
       await app.close();
+    }
+  });
+});
+
+describe('CIMD in the discovery documents follows the realm policy (#534)', () => {
+  const PATHS = ['/.well-known/oauth-authorization-server', '/.well-known/openid-configuration'];
+
+  async function documents(cimd?: CimdPolicy): Promise<Record<string, unknown>[]> {
+    const app = await buildApp({ cimd });
+    try {
+      return await Promise.all(
+        PATHS.map(async (url) => {
+          const res = await app.inject({ method: 'GET', url });
+          expect(res.statusCode, res.body).toBe(200);
+          return res.json<Record<string, unknown>>();
+        })
+      );
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('advertises CIMD for a realm with the seeded policy', async () => {
+    for (const body of await documents()) {
+      expect(body['client_id_metadata_document_supported']).toBe(true);
+    }
+  });
+
+  it('advertises CIMD whatever trust policy the realm has, which a client cannot see', async () => {
+    for (const body of await documents({
+      enabled: true,
+      trustPolicy: 'allowlist',
+      trustedDomains: [],
+    })) {
+      expect(body['client_id_metadata_document_supported']).toBe(true);
+    }
+  });
+
+  it('omits it for a realm that switched CIMD off, though CIMD_ENABLED is on', async () => {
+    mockEnv['CIMD_ENABLED'] = true;
+    for (const body of await documents({
+      enabled: false,
+      trustPolicy: 'accept-any-https',
+      trustedDomains: [],
+    })) {
+      expect(body).not.toHaveProperty('client_id_metadata_document_supported');
+    }
+  });
+
+  it('advertises it for a realm that has CIMD on, though CIMD_ENABLED is off', async () => {
+    mockEnv['CIMD_ENABLED'] = false;
+    for (const body of await documents({
+      enabled: true,
+      trustPolicy: 'accept-any-https',
+      trustedDomains: [],
+    })) {
+      expect(body['client_id_metadata_document_supported']).toBe(true);
     }
   });
 });

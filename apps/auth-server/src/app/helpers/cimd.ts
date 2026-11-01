@@ -9,6 +9,7 @@ import { env } from '../../config/env';
 import { OAUTH_CLIENT_ID_MAX_LENGTH } from '../constants';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
+import type { CimdPolicy } from './cimd-policy';
 import {
   assertJwksMutuallyExclusive,
   CLIENT_JWKS_URI_MAX_LENGTH,
@@ -40,8 +41,9 @@ import { egressGet } from './egress-get';
  *     document's `redirect_uris` (exact match — no wildcards; only the port
  *     of a loopback redirect may differ, RFC 8252 §7.3 — see
  *     `redirectUriMatchesRegistered`).
- *   - An optional deployment-configured domain trust policy gates which
- *     hosts may act as CIMD clients at all.
+ *   - The realm's domain trust policy (`registration.cimd` of its
+ *     policies, #534) gates which hosts may act as CIMD clients of the realm
+ *     at all, and its switch whether a URL `client_id` is one at all.
  *
  * CIMD clients are deliberately NOT persisted: there is no registration
  * record to spam, which is what neutralizes the open-DCR abuse surface
@@ -301,17 +303,19 @@ export function isCimdClientId(clientId: string): boolean {
 }
 
 /**
- * Apply the configured domain trust policy to a CIMD client_id URL host.
- * Throws {@link InvalidClientError} when the host is not trusted. Runs
- * AFTER the SSRF / structural checks; it is a coarse-grained, operator-set
- * gate, not a security boundary on its own.
+ * Apply the realm's domain trust policy (`registration.cimd.trustPolicy` and
+ * `trustedDomains`, #534) to a CIMD client_id URL host. Throws
+ * {@link InvalidClientError} when the host is not trusted. Runs AFTER the
+ * structural checks and BEFORE the document cache, so a document another
+ * realm resolved never reaches a realm that does not trust its host; it is a
+ * coarse-grained, operator-set gate, not a security boundary on its own.
  */
-function enforceTrustPolicy(host: string): void {
-  if (env.CIMD_TRUST_POLICY === 'accept-any-https') return;
+function enforceTrustPolicy(host: string, policy: CimdPolicy): void {
+  if (policy.trustPolicy === 'accept-any-https') return;
 
-  // allowlist policy
+  // allowlist policy: an empty list trusts no host.
   const h = host.toLowerCase();
-  const trusted = env.CIMD_TRUSTED_DOMAINS.some((entry) => {
+  const trusted = policy.trustedDomains.some((entry) => {
     if (entry.startsWith('*.')) {
       const suffix = entry.slice(1); // ".example.com"
       return h.endsWith(suffix) && h.length > suffix.length;
@@ -532,9 +536,11 @@ async function writeCache(
  * Fetch + validate a CIMD `client_id` URL into a parsed metadata document.
  *
  * Steps (all of which can reject):
- *   1. CIMD enabled + structural client_id check.
- *   2. Domain trust policy (operator-set allowlist / accept-any-https).
+ *   1. CIMD enabled in the realm + structural client_id check.
+ *   2. The realm's domain trust policy (allowlist / accept-any-https).
  *   3. Document cache hit → return cached doc (HTTP cache-header behaviour).
+ *      The cache holds the document of a URL, which is the same for every
+ *      realm; steps 1 and 2 are the realm's and run first, on every call.
  *   4. SSRF-guarded https GET (no redirects, DNS-pinned, size/time-bounded).
  *   5. 200 + valid JSON + required fields.
  *   6. **client_id == document URL** (exact) — the core CIMD binding.
@@ -545,14 +551,21 @@ async function writeCache(
  * document was rejected; the message carries detail for the caller's audit
  * log only.
  *
+ * `policy` is the CIMD policy of the realm the request resolved to
+ * (`cimdPolicyOf`, ADR-019 Decisions 1 and 10, #534): a realm that switched
+ * CIMD off treats a URL `client_id` as unknown, and a realm's trust policy
+ * names the hosts it accepts. The cache lifetimes, the document size and the
+ * fetch timeout are the deployment's.
+ *
  * Returns the validated document; persistence into a client row is the
  * caller's responsibility (see client-resolution.ts).
  */
 export async function fetchAndValidateCimdDocument(
   fastify: FastifyInstance,
-  clientId: string
+  clientId: string,
+  policy: CimdPolicy
 ): Promise<CimdDocument> {
-  if (!env.CIMD_ENABLED) {
+  if (!policy.enabled) {
     throw new InvalidClientError();
   }
   if (!isCimdClientId(clientId)) {
@@ -560,7 +573,7 @@ export async function fetchAndValidateCimdDocument(
   }
 
   const host = new URL(clientId).hostname;
-  enforceTrustPolicy(host);
+  enforceTrustPolicy(host, policy);
 
   // Cache hit: serve without re-fetching (HTTP cache-header behaviour).
   const cached = await readCache(fastify, clientId);

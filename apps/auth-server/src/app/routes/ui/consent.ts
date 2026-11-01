@@ -460,7 +460,7 @@ export default async function (fastify: FastifyInstance) {
       // already materialised by /oauth/authorize, so findByClientId inside
       // resolveClient hits it; if its document cache expired it is re-fetched
       // and re-validated here).
-      const { client } = await resolveClient(fastify, realm.id, query.client_id);
+      const { client } = await resolveClient(fastify, realm, query.client_id);
       if (!client) throw unresolvedClientError();
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
       if (!isClientUsable(client)) throw unusableClientError();
@@ -719,7 +719,7 @@ export default async function (fastify: FastifyInstance) {
       await burnConsentCsrfToken(fastify, session);
 
       const realm = requestRealm(request);
-      const { client } = await resolveClient(fastify, realm.id, body.client_id);
+      const { client } = await resolveClient(fastify, realm, body.client_id);
       if (!client) throw unresolvedClientError();
       // A disabled or operator-suspended client (ANT-2026-DR5XI3LV).
       if (!isClientUsable(client)) throw unusableClientError();
