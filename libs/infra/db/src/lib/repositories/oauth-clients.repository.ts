@@ -44,7 +44,7 @@ const NOT_FIRST_PARTY = {
  * not nulled, so an update leaves the operator's profile as it is.
  */
 function withoutFirstPartyColumns<T extends object>(data: T): T {
-  const copy: Record<string, unknown> = { ...data };
+  const copy = { ...data } as Record<string, unknown>;
   for (const column of Object.keys(NOT_FIRST_PARTY)) delete copy[column];
   return copy as T;
 }
