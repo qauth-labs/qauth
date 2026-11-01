@@ -337,6 +337,13 @@
       "when": 1793450937620,
       "tag": "0047_oauth_client_verified_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1793491298761,
+      "tag": "0048_realm_secrets",
+      "breakpoints": true
     }
   ]
 }
