@@ -283,7 +283,7 @@ the account console ships (v0.3).
 > it is `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:371`), so it is
 > withheld from cross-site `fetch()` subresource requests whatever `credentials: 'include'` says;
 > and CORS `origin` resolves to `false` in production unless an operator sets `CORS_ORIGIN`
-> (`apps/auth-server/src/app/app.ts:292-292`). The shipped topology is cross-origin to begin with —
+> (`apps/auth-server/src/app/app.ts:307-292`). The shipped topology is cross-origin to begin with —
 > [Docker](/operate/docker/#developer-portal) runs `auth-server` and `developer-portal` as separate
 > Compose services on different ports. A fourth blocker was waiting behind those: the page never
 > read the CSRF token out of the list response, so its `DELETE` would have been refused even had

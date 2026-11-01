@@ -81,7 +81,7 @@ cross-linked to each other inside the ADR; read the one linked here first, it po
 
 The PQC hybrid-signing security review's original scope statement said hybrid issuance "is not
 wired into live routes yet." That stopped being true after #275 wired
-`apps/auth-server/src/app/app.ts:221-222`'s `hybridSigningEnabled: true` into the JWT plugin
+`apps/auth-server/src/app/app.ts:232-222`'s `hybridSigningEnabled: true` into the JWT plugin
 whenever `HYBRID_SIGNING_ENABLED` is set — an operator flipping that flag now DOES depend on this
 code at runtime. A dated note at the top of the review records this; the review's actual findings
 and verdict are unaffected, only that one scope claim is superseded. Read the note in the review

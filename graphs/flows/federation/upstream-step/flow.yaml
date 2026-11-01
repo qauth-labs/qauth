@@ -231,7 +231,7 @@ states:
     description: >-
       The bounce route gets the form, no transaction and no context. The browser follows a 303 to the GET route on the same origin
       and brings the SameSite=Lax flow cookie with it.
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:190
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:193
     always:
       - guard: bouncesElsewhere
         target: methodFault
@@ -239,10 +239,10 @@ states:
           the bounce names a place other than the method's own GET callback routes, carries a query that is not a
           plain object of strings, or throws: nothing is redirected, and the mount hands the engine an
           AuthMethodFaultError through the host's completion, as for every other fault
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:197
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:200
       - target: checkingBinding
         say: "the browser follows the bounce to the method's GET callback"
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:200
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:203
 
   checkingBinding:
     title: Compare the callback's binding with the pending transaction's, before taking it
@@ -251,16 +251,16 @@ states:
       callback carries (one value of the route's bindingParameter, state by default: from the query of a GET, the
       form of a POST) with the transaction's, in constant time. On any mismatch the method never runs, so it spends
       no code and calls no provider, and the pending sign-in stays pending: another site cannot cancel it.
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:212
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:215
     always:
       - guard: noTransaction
         target: failedTransactionMismatch
         say: 'no transaction is pending for this browser: a forged or forwarded callback, or a replay'
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
       - guard: bindingDiffers
         target: failedTransactionMismatch
         say: "the binding is missing, empty, repeated or another start's: transaction_mismatch, and nothing is taken"
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
       - target: takingTransaction
         say: "the binding is the pending transaction's"
         source: libs/server/federation/src/auth-method/engine.ts:179
@@ -271,12 +271,12 @@ states:
       The host takes it once: a second request for the same transaction finds none. It compares the binding of what
       it took once more (another start in the same browser may have replaced the transaction between the two reads),
       and the callback gets the query, the form and the transaction, and no header and no cookie.
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:219
     always:
       - target: checkingCallback
         effect: [takeTransaction]
         say: 'the transaction is taken and handed to the callback'
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:239
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:242
 
   checkingCallback:
     title: The method's callback checks the provider's answer
@@ -292,7 +292,7 @@ states:
         say: >-
           the handler throws, or the method's context cannot be built: the transaction is spent, and the mount hands
           the engine an AuthMethodFaultError with the error as its cause, never a raw 500
-        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:241
+        source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:244
       - guard: outcomeInvalid
         target: methodFault
         say: 'the callback answers outside the closed set of outcomes'
@@ -439,17 +439,17 @@ assertions:
     say: >-
       An identity comes only from a callback that took the pending transaction of the browser that started, so a
       callback forged, forwarded to another browser or replayed never signs anyone in
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
   - id: identity-needs-the-binding
     never: "state == 'identityVerified' and bindingDiffers"
     say: 'A response meant for another start, or forged, never gives an identity'
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:213
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
   - id: a-foreign-callback-takes-nothing
     never: 'transactionTaken and (noTransaction or bindingDiffers)'
     say: >-
       The host takes a pending transaction only for a callback that carries its binding, so a cross-site request
       cannot spend or cancel a pending sign-in
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:216
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:219
   - id: verify-only-sees-callback-results
     never: 'verifyCalled and (noTransaction or bindingDiffers or callbackFaults or outcomeInvalid)'
     say: >-
@@ -461,7 +461,7 @@ assertions:
     say: >-
       A handler that throws, or a context that cannot be built, ends the step as a fault through the engine, never as
       an identity and never as a raw error
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:241
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:244
   - id: no-foreign-attribute-source
     never: "state == 'identityVerified' and foreignSource"
     say: "Every attribute the engine hands on carries the method's own type as its source"
@@ -477,4 +477,4 @@ assertions:
   - id: a-bounce-stays-on-the-method
     never: "state == 'checkingBinding' and returnMode == 'formPost' and bouncesElsewhere"
     say: "A form_post is sent on only to one of the method's own GET callback routes, on the same origin"
-    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:281
+    source: libs/fastify/plugins/federation/src/lib/auth-method-routes.ts:284
