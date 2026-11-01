@@ -1,15 +1,23 @@
 import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
-import type { DbClient, Realm, RealmsRepository } from '@qauth-labs/infra-db';
+import type {
+  DbClient,
+  Realm,
+  RealmSecretsRepository,
+  RealmsRepository,
+} from '@qauth-labs/infra-db';
 import {
   createPolicyStore,
+  createRealmSecretStore,
   type RealmPolicies,
   type RealmPolicyStore,
-  type RealmSecretStore,
+  type RealmSecretCipher,
+  type RealmSecretStoreWithSeed,
 } from '@qauth-labs/server-realm-policy';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 
 import packageJson from '../../package.json';
+import { createRealmSecretStorage } from './secret-storage';
 import { createRealmPolicyStorage } from './storage';
 
 /** The plugin's name, for another plugin's `dependencies`. */
@@ -17,6 +25,9 @@ export const REALM_POLICY_PLUGIN_NAME = packageJson.name;
 
 /** The policy store as the auth server holds it: realm rows of the realms table. */
 export type RealmPolicyStoreOfRealms = RealmPolicyStore<Realm, DbClient>;
+
+/** The realm secret store as the auth server holds it, over `realm_secrets` (#529). */
+export type RealmSecretStoreOfRealms = RealmSecretStoreWithSeed<DbClient>;
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -26,7 +37,22 @@ declare module 'fastify' {
      * counter, and `seedRealms` for the boot step.
      */
     policyStore: RealmPolicyStoreOfRealms;
+    /**
+     * The realm secret store (#529): the values of the realms' secret policy
+     * fields, encrypted with each realm's data-at-rest key. `getForUse` is
+     * for the realm's mail sender only. `null` in a process that was given
+     * none, where the policy store refuses every write of a secret.
+     */
+    realmSecretStore: RealmSecretStoreOfRealms | null;
   }
+}
+
+/** What the realm secret store is built from (#529). */
+export interface RealmSecretStoreSettings {
+  /** The database plugin's `fastify.repositories.realmSecrets`. */
+  readonly repository: Pick<RealmSecretsRepository, 'find' | 'write' | 'insertIfAbsent'>;
+  /** The signer's data-at-rest operations, under the role of the component that calls. */
+  readonly cipher: RealmSecretCipher;
 }
 
 /** Options of {@link realmPolicyPlugin}. */
@@ -46,26 +72,39 @@ export interface RealmPolicyPluginOptions {
     RealmsRepository,
     'findById' | 'listPolicyRecords' | 'lockPolicyRecord' | 'writePolicies'
   >;
-  /** Where secret fields are kept (#529). Absent, every write of a secret is refused. */
-  readonly secrets?: RealmSecretStore<DbClient>;
+  /**
+   * The realm secret store's repository and cipher (#529). Absent, the
+   * process has no secret store (`fastify.realmSecretStore` is `null`) and
+   * the policy store refuses every write of a secret.
+   */
+  readonly secrets?: RealmSecretStoreSettings;
 }
 
 /**
  * Decorate `fastify.policyStore`: the realm policy store over the realms
- * table. Registered after the database plugin, whose `fastify.db` it writes
- * in.
+ * table, and `fastify.realmSecretStore`, the store of the realms' secret
+ * values that the policy store hands every secret a write sets or clears.
+ * Registered after the database plugin, whose `fastify.db` it writes in.
  *
  * @throws PolicyValidationError at registration when the seeds are not a
  *   valid policy document
  */
 export const realmPolicyPlugin = fp(
   async (fastify: FastifyInstance, options: RealmPolicyPluginOptions) => {
+    const secrets =
+      options.secrets === undefined
+        ? null
+        : createRealmSecretStore<DbClient>({
+            storage: createRealmSecretStorage(options.secrets.repository),
+            cipher: options.secrets.cipher,
+          });
+    fastify.decorate('realmSecretStore', secrets);
     fastify.decorate(
       'policyStore',
       createPolicyStore({
         storage: createRealmPolicyStorage(fastify.db, options.realms),
         seeds: options.seeds,
-        ...(options.secrets === undefined ? {} : { secrets: options.secrets }),
+        ...(secrets === null ? {} : { secrets }),
       })
     );
   },

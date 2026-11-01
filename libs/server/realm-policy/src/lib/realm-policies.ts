@@ -144,6 +144,18 @@ export function defaultsFromEnv(env: PolicySeedEnv): RealmPolicies {
   return REALM_POLICY_REGISTRY.defaultsFromEnv(env) as RealmPolicies;
 }
 
+/**
+ * The secret values the environment seeds, by field path (#529): what the
+ * boot stores in the first realm's secret store, once. Read as the server
+ * reads each key; a blank value is unset.
+ *
+ * @throws PolicySeedError when a value cannot seed its field (the error
+ *   names the key and the path, never the value)
+ */
+export function secretSeedsFromEnv(env: PolicySeedEnv): ReadonlyMap<string, string> {
+  return REALM_POLICY_REGISTRY.secretSeedsFromEnv(env);
+}
+
 /** The JSON Schema (draft 2020-12) of a view of the realm policies, `representation` by default. */
 export function toJsonSchema(view: PolicyView = 'representation'): JsonSchemaObject {
   return REALM_POLICY_REGISTRY.toJsonSchema(view);

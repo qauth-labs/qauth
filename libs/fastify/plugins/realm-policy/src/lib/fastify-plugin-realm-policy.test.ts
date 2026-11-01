@@ -1,6 +1,10 @@
 import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
-import type { Realm, RealmsRepository } from '@qauth-labs/infra-db';
-import { defaultsFromEnv, PolicyValidationError } from '@qauth-labs/server-realm-policy';
+import { type Realm, realmPolicyRecord, type RealmsRepository } from '@qauth-labs/infra-db';
+import {
+  defaultsFromEnv,
+  PolicySecretStoreUnavailableError,
+  PolicyValidationError,
+} from '@qauth-labs/server-realm-policy';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 import { describe, expect, it, vi } from 'vitest';
@@ -92,6 +96,80 @@ describe('realmPolicyPlugin', () => {
         await app.ready();
       })()
     ).rejects.toThrow(DATABASE_PLUGIN_NAME);
+    await app.close();
+  });
+
+  it('has no secret store unless given one, and then refuses every write of a secret', async () => {
+    const app = Fastify();
+    await app.register(fakeDatabasePlugin());
+    await app.register(realmPolicyPlugin, { seeds: SEEDS, realms: fakeRealms() });
+    await app.ready();
+
+    expect(app.realmSecretStore).toBeNull();
+    await expect(
+      app.policyStore.update(
+        'realm-1',
+        { mail: { smtp: { password: 'a-password' } } },
+        { expectedVersion: 5 }
+      )
+    ).rejects.toBeInstanceOf(PolicySecretStoreUnavailableError);
+    await app.close();
+  });
+
+  it('builds the secret store over the repository and cipher it is given (#529)', async () => {
+    const PASSWORD = 'the-smtp-password';
+    const rows = new Map<string, { ciphertext: string | null; keyId: string | null }>();
+    const repository = {
+      find: vi.fn(async (realmId: string, name: string) => {
+        const row = rows.get(`${realmId} ${name}`);
+        return row === undefined ? undefined : { realmId, name, updatedAt: 0, ...row };
+      }),
+      write: vi.fn(
+        async (
+          realmId: string,
+          name: string,
+          value: { ciphertext: string; keyId: string } | null
+        ) => {
+          rows.set(`${realmId} ${name}`, value ?? { ciphertext: null, keyId: null });
+        }
+      ),
+      insertIfAbsent: vi.fn(async () => true),
+    };
+    const cipher = {
+      encrypt: vi.fn(async () => `v1.kid-7.${'A'.repeat(16)}.${'B'.repeat(30)}`),
+      decrypt: vi.fn(async () => PASSWORD),
+    };
+    const lockPolicyRecord = vi.fn(async () => realmPolicyRecord(REALM));
+    const writePolicies = vi.fn(async () => ({ ...REALM, policiesVersion: 6 }) as Realm);
+    const app = Fastify();
+    await app.register(fakeDatabasePlugin());
+    await app.register(realmPolicyPlugin, {
+      seeds: SEEDS,
+      realms: fakeRealms({ lockPolicyRecord, writePolicies }),
+      secrets: { repository, cipher },
+    });
+    await app.ready();
+
+    await app.policyStore.update(
+      'realm-1',
+      { mail: { smtp: { password: PASSWORD } } },
+      { expectedVersion: 5 }
+    );
+
+    expect(cipher.encrypt).toHaveBeenCalledWith({
+      realmId: 'realm-1',
+      plaintext: PASSWORD,
+      context: 'realm_secrets:mail.smtp.password',
+    });
+    expect(repository.write).toHaveBeenCalledWith(
+      'realm-1',
+      'mail.smtp.password',
+      { ciphertext: `v1.kid-7.${'A'.repeat(16)}.${'B'.repeat(30)}`, keyId: 'kid-7' },
+      expect.anything()
+    );
+    expect(JSON.stringify(writePolicies.mock.calls)).not.toContain(PASSWORD);
+    expect(await app.realmSecretStore?.isSet('realm-1', 'mail.smtp.password')).toBe(true);
+    expect(await app.realmSecretStore?.getForUse('realm-1', 'mail.smtp.password')).toBe(PASSWORD);
     await app.close();
   });
 });
