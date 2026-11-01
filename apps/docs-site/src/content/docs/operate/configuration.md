@@ -3,7 +3,7 @@ title: Configuration
 description: Every environment key QAuth reads, with its stability tier, role, default and meaning.
 sidebar:
   order: 8
-lastVerified: '2026-10-24'
+lastVerified: '2026-11-01'
 ---
 
 <!-- Generated from libs/server/config/src/lib/registry by its tests. Do not edit by hand: change the registry and run `pnpm nx test server-config -- -u`. -->
@@ -104,14 +104,14 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ### Accounts and passwords
 
-| Key                             | Role                                          | Default | Since | Description                                                                                                                                                                                   |
-| ------------------------------- | --------------------------------------------- | ------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FAILED_LOGIN_LOCKOUT_DURATION` | realm-seed: `bruteForce.lockoutSeconds`       | `900`   | 0.1.0 | How long, in seconds, a locked-out identifier is refused before any credential check.                                                                                                         |
-| `FAILED_LOGIN_MAX_ATTEMPTS`     | realm-seed: `bruteForce.maxAttempts`          | `5`     | 0.1.0 | How many failed logins for one identifier, inside `FAILED_LOGIN_WINDOW`, start a lockout.                                                                                                     |
-| `FAILED_LOGIN_TRACKING_ENABLED` | realm-seed: `bruteForce.enabled`              | `true`  | 0.1.0 | Lock an identifier out after repeated failed logins; with it off, failed logins are only logged.                                                                                              |
-| `FAILED_LOGIN_WINDOW`           | realm-seed: `bruteForce.windowSeconds`        | `900`   | 0.1.0 | The window, in seconds, over which failed logins are counted.                                                                                                                                 |
-| `PASSWORD_MIN_SCORE`            | realm-seed: `password.minScore`               | `2`     | 0.1.0 | The strength score, from 0 (very weak) to 4 (strong), a new password must reach.                                                                                                              |
-| `REQUIRE_VERIFIED_ACCOUNT`      | realm-seed: `accounts.requireVerifiedAccount` | `true`  | 0.1.0 | Refuse a password login, with the same answer as a wrong password, until the account is verified; for a password account, by its confirmed email address. Old name: `REQUIRE_EMAIL_VERIFIED`. |
+| Key                             | Role                                          | Default | Since | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------- | --------------------------------------------- | ------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FAILED_LOGIN_LOCKOUT_DURATION` | realm-seed: `bruteForce.lockoutSeconds`       | `900`   | 0.1.0 | How long, in seconds, a locked-out identifier is refused before any credential check, that seeds `bruteForce.lockoutSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).                                                                                                                |
+| `FAILED_LOGIN_MAX_ATTEMPTS`     | realm-seed: `bruteForce.maxAttempts`          | `5`     | 0.1.0 | How many failed logins for one identifier, inside the window, start a lockout, that seeds `bruteForce.maxAttempts` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).                                                                                                                          |
+| `FAILED_LOGIN_TRACKING_ENABLED` | realm-seed: `bruteForce.enabled`              | `true`  | 0.1.0 | Lock an identifier out after repeated failed logins (with it off, failed logins are only logged), that seeds `bruteForce.enabled` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).                                                                                                           |
+| `FAILED_LOGIN_WINDOW`           | realm-seed: `bruteForce.windowSeconds`        | `900`   | 0.1.0 | The window, in seconds, over which failed logins are counted, that seeds `bruteForce.windowSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).                                                                                                                                         |
+| `PASSWORD_MIN_SCORE`            | realm-seed: `password.minScore`               | `2`     | 0.1.0 | The strength score, from 0 (very weak) to 4 (strong), a new password must reach, that seeds `password.minScore` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).                                                                                                                             |
+| `REQUIRE_VERIFIED_ACCOUNT`      | realm-seed: `accounts.requireVerifiedAccount` | `true`  | 0.1.0 | Refuse a password login, with the same answer as a wrong password, until the account is verified (for a password account, by its confirmed email address), that seeds `accounts.requireVerifiedAccount` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again). Old name: `REQUIRE_EMAIL_VERIFIED`. |
 
 ### Mail
 
@@ -338,6 +338,12 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 | `OID4VP_VERIFIER_TRUST_ANCHORS_PATH`     | deployment | unset                                             | 0.1.0 | A file holding more verifier trust anchors, added to `OID4VP_VERIFIER_TRUST_ANCHORS`.                                                       |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT`      | deployment | `openid4vp://`                                    | 0.1.0 | Where the wallet sign-in screen's QR code and wallet button point: a wallet's custom scheme or universal link.                              |
 
+### Plugins
+
+| Key                   | Role       | Default | Since | Description                                                                                                                                                                                    |
+| --------------------- | ---------- | ------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_METHOD_PLUGINS` | deployment | empty   | 0.2.0 | The AuthMethod plugin packages to load at boot, by npm package name, comma-separated; the operator installs them with the deployment, and a package that is not a valid plugin stops the boot. |
+
 ### Rate limits
 
 | Key                                 | Role       | Default | Since | Description                                                                                                  |
@@ -395,7 +401,11 @@ A key marked **Secret** holds a credential. This page never shows its value, not
 
 ## Experimental keys
 
-No key is experimental.
+### Plugins
+
+| Key                  | Role       | Default | Since | Description                                                                                                                                           |
+| -------------------- | ---------- | ------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PLUGIN_API_ENABLED` | deployment | `false` | 0.2.0 | Turn on the experimental plugin API, so a plugin outside QAuth's first-party list loads; with it off, such a plugin is skipped and the boot says why. |
 
 ### Experimental values
 

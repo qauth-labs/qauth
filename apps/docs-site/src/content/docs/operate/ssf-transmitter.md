@@ -3,7 +3,7 @@ title: SSF transmitter
 description: Turn on QAuth's Shared Signals Framework transmitter, register a receiver, and run the verification event end to end.
 sidebar:
   order: 11
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 QAuth can be an [OpenID Shared Signals Framework 1.0](https://openid.net/specs/openid-sharedsignals-framework-1_0-final.html)
@@ -76,7 +76,8 @@ a user only when the user is related to it, in one of two ways:
 
 - **Its users.** The user holds an active consent for the receiver's client, or a live refresh
   token the client was issued (decided on 2026-10-26). Such a receiver is the client your users
-  sign in through, given `client_credentials` and `ssf:stream` as well.
+  sign in through, given `client_credentials` and `ssf:stream` as well, with the
+  `client_credentials` grant kept to `ssf:stream` (see below).
 - **A resource server's users.** The user holds a live refresh token whose audience names the
   receiver as a resource server (decided on 2026-10-31). A receiver is the resource server of the
   values its `audience` lists, the column introspection reads the same way, except a
@@ -112,8 +113,9 @@ client, or deleting it stops its deliveries, and its token stops working on `/ss
 when it expires; deleting the client deletes its stream.
 
 Give the relying party's client `client_credentials`, the `ssf:stream` scope and the realm's issuer
-as its audience, beside what its users sign in with, for example as an entry of the seed
-manifest's `clients`:
+as its audience, beside what its users sign in with, and keep the `client_credentials` grant to
+`ssf:stream` with `client_credentials_scopes`, for example as an entry of the seed manifest's
+`clients`:
 
 ```json
 {
@@ -121,10 +123,25 @@ manifest's `clients`:
   "name": "Notes",
   "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
   "redirect_uris": ["https://notes.example.com/callback"],
-  "scopes": ["openid", "ssf:stream"],
+  "scopes": ["openid", "notes:read", "ssf:stream"],
+  "client_credentials_scopes": ["ssf:stream"],
   "audience": ["https://auth.example.com"]
 }
 ```
+
+A `client_credentials` token names no user: its `sub` is the client's `client_id`.
+`client_credentials_scopes` lists the scopes that grant may issue, out of `scopes`. With
+`["ssf:stream"]`, the client gets a token of its own for `ssf:stream` only, and the scopes its
+users grant it at sign-in, `openid` and `notes:read` here, reach only the tokens a user granted:
+a `client_credentials` request for one of them is refused with `invalid_scope`. The seeder refuses
+a list that names a scope `scopes` does not hold, and the list on a client without the
+`client_credentials` grant.
+
+Keep the realm's issuer the client's only `audience` (without one, the token's `aud` is the
+client's `client_id`, which `/ssf/` refuses). The list narrows a `client_credentials` token's
+scopes, not its `aud`, which is the client's `audience`: a resource server listed there beside the
+issuer finds itself in the `aud` of a token that names no user, and accepts it if it checks only
+`aud` and the signature.
 
 The receiver then gets a token:
 
@@ -134,17 +151,25 @@ curl -s https://auth.example.com/oauth/token \
   -d client_id=notes-app -d client_secret="$SECRET"
 ```
 
-:::caution[The client can get a token without a user for any of its scopes]
-A client that holds `client_credentials` can get a token for itself, with no user, for any scope
-in its `scopes`: not only `ssf:stream`, but also each scope its users grant it at sign-in, such as
-`openid` here or an API scope such as `notes:read`. Such a token's `sub` is the client's
-`client_id`, not a user's id.
+:::caution[Without the list, the client gets a token without a user for any of its scopes]
+A client that holds `client_credentials` and has no `client_credentials_scopes` gets a token for
+itself, with no user, for any scope in its `scopes`, each scope its users grant it at sign-in
+included. Set the list on every client that signs users in and holds `client_credentials`.
 
-- Request `scope=ssf:stream`, and nothing else, with `client_credentials`, as above. Never use that
-  token anywhere but `/ssf/`.
-- A resource server that accepts tokens of this realm must refuse a scope its users grant
-  (user-delegated) on a `client_credentials` token: when `sub` is the `client_id`, no user granted
-  that scope. Check `sub` before acting on such a scope.
+Add it to the client's manifest entry. The seeder writes an existing client only with `--rotate`,
+which also issues it a new secret; to set the stored row without rotating:
+
+```sql
+UPDATE oauth_clients SET client_credentials_scopes = '["ssf:stream"]'
+WHERE realm_id = '<realm id>' AND client_id = 'notes-app';
+```
+
+A later `--rotate` refuses an entry without the list for a client whose row has one, so the
+rotation cannot lift it unnoticed; to lift it on purpose, set the column to `NULL` first.
+
+The token endpoint reads the client row on every request, so the next token request follows the
+list, on every node of a release that knows it (a node of an older release ignores the column).
+A token issued before keeps its scopes until it expires.
 :::
 
 ## Create a stream

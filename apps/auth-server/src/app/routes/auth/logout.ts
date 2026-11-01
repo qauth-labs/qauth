@@ -149,8 +149,8 @@ export default async function (fastify: FastifyInstance) {
         // End the user's hosted browser sessions first, so none of them can
         // obtain a new authorization code once the codes are invalidated
         // below. The portal calls this route from its server, so they are
-        // found through the per-user index, not a cookie; the request's own
-        // cookie is cleared when it names one of them.
+        // found by the user in Postgres, never through a cookie or Redis
+        // (#912); the request's own cookie is cleared when it names one.
         const endedSessions = await endBrowserSessions(fastify, user.realmId, userId);
         // Best effort (#493): the cookie verifies only with the realm's cookie
         // keys, and a process that cannot read them (no signer role, a signer

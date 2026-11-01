@@ -134,7 +134,7 @@ describe('session lists and revocations on a real Postgres and Redis (#550)', ()
     nodeB = await startNode(shared);
     nodeC = await startNode({
       ...shared,
-      redisUrl: infra.redis.connectionUrl.replace(/\/0$/, '/1'),
+      redisUrl: infra.redis.spareConnectionUrl,
       cacheTtlSeconds: 1,
     });
     for (const [name, node] of [

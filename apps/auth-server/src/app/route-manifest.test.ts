@@ -48,7 +48,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   requireJwt: 'jwt',
   verifyRequestAccessToken: 'jwt',
   passwordHasher: 'password',
-  passwordValidator: 'password',
+  passwordValidators: 'password',
   pkceUtils: 'pkce',
   providerRegistry: 'federation',
   emailService: 'email',

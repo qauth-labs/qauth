@@ -3,7 +3,7 @@ title: OAuth 2.1 Flow
 description: QAuth's OAuth 2.1 / OIDC endpoints with copy-paste curl for every step, to implement a client by hand.
 sidebar:
   order: 2
-lastVerified: '2026-10-25'
+lastVerified: '2026-11-01'
 ---
 
 This page documents QAuth's OAuth 2.1 / OIDC endpoints with copy-paste `curl`
@@ -240,8 +240,9 @@ Notes:
 - `resource` here must be a **subset** of the resource set bound at authorize
   time, or you get `invalid_target`. Omit it to inherit the code's binding.
 - **`refresh_token` is present only when the user has a stored consent** for
-  your client that covers the granted scopes — the row they can review and
-  revoke under `/consents`. If they untick **Remember this decision** on the
+  your client that covers the granted scopes at every `resource` the token is
+  bound to — the row they can review and revoke under `/consents`. A consent
+  remembered for one resource server does not cover another. If they untick **Remember this decision** on the
   consent screen, the approval is one-time: the member is absent, and you send
   them through `/oauth/authorize` again once the access token expires.
   Requesting `offline_access` does not change this either way.
@@ -395,6 +396,13 @@ curl -s -X POST http://localhost:3000/oauth/token \
 - The client must have the `client_credentials` grant and the requested scopes
   in its `scopes` allowlist. **At least one scope is required** (a scopeless
   machine token is rejected per RFC 9700).
+- A client that also signs users in can have its `client_credentials` grant
+  narrowed by the operator to the scopes it needs as itself
+  (`client_credentials_scopes` in the seed manifest): a scope outside that list
+  is refused with `invalid_scope` even though the client holds it, so the
+  scopes its users grant it never reach a token that names no user. A client
+  without the list may request any scope of `scopes`. See
+  [SSF transmitter](/operate/ssf-transmitter/#register-a-receiver).
 - `resource` must fall within the client's configured `audience` (or defaults to
   the `client_id`); it sets the token `aud`.
 - An audience in the reserved `urn:qauth:aud:` namespace, such as the developer
@@ -510,6 +518,13 @@ Rules that are load-bearing rather than incidental:
   Key material carried _by_ the assertion — `jwk`, `jku`, `x5u` headers — is
   rejected outright; honouring it would let anyone sign their own credential and
   supply the key to check it against.
+- **Public keys only.** A key set holding any private member (`d`, the RSA
+  primes and CRT values `p`, `q`, `dp`, `dq`, `qi` and `oth`, an ML-DSA `priv`
+  or a symmetric `k`) is refused whole, and so is a key without the public
+  members its type needs (EC `crv`, `x` and `y`; OKP `crv` and `x`; RSA `n` and
+  `e`). The assertion is refused with `invalid_client`. A key whose private
+  members were published is exposed: replace it with a new key, not a trimmed
+  copy of the old one.
 - **Asymmetric algorithms only.** `alg` is intersected with the same list
   discovery advertises, which contains no `none` and no `HS*`. An HS256
   assertion verified against a public JWK is the classic algorithm-confusion

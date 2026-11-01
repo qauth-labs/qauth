@@ -432,7 +432,7 @@ async function started(
   run: KitRun
 ): Promise<KitStart> {
   const before = run.egressBodies.length;
-  const start = await startUpstreamStep(method, context, { uiLocales: ['en'] }).catch(
+  const start = await startUpstreamStep(method, { uiLocales: ['en'] }, context).catch(
     (error: unknown) => run.stop(`start() failed: ${describe(error)}`)
   );
   const posted = run.egressBodies.slice(before);

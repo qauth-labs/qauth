@@ -37,7 +37,7 @@ import {
   validateScopes,
 } from '../../helpers/client-auth';
 import { isAgentClient } from '../../helpers/client-resolution';
-import { isScopeSubset } from '../../helpers/consent';
+import { consentCovers } from '../../helpers/consent';
 import { resolveIssuerIdentifier } from '../../helpers/discovery';
 import { dpopEventReason, verifyTokenRequestProof } from '../../helpers/dpop';
 import { resolveEmailClaimsForScopes } from '../../helpers/email-claims';
@@ -1041,12 +1041,16 @@ async function handleAuthorizationCode(
   // A refresh token is standing access, and the active consent row is the
   // user's only handle on it: `/consents` lists those rows, and consent
   // revocation reaches the refresh tokens through one. So a refresh token is
-  // minted only under a stored consent that covers the code's scopes. An
-  // approval given with "Remember this decision" unticked, a consent revoked
-  // since the code was issued, and a code of the legacy Bearer authorize path
-  // (retired by #524; it stored no consent) yield the access token (and ID
-  // token) alone; the client
-  // returns through /oauth/authorize when it expires.
+  // minted only under a stored consent that covers its scopes and resources:
+  // the code's scopes at every RFC 8707 resource the family is bound to
+  // (`consentCovers`, the consent skip's rule), since a consent stored for one
+  // resource server says nothing about another. Without a resource the scopes
+  // alone decide. An approval given with "Remember this decision" unticked, an
+  // administrative consent (ADR-017 Decision 9) that no stored consent covers,
+  // a consent revoked since the code was issued, and a code of the legacy
+  // Bearer authorize path (retired by #524; it stored no consent) yield the
+  // access token (and ID token) alone; the client returns through
+  // /oauth/authorize when it expires.
   const consent = await fastify.repositories.oauthConsents.findActive(
     ctx.realmId,
     user.id,
@@ -1054,7 +1058,7 @@ async function handleAuthorizationCode(
   );
   const familyCreatedAt = issuedAt;
   const refresh =
-    consent && isScopeSubset(authCode.scopes, consent.scopes)
+    consent && consentCovers(consent, authCode.scopes, effectiveResource)
       ? {
           ...fastify.jwtUtils.generateRefreshToken(),
           // The realm's `sso_max_lifespan` caps the family from its start,
@@ -1253,7 +1257,8 @@ async function handleAuthorizationCode(
  *
  * - `sub` = clientId (no end-user).
  * - No refresh token issued (RFC 6749 4.4.3).
- * - Scopes must be a subset of client's configured `scopes` column.
+ * - Scopes must be a subset of client's configured `scopes` column, and of
+ *   its `client_credentials_scopes` when the operator set one (#891).
  * - `aud` resolves from client.audience (default: clientId).
  */
 async function handleClientCredentials(
@@ -1280,6 +1285,20 @@ async function handleClientCredentials(
   } catch (err) {
     await emitRequestFailed(ctx, oauthErrorCode(err), 'scope_not_allowed_for_client');
     throw err;
+  }
+
+  // #891: the token names no user, so a scope the operator kept for tokens
+  // a user granted (`notes:read` on a relying party that receives SSF events
+  // as itself, say) is refused here, even though the client holds it.
+  const grantAllowlist = clientCredentialsScopeAllowlist(client);
+  if (grantAllowlist !== null) {
+    const outside = grantedScopes.filter((scope) => !grantAllowlist.has(scope));
+    if (outside.length > 0) {
+      await emitRequestFailed(ctx, 'invalid_scope', 'scope_not_allowed_for_grant');
+      throw new InvalidScopeError(
+        `${outside.join(' ')} not permitted for this client with the client_credentials grant`
+      );
+    }
   }
 
   // A scopeless machine token has no authorisation surface — almost always a
@@ -1354,6 +1373,27 @@ async function handleClientCredentials(
     token_type: tokenTypeFor(ctx),
     ...(scopeString ? { scope: scopeString } : {}),
   };
+}
+
+/**
+ * The scopes the `client_credentials` grant may issue to a client, beside its
+ * `scopes` (#891): `oauth_clients.client_credentials_scopes`, which only the
+ * seed manifest writes. A client that also signs users in lists there only
+ * the scopes it needs as itself, `ssf:stream` for an SSF receiver, so the
+ * scopes its users grant it never reach a token that names no user.
+ *
+ * null when the column is NULL (or absent): the grant may issue any scope of
+ * `scopes`, as before the column existed. The stored shape is re-checked
+ * here, beside the DB CHECK: anything but an array of non-empty strings
+ * allows nothing, so a malformed value refuses every scope rather than
+ * lifting the narrowing.
+ */
+function clientCredentialsScopeAllowlist(client: OAuthClientLike): ReadonlySet<string> | null {
+  const list: unknown = client.clientCredentialsScopes;
+  if (list === null || list === undefined) return null;
+  return Array.isArray(list) && list.every((scope) => typeof scope === 'string' && scope.length > 0)
+    ? new Set<string>(list)
+    : new Set<string>();
 }
 
 /**

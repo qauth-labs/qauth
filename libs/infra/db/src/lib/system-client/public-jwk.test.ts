@@ -1,6 +1,7 @@
+import { PRIVATE_JWK_MEMBERS } from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
-import { PRIVATE_JWK_MEMBERS, publicJwkSchema } from './public-jwk';
+import { publicJwkSchema } from './public-jwk';
 
 const OKP = { kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' };
 const EC = { kty: 'EC', crv: 'P-256', x: 'eA', y: 'eQ' };

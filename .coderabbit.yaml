@@ -71,6 +71,11 @@ reviews:
     # One review per PR from the free allowance; later pushes are reviewed on
     # request (`@coderabbitai review`).
     auto_incremental_review: false
+    # Executor pull requests open stacked: a PR's base is the branch of the
+    # executor PR below it, not main, and only the default branch is
+    # reviewed unless listed here.
+    base_branches:
+      - '^exec/.*'
     labels:
       - '!integration'
 

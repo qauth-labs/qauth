@@ -32,7 +32,7 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts libs/keys/vault",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the KEK provider contract and the token, rotation and policy suites against a Vault dev server in a container (testcontainers). Requires a running Docker daemon. CI's integration job runs it when the project is affected."

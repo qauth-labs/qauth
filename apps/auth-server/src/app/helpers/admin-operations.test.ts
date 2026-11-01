@@ -1099,6 +1099,17 @@ const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
       ),
       '/firstParty': unless('/firstParty', (next) => next === false, 'token-content'),
       '/verifiedDomain': securityWith('token-content'),
+      // #891: a list that keeps or narrows the scopes a token naming no user
+      // may carry is an ordinary write; lifting it (NULL) or adding a scope is not.
+      '/clientCredentialsScopes': unless(
+        '/clientCredentialsScopes',
+        (next, current) =>
+          Array.isArray(next) &&
+          (current === null ||
+            current === undefined ||
+            (Array.isArray(current) && next.every((scope) => current.includes(scope)))),
+        'token-content'
+      ),
       '/environment': unless('/environment', (next) => next === 'production', 'posture-loosening'),
     },
     unchanged: WRITE,

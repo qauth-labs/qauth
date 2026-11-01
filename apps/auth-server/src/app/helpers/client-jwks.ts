@@ -1,5 +1,6 @@
 import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { publicJwkProblem } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import type { JSONWebKeySet } from 'jose';
 import { z } from 'zod';
@@ -59,17 +60,28 @@ const CLIENT_JWKS_CACHE_TTL_SECONDS = 300;
  *   - the members a verifier reads — the ones `jose` selects a key by and
  *     imports it from: `kty`, `kid`, `alg`, `use`, `key_ops`, `crv`, `x`, `y`,
  *     `n`, `e` — are typed and length-capped, and ONLY those are kept. Other
- *     members are accepted (RFC 7517 §4) but dropped, so they never reach
- *     `jose`: WebCrypto's `importKey` converts the members it knows (`p`, `q`,
- *     `oth`, `priv`, …) with `String()` whatever their type, synchronously,
- *     and `String()` of a deeply nested array costs as much as the nesting is
- *     deep (ANT-2026-IY5YYLQR). The set is the one `id-jag-issuer-keys.ts`
- *     keeps for issuer keys, plus `key_ops`, which `jose` selects by;
- *   - no PRIVATE component may be present. The AS never needs a client's
- *     private key, so accepting one is pure liability — a `d` (RSA/EC/OKP
- *     private exponent) or `k` (symmetric key value) member rejects the whole
- *     set. The seed manifest applies the same rule at provisioning time; this
- *     is the defence-in-depth re-check on read that the schema column asks for.
+ *     public members are accepted (RFC 7517 §4) but dropped, so they never
+ *     reach `jose`: WebCrypto's `importKey` converts the members it knows
+ *     (`pub`, and the private ones refused below) with `String()` whatever
+ *     their type, synchronously, and `String()` of a deeply nested array costs
+ *     as much as the nesting is deep (ANT-2026-IY5YYLQR). The set is the one
+ *     `id-jag-issuer-keys.ts` keeps for issuer keys, plus `key_ops`, which
+ *     `jose` selects by;
+ *   - no PRIVATE member may be present (`PRIVATE_JWK_MEMBERS` in
+ *     `@qauth-labs/shared-validation`, the seed manifest's rule, #935): the
+ *     private part of an EC, OKP or RSA key, the RSA primes and CRT values
+ *     (`p`, `q`, `dp`, `dq`, `qi`, `oth`, with or without `d`), an ML-DSA
+ *     `priv` or a symmetric `k` rejects the whole set. Such a key is refused,
+ *     not stripped and trusted: whoever published it has exposed its private
+ *     half, so the refusal names the members and says the key must be
+ *     rotated, for the operator to pass on. The member is matched by name
+ *     only, so its value is never converted;
+ *   - a key of a known type must carry the public members it needs (EC
+ *     `crv`/`x`/`y`, OKP `crv`/`x`, RSA `n`/`e`), the seed manifest's rule
+ *     too: without them `jose` would refuse every assertion later for a reason
+ *     nobody reads. The seed manifest applies both rules at provisioning time;
+ *     this is the defence-in-depth re-check on read that the schema column
+ *     asks for.
  *   - `kty: 'oct'` is rejected. A symmetric key can only be used with a MAC
  *     algorithm, and none of those are in the permitted assertion algorithm
  *     list — rejecting it here states that intent instead of relying on `jose`
@@ -100,8 +112,16 @@ const clientJwkSchema = z
     },
     { message: 'jwks member names are bounded in number and length' }
   )
-  .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
-    message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
+  .superRefine((jwk, ctx) => {
+    const problem = publicJwkProblem(jwk);
+    if (problem === undefined) return;
+    ctx.addIssue({
+      code: 'custom',
+      message:
+        problem.kind === 'private'
+          ? `${problem.message}: the key's private half is published, so the client must rotate it`
+          : problem.message,
+    });
   })
   .refine((jwk) => jwk.kty !== 'oct', {
     message: 'jwks must not contain symmetric ("oct") keys',
@@ -133,15 +153,35 @@ export type ClientJwkSet = z.infer<typeof clientJwkSetSchema>;
  * must clear the same bar.
  *
  * Throws {@link InvalidClientError} on anything that does not parse; the
- * message is for the caller's audit log, never for the client.
+ * message is for the caller's audit log, never for the client. It names the
+ * key and the reason for each refusal this module states (a private member, a
+ * missing public member, a symmetric key, an unbounded member list), so an
+ * operator reading the log of a refused `jwks_uri` document knows to have the
+ * client rotate an exposed key (#935).
  */
 export function parseClientJwkSet(value: unknown, source: string): JSONWebKeySet {
   const parsed = clientJwkSetSchema.safeParse(value);
   if (!parsed.success) {
-    throw new InvalidClientError(`${source} is not a valid public JWK Set`);
+    throw new InvalidClientError(
+      `${source} is not a valid public JWK Set${refusalReasons(parsed.error)}`
+    );
   }
   // Typed, capped, and holding only the members `jose` reads.
   return { keys: parsed.data.keys };
+}
+
+/**
+ * The refusals {@link clientJwkSchema} states itself, each with the key it is
+ * about (`keys[0]: …`), as a suffix for the error description. Its messages
+ * are fixed text and member names from a closed list, never a value from the
+ * document. Zod's own type and length messages are left out: they add nothing
+ * an operator acts on.
+ */
+function refusalReasons(error: z.ZodError): string {
+  const reasons = error.issues
+    .filter((issue) => issue.code === 'custom')
+    .map((issue) => `${z.core.toDotPath(issue.path)}: ${issue.message}`);
+  return reasons.length > 0 ? `: ${reasons.join('; ')}` : '';
 }
 
 /**

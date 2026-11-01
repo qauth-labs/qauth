@@ -38,6 +38,10 @@ export const observabilityEnvSchema = z.object({
    * Enable failed-login throttling/lockout (QAuth §3.1.12). When disabled the
    * login route still logs failures (§3.1 #125) but never blocks. Defaults to
    * on.
+   *
+   * This key and the three below seed a new realm's `bruteForce` policies
+   * (#528). The auth server reads each realm's own policies from the realm
+   * row; a later change of a key leaves a realm that has its policies as it is.
    */
   FAILED_LOGIN_TRACKING_ENABLED: z
     .enum(['true', 'false', '1', '0'])

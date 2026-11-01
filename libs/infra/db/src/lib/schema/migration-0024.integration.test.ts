@@ -8,7 +8,7 @@
  * uses, and keep every existing row as it was.
  *
  * Requires Docker; self-skips without it. Each case rebuilds the schema from
- * scratch (DROP SCHEMA CASCADE) inside one shared container.
+ * scratch (DROP SCHEMA CASCADE) inside the suite's one database.
  */
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -36,7 +36,6 @@ import {
   type RealmSecretStore,
 } from '@qauth-labs/server-realm-policy';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -62,8 +61,7 @@ describe('policy store over the realms table (integration)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     database = createDatabase({ connectionString: container.connectionString });
     // A second pool, as a second node has.
     second = createDatabase({ connectionString: container.connectionString });
@@ -519,7 +517,8 @@ describe('policy store over the realms table (integration)', () => {
         const {
           rows: [waiting],
         } = await db().pool.query<{ count: string }>(
-          `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`
+          `SELECT count(*) FROM pg_stat_activity
+            WHERE datname = current_database() AND wait_event_type = 'Lock'`
         );
         if (Number(waiting.count) > 0) return;
         await new Promise((resolve) => setTimeout(resolve, 25));

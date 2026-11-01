@@ -18,9 +18,11 @@
     },
     "build": {
       "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["default", "^default", "{workspaceRoot}/docs/**/*", "{workspaceRoot}/*.md"],
       "outputs": ["{workspaceRoot}/dist/apps/docs-site"],
       "metadata": {
-        "description": "Static build of the QAuth documentation site. Output lands at dist/apps/docs-site via astro.config.mjs's outDir."
+        "description": "Static build of the QAuth documentation site. Output lands at dist/apps/docs-site via astro.config.mjs's outDir. Cacheable (#960), so CI restores an unchanged site from the remote cache instead of building it. What the build reads besides this project's own files (`default`) and its dependencies (`^default`) is declared here: the records collection and `src/lib/records.ts` load docs/adr/*.md and docs/security/*.md, and the remark plugin rewrites a record's relative link only when its target exists, so the existence of every file a record links to is an input too. Today those targets are all under docs/ or a root-level .md file (SECURITY.md), hence the two globs; src/build-inputs.test.ts fails when a record links anywhere else, because the link would then be rewritten from a file this hash does not cover and a cached build would replay a stale page. The npm packages the project depends on (astro, Starlight) are hashed by Nx by default."
       },
       "options": {
         "command": "astro build",

@@ -8,6 +8,8 @@
     "jsxImportSource": "astro",
     "allowJs": true,
     "verbatimModuleSyntax": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
   }
 }

@@ -167,7 +167,7 @@ describe('the egress allowlist (real containers)', () => {
     );
     booted.push(server);
     const { app } = server;
-    await app.redis.flushall();
+    await app.redis.flushdb();
     if ((await app.repositories.realms.findByName(OTHER_REALM)) === undefined) {
       await app.repositories.realms.createWithPrimaryHost(
         { name: OTHER_REALM, issuer: `https://${OTHER_HOST}`, enabled: true },
@@ -213,7 +213,7 @@ describe('the egress allowlist (real containers)', () => {
       expect(publicKeys.requests.map(({ url }) => url)).toEqual(['/jwks']);
 
       // The caches are per issuer; empty them so the other realm has to fetch.
-      await app.redis.flushall();
+      await app.redis.flushdb();
       await expect(
         createIdJagIssuerKeyResolver(app, OTHER_REALM)(request)
       ).resolves.toBeUndefined();

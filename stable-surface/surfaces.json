@@ -159,6 +159,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-consent-administrative-v1",
+      "description": "The urn:qauth:event:consent.administrative:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #633).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/consent.administrative.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-consent-denied-v1",
       "description": "The urn:qauth:event:consent.denied:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",

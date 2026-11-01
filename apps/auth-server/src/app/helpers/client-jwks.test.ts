@@ -1,4 +1,5 @@
 import { InvalidClientError } from '@qauth-labs/shared-errors';
+import { PRIVATE_JWK_MEMBERS } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,6 +29,9 @@ import {
 } from './client-jwks';
 
 const PUBLIC_JWK = { kty: 'EC', crv: 'P-256', x: 'abc', y: 'def', kid: 'k1' };
+const RSA_PUBLIC_JWK = { kty: 'RSA', n: 'bg', e: 'AQAB', kid: 'r1' };
+/** #935: an RSA key carrying its primes but no `d`, which used to be stripped and trusted. */
+const RSA_WITH_PRIMES = { ...RSA_PUBLIC_JWK, p: 'cA', q: 'cQ' };
 const JWKS_URI = 'https://client.example.com/jwks.json';
 
 function fastifyStub() {
@@ -89,6 +93,56 @@ describe('parseClientJwkSet', () => {
   });
 });
 
+// #935: only `d` and `k` were refused. A key carrying the RSA primes or CRT
+// values without `d` had them dropped and was trusted, although its owner had
+// published its private key.
+describe('parseClientJwkSet — every private member refuses the set (#935)', () => {
+  it('accepts a public RSA key', () => {
+    expect(parseClientJwkSet({ keys: [RSA_PUBLIC_JWK] }, 'test')).toEqual({
+      keys: [RSA_PUBLIC_JWK],
+    });
+  });
+
+  it('refuses an RSA key carrying p and q but no d, and says why', () => {
+    expect(() =>
+      parseClientJwkSet({ keys: [PUBLIC_JWK, RSA_WITH_PRIMES] }, 'registered client jwks')
+    ).toThrow(
+      expect.objectContaining({
+        errorDescription:
+          'registered client jwks is not a valid public JWK Set: keys[1]: jwks must contain ' +
+          'PUBLIC keys only (private member "p", "q" present): the key\'s private half is ' +
+          'published, so the client must rotate it',
+      })
+    );
+  });
+
+  it.each(PRIVATE_JWK_MEMBERS)('refuses a key carrying "%s"', (member) => {
+    expect(() =>
+      parseClientJwkSet({ keys: [{ ...RSA_PUBLIC_JWK, [member]: 'c2VjcmV0' }] }, 'test')
+    ).toThrow(
+      expect.objectContaining({
+        errorDescription: expect.stringContaining(`private member "${member}" present`),
+      })
+    );
+  });
+
+  it.each<[string, Record<string, unknown>, string]>([
+    ['an RSA key with no e', { kty: 'RSA', n: 'bg' }, 'keys[0]: a RSA key needs "e"'],
+    ['an EC key with no y', { kty: 'EC', crv: 'P-256', x: 'abc' }, 'keys[0]: a EC key needs "y"'],
+    ['an OKP key with no x', { kty: 'OKP', crv: 'Ed25519' }, 'keys[0]: a OKP key needs "x"'],
+  ])('refuses %s, naming the member', (_label, jwk, reason) => {
+    expect(() => parseClientJwkSet({ keys: [jwk] }, 'test')).toThrow(
+      expect.objectContaining({ errorDescription: expect.stringContaining(reason) })
+    );
+  });
+
+  it('keeps Zod type messages out of the refusal', () => {
+    expect(() => parseClientJwkSet({ keys: [{ ...PUBLIC_JWK, kid: 1 }] }, 'test')).toThrow(
+      expect.objectContaining({ errorDescription: 'test is not a valid public JWK Set' })
+    );
+  });
+});
+
 // Regression (ANT-2026-IY5YYLQR): only `kty` was typed, and the key went to
 // `jose` as it came. WebCrypto's `importKey` does not refuse a JWK member of
 // the wrong type: it converts it to a string, synchronously — and `String()`
@@ -126,14 +180,26 @@ describe('parseClientJwkSet — only typed members the verifier reads reach jose
       key_ops: ['verify'],
       ext: true,
       x5c: ['MIIB'],
-      p: [[['deep']]],
-      oth: [{}],
-      priv: {},
+      pub: [[['deep']]],
       note: 'hi',
     };
     expect(parseClientJwkSet({ keys: [jwk] }, 'test')).toEqual({
       keys: [{ ...PUBLIC_JWK, alg: 'ES256', use: 'sig', key_ops: ['verify'] }],
     });
+  });
+
+  // The private members WebCrypto converts are refused by name (#935), so a
+  // nested value in one is never converted either.
+  it.each<[string, unknown]>([
+    ['p', nested(50)],
+    ['oth', [{}]],
+    ['priv', {}],
+  ])('refuses a private member %s whatever its type', (member, value) => {
+    expect(() => parseClientJwkSet({ keys: [{ ...PUBLIC_JWK, [member]: value }] }, 'test')).toThrow(
+      expect.objectContaining({
+        errorDescription: expect.stringContaining(`private member "${member}" present`),
+      })
+    );
   });
 
   it('re-fetches rather than serve a cached key set with a mistyped member', async () => {
@@ -231,6 +297,24 @@ describe('fetchClientJwkSet', () => {
     await expect(fetchClientJwkSet(fastifyStub(), JWKS_URI)).rejects.toMatchObject({
       errorDescription: expect.stringMatching(/not a valid public JWK Set/),
     });
+  });
+
+  // #935 acceptance: the document is refused, not trusted with the primes
+  // dropped, and the refusal tells the operator the client must rotate.
+  it('refuses a document whose RSA key carries p and q but no d, and says why', async () => {
+    const fastify = fastifyStub();
+    egressGet.mockResolvedValue({
+      status: 200,
+      body: JSON.stringify({ keys: [RSA_WITH_PRIMES] }),
+      headers: {},
+    });
+    await expect(fetchClientJwkSet(fastify, JWKS_URI)).rejects.toMatchObject({
+      errorDescription:
+        'client jwks_uri document is not a valid public JWK Set: keys[0]: jwks must contain ' +
+        'PUBLIC keys only (private member "p", "q" present): the key\'s private half is ' +
+        'published, so the client must rotate it',
+    });
+    expect(fastify.redis.set).not.toHaveBeenCalled();
   });
 
   it('does not cache a rejected document', async () => {

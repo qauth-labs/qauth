@@ -246,13 +246,19 @@ describe('realm policies at boot on the auth server (#516)', () => {
     expect(await defaultRealmRow()).toEqual(filled);
     expect(secondWarnings.filter((line) => line.msg.includes(KEPT))).toEqual([]);
     const ignored = secondWarnings.filter((line) => line.msg.includes(IGNORED));
-    // The token lifetimes (#527), the allowlist and the mail transport and
-    // sender (#529) read the realm row: each key set is ignored, once. The
-    // harness's environment sets EMAIL_PROVIDER and EMAIL_FROM_ADDRESS.
+    // The token lifetimes (#527), the password policy (#528), the allowlist
+    // and the mail transport and sender (#529) read the realm row: each key
+    // set is ignored, once. The harness's environment sets EMAIL_PROVIDER and
+    // EMAIL_FROM_ADDRESS.
     expect(ignored).toEqual([
       expect.objectContaining({
         variable: 'ACCESS_TOKEN_LIFESPAN',
         policy: 'tokens.accessTokenLifespanSeconds',
+        realm: 'master',
+      }),
+      expect.objectContaining({
+        variable: 'PASSWORD_MIN_SCORE',
+        policy: 'password.minScore',
         realm: 'master',
       }),
       expect.objectContaining({
@@ -271,12 +277,10 @@ describe('realm policies at boot on the auth server (#516)', () => {
         realm: 'master',
       }),
     ]);
-    // The access token lifetime and the allowlist changed in the environment,
-    // to looser values: the stored, stricter ones apply, and no further
-    // warning is needed (#529). The mail keys agree with the stored values.
+    // The access token lifetime, the password score and the allowlist
+    // changed in the environment, to looser values: the stored, stricter ones
+    // apply, and no further warning is needed (#529). The mail keys agree
+    // with the stored values.
     expect(secondWarnings.filter((line) => line.environment !== undefined)).toEqual([]);
-    // The password policy still reads the environment (#528): no warning
-    // tells the operator to drop it.
-    expect(ignored.map((line) => line.variable)).not.toContain('PASSWORD_MIN_SCORE');
   });
 });

@@ -10,31 +10,66 @@ permissions:
   actions: read
   contents: read
 
+# A newer push to the same pull request or branch cancels the run it
+# supersedes. Merging a stack pushes main once per pull request, and each push
+# started a full run; together the runs outgrew the account's concurrent-job
+# limit, so the jobs of the last run, the only result that counts, waited in
+# the queue. Pull requests are grouped by number, pushes by branch.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  # The affected Nx targets, one matrix leg per target, so lint, typecheck,
-  # test and build run side by side instead of one after another in a single
-  # `nx affected -t lint typecheck test build`. Each leg installs and computes
-  # the affected set on its own, and the legs share no task results (there is
-  # no remote cache): a task another target depends on runs in that target's
-  # leg, as test-vectors' `validate` runs in the test leg before its `test`.
+  # The affected Nx targets, one matrix leg per target, so lint, typecheck
+  # and build run side by side instead of one after another in a single
+  # `nx affected -t lint typecheck build`. Each leg installs and computes
+  # the affected set on its own. A task another target depends on runs in that
+  # target's leg, unless the remote cache below already holds its result.
   # `fail-fast: false` keeps what the single command did, which ran every task
   # and reported every failure: a red leg does not cancel the others.
+  #
+  # There is no `test` leg. Every project's `test` target is `vitest run` with
+  # a config that only adds `root` and `include` to the root one, so the
+  # `coverage` job's single repo-wide run is every one of those tests under the
+  # same settings. A `test` leg ran each of them a second time.
   #
   # The lint leg runs two targets: `lint` (Oxlint, .oxlintrc.json) and
   # `dependency-checks`, the one rule still on ESLint (@nx/dependency-checks on
   # package.json files, eslint.config.mjs), which Oxlint cannot run because it
   # does not lint JSON. Together they are what `lint` checked under ESLint,
   # less formatting, which the `format` job checks.
+  #
+  # Remote cache (#960): a self-hosted server speaking Nx's HTTP cache spec
+  # (`NX_REMOTE_CACHE_URL`, a repository variable). A push to main reads and
+  # writes it with the write token, a secret of the `protected` environment,
+  # whose deployment branch policy admits main alone, so a pull request's job
+  # cannot reach that token even by naming the environment. Every other run
+  # gets the read-only token, which the server refuses to store with, so a pull
+  # request replays what main built and never writes. A fork's pull request
+  # gets no secrets and runs on the local cache only. An empty `environment`
+  # name attaches none.
+  #
+  # Nx itself fails the whole command when its cache server is unreachable or
+  # answers an error, so Nx talks to a local proxy
+  # (.github/actions/nx-remote-cache) that turns every such failure into a miss
+  # or a refused write: losing the server makes CI slower, never red.
   affected:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'protected' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        target: [lint, typecheck, test, build]
+        target: [lint, typecheck, build]
     steps:
+      # Full history for nx-set-shas, without file contents. The build leg
+      # also keeps every tree: Starlight runs `git log --name-status` over the
+      # docs directory's whole history on every `astro build` (its last-updated
+      # dates, computed even with `lastUpdated` off), and in a treeless clone
+      # git fetches each commit's tree from the remote one at a time. That was
+      # about 850 fetches and 9 minutes of a 9.5-minute docs-site build.
       - uses: actions/checkout@v7
         with:
-          filter: tree:0
+          filter: ${{ matrix.target == 'build' && 'blob:none' || 'tree:0' }}
           fetch-depth: 0
 
       - uses: pnpm/action-setup@v6
@@ -52,11 +87,59 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: nrwl/nx-set-shas@v5
 
+      # The docs site's own Astro caches: the content layer's data store and
+      # processed assets (cacheDir, node_modules/.astro) and the generated
+      # content types (.astro). Both `astro build` (build leg) and `astro
+      # check` (typecheck leg) sync the content collections first, and a cold
+      # sync is most of a cold build. Astro checks every entry's digest, so a
+      # cache from an older commit is safe: only changed entries are processed
+      # again. Restored after the install, which would otherwise own
+      # node_modules. GitHub scopes a pull request's saved cache to that pull
+      # request, so one cannot reach main or another branch.
+      - name: Restore the docs site's Astro cache
+        id: astro-cache
+        if: matrix.target != 'lint'
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            apps/docs-site/node_modules/.astro
+            apps/docs-site/.astro
+          key: docs-astro-${{ matrix.target }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            docs-astro-${{ matrix.target }}-${{ hashFiles('pnpm-lock.yaml') }}-
+
+      - name: Remote cache
+        uses: ./.github/actions/nx-remote-cache
+        with:
+          url: ${{ vars.NX_REMOTE_CACHE_URL }}
+          token: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.NX_REMOTE_CACHE_WRITE_TOKEN || secrets.NX_REMOTE_CACHE_READ_TOKEN }}
+
       # The targets reach the script through the environment, not by
       # interpolation into it. Nx takes a comma-separated list.
-      - run: pnpm exec nx affected -t "$TARGETS"
+      # `--output-style=static` prints every task's output, not only a failed
+      # one's, so a slow task shows where its time went.
+      - run: pnpm exec nx affected -t "$TARGETS" --output-style=static
         env:
           TARGETS: ${{ matrix.target == 'lint' && 'lint,dependency-checks' || matrix.target }}
+
+      # Only when the docs site ran in this leg: an unaffected docs site
+      # leaves no cache to save.
+      - name: Save the docs site's Astro cache
+        if: matrix.target != 'lint' && steps.astro-cache.outputs.cache-hit != 'true' && hashFiles('apps/docs-site/node_modules/.astro/**') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            apps/docs-site/node_modules/.astro
+            apps/docs-site/.astro
+          key: ${{ steps.astro-cache.outputs.cache-primary-key }}
+
+      # Reads, hits and writes of this leg, in the job summary: the measure of
+      # what the cache saves.
+      - name: Remote cache summary
+        if: always()
+        uses: ./.github/actions/nx-remote-cache
+        with:
+          summary: 'true'
 
   # Formatting: Oxfmt (.oxfmtrc.json) over the whole repository, every file type
   # it formats. Under ESLint this was the `prettier/prettier` rule inside `lint`,
@@ -125,11 +208,12 @@ jobs:
         if: always()
         run: node scripts/action-refs/check.mjs .github/workflows
 
-  # Coverage gate: a single repo-wide vitest run enforces the global
-  # thresholds in vitest.config.ts and fails CI on a regression. Run
-  # separately from the affected per-project `test` targets (which write
-  # per-project coverage dirs) so the threshold is evaluated once across
-  # the whole fast unit suite. The Docker-backed integration suite (#167,
+  # Unit tests and the coverage gate: a single repo-wide vitest run runs every
+  # unit test (each project's `test` target runs a subset of the same files
+  # under the same settings, so CI has no `test` leg) and enforces the global
+  # thresholds in vitest.config.mts, failing CI on a regression. The threshold
+  # is evaluated once across the whole fast unit suite. The Docker-backed
+  # integration suite (#167,
   # `*.integration.test.ts`) is excluded here, so no Postgres/Redis is
   # needed — the `integration` job below runs it instead.
   #
@@ -156,6 +240,12 @@ jobs:
           cache: 'pnpm'
 
       - run: pnpm install --frozen-lockfile
+
+      # The one `test` dependency that is not a vitest run: test-vectors'
+      # `test` target only depends on `validate`, which checks every vector
+      # file against the qauth-vectors format. It takes about a second, so it
+      # runs on every PR rather than affected-scoped.
+      - run: pnpm exec nx run test-vectors:validate
 
       # `--reporter=default --reporter=json` keeps the human output AND emits the
       # machine report the conformance matrix joins against, so the suite is not
@@ -192,7 +282,7 @@ jobs:
         run: node --experimental-strip-types scripts/check-issue-state-claims.mts
 
   # The `affected` and `coverage` jobs above can never exercise real DDL: every
-  # unit suite mocks the repositories, and both vitest.config.ts and the
+  # unit suite mocks the repositories, and both vitest.config.mts and the
   # coverage gate exclude `*.integration.test.ts`. So the testcontainers suites
   # are the ONLY assertion that the generated migrations produce the schema the
   # code expects — e.g. that `authorization_codes.state`/`.nonce` are unbounded
