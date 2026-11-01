@@ -54,16 +54,16 @@ scope:
     - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer, an endpoint host)
       give one answer and are drawn as one exit'
     - 'with RATE_LIMIT_ENABLED=false neither rate limit is applied'
-    - "in a realm whose brute-force policy is off (bruteForce.enabled false, which FAILED_LOGIN_TRACKING_ENABLED=false
+    - 'in a realm whose brute-force policy is off (bruteForce.enabled false, which FAILED_LOGIN_TRACKING_ENABLED=false
       seeds in a new realm, #528) no attempt is counted and no address is ever locked out; a cache failure while an
-      attempt is counted fails open: the attempt is let through, and what was counted stays counted"
-    - 'an attempt that reaches the threshold together with another one, which armed the lockout first, was counted on
+      attempt is counted fails open: the attempt is let through, and what was counted stays counted'
+    - "an attempt that reaches the threshold together with another one, which armed the lockout first, was counted on
       its way in: it is refused as locked out and gives its count back best effort, so a cache failure at that moment
-      leaves it counted; its Retry-After is then the realm''s full bruteForce.lockoutSeconds, not the seconds left'
-    - 'LOGIN_RATE_LIMIT must stay above the realm''s bruteForce.maxAttempts (the defaults are 5 and 5) for one client
+      leaves it counted; its Retry-After is then the realm's full bruteForce.lockoutSeconds, not the seconds left"
+    - "LOGIN_RATE_LIMIT must stay above the realm's bruteForce.maxAttempts (the defaults are 5 and 5) for one client
       address to meet the lockout: at or below it, the login limit refuses that address with its 429 by the request
       after its last counted failure, and the lockout page is never shown to it, though the lockout still holds against
-      attempts on the same account from other addresses. binding.yaml sets the limit above the threshold'
+      attempts on the same account from other addresses. binding.yaml sets the limit above the threshold"
     - 'a password credential whose credential_data is malformed, or whose provider identity disagrees with its row,
       answers like a wrong password and logs an error; one whose users row is missing answers like a disabled user
       and logs an error. Neither happens in normal operation'
