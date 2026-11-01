@@ -31,7 +31,9 @@ import { type SmtpFixture, startSmtpFixture } from '../testing/smtp-fixture';
  *   without a restart;
  * - no table holds a password in the clear, the realm row included;
  * - the first boot seeds the default realm's password from SMTP_PASSWORD, and
- *   no later boot does, whatever SMTP_PASSWORD then says.
+ *   no later boot does, whatever SMTP_PASSWORD then says;
+ * - a password the first boot lacked is seeded by the boot that has it, and a
+ *   realm whose stored transport is the environment's gets it too.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -318,9 +320,10 @@ describe('each realm sends through its own mail transport (#529)', () => {
     const firstApp = await boot(smtpEnvironment(serverA, PASSWORD_A), first);
     const realm = await firstApp.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('no default realm');
-    expect(await firstApp.realmSecretStore?.getForUse(realm.id, 'mail.smtp.password')).toBe(
-      PASSWORD_A
-    );
+    expect(await firstApp.realmSecretStore?.isSet(realm.id, 'mail.smtp.password')).toBe(true);
+    await register(firstApp, 'dana@example.com');
+    await serverA.waitForMessages(1);
+    expect(serverA.logins.at(-1)?.password).toBe(PASSWORD_A);
     const seeded = await database().dbPool.query(
       'SELECT name, ciphertext, key_id, updated_at FROM realm_secrets WHERE realm_id = $1 ORDER BY name',
       [realm.id]
@@ -344,9 +347,6 @@ describe('each realm sends through its own mail transport (#529)', () => {
       [realm.id]
     );
     expect(again.rows).toEqual(seeded.rows);
-    expect(await secondApp.realmSecretStore?.getForUse(realm.id, 'mail.smtp.password')).toBe(
-      PASSWORD_A
-    );
     expect(await secondApp.realmSecretStore?.isSet(realm.id, 'mail.resend.apiKey')).toBe(false);
     // Each secret key the environment still sets is named once, never its value.
     expect(
@@ -362,7 +362,74 @@ describe('each realm sends through its own mail transport (#529)', () => {
 
     // And the mail still goes out with the stored password.
     await register(secondApp, 'erin@example.com');
-    await serverA.waitForMessages(1);
+    await serverA.waitForMessages(2);
     expect(serverA.logins.at(-1)?.password).toBe(PASSWORD_A);
+  });
+
+  it('seeds the password at a later boot when the first boot lacked it and the transport needs it', async () => {
+    const serverA = await smtpFixture();
+    const { SMTP_PASSWORD: _unset, ...withoutPassword } = smtpEnvironment(serverA, PASSWORD_A);
+    const firstApp = await boot(withoutPassword);
+    const realm = await firstApp.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm) throw new Error('no default realm');
+    const rows = async () =>
+      (
+        await database().dbPool.query<{ name: string; set: boolean }>(
+          'SELECT name, ciphertext IS NOT NULL AS set FROM realm_secrets WHERE realm_id = $1 ORDER BY name',
+          [realm.id]
+        )
+      ).rows;
+    // smtp needs the password: no row records it unset. The API key, which
+    // smtp does not need, is recorded unset as before.
+    expect(await rows()).toEqual([{ name: 'mail.resend.apiKey', set: false }]);
+    for (const server of servers.splice(0)) await server.close();
+
+    const secondApp = await boot(smtpEnvironment(serverA, PASSWORD_A));
+    expect(await rows()).toEqual([
+      { name: 'mail.resend.apiKey', set: false },
+      { name: 'mail.smtp.password', set: true },
+    ]);
+    await register(secondApp, 'frank@example.com');
+    await serverA.waitForMessages(1);
+    expect(serverA.logins).toEqual([{ user: 'mailer-a', password: PASSWORD_A, accepted: true }]);
+  });
+
+  it("seeds another realm whose stored transport is the environment's, as the upgrade's fill leaves every realm", async () => {
+    const serverA = await smtpFixture();
+    const firstApp = await boot(smtpEnvironment(serverA, PASSWORD_A));
+    // A realm whose policies the environment seeded, as the first boot after
+    // the upgrade fills every realm: the environment's transport, no secret.
+    const { realm } = await firstApp.repositories.realms.createWithPrimaryHost(
+      { name: 'beta', issuer: `https://${HOST_B}`, enabled: true },
+      HOST_B
+    );
+    await provisionRealmKeys(firstApp, 'beta');
+    expect(await firstApp.realmSecretStore?.isSet(realm.id, 'mail.smtp.password')).toBe(false);
+    for (const server of servers.splice(0)) await server.close();
+
+    const lines: LogLine[] = [];
+    const secondApp = await boot(smtpEnvironment(serverA, PASSWORD_A), lines);
+    expect(await secondApp.realmSecretStore?.isSet(realm.id, 'mail.smtp.password')).toBe(true);
+    // Nothing else is written for it: no row records its API key unset.
+    expect(
+      (
+        await database().dbPool.query('SELECT name FROM realm_secrets WHERE realm_id = $1', [
+          realm.id,
+        ])
+      ).rows
+    ).toEqual([{ name: 'mail.smtp.password' }]);
+    expect(
+      lines.filter((line) => line.realm === 'beta' && line.policy === 'mail.smtp.password')
+    ).toEqual([expect.objectContaining({ variable: 'SMTP_PASSWORD' })]);
+
+    await register(secondApp, 'grace@example.com', HOST_B);
+    const [message] = await serverA.waitForMessages(1);
+    expect(message?.to).toEqual(['grace@example.com']);
+    expect(serverA.logins.at(-1)).toEqual({
+      user: 'mailer-a',
+      password: PASSWORD_A,
+      accepted: true,
+    });
+    expect(JSON.stringify(lines)).not.toContain(PASSWORD_A);
   });
 });

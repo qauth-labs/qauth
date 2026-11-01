@@ -216,6 +216,7 @@ describe('createRealmSecretStore (#529)', () => {
         seeded: ['mail.smtp.password'],
         recordedUnset: ['mail.resend.apiKey'],
         present: [],
+        leftWithoutRow: [],
       });
       expect(await store.getForUse(REALM, 'mail.smtp.password')).toBe(PASSWORD);
       expect(rows.get(`${REALM} mail.resend.apiKey`)).toBeNull();
@@ -235,10 +236,33 @@ describe('createRealmSecretStore (#529)', () => {
         seeded: [],
         recordedUnset: [],
         present: ['mail.smtp.password', 'mail.resend.apiKey'],
+        leftWithoutRow: [],
       });
       expect(cipher.encrypt).not.toHaveBeenCalled();
       expect(await store.getForUse(REALM, 'mail.smtp.password')).toBe(PASSWORD);
       expect(await store.isSet(REALM, 'mail.resend.apiKey')).toBe(false);
+    });
+
+    it('leaves a needed secret the environment lacks without a row, so a later boot still seeds it', async () => {
+      const { store, rows } = storeOver();
+      const needed = new Set(['mail.smtp.password']);
+
+      expect(await store.seed(REALM, new Map(), { leaveWithoutRow: needed })).toEqual({
+        seeded: [],
+        recordedUnset: ['mail.resend.apiKey'],
+        present: [],
+        leftWithoutRow: ['mail.smtp.password'],
+      });
+      expect(rows.has(`${REALM} mail.smtp.password`)).toBe(false);
+
+      // The next boot's environment sets it: it is stored then.
+      expect(await store.seed(REALM, seeds, { leaveWithoutRow: needed })).toEqual({
+        seeded: ['mail.smtp.password'],
+        recordedUnset: [],
+        present: ['mail.resend.apiKey'],
+        leftWithoutRow: [],
+      });
+      expect(await store.getForUse(REALM, 'mail.smtp.password')).toBe(PASSWORD);
     });
 
     it('never seeds a secret an admin changed or cleared', async () => {
@@ -271,6 +295,7 @@ describe('createRealmSecretStore (#529)', () => {
         seeded: [],
         recordedUnset: [],
         present: ['mail.smtp.password', 'mail.resend.apiKey'],
+        leftWithoutRow: [],
       });
       expect(await store.isSet(REALM, 'mail.smtp.password')).toBe(false);
     });

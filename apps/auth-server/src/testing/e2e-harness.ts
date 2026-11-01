@@ -420,9 +420,8 @@ export async function bootAuthServer(
   // first import's parsed `env` would be reused for every later boot.
   vitest.vi.resetModules();
 
-  const { app, defaultRealmBootSettings, defaultRealmSecretSeedSettings } =
-    await import('../app/app');
-  const { seedDefaultRealmSecrets } = await import('../app/helpers/realm-secrets');
+  const { app, defaultRealmBootSettings, realmSecretSeedSettings } = await import('../app/app');
+  const { seedRealmSecrets } = await import('../app/helpers/realm-secrets');
   const { createAdminServer } = await import('../app/admin/listener');
   const { createInternalServer } = await import('../app/internal/listener');
   const { readInternalTlsFiles } = await import('../app/internal/tls-files');
@@ -542,7 +541,7 @@ export async function bootAuthServer(
     // The environment as this server booted with it: a later boot of another
     // server rewrites `process.env`.
     const bootEnvironment = { ...process.env };
-    const quiet = { info: () => undefined, warn: () => undefined };
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
     const bootRealmKeys = (realmName: string, withVariables: boolean) =>
       bootRealmKeysWithKekEnv(
         {
@@ -559,7 +558,7 @@ export async function bootAuthServer(
         }
       );
     // Read now: a later boot of another server rewrites `process.env`.
-    const secretSeedSettings = defaultRealmSecretSeedSettings();
+    const secretSeedSettings = realmSecretSeedSettings();
     defaultRealmReboots.set(server, async () => {
       await bootDefaultRealm(
         {
@@ -571,11 +570,11 @@ export async function bootAuthServer(
         defaultRealmBootSettings()
       );
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
-      // The default realm's secrets (#529), as the boot seeds them once its
-      // keys exist.
+      // The realms' secrets (#529), as the boot seeds them once the default
+      // realm's keys exist.
       const secrets = server.realmSecretStore;
       if (secrets !== null) {
-        await seedDefaultRealmSecrets(
+        await seedRealmSecrets(
           {
             realms: server.repositories.realms,
             policies: server.policyStore,

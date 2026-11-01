@@ -1,5 +1,6 @@
 import {
   defaultsFromEnv,
+  PolicyValidationError,
   type RealmPolicySnapshot,
   type RealmSecretSeedReport,
   secretSeedKeys,
@@ -9,12 +10,15 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { testRealm } from '../../testing/request-realm';
 import {
-  type DefaultRealmSecretSeedDependencies,
   mailTransportIncompleteWarning,
   realmMailSource,
   realmSecretCipher,
+  type RealmSecretSeedDependencies,
+  realmSecretSeedFailedWarning,
   secretSeedKeyIgnoredWarning,
-  seedDefaultRealmSecrets,
+  seedRealmSecrets,
+  smtpPasswordForAnotherServerError,
+  type SmtpServer,
 } from './realm-secrets';
 
 const REALM = testRealm({ id: '0190a6d4-5b8e-7c3a-9f12-3b4c5d6e7f80' });
@@ -47,26 +51,75 @@ describe('realmSecretCipher (#529)', () => {
   });
 });
 
-describe('seedDefaultRealmSecrets (#529)', () => {
+describe('seedRealmSecrets (#529)', () => {
   const seedKeys = secretSeedKeys();
+  const SMTP_ENV = {
+    EMAIL_PROVIDER: 'smtp',
+    EMAIL_FROM_ADDRESS: 'no-reply@example.com',
+    SMTP_HOST: 'smtp.example.com',
+    SMTP_PORT: '587',
+    SMTP_USER: 'mailer',
+  };
+  const ENV_SMTP = { host: 'smtp.example.com', port: 587, user: 'mailer' };
+  const OTHER = { id: '0190a6d4-5b8e-7c3a-9f12-3b4c5d6e7f81', name: 'beta' };
+
+  interface RealmSetup {
+    readonly id: string;
+    readonly name: string;
+    /** The environment its policies were filled from. */
+    readonly env?: Record<string, string>;
+    readonly hasPolicies?: boolean;
+    /** `get` throws this, as for a stored document this release refuses. */
+    readonly refused?: boolean;
+  }
 
   function deps(
-    report: RealmSecretSeedReport,
-    options: { env?: Record<string, string>; isSet?: boolean; realm?: boolean } = {}
+    report: Partial<RealmSecretSeedReport> = {},
+    options: { realms?: RealmSetup[]; isSet?: boolean; seedFails?: string } = {}
   ) {
-    const policies = defaultsFromEnv(options.env ?? {});
+    const realms = options.realms ?? [{ id: REALM.id, name: 'master' }];
     const warn = vi.fn();
     const info = vi.fn();
-    const seed = vi.fn(async () => report);
+    const error = vi.fn();
+    const seed = vi.fn(async (realmId: string) => {
+      if (realmId === options.seedFails) throw new Error('no data-at-rest key');
+      return { seeded: [], recordedUnset: [], present: [], leftWithoutRow: [], ...report };
+    });
     const isSet = vi.fn(async () => options.isSet ?? false);
-    const value: DefaultRealmSecretSeedDependencies = {
-      realms: { findByName: vi.fn(async () => (options.realm === false ? undefined : REALM)) },
-      policies: { ofRealm: vi.fn(() => ({ policies }) as unknown as RealmPolicySnapshot) },
+    const get = vi.fn(async (realmId: string) => {
+      const realm = realms.find((candidate) => candidate.id === realmId);
+      if (realm === undefined) return undefined;
+      if (realm.refused) {
+        throw new PolicyValidationError('The stored realm policies are not valid', [
+          { path: 'tokens.accessTokenLifespanSeconds', message: 'is too large' },
+        ]);
+      }
+      return {
+        realmId,
+        version: realm.hasPolicies === false ? 0 : 1,
+        hasPolicies: realm.hasPolicies !== false,
+        policies: defaultsFromEnv(realm.env ?? {}),
+      } as unknown as RealmPolicySnapshot;
+    });
+    const value: RealmSecretSeedDependencies = {
+      realms: {
+        listPolicyRecords: vi.fn(async () =>
+          realms.map((realm) => ({ realmId: realm.id, realmName: realm.name }) as never)
+        ),
+      },
+      policies: { get },
       secrets: { seed, isSet },
-      log: { warn, info },
+      log: { warn, info, error },
     };
-    return { deps: value, warn, info, seed, isSet };
+    return { deps: value, warn, info, error, seed, isSet, get };
   }
+
+  const settings = (seeds: Map<string, string>, environmentSmtp: SmtpServer = ENV_SMTP) => ({
+    realmName: 'master',
+    seeds,
+    seedKeys,
+    environmentSmtp,
+  });
 
   it('seeds the default realm from the environment and names what it seeded, never the value', async () => {
     const seeds = new Map([['mail.smtp.password', PASSWORD]]);
@@ -75,16 +128,17 @@ describe('seedDefaultRealmSecrets (#529)', () => {
       info,
       warn,
       seed,
-    } = deps({
-      seeded: ['mail.smtp.password'],
-      recordedUnset: ['mail.resend.apiKey'],
-      present: [],
+    } = deps(
+      { seeded: ['mail.smtp.password'], recordedUnset: ['mail.resend.apiKey'] },
+      { realms: [{ id: REALM.id, name: 'master', env: SMTP_ENV }], isSet: true }
+    );
+
+    await seedRealmSecrets(d, settings(seeds));
+
+    // smtp needs the password, so it stays without a row were it unset.
+    expect(seed).toHaveBeenCalledWith(REALM.id, seeds, {
+      leaveWithoutRow: new Set(['mail.smtp.password']),
     });
-
-    await seedDefaultRealmSecrets(d, { realmName: 'master', seeds, seedKeys });
-
-    expect(d.realms.findByName).toHaveBeenCalledWith('master');
-    expect(seed).toHaveBeenCalledWith(REALM.id, seeds);
     expect(info).toHaveBeenCalledWith(
       {
         realm: 'master',
@@ -98,19 +152,128 @@ describe('seedDefaultRealmSecrets (#529)', () => {
     expect(JSON.stringify([info.mock.calls, warn.mock.calls])).not.toContain(PASSWORD);
   });
 
-  it('warns once for a secret seed key the environment still sets after the first seed', async () => {
+  it('leaves a secret the stored transport needs without a row when the environment lacks it, so a later boot seeds it', async () => {
+    const { deps: d, seed } = deps(
+      { recordedUnset: ['mail.resend.apiKey'], leftWithoutRow: ['mail.smtp.password'] },
+      { realms: [{ id: REALM.id, name: 'master', env: SMTP_ENV }] }
+    );
+
+    await seedRealmSecrets(d, settings(new Map()));
+
+    expect(seed).toHaveBeenCalledWith(REALM.id, new Map(), {
+      leaveWithoutRow: new Set(['mail.smtp.password']),
+    });
+  });
+
+  it("does not store SMTP_PASSWORD in a realm whose stored server or user is not the environment's, and says so", async () => {
     const seeds = new Map([['mail.smtp.password', PASSWORD]]);
     const {
       deps: d,
-      warn,
-      info,
-    } = deps({
-      seeded: [],
-      recordedUnset: [],
-      present: ['mail.smtp.password', 'mail.resend.apiKey'],
-    });
+      seed,
+      error,
+    } = deps(
+      { leftWithoutRow: ['mail.smtp.password'] },
+      { realms: [{ id: REALM.id, name: 'master', env: SMTP_ENV }] }
+    );
 
-    await seedDefaultRealmSecrets(d, { realmName: 'master', seeds, seedKeys });
+    // The environment now names another host than the one the fill stored.
+    await seedRealmSecrets(d, settings(seeds, { ...ENV_SMTP, host: 'smtp.new.example' }));
+
+    expect(seed).toHaveBeenCalledWith(REALM.id, new Map(), {
+      leaveWithoutRow: new Set(['mail.smtp.password']),
+    });
+    expect(error.mock.calls).toEqual([
+      [
+        {
+          variable: 'SMTP_PASSWORD',
+          realm: 'master',
+          realmId: REALM.id,
+          policy: 'mail.smtp.password',
+        },
+        smtpPasswordForAnotherServerError('SMTP_PASSWORD', 'master'),
+      ],
+    ]);
+    expect(JSON.stringify(error.mock.calls)).not.toContain(PASSWORD);
+  });
+
+  it("seeds another realm only with a secret its stored transport needs, when its server is the environment's, recording nothing else", async () => {
+    const seeds = new Map([
+      ['mail.smtp.password', PASSWORD],
+      ['mail.resend.apiKey', 're_key'],
+    ]);
+    const { deps: d, seed } = deps(
+      {},
+      {
+        realms: [
+          { id: REALM.id, name: 'master', env: SMTP_ENV },
+          { id: OTHER.id, name: 'beta', env: SMTP_ENV },
+          { id: 'mock-realm', name: 'gamma' },
+          { id: 'elsewhere', name: 'delta', env: { ...SMTP_ENV, SMTP_HOST: 'smtp.b.example' } },
+          { id: 'unfilled', name: 'epsilon', env: SMTP_ENV, hasPolicies: false },
+        ],
+        isSet: true,
+      }
+    );
+
+    await seedRealmSecrets(d, settings(seeds));
+
+    const everything = new Set(seedKeys.keys());
+    expect(seed.mock.calls).toEqual([
+      [REALM.id, seeds, { leaveWithoutRow: new Set(['mail.smtp.password']) }],
+      [OTHER.id, new Map([['mail.smtp.password', PASSWORD]]), { leaveWithoutRow: everything }],
+      // mock needs nothing: nothing is stored, and no row records it unset.
+      ['mock-realm', new Map(), { leaveWithoutRow: everything }],
+      // Another server: the environment's password is not its.
+      ['elsewhere', new Map(), { leaveWithoutRow: everything }],
+      // A realm with no policies yet sends with the environment's secrets.
+    ]);
+  });
+
+  it('goes on past a realm it cannot seed or whose stored policies this release refuses', async () => {
+    const {
+      deps: d,
+      seed,
+      warn,
+    } = deps(
+      {},
+      {
+        realms: [
+          { id: REALM.id, name: 'master', env: SMTP_ENV },
+          { id: 'refused', name: 'refused', refused: true },
+          { id: OTHER.id, name: 'beta', env: SMTP_ENV },
+          { id: 'last', name: 'last', env: SMTP_ENV },
+        ],
+        isSet: true,
+        seedFails: OTHER.id,
+      }
+    );
+
+    await seedRealmSecrets(d, settings(new Map([['mail.smtp.password', PASSWORD]])));
+
+    expect(seed.mock.calls.map(([realmId]) => realmId)).toEqual([REALM.id, OTHER.id, 'last']);
+    expect(warn.mock.calls.map(([fields]) => fields.realm)).toEqual(['refused', 'beta']);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({ paths: ['tokens.accessTokenLifespanSeconds'] });
+    expect(warn.mock.calls[1]).toEqual([
+      { realm: 'beta', realmId: OTHER.id, error: 'Error' },
+      realmSecretSeedFailedWarning('beta'),
+    ]);
+  });
+
+  it('stops the boot when the default realm cannot be seeded', async () => {
+    const { deps: d } = deps(
+      {},
+      { realms: [{ id: REALM.id, name: 'master', env: SMTP_ENV }], seedFails: REALM.id }
+    );
+    await expect(
+      seedRealmSecrets(d, settings(new Map([['mail.smtp.password', PASSWORD]])))
+    ).rejects.toThrow('no data-at-rest key');
+  });
+
+  it('warns once for a secret seed key the environment still sets after the first seed', async () => {
+    const seeds = new Map([['mail.smtp.password', PASSWORD]]);
+    const { deps: d, warn, info } = deps({ present: ['mail.smtp.password', 'mail.resend.apiKey'] });
+
+    await seedRealmSecrets(d, settings(seeds, { host: null, port: null, user: null }));
 
     // RESEND_API_KEY is not set, so only SMTP_PASSWORD is named.
     expect(warn.mock.calls).toEqual([
@@ -124,10 +287,9 @@ describe('seedDefaultRealmSecrets (#529)', () => {
   });
 
   it('warns for each thing the stored transport lacks, which no longer stops the boot', async () => {
-    const report = { seeded: [], recordedUnset: [], present: [] };
     const run = async (env: Record<string, string>, isSet: boolean) => {
-      const d = deps(report, { env, isSet });
-      await seedDefaultRealmSecrets(d.deps, { realmName: 'master', seeds: new Map(), seedKeys });
+      const d = deps({}, { realms: [{ id: REALM.id, name: 'master', env }], isSet });
+      await seedRealmSecrets(d.deps, settings(new Map()));
       return d;
     };
     const whole = {
@@ -170,12 +332,9 @@ describe('seedDefaultRealmSecrets (#529)', () => {
     expect((await run({}, false)).warn).not.toHaveBeenCalled();
   });
 
-  it('does nothing without the default realm', async () => {
-    const { deps: d, seed } = deps(
-      { seeded: [], recordedUnset: [], present: [] },
-      { realm: false }
-    );
-    await seedDefaultRealmSecrets(d, { realmName: 'master', seeds: new Map(), seedKeys });
+  it('does nothing without a realm', async () => {
+    const { deps: d, seed } = deps({}, { realms: [] });
+    await seedRealmSecrets(d, settings(new Map()));
     expect(seed).not.toHaveBeenCalled();
   });
 });

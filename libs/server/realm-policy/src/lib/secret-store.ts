@@ -135,6 +135,25 @@ export interface RealmSecretSeedReport {
   readonly recordedUnset: readonly string[];
   /** The secrets the realm already had a row for, set or not, which this call left alone. */
   readonly present: readonly string[];
+  /**
+   * The secrets the environment does not set, or `seeds` leaves out, that
+   * this call left without a row as `options.leaveWithoutRow` asks: a later
+   * seed may still store them.
+   */
+  readonly leftWithoutRow: readonly string[];
+}
+
+/** How {@link RealmSecretStoreWithSeed.seed} runs. */
+export interface RealmSecretSeedOptions<Tx> {
+  /**
+   * The secrets to leave without a row when `seeds` has no value for them,
+   * rather than record them as holding none: a secret the realm's transport
+   * needs (#529, from the review of #937), so a later boot whose environment
+   * sets it still stores it. A policy update's clear (`put(null)`) records
+   * its row whatever this says.
+   */
+  readonly leaveWithoutRow?: ReadonlySet<string>;
+  readonly tx?: Tx;
 }
 
 /** The realm secret store, with the boot's seed from the environment. */
@@ -142,18 +161,19 @@ export interface RealmSecretStoreWithSeed<Tx> extends RealmSecretStore<Tx> {
   /**
    * Seed the realm's secrets from the environment, once (#529): every secret
    * field that has a seed key and no row in the realm gets the value `seeds`
-   * holds for its path, or a row that holds none when `seeds` has no value.
-   * A secret that has a row, set or cleared, is never written: a later
-   * change of the environment changes no realm, as for every policy
-   * (ADR-019 Decision 10). Of two nodes that seed together, the first write
-   * wins.
+   * holds for its path, or a row that holds none when `seeds` has no value
+   * (unless `options.leaveWithoutRow` names it: then no row). A secret that
+   * has a row, set or cleared, is never written: a later change of the
+   * environment changes no realm, as for every policy (ADR-019 Decision
+   * 10). Of two nodes that seed together, the first write wins.
    *
-   * @param seeds - the secret values by path, as `secretSeedsFromEnv` reads them
+   * @param seeds - the secret values by path, as `secretSeedsFromEnv` reads
+   *   them, less any the caller must not store in this realm
    */
   seed(
     realmId: string,
     seeds: ReadonlyMap<string, string>,
-    tx?: Tx
+    options?: RealmSecretSeedOptions<Tx>
   ): Promise<RealmSecretSeedReport>;
 }
 
@@ -254,11 +274,12 @@ export function createRealmSecretStore<Tx>(
     async seed(
       realmId: string,
       seeds: ReadonlyMap<string, string>,
-      tx?: Tx
+      { leaveWithoutRow, tx }: RealmSecretSeedOptions<Tx> = {}
     ): Promise<RealmSecretSeedReport> {
       const seeded: string[] = [];
       const recordedUnset: string[] = [];
       const present: string[] = [];
+      const leftWithoutRow: string[] = [];
       for (const entry of secrets.values()) {
         if (entry.field.seedEnv === null) continue;
         // Read first: a boot that finds every row encrypts nothing.
@@ -267,6 +288,10 @@ export function createRealmSecretStore<Tx>(
           continue;
         }
         const value = seeds.get(entry.path);
+        if (value === undefined && leaveWithoutRow?.has(entry.path)) {
+          leftWithoutRow.push(entry.path);
+          continue;
+        }
         const stored = value === undefined ? null : await encrypt(realmId, entry, value);
         if (!(await storage.insertIfAbsent(realmId, entry.path, stored, tx))) {
           // Another node seeded it since the read: its row stays.
@@ -277,7 +302,7 @@ export function createRealmSecretStore<Tx>(
           seeded.push(entry.path);
         }
       }
-      return { seeded, recordedUnset, present };
+      return { seeded, recordedUnset, present, leftWithoutRow };
     },
   });
 }

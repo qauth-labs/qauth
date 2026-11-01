@@ -62,10 +62,10 @@ import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
 import {
-  type DefaultRealmSecretSeedSettings,
   realmMailSource,
   realmSecretCipher,
-  seedDefaultRealmSecrets,
+  type RealmSecretSeedSettings,
+  seedRealmSecrets,
 } from './helpers/realm-secrets';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
@@ -172,15 +172,18 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
 }
 
 /**
- * The settings of the default realm's secret seed (#529), from the raw
- * environment: the secret values it sets, and each one's key. Exported for
- * the E2E harness, which seeds again after it empties the database.
+ * The settings of the realms' secret seed (#529), from the raw environment:
+ * the secret values it sets, each one's key, and the smtp server and user
+ * `SMTP_PASSWORD` belongs to. Exported for the E2E harness, which seeds
+ * again after it empties the database.
  */
-export function defaultRealmSecretSeedSettings(): DefaultRealmSecretSeedSettings {
+export function realmSecretSeedSettings(): RealmSecretSeedSettings {
+  const { smtp } = defaultsFromEnv(process.env).mail;
   return {
     realmName: env.DEFAULT_REALM_NAME,
     seeds: secretSeedsFromEnv(process.env),
     seedKeys: secretSeedKeys(),
+    environmentSmtp: { host: smtp.host, port: smtp.port, user: smtp.user },
   };
 }
 
@@ -719,22 +722,24 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
           }
         : {}),
     });
-    // The default realm's secrets (#529), once its key boot step above gave
-    // it a data-at-rest key: SMTP_PASSWORD or RESEND_API_KEY is stored
-    // encrypted in the realm the first time a node can, and never again. An
-    // `onReady` hook registered after the signer's, so it runs after it.
+    // The realms' secrets (#529), once the key boot step above gave the
+    // default realm a data-at-rest key: SMTP_PASSWORD or RESEND_API_KEY is
+    // stored encrypted in the default realm, and in each realm whose stored
+    // transport is the environment's and needs it, the first time a node
+    // can, and never again. An `onReady` hook registered after the signer's,
+    // so it runs after it.
     if (defaultRealmBoot) {
       fastify.addHook('onReady', async () => {
         const secrets = fastify.realmSecretStore;
         if (secrets === null) return;
-        await seedDefaultRealmSecrets(
+        await seedRealmSecrets(
           {
             realms: fastify.repositories.realms,
             policies: fastify.policyStore,
             secrets,
             log: fastify.log,
           },
-          defaultRealmSecretSeedSettings()
+          realmSecretSeedSettings()
         );
       });
     }
