@@ -27,10 +27,13 @@ pnpm nx affected -t test --base=origin/main --head=HEAD
 - run: pnpm nx affected -t lint test build --base=origin/main
 ```
 
-## Nx Cloud
+## Remote cache
 
-Not used. The workspace has no remote cache (`neverConnectToCloud` in `nx.json`); each CI
-leg computes its tasks with the local cache only.
+Not Nx Cloud (`neverConnectToCloud` in `nx.json`). CI's `affected` legs use a self-hosted
+server that speaks Nx's HTTP cache spec, through `.github/actions/nx-remote-cache`: a push
+to main reads and writes, every other run only reads, and a fork's pull request runs on the
+local cache. The action's job-summary table shows each leg's hits and misses. Local runs do
+not use it.
 
 ## Local CI Simulation
 

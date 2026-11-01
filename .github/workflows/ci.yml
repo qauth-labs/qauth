@@ -14,10 +14,10 @@ jobs:
   # The affected Nx targets, one matrix leg per target, so lint, typecheck
   # and build run side by side instead of one after another in a single
   # `nx affected -t lint typecheck build`. Each leg installs and computes
-  # the affected set on its own, and the legs share no task results (there is
-  # no remote cache): a task another target depends on runs in that target's
-  # leg. `fail-fast: false` keeps what the single command did, which ran every
-  # task and reported every failure: a red leg does not cancel the others.
+  # the affected set on its own. A task another target depends on runs in that
+  # target's leg, unless the remote cache below already holds its result.
+  # `fail-fast: false` keeps what the single command did, which ran every task
+  # and reported every failure: a red leg does not cancel the others.
   #
   # There is no `test` leg. Every project's `test` target is `vitest run` with
   # a config that only adds `root` and `include` to the root one, so the
@@ -29,8 +29,24 @@ jobs:
   # package.json files, eslint.config.mjs), which Oxlint cannot run because it
   # does not lint JSON. Together they are what `lint` checked under ESLint,
   # less formatting, which the `format` job checks.
+  #
+  # Remote cache (#960): a self-hosted server speaking Nx's HTTP cache spec
+  # (`NX_REMOTE_CACHE_URL`, a repository variable). A push to main reads and
+  # writes it with the write token, a secret of the `protected` environment,
+  # whose deployment branch policy admits main alone, so a pull request's job
+  # cannot reach that token even by naming the environment. Every other run
+  # gets the read-only token, which the server refuses to store with, so a pull
+  # request replays what main built and never writes. A fork's pull request
+  # gets no secrets and runs on the local cache only. An empty `environment`
+  # name attaches none.
+  #
+  # Nx itself fails the whole command when its cache server is unreachable or
+  # answers an error, so Nx talks to a local proxy
+  # (.github/actions/nx-remote-cache) that turns every such failure into a miss
+  # or a refused write: losing the server makes CI slower, never red.
   affected:
     runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'protected' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -83,6 +99,12 @@ jobs:
           restore-keys: |
             docs-astro-${{ matrix.target }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
+      - name: Remote cache
+        uses: ./.github/actions/nx-remote-cache
+        with:
+          url: ${{ vars.NX_REMOTE_CACHE_URL }}
+          token: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && secrets.NX_REMOTE_CACHE_WRITE_TOKEN || secrets.NX_REMOTE_CACHE_READ_TOKEN }}
+
       # The targets reach the script through the environment, not by
       # interpolation into it. Nx takes a comma-separated list.
       # `--output-style=static` prints every task's output, not only a failed
@@ -101,6 +123,14 @@ jobs:
             apps/docs-site/node_modules/.astro
             apps/docs-site/.astro
           key: ${{ steps.astro-cache.outputs.cache-primary-key }}
+
+      # Reads, hits and writes of this leg, in the job summary: the measure of
+      # what the cache saves.
+      - name: Remote cache summary
+        if: always()
+        uses: ./.github/actions/nx-remote-cache
+        with:
+          summary: 'true'
 
   # Formatting: Oxfmt (.oxfmtrc.json) over the whole repository, every file type
   # it formats. Under ESLint this was the `prettier/prettier` rule inside `lint`,

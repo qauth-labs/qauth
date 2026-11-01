@@ -168,6 +168,17 @@
     }
   ],
   "targetDefaults": {
+    // Every `test-integration` target runs the root vitest.integration.config.mts,
+    // which holds the shared-container global setup, the worker count and the
+    // include and exclude globs. A root file belongs to no project, so without
+    // this input a change to that file alone affects no `test-integration`
+    // target and no suite runs. `test-kms` runs the same config.
+    "test-integration": {
+      "inputs": ["default", "^default", "{workspaceRoot}/vitest.integration.config.mts"]
+    },
+    "test-kms": {
+      "inputs": ["default", "^default", "{workspaceRoot}/vitest.integration.config.mts"]
+    },
     "@nx/esbuild:esbuild": {
       "cache": true,
       "dependsOn": ["^build"],
@@ -232,8 +243,10 @@
   "affected": {
     "legacy": true
   },
-  // No remote cache: the Nx Cloud workspace was dropped on 31 Oct 2026, when
-  // its free plan ran out and the cache had saved little. This keeps `nx`
-  // commands (generators, migrations) from connecting the workspace again.
+  // No Nx Cloud: the workspace was dropped on 31 Oct 2026, when its free plan
+  // ran out. This keeps `nx` commands (generators, migrations) from connecting
+  // it again. CI's remote cache is a self-hosted server Nx reaches through
+  // NX_SELF_HOSTED_REMOTE_CACHE_SERVER, set by .github/actions/nx-remote-cache
+  // (#960), which needs no Nx Cloud.
   "neverConnectToCloud": true
 }
