@@ -150,16 +150,20 @@ A client that holds `client_credentials` and has no `client_credentials_scopes` 
 itself, with no user, for any scope in its `scopes`, each scope its users grant it at sign-in
 included. Set the list on every client that signs users in and holds `client_credentials`.
 
-The seeder writes an existing client only with `--rotate`, which also issues it a new secret. To set
-the list without rotating:
+Add it to the client's manifest entry. The seeder writes an existing client only with `--rotate`,
+which also issues it a new secret; to set the stored row without rotating:
 
 ```sql
 UPDATE oauth_clients SET client_credentials_scopes = '["ssf:stream"]'
 WHERE realm_id = '<realm id>' AND client_id = 'notes-app';
 ```
 
-The token endpoint reads the client row on every request, so the next token request already
-follows it; a token issued before keeps its scopes until it expires.
+A later `--rotate` refuses an entry without the list for a client whose row has one, so the
+rotation cannot lift it unnoticed; to lift it on purpose, set the column to `NULL` first.
+
+The token endpoint reads the client row on every request, so the next token request follows the
+list, on every node of a release that knows it (a node of an older release ignores the column).
+A token issued before keeps its scopes until it expires.
 :::
 
 ## Create a stream

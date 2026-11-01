@@ -2406,15 +2406,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint refuses any other scope on `client_credentials` with `invalid_scope`
   (event reason `scope_not_allowed_for_grant`); without one the grant is as
   before. The manifest refuses a listed scope `scopes` does not hold, an empty
-  list, and the list on a client without the grant. The **SSF transmitter**
+  list, and the list on a client without the grant, and `--rotate` refuses an
+  entry without the list for a client whose row has one, so a rotation cannot
+  lift it unnoticed. The admin API's reserved `clients.update` cases count
+  lifting or widening the list as `token-content`. The **SSF transmitter**
   page's receiver example now lists `["ssf:stream"]` there, and its warning
   covers only a client without the list.
 
-  **Action for operators**: give every client that signs users in and holds
-  `client_credentials` a `client_credentials_scopes`, an SSF receiver's
-  `["ssf:stream"]`. The seeder writes an existing client only with
-  `--rotate`; without rotating, set the column with an `UPDATE` (see the SSF
-  transmitter page).
+  **Action for operators**: once every node runs this release, give every
+  client that signs users in and holds `client_credentials` a
+  `client_credentials_scopes`, an SSF receiver's `["ssf:stream"]`, in its
+  manifest entry. The seeder writes an existing client only with `--rotate`;
+  without rotating, also set the column with an `UPDATE` (see the SSF
+  transmitter page and the upgrade guide). A node of the previous release
+  ignores the column.
 
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped

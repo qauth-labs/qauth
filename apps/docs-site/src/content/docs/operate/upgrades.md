@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -611,6 +611,29 @@ GRANT SELECT ("issuer") ON TABLE "realms" TO <delivery_role>;
 Nothing checks the grants at boot. Without this one, every SSF delivery
 attempt fails with `permission denied for table realms` and is retried until
 its attempts run out; the delivery role logs `a delivery route threw`.
+
+### Keep a relying party's `client_credentials` to the scopes it needs
+
+A `client_credentials` token names no user, and until this release the grant
+issued any scope of a client's `scopes`. So a relying party given the grant to
+manage its [SSF stream](/operate/ssf-transmitter/#register-a-receiver) could
+also get a token without a user for each scope its users grant it
+([#891](https://github.com/qauth-labs/qauth/issues/891)). Migration 0049 adds
+`oauth_clients.client_credentials_scopes`, nullable with no default and a CHECK
+every existing row passes: the scopes that grant may issue, out of `scopes`.
+NULL, every existing client's value, keeps the grant as it was, and the
+previous release keeps creating and updating clients on the new schema.
+
+After the upgrade, give every client that signs users in and holds
+`client_credentials` the list, an SSF receiver's `["ssf:stream"]`, in its seed
+manifest entry, and set it on the stored row (the seeder writes an existing
+client only with `--rotate`, which also issues a new secret). A later
+`--rotate` refuses an entry without the list for a client that has one, so the
+manifest and the row stay in step.
+
+Set the list only after every node runs this release. A node of the previous
+release does not read the column and keeps issuing every scope of `scopes` on
+`client_credentials`.
 
 ## Upgrading within 1.x
 
