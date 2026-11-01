@@ -1390,7 +1390,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   provider administration ([#714]). It makes no account decision: the
   upstream sign-in flow is [#639]. The AuthMethod contract's egress request
   gains `redirect: 'error'`, the one cap a method may set (no redirect
-  followed), which the client uses on every call.
+  followed), which the client uses on every call. The signer lets the `api`
+  role decrypt a provider's client secret (a context under
+  `upstream-oidc:client-secret:`) as well as a realm's mail secret, so the
+  host opens a stored config as `api`. The stored secret is bound to where it
+  is sent: after the issuer or a token endpoint set by hand changes, it no
+  longer opens and must be entered again.
 
 - **The developer API and the account API's consents, under versioned
   prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
@@ -2380,7 +2385,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#599]: https://github.com/qauth-labs/qauth/issues/599
 [#600]: https://github.com/qauth-labs/qauth/issues/600
 [#601]: https://github.com/qauth-labs/qauth/issues/601
-[#714]: https://github.com/qauth-labs/qauth/issues/714
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
@@ -2391,6 +2395,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
+[#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857
