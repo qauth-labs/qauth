@@ -1,7 +1,7 @@
 import { ACCOUNTS_POLICY_GROUP } from './accounts';
 import { ADMIN_POLICY_GROUP } from './admin';
 import { BRUTE_FORCE_POLICY_GROUP } from './brute-force';
-import { MAIL_POLICY_GROUP } from './mail';
+import { MAIL_POLICY_GROUP, mailTransportIssues } from './mail';
 import { PASSWORD_POLICY_GROUP } from './password';
 import { POSTURE_POLICY_GROUP } from './posture';
 import { REGISTRATION_POLICY_GROUP } from './registration';
@@ -12,6 +12,7 @@ export {
   ADMIN_POLICY_GROUP,
   BRUTE_FORCE_POLICY_GROUP,
   MAIL_POLICY_GROUP,
+  mailTransportIssues,
   PASSWORD_POLICY_GROUP,
   POSTURE_POLICY_GROUP,
   REGISTRATION_POLICY_GROUP,

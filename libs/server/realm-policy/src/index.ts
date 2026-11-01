@@ -14,6 +14,7 @@ export type * from './lib/realm-policies';
 export * from './lib/realm-policies';
 export type * from './lib/registry';
 export * from './lib/registry';
+export type * from './lib/rules';
 export type * from './lib/secret-store';
 export * from './lib/secret-store';
 export type * from './lib/seed-keys';

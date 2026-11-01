@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 import { groupDocsLink } from '../docs';
 import { policyField } from '../field';
+import type { PolicyIssue } from '../registry';
+import type { PolicyRule } from '../rules';
 
 const link = groupDocsLink('mail');
 
@@ -23,9 +25,14 @@ const SINGLE_LINE = /^[^\r\n]*$/;
  * selected.
  *
  * The SMTP password and the Resend API key are secrets: write-only, never in
- * the stored document, shown as `passwordSet` and `apiKeySet`. The secret
- * store of CFG-07 keeps their values. A mail link's base is not a policy: it
- * comes from the realm's host (#490).
+ * the stored document, shown as `passwordSet` and `apiKeySet`. The realm's
+ * secret store keeps their values, encrypted (`realm_secrets`, #529). A mail
+ * link's base is not a policy: it comes from the realm's host (#490).
+ *
+ * The realm's mail sender reads the transport and the sender from the realm
+ * row since #529, building the transport on the first mail after a change;
+ * {@link mailTransportIssues} keeps an update from storing a transport that
+ * cannot send.
  */
 export const MAIL_POLICY_GROUP = {
   provider: policyField(z.enum(['mock', 'resend', 'smtp']), {
@@ -185,3 +192,53 @@ export const MAIL_POLICY_GROUP = {
     },
   }),
 } as const;
+
+/** The mail group as {@link mailTransportIssues} reads it from a parsed document. */
+interface MailTransportFields {
+  readonly provider: 'mock' | 'resend' | 'smtp';
+  readonly fromAddress: string | null;
+  readonly smtp: {
+    readonly host: string | null;
+    readonly port: number | null;
+    readonly user: string | null;
+  };
+}
+
+/**
+ * The realm policy rule of the mail transport (#529): a policy update that
+ * selects a transport must give it what it sends with.
+ *
+ * - `smtp` needs `mail.smtp.host`, `mail.smtp.port` and `mail.smtp.user`, and
+ *   `mail.smtp.password` set;
+ * - `resend` needs `mail.resend.apiKey` set;
+ * - both need `mail.fromAddress`, the address every mail is sent from;
+ * - `mock` sends nothing, and needs nothing.
+ *
+ * Until #529 the boot refused such an environment; the check moved to the
+ * update, since the realm row holds the transport now. The issues name the
+ * missing paths, never a value.
+ */
+export const mailTransportIssues: PolicyRule = (policies, { isSet }) => {
+  const mail = policies['mail'] as MailTransportFields | undefined;
+  if (mail === undefined || mail.provider === 'mock') return [];
+  const why = `is required when mail.provider is ${mail.provider}`;
+  const issues: PolicyIssue[] = [];
+  if (mail.fromAddress === null) issues.push({ path: 'mail.fromAddress', message: why });
+  if (mail.provider === 'smtp') {
+    if (mail.smtp.host === null) issues.push({ path: 'mail.smtp.host', message: why });
+    if (mail.smtp.port === null) issues.push({ path: 'mail.smtp.port', message: why });
+    if (mail.smtp.user === null) issues.push({ path: 'mail.smtp.user', message: why });
+    if (!isSet('mail.smtp.password')) {
+      issues.push({
+        path: 'mail.smtp.password',
+        message: `must be set when mail.provider is smtp`,
+      });
+    }
+  } else if (!isSet('mail.resend.apiKey')) {
+    issues.push({
+      path: 'mail.resend.apiKey',
+      message: `must be set when mail.provider is resend`,
+    });
+  }
+  return issues;
+};

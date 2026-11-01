@@ -15,7 +15,7 @@ import {
 } from './policy-store';
 import { defaultsFromEnv, REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
 import { createPolicyRegistry, PolicyValidationError } from './registry';
-import type { RealmSecretStore } from './secret-store';
+import { createRealmSecretStore, type RealmSecretStore } from './secret-store';
 
 /**
  * The policy store (#516) over an in-memory storage: reads join the stored
@@ -526,7 +526,10 @@ describe('createPolicyStore — secrets never reach the stored document', () => 
       {
         mail: {
           provider: 'smtp',
-          smtp: { host: 'smtp.example.com', password: SECRET },
+          // A whole smtp transport: the mail rule (#529) refuses one without
+          // its host, port, user, password or sender.
+          fromAddress: 'no-reply@example.com',
+          smtp: { host: 'smtp.example.com', port: 587, user: 'mailer', password: SECRET },
           resend: { apiKey: null },
         },
       },
@@ -825,5 +828,253 @@ describe('createPolicyStore — seedRealms', () => {
       password: { minScore: 1 },
       sessions: { idleSeconds: 600 },
     });
+  });
+});
+
+/**
+ * A working secret store over memory (#529): values encrypted by a stand-in
+ * cipher in the signer's format, so `isSet` and `getForUse` answer what
+ * `put` stored.
+ */
+function workingSecrets() {
+  const rows = new Map<string, { ciphertext: string; keyId: string } | null>();
+  const keyOf = (realmId: string, path: string) => `${realmId} ${path}`;
+  const flip = (bytes: Buffer) => Buffer.from(bytes.map((byte) => byte ^ 0x5a));
+  const secrets = createRealmSecretStore<Tx>({
+    storage: {
+      async read(realmId, path) {
+        const key = keyOf(realmId, path);
+        return rows.has(key) ? { ciphertext: rows.get(key)?.ciphertext ?? null } : undefined;
+      },
+      async write(realmId, path, value) {
+        rows.set(keyOf(realmId, path), value);
+      },
+      async insertIfAbsent(realmId, path, value) {
+        if (rows.has(keyOf(realmId, path))) return false;
+        rows.set(keyOf(realmId, path), value);
+        return true;
+      },
+    },
+    cipher: {
+      encrypt: async ({ plaintext }) =>
+        `v1.kid-1.${'A'.repeat(16)}.${flip(Buffer.from(plaintext)).toString('base64url')}`,
+      decrypt: async ({ ciphertext }) =>
+        flip(Buffer.from(ciphertext.split('.')[3] ?? '', 'base64url')).toString('utf8'),
+    },
+  });
+  return { secrets, rows };
+}
+
+/** A whole smtp transport but its password. */
+const SMTP_TRANSPORT = {
+  provider: 'smtp',
+  fromAddress: 'no-reply@example.com',
+  smtp: { host: 'smtp.example.com', port: 587, user: 'mailer' },
+} as const;
+
+describe('createPolicyStore — the mail transport rule on every update (#529)', () => {
+  /** The issues of a refused update, or a failure when it was not refused. */
+  async function refusedIssues(update: Promise<unknown>) {
+    const refused = await update.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    expect(refused).toBeInstanceOf(PolicyValidationError);
+    return (refused as PolicyValidationError).issues;
+  }
+
+  it('refuses smtp without a password, writing nothing', async () => {
+    const { secrets } = workingSecrets();
+    const { store, writes } = storeOver([realmWithPolicies()], secrets);
+
+    const issues = await refusedIssues(
+      store.update('realm-a', { mail: SMTP_TRANSPORT }, { expectedVersion: 3 })
+    );
+
+    expect(issues).toEqual([
+      { path: 'mail.smtp.password', message: 'must be set when mail.provider is smtp' },
+    ]);
+    expect(writes).toEqual([]);
+    expect(await secrets.isSet('realm-a', 'mail.smtp.password')).toBe(false);
+  });
+
+  it('refuses smtp without its host, port, user or sender, naming each path', async () => {
+    const { secrets } = workingSecrets();
+    const { store, writes } = storeOver([realmWithPolicies()], secrets);
+
+    const issues = await refusedIssues(
+      store.update(
+        'realm-a',
+        { mail: { provider: 'smtp', smtp: { password: SECRET } } },
+        { expectedVersion: 3 }
+      )
+    );
+
+    expect(issues.map((issue) => issue.path)).toEqual([
+      'mail.fromAddress',
+      'mail.smtp.host',
+      'mail.smtp.port',
+      'mail.smtp.user',
+    ]);
+    expect(JSON.stringify(issues)).not.toContain(SECRET);
+    expect(writes).toEqual([]);
+    // The password of the refused update was never stored either.
+    expect(await secrets.isSet('realm-a', 'mail.smtp.password')).toBe(false);
+  });
+
+  it('accepts smtp with the password the same update sets', async () => {
+    const { secrets, rows } = workingSecrets();
+    const { store } = storeOver([realmWithPolicies()], secrets);
+
+    const snapshot = await store.update(
+      'realm-a',
+      { mail: { ...SMTP_TRANSPORT, smtp: { ...SMTP_TRANSPORT.smtp, password: SECRET } } },
+      { expectedVersion: 3 }
+    );
+
+    expect(snapshot.policies.mail.provider).toBe('smtp');
+    expect(await secrets.getForUse('realm-a', 'mail.smtp.password')).toBe(SECRET);
+    expect(JSON.stringify([...rows])).not.toContain(SECRET);
+  });
+
+  it('accepts a later update while the stored password stays set, and refuses one that clears it', async () => {
+    const { secrets } = workingSecrets();
+    const { store } = storeOver([realmWithPolicies()], secrets);
+    await store.update(
+      'realm-a',
+      { mail: { ...SMTP_TRANSPORT, smtp: { ...SMTP_TRANSPORT.smtp, password: SECRET } } },
+      { expectedVersion: 3 }
+    );
+
+    // Another group, then another mail field: the password is still set.
+    await store.update(
+      'realm-a',
+      { tokens: { accessTokenLifespanSeconds: 300 } },
+      { expectedVersion: 4 }
+    );
+    await store.update('realm-a', { mail: { fromName: 'Example' } }, { expectedVersion: 5 });
+
+    const issues = await refusedIssues(
+      store.update('realm-a', { mail: { smtp: { password: null } } }, { expectedVersion: 6 })
+    );
+    expect(issues).toEqual([
+      { path: 'mail.smtp.password', message: 'must be set when mail.provider is smtp' },
+    ]);
+    expect(await secrets.getForUse('realm-a', 'mail.smtp.password')).toBe(SECRET);
+
+    // Back to mock, the password may go.
+    await store.update(
+      'realm-a',
+      { mail: { provider: 'mock', smtp: { password: null } } },
+      { expectedVersion: 6 }
+    );
+    expect(await secrets.isSet('realm-a', 'mail.smtp.password')).toBe(false);
+  });
+
+  it('refuses resend without an API key and accepts it with one', async () => {
+    const { secrets } = workingSecrets();
+    const { store } = storeOver([realmWithPolicies()], secrets);
+    const resend = { provider: 'resend', fromAddress: 'no-reply@example.com' } as const;
+
+    expect(
+      await refusedIssues(store.update('realm-a', { mail: resend }, { expectedVersion: 3 }))
+    ).toEqual([
+      { path: 'mail.resend.apiKey', message: 'must be set when mail.provider is resend' },
+    ]);
+
+    await store.update(
+      'realm-a',
+      { mail: { ...resend, resend: { apiKey: 're_key' } } },
+      { expectedVersion: 3 }
+    );
+    expect(await secrets.isSet('realm-a', 'mail.resend.apiKey')).toBe(true);
+  });
+
+  it('refuses a non-mock transport on a server without a secret store', async () => {
+    const { store } = storeOver([realmWithPolicies()]);
+
+    expect(
+      await refusedIssues(store.update('realm-a', { mail: SMTP_TRANSPORT }, { expectedVersion: 3 }))
+    ).toEqual([{ path: 'mail.smtp.password', message: expect.any(String) }]);
+    // Mock needs nothing.
+    await store.update('realm-a', { mail: { provider: 'mock' } }, { expectedVersion: 3 });
+  });
+
+  it('runs no rule for another registry unless given one', async () => {
+    const registry = createPolicyRegistry({ version: '1-rc.0' });
+    registry.registerPolicyGroup('sample', {
+      size: policyField(z.number().int(), {
+        seedEnv: null,
+        default: 1,
+        direction: 'lower-is-stricter',
+        securityWhen: 'never',
+        effects: [],
+        secret: false,
+        environmentBound: false,
+        doc: { summary: 'A size.', link: 'https://docs.qauth.dev/reference/realm-policies/' },
+      }),
+    });
+    const rule = vi.fn(() => [{ path: 'sample.size', message: 'is never right' }]);
+    const realm = realmWithPolicies({ document: { sample: { size: 1 } } });
+
+    const plain = createPolicyStore({
+      storage: memoryStorage([structuredClone(realm)]).storage,
+      seeds: {},
+      registry,
+    });
+    await plain.update('realm-a', { sample: { size: 2 } }, { expectedVersion: 3 });
+
+    const ruled = createPolicyStore({
+      storage: memoryStorage([structuredClone(realm)]).storage,
+      seeds: {},
+      registry,
+      rules: [rule],
+    });
+    expect(
+      await refusedIssues(ruled.update('realm-a', { sample: { size: 2 } }, { expectedVersion: 3 }))
+    ).toEqual([{ path: 'sample.size', message: 'is never right' }]);
+    expect(rule).toHaveBeenCalledWith(
+      { sample: { size: 2 } },
+      expect.objectContaining({ isSet: expect.any(Function) })
+    );
+  });
+});
+
+describe('createPolicyStore — the representation (#529)', () => {
+  it('shows passwordSet: true and never the password', async () => {
+    const { secrets } = workingSecrets();
+    const { store } = storeOver([realmWithPolicies()], secrets);
+    await store.update(
+      'realm-a',
+      { mail: { ...SMTP_TRANSPORT, smtp: { ...SMTP_TRANSPORT.smtp, password: SECRET } } },
+      { expectedVersion: 3 }
+    );
+
+    const representation = await store.representation('realm-a');
+
+    const mail = representation?.policies['mail'] as Record<string, Record<string, unknown>>;
+    expect(mail['smtp']).toEqual({
+      host: 'smtp.example.com',
+      port: 587,
+      secure: true,
+      user: 'mailer',
+      passwordSet: true,
+    });
+    expect(mail['resend']).toEqual({ apiKeySet: false });
+    expect(representation?.version).toBe(4);
+    expect(stringsIn(representation)).not.toContain(SECRET);
+    expect(JSON.stringify(representation)).not.toContain(SECRET);
+  });
+
+  it('shows every secret unset without a secret store, and nothing for an unknown realm', async () => {
+    const { store } = storeOver([realmWithPolicies()]);
+
+    const mail = (await store.representation('realm-a'))?.policies['mail'] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(mail['smtp']?.['passwordSet']).toBe(false);
+    expect(mail['resend']).toEqual({ apiKeySet: false });
+    expect(await store.representation('no-such-realm')).toBeUndefined();
   });
 });

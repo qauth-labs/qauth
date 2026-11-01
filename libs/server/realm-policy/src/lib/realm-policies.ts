@@ -11,7 +11,7 @@ import {
 import type { z } from 'zod';
 
 import type { PolicyField } from './field';
-import { BUILT_IN_POLICY_GROUPS } from './groups';
+import { BUILT_IN_POLICY_GROUPS, mailTransportIssues } from './groups';
 import {
   createPolicyRegistry,
   type JsonSchemaObject,
@@ -23,6 +23,7 @@ import {
   type PolicySeedEnv,
   type PolicyView,
 } from './registry';
+import type { PolicyRule } from './rules';
 
 /**
  * The realm policies of QAuth: one registry holding the built-in groups
@@ -99,6 +100,13 @@ export const REALM_POLICY_REGISTRY: PolicyRegistry = createPolicyRegistry({
 for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
   REALM_POLICY_REGISTRY.registerPolicyGroup(name, shape);
 }
+
+/**
+ * The rules over a whole document that every policy update of a realm must
+ * pass (#529): the mail transport has what it sends with
+ * ({@link mailTransportIssues}).
+ */
+export const REALM_POLICY_RULES: readonly PolicyRule[] = Object.freeze([mailTransportIssues]);
 
 /**
  * Add a group of realm policies, as another area of QAuth does for its own
