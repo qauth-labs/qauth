@@ -41,7 +41,18 @@ const PASSWORD_A = 'realm-a-smtp-password-kept-encrypted';
 const PASSWORD_B = 'realm-b-smtp-password-kept-encrypted';
 const PASSWORD_B_ROTATED = 'realm-b-rotated-smtp-password-kept-encrypted';
 const LATER_ENVIRONMENT_PASSWORD = 'a-later-environment-password-never-stored';
-const ALL_PASSWORDS = [PASSWORD_A, PASSWORD_B, PASSWORD_B_ROTATED, LATER_ENVIRONMENT_PASSWORD];
+
+/** A password and the encoded forms it could hide in: base64, base64url, hex, and SMTP AUTH PLAIN. */
+function encodedForms(password: string, user: string): string[] {
+  const bytes = Buffer.from(password, 'utf8');
+  return [
+    password,
+    bytes.toString('base64'),
+    bytes.toString('base64url'),
+    bytes.toString('hex'),
+    Buffer.from(`\u0000${user}\u0000${password}`, 'utf8').toString('base64'),
+  ];
+}
 
 const HOST_B = 'beta.example.com';
 
@@ -156,7 +167,13 @@ describe('each realm sends through its own mail transport (#529)', () => {
       {
         mail: {
           provider: 'smtp',
-          smtp: { host: fixture.host, port: fixture.port, user: 'mailer-b', password },
+          smtp: {
+            host: fixture.host,
+            port: fixture.port,
+            secure: false,
+            user: 'mailer-b',
+            password,
+          },
         },
       },
       { expectedVersion: current?.version ?? 0 }
@@ -196,8 +213,10 @@ describe('each realm sends through its own mail transport (#529)', () => {
     expect(serverA.logins).toEqual([{ user: 'mailer-a', password: PASSWORD_A, accepted: true }]);
     expect(serverB.logins).toEqual([{ user: 'mailer-b', password: PASSWORD_B, accepted: true }]);
     // The sender of both is the realm's own: the seeded name and address.
-    expect(toA?.from).toBe('no-reply@auth.example.com');
-    expect(toA?.data).toMatch(/^From: QAuth <no-reply@auth\.example\.com>\r?$/m);
+    for (const message of [toA, toB]) {
+      expect(message?.from).toBe('no-reply@auth.example.com');
+      expect(message?.data).toMatch(/^From: QAuth <no-reply@auth\.example\.com>\r?$/m);
+    }
   });
 
   it('sends the next mail with a changed password or transport, without a restart', async () => {
@@ -263,25 +282,26 @@ describe('each realm sends through its own mail transport (#529)', () => {
       expect(row.ciphertext?.split('.')[1]).toBe(row.key_id);
     }
 
-    const { rows: realmRows } = await database().dbPool.query<{ row: string }>(
-      'SELECT r::text AS row FROM realms r'
-    );
+    // Every row of every table, the realm rows included, in the forms Postgres
+    // prints them (jsonb, bytea as hex, text as it is).
     const dump = await databaseDump();
-    for (const text of [JSON.stringify(secrets), JSON.stringify(realmRows), dump]) {
-      for (const password of ALL_PASSWORDS) expect(text).not.toContain(password);
-      expect(text).not.toContain(Buffer.from(PASSWORD_A).toString('base64'));
-    }
+    const forms = [
+      ...encodedForms(PASSWORD_A, 'mailer-a'),
+      ...encodedForms(PASSWORD_B, 'mailer-b'),
+    ];
+    expect(forms.filter((form) => dump.includes(form))).toEqual([]);
     // The realm rows' policies hold no member for a secret at all: not its
     // value, and not whether it is set.
-    const { rows: stored } = await database().dbPool.query<{ policies: unknown }>(
-      'SELECT policies FROM realms'
+    const { rows: stored } = await database().dbPool.query<{ policies: string }>(
+      'SELECT policies::text AS policies FROM realms'
     );
     expect(stored).toHaveLength(2);
     for (const { policies } of stored) {
-      const mail = (policies as { mail?: { smtp?: object; resend?: object } }).mail;
-      expect(mail?.smtp).toBeDefined();
-      expect(Object.keys(mail?.smtp ?? {})).not.toContain('password');
-      expect(Object.keys(mail?.resend ?? {})).not.toContain('apiKey');
+      // The `password` group is the password policy; the mail group is the one
+      // that has secret fields.
+      const mail = JSON.stringify((JSON.parse(policies) as { mail?: unknown }).mail);
+      expect(mail).toContain('"smtp"');
+      expect(mail).not.toMatch(/"(password|passwordSet|apiKey|apiKeySet)"/);
     }
     // The representation shows passwordSet.
     const representation = await app.policyStore.representation(realm.id);
