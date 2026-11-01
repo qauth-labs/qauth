@@ -96,6 +96,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read the environment until they move to the row ([#527], [#528], [#529],
   [#534]). See **Realm policies move onto the realm row** in
   `operate/upgrades`.
+- **Each realm sends its mail through its own transport and sender** ([#529],
+  ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
+  policies (transport, sender address and name, SMTP host, port, TLS and user)
+  from its row for every mail, and builds the realm's provider on its first
+  mail after a change, keyed by realm id and `policies_version`, so a change
+  reaches the next mail without a restart; app.ts no longer builds one provider
+  for the process. The SMTP password and the Resend API key go to the new
+  realm secret store: migration 0048 adds `realm_secrets`, which holds each
+  value encrypted with the realm's data-at-rest key by the signer, under a
+  context that names the field, and CHECKs refuse anything but that ciphertext.
+  The representation (`policyStore.representation`) shows only `passwordSet`
+  and `apiKeySet`; logs, errors and the audit diff never carry a value. The
+  first boot that can encrypt stores `SMTP_PASSWORD` or `RESEND_API_KEY` in the
+  default realm, once, and records an unset one; later boots ignore both keys
+  for it and warn while they are set. A policy update that selects `smtp`
+  without its host, port, user, sender address and password, or `resend`
+  without its sender address and API key, is refused (`RealmPolicyRefusedError`,
+  422 `unprocessable_content`); the boot no longer refuses such an environment,
+  and warns when the default realm's stored transport lacks its secret. Mail is
+  sent from `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>`, as the realm stores them.
+  Each boot also warns when a seed key of a policy the server reads from the row
+  is stricter than the stored value, or, for a policy with no order, differs
+  from it. See **Mail secrets move into the realm** in `operate/upgrades`.
 - The auth-server logs a warning at boot for each experimental key or value that
   is set. A key or value that switches on an experimental feature warns through
   that feature instead (below).

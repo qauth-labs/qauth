@@ -1,542 +1,104 @@
 # Fastify Email Plugin
 
-Fastify plugin for email service in QAuth. This plugin provides dependency injection for email services using the factory pattern, eliminating direct `process.env` access.
+Fastify plugin for the mail QAuth sends. It decorates the instance with `emailService`, the mail
+service of every realm, and `emailVerificationTokenUtils`.
 
 ## Overview
 
-The `@qauth-labs/fastify-plugin-email` plugin integrates email functionality into your Fastify application by:
+Each realm sends its mail through its own transport and from its own sender
+([ADR-019](../../../../docs/adr/019-deployment-topology-and-trust-boundaries.md) Decision 10,
+issue #529):
 
-- Decorating the Fastify instance with `emailService` property
-- Using factory pattern for configuration (no direct `process.env` access)
-- Providing type-safe email operations
-- Supporting multiple email providers (mock, resend, smtp)
-- Enabling different email configurations per Fastify instance
+- the transport (`mock`, `smtp` or `resend`), the sender address and name, and the SMTP host, port,
+  TLS setting and user are the realm's `mail.*` policies, on the realm row;
+- the SMTP password and the Resend API key sit in the realm's secret store, encrypted with the
+  realm's data-at-rest key, and only the mail sender reads them.
 
-## Installation
-
-This library is part of the QAuth monorepo and is automatically available to other projects within the workspace.
-
-```typescript
-import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
-```
+The plugin holds no transport of its own. Every mail names its realm; the plugin reads the realm's
+mail policies through the `source` it is given, builds the realm's provider from them, and keeps it
+for the policy counter it read (`policies_version`). A change of the transport, the sender or the
+password raises the counter, so it reaches the next mail without a restart.
 
 ## Usage
 
-### Basic Registration
-
 ```typescript
-import Fastify from 'fastify';
 import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
 
-const fastify = Fastify();
-
-// Register the email plugin with mock provider (default)
-await fastify.register(emailPlugin);
-
-// Or explicitly specify provider
 await fastify.register(emailPlugin, {
-  provider: 'mock',
-});
-
-// Start the server
-await fastify.listen({ port: 3000 });
-```
-
-### With Service Configuration
-
-```typescript
-import Fastify from 'fastify';
-import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
-
-const fastify = Fastify();
-
-// Register with service configuration
-await fastify.register(emailPlugin, {
-  provider: 'mock',
-  serviceConfig: {
-    defaultFrom: 'noreply@example.com',
+  // Where each realm's mail policies and secrets are read, on every mail.
+  source: {
+    async read(realmId) {
+      const snapshot = await fastify.policyStore.get(realmId);
+      if (snapshot === undefined) return undefined;
+      return {
+        version: snapshot.version,
+        mail: snapshot.policies.mail,
+        secretOf: (path) => fastify.realmSecretStore?.getForUse(realmId, path),
+      };
+    },
   },
+  // What every realm's mail shares: the lifetime the verification mail states.
+  serviceConfig: { verificationTokenExpiry: 86400 },
 });
 
-await fastify.listen({ port: 3000 });
-```
-
-### Using Email Service in Routes
-
-Once registered, the email service is available on the Fastify instance:
-
-```typescript
-fastify.post('/auth/register', async (request, reply) => {
-  const { email, password } = request.body as { email: string; password: string };
-
-  // Your own persistence helper. Since ADR-002 (#230) a registration is two
-  // writes — the `users` identity anchor and its `user_credentials` row — so
-  // return both; see the full example at the end of this README.
-  const { user, credential } = await createUser({ email, password });
-
-  // Generate verification token
-  const { token, tokenHash } = generateVerificationToken();
-
-  // Store token hash in database. Verification points at `credential_id`, not
-  // `user_id` — migration 0011 dropped the latter.
-  await db.emailVerificationTokens.create({
-    tokenHash,
-    credentialId: credential.id,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-  });
-
-  // Send verification email. `issuer` is the base of the link,
-  // `${issuer}/auth/verify?token=…`; QAuth passes the issuer of the account's realm.
-  await fastify.emailService.sendVerificationEmail(email, token, { baseUrl: issuer });
-
-  return reply.code(201).send({
-    // The address lives on the credential's `external_sub`, not on the user row.
-    user: { id: user.id, email: credential.externalSub },
-    message: 'Registration successful. Please check your email to verify your account.',
-  });
+// In a route: the realm the account belongs to, and the link base, its issuer.
+await fastify.emailService.sendVerificationEmail(realm.id, address, token, {
+  baseUrl: realm.issuer,
 });
+await fastify.emailService.sendAccountExistsEmail(realm.id, address);
 ```
+
+The auth server builds its source in `apps/auth-server/src/app/helpers/realm-secrets.ts`
+(`realmMailSource`).
 
 ## API
 
-### Plugin Registration
+### `emailService`
 
-```typescript
-await fastify.register(emailPlugin, options);
-```
+Type: `RealmEmailService` (from `@qauth-labs/server-email`).
 
-**Options**:
+- `sendVerificationEmail(realmId, to, token, link, options?)`: a verification mail whose link is
+  `${link.baseUrl}/auth/verify?token=…`.
+- `sendAccountExistsEmail(realmId, to, options?)`: the notice that someone tried to register an
+  address again. No link, no token.
 
-```typescript
-interface EmailPluginOptions {
-  /**
-   * Email provider type (mock, resend, smtp)
-   * Default: 'mock'
-   */
-  provider?: 'mock' | 'resend' | 'smtp';
-  /**
-   * Provider-specific configuration
-   * Optional - depends on provider type
-   */
-  providerConfig?: EmailProviderConfig;
-  /**
-   * Email service configuration
-   * Optional - missing values will use defaults
-   */
-  serviceConfig?: {
-    /**
-     * Default sender email address
-     */
-    defaultFrom?: string;
-  };
-}
-```
+Both resolve with an `EmailResult` (`success`, `messageId` or `error`) and reject with
+`RealmMailUnavailableError` when the realm cannot send mail: there is no such realm, or its
+transport lacks a setting or its secret. The error names the realm id and the policy path, never a
+value.
 
-**Note**: Both `providerConfig` and `serviceConfig` are optional. If not provided, defaults will be used.
+### `emailVerificationTokenUtils`
 
-### Fastify Instance Decorators
+`generateVerificationToken`, `hashToken`, `isValidTokenFormat` and `constantTimeCompare`, from
+`@qauth-labs/server-email`.
 
-The plugin decorates the Fastify instance with one property:
+## Transports
 
-#### `fastify.emailService`
+- `mock` delivers nothing: it records each mail in memory, and logs it to the console outside
+  tests. It needs no setting.
+- `smtp` sends through nodemailer to `mail.smtp.host` and `mail.smtp.port`, over TLS from the start
+  when `mail.smtp.secure` is on, signing in as `mail.smtp.user` with the stored password.
+- `resend` sends through the Resend API with the stored API key.
 
-Type: `EmailService`
-
-The email service instance with methods:
-
-- `sendVerificationEmail(to: string, token: string, link: { baseUrl: string }, options?: Partial<EmailOptions>): Promise<EmailResult>` - Send a verification email whose link is `${baseUrl}/auth/verify?token=...`; the base is given per mail, so each account is linked to its own realm's issuer
-
-**Example**:
-
-```typescript
-// Send verification email
-const result = await fastify.emailService.sendVerificationEmail('user@example.com', 'token123', {
-  baseUrl: 'https://auth.example.com',
-});
-
-if (result.success) {
-  console.log('Email sent:', result.messageId);
-} else {
-  console.error('Email failed:', result.error);
-}
-```
-
-## TypeScript Support
-
-The plugin includes TypeScript type definitions. `fastify.emailService` is automatically typed:
-
-```typescript
-import { FastifyInstance } from 'fastify';
-
-async function myRoute(fastify: FastifyInstance) {
-  // TypeScript knows about fastify.emailService
-  await fastify.emailService.sendVerificationEmail('user@example.com', 'token123', {
-    baseUrl: 'https://auth.example.com',
-  });
-}
-```
-
-## Email Providers
-
-### Mock Provider (Default)
-
-The mock provider logs emails to the console and stores them in memory. Useful for development and testing:
-
-```typescript
-await fastify.register(emailPlugin, {
-  provider: 'mock',
-});
-```
-
-**Features**:
-
-- No external dependencies
-- Logs emails to console (in non-test environments)
-- Stores emails in memory for testing
-- Always succeeds
-
-### Resend Provider
-
-The Resend provider sends emails via the Resend API:
-
-```typescript
-await fastify.register(emailPlugin, {
-  provider: 'resend',
-  providerConfig: {
-    apiKey: 're_...',
-    fromAddress: 'noreply@example.com', // Optional, can be set per email
-  },
-  serviceConfig: {
-    defaultFrom: 'noreply@example.com',
-  },
-});
-```
-
-**Features**:
-
-- Automatic retry on transient failures (network errors, rate limits)
-- Idempotency key support to prevent duplicate sends
-- TypeScript-first SDK
-- 3,000 emails/month free tier
-
-### SMTP Provider
-
-The SMTP provider sends emails via SMTP:
-
-```typescript
-await fastify.register(emailPlugin, {
-  provider: 'smtp',
-  providerConfig: {
-    host: 'smtp.example.com',
-    port: 587,
-    secure: false, // true for SSL/TLS, false for STARTTLS
-    auth: {
-      user: 'user@example.com',
-      pass: 'password',
-    },
-    fromAddress: 'noreply@example.com', // Optional
-    options: {
-      requireTLS: true, // Optional: require TLS
-      ignoreTLS: false, // Optional: ignore TLS certificate errors
-    },
-  },
-  serviceConfig: {
-    defaultFrom: 'noreply@example.com',
-  },
-});
-```
-
-**Features**:
-
-- Support for STARTTLS and direct SSL/TLS
-- Configurable authentication
-- Connection pooling via nodemailer
-- Ideal for self-hosted deployments
-
-## Configuration
-
-### Environment Variables
-
-The plugin accepts configuration through options. A host app passes values from its own parsed environment, which it builds with the schemas of `@qauth-labs/server-config`:
-
-```typescript
-// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
-import { env } from './config/env';
-
-await fastify.register(emailPlugin, {
-  provider: env.EMAIL_PROVIDER, // 'mock' (default), 'resend' or 'smtp'
-  // 'resend' and 'smtp' also need `providerConfig` (see Resend Provider and SMTP
-  // Provider above), built from RESEND_API_KEY or the SMTP_* keys; without it,
-  // registration fails.
-  serviceConfig: {
-    defaultFrom: env.EMAIL_FROM_ADDRESS,
-    verificationTokenExpiry: env.EMAIL_VERIFICATION_TOKEN_EXPIRY,
-  },
-});
-```
-
-**Note**: Email environment variables are now available in `@qauth-labs/server-config` via `emailEnvSchema`. See the [server-config documentation](../../../server/config/README.md) for details.
-
-## Factory Pattern
-
-This plugin uses the factory pattern from `@qauth-labs/server-email`:
-
-- **No direct `process.env` access** - Configuration is passed explicitly
-- **Testable** - Easy to inject mock configurations in tests
-- **Flexible** - Different Fastify instances can use different configurations
-
-```typescript
-// Different configurations for different instances
-const productionApp = Fastify();
-await productionApp.register(emailPlugin, {
-  provider: 'resend',
-  serviceConfig: {
-    defaultFrom: 'noreply@example.com',
-  },
-});
-
-const testApp = Fastify();
-await testApp.register(emailPlugin, {
-  provider: 'mock', // Use mock for tests
-});
-```
-
-## Integration with Other Plugins
-
-Register the email plugin after database and password plugins:
-
-```typescript
-import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
-import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
-import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
-
-// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
-import { env } from './config/env';
-
-await fastify.register(databasePlugin, {
-  config: {
-    connectionString: env.DATABASE_URL,
-    pool: {
-      max: env.DB_POOL_MAX,
-      min: env.DB_POOL_MIN,
-      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
-      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
-    },
-  },
-});
-await fastify.register(cachePlugin, {
-  config: {
-    url: env.REDIS_URL,
-    host: env.REDIS_HOST,
-    port: env.REDIS_PORT,
-    password: env.REDIS_PASSWORD,
-    db: env.REDIS_DB,
-    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
-    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
-    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
-    lazyConnect: true,
-  },
-});
-await fastify.register(passwordPlugin, {
-  hashConfig: {
-    memoryCost: env.PASSWORD_MEMORY_COST,
-    timeCost: env.PASSWORD_TIME_COST,
-    parallelism: env.PASSWORD_PARALLELISM,
-  },
-  validationConfig: {
-    minScore: env.PASSWORD_MIN_SCORE,
-  },
-});
-await fastify.register(emailPlugin, {
-  provider: 'mock',
-  serviceConfig: {
-    defaultFrom: 'noreply@example.com',
-  },
-});
-```
-
-## Error Handling
-
-Email operations can fail. Always handle errors:
-
-```typescript
-fastify.post('/auth/register', async (request, reply) => {
-  try {
-    const result = await fastify.emailService.sendVerificationEmail(email, token, {
-      baseUrl: issuer,
-    });
-    if (!result.success) {
-      fastify.log.error({ error: result.error }, 'Email sending failed');
-      // Handle error (e.g., queue for retry, log, etc.)
-    }
-  } catch (error) {
-    fastify.log.error(error, 'Email service error');
-    reply.code(500).send({ error: 'Registration failed' });
-  }
-});
-```
-
-## Best Practices
-
-1. **Register After Database/Password**: Register the email plugin after database and password plugins if you need them in your routes.
-
-2. **Use Mock Provider for Tests**: Use the mock provider in test environments to avoid external dependencies.
-
-3. **Error Handling**: Always wrap email operations in try-catch blocks in production code.
-
-4. **Logging**: The plugin logs debug information when registered. Check logs to verify plugin registration.
-
-5. **Provider Selection**: Choose the appropriate provider based on your environment:
-   - Development: `mock`
-   - Testing: `mock`
-   - Production: `resend` or `smtp`
-
-6. **Configuration**: Use environment-based configuration for production deployments.
-
-## Example: Complete Integration
-
-```typescript
-import Fastify from 'fastify';
-import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
-import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
-import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
-import { emailPlugin } from '@qauth-labs/fastify-plugin-email';
-import { generateVerificationToken } from '@qauth-labs/server-email';
-import { buildPasswordCredentialData } from '@qauth-labs/server-federation';
-import { normalizeEmail } from '@qauth-labs/shared-validation';
-
-// The host app's parsed environment (in QAuth: apps/auth-server/src/config/env.ts)
-import { env } from './config/env';
-
-const fastify = Fastify();
-
-// The realm the accounts belong to (a `realms.id`). QAuth's auth server takes
-// it from the host each request names.
-const realmId = '<your realm id>';
-
-// Register plugins
-await fastify.register(databasePlugin, {
-  config: {
-    connectionString: env.DATABASE_URL,
-    pool: {
-      max: env.DB_POOL_MAX,
-      min: env.DB_POOL_MIN,
-      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT,
-      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT,
-    },
-  },
-});
-await fastify.register(cachePlugin, {
-  config: {
-    url: env.REDIS_URL,
-    host: env.REDIS_HOST,
-    port: env.REDIS_PORT,
-    password: env.REDIS_PASSWORD,
-    db: env.REDIS_DB,
-    maxRetriesPerRequest: env.REDIS_MAX_RETRIES,
-    connectTimeout: env.REDIS_CONNECTION_TIMEOUT,
-    commandTimeout: env.REDIS_COMMAND_TIMEOUT,
-    lazyConnect: true,
-  },
-});
-await fastify.register(passwordPlugin);
-await fastify.register(emailPlugin, {
-  provider: 'mock', // Use 'resend' or 'smtp' in production
-  serviceConfig: {
-    defaultFrom: 'noreply@example.com',
-  },
-});
-
-// The base of the verification link; QAuth uses the issuer of the account's realm.
-const issuer = env.JWT_ISSUER;
-
-// Registration route
-fastify.post('/auth/register', async (request, reply) => {
-  const { email, password } = request.body as { email: string; password: string };
-  // One normalised address for both the credential and the email that is sent
-  const normalizedEmail = normalizeEmail(email);
-
-  // Validate password strength
-  const strength = fastify.passwordValidator.validatePasswordStrength(password);
-  if (!strength.valid) {
-    return reply.code(422).send({
-      error: 'Password does not meet strength requirements',
-      feedback: strength.feedback,
-    });
-  }
-
-  // Hash password
-  const passwordHash = await fastify.passwordHasher.hashPassword(password);
-
-  // Create the identity anchor, then the credential. Since ADR-002 (#230)
-  // `users` carries no email or password_hash.
-  const user = await fastify.repositories.users.create({ realmId });
-
-  const credential = await fastify.repositories.userCredentials.create({
-    userId: user.id,
-    realmId,
-    providerType: 'password',
-    externalSub: normalizedEmail,
-    credentialData: buildPasswordCredentialData(passwordHash, false),
-  });
-
-  // Generate verification token
-  const { token, tokenHash } = generateVerificationToken();
-
-  // Store token hash in database. Migration 0011 dropped `user_id` and promoted
-  // `credential_id` to NOT NULL — verification points at the credential that
-  // owns the address, not at the user.
-  await fastify.repositories.emailVerificationTokens.create({
-    tokenHash,
-    credentialId: credential.id,
-    expiresAt: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
-  });
-
-  // Send verification email
-  try {
-    const result = await fastify.emailService.sendVerificationEmail(normalizedEmail, token, {
-      baseUrl: issuer,
-    });
-    if (!result.success) {
-      fastify.log.error({ error: result.error }, 'Failed to send verification email');
-    }
-  } catch (error) {
-    fastify.log.error(error, 'Error sending verification email');
-  }
-
-  // The user row never held a password hash, so it is already safe to return.
-  const safeUser = user;
-  return reply.code(201).send({ user: safeUser });
-});
-
-await fastify.listen({ port: 3000 });
-```
+`smtp` and `resend` send from `mail.fromName <mail.fromAddress>`. The realm policy update refuses a
+transport without what it sends with, so a stored transport normally has it; one that does not
+makes its mail fail, naming the missing path.
 
 ## Development
 
-### Running Tests
-
 ```bash
-nx test fastify-plugin-email
+pnpm nx typecheck fastify-plugin-email
+pnpm nx lint fastify-plugin-email
 ```
 
-### Linting
-
-```bash
-nx lint fastify-plugin-email
-```
-
-## Dependencies
-
-- `@qauth-labs/server-email`: Email service library with factory pattern
-- `fastify-plugin`: Fastify plugin wrapper
+The per-realm sender and its tests live in `@qauth-labs/server-email` (`src/lib/realm-mail.ts`).
 
 ## Related Libraries
 
-- [`@qauth-labs/server-email`](../../../server/email/README.md): Email service library with factory pattern
-- [`@qauth-labs/fastify-plugin-db`](../db/README.md): Database plugin for Fastify
-- [`@qauth-labs/fastify-plugin-password`](../password/README.md): Password plugin for Fastify
+- [`@qauth-labs/server-email`](../../../server/email/README.md): the providers, the templates and
+  the per-realm mail service
+- [`@qauth-labs/fastify-plugin-realm-policy`](../realm-policy): the realm policy store and the realm
+  secret store
 
 ## License
 

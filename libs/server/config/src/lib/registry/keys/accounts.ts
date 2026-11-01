@@ -179,7 +179,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: 'mock',
     since: '0.1.0',
-    docs: 'How mail is sent: `mock`, which delivers nothing, `resend` or `smtp`.',
+    docs: "How mail is sent: `mock`, which delivers nothing, `resend` or `smtp`, that seeds `mail.provider` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'EMAIL_FROM_ADDRESS',
@@ -189,7 +189,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: { required: true },
     since: '0.1.0',
-    docs: 'The sender address of the mail QAuth sends.',
+    docs: "The sender address of the mail QAuth sends, that seeds `mail.fromAddress` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'EMAIL_FROM_NAME',
@@ -199,7 +199,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: 'QAuth',
     since: '0.1.0',
-    docs: 'The sender name of the mail QAuth sends.',
+    docs: "The sender name of the mail QAuth sends, in its `From` header, that seeds `mail.fromName` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'EMAIL_BASE_URL',
@@ -219,7 +219,7 @@ export const ACCOUNT_KEYS = defineKeys([
     default: null,
     since: '0.1.0',
     secret: true,
-    docs: 'The Resend API key, for `EMAIL_PROVIDER=resend`.',
+    docs: "The Resend API key, for `EMAIL_PROVIDER=resend`, that seeds `mail.resend.apiKey` of the first realm only, once: the first boot that can encrypt it stores it in the realm's secret store, encrypted with the realm's data-at-rest key, and no later boot reads it for that realm, so change it through the realm's policies; a realm created later gets its own through a policy update (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again), so remove it once every node runs a release that stores it.",
   },
   {
     name: 'SMTP_HOST',
@@ -229,7 +229,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: null,
     since: '0.1.0',
-    docs: 'The SMTP server host, for `EMAIL_PROVIDER=smtp`.',
+    docs: "The SMTP server host, for `EMAIL_PROVIDER=smtp`, that seeds `mail.smtp.host` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'SMTP_PORT',
@@ -239,7 +239,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: null,
     since: '0.1.0',
-    docs: 'The SMTP server port, for `EMAIL_PROVIDER=smtp`.',
+    docs: "The SMTP server port, for `EMAIL_PROVIDER=smtp`, that seeds `mail.smtp.port` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'SMTP_SECURE',
@@ -249,7 +249,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: 'true',
     since: '0.1.0',
-    docs: 'Connect to the SMTP server over TLS.',
+    docs: "Connect to the SMTP server over TLS, that seeds `mail.smtp.secure` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'SMTP_USER',
@@ -259,7 +259,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'mail',
     default: null,
     since: '0.1.0',
-    docs: 'The SMTP user name.',
+    docs: "The SMTP user name, that seeds `mail.smtp.user` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, its mail reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again).",
   },
   {
     name: 'SMTP_PASSWORD',
@@ -270,7 +270,7 @@ export const ACCOUNT_KEYS = defineKeys([
     default: null,
     since: '0.1.0',
     secret: true,
-    docs: 'The SMTP password.',
+    docs: "The SMTP password, that seeds `mail.smtp.password` of the first realm only, once: the first boot that can encrypt it stores it in the realm's secret store, encrypted with the realm's data-at-rest key, and no later boot reads it for that realm, so change it through the realm's policies; a realm created later gets its own through a policy update (a realm a node of the previous release created during a rolling upgrade sends with this key until a node of this release boots again), so remove it once every node runs a release that stores it.",
   },
   {
     name: 'EMAIL_VERIFICATION_TOKEN_EXPIRY',
