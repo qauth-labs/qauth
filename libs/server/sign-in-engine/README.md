@@ -42,11 +42,18 @@ const result = await engine.advance(transaction, answer, {
 | `refused`  | `transaction_ended`, `throttled`, `unavailable`, `invalid_answer` or `request_refused`                     |
 
 The transaction it returns is the one to keep for the next round; `signInTransactionSchema` checks
-it when it is read back. It holds the identifier, the subject, the verified steps and `auth_time`,
-and never a policy, an answer or an account's state. A completed sign-in, a redirect and a
-transaction that ended return `null` in its place, so nothing completes twice. Every other refusal
-returns the transaction as far as the round took it: an identifier the round fixed stays, nothing
-it refused is in it.
+it when it is read back. It holds the realm and the client it is for, when round 0 began, the
+identifier, the subject, the verified steps and `auth_time`, and never a policy, an answer or an
+account's state. A completed sign-in, a redirect and a transaction that ended return `null` in its
+place, so nothing completes twice. Every other refusal returns the transaction as far as the round
+took it: an identifier the round fixed stays, nothing it refused is in it.
+
+**The transaction is not sealed.** Whoever can write one can claim any subject and any verified
+step, so the transport must keep it server-side, under an unguessable handle bound to the realm and
+the client, and never take one back from the client. The engine ends (`transaction_ended`) a
+transaction that is not well formed, belongs to another realm or client, begins more than a minute
+in the future, or is older than two hours (`SIGN_IN_TRANSACTION_MAX_AGE_MS`, the longest
+`INTERACTION_TTL` allows; a transport ends its own sooner), and audits the end naming nobody.
 
 ## The rules, in order
 
@@ -87,11 +94,16 @@ authentication, run before the call). The first unmet rule produces the answer.
   refusal or failure.
 - **Eager answers.** An answer is verified only when its step is the one the engine asks for next.
   Any other is ignored: not verified, not counted, not audited.
-- **One subject per transaction.** The first identifier and the first user proven are fixed.
+- **One subject per transaction.** The first identifier and the first user proven are fixed. A
+  factor that names its account by itself (a discoverable passkey) offered once an identifier is
+  held must prove the account that identifier names, or the transaction ends.
 - **Fail closed.** A port that throws (the policy, the directory, a hook, the ladder's reservation,
   the verifier, the identifier key) refuses the round as `unavailable`; every one of them that can
   fail before a credential is checked does so alike for every identifier. Settling a ladder
-  reservation never changes the answer: a failure there is reported through `onUnavailable`.
+  reservation never changes the answer: a failure there is reported through `onUnavailable`, and a
+  reporter that throws changes nothing either. The engine's default ladder counts nothing, so the
+  plugin of `@qauth-labs/fastify-plugin-sign-in-engine` refuses to build a production engine
+  without a `ladder` hook.
 - **A disabled user is never changed.** It gets the ordinary invalid-credentials answer, and no
   subject is fixed, so no transport can mint for it. The engine checks this for every factor step,
   not only the password: a step that proves a disabled account (or an unverified one under the
@@ -105,8 +117,13 @@ authentication, run before the call). The first unmet rule produces the answer.
 Each processed step writes one record through the round's `audit` sink: `passed`, `refused` or
 `ended`, the step, the reason, and the person by the transaction's subject once a factor fixed one,
 by the identifier's keyed HMAC before; a refused answer never names a user it happened to resolve,
-and a step refused before the transaction holds any identifier names nobody. A record never holds a
-password, a code or the identifier. A sink that fails fails the round. The adapters map them onto
+and a step refused before the transaction holds any identifier names nobody. A solved bot challenge
+is a `passed` record too. So is every refusal of the whole round: a limiter's (`rate_limited`), the
+request checks' (`request_refused`) and a malformed answer (`invalid_answer`) are `refused`
+records, and a transaction the round may not use (`transaction_invalid`, `transaction_expired`) an
+`ended` one that names nobody. Such a record names the step the answer names when the engine has a
+handler for it, else the identifier step. A record never holds a password, a code or the
+identifier. A sink that fails fails the round. The adapters map them onto
 `user.sign_in_step_passed` and `user.sign_in_failed`.
 
 ## Adding a step
@@ -116,11 +133,15 @@ role (`challenge`, `first_factor`, `second_factor`), the factor it proves, wheth
 use it, its params and personal data, and how it verifies an answer the step grammar has already
 read. A first factor may be `discoverable` (a passkey that names the account by itself): it is
 offered before any identifier, and after the password once one is held. A handler refuses a
-disabled account itself, settling its ladder as a failure. Passkeys (#651), TOTP (#653) and the
-email code (#638) come this way; an email code can never be registered as a factor.
+disabled account itself, settling its ladder as a failure. Passkeys (#651) and TOTP (#653) come this
+way; `totp` only as a second factor. An `email_code` step is refused when the engine is built: the
+email code (#638) is never an authenticator.
 
 ## Known gaps, for the issues that follow
 
 - The per-transaction budgets of the FiPA `auth_session` (rounds, failures per step) are #647's.
+- An answer is read against the params the engine computes for the round, not a stored copy of the
+  ones it offered: a challenge handler whose params change every round needs the offered params kept
+  first.
 - The policy has no storage yet: `NO_SECOND_FACTOR_POLICY` is the default until it has one.
 - `user_credentials.disabled_at` does not exist yet (#615): the adapters report no factor disabled.

@@ -68,6 +68,13 @@ scope:
       too, whatever that user's state"
     - 'a step refused before the transaction holds any identifier (a bot challenge, a discoverable passkey from #651)
       is audited naming nobody'
+    - 'the transaction is not sealed, so the transport keeps it server-side under an unguessable handle bound to the
+      realm and the client. Before anything else a round ends one that is not well formed, belongs to another realm or
+      client, begins more than a minute in the future or is older than two hours, audited as transaction_invalid or
+      transaction_expired naming nobody'
+    - 'a factor that names its account by itself (a discoverable passkey, #651), answered while the transaction holds
+      an identifier, must prove the account that identifier names; another account ends the transaction as
+      subject_mismatch'
 
 context:
   # The transport's authorization request carries a login_hint. It is frozen at round 0, so every round sees the same.
@@ -614,7 +621,9 @@ states:
   throttled:
     type: final
     title: Refuse the round for a limiter
-    description: The transaction stays as far as the round took it.
+    description: >-
+      Audited as rate_limited, under the identifier HMAC when the transaction holds one and naming nobody otherwise. The
+      transaction stays as far as the round took it.
     response:
       kind: refused
       body: { reason: throttled, retryAfterSeconds: "the limiter's" }
@@ -632,6 +641,8 @@ states:
   requestRefused:
     type: final
     title: Refuse the round for the request checks
+    description: >-
+      Audited as request_refused, under the identifier HMAC when the transaction holds one and naming nobody otherwise.
     response:
       kind: refused
       body:
@@ -651,7 +662,9 @@ states:
   answerRefused:
     type: final
     title: Refuse a malformed answer
-    description: A fault of the request; the transaction stays as far as the round took it.
+    description: >-
+      A fault of the request, audited as invalid_answer (under the identifier HMAC when the transaction holds one); the
+      transaction stays as far as the round took it.
     response:
       kind: refused
       body: { reason: invalid_answer }

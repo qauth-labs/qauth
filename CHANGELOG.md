@@ -1034,12 +1034,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that cannot be read refuses the round; until it has storage, no second factor
   is required), hooks for the limiters, the transport's request checks, the bot
   challenge and the per-account ladder, the identifier, then the password.
-  Until a factor succeeds it reads no account and answers an unknown,
-  password-only, passkey-only, disabled or locked account alike, with one
-  Argon2id verification per password (a dummy hash when none is usable) and a
+  Until a factor succeeds it reads only what the password check needs of the
+  account the identifier names, and answers an unknown, password-only,
+  passkey-only, disabled or locked account alike, with one Argon2id
+  computation per password (against a dummy hash when none is usable) and a
   500 ms floor on every round. An answer counts only when its step is the next
-  one. A second identifier, or another user's proof, ends the transaction as
-  `subject_mismatch`. A disabled user gets the ordinary invalid-credentials
+  one. A second identifier, another user's proof, or a passkey that proves
+  another account than the identifier names ends the transaction as
+  `subject_mismatch`. The transaction carries its realm, its client and when
+  it began, and one of another realm or client, or older than two hours, ends;
+  it is not sealed, so the transports keep it server-side. Every refusal is
+  audited, a limiter's, the request checks' and a malformed answer's included,
+  and a production server builds the engine only with a per-account ladder. A disabled user gets the ordinary invalid-credentials
   answer and no subject; an unverified account under `REQUIRE_VERIFIED_ACCOUNT`
   still does too. After a password, the downgrade rule (a disabled factor still
   counts as bound) and the MFA policy answer a redirect until the steps that

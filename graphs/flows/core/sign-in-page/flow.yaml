@@ -986,5 +986,7 @@ assertions:
     source: apps/auth-server/src/app/routes/ui/login.ts:289
   - id: resumed-handle-is-burned
     never: "state == 'authorization_resumed' and not handleBurned"
-    say: 'A handle is deleted before its authorize URL is used, so it resumes once'
+    say: >-
+      A handle is deleted before its authorize URL is used, so a later resume finds nothing; two resumes of one live
+      handle at the same instant can both resume (out of view)
     source: apps/auth-server/src/app/helpers/pending-authorization.ts:254
