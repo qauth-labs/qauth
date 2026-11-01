@@ -15,9 +15,10 @@ import { requestRealm } from '../helpers/request-realm';
  * host, mounted by `authMethodRoutesPlugin` from the provider registry.
  *
  * A route of a plugin the request's realm has not enabled answers as a path
- * no route serves: the `not_found` problem document, from an `onRequest`
+ * no route serves: the `not_found` problem document, from a `preParsing`
  * hook, before the body is read, so neither its status nor a validation
- * error gives the plugin away.
+ * error gives the plugin away. It runs after the request ceiling, so a
+ * flood of such requests is limited before it reaches the database.
  *
  * The upstream step that sends a browser to a provider, and keeps its
  * transaction, comes with the upstream sign-in flow (#639). Until then no
@@ -37,14 +38,18 @@ const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
   // No plugin loaded: no route, and no hook.
   if (fastify.providerRegistry.authMethods().length === 0) return;
 
-  fastify.addHook('onRequest', async (request, reply) => {
+  // Checked in `preParsing`, after the request ceiling (a route-level
+  // `onRequest` hook) and before the body is read: a flood of requests to an
+  // installed plugin's paths meets the rate limit before it reaches the
+  // database.
+  fastify.addHook('preParsing', async (request, reply, payload) => {
     const type = routeType(request.routeOptions.url);
     const plugin = type === undefined ? undefined : fastify.authMethodPlugins.ofType(type);
     if (
       plugin !== undefined &&
       (await authMethodPluginEnabledIn(fastify, requestRealm(request).id, plugin))
     ) {
-      return;
+      return payload;
     }
     return answerRouteNotFound(request, reply);
   });

@@ -8,6 +8,7 @@ import {
   loadAuthMethodPlugins,
   skippedAuthMethodPluginMessage,
   withConfigMembers,
+  withoutConfigMembers,
 } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify';
 
@@ -200,7 +201,9 @@ export async function authMethodPluginConfig(
     });
     secrets.set(path, plaintext.toString('utf8'));
   }
-  return withConfigMembers(row.config, secrets);
+  // A member the plugin marks secret comes only from the secret store, never
+  // from the plain config an earlier version of the plugin may have kept.
+  return withConfigMembers(withoutConfigMembers(row.config, plugin.secretPaths), secrets);
 }
 
 /** The context of a plugin the request's realm has not enabled: never built. */

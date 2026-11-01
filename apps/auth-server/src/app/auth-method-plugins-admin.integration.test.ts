@@ -175,16 +175,11 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     });
   }
 
-  /**
-   * Run a security operation end to end: file its approval, approve it with
-   * the test factor, and send it with the approval. Answers every response,
-   * for the secret scan.
-   */
-  async function approved(
+  /** File an approval for one request of a plugin operation and approve it with the test factor. */
+  async function fileAndApprove(
     realmId: string,
     requester: Awaited<ReturnType<typeof adminWith>>,
     operation: 'plugins.update' | 'plugins.enable' | 'plugins.disable',
-    suffix: string,
     body?: unknown
   ) {
     const filed = await send(
@@ -212,7 +207,23 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       ...decision,
       response: test.answer(challenge, requester.approver),
     });
+    return { approvalId, filed };
+  }
 
+  /**
+   * Run a security operation end to end: file its approval, approve it with
+   * the test factor, and send it with the approval. Answers every response,
+   * for the secret scan.
+   */
+  async function approved(
+    realmId: string,
+    requester: Awaited<ReturnType<typeof adminWith>>,
+    operation: 'plugins.update' | 'plugins.enable' | 'plugins.disable',
+    suffix: string,
+    body?: unknown,
+    headers: Record<string, string> = {}
+  ) {
+    const { approvalId, filed } = await fileAndApprove(realmId, requester, operation, body);
     const read = await send(
       'GET',
       `/admin/v1-rc.0/realms/${realmId}/approvals/${approvalId}`,
@@ -220,9 +231,42 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     );
     const done = await send('POST', pluginPath(realmId, suffix), requester.token, body, {
       'qauth-approval': approvalId,
+      ...headers,
     });
     expect(done.statusCode, done.body).toBe(200);
     return { done, responses: [filed, read, done] };
+  }
+
+  /** Seal `value` for the plugin's client secret in the realm. */
+  async function seal(realmId: string, token: string, value = SECRET) {
+    const sealed = await send('POST', pluginPath(realmId, '/corp/secrets/seal'), token, {
+      path: 'clientSecret',
+      value,
+    });
+    expect(sealed.statusCode, sealed.body).toBe(200);
+    return { response: sealed, sealed: sealed.json<{ sealed: string }>().sealed };
+  }
+
+  /**
+   * Configure the plugin with CONFIG and the client secret `value`, sealed,
+   * over the state of version `version`.
+   */
+  async function configure(
+    realmId: string,
+    requester: Awaited<ReturnType<typeof adminWith>>,
+    version = 0,
+    value = SECRET
+  ) {
+    const sealed = await seal(realmId, requester.token, value);
+    const result = await approved(
+      realmId,
+      requester,
+      'plugins.update',
+      '/corp/config',
+      { config: CONFIG, secrets: { clientSecret: { sealed: sealed.sealed } } },
+      { 'if-match': `"${version}"` }
+    );
+    return { ...result, responses: [sealed.response, ...result.responses] };
   }
 
   /** The text of every row of `table` that belongs to the realm. */
@@ -274,10 +318,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       expect(unapproved.json()).toMatchObject({ code: 'approval_required' });
 
       // A plugin is enabled only with a config its schema accepts.
-      await approved(realm.id, requester, 'plugins.update', '/corp/config', {
-        config: CONFIG,
-        secrets: { clientSecret: SECRET },
-      });
+      await configure(realm.id, requester);
       const { done } = await approved(realm.id, requester, 'plugins.enable', '/corp/enable');
       expect(done.json()).toMatchObject({ name: 'corp', type: 'corp_sso', enabled: true });
     });
@@ -319,10 +360,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     const requester = await adminWith(realm.id, 'security-admin');
     const logStart = logLines.length;
 
-    const configured = await approved(realm.id, requester, 'plugins.update', '/corp/config', {
-      config: CONFIG,
-      secrets: { clientSecret: SECRET },
-    });
+    const configured = await configure(realm.id, requester);
     expect(configured.done.json()).toMatchObject({
       config: CONFIG,
       secrets: [{ path: 'clientSecret', set: true }],
@@ -343,6 +381,24 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     const row = await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp');
     expect(row?.secrets['clientSecret']).toMatch(/^v1\.[^.]+\.[^.]+\.[^.]+$/);
     expect(JSON.stringify(row)).not.toContain(SECRET);
+
+    // The audit row of the configure says which secret it set, and no value.
+    const { rows: diffs } = await app().dbPool.query<{ masked_diff: unknown }>(
+      `SELECT masked_diff FROM admin_audit_log
+        WHERE realm_id = $1 AND operation_id = 'plugins.update' AND outcome = 'succeeded'`,
+      [realm.id]
+    );
+    expect(diffs).toEqual([
+      {
+        masked_diff: expect.objectContaining({
+          before: null,
+          after: expect.objectContaining({
+            secrets: [{ path: 'clientSecret', set: true }],
+            secretsChanged: ['clientSecret'],
+          }),
+        }),
+      },
+    ]);
 
     // The audit rows, the events and the used approvals hold no trace of it.
     for (const table of ['admin_audit_log', 'events', 'admin_approvals']) {
@@ -376,50 +432,64 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
   it("refuses a config the plugin's schema refuses, naming the member and never its value", async () => {
     const realm = await tenant('alpha');
     const requester = await adminWith(realm.id, 'security-admin');
+    const { sealed } = await seal(realm.id, requester.token);
     const body = {
       config: { issuer: 'not a url', clientId: 'qauth' },
-      secrets: { clientSecret: SECRET },
+      secrets: { clientSecret: { sealed } },
     };
-
-    const filed = await send(
-      'POST',
-      `/admin/v1-rc.0/realms/${realm.id}/approvals`,
-      requester.token,
-      {
-        operation: 'plugins.update',
-        params: { plugin: 'corp' },
-        body,
-      }
-    );
-    expect(filed.statusCode, filed.body).toBe(201);
-    const approvalId = filed.json<{ id: string }>().id;
-    const engine = await import('./admin/approvals/engine');
-    const decision = {
-      realmId: realm.id,
-      approvalId,
-      approver: requester.approver,
-      sessionIssuedAtMs: Date.now(),
-    };
-    const { challenge } = await engine.startApproval(app(), test.factor, decision);
-    await engine.completeApproval(app(), test.factor, {
-      ...decision,
-      response: test.answer(challenge, requester.approver),
-    });
+    const { approvalId } = await fileAndApprove(realm.id, requester, 'plugins.update', body);
 
     const refused = await send(
       'POST',
       pluginPath(realm.id, '/corp/config'),
       requester.token,
       body,
-      {
-        'qauth-approval': approvalId,
-      }
+      { 'qauth-approval': approvalId, 'if-match': '"0"' }
     );
     expect(refused.statusCode).toBe(400);
     expect(refused.json<{ detail?: string }>().detail).toContain('issuer: invalid_format');
     expect(refused.body).not.toContain('not a url');
     expect(refused.body).not.toContain(SECRET);
     expect(await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp')).toBeUndefined();
+    // The approval the refused request left approved holds a ciphertext, never the value.
+    expect(await rowsText('admin_approvals', realm.id)).not.toContain(SECRET);
+  });
+
+  it('seals a secret for a write admin, and refuses a sealed value of another realm', async () => {
+    const alpha = await tenant('alpha');
+    const beta = await tenant('beta');
+    const editor = await adminWith(alpha.id, 'editor');
+    const viewer = await adminWith(alpha.id, 'viewer', 'qauth:admin:read');
+
+    // Sealing changes nothing, so a write admin may; a reader may not.
+    const { response, sealed } = await seal(alpha.id, editor.token);
+    expect(response.json()).toEqual({
+      path: 'clientSecret',
+      sealed: expect.stringMatching(/^v1\./),
+    });
+    expect(response.body).not.toContain(SECRET);
+    expect(await app().repositories.realmAuthMethodPlugins.find(alpha.id, 'corp')).toBeUndefined();
+    const refused = await send('POST', pluginPath(alpha.id, '/corp/secrets/seal'), viewer.token, {
+      path: 'clientSecret',
+      value: SECRET,
+    });
+    expect(refused.statusCode).toBe(403);
+    const notSecret = await send('POST', pluginPath(alpha.id, '/corp/secrets/seal'), editor.token, {
+      path: 'clientId',
+      value: SECRET,
+    });
+    expect(notSecret.statusCode).toBe(400);
+
+    // Alpha's sealed value does not open in beta.
+    const requester = await adminWith(beta.id, 'security-admin');
+    const body = { config: CONFIG, secrets: { clientSecret: { sealed } } };
+    const { approvalId } = await fileAndApprove(beta.id, requester, 'plugins.update', body);
+    const foreign = await send('POST', pluginPath(beta.id, '/corp/config'), requester.token, body, {
+      'qauth-approval': approvalId,
+      'if-match': '"0"',
+    });
+    expect(foreign.statusCode).toBe(400);
+    expect(await app().repositories.realmAuthMethodPlugins.find(beta.id, 'corp')).toBeUndefined();
   });
 
   // Acceptance criterion: a disabled plugin's routes answer 404.
@@ -458,10 +528,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(await callback()).toEqual(absent);
     expect(comparable(await browser('POST', CALLBACK, '%zz=&'), CALLBACK)).toEqual(absentPost);
 
-    await approved(realm.id, requester, 'plugins.update', '/corp/config', {
-      config: CONFIG,
-      secrets: { clientSecret: SECRET },
-    });
+    await configure(realm.id, requester);
     // Configured, still off.
     expect(await callback()).toEqual(absent);
 
@@ -488,36 +555,32 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(elsewhere.statusCode).toBe(404);
   });
 
-  it('refuses a write named against a state that moved, with 412', async () => {
+  it('refuses a write named against a state that moved with 412, and a configure that names none with 428', async () => {
     const realm = await tenant('alpha');
     const requester = await adminWith(realm.id, 'security-admin');
-    await approved(realm.id, requester, 'plugins.update', '/corp/config', {
-      config: CONFIG,
-      secrets: { clientSecret: SECRET },
-    });
+    await configure(realm.id, requester);
 
-    const filed = await send(
+    // A second configure written against version 0, which moved to 1.
+    const { sealed } = await seal(realm.id, requester.token, 'another-client-secret-value');
+    const body = { config: CONFIG, secrets: { clientSecret: { sealed } } };
+    const update = await fileAndApprove(realm.id, requester, 'plugins.update', body);
+    const unnamed = await send(
       'POST',
-      `/admin/v1-rc.0/realms/${realm.id}/approvals`,
+      pluginPath(realm.id, '/corp/config'),
       requester.token,
+      body,
       {
-        operation: 'plugins.enable',
-        params: { plugin: 'corp' },
+        'qauth-approval': update.approvalId,
       }
     );
-    const approvalId = filed.json<{ id: string }>().id;
-    const engine = await import('./admin/approvals/engine');
-    const decision = {
-      realmId: realm.id,
-      approvalId,
-      approver: requester.approver,
-      sessionIssuedAtMs: Date.now(),
-    };
-    const { challenge } = await engine.startApproval(app(), test.factor, decision);
-    await engine.completeApproval(app(), test.factor, {
-      ...decision,
-      response: test.answer(challenge, requester.approver),
+    expect(unnamed.statusCode).toBe(428);
+    const moved = await send('POST', pluginPath(realm.id, '/corp/config'), requester.token, body, {
+      'qauth-approval': update.approvalId,
+      'if-match': '"0"',
     });
+    expect(moved.statusCode).toBe(412);
+
+    const { approvalId } = await fileAndApprove(realm.id, requester, 'plugins.enable');
 
     const stale = await send(
       'POST',

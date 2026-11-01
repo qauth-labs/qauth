@@ -239,6 +239,13 @@ export const ADMIN_PERMISSIONS: readonly AdminPermission[] = Object.freeze([
       "Read the AuthMethod plugins installed in the deployment and a realm's state of each, never a secret value (#600).",
   }),
   definePermission({
+    id: 'plugins.write',
+    class: 'write',
+    resource: 'plugins',
+    description:
+      "Seal a value for an AuthMethod plugin's secret member: it changes nothing until a security admin sets it (#600).",
+  }),
+  definePermission({
     id: 'plugins.security',
     class: 'security',
     resource: 'plugins',

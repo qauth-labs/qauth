@@ -11,6 +11,7 @@
     "realms.policies.write",
     "realms.policies.security",
     "plugins.read",
+    "plugins.write",
     "plugins.security",
     "approvals.read",
     "approvals.approve"
@@ -96,6 +97,20 @@
           "type": "string",
           "enum": [
             "read"
+          ]
+        }
+      }
+    },
+    "plugins.write": {
+      "type": "object",
+      "required": [
+        "class"
+      ],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": [
+            "write"
           ]
         }
       }

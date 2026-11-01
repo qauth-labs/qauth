@@ -1347,13 +1347,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default, its config's plain members, and each secret member (marked
   `writeOnly` in the plugin's schema) as a ciphertext under the realm's
   `data_at_rest` key. The admin API lists and reads the installed plugins
-  (`plugins.list`, `plugins.get`, the permission `plugins.read`) and
-  configures, enables and disables one per realm (`plugins.update`,
+  (`plugins.list`, `plugins.get`, the permission `plugins.read`), seals a
+  secret value for one member (`plugins.secrets.seal`, under the new write
+  permission `plugins.write`; it changes nothing) and configures, enables and
+  disables one per realm (`plugins.update`, which needs `If-Match`,
   `plugins.enable`, `plugins.disable`): security operations with
   `credential-path`, under the new permission `plugins.security`, so they need
-  `qauth:admin:security` and an approval. A config must pass the plugin's own
-  schema; secrets are write-only, sent apart from the plain members and never
-  shown in a response, an audit row or a log. A disabled plugin's routes
+  `qauth:admin:security` and an approval. A configure carries only sealed
+  values, so the request an approval stores never holds a secret in the
+  clear. A config must pass the plugin's own schema; secrets are write-only
+  and never shown in a response, an audit row or a log. A disabled plugin's routes
   under `/upstream/<type>` answer the `not_found` document of a path no route
   serves, and plugin routes are left out of the OpenAPI documents. A plugin's
   context holds its realm config, the egress client, the signer bound to the

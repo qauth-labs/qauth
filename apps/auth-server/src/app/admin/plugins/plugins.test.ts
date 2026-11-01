@@ -16,6 +16,8 @@ import { pluginConfigBodySchema, pluginResource } from './routes';
  */
 
 const SECRET = 'fixture-client-secret-value';
+/** A value as plugins.secrets.seal answers one. */
+const SEALED = 'v1.kid-1.aXY.Y2lwaGVydGV4dA';
 
 async function installed() {
   const runtime = await loadDeploymentAuthMethodPlugins(
@@ -41,6 +43,7 @@ describe('the plugin operations (#600)', () => {
     expect(shape).toEqual([
       ['plugins.list', 'read', [], ['plugins.read']],
       ['plugins.get', 'read', [], ['plugins.read']],
+      ['plugins.secrets.seal', 'write', [], ['plugins.write']],
       ['plugins.update', 'security', ['credential-path'], ['plugins.security']],
       ['plugins.enable', 'security', ['credential-path'], ['plugins.security']],
       ['plugins.disable', 'security', ['credential-path'], ['plugins.security']],
@@ -60,7 +63,7 @@ describe('the plugin operations (#600)', () => {
       query: {},
       body: {
         config: { issuer: 'https://idp.example', clientId: 'qauth' },
-        secrets: { clientSecret: SECRET, oldKey: null },
+        secrets: { clientSecret: { sealed: SEALED }, oldKey: null },
       },
     });
     expect(rendered).toEqual({
@@ -68,11 +71,11 @@ describe('the plugin operations (#600)', () => {
       fields: [
         { label: 'config.issuer', value: '"https://idp.example"' },
         { label: 'config.clientId', value: '"qauth"' },
-        { label: 'secret clientSecret', value: 'set to a new value (not shown)' },
+        { label: 'secret clientSecret', value: 'set to a new sealed value (not shown)' },
         { label: 'secret oldKey', value: 'cleared' },
       ],
     });
-    expect(JSON.stringify(rendered)).not.toContain(SECRET);
+    expect(JSON.stringify(rendered)).not.toContain(SEALED);
   });
 
   it('names the plugin an enable or a disable is for', () => {
@@ -98,30 +101,41 @@ describe('the plugin operations (#600)', () => {
 });
 
 describe('the configure body (#600)', () => {
-  it('takes plain members under config and secrets by path, set or cleared', async () => {
+  it('takes plain members under config and sealed secrets by path, set or cleared', async () => {
     const schema = pluginConfigBodySchema(await installed());
     expect(
       schema.safeParse({
         config: { issuer: 'https://idp.example', clientId: 'qauth' },
-        secrets: { clientSecret: SECRET },
+        secrets: { clientSecret: { sealed: SEALED } },
       }).success
     ).toBe(true);
     expect(schema.safeParse({ config: {}, secrets: { clientSecret: null } }).success).toBe(true);
   });
 
+  it('refuses a secret in the clear, so the request an approval stores holds none', async () => {
+    const schema = pluginConfigBodySchema(await installed());
+    for (const value of [SECRET, { sealed: SECRET }, { sealed: SEALED, value: SECRET }]) {
+      expect(schema.safeParse({ config: {}, secrets: { clientSecret: value } }).success).toBe(
+        false
+      );
+    }
+  });
+
   it("refuses an installed plugin's secret member under config, so no approval holds one in the clear", async () => {
     const schema = pluginConfigBodySchema(await installed());
-    const parsed = schema.safeParse({ config: { clientSecret: SECRET } });
-    expect(parsed.success).toBe(false);
-    expect(parsed.error?.issues.map((issue) => issue.message)).toEqual([
-      'config holds a secret member: send it under secrets',
-    ]);
+    for (const config of [{ clientSecret: SECRET }, { clientSecret: SECRET, a: 1 }]) {
+      const parsed = schema.safeParse({ config });
+      expect(parsed.success).toBe(false);
+      expect(parsed.error?.issues.map((issue) => issue.message)).toEqual([
+        'config holds a secret member: seal it with plugins.secrets.seal and send it under secrets',
+      ]);
+    }
   });
 
   it.each([
     ['a member other than config and secrets', { config: {}, code: 'x' }],
-    ['an empty secret', { config: {}, secrets: { clientSecret: '' } }],
-    ['a secret that is not a string', { config: {}, secrets: { clientSecret: 42 } }],
+    ['an empty sealed value', { config: {}, secrets: { clientSecret: { sealed: '' } } }],
+    ['a secret that is not sealed', { config: {}, secrets: { clientSecret: 42 } }],
     ['a config that is not an object', { config: ['a'] }],
     ['a config too large', { config: { blob: 'x'.repeat(17 * 1024) } }],
   ])('refuses %s', async (_case, body) => {
@@ -144,6 +158,22 @@ describe('the plugin representation (#600)', () => {
       secrets: [{ path: 'clientSecret', set: false }],
       version: 0,
     });
+  });
+
+  it('never shows a member the plugin now marks secret, even one stored as plain before', async () => {
+    const [plugin] = await installed();
+    const resource = pluginResource(plugin, {
+      realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b',
+      pluginId: 'corp',
+      enabled: false,
+      config: { clientId: 'qauth', clientSecret: SECRET },
+      secrets: {},
+      version: 2,
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    expect(resource.config).toEqual({ clientId: 'qauth' });
+    expect(JSON.stringify(resource)).not.toContain(SECRET);
   });
 
   it('says a secret holds a value and never shows it, nor its ciphertext', async () => {
@@ -207,10 +237,11 @@ describe('the plugin routes in the admin OpenAPI document (#600)', () => {
         '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/config',
         '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable',
         '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/enable',
+        '/admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/secrets/seal',
       ]);
       const report = checkApiConventions(document, { operations: OPERATION_REGISTRY });
       expect(report.violations).toEqual([]);
-      expect(report.checkedOperations).toBe(5);
+      expect(report.checkedOperations).toBe(6);
     } finally {
       await app.close();
     }

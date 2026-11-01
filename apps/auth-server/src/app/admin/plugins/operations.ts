@@ -18,6 +18,12 @@ import type {
  * `plugins.update` are reserved as such in `admin-operations-reserved.ts`;
  * disabling is one by the same effect, as `upstreamProviders.disable` is.
  *
+ * `plugins.secrets.seal` encrypts a secret member's value for the realm and
+ * answers the ciphertext: it changes nothing, so it is a write with no
+ * effect, under `plugins.write`. A configure request carries only sealed
+ * values, so the request an approval stores never holds a secret in the
+ * clear.
+ *
  * No operation uploads, replaces or edits plugin code: the code is what the
  * operator installed with the deployment, and the operations set only data
  * the plugin's own config schema accepts.
@@ -27,6 +33,7 @@ import type {
 export const PLUGIN_OPERATION_IDS = Object.freeze({
   list: 'plugins.list',
   get: 'plugins.get',
+  seal: 'plugins.secrets.seal',
   update: 'plugins.update',
   enable: 'plugins.enable',
   disable: 'plugins.disable',
@@ -65,7 +72,7 @@ function renderUpdate(request: RenderInput) {
     for (const [path, value] of Object.entries(body.secrets)) {
       fields.push({
         label: `secret ${path}`,
-        value: value === null ? 'cleared' : 'set to a new value (not shown)',
+        value: value === null ? 'cleared' : 'set to a new sealed value (not shown)',
       });
     }
   }
@@ -92,6 +99,14 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     permissions: ['plugins.read'],
     description:
       "Read one installed AuthMethod plugin with the realm's state of it; secret members show only whether they hold a value.",
+  },
+  {
+    id: PLUGIN_OPERATION_IDS.seal,
+    class: 'write',
+    effects: [],
+    permissions: ['plugins.write'],
+    description:
+      "Seal a value for one of an AuthMethod plugin's secret members in a realm: it changes nothing, and answers the value encrypted for that member, which plugins.update then sets.",
   },
   {
     id: PLUGIN_OPERATION_IDS.update,

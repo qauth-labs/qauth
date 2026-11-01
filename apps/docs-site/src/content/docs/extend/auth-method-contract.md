@@ -267,22 +267,40 @@ are left out of the OpenAPI documents.
 
 **Per realm**, every plugin starts off. The admin API's plugin operations, under
 `/admin/v1-rc.0/realms/{realmId}/plugins`, list the installed plugins with the realm's state of
-each (`plugins.list`, `plugins.get`), replace a plugin's config (`plugins.update`,
-`POST …/plugins/{plugin}/config`) and turn it on and off (`plugins.enable`, `plugins.disable`).
-`{plugin}` is the plugin's `id`. The three writes change which upstream credentials sign users in,
-so each is a [security operation](/reference/security-operations/) with the effect
-`credential-path`: it needs `qauth:admin:security` (the permission `plugins.security`) and an
-approval, and `qauth:admin:write` reaches none of them. A write may carry `If-Match` with the
-`ETag` its read gave, and a state that moved since answers 412.
+each (`plugins.list`, `plugins.get`), seal a secret value (`plugins.secrets.seal`), replace a
+plugin's config (`plugins.update`, `POST …/plugins/{plugin}/config`) and turn it on and off
+(`plugins.enable`, `plugins.disable`). `{plugin}` is the plugin's `id`. The three writes change
+which upstream credentials sign users in, so each is a
+[security operation](/reference/security-operations/) with the effect `credential-path`: it needs
+`qauth:admin:security` (the permission `plugins.security`) and an approval, and
+`qauth:admin:write` reaches none of them. A configure needs `If-Match` with the `ETag` its read
+gave (428 without it); an enable or a disable may carry one; a state that moved since answers 412.
 
-A configure request sends the plain members under `config` and the secret members under
-`secrets`, by path: a string sets one, `null` clears it, and one it does not name keeps its value.
-The whole config, secrets included, must pass the plugin's own schema, and a plugin is enabled
-only with a config that does. A secret member sent under `config` is refused, before an approval
-could store it. The server encrypts each secret with the realm's `data_at_rest` key before it
-stores it; no response, audit row, event or log line holds one, and the representation says only
-which secret members hold a value. An approval keeps the request it was filed for, secrets
-included, only until it is used, withdrawn or denied, as for every security operation.
+**Secrets.** A secret's value reaches the server in one request only: `plugins.secrets.seal`
+(`POST …/plugins/{plugin}/secrets/seal`, `{ path, value }`), which encrypts it with the realm's
+`data_at_rest` key, bound to that plugin and member, and answers the ciphertext. It changes
+nothing, so it is a write under `plugins.write`. A configure request then sends the plain members
+under `config` and names each secret member under `secrets`, by path: `{ sealed }` sets one to the
+sealed value, `null` clears it, and one it does not name keeps its value. So the request an
+approval stores until it is used, and the digests it is bound by, hold a ciphertext, never the
+value. The handler checks that each sealed value opens for its member of this plugin in this
+realm, and the whole config, secrets included, must pass the plugin's own schema; a plugin is
+enabled only with a config that does. A secret member sent under `config`, however it is spelled,
+is refused. No response, audit row, event or log line holds a value: the representation says only
+which secret members hold one, and the audit row of a configure names the secrets it set or
+cleared.
+
+```http
+POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/secrets/seal
+{ "path": "clientSecret", "value": "…" }
+→ 200 { "path": "clientSecret", "sealed": "v1.…" }
+
+POST /admin/v1-rc.0/realms/{realmId}/plugins/corp-sso/config
+If-Match: "0"
+QAuth-Approval: {approvalId}
+{ "config": { "issuer": "https://idp.example", "clientId": "qauth" },
+  "secrets": { "clientSecret": { "sealed": "v1.…" } } }
+```
 
 **A disabled plugin's routes** answer `404` with the `not_found` document of a path no route
 serves, before the request's body is read; disabling keeps the config.

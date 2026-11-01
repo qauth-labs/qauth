@@ -28,6 +28,7 @@ describe('the admin permission catalog (#507)', () => {
       ['realms.policies.write', 'write'],
       ['realms.policies.security', 'security'],
       ['plugins.read', 'read'],
+      ['plugins.write', 'write'],
       ['plugins.security', 'security'],
       ['approvals.read', 'read'],
       ['approvals.approve', 'security'],
