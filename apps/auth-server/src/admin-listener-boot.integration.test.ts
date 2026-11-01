@@ -71,13 +71,13 @@ async function freePort(): Promise<number> {
 }
 
 /**
- * A free port other than `taken`: each probe releases its port before it
- * resolves, so two probes in a row may be handed the same one.
+ * A free port other than those `taken`: each probe releases its port before
+ * it resolves, so two probes in a row may be handed the same one.
  */
-async function freePortOtherThan(taken: number): Promise<number> {
+async function freePortOtherThan(...taken: readonly number[]): Promise<number> {
   for (;;) {
     const port = await freePort();
-    if (port !== taken) return port;
+    if (!taken.includes(port)) return port;
   }
 }
 
@@ -147,7 +147,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
   async function startServer(
     ctx: { skip: () => void },
     environment: Record<string, string> = {},
-    ports: { adminPort?: number } = {}
+    ports: { adminPort?: number; internalPort?: boolean } = {}
   ): Promise<StartedServer> {
     if (!dockerUp || !postgres || !redis || !jwt) {
       ctx.skip();
@@ -155,6 +155,9 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     }
     const port = await freePort();
     const adminPort = ports.adminPort ?? (await freePortOtherThan(port));
+    // INTERNAL_PORT must differ from both, or the boot is refused.
+    const internalPort =
+      ports.internalPort === true ? await freePortOtherThan(port, adminPort) : undefined;
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -171,6 +174,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,
         JWT_PUBLIC_KEY: jwt.publicKey,
+        ...(internalPort === undefined ? {} : { INTERNAL_PORT: String(internalPort) }),
         ...environment,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -268,7 +272,6 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
       { ADMIN_API_ENABLED: 'false' },
       {
         SERVICE_ROLES: 'web,api,signer,delivery',
-        INTERNAL_PORT: String(await freePort()),
         INTERNAL_TLS_CERT_PATH: tls.files.certPath,
         INTERNAL_TLS_KEY_PATH: tls.files.keyPath,
         INTERNAL_TLS_CA_PATH: tls.files.caPath,
@@ -277,7 +280,9 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     ];
     try {
       for (const environment of environments) {
-        const server = await startServer(ctx, environment);
+        const server = await startServer(ctx, environment, {
+          internalPort: environment['SERVICE_ROLES'] !== undefined,
+        });
         await until(logged(server, 'Server listening on '), 'the server to listen', server);
 
         expect(logged(server, 'Admin API listening')()).toBe(false);
