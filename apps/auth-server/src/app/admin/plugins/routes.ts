@@ -42,12 +42,13 @@ import { PLUGIN_OPERATION_IDS } from './operations';
  * `{plugin}` is the plugin's name, its AuthMethod id.
  *
  * The three writes are security operations: each runs only with an approval
- * filed for exactly that request. A configure names the version of the state
- * it replaces in its body (`version`), so the approval binds it and the
- * approver sees it, and a configure over a state that moved since is refused
- * with 412: two approved configures never overwrite each other unseen. An
- * enable or a disable may carry `If-Match`. Every write is conditional on
- * the version it read in its transaction.
+ * filed for exactly that request. Each names the version of the state it
+ * acts on in its body (`version`), so the approval binds it and the approver
+ * sees it, and a write over a state that moved since is refused with 412:
+ * two approved configures never overwrite each other unseen, and an approved
+ * enable never runs against a config its approver never saw. Each may carry
+ * `If-Match` too. Every write is conditional on the version it read in its
+ * transaction.
  *
  * SECRETS. A plugin's config schema marks its secret members
  * (`writeOnly`). A secret's value reaches the server in one place only: the
@@ -218,6 +219,28 @@ function auditSide(
   ) as NonNullable<AdminChange['change']['after']>;
 }
 
+/** The version of the realm's state of a plugin that a write names: what the approval binds. */
+function stateVersionSchema(what: string) {
+  return z
+    .int()
+    .min(0)
+    .max(2_147_483_647)
+    .meta({
+      description: `The version of the realm's state of the plugin ${what}, as its read gave it (\`0\` before it was first configured). The approval binds it; a state that moved since answers 412.`,
+    });
+}
+
+/**
+ * The body of `plugins.enable` or `plugins.disable` (#600): the version of
+ * the state it acts on, so an approved enable never runs against a config
+ * its approver never saw, nor a disable against a state that moved.
+ */
+export function pluginStateBodySchema(action: 'enable' | 'disable') {
+  return z.strictObject({ version: stateVersionSchema(`this ${action} acts on`) }).meta({
+    description: `The state of the plugin ${action === 'enable' ? 'an enable' : 'a disable'} acts on.`,
+  });
+}
+
 /**
  * The body of `plugins.update`, for the plugins `installed` (#600): the
  * plain members under `config`, the secret members under `secrets`. A
@@ -229,10 +252,7 @@ export function pluginConfigBodySchema(installed: readonly InstalledAuthMethodPl
   const secretPaths = [...new Set(installed.flatMap((plugin) => plugin.secretPaths))];
   return z
     .strictObject({
-      version: z.int().min(0).max(2_147_483_647).meta({
-        description:
-          "The version of the realm's state of the plugin this configure replaces, as its read gave it (`0` before it was first configured). The approval binds it; a state that moved since answers 412.",
-      }),
+      version: stateVersionSchema('this configure replaces'),
       config: z
         .record(z.string().min(1).max(64), z.unknown())
         .refine((config) => Object.keys(config).length <= MAX_CONFIG_MEMBERS, {
@@ -338,6 +358,20 @@ function installedPlugin(fastify: FastifyInstance, name: string): InstalledAuthM
   const plugin = fastify.authMethodPlugins.find(name);
   if (plugin === undefined) throw new NotFoundError('Plugin', name);
   return plugin;
+}
+
+/**
+ * Refuse, with 412, a write whose body names another version of the state
+ * than `row`'s: the body is what the approval binds, so an approved write
+ * runs only over the state its approver saw.
+ */
+function requireNamedVersion(
+  version: number,
+  operationId: string,
+  row: RealmAuthMethodPlugin | undefined
+): void {
+  if (version !== stateOf(row).version)
+    throw new PreconditionFailedError({ operation: operationId });
 }
 
 /** Refuse a write named against another version of the state than `row`'s. */
@@ -674,9 +708,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       // A configure replaces the whole config: it names, in the body the
       // approval binds, the version it replaces, so an approved change never
       // overwrites another unseen.
-      if (request.body.version !== stateOf(row).version) {
-        throw new PreconditionFailedError({ operation: operations.update.id });
-      }
+      requireNamedVersion(request.body.version, operations.update.id, row);
       requireCurrent(request, operations.update.id, row);
       const { config, secrets: changes = {} } = request.body;
 
@@ -727,9 +759,11 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         ...operationSchemaExtensions(operations.enable),
         ...common,
         summary: 'Enable an AuthMethod plugin in the realm',
+        description:
+          'Names the version of the state it enables in its body (412 when the state moved), so an approved enable never runs against a config its approver never saw.',
         'x-qauth-errors': [400, 401, 403, 404, 412],
         params: pluginParams,
-        body: z.null().optional(),
+        body: pluginStateBodySchema('enable'),
         response: { 200: pluginSchema },
       },
     },
@@ -737,6 +771,7 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
       const plugin = installedPlugin(fastify, request.params.plugin);
       const realmId = requestAdminCaller(request).targetRealm.id;
       const row = await rowOf(request, plugin);
+      requireNamedVersion(request.body.version, operations.enable.id, row);
       requireCurrent(request, operations.enable.id, row);
       if (row?.enabled === true) return answer(request, reply, plugin, row, row);
       const state = stateOf(row);
@@ -764,15 +799,18 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
         ...operationSchemaExtensions(operations.disable),
         ...common,
         summary: 'Disable an AuthMethod plugin in the realm',
+        description:
+          'Names the version of the state it disables in its body (412 when the state moved).',
         'x-qauth-errors': [400, 401, 403, 404, 412],
         params: pluginParams,
-        body: z.null().optional(),
+        body: pluginStateBodySchema('disable'),
         response: { 200: pluginSchema },
       },
     },
     async (request, reply) => {
       const plugin = installedPlugin(fastify, request.params.plugin);
       const row = await rowOf(request, plugin);
+      requireNamedVersion(request.body.version, operations.disable.id, row);
       requireCurrent(request, operations.disable.id, row);
       if (row === undefined || !row.enabled) return answer(request, reply, plugin, row, row);
       const written = await writeState(request, operations.disable.id, plugin, row, {

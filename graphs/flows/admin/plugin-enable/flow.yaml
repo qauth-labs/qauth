@@ -62,8 +62,8 @@ context:
     values: [current, moved]
     initial: any
     say:
-      current: 'If-Match is absent, or names the version of the plugin state the handler reads'
-      moved: 'If-Match names another version: another admin changed the state since the caller read it'
+      current: "the body's version, and If-Match when present, name the version of the plugin state the handler reads"
+      moved: 'the body or If-Match names another version: the state changed since the caller read it, or since its approval was filed'
   config:
     values: [valid, invalid]
     initial: any
@@ -144,7 +144,7 @@ states:
         source: apps/auth-server/src/app/admin/plugins/routes.ts:262
       - guard: stateMoved
         target: preconditionFailed
-        say: 'the state moved since the caller read it; the write would be conditional on the version it read anyway'
+        say: 'the state moved since the caller read it, or its approver saw it: the body names the version the approval binds'
         source: apps/auth-server/src/app/admin/plugins/routes.ts:269
       - guard: configInvalid
         target: configRefused

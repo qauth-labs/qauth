@@ -6,7 +6,12 @@ import { ADMIN_SCOPES } from '../../helpers/admin-scopes';
 import { loadDeploymentAuthMethodPlugins } from '../../helpers/auth-method-plugins';
 import type { AdminRateLimitCheck } from '../pipeline';
 import { PLUGIN_OPERATION_IDS } from './operations';
-import { newUrlDestinations, pluginConfigBodySchema, pluginResource } from './routes';
+import {
+  newUrlDestinations,
+  pluginConfigBodySchema,
+  pluginResource,
+  pluginStateBodySchema,
+} from './routes';
 
 /**
  * The plugin operations of the admin API (#600), without a listener: their
@@ -80,26 +85,49 @@ describe('the plugin operations (#600)', () => {
     expect(JSON.stringify(rendered)).not.toContain(SEALED);
   });
 
-  it('names the plugin an enable or a disable is for', () => {
+  it('names the plugin an enable or a disable is for, and the version of the state it acts on', () => {
     const request = {
       method: 'POST',
       params: { realmId: '0190f5a8-7c3e-7d10-8a4b-3c2d1e0f9a8b', plugin: 'corp' },
       query: {},
-      body: null,
+      body: { version: 4 },
     };
+    const version = [{ label: 'acts on the state of version', value: '4' }];
     expect(
       OPERATION_REGISTRY.get(PLUGIN_OPERATION_IDS.enable)?.render?.({
         ...request,
         operationId: PLUGIN_OPERATION_IDS.enable,
       })
-    ).toEqual({ title: 'Enable the sign-in plugin corp in the realm' });
+    ).toEqual({ title: 'Enable the sign-in plugin corp in the realm', fields: version });
     expect(
       OPERATION_REGISTRY.get(PLUGIN_OPERATION_IDS.disable)?.render?.({
         ...request,
         operationId: PLUGIN_OPERATION_IDS.disable,
       })
-    ).toEqual({ title: 'Disable the sign-in plugin corp in the realm' });
+    ).toEqual({ title: 'Disable the sign-in plugin corp in the realm', fields: version });
   });
+});
+
+describe('the enable and disable body (#600)', () => {
+  it.each(['enable', 'disable'] as const)(
+    'takes the version of the state a %s acts on, and nothing else',
+    (action) => {
+      const schema = pluginStateBodySchema(action);
+      expect(schema.safeParse({ version: 0 }).success).toBe(true);
+      expect(schema.safeParse({ version: 3 }).success).toBe(true);
+      // The version is part of the request an approval binds.
+      for (const body of [
+        undefined,
+        null,
+        {},
+        { version: -1 },
+        { version: 1.5 },
+        { version: 1, enabled: true },
+      ]) {
+        expect(schema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+      }
+    }
+  );
 });
 
 describe('the configure body (#600)', () => {

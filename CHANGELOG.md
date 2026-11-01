@@ -1388,9 +1388,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`plugins.list`, `plugins.get`, the permission `plugins.read`), seals a
   secret value for one member (`plugins.secrets.seal`, under the new write
   permission `plugins.write`; it changes nothing) and configures, enables and
-  disables one per realm (`plugins.update`, which names in its body the
-  version it replaces,
-  `plugins.enable`, `plugins.disable`): security operations with
+  disables one per realm (`plugins.update`, `plugins.enable`,
+  `plugins.disable`, each of which names in its body the version of the
+  state it acts on, so an approval binds it): security operations with
   `credential-path`, under the new permission `plugins.security`, so they need
   `qauth:admin:security` and an approval. A configure carries only sealed
   values, so the request an approval stores never holds a secret in the

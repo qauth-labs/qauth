@@ -295,10 +295,11 @@ plugin's config (`plugins.update`, `POST …/plugins/{plugin}/config`) and turn 
 which upstream credentials sign users in, so each is a
 [security operation](/reference/security-operations/) with the effect `credential-path`: it needs
 `qauth:admin:security` (the permission `plugins.security`) and an approval, and
-`qauth:admin:write` reaches none of them. A configure names in its body the `version` of the
-state it replaces, as its read gave it, so the approval binds it and the approver sees it, and a
-state that moved since answers 412: two approved configures never overwrite each other unseen. An
-enable or a disable may carry `If-Match`.
+`qauth:admin:write` reaches none of them. Each of the three names in its body the `version` of
+the state it acts on, as its read gave it (`{ "version": 1 }` for an enable or a disable), so the
+approval binds it and the approver sees it, and a state that moved since answers 412: two approved
+configures never overwrite each other unseen, and an approved enable never turns on a config its
+approver never saw. Each may carry `If-Match` too.
 
 **Secrets.** A secret's value reaches the server in one request only: `plugins.secrets.seal`
 (`POST …/plugins/{plugin}/secrets/seal`, `{ path, value }`), which encrypts it with the realm's

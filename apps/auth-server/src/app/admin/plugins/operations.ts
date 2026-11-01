@@ -84,6 +84,21 @@ function renderUpdate(request: RenderInput) {
   };
 }
 
+/**
+ * What an approver is shown of an enable or a disable: the plugin, and the
+ * version of the realm's state of it the request acts on, which the approval
+ * binds.
+ */
+function renderStateChange(title: string) {
+  return (request: RenderInput) => {
+    const body = (request.body ?? {}) as { version?: unknown };
+    return {
+      title: `${title} ${pluginOf(request)} in the realm`,
+      fields: [{ label: 'acts on the state of version', value: shownValue(body.version) }],
+    };
+  };
+}
+
 /** The definitions, for `ADMIN_OPERATIONS` (`helpers/admin-operations.ts`). */
 export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] = Object.freeze([
   {
@@ -125,10 +140,8 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     effects: ['credential-path'],
     permissions: ['plugins.security'],
     description:
-      "Enable an AuthMethod plugin in a realm, so its sign-in routes answer there; its configuration must pass the plugin's config schema.",
-    render: (request: RenderInput) => ({
-      title: `Enable the sign-in plugin ${pluginOf(request)} in the realm`,
-    }),
+      "Enable an AuthMethod plugin in a realm, so its sign-in routes answer there; its configuration must pass the plugin's config schema, and the request names the version of the state it enables.",
+    render: renderStateChange('Enable the sign-in plugin'),
   },
   {
     id: PLUGIN_OPERATION_IDS.disable,
@@ -136,9 +149,7 @@ export const PLUGIN_OPERATION_DEFINITIONS: readonly AdminOperationDefinition[] =
     effects: ['credential-path'],
     permissions: ['plugins.security'],
     description:
-      'Disable an AuthMethod plugin in a realm: its sign-in routes answer 404 there, and its configuration is kept.',
-    render: (request: RenderInput) => ({
-      title: `Disable the sign-in plugin ${pluginOf(request)} in the realm`,
-    }),
+      'Disable an AuthMethod plugin in a realm: its sign-in routes answer 404 there, and its configuration is kept; the request names the version of the state it disables.',
+    render: renderStateChange('Disable the sign-in plugin'),
   },
 ]);

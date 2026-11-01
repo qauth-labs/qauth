@@ -286,7 +286,9 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
         'qauth:admin:read qauth:admin:write'
       );
 
-      const response = await send('POST', pluginPath(realm.id, '/corp/enable'), token);
+      const response = await send('POST', pluginPath(realm.id, '/corp/enable'), token, {
+        version: 0,
+      });
 
       expect(response.statusCode).toBe(403);
       expect(response.headers['www-authenticate']).toContain('error="insufficient_scope"');
@@ -300,7 +302,9 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       const realm = await tenant('alpha');
       const { token } = await adminWith(realm.id, 'editor');
 
-      const response = await send('POST', pluginPath(realm.id, '/corp/enable'), token);
+      const response = await send('POST', pluginPath(realm.id, '/corp/enable'), token, {
+        version: 0,
+      });
 
       expect(response.statusCode).toBe(403);
       expect(response.json()).toMatchObject({ code: 'forbidden' });
@@ -310,13 +314,17 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       const realm = await tenant('alpha');
       const requester = await adminWith(realm.id, 'security-admin');
 
-      const unapproved = await send('POST', pluginPath(realm.id, '/corp/enable'), requester.token);
+      const unapproved = await send('POST', pluginPath(realm.id, '/corp/enable'), requester.token, {
+        version: 0,
+      });
       expect(unapproved.statusCode).toBe(403);
       expect(unapproved.json()).toMatchObject({ code: 'approval_required' });
 
       // A plugin is enabled only with a config its schema accepts.
       await configure(realm.id, requester);
-      const { done } = await approved(realm.id, requester, 'plugins.enable', '/corp/enable');
+      const { done } = await approved(realm.id, requester, 'plugins.enable', '/corp/enable', {
+        version: 1,
+      });
       expect(done.json()).toMatchObject({ name: 'corp', type: 'corp_sso', enabled: true });
     });
 
@@ -363,7 +371,9 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       secrets: [{ path: 'clientSecret', set: true }],
       version: 1,
     });
-    const enabled = await approved(realm.id, requester, 'plugins.enable', '/corp/enable');
+    const enabled = await approved(realm.id, requester, 'plugins.enable', '/corp/enable', {
+      version: 1,
+    });
     const read = [
       await send('GET', pluginPath(realm.id), requester.token),
       await send('GET', pluginPath(realm.id, '/corp'), requester.token),
@@ -577,12 +587,12 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     // Configured, still off.
     expect(await callback()).toEqual(absent);
 
-    await approved(realm.id, requester, 'plugins.enable', '/corp/enable');
+    await approved(realm.id, requester, 'plugins.enable', '/corp/enable', { version: 1 });
     // On: the route answers. No upstream sign-in is pending in this browser.
     const on = await browser('GET', `${CALLBACK}?state=x`);
     expect(on.statusCode).toBe(400);
 
-    await approved(realm.id, requester, 'plugins.disable', '/corp/disable');
+    await approved(realm.id, requester, 'plugins.disable', '/corp/disable', { version: 2 });
     expect(await callback()).toEqual(absent);
     // The config is kept: the plugin is off, not forgotten.
     expect(await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp')).toMatchObject({
@@ -600,7 +610,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     expect(elsewhere.statusCode).toBe(404);
   });
 
-  it('refuses a configure approved for a state that moved, and an enable named against one, with 412', async () => {
+  it('refuses a configure or an enable approved for a state that moved, with 412', async () => {
     const realm = await tenant('alpha');
     const requester = await adminWith(realm.id, 'security-admin');
 
@@ -643,21 +653,39 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       ]
     ).toBe(first.sealed);
 
-    const { approvalId } = await fileAndApprove(realm.id, requester, 'plugins.enable');
+    // An enable approved for the state of version 0, which moved to 1 since:
+    // its approver never saw the config it would turn on.
+    const unseen = await fileAndApprove(realm.id, requester, 'plugins.enable', { version: 0 });
+    const moved = await send(
+      'POST',
+      pluginPath(realm.id, '/corp/enable'),
+      requester.token,
+      { version: 0 },
+      { 'qauth-approval': unseen.approvalId }
+    );
+    expect(moved.statusCode).toBe(412);
 
+    // One that names the current state, with an If-Match for another.
+    const current = await fileAndApprove(realm.id, requester, 'plugins.enable', { version: 1 });
     const stale = await send(
       'POST',
       pluginPath(realm.id, '/corp/enable'),
       requester.token,
-      undefined,
-      {
-        'qauth-approval': approvalId,
-        'if-match': '"0"',
-      }
+      { version: 1 },
+      { 'qauth-approval': current.approvalId, 'if-match': '"0"' }
     );
     expect(stale.statusCode).toBe(412);
     expect((await app().repositories.realmAuthMethodPlugins.find(realm.id, 'corp'))?.enabled).toBe(
       false
     );
+
+    // An enable needs the version in its body, before any approval is filed.
+    const unnamed = await send(
+      'POST',
+      `/admin/v1-rc.0/realms/${realm.id}/approvals`,
+      requester.token,
+      { operation: 'plugins.enable', params: { plugin: 'corp' } }
+    );
+    expect(unnamed.statusCode).toBe(400);
   });
 });
