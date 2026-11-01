@@ -328,12 +328,12 @@ describe('each realm sends through its own mail transport (#529)', () => {
     const app = await boot(without(smtpEnvironment(serverA, PASSWORD_A), 'SMTP_ALLOWED_HOSTS'));
     const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('no default realm');
-    // The policy update refuses the loopback host...
+    // The policy update refuses a private host the operator does not list...
     const current = await app.policyStore.get(realm.id);
     await expect(
       app.policyStore.update(
         realm.id,
-        { mail: { smtp: { host: '127.0.0.1', port: serverA.port, password: PASSWORD_B } } },
+        { mail: { smtp: { host: '10.0.0.25', port: serverA.port, password: PASSWORD_B } } },
         { expectedVersion: current?.version ?? 0 }
       )
     ).rejects.toMatchObject({ issues: [expect.objectContaining({ path: 'mail.smtp.host' })] });
@@ -457,9 +457,8 @@ describe('each realm sends through its own mail transport (#529)', () => {
         ])
       ).rows
     ).toEqual([{ name: 'mail.smtp.password' }]);
-    expect(
-      lines.filter((line) => line.realm === 'beta' && line.policy === 'mail.smtp.password')
-    ).toEqual([expect.objectContaining({ variable: 'SMTP_PASSWORD' })]);
+    // No warning or error names it: it was seeded, not skipped.
+    expect(lines.filter((line) => line.realm === 'beta')).toEqual([]);
 
     await register(secondApp, 'grace@example.com', HOST_B);
     const [message] = await serverA.waitForMessages(1);
