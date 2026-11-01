@@ -9,6 +9,7 @@ import {
   SIGNER_CALLERS,
   SIGNER_POLICY,
   type SignerCaller,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './signer-policy';
 import { JWS_SIGNING_PURPOSES } from './signer-typ';
 
@@ -107,12 +108,21 @@ describe('SIGNER_POLICY', () => {
     ]);
   });
 
-  it("lets api decrypt only a realm's mail transport secret (#529)", () => {
-    expect(SIGNER_POLICY.api.decrypt).toEqual([REALM_MAIL_SECRET_CONTEXT_PREFIX]);
-    // The contexts `realmSecretContext` of server-realm-policy makes.
+  it("lets api decrypt only a realm's mail secret and an upstream client secret (#529, #601)", () => {
+    // Pinned as strings: server-realm-policy makes the mail contexts without
+    // importing this library, and a changed prefix must fail here.
+    expect(REALM_MAIL_SECRET_CONTEXT_PREFIX).toBe('realm_secrets:mail.');
+    expect(UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX).toBe('upstream-oidc:client-secret:');
+    expect(SIGNER_POLICY.api.decrypt).toEqual([
+      REALM_MAIL_SECRET_CONTEXT_PREFIX,
+      UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+    ]);
+    // The contexts `realmSecretContext` of server-realm-policy and
+    // `upstreamClientSecretContext` of server-upstream-oidc make.
     for (const context of [
       'realm_secrets:mail.smtp.password',
       'realm_secrets:mail.resend.apiKey',
+      `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
     }
@@ -120,11 +130,22 @@ describe('SIGNER_POLICY', () => {
       undefined,
       '',
       'delivery:ssf_streams.x:1',
+      'delivery:upstream-oidc:client-secret:realm-1:oidc_corp',
       'realm_secrets:admin.x',
       'realm_secrets:mailx',
+      'upstream-oidc:client-secretx',
+      'upstream-oidc:other:realm-1',
+      'Upstream-oidc:client-secret:realm-1:oidc_corp',
       'oid4vp_request_states.key:1',
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), String(context)).toBe(false);
+    }
+    // Neither the browser-facing role nor delivery opens a provider's secret.
+    for (const caller of ['web', 'delivery', 'admin'] as const) {
+      expect(
+        isSignerCallAllowed(caller, 'decrypt', 'upstream-oidc:client-secret:realm-1:oidc_corp'),
+        caller
+      ).toBe(false);
     }
   });
 

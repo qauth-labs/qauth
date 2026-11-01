@@ -1367,6 +1367,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, PKCE with S256 included. Nothing registers a method in a running server
   yet: the plugin runtime is [#600], the upstream sign-in flow [#639].
 
+- **The generic upstream OpenID Connect client, experimental** ([#601],
+  ADR-018 §3, ADR-019 Decisions 8 and 9). The new library
+  `libs/server/upstream-oidc` is the first AuthMethod: one per configured
+  provider type `oidc_<alias>`, with its own callback,
+  `/upstream/oidc_<alias>/callback`, so a response for one provider cannot be
+  replayed at another. It reads the provider's discovery document through the
+  egress client (its `issuer` must match byte for byte, and every URL it names
+  goes out as a `remote_document` destination, which the egress allowlist
+  never opens) or takes the endpoints set by hand for a provider on a private
+  address. It sends the code flow with `state`, `nonce` and PKCE S256, checks
+  the RFC 9207 `iss` parameter, accepts the callback as `GET` and as
+  `form_post` (bounced to the `GET` callback so the `SameSite=Lax` flow cookie
+  comes along), redeems the code with `client_secret_basic`,
+  `client_secret_post` or a `private_key_jwt` assertion the signer role signs,
+  validates the ID token against the provider's cached key set and an
+  allowlist of asymmetric algorithms (`iss`, `aud`, `azp`, `exp`, `iat`,
+  `nonce`), and reads userinfo when configured. Every call follows no
+  redirect and has its own deadline and size cap. A stored client secret is
+  sealed with the realm's data-at-rest key and never shown, and a
+  registration check runs discovery and the egress address checks for the
+  provider administration ([#714]). It makes no account decision: the
+  upstream sign-in flow is [#639]. The AuthMethod contract's egress request
+  gains `redirect: 'error'`, the one cap a method may set (no redirect
+  followed), which the client uses on every call. The signer lets the `api`
+  role decrypt a provider's client secret (a context under
+  `upstream-oidc:client-secret:`) as well as a realm's mail secret, so the
+  host opens a stored config as `api`. The stored secret is bound to where it
+  is sent: after the issuer or a token endpoint set by hand changes, it no
+  longer opens and must be entered again.
+
 - **The developer API and the account API's consents, under versioned
   prefixes** ([#524], ADR-019 Decision 7, ADR-018 §5). `/developer/v1-rc.0`
   serves a developer's clients (list, create, read, merge-patch update,
@@ -2354,6 +2384,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#596]: https://github.com/qauth-labs/qauth/issues/596
 [#599]: https://github.com/qauth-labs/qauth/issues/599
 [#600]: https://github.com/qauth-labs/qauth/issues/600
+[#601]: https://github.com/qauth-labs/qauth/issues/601
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
@@ -2364,6 +2395,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
+[#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
 [#857]: https://github.com/qauth-labs/qauth/issues/857

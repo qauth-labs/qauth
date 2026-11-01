@@ -86,6 +86,7 @@ export {
   SIGNER_POLICY,
   type SignerCaller,
   type SignerGrant,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './lib/signer-policy';
 export {
   CLIENT_ASSERTION_TYP,

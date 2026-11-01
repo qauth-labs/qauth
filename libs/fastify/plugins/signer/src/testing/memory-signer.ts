@@ -90,8 +90,22 @@ export interface TestSigner {
    * signer whose refresh interval is not `0` sees it only after that interval.
    */
   rotateTokenKeys(realmId: string, options?: TokenKeyRotationOptions): Promise<TokenKeyRotation>;
+  /**
+   * Configure an upstream provider for the realm (#601): the client id the
+   * signer signs its assertions as, and an active `upstream_client_assertion`
+   * key scoped to the provider, which `getUpstreamJwks` then publishes.
+   */
+  addUpstreamClient(realmId: string, providerId: string, client: TestUpstreamClient): Promise<void>;
   /** Every store read the signer made, by method name, in order. */
   readonly storeReads: string[];
+}
+
+/** An upstream provider a {@link TestSigner} signs client assertions toward. */
+export interface TestUpstreamClient {
+  /** The client id at the provider: every assertion's `iss` and `sub`. */
+  readonly clientId: string;
+  /** The assertion key's algorithm. The purpose's default (`RS256`) when absent. */
+  readonly algorithm?: 'RS256' | 'ES256' | 'EdDSA';
 }
 
 interface MemoryRow {
@@ -113,6 +127,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
   });
   const rows: MemoryRow[] = [];
   const issuers = new Map<string, string>();
+  const upstreamClients = new Map<string, { clientId: string }>();
   const storeReads: string[] = [];
 
   /** A row with its sealed material, as `realm_keys` holds it. */
@@ -245,7 +260,10 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
           : []
       );
     },
-    findUpstreamClient: async () => undefined,
+    async findUpstreamClient(realmId, providerId) {
+      storeReads.push('findUpstreamClient');
+      return upstreamClients.get(`${realmId}/${providerId}`);
+    },
   };
 
   const factory = createKeyFactory({
@@ -299,6 +317,15 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     rotateTokenKeys(realmId, rotation) {
       return rotateTokenKeys(keyStore, factory, realmId, rotation);
+    },
+    async addUpstreamClient(realmId, providerId, client) {
+      await factory.createKey({
+        realmId,
+        purpose: 'upstream_client_assertion',
+        scopeId: providerId,
+        ...(client.algorithm === undefined ? {} : { algorithm: client.algorithm }),
+      });
+      upstreamClients.set(`${realmId}/${providerId}`, { clientId: client.clientId });
     },
     storeReads,
   };

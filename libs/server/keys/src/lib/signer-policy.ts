@@ -62,13 +62,23 @@ export const DELIVERY_SECRET_CONTEXT_PREFIX = 'delivery:';
 
 /**
  * The `context` prefix of a realm's mail transport secret, the SMTP password
- * or the Resend API key (`realm_secrets:mail.<field>`, #529): the only
- * `data_at_rest` ciphertexts the `api` role may decrypt, for the realm's
- * mail sender. `@qauth-labs/server-realm-policy` makes the context
+ * or the Resend API key (`realm_secrets:mail.<field>`, #529): one of the two
+ * kinds of `data_at_rest` ciphertext the `api` role may decrypt, for the
+ * realm's mail sender. `@qauth-labs/server-realm-policy` makes the context
  * (`realmSecretContext`); this library may not import it, so both pin the
  * string in their tests.
  */
 export const REALM_MAIL_SECRET_CONTEXT_PREFIX = 'realm_secrets:mail.';
+
+/**
+ * The `context` prefix of an upstream OpenID Provider's client secret
+ * (`upstream-oidc:client-secret:<realm id>:<provider type>:<destination>`,
+ * #601): the other kind of `data_at_rest` ciphertext the `api` role may
+ * decrypt, so the host can open a provider's stored config for the code
+ * exchange, as it already signs that provider's client assertions (#547).
+ * `@qauth-labs/server-upstream-oidc` builds its contexts from this constant.
+ */
+export const UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX = 'upstream-oidc:client-secret:';
 
 const NOTHING_ELSE = {
   signJws: [],
@@ -87,9 +97,12 @@ const NOTHING_ELSE = {
  *   to a role outside the signer. It never signs a token.
  * - `api` signs access and ID tokens (`token_signing`, hybrid included), signs
  *   client assertions toward upstream providers (#547), and encrypts with the
- *   `data_at_rest` key. It decrypts only a realm's mail transport secret
- *   ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}), which its mail sender sends
- *   with (#529); nothing else of the role decrypts.
+ *   `data_at_rest` key. It decrypts only two kinds of stored secret: a realm's
+ *   mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}), which
+ *   its mail sender sends with (#529), and an upstream provider's client
+ *   secret ({@link UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX}), which the code
+ *   exchange with that provider sends (#601). Nothing else of the role
+ *   decrypts.
  * - `delivery` signs Security Event Tokens and logout tokens
  *   (`event_signing`) and webhook messages (#547). It holds no secret: it
  *   sends the message to the signer and gets the signature header back. It
@@ -121,7 +134,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signHybrid: true,
     signClientAssertion: true,
     encrypt: true,
-    decrypt: [REALM_MAIL_SECRET_CONTEXT_PREFIX],
+    decrypt: [REALM_MAIL_SECRET_CONTEXT_PREFIX, UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX],
     ...PUBLIC_READS,
   },
   delivery: {
