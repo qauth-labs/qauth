@@ -18,6 +18,7 @@ import {
 } from 'fastify-type-provider-zod';
 
 import { env } from '../../config/env';
+import { closeWithApp } from '../helpers/listener-close';
 import {
   answerClientError,
   answerFrameworkError,
@@ -382,7 +383,9 @@ export interface InternalApiOptions {
 /**
  * How long the internal listener waits for its calls in flight when the
  * server closes, before it closes their connections: under the 10 s Fastify
- * gives a `preClose` hook.
+ * gives a `preClose` hook. It closes at the same time as the admin listener
+ * (`helpers/listener-close.ts`), so a process with both stops within the
+ * longer of their two graces.
  */
 export const INTERNAL_CLOSE_GRACE_MS = 8_000;
 
@@ -418,7 +421,7 @@ export async function closeInternalServer(internal: FastifyInstance): Promise<vo
  * a route outside `/internal/` or with no role this process holds.
  *
  * `internal` stops accepting requests when `source` begins to close, before
- * the database closes.
+ * the database closes, and while any other listener of the app closes.
  */
 export async function installInternalApi(
   internal: FastifyInstance,
@@ -465,7 +468,5 @@ export async function installInternalApi(
     'Installed the internal listener'
   );
 
-  source.addHook('preClose', async () => {
-    await closeInternalServer(internal);
-  });
+  closeWithApp(source, () => closeInternalServer(internal));
 }

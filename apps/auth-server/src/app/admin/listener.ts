@@ -17,6 +17,7 @@ import {
 import { env } from '../../config/env';
 import { API_FAMILY_PREFIXES } from '../api-conventions/families';
 import type { OperationRegistry } from '../helpers/admin-operations';
+import { closeWithApp } from '../helpers/listener-close';
 import { adminAddressRateLimitKey, adminSubjectRateLimitKey } from '../helpers/realm-rate-limit';
 import {
   answerClientError,
@@ -270,7 +271,9 @@ async function registerCeilings(admin: FastifyInstance, source: FastifyInstance)
  * ceiling of its own.
  *
  * `admin` stops accepting requests when `source` begins to close, before the
- * database closes: its `preClose` hook closes it ({@link closeAdminServer}).
+ * database closes: the app's `preClose` hook closes it
+ * ({@link closeAdminServer}), at the same time as the internal listener
+ * (`helpers/listener-close.ts`), so the two graces do not add up.
  */
 export async function installAdminApi(
   admin: FastifyInstance,
@@ -316,7 +319,5 @@ export async function installAdminApi(
     async () => admin.swagger()
   );
 
-  source.addHook('preClose', async () => {
-    await closeAdminServer(admin, calls);
-  });
+  closeWithApp(source, () => closeAdminServer(admin, calls));
 }
