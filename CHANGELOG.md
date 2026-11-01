@@ -2425,6 +2425,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Signing out everywhere ends every session, whatever Redis has lost**
+  ([#912], found in the review of [#550]). `/auth/logout` found the user's
+  browser sessions through a per-user index in Redis, so a session the index
+  no longer named (an eviction, a restart without persistence, a failover)
+  survived the sign-out. It now ends them in Postgres, in one transaction,
+  through the session service's `revokeAllForUser`, then drops their side
+  records; the authorization codes and refresh tokens are swept after it as
+  before. A Redis failure while the side records are dropped is logged and
+  no longer stops the sweep. Sign-in still writes the index for one more
+  release, for the previous release's logout during a rolling upgrade.
 - **A fetch process can no longer exhaust the server's memory** ([#857]). The
   egress client's fetch processes answer over a plain socket of size-capped
   frames instead of Node's IPC channel, which deserialized a message whole
@@ -2532,6 +2542,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#638]: https://github.com/qauth-labs/qauth/issues/638
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
+[#912]: https://github.com/qauth-labs/qauth/issues/912
 
 ## [0.1.3] - 2026-10-21
 
