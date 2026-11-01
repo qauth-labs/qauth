@@ -48,7 +48,8 @@ scope:
       operator-set first-party profile resolves (resolveFirstPartyProfile) when no requested scope is dangerous and
       prompt is not consent, writes no consent, and records consent.administrative with the code; a dangerous scope or
       prompt=consent sends such a client here, where the screen runs as for any client. A native_backend client's
-      request is prompt=login there, whatever it says, and prompt=none from one answers login_required there"
+      request asks for a fresh sign-in there as prompt=login does, whatever it says (its own prompt=consent still sends
+      it here), and prompt=none from one answers login_required there"
     - 'revoking a consent (/consents, /api/consents), which is its own flow: ACC-11 moves it to the account console
       and writes its graph'
     - 'a store failure before anything is written (the lookup of the host, the rate-limit counter, the session, the
@@ -215,8 +216,9 @@ context:
     say:
       none: 'nothing asks for a fresh sign-in, or the sign-in is fresh enough for what asks'
       promptLogin: >-
-        the form carries prompt=login, or the client's first-party profile is native_backend, whose request counts as
-        prompt=login whatever the form says (ADR-017 Decision 9), and the sign-in is more than two minutes old
+        the form carries prompt=login, or the client's first-party profile is native_backend, whose request asks for a
+        fresh sign-in as prompt=login does whatever the form says (ADR-017 Decision 9), and the sign-in is more than two
+        minutes old
       maxAgeExceeded: 'the form carries max_age, and the sign-in is older than that many whole seconds'
       dangerousScope: >-
         the scopes include a dangerous one (write:*, agent:admin, agent:exec) and the sign-in is more than two minutes
@@ -259,7 +261,8 @@ guards:
   scopesDiffer: "posted == 'otherScopes'"
   resourcesDiffer: "posted == 'otherResources'"
   # evaluateStepUp: prompt=login and max_age hold in every environment, the dangerous-scope rule not for a development
-  # client. A native_backend client's request is prompt=login (forcesLoginPrompt), so it reads as promptLogin
+  # client. A native_backend client's request asks for a fresh sign-in as prompt=login does (forceFreshLogin), so it
+  # reads as promptLogin
   needsFreshLogin:
     "stepUp in ['promptLogin', 'maxAgeExceeded'] or (stepUp == 'dangerousScope' and not
     developmentClient)"
@@ -829,8 +832,9 @@ states:
       ADR-007 §2. Every scope about to be granted is treated as new, so a prior consent cannot skip the gate.
       prompt=login and a dangerous scope ask for a sign-in within the last two minutes (STEP_UP_FRESH_AUTH_WINDOW_MS);
       max_age asks for one within that many whole seconds. A development client is spared only the dangerous-scope
-      rule. A native_backend client's request counts as prompt=login whatever the form says (ADR-017 Decision 9), so
-      a page reached without /oauth/authorize cannot mint a code for its browser leg without a visible sign-in. The
+      rule. A native_backend client's request asks for a fresh sign-in as prompt=login does, whatever the form says
+      (ADR-017 Decision 9), so a page reached without /oauth/authorize cannot mint a code for its browser leg on a
+      sign-in older than two minutes. The
       authorize URL is rebuilt from the form with the bound resources and parked, and the browser is sent
       to sign in.
     source: apps/auth-server/src/app/routes/ui/consent.ts:903
@@ -838,7 +842,7 @@ states:
       - guard: needsFreshLogin
         target: parkingRequest
         say: 'the sign-in is too old for what is asked; step_up.required is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:925
+        source: apps/auth-server/src/app/routes/ui/consent.ts:924
       - guard: remember
         target: savingConsent
         say: 'the sign-in is fresh enough, and the user ticked "Remember this decision"'
@@ -1399,7 +1403,7 @@ assertions:
   - id: no-code-on-a-stale-sign-in
     never: "state in ['savingConsent', 'mintingCode', 'recordingGrant', 'code_issued'] and needsFreshLogin"
     say: 'No consent is saved and no code minted on a sign-in older than what the request or its scopes ask for'
-    source: apps/auth-server/src/app/routes/ui/consent.ts:925
+    source: apps/auth-server/src/app/routes/ui/consent.ts:924
   - id: remembered-only-when-asked
     never: 'consentSaved and not allowForever'
     say: 'A consent is saved only when the form carries allow_forever=1'

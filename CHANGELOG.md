@@ -1353,16 +1353,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   native profiles** ([#633], ADR-017 Decision 9). `/oauth/authorize` issues a
   code without the consent screen to a client whose operator-set first-party
   profile resolves, when none of the requested scopes is dangerous and the
-  request does not carry `prompt=consent`. No consent row is written, so the
-  client is not listed under `/consents` and `/oauth/token` returns no
+  request does not carry `prompt=consent`. No consent row is written: unless
+  the user once remembered a consent for the client on the consent screen, it
+  is not listed under `/consents` and `/oauth/token` returns no
   `refresh_token` for such a code. Every such code is recorded as the new
   `consent.administrative` event (the profile, the scopes, the resource
   indicators, the endpoint) in the transaction that mints it. A dangerous scope
   or `prompt=consent` shows the screen even under a stored consent. Every
   request of a `native_backend` client counts as `prompt=login`, on
   `/oauth/authorize` and on `POST /ui/consent`, whatever it says: a session
-  signed in more than two minutes earlier meets the login page, and
-  `prompt=none` answers `login_required`. A client without a profile is
+  signed in more than two minutes earlier meets the login page (the window
+  `prompt=login` gives every client), and `prompt=none` answers
+  `login_required`; the request's own `prompt=consent` still shows the screen. A client without a profile is
   unaffected; no client has one until an operator sets it.
 
 - **The AuthMethod contract, experimental** ([#599], ADR-003 as amended,

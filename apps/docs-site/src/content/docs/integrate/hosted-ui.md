@@ -151,24 +151,29 @@ consent, an administrative consent:
 - `/oauth/authorize` issues a code without this screen when none of the
   requested scopes is dangerous (`write:*`, `agent:admin`, `agent:exec`) and
   the request does not carry `prompt=consent`. Under `prompt=none` it issues
-  the code too.
-- Nothing is stored for the user: the client is not listed under `/consents`,
-  and `/oauth/token` returns no `refresh_token` for such a code, as for an
-  approval with **Remember this decision** unticked.
+  the code too, for a `web_redirect` client.
+- The waiver stores nothing for the user. Unless the user once remembered a
+  consent for the client on this screen, the client is not listed under
+  `/consents`, and `/oauth/token` returns no `refresh_token` for such a code,
+  as for an approval with **Remember this decision** unticked. A remembered
+  consent that covers the code's scopes still yields one.
 - Every such code is recorded as a
   [`consent.administrative`](/reference/events/#consentadministrative-v1-rc0)
   event: the profile it rests on, the scopes and resource indicators it
   covered, and the endpoint.
 - A dangerous scope or `prompt=consent` shows this screen, as for any client,
-  even when a stored consent covers the request; `prompt=none` then answers
-  `consent_required`.
+  even when a stored consent covers the request. Under `prompt=none` such a
+  request answers `login_required` when a fresh sign-in is due (a dangerous
+  scope on a sign-in more than two minutes old), else `consent_required`.
 - A client whose profile is `native_backend`, the backend of a native app, has
   every request treated as `prompt=login`, whatever the request says: a
   browser that already holds a session meets the login page unless its sign-in
   is less than two minutes old, and `prompt=none` answers `login_required`
   however recent the sign-in. A `POST /ui/consent` for such a client asks for
-  the same fresh sign-in. The browser leg of a native app never completes
-  without a visible login.
+  the same fresh sign-in. So a native app's browser leg completes only on a
+  sign-in of the last two minutes, the window `prompt=login` gives every
+  client, never on an older session. Its own `prompt=consent` still shows this
+  screen.
 
 A client whose profile does not hold, because its row breaks one of the
 profile's rules or its policy does not parse, is treated as a client without
