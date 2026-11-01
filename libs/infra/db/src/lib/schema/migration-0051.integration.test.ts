@@ -1,5 +1,5 @@
 /**
- * Seed-then-migrate test for migration 0050: the scopes the
+ * Seed-then-migrate test for migration 0051: the scopes the
  * `client_credentials` grant may issue to a client (#891).
  *
  * The migration is forward-only: it adds a nullable column and a CHECK, and
@@ -10,7 +10,7 @@
  * or a JSON array there, nothing else.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
- * and upgraded through 0049, then 0050, so a later migration cannot change
+ * and upgraded through 0050, then 0051, so a later migration cannot change
  * what this test sees.
  */
 import { rmSync } from 'node:fs';
@@ -25,12 +25,12 @@ import {
 import { Pool } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-const MIGRATION_IDX = 50;
+const MIGRATION_IDX = 51;
 
 /** Every column of `oauth_clients` but `client_credentials_scopes`, as one row reads them. */
 const ROW_WITHOUT_LIST = `to_jsonb(oauth_clients) - 'client_credentials_scopes'`;
 
-describe('migration 0050 — oauth_clients.client_credentials_scopes (seed-then-migrate)', () => {
+describe('migration 0051 — oauth_clients.client_credentials_scopes (seed-then-migrate)', () => {
   let container: StartedPostgres | undefined;
   let pool: Pool | undefined;
   let dockerUp = false;
@@ -68,7 +68,7 @@ describe('migration 0050 — oauth_clients.client_credentials_scopes (seed-then-
     return pool;
   }
 
-  /** Apply every migration through 0050. */
+  /** Apply every migration through 0051. */
   async function migrate(): Promise<void> {
     if (!container) throw new Error('no container');
     await applyQauthMigrations(container.connectionString, through);

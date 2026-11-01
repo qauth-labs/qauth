@@ -148,7 +148,7 @@ realmId)` sets it in the first passkey enrolment's transaction, and the trigger
 as `external_sub`; their `credential_data` shape belongs to
 `webauthnCredentialDataSchema` in `@qauth-labs/server-federation`.
 `oauth_clients.webauthn_allowed_origins` is operator-set (seed manifest only).
-So is `oauth_clients.client_credentials_scopes` (migration 0050, #891): the
+So is `oauth_clients.client_credentials_scopes` (migration 0051, #891): the
 scopes the `client_credentials` grant may issue, out of `scopes`; NULL means
 any of them, and `UpdateOAuthClient` excludes it.
 

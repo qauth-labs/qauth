@@ -618,7 +618,7 @@ A `client_credentials` token names no user, and until this release the grant
 issued any scope of a client's `scopes`. So a relying party given the grant to
 manage its [SSF stream](/operate/ssf-transmitter/#register-a-receiver) could
 also get a token without a user for each scope its users grant it
-([#891](https://github.com/qauth-labs/qauth/issues/891)). Migration 0050 adds
+([#891](https://github.com/qauth-labs/qauth/issues/891)). Migration 0051 adds
 `oauth_clients.client_credentials_scopes`, nullable with no default and a CHECK
 every existing row passes: the scopes that grant may issue, out of `scopes`.
 NULL, every existing client's value, keeps the grant as it was, and the

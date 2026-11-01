@@ -2484,7 +2484,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a client's `scopes`, so a relying party given the grant to manage its SSF
   stream could also get a token whose `sub` is its own `client_id` for a scope
   its users grant it (`notes:read`, say), which a resource server that did not
-  check `sub` acted on app-wide. Migration 0050 adds
+  check `sub` acted on app-wide. Migration 0051 adds
   `oauth_clients.client_credentials_scopes`, the scopes that grant may issue,
   out of `scopes`; the seed manifest's `client_credentials_scopes` is the only
   way to set it, and no owner route can change it. With a list, the token
