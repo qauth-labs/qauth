@@ -278,7 +278,8 @@ against issuers who publish none has bought nothing.
 ## Checklist — HAIP profile
 
 `haip-1.0` boots only when every mandate is provisioned: the verifier identity
-(`OID4VP_VERIFIER_SIGNING_KEY` + chain + anchors), an attesting-issuer registry
+(the chain and anchors, and the ES256 key the chain names in the key store,
+imported once from `OID4VP_VERIFIER_SIGNING_KEY`), an attesting-issuer registry
 (`OID4VP_ATTESTING_ISSUERS`) and the status-list pair (`OID4VP_STATUS_LIST_*`).
 Response encryption needs nothing configured — the key is minted per request —
 so the fail-closed half is still worth confirming first:
