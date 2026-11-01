@@ -182,7 +182,7 @@ states:
   starting:
     title: Ask the method to start an upstream transaction
     description: >-
-      start(context, { uiLocales }) answers where the browser goes (the provider's authorization endpoint with its
+      start({ uiLocales }, context) answers where the browser goes (the provider's authorization endpoint with its
       parameters, the redirect_uri a URL under /upstream/<type>, a PKCE S256 challenge), the transaction the method
       needs back (a fresh state, a nonce, the PKCE verifier) and the binding: the fresh, random value the
       authorization request carries to the provider and the callback carries back, usually the state.

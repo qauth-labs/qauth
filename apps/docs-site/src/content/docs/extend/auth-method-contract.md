@@ -55,7 +55,7 @@ type, `oidc_<issuer URL>`) never matches, and the types QAuth writes itself (`pa
 engine offers the upstream step ──► person picks the method
         │
         ▼
-start(context, { uiLocales })  ──► { redirectTo, transaction, binding }
+start({ uiLocales }, context)  ──► { redirectTo, transaction, binding }
         │  the engine keeps the transaction and its binding server-side,
         │  bound to the interaction and its flow cookie, and sends the
         │  browser on
