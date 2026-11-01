@@ -351,12 +351,14 @@ export function createUpstreamOidcMethod(
         method: 'POST',
         path: UPSTREAM_OIDC_CALLBACK_PATH,
         async handle(request: AuthMethodRouteRequest): Promise<AuthMethodBounce> {
-          // Only the response's own parameters, each a single value: the GET
-          // callback refuses a missing or repeated one.
+          // Only the response's own parameters. A repeated one goes on as an
+          // empty value, never dropped: the GET callback refuses an empty
+          // state, code or iss, and takes any `error` as an error, so a
+          // response with two `error` values cannot become a plain code.
           const carried: Record<string, string> = {};
           for (const name of RESPONSE_PARAMETERS) {
-            const value = single(request.form, name);
-            if (value !== undefined) carried[name] = value;
+            if (!Object.hasOwn(request.form, name)) continue;
+            carried[name] = single(request.form, name) ?? '';
           }
           return { to: UPSTREAM_OIDC_CALLBACK_PATH, query: carried };
         },

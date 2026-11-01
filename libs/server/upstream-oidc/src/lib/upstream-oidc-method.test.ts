@@ -739,14 +739,29 @@ describe('form_post', () => {
     });
   });
 
-  it('drops a repeated response parameter, so the GET callback refuses it', async () => {
+  it('carries a repeated response parameter on as an empty value, so the GET callback refuses it', async () => {
     const method = createUpstreamOidcMethod({ type: TYPE, display: { name: 'Example Corp' } });
     const bounce = await bounceRoute(method).handle({
       method: 'POST',
       query: authMethodParameters(undefined),
       form: authMethodParameters({ code: ['a', 'b'], state: 's'.repeat(43) }),
     });
-    expect(bounce.query).toEqual({ state: 's'.repeat(43) });
+    expect(bounce.query).toEqual({ code: '', state: 's'.repeat(43) });
+  });
+
+  it('keeps a repeated error, so a valid code beside it is not redeemed', async () => {
+    const method = createUpstreamOidcMethod({ type: TYPE, display: { name: 'Example Corp' } });
+    const bounce = await bounceRoute(method).handle({
+      method: 'POST',
+      query: authMethodParameters(undefined),
+      form: authMethodParameters({
+        code: 'the-code',
+        state: 's'.repeat(43),
+        error: ['access_denied', 'server_error'],
+        iss: [ISSUER, ISSUER],
+      }),
+    });
+    expect(bounce.query).toEqual({ code: 'the-code', state: 's'.repeat(43), error: '', iss: '' });
   });
 });
 

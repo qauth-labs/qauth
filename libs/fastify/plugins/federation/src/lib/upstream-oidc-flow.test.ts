@@ -1,5 +1,6 @@
 import type { IncomingMessage } from 'node:http';
 
+import formbody from '@fastify/formbody';
 import {
   createTestSigner,
   type TestSigner,
@@ -276,11 +277,8 @@ async function boot(
   };
 
   const app = Fastify({ logger: false });
-  app.addContentTypeParser(
-    'application/x-www-form-urlencoded',
-    { parseAs: 'string' },
-    (_request, body, done) => done(null, Object.fromEntries(new URLSearchParams(String(body))))
-  );
+  // The auth server's own form parser: a repeated key arrives as a list.
+  await app.register(formbody);
   await app.register(federationPlugin, {
     providers: createConfiguredProviders({
       walletFederationEnabled: false,
@@ -325,7 +323,7 @@ function browser(app: FastifyInstance) {
     async request(options: {
       method: 'GET' | 'POST';
       url: string;
-      form?: Record<string, string>;
+      form?: Record<string, string> | [string, string][];
       crossSite?: boolean;
     }) {
       const sendsLaxCookie = options.crossSite !== true || options.method === 'GET';
@@ -502,6 +500,35 @@ describe('form_post', () => {
       crossSite: true,
     });
     expect(back.json()).toMatchObject({ kind: 'identity', externalSub: 'user-1' });
+  });
+
+  it('refuses a posted response that repeats error beside a valid code, and redeems nothing', async () => {
+    registerClient(publicProvider, TYPE, 'client_secret_post');
+    const { app } = await boot(
+      TYPE,
+      await seal(TYPE, configFor('client_secret_post', { responseMode: 'form_post' }))
+    );
+    const tab = browser(app);
+    const started = await tab.request({ method: 'GET', url: '/test/start' });
+    const response = publicProvider.authorize(new URL(started.headers.location as string), PERSON);
+    const tokenRequestsBefore = publicProvider.tokenRequests.length;
+
+    const posted = await tab.request({
+      method: 'POST',
+      url: `/upstream/${TYPE}/callback`,
+      form: [...Object.entries(response), ['error', 'access_denied'], ['error', 'server_error']],
+      crossSite: true,
+    });
+    expect(posted.statusCode).toBe(303);
+    const location = new URL(posted.headers.location as string, ORIGIN);
+    expect(location.searchParams.get('error')).toBe('');
+    const back = await tab.request({
+      method: 'GET',
+      url: `${location.pathname}${location.search}`,
+      crossSite: true,
+    });
+    expect(back.json()).toEqual({ kind: 'failed', reason: 'provider_error' });
+    expect(publicProvider.tokenRequests.length).toBe(tokenRequestsBefore);
   });
 
   it('without the bounce, the cross-site POST would carry no flow cookie and be refused', async () => {

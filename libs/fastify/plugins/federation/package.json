@@ -10,6 +10,7 @@
     "tslib": "catalog:"
   },
   "devDependencies": {
+    "@fastify/formbody": "catalog:",
     "@qauth-labs/fastify-plugin-signer": "workspace:*",
     "@qauth-labs/server-egress": "workspace:*",
     "@qauth-labs/server-keys": "workspace:*",
