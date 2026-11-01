@@ -14,6 +14,7 @@ import type { FastifyInstance } from 'fastify';
 import { hashEmail } from './auth-events';
 import { clientAddressKey, type ClientAddressSource } from './client-address';
 import { recordSuccessfulLogin, registerLoginAttempt } from './failed-login';
+import type { BruteForcePolicy } from './realm-policy-readers';
 
 /** What a verification request carries: the mailed token and the account's password. */
 export interface EmailVerificationInput {
@@ -23,6 +24,12 @@ export interface EmailVerificationInput {
    * a token mailed for another realm's account is an unknown token here.
    */
   readonly realmId: string;
+  /**
+   * That realm's brute-force policy (`accountPoliciesOf`, #528): the password
+   * check here counts against the login routes' lockout, under the policy
+   * they count with.
+   */
+  readonly bruteForce: BruteForcePolicy;
   /** The 64-hex-character token from the verification mail, already format-checked. */
   readonly token: string;
   /** The password chosen at registration. */
@@ -94,7 +101,7 @@ export async function verifyEmailAddress(
   fastify: FastifyInstance,
   request: ClientAddressSource,
   reply: RetryAfterReply,
-  { realmId, token, password }: EmailVerificationInput
+  { realmId, bruteForce, token, password }: EmailVerificationInput
 ): Promise<EmailVerificationResult> {
   // Token format already validated by the caller's Zod schema (64-char hex
   // string). This prevents CVE-2025-12374 style attacks at schema level.
@@ -160,7 +167,7 @@ export async function verifyEmailAddress(
   // the realm the login routes count it in. The attempt is counted before
   // the password is compared; a wrong one stays counted.
   const emailIdentifier = `email:${hashEmail(credential.externalSub)}`;
-  const lockout = await registerLoginAttempt(fastify.redis, credential.realmId, [
+  const lockout = await registerLoginAttempt(fastify.redis, credential.realmId, bruteForce, [
     emailIdentifier,
     `ip:${clientAddressKey(request)}`,
   ]);
@@ -179,7 +186,9 @@ export async function verifyEmailAddress(
     throw new InvalidCredentialsError('Incorrect password for this account');
   }
   // The password is proved: settle the attempt as a successful login does.
-  await recordSuccessfulLogin(fastify.redis, credential.realmId, lockout, [emailIdentifier]);
+  await recordSuccessfulLogin(fastify.redis, credential.realmId, bruteForce, lockout, [
+    emailIdentifier,
+  ]);
 
   // 5.-6. Completion write set (one transaction): consume the token and
   // flip credential_data.email_verified + the attribute's verified flag —

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
-import { env } from '../../config/env';
 import { REDIS_KEYS } from '../constants';
+import type { BruteForcePolicy } from './realm-policy-readers';
 
 /**
  * The Redis client type, derived from the `fastify.redis` decorator that the
@@ -14,13 +14,23 @@ type RedisClient = FastifyInstance['redis'];
  * Failed-login throttling / lockout (QAuth §3.1.12, #115).
  *
  * Tracks login attempts per identifier (email and/or IP) in Redis and,
- * after `FAILED_LOGIN_MAX_ATTEMPTS` failures inside `FAILED_LOGIN_WINDOW`,
- * applies a temporary lockout for `FAILED_LOGIN_LOCKOUT_DURATION` seconds.
+ * after `maxAttempts` failures inside `windowSeconds`, applies a temporary
+ * lockout for `lockoutSeconds`: the brute-force policy of the realm the login
+ * is for (`bruteForce`, ADR-019 Decision 10, #528), which its caller reads
+ * from the realm row (`accountPoliciesOf`). A realm whose policy is off is
+ * neither counted nor locked. `FAILED_LOGIN_TRACKING_ENABLED`,
+ * `FAILED_LOGIN_MAX_ATTEMPTS`, `FAILED_LOGIN_WINDOW` and
+ * `FAILED_LOGIN_LOCKOUT_DURATION` only seed that policy in a new realm.
  *
  * Every key carries the realm the login is for (#487): an account belongs to
  * one realm, so the same address in two realms is two accounts, each with its
  * own count and lockout, and a source address is counted per realm, as the
- * rate limits are (`realmRateLimitKey`).
+ * rate limits are (`realmRateLimitKey`). So failures in one realm never lock
+ * the same identifier in another, whatever either realm's policy.
+ *
+ * A policy change applies from the next attempt: a lockout already armed runs
+ * out its time, and a counter already started keeps its window, unless the
+ * realm switches the policy off, which stops both being read at once.
  *
  * An attempt is counted BEFORE its password is verified, and the atomic
  * `INCR` of that count is the gate. Counting a failure only once Argon2id had
@@ -75,17 +85,19 @@ export interface LoginAttempt extends LockoutStatus {
  *
  * @param redis - The Redis client (`fastify.redis`).
  * @param realmId - The realm the login is for (`request.realm`).
+ * @param policy - That realm's brute-force policy (`accountPoliciesOf`).
  * @param identifiers - Identifiers to check and count (e.g. email hash and/or
  *                      IP).
- * @returns The lockout status; `locked: false` when tracking is disabled or
- *          Redis is unreachable.
+ * @returns The lockout status; `locked: false` when the realm's policy is off
+ *          or Redis is unreachable.
  */
 export async function registerLoginAttempt(
   redis: RedisClient,
   realmId: string,
+  policy: BruteForcePolicy,
   identifiers: string[]
 ): Promise<LoginAttempt> {
-  if (!env.FAILED_LOGIN_TRACKING_ENABLED) {
+  if (!policy.enabled) {
     return { locked: false };
   }
 
@@ -106,24 +118,24 @@ export async function registerLoginAttempt(
 
       // Set the window TTL on the first attempt.
       if (attempts === 1) {
-        await redis.expire(attemptsKey, env.FAILED_LOGIN_WINDOW);
+        await redis.expire(attemptsKey, policy.windowSeconds);
       }
 
       // The attempt that reaches the threshold is the last one let through,
       // and arms the lockout on its way in. NX lets exactly one attempt arm
       // it; any other attempt at or past the threshold finds it armed and is
       // refused, however far ahead of it the lockout check let it get.
-      if (attempts >= env.FAILED_LOGIN_MAX_ATTEMPTS) {
+      if (attempts >= policy.maxAttempts) {
         const result = await redis.set(
           REDIS_KEYS.FAILED_LOGIN_LOCKOUT(realmId, identifier),
           '1',
           'EX',
-          env.FAILED_LOGIN_LOCKOUT_DURATION,
+          policy.lockoutSeconds,
           'NX'
         );
         if (result !== 'OK') {
           await withdrawAttempt(redis, realmId, counted, armed);
-          return { locked: true, retryAfterSeconds: env.FAILED_LOGIN_LOCKOUT_DURATION };
+          return { locked: true, retryAfterSeconds: policy.lockoutSeconds };
         }
         armed.push(identifier);
       }
@@ -146,20 +158,22 @@ export async function registerLoginAttempt(
  *
  * @param redis - The Redis client (`fastify.redis`).
  * @param realmId - The realm `registerLoginAttempt` counted the attempt in.
+ * @param policy - The brute-force policy `registerLoginAttempt` was given.
  * @param attempt - What `registerLoginAttempt` returned for this login.
  * @param proven - Identifiers the login proved (the `email:` identifier).
  */
 export async function recordSuccessfulLogin(
   redis: RedisClient,
   realmId: string,
+  policy: BruteForcePolicy,
   attempt: LoginAttempt,
   proven: string[]
 ): Promise<void> {
-  if (!env.FAILED_LOGIN_TRACKING_ENABLED) {
+  if (!policy.enabled) {
     return;
   }
 
-  await resetFailedAttempts(redis, realmId, proven);
+  await resetFailedAttempts(redis, realmId, policy, proven);
   await withdrawAttempt(
     redis,
     realmId,
@@ -207,14 +221,16 @@ async function withdrawAttempt(
  *
  * @param redis - The Redis client (`fastify.redis`).
  * @param realmId - The realm whose state is cleared.
+ * @param policy - That realm's brute-force policy; nothing is cleared when it is off.
  * @param identifiers - Identifiers to reset (e.g. email hash).
  */
 export async function resetFailedAttempts(
   redis: RedisClient,
   realmId: string,
+  policy: BruteForcePolicy,
   identifiers: string[]
 ): Promise<void> {
-  if (!env.FAILED_LOGIN_TRACKING_ENABLED) {
+  if (!policy.enabled) {
     return;
   }
 
