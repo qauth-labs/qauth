@@ -4,6 +4,8 @@ export * from './assurance/credential-assurance';
 export * from './assurance/key-storage-evidence';
 export * from './assurance/resolve-assurance-policy';
 export * from './attestation';
+// The AuthMethod contract (#599): EXPERIMENTAL, the plugin API of ADR-018 §4.
+export * from './auth-method';
 export * from './claims/attribute-trust';
 export * from './claims/credential-claim-adapters';
 export type * from './claims/credential-claims.types';

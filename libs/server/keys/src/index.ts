@@ -50,6 +50,7 @@ export {
 export {
   type CookieSecret,
   type CookieSecrets,
+  type CookieSecretsOptions,
   type DecryptRequest,
   type EncryptRequest,
   type JwsKeyAlgorithm,

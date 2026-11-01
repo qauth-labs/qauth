@@ -80,6 +80,8 @@ function makeFastify() {
   const ctx: TestContext = { urls: [] };
   const sessions = createBrowserSessionFixture();
   const fastify: any = {
+    // The module's own hooks: the deprecation headers since #524.
+    addHook: vi.fn(),
     withTypeProvider: () => ({
       get: (u: string, _o: unknown, h: any) => {
         ctx.urls.push({ method: 'GET', url: u });
@@ -107,6 +109,7 @@ function makeFastify() {
     },
     db: { transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => cb('tx')) },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };

@@ -4,19 +4,19 @@ import { OAUTH_SCOPE_PARAM_MAX_LENGTH } from '../constants/security';
 import { boundedArray, exactUrl } from './common';
 
 /** Most redirect URIs a client may register, as in dynamic registration. */
-const CLIENT_REDIRECT_URIS_MAX = 20;
+export const CLIENT_REDIRECT_URIS_MAX = 20;
 /** Most scopes a client may hold. */
-const CLIENT_SCOPES_MAX = 100;
+export const CLIENT_SCOPES_MAX = 100;
 /**
  * One scope, no longer than the `scope` parameter it would be requested in.
  * Bounded so a stored row cannot be inflated through it; the handler then
  * de-duplicates the list and checks it against the realm's allowlist.
  */
-const clientScopeSchema = z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH);
+export const clientScopeSchema = z.string().max(OAUTH_SCOPE_PARAM_MAX_LENGTH);
 /** Most grant types a client may list, as in dynamic registration. */
-const CLIENT_GRANT_TYPES_MAX = 8;
+export const CLIENT_GRANT_TYPES_MAX = 8;
 /** Most response types a client may list, as in dynamic registration. */
-const CLIENT_RESPONSE_TYPES_MAX = 4;
+export const CLIENT_RESPONSE_TYPES_MAX = 4;
 
 /**
  * Client-management API schemas (issue #85, task 2.2.1).

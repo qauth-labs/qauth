@@ -148,6 +148,7 @@ function makeFastify() {
       register: vi.fn(),
     },
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
@@ -192,8 +193,8 @@ describe('UI /ui/login — CSRF defence', () => {
     await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, reply);
 
     const cookieValue = csrfCookieValue(state.setCookies);
-    // `<token>.<hmac>` — the raw token is the part before the separator.
-    const rawToken = cookieValue.split('.')[0];
+    // `<kid>.<token>.<mac>` (#493) — the raw token is the middle part.
+    const rawToken = cookieValue.split('.')[1];
     expect(rawToken.length).toBeGreaterThan(0);
     expect(state.body as string).toContain('name="csrf_token"');
     expect(state.body as string).toContain(`value="${rawToken}"`);
@@ -249,7 +250,7 @@ describe('UI /ui/login — CSRF defence', () => {
     const getReply = createReply();
     await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
-    const rawToken = cookieValue.split('.')[0];
+    const rawToken = cookieValue.split('.')[1];
 
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
@@ -312,7 +313,7 @@ describe('UI /ui/login — CSRF defence', () => {
       identifier: 'user@example.com',
     });
     // The cookie names the new session.
-    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(session.sid));
+    expect(sessionCookieSet(state.setCookies)).toBe(await sessionCookie(fastify, session));
     // The new session is recorded under its user, so `/auth/logout` can end it.
     expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([session.sid]));
 
@@ -334,7 +335,7 @@ describe('UI /ui/login — CSRF defence', () => {
     const getReply = createReply();
     await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
-    const rawToken = cookieValue.split('.')[0];
+    const rawToken = cookieValue.split('.')[1];
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
     ).mockResolvedValue(credentialFixture());
@@ -375,7 +376,7 @@ describe('UI /ui/login — CSRF defence', () => {
     const getReply = createReply();
     await ctx.get({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
-    const rawToken = cookieValue.split('.')[0];
+    const rawToken = cookieValue.split('.')[1];
 
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
@@ -410,7 +411,7 @@ describe('UI /ui/login — CSRF defence', () => {
     expect(sessions.service.create).toHaveBeenCalledOnce();
     const session = await sessions.service.create.mock.results[0].value;
     expect(session.sid).not.toBe('planted-sid');
-    expect(sessionCookieSet(state.setCookies)).toBe(sessionCookie(session.sid));
+    expect(sessionCookieSet(state.setCookies)).toBe(await sessionCookie(fastify, session));
   });
 
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
@@ -426,9 +427,13 @@ describe('UI /ui/login — CSRF defence', () => {
       const { fastify, ctx, sessions } = makeFastify();
       await loginRoute(fastify);
       const getReply = createReply();
-      await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+      // The login page of the same realm: its CSRF cookie is bound to it (#493).
+      await ctx.get!(
+        { query: {}, headers: {}, ip: '127.0.0.1', realm: options.realm },
+        getReply.reply
+      );
       const cookieValue = csrfCookieValue(getReply.state.setCookies);
-      const rawToken = cookieValue.split('.')[0];
+      const rawToken = cookieValue.split('.')[1];
 
       (
         fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
@@ -612,7 +617,7 @@ describe('UI /ui/login — CSRF defence', () => {
     const getReply = createReply();
     await ctx.get({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
-    const rawToken = cookieValue.split('.')[0];
+    const rawToken = cookieValue.split('.')[1];
 
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
@@ -643,7 +648,7 @@ describe('UI /ui/login — CSRF defence', () => {
     const getReply = createReply();
     await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
-    const rawToken = cookieValue.split('.')[0];
+    const rawToken = cookieValue.split('.')[1];
 
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
@@ -753,7 +758,7 @@ describe('UI /ui/login — return_to open-redirect guard', () => {
     const getReply = createReply();
     await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
     const cookieValue = csrfCookieValue(getReply.state.setCookies);
-    const rawToken = cookieValue.split('.')[0];
+    const rawToken = cookieValue.split('.')[1];
 
     (
       fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock

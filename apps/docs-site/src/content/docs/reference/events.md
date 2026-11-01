@@ -211,6 +211,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | ------------------------------------------------------------------------------------------------------ | -------- | -------- | ------ |
 | [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                      | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                            | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                    | user     | info     | v0.2.0 |
@@ -239,6 +240,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)                        | user     | info     | v0.2.0 |
 | [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                  | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                  | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:client.first_party_changed:v1-rc.0`](#clientfirst_party_changed-v1-rc0)              | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                        | user     | info     | v0.2.0 |
@@ -282,6 +284,20 @@ A sign-in was refused: an unknown identifier, a wrong credential, a locked or di
 | `reason`          | string                                        | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                                                                                                                |
 | `identifierHmac`  | string                                        | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
 | `verifierProfile` | string                                        | no       | The verifier profile the wallet presentation was checked under, such as `haip-1.0`.                                                                                                                                            |
+
+### user.sign_in_step_passed v1-rc.0
+
+The sign-in engine accepted an answer to one step of a sign-in: the identifier, a solved bot challenge, or a factor that proved who the person is. A refused answer is user.sign_in_failed; the session or the tokens the sign-in leads to are user.signed_in.
+
+- Identifier: `urn:qauth:event:user.sign_in_step_passed:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.sign_in_step_passed.v1-rc.0.json](/schemas/events/user.sign_in_step_passed.v1-rc.0.json)
+
+| Member           | Type   | Required | Meaning                                                                                                                                                                                                                        |
+| ---------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `step`           | string | yes      | The step whose answer was accepted.                                                                                                                                                                                            |
+| `identifierHmac` | string | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
 
 ### user.signed_out v1-rc.0
 
@@ -677,6 +693,25 @@ An operator lifted a client's suspension.
 - Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
+
+### client.first_party_changed v1-rc.0
+
+An operator set, changed or removed a client's first-party profile (ADR-017 Decision 2), its policy or its written reason. Removing the profile revoked every refresh token family of the client in the same transaction.
+
+- Identifier: `urn:qauth:event:client.first_party_changed:v1-rc.0`
+- Category: `admin` · Severity: `warning` · Since: v0.2.0
+- Subject: `client`, when known
+- Schema: [client.first_party_changed.v1-rc.0.json](/schemas/events/client.first_party_changed.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member              | Type                                                             | Required | Meaning                                                                                                                                                                                                     |
+| ------------------- | ---------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `from`              | one of `web_redirect`, `native_backend`, or a later value or any | yes      | `web_redirect` or `native_backend`: the profile before the change, or `null` when the client was not first party. The set may grow in a minor release.                                                      |
+| `to`                | one of `web_redirect`, `native_backend`, or a later value or any | yes      | The profile after the change, or `null` when it was removed. The set may grow in a minor release.                                                                                                           |
+| `flows`             | array of one of `login`, `register`, `reset`, or a later value   | no       | A `native_backend` client's flows after the change: `login`, `register`, `reset`. Absent for any other profile.                                                                                             |
+| `pkceRequired`      | boolean                                                          | no       | Whether a `native_backend` client's policy requires PKCE at the authorization challenge endpoint after the change. `false` is a deviation the operator chose for this client. Absent for any other profile. |
+| `writtenReason`     | string                                                           | no       | The reason the operator wrote for the profile, as stored with the client. Absent when the profile was removed.                                                                                              |
+| `revokedTokenCount` | integer                                                          | yes      | How many refresh tokens the removal revoked: every token of every family of the client that was not already revoked, expired ones included. `0` when the profile was set or changed.                        |
 
 ### api_key.created v1-rc.0
 

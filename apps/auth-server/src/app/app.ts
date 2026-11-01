@@ -55,11 +55,13 @@ import {
   eventTelemetrySettings,
 } from './helpers/event-telemetry';
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
+import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
 import { realmIssuer, tokenRealm } from './helpers/realm-url';
 import { requestRealm } from './helpers/request-realm';
+import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-boot';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
@@ -652,6 +654,22 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
   }
 
+  // The developer portal's token carries the developer API's audience since
+  // #524: every realm's system client gets it as the process boots, after
+  // the default realm's step. A process that does not sign developers in
+  // (`/auth/login` is an `api` route) reads no client.
+  if (defaultRealmBoot && roles.includes('api')) {
+    fastify.addHook('onReady', async () => {
+      const changed = await giveSystemClientsTheDeveloperAudience(fastify);
+      if (changed > 0) {
+        fastify.log.info(
+          { changed, audience: SYSTEM_CLIENT_AUDIENCE },
+          'Gave the system client the developer API audience'
+        );
+      }
+    });
+  }
+
   // The signer's wiring (ADR-019 Decision 9, #464). The plugin loads the KEK:
   // NODE_ENV=production refuses to start without one. Every token is signed
   // through it, with the keys of the request's realm (#491), so it registers
@@ -663,10 +681,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // creates the realm: under the realm's key lock it imports each key variable
   // the realm's encrypted store lacks, creates the standard keys still missing
   // (an RS256 signing key too on a fresh deployment), and warns about every key
-  // variable still set. A signing variable that holds a new key replaces the
+  // variable still set. A signing variable that holds a new key, or a
+  // SESSION_COOKIE_SECRET that differs from the stored cookie key, replaces the
   // stored key until rotation through the store ships (#544, #551); otherwise
-  // tokens never read the variables. The session cookie keeps its variable
-  // until it moves onto the signer (#493).
+  // nothing reads the variables: tokens and the browser cookies are signed
+  // with the realm's keys (#491, #493).
   //
   // Only a process that holds the `signer` role loads it (#495). Any other
   // holds no KEK and no key: its `fastify.signer` refuses every signature,

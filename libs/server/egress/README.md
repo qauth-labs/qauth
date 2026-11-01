@@ -181,7 +181,10 @@ id is refused.
 response head at 16 KiB and tolerates at most three `1xx` interim responses. Chunk-size lines, chunk
 extensions and trailers are not body bytes, so it also caps everything it reads from the connection
 at twice `maxResponseBytes` plus room for the heads; a host cannot stream framing until the total
-timeout.
+timeout. A response with more than 100 headers (a repeated header counts once), a header name over
+256 bytes or a header value over 8 KiB, a redirect's `Location` included, fails with `network`, the
+message naming the bound: these are bounds of the [channel](#the-channel) a fetch process answers
+on.
 
 ## Fetch processes
 
@@ -198,11 +201,11 @@ A process can be killed.
   end of the TLS handshake; the total time runs for the whole call. A process that passes either is
   killed with `SIGKILL`, the call fails with `timeout`, and a fresh process starts when a call next
   needs one. A process holds its slot until it has exited.
-- **Nothing of the server's.** A process starts with an empty environment (Node adds the two
-  variables of its IPC channel and removes them at start), `/dev/null` for its standard streams, no
-  file descriptor of the server's but that channel, none of the server's Node flags, a 64 MiB heap,
-  the lowest CPU priority and, on Linux, the highest OOM score, so that the kernel ends a fetch
-  process before the server when memory runs out.
+- **Nothing of the server's.** A process starts with an empty environment, `/dev/null` for its
+  standard streams, no file descriptor of the server's but its [channel](#the-channel), none of the
+  server's Node flags and no native addons (`--no-addons`), a 64 MiB heap, the lowest CPU priority
+  and, on Linux, the highest OOM score, so that the kernel ends a fetch process before the server
+  when memory runs out.
 - **The descriptors, in detail.** Node opens its own descriptors close-on-exec and marks a low few
   it inherits, but a supervisor (a CI runner, an init system, a shell) can hand the server higher
   ones without close-on-exec, and libuv's spawn closes none. On Linux the pool lists those
@@ -225,8 +228,8 @@ A process can be killed.
   against its total time.
 - **One exchange at a time.** A process runs one exchange, sends back the status, the headers and
   the body, and waits for the next; it keeps nothing between them. An idle process exits after a
-  minute. The pool checks every answer — its shape, the body against `maxResponseBytes`, a failure
-  message kept to one line that names the host — and kills a process that answers out of turn.
+  minute. The pool checks every answer against the bounds of the [channel](#the-channel) and kills
+  a process that answers out of turn, out of shape or beyond a bound.
 - **Loaded from source.** Node does not strip the types of a file under `node_modules`, where a
   deployment keeps this library, so the pool reads `exchange.ts` and hands it to Node with
   `--input-type=module-typescript --eval`. That file therefore imports `node:` builtins only, and
@@ -235,9 +238,9 @@ A process can be killed.
   server's memory; allow for it in a container limit. Processes start only for concurrent calls and
   exit after a minute without one.
 - **Killability, not confidentiality.** A fetch process runs as the server's user. The pool keeps a
-  host from holding the server's CPU or its slots past a deadline; it does not keep the server's
-  secrets from a fetch process that a host has taken over, which can read
-  `/proc/<server pid>/environ`, or end the server through the channel.
+  host from holding the server's CPU or its slots past a deadline, and bounds what a fetch process
+  can make the server read and keep; it does not keep the server's secrets from a fetch process that
+  a host has taken over, which can read `/proc/<server pid>/environ`.
 
 `egressPoolStats()` returns what the pool is doing, for `/metrics`:
 
@@ -263,6 +266,63 @@ new Gauge({
   },
 });
 ```
+
+### The channel
+
+The pool and a fetch process talk over one socket, the process's descriptor 3 (`stdio[3]`), not
+over Node's IPC channel. Node deserializes an IPC message whole, whatever its size, before its
+receiver sees it, and a fetch process is the side the server does not trust: a host may have taken
+it over, through a bug in OpenSSL or in Node's HTTP parser. Whatever such a process sends, the
+server stays up and its memory stays bounded.
+
+Everything on the socket is a frame: a five-byte header, which is the frame's type (one byte) and
+the length of its payload (four bytes, big-endian), then the payload. The pool sends `init` (the
+server's TLS setup) once, then one `exchange` at a time; these come from the side a fetch process
+trusts and carry JSON. What a fetch process sends has a fixed binary layout, and the pool takes a
+frame of a type only when the process may send it, at most as long as that type's cap:
+
+| Frame      | When the process may send it                    | Payload                                                                                                                                                                                           | Cap                         |
+| ---------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `ready`    | Once, first.                                    | Nothing.                                                                                                                                                                                          | 0 bytes                     |
+| `secured`  | Once per exchange: its TLS handshake is done.   | The exchange's id (4 bytes).                                                                                                                                                                      | 4 bytes                     |
+| `failure`  | To end an exchange.                             | Id (4), reason (1: `timeout`, `network` or `size`), message length (2), message in UTF-8.                                                                                                         | 2 055 bytes                 |
+| `response` | To end an exchange, once it has sent `secured`. | Id (4), status (2), header count (2); per header the name's length (2) and the name, the value's length (2) and the value; a location flag (1) and the location's length (2) and bytes; the body. | `maxResponseBytes` + 24 987 |
+
+Each field of a frame is checked against its own bound before it is decoded:
+
+| Field                     | Bound                                                                                                                                                              |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Id                        | The exchange the process runs.                                                                                                                                     |
+| Status                    | 100 to 999.                                                                                                                                                        |
+| Headers                   | 100, each name once (a repeated header's values are joined with `, `).                                                                                             |
+| Header name               | 256 bytes; a lower-case token.                                                                                                                                     |
+| Header value              | 8 KiB; valid as an HTTP header value (no line break or control character).                                                                                         |
+| Names and values together | 16 KiB, the cap of the response head.                                                                                                                              |
+| `Location`                | 8 KiB; valid as an HTTP header value.                                                                                                                              |
+| Body                      | The job's `maxResponseBytes`.                                                                                                                                      |
+| Failure reason            | `timeout`, `network` or `size`; `busy` is the pool's own.                                                                                                          |
+| Failure message           | 2 KiB of valid UTF-8 as sent, before the pool cleans it; then one line of 512 characters at most that starts `egress to <host> failed: `, or the pool's own words. |
+
+On a bad frame:
+
+- **Refused from its header.** A frame of a type the process may not send now (anything while it
+  runs no exchange, a response before `secured`, a second `ready` or `secured`), or longer than its
+  type's cap, is refused once its five header bytes are in, before any of its payload is read. The
+  pool stops reading the socket, kills the process with `SIGKILL` and fails its call with `network`:
+  `the fetch process sent a frame above its size cap`, or `the fetch process sent an invalid
+  answer`. What the pool took from the socket is the bytes before the header and, at most, the rest
+  of the one read (64 KiB) the header arrived in; what the process writes after that is never read.
+- **Refused from a field.** A frame within its cap whose fields break a bound above is refused the
+  same way, with `the fetch process sent an invalid answer`.
+- **Memory.** A frame that passed its header takes one buffer of the length it announced, at most
+  its cap, until its last byte is in; the pool keeps nothing else of a process's bytes. With the
+  default limits that is about 1 MiB per busy process.
+- **A closed channel.** A process that closes its end of the socket is killed; its call fails once it
+  has exited, with `the fetch process ended without a result`.
+
+The exchange holds a host's response to the same header bounds first (`responseHeadProblem`), so an
+unusual host fails with `network` and the bound it broke, not with a killed process. None of these
+kills counts in `deadlineKills`.
 
 ## Errors, counts and logs
 
@@ -304,7 +364,12 @@ stalls mid-handshake and one that keeps OpenSSL busy for seconds (`src/testing/h
 are killed at the deadline while another host is served; many host names of one server hold no
 more than the family's share; and on Linux `/proc` shows what a process inherits: its environment
 and its file descriptors, also when the server holds a descriptor without close-on-exec (the test
-starts a vitest that holds one at descriptor 200, as a CI runner does).
+starts a vitest that holds one at descriptor 200, as a CI runner does). It also holds the unit tests
+of the channel: the frame reader, the caps per frame type and each field bound, at its cap and one
+past it. `src/lib/process-pool-channel.test.ts` runs a hostile program in place of the exchange,
+started by the pool as it starts any fetch process, and shows each bad frame refused, the process
+killed and its call failed; for a frame announced at 4 GiB and then streamed, the channel's
+`bytesRead` stays within one read of the header.
 Run them with:
 
 ```console

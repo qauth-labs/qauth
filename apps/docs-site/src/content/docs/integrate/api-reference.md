@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-10-26'
+lastVerified: '2026-10-31'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -199,11 +199,14 @@ address is at most 254 characters.
 }
 ```
 
-The access token is issued to the system client, and its `aud` is the system
-client's id. The routes that take this token also accept one whose `aud` is the
-developer API's audience, `urn:qauth:aud:developer:v1-rc.0`, which a later
-release mints (see
-[API conventions](/reference/api-conventions/#issuing-a-family-audience)).
+The access token is issued to the system client, and its `aud` is the developer
+API's audience, `urn:qauth:aud:developer:v1-rc.0` (#524): it reaches the
+[Developer API](#developer-api-developer-family-v1-rc0), the deprecated
+`/api/clients/` and `/api/consents/`, userinfo and `POST /auth/logout`. A token
+minted before #524, whose `aud` was the system client's id, is refused there, so
+its developer signs in again (see
+[API conventions](/reference/api-conventions/#issuing-a-family-audience)). It
+is not a sign-in at `GET /oauth/authorize`, which takes only the browser session.
 
 Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
 The `401` is the same for an unknown address, a wrong password, a disabled
@@ -494,13 +497,49 @@ server is too busy to check the client secret (`temporarily_unavailable`; RFC
 ## Discovery
 
 Unauthenticated and cacheable. The discovery documents carry
-`Cache-Control: public, max-age=3600`; the JWKS carries `public, max-age=300`.
+`Cache-Control: public, max-age=3600`; the JWKS carries `public, max-age=300`,
+so an HTTP cache keeps a key set for at most five minutes. A JWKS client
+library keeps its own cache: set it to five minutes at most
+([Caching the JWKS](/integrate/oauth-flow/#caching-the-jwks)).
 
-| Endpoint                                      | Returns                                      |
-| --------------------------------------------- | -------------------------------------------- |
-| `GET /.well-known/oauth-authorization-server` | OAuth 2.0 AS metadata (RFC 8414)             |
-| `GET /.well-known/openid-configuration`       | OIDC Discovery 1.0 (superset of the above)   |
-| `GET /.well-known/jwks.json`                  | JWKS — active EdDSA public key(s) (RFC 7517) |
+| Endpoint                                      | Returns                                                    |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `GET /.well-known/oauth-authorization-server` | OAuth 2.0 AS metadata (RFC 8414)                           |
+| `GET /.well-known/openid-configuration`       | OIDC Discovery 1.0 (superset of the above)                 |
+| `GET /.well-known/jwks.json`                  | JWKS — the realm's published token signing keys (RFC 7517) |
+
+All three are the documents of the realm the request's host names
+([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/),
+Decision 1):
+
+- `issuer` is the realm's issuer, and every endpoint URL, `jwks_uri` included,
+  is built on it.
+- The JWKS lists the realm's published keys, each under its own `kid`: its
+  active keys, a next key from its publication, before it signs, and a retired
+  key while it stays published (after a rotation, until its retention ends).
+  No other realm's key is in it.
+- `id_token_signing_alg_values_supported` follows the realm's active keys:
+  `["RS256","EdDSA"]` when it has an active RS256 key, else `["EdDSA"]`.
+- The settings that add members belong to the deployment, and every realm
+  advertises them alike: `CIMD_ENABLED`, `DPOP_ENABLED`, and `ID_JAG_ENABLED`
+  once `ID_JAG_TRUSTED_ISSUERS` names an issuer.
+
+Every node that serves these documents (a process holding the `api` role, see
+[Service roles](/operate/service-roles/)) answers the same bytes for the same
+realm, whether or not it holds the signer, given the same settings. After a key
+changes, a node may serve its previous key list for up to a minute, its key
+refresh interval. A host that names no realm gets `421` for all three, with no
+fallback to the default realm.
+
+An endpoint host (`DEFAULT_REALM_ENDPOINT_HOSTS`) gets its realm's documents
+unchanged: `issuer` and every URL name the realm's issuer, never the endpoint
+host, and no document lists endpoint hosts. RFC 8414 §3.3 and OpenID Connect
+Discovery §4.3 ask a client to check that `issuer` is the issuer whose
+well-known URL it fetched, which an endpoint host's URL is not. A server-side
+caller that reaches QAuth through an endpoint host must therefore configure the
+realm's issuer explicitly, check `issuer` and the tokens' `iss` against it, and
+use the endpoint host only as the address it connects to. A client library that
+takes the expected issuer from the URL it fetched refuses these documents.
 
 Prefer discovering endpoint URLs from these documents over hard-coding paths.
 The AS metadata advertises `resource_indicators_supported: true`,
@@ -620,7 +659,186 @@ The wallet-login screens below are registered **only** when
 
 ---
 
+## Developer API (`developer` family, v1-rc.0)
+
+A developer's OAuth clients, their static API keys, and the developer's own consents (#524). The
+paths follow the [API conventions](/reference/api-conventions/): JSON members in `camelCase`, except
+registered OAuth client metadata, which keeps its RFC 7591 name (`client_id`, `client_name`,
+`redirect_uris`, `grant_types`, `response_types`, `token_endpoint_auth_method`, `client_secret`);
+times as RFC 3339 strings; lists as `{ "items": [...], "nextCursor": ... }` with `limit` (1 to 200,
+default 50) and `cursor`; an `ETag` on every read of a client, and `If-Match` on its update; errors as
+problem documents.
+
+**Authentication.** `Authorization: Bearer <access_token>` (or `DPoP` while DPoP is on), where the
+token's only audience is `urn:qauth:aud:developer:v1-rc.0`, it carries no `act` claim, and its subject
+is an enabled user of the realm. The token [`POST /auth/login`](#post-authlogin) mints for the
+developer portal is one. A token for another family, or with no family audience, is refused with
+`401` `invalid_access_token`, before the request is validated.
+
+**Ownership.** Every route reads only the caller's own clients. A client that does not exist, that
+another developer owns, or that belongs to another realm is `404` `not_found`, never `403`.
+
+### `GET /developer/v1-rc.0/clients`
+
+List the caller's clients, newest first.
+
+**Query**: `limit`, `cursor`.
+
+**`200 OK`**
+
+```json
+{
+  "items": [
+    {
+      "id": "0b9f7d4e-5c1a-4f7e-9d2b-3a6c8e1f0a42",
+      "client_id": "3f1c…",
+      "client_name": "My App",
+      "description": null,
+      "redirect_uris": ["https://app.example.com/cb"],
+      "scopes": ["openid"],
+      "grant_types": ["authorization_code", "refresh_token"],
+      "response_types": ["code"],
+      "token_endpoint_auth_method": "client_secret_basic",
+      "enabled": true,
+      "suspended": false,
+      "requirePkce": true,
+      "environment": "production",
+      "staticApiKeysAllowed": false,
+      "createdAt": "2026-10-31T09:30:00.000Z",
+      "updatedAt": "2026-10-31T09:30:00.000Z",
+      "lastUsedAt": null
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+`scopes` is a list, as the client stores it. `environment`, `staticApiKeysAllowed` and `suspended`
+are read-only. Errors: `400` (`validation_error` for a `limit` above 200, `invalid_cursor` for a cursor
+this list did not issue), `401`.
+
+### `POST /developer/v1-rc.0/clients`
+
+Create a client. The body is a closed object: `client_name` (required), `description`,
+`redirect_uris`, `scopes`, `grant_types`, `response_types`, `token_endpoint_auth_method`. Left out,
+they take the defaults of dynamic registration: `authorization_code` and `refresh_token`, the `code`
+response type, and a public client (`none`, PKCE).
+
+**`201 Created`**, with `ETag` and `Location`: the client, and `client_secret` for a confidential
+client, in this answer only. Errors: `400` (`validation_error`, `invalid_redirect_uri`,
+`invalid_client_metadata` for a scope the realm does not allow), `401`, `403` (the per-developer
+client limit), `429`.
+
+### `GET /developer/v1-rc.0/clients/{clientId}`
+
+One client, with its `ETag`. `{clientId}` is the client's `id`, not its `client_id`. The `ETag` covers
+every member but `lastUsedAt`, which changes whenever the client is used and no update writes.
+Errors: `400`, `401`, `404`.
+
+### `PATCH /developer/v1-rc.0/clients/{clientId}`
+
+Change a client with a JSON Merge Patch (RFC 7396), sent as `application/merge-patch+json`, naming
+the version it changes in `If-Match`. Members: `client_name`, `description`, `redirect_uris`,
+`scopes`, `grant_types`, `response_types`, `token_endpoint_auth_method`, `enabled`. A member left out
+keeps its value; a list is replaced whole; `null` gives a member the value a create gives it when it
+is left out (`description` none, the lists empty, the grant and response types and the auth method
+their defaults, `enabled` true). `enabled` does not lift an operator's suspension.
+
+The merged client must pass the rules a create checks, and a refusal answers as there: `400`
+`invalid_redirect_uri` (a user-facing grant left without a redirect URI) or `invalid_client_metadata`
+(grant and response types that do not fit, a scope the realm does not allow).
+
+**`200 OK`**: the client and its new `ETag`. Errors: `400` (`validation_error`, also for a member the
+patch may not name, such as `client_id`; the create rules above), `401`, `404`, `412` (`precondition_failed`: the client
+changed since that `ETag`; read it again), `415` (a body that is not a merge patch), `422`
+(`unprocessable_content`: `client_name` set to `null`), `428` (`precondition_required`: no
+`If-Match`).
+
+### `DELETE /developer/v1-rc.0/clients/{clientId}`
+
+Delete a client. **`204 No Content`**. Errors: `400`, `401`, `404`.
+
+### `POST /developer/v1-rc.0/clients/{clientId}/regenerate-secret`
+
+Issue a new `client_secret` for a confidential client; the old one stops working at once.
+**`200 OK`**: the client and `client_secret`, in this answer only. Errors: `400` (a public client has
+no secret), `401`, `404`, `429`.
+
+### `GET /developer/v1-rc.0/clients/{clientId}/api-keys`
+
+A client's static API keys, newest first, masked (`prefix`, `last4`), revoked ones included
+(`revokedAt` set). `clientId` in each key is the client's `id`. **Query**: `limit`, `cursor`.
+**`200 OK`**: `{ "items": [...], "nextCursor": ... }`. Errors: `400`, `401`, `404`.
+
+### `POST /developer/v1-rc.0/clients/{clientId}/api-keys`
+
+Mint a key: `{ "name": "ci" }`. Only while the client's effective environment is `development`
+(ADR-008 §6). **`201 Created`**: the key's fields and the plaintext `key`, in this answer only.
+Errors: `400`, `401`, `403` (not a development client: use `client_credentials`), `404`, `429`.
+
+### `DELETE /developer/v1-rc.0/clients/{clientId}/api-keys/{keyId}`
+
+Revoke a key, idempotently: **`200 OK`** with the key, `revokedAt` set. Errors: `400`, `401`, `404`.
+
+### `GET /developer/v1-rc.0/consents`
+
+The caller's own active consents, as a user, by when each was first given, newest first (a new grant
+to the same client keeps its place, so a page never skips one). It serves the developer portal until the
+account console takes them over.
+
+**`200 OK`**
+
+```json
+{
+  "items": [
+    {
+      "id": "0b9f7d4e-5c1a-4f7e-9d2b-3a6c8e1f0a42",
+      "client_id": "https://agent.example.com/client.json",
+      "client_name": "My Agent",
+      "scopes": ["openid"],
+      "grantedAt": "2026-10-31T09:30:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Errors: `400`, `401`.
+
+### `DELETE /developer/v1-rc.0/consents/{consentId}`
+
+Revoke one of the caller's consents, with the refresh tokens and the unredeemed authorization codes
+the caller holds for that client. **`204 No Content`**. Errors: `400`, `401`, `404` (a consent of
+another user is the same `404` as one that does not exist).
+
+---
+
+## Account API (`account` family, v1-rc.0)
+
+An end user's own account (#524), for the account console's backend. A token whose only audience
+is `urn:qauth:aud:account:v1-rc.0`, sent as a Bearer or DPoP token; a token for the developer API is
+refused here with `401`, and the reverse. The conventions are those of the developer API above.
+
+### `GET /account/v1-rc.0/consents`
+
+The user's active consents, in the order and representation of
+`GET /developer/v1-rc.0/consents`. Errors: `400`, `401`.
+
+### `DELETE /account/v1-rc.0/consents/{consentId}`
+
+Revoke one of the user's consents, as `DELETE /developer/v1-rc.0/consents/{consentId}` does.
+**`204 No Content`**. Errors: `400`, `401`, `404`.
+
+---
+
 ## Consents (`/consents/`)
+
+:::caution[Deprecated]
+Deprecated since #524: every answer carries the `Deprecation` header (RFC 9745), and the operations
+are `deprecated` in `openapi.json`. Use [`GET /account/v1-rc.0/consents`](#get-accountv1-rc0consents).
+The path keeps working until the release-candidate cleanup removes it
+([Deprecations](/reference/api-conventions/#deprecations)).
+:::
 
 Lets a signed-in user manage their own OAuth consent grants from the auth-server's
 **hosted UI**. **Cookie-authed** (`__Host-qauth_session`), so it carries a CSRF
@@ -674,6 +892,12 @@ wired up yet), `401` (`unauthorized` — no or invalid session), `404`
 
 ## Consents API (`/api/consents/`)
 
+:::caution[Deprecated]
+Deprecated since #524, with the same `Deprecation` header. Use
+[`GET /developer/v1-rc.0/consents`](#get-developerv1-rc0consents) (the developer portal does) or
+the account API. The shapes below stay as they are until the path is removed.
+:::
+
 The same consent management, **Bearer-authed** — the credential the developer
 portal and any other API client actually holds. Same auth model as
 [`/api/clients/`](#client-management-apiclients): `Authorization: Bearer
@@ -722,6 +946,14 @@ outcome, so the API never reveals that another user's consent id exists).
 ---
 
 ## Client management (`/api/clients/`)
+
+:::caution[Deprecated]
+Deprecated since #524, with the same `Deprecation` header: use the
+[Developer API](#developer-api-developer-family-v1-rc0), which serves the same clients and API keys
+in the API conventions' representation. These routes accept only the developer portal's token, whose
+audience is `urn:qauth:aud:developer:v1-rc.0` since #524. The shapes below stay as they are until
+the paths are removed.
+:::
 
 Developer-portal API for managing a developer's own OAuth clients. **JSON**,
 **camelCase**, and authenticated with a developer **`Authorization: Bearer`**

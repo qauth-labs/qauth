@@ -2,8 +2,13 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import type { DeliveryRoute } from '@qauth-labs/fastify-plugin-event-delivery';
 import { bootRealmKeysWithKekEnv } from '@qauth-labs/fastify-plugin-signer';
-import { rotateRealmTokenKeys } from '@qauth-labs/fastify-plugin-signer/src/testing/database-key-rotation';
+import {
+  prepublishRealmTokenKeys,
+  rotateRealmTokenKeys,
+} from '@qauth-labs/fastify-plugin-signer/src/testing/database-key-rotation';
 import type {
+  TokenKeyPrepublication,
+  TokenKeyPrepublicationOptions,
   TokenKeyRotation,
   TokenKeyRotationOptions,
 } from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
@@ -144,11 +149,12 @@ const tokenKeyRotations = new WeakMap<
 
 /**
  * Rotate a realm's `token_signing` keys in the database of a server
- * {@link bootAuthServer} booted (#492): a new key of the algorithm (with its
- * ML-DSA-65 partner under hybrid signing) becomes active, and the active one
+ * {@link bootAuthServer} booted (#492): the key of the algorithm that
+ * {@link prepublishRealmKeys} published, or else a new one (with its
+ * ML-DSA-65 partner under hybrid signing), becomes active, and the active one
  * moves to `retired`, published until its retention ends, 14 days unless
- * `retiredRetentionMs` says otherwise. The wait between publishing the new key
- * and activating it is skipped.
+ * `retiredRetentionMs` says otherwise. A new key is activated at once, without
+ * the wait between publishing a key and activating it.
  *
  * The server's signer reads key lists at most once a minute, so it keeps
  * signing and verifying with what it read before. Boot another server on the
@@ -164,6 +170,34 @@ export async function rotateRealmKeys(
     throw new Error('rotateRealmKeys: the server was not booted by bootAuthServer');
   }
   return rotate(realmName, options);
+}
+
+/** Per booted server: publish a realm's `next` token key, by name, with the server's KEK and database. */
+const tokenKeyPrepublications = new WeakMap<
+  FastifyInstance,
+  (realmName: string, options: TokenKeyPrepublicationOptions) => Promise<TokenKeyPrepublication>
+>();
+
+/**
+ * Publish a new `next` `token_signing` key of a realm in the database of a
+ * server {@link bootAuthServer} booted (#494): the first half of a rotation.
+ * The key is in the realm's JWKS from then on and signs nothing until
+ * {@link rotateRealmKeys} activates it, which it does instead of creating a
+ * key of its own.
+ *
+ * As for a rotation, the server's signer reads key lists at most once a
+ * minute: boot another server on the same containers to see the key.
+ */
+export async function prepublishRealmKeys(
+  app: FastifyInstance,
+  realmName: string,
+  options: TokenKeyPrepublicationOptions = {}
+): Promise<TokenKeyPrepublication> {
+  const prepublish = tokenKeyPrepublications.get(app);
+  if (prepublish === undefined) {
+    throw new Error('prepublishRealmKeys: the server was not booted by bootAuthServer');
+  }
+  return prepublish(realmName, options);
 }
 
 /**
@@ -360,6 +394,8 @@ export async function bootAuthServer(
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
       key.startsWith('JWT_') ||
+      // A key variable too (#493): a boot that leaves it out boots without it.
+      key === 'SESSION_COOKIE_SECRET' ||
       key.startsWith('PQC_') ||
       key === 'HYBRID_SIGNING_ENABLED' ||
       key === 'SIGNING_ALGORITHM_MODE' ||
@@ -529,20 +565,22 @@ export async function bootAuthServer(
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
+    const keyDependencies = {
+      db: server.db,
+      kekEnv: bootEnvironment,
+      warn: () => undefined,
+      enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+      hybridSigning: env.HYBRID_SIGNING_ENABLED,
+    };
     tokenKeyRotations.set(server, async (realmName, rotation) => {
       const realm = await server.repositories.realms.findByName(realmName);
       if (realm === undefined) throw new Error(`rotateRealmKeys: no realm ${realmName}`);
-      return rotateRealmTokenKeys(
-        {
-          db: server.db,
-          kekEnv: bootEnvironment,
-          warn: () => undefined,
-          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
-          hybridSigning: env.HYBRID_SIGNING_ENABLED,
-        },
-        realm.id,
-        rotation
-      );
+      return rotateRealmTokenKeys(keyDependencies, realm.id, rotation);
+    });
+    tokenKeyPrepublications.set(server, async (realmName, prepublication) => {
+      const realm = await server.repositories.realms.findByName(realmName);
+      if (realm === undefined) throw new Error(`prepublishRealmKeys: no realm ${realmName}`);
+      return prepublishRealmTokenKeys(keyDependencies, realm.id, prepublication);
     });
   }
 

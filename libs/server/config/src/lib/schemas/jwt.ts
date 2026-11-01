@@ -49,6 +49,25 @@ function resolveKey(
 }
 
 /**
+ * The longest access token lifetime, in seconds, a deployment or a realm may
+ * set: one day, for staging and production clients and for development
+ * clients alike. A token must stay verifiable for its whole life, and a
+ * retired signing key leaves the verification set when its retention ends
+ * (`DEFAULT_KEY_RETIRED_RETENTION_DAYS`, 14 days, in
+ * `@qauth-labs/server-keys`), so the bound stays far below it. The ID token
+ * shares the access token's lifetime, so it is bounded too.
+ */
+export const MAX_ACCESS_TOKEN_LIFESPAN_SECONDS = 86_400;
+
+/**
+ * The longest refresh token lifetime, in seconds, a deployment or a realm may
+ * set: 90 days. A refresh token is a stored random value, not a signed one,
+ * so no key retention bounds it; a lifetime of years would only keep a stolen
+ * one useful that long.
+ */
+export const MAX_REFRESH_TOKEN_LIFESPAN_SECONDS = 90 * 86_400;
+
+/**
  * JWT environment configuration schema
  * JWT token generation and validation settings
  *
@@ -138,14 +157,20 @@ export const jwtEnvSchema = z
     JWT_ISSUER: z.url('JWT issuer must be a valid URL'),
 
     /**
-     * Access token expiration in seconds (default: 900 = 15 minutes).
+     * Access token expiration in seconds (default: 900 = 15 minutes; at most
+     * {@link MAX_ACCESS_TOKEN_LIFESPAN_SECONDS}).
      *
      * This is the `short` tier baseline used by the `staging` and `production`
      * environment profiles (ADR-008 §5, issue #197). The `development` profile
      * uses {@link DEV_ACCESS_TOKEN_LIFESPAN} instead so local tokens can be
      * long-lived for convenience without ever loosening production.
      */
-    ACCESS_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(900),
+    ACCESS_TOKEN_LIFESPAN: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(MAX_ACCESS_TOKEN_LIFESPAN_SECONDS)
+      .default(900),
 
     /**
      * Access token expiration in seconds for the `development` environment
@@ -160,12 +185,19 @@ export const jwtEnvSchema = z
       .number()
       .int()
       .positive()
+      .max(MAX_ACCESS_TOKEN_LIFESPAN_SECONDS)
       .default(8 * 60 * 60),
 
     /**
-     * Refresh token expiration in seconds (default: 604800 = 7 days)
+     * Refresh token expiration in seconds (default: 604800 = 7 days; at most
+     * {@link MAX_REFRESH_TOKEN_LIFESPAN_SECONDS}).
      */
-    REFRESH_TOKEN_LIFESPAN: z.coerce.number().int().positive().default(604800),
+    REFRESH_TOKEN_LIFESPAN: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(MAX_REFRESH_TOKEN_LIFESPAN_SECONDS)
+      .default(604800),
   })
   .transform((data) => {
     // Resolve the OPTIONAL private key: prefer file path, fallback to direct key.

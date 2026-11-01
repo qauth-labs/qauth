@@ -66,17 +66,19 @@ export type GrantType =
   | 'urn:ietf:params:oauth:grant-type:token-exchange';
 
 /**
- * Safe representation of an OAuth client as returned by every `/api/clients`
- * route except the secret-bearing responses. The plaintext `clientSecret` is
- * deliberately absent here — it only exists on {@link ClientWithSecret}.
- */
-/**
  * A client's effective deployment environment (ADR-008). Resolved server-side
  * as the stricter of the client's declared environment and its realm ceiling —
  * the portal only reads it, never sets it.
  */
 export type ClientEnvironment = 'development' | 'staging' | 'production';
 
+/**
+ * An OAuth client as the portal's pages use it: the developer API's
+ * representation (`/developer/v1-rc.0/clients`, #524) mapped onto the
+ * portal's own camelCase names, times as epoch milliseconds. The plaintext
+ * `clientSecret` is deliberately absent here — it only exists on
+ * {@link ClientWithSecret}.
+ */
 export interface OAuthClient {
   id: string;
   clientId: string;
@@ -107,6 +109,12 @@ export interface OAuthClient {
   createdAt: number;
   updatedAt: number | null;
   lastUsedAt: number | null;
+  /**
+   * The client's `ETag` when the answer carried one: the version an update
+   * names in `If-Match`, so a change made since this read is refused (412)
+   * instead of overwritten.
+   */
+  etag?: string;
 }
 
 /**
@@ -130,7 +138,7 @@ export interface ApiKey {
 }
 
 /**
- * Returned only by `POST /api/clients/:clientId/api-keys` (create). The
+ * Returned only by the mint of a key (`POST .../api-keys`). The
  * plaintext `key` is shown once and is unrecoverable afterwards — never persist
  * it beyond the one-time display modal.
  */
@@ -148,8 +156,8 @@ export interface CreateApiKeyInput {
 }
 
 /**
- * Returned only by `POST /api/clients` (create) and
- * `POST /api/clients/:id/regenerate-secret`. The `clientSecret` is shown once
+ * Returned only by a create and by `.../regenerate-secret`. The
+ * `clientSecret` is shown once
  * and is unrecoverable afterwards — never persist it beyond the one-time
  * display modal.
  */
@@ -158,8 +166,8 @@ export interface ClientWithSecret extends OAuthClient {
 }
 
 /**
- * One row of `GET /api/consents` (issue #366). The auth-server owns the shape;
- * this mirrors `consentRowSchema` in `routes/consents-api`.
+ * One active consent of the developer as a user (issue #366), from
+ * `GET /developer/v1-rc.0/consents`, mapped onto the portal's names.
  */
 export interface Consent {
   id: string;
@@ -242,6 +250,14 @@ const PROBLEM_CODE_MAP: Readonly<Record<string, string>> = {
   access_token_expired: 'UNAUTHENTICATED',
   not_found: 'NOT_FOUND',
   too_many_requests: 'RATE_LIMITED',
+  // The developer API's conventions (#524): a page cursor the list did not
+  // issue, an update whose `If-Match` is missing or names another version, a
+  // merge patch the client cannot become.
+  invalid_cursor: 'VALIDATION_ERROR',
+  precondition_required: 'VALIDATION_ERROR',
+  precondition_failed: 'CONFLICT',
+  unprocessable_content: 'VALIDATION_ERROR',
+  unsupported_media_type: 'VALIDATION_ERROR',
 };
 
 /**
@@ -351,7 +367,7 @@ async function readError(res: Response): Promise<ResultError> {
 
 /**
  * Variant of {@link apiRequest} for endpoints that return `204 No Content`
- * (notably `DELETE /api/clients/:id`). Calling `res.json()` on an empty body
+ * (notably a client delete). Calling `res.json()` on an empty body
  * would throw, so success is reported without parsing.
  */
 async function apiRequestNoContent(
@@ -426,15 +442,20 @@ function forwardedFor(): string | undefined {
   }
 }
 
-async function apiRequest<T>(
+/**
+ * One call to the auth-server: the parsed JSON body of a success with the
+ * answer's `ETag`, or the error. A caller that names its own `Content-Type`
+ * keeps it (a merge patch); any other body is sent as JSON.
+ */
+async function apiExchange<T>(
   path: string,
   init: RequestInit & { skipContentType?: boolean }
-): Promise<Result<T>> {
+): Promise<Result<{ body: T; etag: string | undefined }>> {
   const { skipContentType, ...fetchInit } = init;
   const headers: Record<string, string> = {
     ...(fetchInit.headers as Record<string, string> | undefined),
   };
-  if (!skipContentType && fetchInit.method !== 'GET') {
+  if (!skipContentType && fetchInit.method !== 'GET' && headers['Content-Type'] === undefined) {
     headers['Content-Type'] = 'application/json';
   }
   const xff = forwardedFor();
@@ -449,8 +470,8 @@ async function apiRequest<T>(
     });
 
     if (res.ok) {
-      const data = (await res.json()) as T;
-      return { ok: true, data };
+      const body = (await res.json()) as T;
+      return { ok: true, data: { body, etag: res.headers?.get('etag') ?? undefined } };
     }
 
     return { ok: false, error: await readError(res) };
@@ -464,6 +485,208 @@ async function apiRequest<T>(
       },
     };
   }
+}
+
+async function apiRequest<T>(
+  path: string,
+  init: RequestInit & { skipContentType?: boolean }
+): Promise<Result<T>> {
+  const result = await apiExchange<T>(path, init);
+  return result.ok ? { ok: true, data: result.data.body } : result;
+}
+
+// ---------------------------------------------------------------------------
+// The developer API (`/developer/v1-rc.0`, #524)
+// ---------------------------------------------------------------------------
+
+/** Where the developer API is served. */
+export const DEVELOPER_API = '/developer/v1-rc.0';
+
+/** A client as the developer API represents it: RFC 7591 names, RFC 3339 times. */
+interface WireClient {
+  id: string;
+  client_id: string;
+  client_name: string;
+  description: string | null;
+  redirect_uris: string[];
+  scopes: string[];
+  grant_types: GrantType[];
+  response_types: string[];
+  token_endpoint_auth_method: TokenEndpointAuthMethod;
+  enabled: boolean;
+  suspended: boolean;
+  requirePkce: boolean;
+  environment: ClientEnvironment;
+  staticApiKeysAllowed: boolean;
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string | null;
+  client_secret?: string;
+}
+
+/** A static API key as the developer API represents it. */
+interface WireApiKey {
+  id: string;
+  clientId: string;
+  name: string;
+  prefix: string;
+  last4: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+  revokedAt: string | null;
+  key?: string;
+}
+
+/** A consent as the developer API represents it. */
+interface WireConsent {
+  id: string;
+  client_id: string;
+  client_name: string;
+  scopes: string[];
+  grantedAt: string;
+}
+
+/** One page of a developer API list. */
+interface WirePage<Item> {
+  items: Item[];
+  nextCursor: string | null;
+}
+
+/** The largest page the developer API serves (API conventions). */
+const PAGE_LIMIT = 200;
+
+/**
+ * Most pages one list read follows. A developer owns at most
+ * `MAX_CLIENTS_PER_DEVELOPER` clients, so a list longer than this is a server
+ * that keeps answering a cursor, never a real list.
+ */
+const MAX_PAGES = 50;
+
+/** An RFC 3339 time as epoch milliseconds, as the portal's pages show times. */
+function epochMs(value: string): number {
+  return Date.parse(value);
+}
+
+function epochMsOrNull(value: string | null): number | null {
+  return value === null ? null : Date.parse(value);
+}
+
+function fromWireClient(wire: WireClient, etag?: string): ClientWithSecret {
+  return {
+    id: wire.id,
+    clientId: wire.client_id,
+    name: wire.client_name,
+    description: wire.description,
+    redirectUris: wire.redirect_uris,
+    scopes: wire.scopes,
+    grantTypes: wire.grant_types,
+    responseTypes: wire.response_types,
+    tokenEndpointAuthMethod: wire.token_endpoint_auth_method,
+    enabled: wire.enabled,
+    suspended: wire.suspended,
+    requirePkce: wire.requirePkce,
+    environment: wire.environment,
+    staticApiKeysAllowed: wire.staticApiKeysAllowed,
+    createdAt: epochMs(wire.createdAt),
+    updatedAt: epochMs(wire.updatedAt),
+    lastUsedAt: epochMsOrNull(wire.lastUsedAt),
+    ...(etag === undefined ? {} : { etag }),
+    ...(wire.client_secret === undefined ? {} : { clientSecret: wire.client_secret }),
+  };
+}
+
+function fromWireApiKey(wire: WireApiKey): ApiKeyWithSecret | ApiKey {
+  return {
+    id: wire.id,
+    clientId: wire.clientId,
+    name: wire.name,
+    prefix: wire.prefix,
+    last4: wire.last4,
+    createdAt: epochMs(wire.createdAt),
+    lastUsedAt: epochMsOrNull(wire.lastUsedAt),
+    revokedAt: epochMsOrNull(wire.revokedAt),
+    ...(wire.key === undefined ? {} : { key: wire.key }),
+  };
+}
+
+function fromWireConsent(wire: WireConsent): Consent {
+  return {
+    id: wire.id,
+    clientId: wire.client_id,
+    clientName: wire.client_name,
+    scopes: wire.scopes,
+    grantedAt: epochMs(wire.grantedAt),
+  };
+}
+
+/** A create's body in the developer API's names; members left out keep their defaults. */
+function toWireNewClient(input: CreateClientInput): Record<string, unknown> {
+  return {
+    client_name: input.name,
+    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(input.redirectUris === undefined ? {} : { redirect_uris: input.redirectUris }),
+    ...(input.scopes === undefined ? {} : { scopes: input.scopes }),
+    ...(input.grantTypes === undefined ? {} : { grant_types: input.grantTypes }),
+    ...(input.responseTypes === undefined ? {} : { response_types: input.responseTypes }),
+    ...(input.tokenEndpointAuthMethod === undefined
+      ? {}
+      : { token_endpoint_auth_method: input.tokenEndpointAuthMethod }),
+  };
+}
+
+/**
+ * An update as a JSON Merge Patch (RFC 7396): only the members the portal
+ * changes. `description: null` removes the description, as before.
+ */
+function toWireClientPatch(input: UpdateClientInput): Record<string, unknown> {
+  return {
+    ...(input.name === undefined ? {} : { client_name: input.name }),
+    ...(input.description === undefined ? {} : { description: input.description }),
+    ...(input.redirectUris === undefined ? {} : { redirect_uris: input.redirectUris }),
+    ...(input.scopes === undefined ? {} : { scopes: input.scopes }),
+    ...(input.grantTypes === undefined ? {} : { grant_types: input.grantTypes }),
+    ...(input.responseTypes === undefined ? {} : { response_types: input.responseTypes }),
+    ...(input.tokenEndpointAuthMethod === undefined
+      ? {}
+      : { token_endpoint_auth_method: input.tokenEndpointAuthMethod }),
+    ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+  };
+}
+
+/**
+ * Every item of a developer API list, following `nextCursor` page by page.
+ * The pages the portal shows are short (a developer's clients, a client's
+ * keys, a user's consents), so it reads them whole, as it did before lists
+ * were paged.
+ */
+async function listAll<Item>(path: string, accessToken: string): Promise<Result<Item[]>> {
+  const items: Item[] = [];
+  let cursor: string | null = null;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const query = new URLSearchParams({ limit: String(PAGE_LIMIT) });
+    if (cursor !== null) query.set('cursor', cursor);
+    const result: Result<WirePage<Item>> = await apiRequest<WirePage<Item>>(
+      `${path}?${query.toString()}`,
+      {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        skipContentType: true,
+      }
+    );
+    if (!result.ok) return result;
+    items.push(...result.data.items);
+    cursor = result.data.nextCursor;
+    if (cursor === null) return { ok: true, data: items };
+  }
+  return {
+    ok: false,
+    error: { code: 'UNKNOWN', message: 'The list did not end', status: 0 },
+  };
+}
+
+/** The developer API path of one client. */
+function clientPath(id: string): string {
+  return `${DEVELOPER_API}/clients/${encodeURIComponent(id)}`;
 }
 
 export const authServerClient = {
@@ -525,114 +748,142 @@ export const authServerClient = {
     });
   },
 
-  listClients(accessToken: string): Promise<Result<ClientListData>> {
-    return apiRequest<ClientListData>('/api/clients', {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${accessToken}` },
-      skipContentType: true,
-    });
+  async listClients(accessToken: string): Promise<Result<ClientListData>> {
+    const result = await listAll<WireClient>(`${DEVELOPER_API}/clients`, accessToken);
+    return result.ok
+      ? { ok: true, data: { clients: result.data.map((wire) => fromWireClient(wire)) } }
+      : result;
   },
 
-  listConsents(accessToken: string): Promise<Result<ConsentListData>> {
-    return apiRequest<ConsentListData>('/api/consents', {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${accessToken}` },
-      skipContentType: true,
-    });
+  async listConsents(accessToken: string): Promise<Result<ConsentListData>> {
+    const result = await listAll<WireConsent>(`${DEVELOPER_API}/consents`, accessToken);
+    return result.ok ? { ok: true, data: { consents: result.data.map(fromWireConsent) } } : result;
   },
 
   /**
-   * Revoke one consent. `/api/consents` is Bearer-authenticated, so unlike the
-   * cookie-authed `/consents` it needs no `X-CSRF-Token` header — see that
-   * route's module comment for why.
+   * Revoke one consent. The developer API is Bearer-authenticated, so unlike
+   * the cookie-authed `/consents` it needs no `X-CSRF-Token` header.
    */
   revokeConsent(accessToken: string, id: string): Promise<Result<null>> {
-    return apiRequestNoContent(`/api/consents/${encodeURIComponent(id)}`, {
+    return apiRequestNoContent(`${DEVELOPER_API}/consents/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,
     });
   },
 
-  getClient(accessToken: string, id: string): Promise<Result<OAuthClient>> {
-    return apiRequest<OAuthClient>(`/api/clients/${encodeURIComponent(id)}`, {
+  /** One client, with its `ETag` for a later update. */
+  async getClient(accessToken: string, id: string): Promise<Result<OAuthClient>> {
+    const result = await apiExchange<WireClient>(clientPath(id), {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,
     });
+    return result.ok
+      ? { ok: true, data: fromWireClient(result.data.body, result.data.etag) }
+      : result;
   },
 
-  createClient(accessToken: string, input: CreateClientInput): Promise<Result<ClientWithSecret>> {
-    return apiRequest<ClientWithSecret>('/api/clients', {
+  async createClient(
+    accessToken: string,
+    input: CreateClientInput
+  ): Promise<Result<ClientWithSecret>> {
+    const result = await apiExchange<WireClient>(`${DEVELOPER_API}/clients`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(input),
+      body: JSON.stringify(toWireNewClient(input)),
     });
+    return result.ok
+      ? { ok: true, data: fromWireClient(result.data.body, result.data.etag) }
+      : result;
   },
 
-  updateClient(
+  /**
+   * Change a client with a JSON Merge Patch. `ifMatch` is the `ETag` of the
+   * representation the developer edited: a client changed since is refused
+   * (412, `CONFLICT`) rather than overwritten. Without one, the client is read
+   * first and its current version is named.
+   */
+  async updateClient(
     accessToken: string,
     id: string,
-    input: UpdateClientInput
+    input: UpdateClientInput,
+    ifMatch?: string
   ): Promise<Result<OAuthClient>> {
-    return apiRequest<OAuthClient>(`/api/clients/${encodeURIComponent(id)}`, {
+    let version = ifMatch;
+    if (version === undefined) {
+      const current = await authServerClient.getClient(accessToken, id);
+      if (!current.ok) return current;
+      version = current.data.etag;
+    }
+    const result = await apiExchange<WireClient>(clientPath(id), {
       method: 'PATCH',
-      headers: { Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify(input),
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/merge-patch+json',
+        ...(version === undefined ? {} : { 'If-Match': version }),
+      },
+      body: JSON.stringify(toWireClientPatch(input)),
     });
+    return result.ok
+      ? { ok: true, data: fromWireClient(result.data.body, result.data.etag) }
+      : result;
   },
 
   deleteClient(accessToken: string, id: string): Promise<Result<null>> {
-    return apiRequestNoContent(`/api/clients/${encodeURIComponent(id)}`, {
+    return apiRequestNoContent(clientPath(id), {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${accessToken}` },
       skipContentType: true,
     });
   },
 
-  regenerateClientSecret(accessToken: string, id: string): Promise<Result<ClientWithSecret>> {
-    return apiRequest<ClientWithSecret>(
-      `/api/clients/${encodeURIComponent(id)}/regenerate-secret`,
-      {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}` },
-        skipContentType: true,
-      }
-    );
+  async regenerateClientSecret(accessToken: string, id: string): Promise<Result<ClientWithSecret>> {
+    const result = await apiExchange<WireClient>(`${clientPath(id)}/regenerate-secret`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      skipContentType: true,
+    });
+    return result.ok
+      ? { ok: true, data: fromWireClient(result.data.body, result.data.etag) }
+      : result;
   },
 
   // ── Static developer API keys (#97 backend, consumed by #98) ──────────────
 
-  listApiKeys(accessToken: string, clientId: string): Promise<Result<ApiKeyListData>> {
-    return apiRequest<ApiKeyListData>(`/api/clients/${encodeURIComponent(clientId)}/api-keys`, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${accessToken}` },
-      skipContentType: true,
-    });
+  async listApiKeys(accessToken: string, clientId: string): Promise<Result<ApiKeyListData>> {
+    const result = await listAll<WireApiKey>(`${clientPath(clientId)}/api-keys`, accessToken);
+    return result.ok ? { ok: true, data: { apiKeys: result.data.map(fromWireApiKey) } } : result;
   },
 
-  createApiKey(
+  async createApiKey(
     accessToken: string,
     clientId: string,
     input: CreateApiKeyInput
   ): Promise<Result<ApiKeyWithSecret>> {
-    return apiRequest<ApiKeyWithSecret>(`/api/clients/${encodeURIComponent(clientId)}/api-keys`, {
+    const result = await apiRequest<WireApiKey>(`${clientPath(clientId)}/api-keys`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(input),
     });
+    return result.ok ? { ok: true, data: fromWireApiKey(result.data) as ApiKeyWithSecret } : result;
   },
 
   // Revoke returns the masked key as a 200 JSON body (idempotent soft-delete),
   // so this parses the response rather than using the no-content variant.
-  revokeApiKey(accessToken: string, clientId: string, keyId: string): Promise<Result<ApiKey>> {
-    return apiRequest<ApiKey>(
-      `/api/clients/${encodeURIComponent(clientId)}/api-keys/${encodeURIComponent(keyId)}`,
+  async revokeApiKey(
+    accessToken: string,
+    clientId: string,
+    keyId: string
+  ): Promise<Result<ApiKey>> {
+    const result = await apiRequest<WireApiKey>(
+      `${clientPath(clientId)}/api-keys/${encodeURIComponent(keyId)}`,
       {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${accessToken}` },
         skipContentType: true,
       }
     );
+    return result.ok ? { ok: true, data: fromWireApiKey(result.data) } : result;
   },
 };

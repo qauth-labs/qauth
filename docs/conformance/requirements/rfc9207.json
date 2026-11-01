@@ -18,7 +18,7 @@
       "quote": "The iss parameter value is the issuer identifier of the authorization server that created the authorization response, as defined in [RFC8414]. Its value MUST be a URL that uses the \"https\" scheme without any query or fragment components.",
       "applies": "apps/auth-server/src/app/helpers/discovery.ts (resolveIssuerIdentifier) — the single function that produces both the emitted iss and the advertised issuer.",
       "status": "covered",
-      "evidenceMatch": "resolveIssuerIdentifier"
+      "evidenceMatch": "resolveIssuerIdentifier|iss equal to the published issuer"
     },
     {
       "id": "rfc9207-2_3-metadata-issuer-identical-to-iss",

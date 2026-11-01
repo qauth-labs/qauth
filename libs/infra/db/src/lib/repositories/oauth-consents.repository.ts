@@ -1,7 +1,8 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt } from 'drizzle-orm';
 
 import type {
+  KeysetPage,
   NewOAuthConsent,
   OAuthConsent,
   OAuthConsentsRepository,
@@ -107,6 +108,47 @@ export function createOAuthConsentsRepository(defaultDb: DbClient): OAuthConsent
         .innerJoin(oauthClients, eq(oauthConsents.oauthClientId, oauthClients.id))
         .where(activeConsentsOf(realmId, userId))
         .orderBy(desc(oauthConsents.grantedAt));
+
+      return rows.map((r) => ({
+        ...r.consent,
+        clientClientId: r.clientClientId,
+        clientName: r.clientName,
+      }));
+    },
+
+    /**
+     * One page of the active consents a user of the realm holds, with each
+     * one's client, by when each consent was first given, newest first
+     * (#524): ordered by `id` alone, descending, starting after
+     * `page.after.id`. The id is a UUIDv7 the row keeps for its life, while a
+     * new grant to the same client rewrites `granted_at`, so a page keyed on
+     * that column would skip a consent re-granted between two reads.
+     * `page.after.at` is not read.
+     */
+    async pageActiveForUserWithClient(
+      realmId: string,
+      userId: string,
+      page: KeysetPage,
+      tx?: DbClient
+    ) {
+      const invoker = tx ?? defaultDb;
+      const after = page.after;
+      const rows = await invoker
+        .select({
+          consent: oauthConsents,
+          clientClientId: oauthClients.clientId,
+          clientName: oauthClients.name,
+        })
+        .from(oauthConsents)
+        .innerJoin(oauthClients, eq(oauthConsents.oauthClientId, oauthClients.id))
+        .where(
+          and(
+            activeConsentsOf(realmId, userId),
+            after === undefined ? undefined : lt(oauthConsents.id, after.id)
+          )
+        )
+        .orderBy(desc(oauthConsents.id))
+        .limit(page.limit);
 
       return rows.map((r) => ({
         ...r.consent,

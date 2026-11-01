@@ -458,8 +458,8 @@ jobs:
       # holds discovery to.
       QAUTH_BASE_URL: http://localhost:3000
     services:
-      # Same services as docker-smoke; the containers below join the runner's
-      # network with `--network host` and reach both over localhost.
+      # docker-smoke's services, plus Mailpit; the containers below join the
+      # runner's network with `--network host` and reach each over localhost.
       postgres:
         image: postgres:18-alpine
         env:
@@ -479,6 +479,24 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      # The mail sink the server delivers to over SMTP (1025). The suite reads
+      # each verification mail from its HTTP API (8025) and verifies the
+      # account the way a person does: the server signs in only verified
+      # accounts (REQUIRE_VERIFIED_ACCOUNT, on by default), and that flow is
+      # under test too. The same image as scripts/upgrade-test.
+      mailpit:
+        image: axllent/mailpit:v1.27.11
+        env:
+          MP_SMTP_AUTH_ACCEPT_ANY: '1'
+          MP_SMTP_AUTH_ALLOW_INSECURE: '1'
+        ports:
+          - 1025:1025
+          - 8025:8025
+        options: >-
+          --health-cmd "/mailpit readyz"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
@@ -543,10 +561,12 @@ jobs:
             echo "QAUTH_WIRE_CLIENT_SECRET=$secret"
           } >> "$GITHUB_ENV"
 
-      # As docker-smoke, plus raised rate limits: the defaults allow three
-      # registrations and five logins per window per address, and every request
-      # of the suite comes from one address. Raised, not disabled — the
-      # rate-limit suite spends the registration budget and requires a 429.
+      # As docker-smoke, plus mail over SMTP to Mailpit and raised rate limits:
+      # the defaults allow three registrations and five logins per window per
+      # address, the code flows spend more than the default 30 token requests
+      # a minute, and every request of the suite comes from one address. Raised,
+      # not disabled — the rate-limit suite spends the registration budget and
+      # requires a 429. The limits are scripts/upgrade-test's.
       - name: Start auth-server container
         run: |
           set -euo pipefail
@@ -569,12 +589,23 @@ jobs:
             -e KEK="$(openssl rand -base64 32)" \
             -e SESSION_COOKIE_SECRET="$(openssl rand -base64 48)" \
             -e SESSION_COOKIE_SECURE=false \
-            -e EMAIL_PROVIDER=mock \
+            -e EMAIL_PROVIDER=smtp \
+            -e SMTP_HOST=localhost \
+            -e SMTP_PORT=1025 \
+            -e SMTP_SECURE=false \
+            -e SMTP_USER=wire-suite \
+            -e SMTP_PASSWORD=wire-suite \
             -e EMAIL_FROM_ADDRESS='noreply@qauth.dev' \
             -e EMAIL_BASE_URL="$QAUTH_BASE_URL" \
             -e RATE_LIMIT_MAX=10000 \
             -e REGISTRATION_RATE_LIMIT=100 \
             -e LOGIN_RATE_LIMIT=100 \
+            -e TOKEN_RATE_LIMIT=1000 \
+            -e AUTHORIZE_RATE_LIMIT=1000 \
+            -e INTROSPECT_RATE_LIMIT=1000 \
+            -e USERINFO_RATE_LIMIT=1000 \
+            -e VERIFICATION_RATE_LIMIT=100 \
+            -e REGISTER_CLIENT_RATE_LIMIT=100 \
             "$SERVER_IMAGE"
 
       - name: Wait for /health to report healthy
@@ -600,6 +631,7 @@ jobs:
         timeout-minutes: 10
         env:
           QAUTH_WIRE_ALLOW_WRITES: '1'
+          QAUTH_WIRE_MAIL_URL: http://localhost:8025
         run: >-
           pnpm exec nx run wire-suite:run --
           --reporter=default --reporter=json

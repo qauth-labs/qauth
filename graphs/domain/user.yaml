@@ -1,6 +1,6 @@
 # The hand-written overlay of User, the users table: the identity anchor, which holds no credential and no address
 # (ADR-002). The entity and its fields are generated from the Drizzle schema (#563); an overlay only adds to them
-# (#564). This one adds the examples and the internal actions the two password sign-in flows (core.sign-in,
+# (#564). This one adds the examples and the internal actions the two password sign-in flows (core.sign-in-page,
 # core.sign-in-token) invoke.
 schema: delurio-graph/0
 kind: domain
@@ -42,7 +42,7 @@ entities:
 
 actions:
   User.findById:
-    # internal: invoked by core.sign-in and core.sign-in-token, with no route and no actor policy
+    # internal: invoked by core.sign-in-page and core.sign-in-token, with no route and no actor policy
     source: libs/infra/db/src/lib/repositories/users.repository.ts:88
     body:
       type: object
@@ -57,7 +57,7 @@ actions:
       checked out, for its enabled flag.
 
   User.updateLastLogin:
-    # internal: invoked by core.sign-in and core.sign-in-token, with no route and no actor policy
+    # internal: invoked by core.sign-in-page and core.sign-in-token, with no route and no actor policy
     source: libs/infra/db/src/lib/repositories/users.repository.ts:158
     body:
       type: object

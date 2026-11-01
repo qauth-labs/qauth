@@ -40,7 +40,7 @@ import {
   writeInteractionState,
 } from './interaction-record';
 import { requestRealm } from './request-realm';
-import { setSessionCookie } from './session-cookie';
+import { sessionCookieHeader } from './session-cookie';
 import { emitUserEvent } from './user-events';
 
 /**
@@ -623,6 +623,10 @@ async function settleAnswer(
     ...(signIn.issuedAt === undefined ? {} : { issuedAt: signIn.issuedAt }),
   });
   settled.session = { realmId: session.realmId, sid: session.sid };
+  // Signed now, with the realm's cookie key from the signer (#493): a signer
+  // that cannot answer fails the answer here, before the record is bound to a
+  // new secret, and the session just created ends with the turn given back.
+  const sessionCookie = await sessionCookieHeader(request.server, session);
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
     ...taken,
@@ -643,7 +647,7 @@ async function settleAnswer(
   settled.session = undefined;
   // Both cookies together, before anything else can fail: the record is now
   // bound to the new secret, and a browser without it could not go on.
-  setSessionCookie(reply, session.sid);
+  reply.header('Set-Cookie', sessionCookie);
   setFlowCookie(
     reply,
     nextFlowSecrets(bound.secrets, { remove: bound.secret, add: secret }),

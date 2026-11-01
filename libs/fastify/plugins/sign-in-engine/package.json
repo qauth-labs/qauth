@@ -1,0 +1,22 @@
+{
+  "name": "@qauth-labs/fastify-plugin-sign-in-engine",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/server-federation": "workspace:*",
+    "@qauth-labs/server-sign-in-engine": "workspace:*",
+    "@qauth-labs/server-step-grammar": "workspace:*",
+    "@qauth-labs/shared-events": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:"
+  },
+  "devDependencies": {
+    "@qauth-labs/infra-db": "workspace:*",
+    "@qauth-labs/server-password": "workspace:*",
+    "@qauth-labs/shared-testing": "workspace:*",
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

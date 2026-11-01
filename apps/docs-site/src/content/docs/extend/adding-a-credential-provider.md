@@ -15,6 +15,11 @@ This page is the practical version of
 [ADR-003](/reference/records/adr/003-credential-provider-interface/). Read the ADR for the decision and its
 alternatives; read this for what the code actually does at `HEAD`.
 
+> **A sign-in method with screens or an upstream?** A method that needs Interaction API steps or
+> routes of its own, such as an upstream OpenID Connect provider, implements the
+> [AuthMethod contract](/extend/auth-method-contract/) instead, which extends `CredentialProvider`.
+> That contract is the experimental plugin API.
+
 ## The contract
 
 `libs/server/federation/src/providers/credential-provider.interface.ts:63`:
@@ -85,7 +90,7 @@ write `fastify.providerRegistry.resolve('password')`.
 
 `createConfiguredProviders`
 (`libs/fastify/plugins/federation/src/lib/configured-providers.ts:302`) is where "which upstreams
-exist" is decided, and `apps/auth-server/src/app/app.ts:128` is the only place that calls it.
+exist" is decided, and `apps/auth-server/src/app/app.ts:130` is the only place that calls it.
 
 Two properties make it worth understanding before you extend it:
 

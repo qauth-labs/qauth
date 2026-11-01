@@ -12,7 +12,13 @@ export {
   type IssuerAssuranceMap,
   type PerRealmIssuerAssurance,
 } from './assurance';
-export { type AuthEnv, authEnvSchema, DEV_SESSION_COOKIE_SECRET_DEFAULT } from './auth';
+export {
+  type AuthEnv,
+  authEnvSchema,
+  DEV_SESSION_COOKIE_SECRET_DEFAULT,
+  isPublishedSessionCookieSecret,
+  PUBLISHED_SESSION_COOKIE_SECRETS,
+} from './auth';
 export { type BaseEnv, baseEnvSchema } from './base';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
@@ -52,7 +58,12 @@ export {
   type PeerSanType,
 } from './internal-listener';
 export { type IssuerKeysEnv, issuerKeysEnvSchema, type PerIssuerKeySets } from './issuer-keys';
-export { type JwtEnv, jwtEnvSchema } from './jwt';
+export {
+  type JwtEnv,
+  jwtEnvSchema,
+  MAX_ACCESS_TOKEN_LIFESPAN_SECONDS,
+  MAX_REFRESH_TOKEN_LIFESPAN_SECONDS,
+} from './jwt';
 export { type KekEnv, kekEnvSchema } from './kek';
 export {
   type AttestedKeyStorageGrade,
@@ -76,7 +87,6 @@ export {
   isServiceRole,
   keyMaterialProblems,
   parseServiceRoles,
-  readsSessionCookie,
   SERVICE_ROLE_NAMES,
   type ServiceRole,
   ServiceRoleBootError,

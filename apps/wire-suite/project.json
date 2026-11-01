@@ -5,6 +5,30 @@
   "projectType": "application",
   "tags": ["scope:wire-suite", "type:testing"],
   "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/apps/docs-site/public/openapi.json"
+      ],
+      "metadata": {
+        "description": "The suite's own unit tests: the configuration guard, the helpers, and the check that every /oauth/* and /.well-known/* operation of the published OpenAPI document has a wire test. Needs no server. The OpenAPI document is an input because the coverage check reads it."
+      }
+    },
     "run": {
       "executor": "nx:run-commands",
       "cache": false,
@@ -14,7 +38,7 @@
         "forwardAllArgs": true
       },
       "metadata": {
-        "description": "Run the black-box wire suite against a running QAuth (ADR-018 §5). Talks to the server only over HTTP. Needs QAUTH_BASE_URL, the seeded client id and secret, and QAUTH_WIRE_ALLOW_WRITES=1, because it creates users. Never cached: its input is a live server, not files. See apps/wire-suite/README.md."
+        "description": "Run the black-box wire suite against a running QAuth (ADR-018 \u00a75). Talks to the server only over HTTP. Needs QAUTH_BASE_URL, the seeded client id and secret, and QAUTH_WIRE_ALLOW_WRITES=1, because it creates users. Never cached: its input is a live server, not files. See apps/wire-suite/README.md."
       }
     }
   }

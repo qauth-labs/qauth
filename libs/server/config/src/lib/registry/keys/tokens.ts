@@ -22,7 +22,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'tokens',
     default: '900',
     since: '0.1.0',
-    docs: 'The access token lifetime, in seconds, for `staging` and `production` clients.',
+    docs: "The access token lifetime, in seconds, at most 86400 (a day), for `staging` and `production` clients, and the lifetime of every ID token, that seeds `tokens.accessTokenLifespanSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'DEV_ACCESS_TOKEN_LIFESPAN',
@@ -32,7 +32,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'tokens',
     default: '28800',
     since: '0.1.0',
-    docs: 'The access token lifetime, in seconds, for `development` clients only.',
+    docs: "The access token lifetime, in seconds, at most 86400 (a day), for `development` clients only, that seeds `tokens.developmentAccessTokenLifespanSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'REFRESH_TOKEN_LIFESPAN',
@@ -42,7 +42,7 @@ export const TOKEN_KEYS = defineKeys([
     owner: 'tokens',
     default: '604800',
     since: '0.1.0',
-    docs: 'The refresh token lifetime, in seconds.',
+    docs: "The lifetime, in seconds, at most 7776000 (90 days), of a new or rotated refresh token, that seeds `tokens.refreshTokenLifespanSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'SIGNING_ALGORITHM_MODE',

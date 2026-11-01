@@ -19,9 +19,22 @@ test that cites a registered spec section counts as evidence for that row.
   `QAUTH_WIRE_ALLOW_WRITES=1`, because it registers users and uses clients on the server it
   targets.
 - **Users come from `src/fixtures/users.ts` only.** Today that file calls `POST /auth/register`;
-  ADR-017 replaces registration with hosted sign-up, and then this one file changes.
+  ADR-017 replaces registration with hosted sign-up, and then this one file changes. An account a
+  test signs in with comes from `createSignInAccount()`, which verifies the address through the
+  mail sink when `QAUTH_WIRE_MAIL_URL` is set (below).
 - **Clients come from `seed/clients.json` only.** The run provisions them with the operator seed
-  command before the suite starts. The suite never creates a client through the server's routes.
+  command before the suite starts. The one exception is `suites/registration/`, which tests
+  dynamic registration itself: it registers clients, and uses one only to show that the secret it
+  was issued authenticates. No other suite uses a client the server's routes created.
+- **Every OAuth and discovery operation has a wire test.** A wire test sends a request to an
+  operation with `call('METHOD /path', …)` (or builds its URL with `operationUrl`), naming it
+  exactly as `apps/docs-site/public/openapi.json` lists it. `src/operation-coverage.test.ts`, a
+  unit test, fails when an `/oauth/*` or `/.well-known/*` operation of that document has no such
+  call in any `*.wire.test.ts`, unless it is experimental and `suites/experimental/` checks it.
+- **A browser is a cookie jar and the redirects it follows.** `helpers/browser.ts` signs in on
+  `/ui/login` and answers `/ui/consent` from the HTML forms the server renders, and stops at the
+  client's redirect URI, which it never requests. `fixtures/authorization.ts` builds the seeded
+  client's authorization requests (PKCE, `state`, `nonce`) and token requests.
 - **What a default deployment hides comes from `src/fixtures/experimental.ts` only.** The auth
   server's tests generate it from the maximal OpenAPI export and the experimental-feature registry
   (`pnpm nx test auth-server -- -u`): every experimental operation, and every discovery member an
@@ -40,21 +53,22 @@ test that cites a registered spec section counts as evidence for that row.
 
 ## Configuration
 
-| Variable                     | Required | Meaning                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `QAUTH_WIRE_ALLOW_WRITES`    | yes      | Must be exactly `1`. Confirms the server may be written to.                                                                                                                                                                                                                                                                                  |
-| `QAUTH_BASE_URL`             | yes      | The server's issuer identifier, e.g. `http://localhost:3000`. Discovery must report it as is.                                                                                                                                                                                                                                                |
-| `QAUTH_ADMIN_URL`            | no       | Where admin operations go. Defaults to `QAUTH_BASE_URL`.                                                                                                                                                                                                                                                                                     |
-| `QAUTH_WIRE_CLIENT_ID`       | yes      | The confidential client from `seed/clients.json`: `wire-confidential`.                                                                                                                                                                                                                                                                       |
-| `QAUTH_WIRE_CLIENT_SECRET`   | yes      | Its secret, as the seed command printed it.                                                                                                                                                                                                                                                                                                  |
-| `QAUTH_WIRE_SSF_TRANSMITTER` | no       | `1` when the target's realm runs the SSF transmitter; the metadata suite then checks the document, and that its `jwks_uri` holds the SET keys apart from the realm JWKS, instead of the `404` problem, and the error suite checks that `/ssf/stream` refuses a request without a receiver token with a `401` problem and a Bearer challenge. |
+| Variable                     | Required | Meaning                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `QAUTH_WIRE_ALLOW_WRITES`    | yes      | Must be exactly `1`. Confirms the server may be written to.                                                                                                                                                                                                                                                                                                         |
+| `QAUTH_BASE_URL`             | yes      | The server's issuer identifier, e.g. `http://localhost:3000`. Discovery must report it as is.                                                                                                                                                                                                                                                                       |
+| `QAUTH_ADMIN_URL`            | no       | Where admin operations go. Defaults to `QAUTH_BASE_URL`.                                                                                                                                                                                                                                                                                                            |
+| `QAUTH_WIRE_CLIENT_ID`       | yes      | The confidential client from `seed/clients.json`: `wire-confidential`.                                                                                                                                                                                                                                                                                              |
+| `QAUTH_WIRE_CLIENT_SECRET`   | yes      | Its secret, as the seed command printed it.                                                                                                                                                                                                                                                                                                                         |
+| `QAUTH_WIRE_SSF_TRANSMITTER` | no       | `1` when the target's realm runs the SSF transmitter; the metadata suite then checks the document, and that its `jwks_uri` holds the SET keys apart from the realm JWKS, instead of the `404` problem, and the error suite checks that `/ssf/stream` refuses a request without a receiver token with a `401` problem and a Bearer challenge.                        |
+| `QAUTH_WIRE_MAIL_URL`        | no       | The HTTP API of the Mailpit instance the target sends its mail to, e.g. `http://localhost:8025`. Every account the suite signs in is then verified first, as a person verifies it. Leave it unset only for a target that signs in unverified accounts (`REQUIRE_VERIFIED_ACCOUNT=false`): on a target with the default, every test that signs in fails and says so. |
 
 ## Run it locally
 
 You need Docker and a workspace install (`pnpm install`).
 
 1. **Configure the stack.** Copy `.env.docker.example` to `.env` and fill in `JWT_PRIVATE_KEY`,
-   `JWT_PUBLIC_KEY`, `SESSION_COOKIE_SECRET` and `KEK`, as the
+   `JWT_PUBLIC_KEY` and `KEK`, as the
    [Docker guide](https://docs.qauth.dev/operate/docker/) describes. Then raise the rate limits
    for the run, as CI does — every request of the suite comes from one address, and the defaults
    allow three registrations and five logins per window:
@@ -63,9 +77,28 @@ You need Docker and a workspace install (`pnpm install`).
    RATE_LIMIT_MAX=10000
    REGISTRATION_RATE_LIMIT=100
    LOGIN_RATE_LIMIT=100
+   INTROSPECT_RATE_LIMIT=1000
+   VERIFICATION_RATE_LIMIT=100
    # Optional: lets you run the suite again a minute later (see below).
    REGISTRATION_RATE_WINDOW=60
    ```
+
+   The suite signs accounts in through `/ui/login`, and the server signs in only verified
+   accounts by default. Through Compose, let unverified accounts sign in and leave
+   `QAUTH_WIRE_MAIL_URL` unset:
+
+   ```bash
+   REQUIRE_VERIFIED_ACCOUNT=false
+   ```
+
+   Compose forwards only the settings it lists, and `TOKEN_RATE_LIMIT`, `AUTHORIZE_RATE_LIMIT`,
+   `USERINFO_RATE_LIMIT`, `REGISTER_CLIENT_RATE_LIMIT` and `SMTP_*` are not among them. A full
+   run sends the token endpoint more than its default 30 requests a minute from one address, so
+   some tests may answer `429`; run one area at a time
+   (`pnpm nx run wire-suite:run -- src/suites/oauth/userinfo.wire.test.ts`), or start the image
+   with `docker run` and the rate limits of the `wire-suite` CI job. To keep the verified-account
+   default, send the server's mail over SMTP to Mailpit (`axllent/mailpit`) and give the suite its
+   HTTP API as `QAUTH_WIRE_MAIL_URL`.
 
 2. **Start it.** The migration runner runs before the server does.
 
@@ -96,6 +129,8 @@ You need Docker and a workspace install (`pnpm install`).
    export QAUTH_WIRE_CLIENT_ID=wire-confidential
    export QAUTH_WIRE_CLIENT_SECRET=<the secret the seed printed>
    export QAUTH_WIRE_ALLOW_WRITES=1
+   # Only for a target that sends its mail to Mailpit, as the CI job's does:
+   # export QAUTH_WIRE_MAIL_URL=http://localhost:8025
 
    pnpm nx run wire-suite:run
    ```
@@ -113,5 +148,11 @@ window, or empty the local Redis: `docker compose exec redis redis-cli FLUSHALL`
 
 ## The suite's own tests
 
-`src/**/*.test.ts` (no `.wire.`) tests the configuration guard and the helpers. They need no
-server and run with the rest of the unit suite: `pnpm nx test wire-suite`.
+`src/**/*.test.ts` (no `.wire.`) tests the configuration guard, the helpers and the operation
+coverage. They need no server and run with the rest of the unit suite: `pnpm nx test wire-suite`.
+
+## Not ported on purpose
+
+The suite holds the core protocol checks. Wallet sign-in (OID4VP), ID-JAG, step-up, DPoP, token
+exchange and private-key client authentication are off by default or need clients and keys the
+seed does not provision; each area adds its own wire tests when it does.

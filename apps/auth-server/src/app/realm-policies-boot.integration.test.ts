@@ -246,17 +246,22 @@ describe('realm policies at boot on the auth server (#516)', () => {
     expect(await defaultRealmRow()).toEqual(filled);
     expect(secondWarnings.filter((line) => line.msg.includes(KEPT))).toEqual([]);
     const ignored = secondWarnings.filter((line) => line.msg.includes(IGNORED));
-    // The allowlist's area reads the realm row: its key is ignored, once.
+    // The token lifetimes (#527) and the allowlist read the realm row: each
+    // key is ignored, once.
     expect(ignored).toEqual([
+      expect.objectContaining({
+        variable: 'ACCESS_TOKEN_LIFESPAN',
+        policy: 'tokens.accessTokenLifespanSeconds',
+        realm: 'master',
+      }),
       expect.objectContaining({
         variable: 'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
         policy: 'registration.dynamicRegistrationAllowedScopes',
         realm: 'master',
       }),
     ]);
-    // The token lifetimes and the password policy still read the
-    // environment (#527, #528): no warning tells the operator to drop them.
-    expect(ignored.map((line) => line.variable)).not.toContain('ACCESS_TOKEN_LIFESPAN');
+    // The password policy still reads the environment (#528): no warning
+    // tells the operator to drop it.
     expect(ignored.map((line) => line.variable)).not.toContain('PASSWORD_MIN_SCORE');
   });
 });

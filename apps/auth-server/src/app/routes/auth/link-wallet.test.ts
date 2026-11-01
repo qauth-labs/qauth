@@ -159,6 +159,7 @@ function makeFastify() {
     },
     sessionUtils,
     sessionService: sessions.service,
+    signer: sessions.signer,
     redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };

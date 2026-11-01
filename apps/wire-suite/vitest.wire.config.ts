@@ -33,6 +33,12 @@ export default defineConfig({
     // a password with Argon2id.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // Several files sign a user in at once, all from one address. The server
+    // counts every sign-in in flight against that address and locks it out
+    // for 15 minutes when the fifth arrives before the others are settled
+    // (`FAILED_LOGIN_MAX_ATTEMPTS`, default 5). Four workers keep the suite
+    // below that on a host with any number of cores.
+    maxWorkers: 4,
     projects: [
       {
         extends: true,

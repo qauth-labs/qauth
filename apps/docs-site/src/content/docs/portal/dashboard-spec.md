@@ -216,10 +216,10 @@ it cannot authenticate for a developer who signed in through this portal. Issue 
 three independent blockers, each fatal on its own:
 
 1. The page depends on `__Host-qauth_session`, the auth-server's hosted-UI cookie
-   (`apps/auth-server/src/app/helpers/session-cookie.ts:18`). The portal sets
+   (`apps/auth-server/src/app/helpers/session-cookie.ts:170`). The portal sets
    `__Host-qauth_portal_session` instead (`apps/developer-portal/src/server/session-cookie.ts:5`)
    and never visits `/ui/login`, so the cookie the page needs is simply absent.
-2. That cookie is issued `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:153`),
+2. That cookie is issued `SameSite=Lax` (`apps/auth-server/src/app/helpers/session-cookie.ts:371`),
    which withholds it from cross-site `fetch()` subresource requests regardless of
    `credentials: 'include'`.
 3. Production CORS is fail-closed: `origin` resolves to `false` unless an operator sets
@@ -414,9 +414,9 @@ is not. The developer-facing write paths do set it `true`
 (`apps/auth-server/src/app/routes/clients/index.ts:539`, dynamic registration at
 `apps/auth-server/src/app/routes/oauth/register.ts:168`, CIMD at
 `apps/auth-server/src/app/helpers/cimd.ts:461`, and the column default at
-`libs/infra/db/src/lib/schema/core.ts:410`), but `getOrCreateSystemClient` creates the internal
-system client with `requirePkce: false`
-(`apps/auth-server/src/app/helpers/oauth-client.ts:44`), reached from first-party login
+`libs/infra/db/src/lib/schema/core.ts:410`), but a system client an earlier release created holds
+`requirePkce: false`, as `getOrCreateSystemClient` wrote it until #631
+(`apps/auth-server/src/app/helpers/oauth-client.ts`), reached from first-party login
 (`apps/auth-server/src/app/routes/auth/login.ts:171`) and the authorize route
 (`apps/auth-server/src/app/routes/oauth/authorize.ts:347`). The column genuinely varies. The
 conclusion is unchanged — it is unenforced either way — but the supporting claim has to be the one

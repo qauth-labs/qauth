@@ -7,6 +7,7 @@ import { securityHeadersPlugin } from '../app/plugins/security-headers';
 import verifyApiRoute from '../app/routes/auth/verify';
 import verifyPageRoute from '../app/routes/auth/verify-page';
 import uiVerifyRoute from '../app/routes/ui/verify';
+import { createFakeCookieSigner } from './cookie-keys';
 import { supplyRequestRealm, testRealm } from './request-realm';
 
 /** The token row a known token resolves to. */
@@ -143,6 +144,8 @@ export async function buildEmailVerificationApp(): Promise<{
   } as unknown as FastifyInstance['passwordHasher']);
   app.decorate('db', { transaction: stubs.transaction } as unknown as FastifyInstance['db']);
   app.decorate('redis', stubs.redis as unknown as FastifyInstance['redis']);
+  // The login-CSRF cookie is signed with the realm's cookie key (#493).
+  app.decorate('signer', createFakeCookieSigner() as unknown as FastifyInstance['signer']);
 
   await app.register(verifyApiRoute, { prefix: '/auth' });
   await app.register(verifyPageRoute, { prefix: '/auth' });

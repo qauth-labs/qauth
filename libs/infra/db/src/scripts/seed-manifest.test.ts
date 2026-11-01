@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { isCimdClientIdShape, manifestSchema } from './seed-manifest';
+import {
+  firstPartyColumnsOf,
+  isCimdClientIdShape,
+  manifestSchema,
+  parseManifest,
+} from './seed-manifest';
 
 /**
  * Validation of the seed manifest, and of its `cimd_clients` section (#770).
@@ -338,5 +343,254 @@ describe('isCimdClientIdShape', () => {
         }).success
       ).toBe(false);
     });
+  });
+});
+
+describe('first-party profiles (#631, ADR-017 Decision 2)', () => {
+  const KEYS = {
+    keys: [{ kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' }],
+  };
+  const nativeBackend = {
+    client_id: 'notes-backend',
+    name: 'Notes',
+    grant_types: ['authorization_code', 'refresh_token'],
+    redirect_uris: ['com.example.notes:/callback'],
+    token_endpoint_auth_method: 'private_key_jwt',
+    jwks: KEYS,
+    first_party_profile: 'native_backend',
+    first_party_reason: 'Notes is our own app, published under our brand.',
+  };
+  const webFrontEnd = {
+    client_id: 'console',
+    name: 'Console',
+    grant_types: ['authorization_code', 'refresh_token'],
+    redirect_uris: ['https://console.example.com/callback'],
+    token_endpoint_auth_method: 'private_key_jwt',
+    jwks_uri: 'https://console.example.com/jwks.json',
+    first_party_profile: 'web_redirect',
+    first_party_reason: 'Our own console.',
+  };
+
+  /** The messages of a refused entry. */
+  function refusal(client: Record<string, unknown>): string[] {
+    const result = manifestSchema.safeParse({ realm: 'master', clients: [client] });
+    expect(result.success, JSON.stringify(client)).toBe(false);
+    return result.error?.issues.map((issue) => issue.message) ?? [];
+  }
+
+  function without(client: Record<string, unknown>, ...keys: string[]): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(client).filter(([key]) => !keys.includes(key)));
+  }
+
+  it('accepts a native backend and fills its policy defaults', () => {
+    const parsed = manifestSchema.parse({ realm: 'master', clients: [nativeBackend] });
+    const client = parsed.clients?.[0];
+    expect(client?.first_party_profile).toBe('native_backend');
+    expect(client && firstPartyColumnsOf(client)).toEqual({
+      profile: 'native_backend',
+      policy: { flows: ['login'], email_code_after_password: false, pkce_required: true },
+      reason: 'Notes is our own app, published under our brand.',
+    });
+  });
+
+  it('keeps the policy the operator wrote, and trims the reason', () => {
+    const parsed = manifestSchema.parse({
+      realm: 'master',
+      clients: [
+        {
+          ...nativeBackend,
+          first_party_policy: { flows: ['login', 'register', 'reset'], pkce_required: false },
+          first_party_reason: '  Our own app.  ',
+        },
+      ],
+    });
+    const client = parsed.clients?.[0];
+    expect(client && firstPartyColumnsOf(client)).toEqual({
+      profile: 'native_backend',
+      policy: {
+        flows: ['login', 'register', 'reset'],
+        email_code_after_password: false,
+        pkce_required: false,
+      },
+      reason: 'Our own app.',
+    });
+  });
+
+  it('accepts a web front-end, with no policy', () => {
+    const parsed = manifestSchema.parse({ realm: 'master', clients: [webFrontEnd] });
+    const client = parsed.clients?.[0];
+    expect(client && firstPartyColumnsOf(client)).toEqual({
+      profile: 'web_redirect',
+      policy: null,
+      reason: 'Our own console.',
+    });
+  });
+
+  it('writes no first-party column for an entry without a profile', () => {
+    const parsed = manifestSchema.parse({
+      realm: 'master',
+      clients: [without(webFrontEnd, 'first_party_profile', 'first_party_reason')],
+    });
+    const client = parsed.clients?.[0];
+    expect(client && firstPartyColumnsOf(client)).toEqual({
+      profile: null,
+      policy: null,
+      reason: null,
+    });
+  });
+
+  it('refuses a profile without a written reason, or with a blank or overlong one', () => {
+    for (const client of [
+      without(nativeBackend, 'first_party_reason'),
+      without(webFrontEnd, 'first_party_reason'),
+    ]) {
+      expect(refusal(client).join('\n')).toContain(
+        'first_party_profile requires first_party_reason'
+      );
+    }
+    expect(refusal({ ...webFrontEnd, first_party_reason: '   ' })).not.toEqual([]);
+    expect(refusal({ ...webFrontEnd, first_party_reason: 'x'.repeat(1001) })).not.toEqual([]);
+    expect(
+      manifestSchema.safeParse({
+        realm: 'master',
+        clients: [{ ...webFrontEnd, first_party_reason: 'x'.repeat(1000) }],
+      }).success
+    ).toBe(true);
+  });
+
+  it('refuses a reason or a policy without the profile it belongs to', () => {
+    expect(refusal(without(webFrontEnd, 'first_party_profile')).join('\n')).toContain(
+      'first_party_reason applies only together with first_party_profile'
+    );
+    expect(refusal({ ...webFrontEnd, first_party_policy: {} }).join('\n')).toContain(
+      'first_party_policy applies only to first_party_profile=native_backend'
+    );
+  });
+
+  it('refuses a native profile without the backend keys', () => {
+    const messages = refusal(without(nativeBackend, 'jwks')).join('\n');
+    expect(messages).toContain('first_party_profile=native_backend requires the backend');
+  });
+
+  it('refuses a native profile without a browser-leg redirect URI', () => {
+    for (const redirectUris of [
+      undefined,
+      [],
+      ['http://notes.example.com/callback'],
+      ['http://localhost:8080/callback'],
+      ['notes:/callback'],
+    ]) {
+      const client =
+        redirectUris === undefined
+          ? without(nativeBackend, 'redirect_uris')
+          : { ...nativeBackend, redirect_uris: redirectUris };
+      expect(refusal(client).join('\n'), JSON.stringify(redirectUris)).toContain(
+        'requires at least one redirect URI for the browser leg'
+      );
+    }
+    for (const redirectUri of [
+      'https://notes.example.com/app/callback',
+      'com.example.notes:/callback',
+      'http://127.0.0.1/callback',
+      'http://[::1]:8080/callback',
+    ]) {
+      expect(
+        manifestSchema.safeParse({
+          realm: 'master',
+          clients: [
+            { ...nativeBackend, redirect_uris: ['http://localhost:8080/callback', redirectUri] },
+          ],
+        }).success,
+        redirectUri
+      ).toBe(true);
+    }
+  });
+
+  it('refuses a native profile without the authorization_code grant', () => {
+    expect(refusal({ ...nativeBackend, grant_types: ['refresh_token'] }).join('\n')).toContain(
+      'first_party_profile=native_backend requires the authorization_code grant'
+    );
+  });
+
+  it('refuses a profile on a client that does not use private_key_jwt, or on an agent', () => {
+    for (const method of ['client_secret_basic', 'client_secret_post', 'none']) {
+      expect(
+        refusal({ ...webFrontEnd, token_endpoint_auth_method: method }).join('\n'),
+        method
+      ).toContain('first_party_profile requires token_endpoint_auth_method=private_key_jwt');
+    }
+    expect(refusal(without(webFrontEnd, 'token_endpoint_auth_method')).join('\n')).toContain(
+      'first_party_profile requires token_endpoint_auth_method=private_key_jwt'
+    );
+    expect(refusal({ ...webFrontEnd, is_agent: true }).join('\n')).toContain(
+      'first_party_profile cannot be set on an agent'
+    );
+  });
+
+  it('refuses an unknown profile and a policy that does not parse', () => {
+    expect(refusal({ ...nativeBackend, first_party_profile: 'native_attested' })).not.toEqual([]);
+    for (const policy of [
+      { flows: [] },
+      { flows: ['login', 'login'] },
+      { flows: ['signup'] },
+      { dpop: true },
+      'login',
+    ]) {
+      expect(
+        refusal({ ...nativeBackend, first_party_policy: policy }),
+        JSON.stringify(policy)
+      ).not.toEqual([]);
+    }
+  });
+});
+
+describe('parseManifest: the system client id', () => {
+  const SECTION = {
+    redirect_uris: ['https://portal.example.com/callback'],
+    jwks: {
+      keys: [{ kty: 'OKP', crv: 'Ed25519', x: '11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo' }],
+    },
+  };
+
+  it("takes SYSTEM_CLIENT_ID for a section that names no client_id, as the auth server's id", () => {
+    const parsed = parseManifest(
+      { realm: 'master', system_client: SECTION },
+      { SYSTEM_CLIENT_ID: ' portal ' }
+    );
+    expect(parsed.system_client?.client_id).toBe('portal');
+  });
+
+  it('keeps a client_id the section names, and falls back to system without SYSTEM_CLIENT_ID', () => {
+    expect(
+      parseManifest(
+        { realm: 'master', system_client: { ...SECTION, client_id: 'named' } },
+        { SYSTEM_CLIENT_ID: 'portal' }
+      ).system_client?.client_id
+    ).toBe('named');
+    for (const env of [{}, { SYSTEM_CLIENT_ID: '  ' }]) {
+      expect(
+        parseManifest({ realm: 'master', system_client: SECTION }, env).system_client?.client_id
+      ).toBe('system');
+    }
+  });
+
+  it('refuses a clients entry that names the id SYSTEM_CLIENT_ID gave the section', () => {
+    expect(() =>
+      parseManifest(
+        {
+          realm: 'master',
+          system_client: SECTION,
+          clients: [
+            {
+              client_id: 'portal',
+              name: 'Portal',
+              grant_types: ['client_credentials'],
+              token_endpoint_auth_method: 'client_secret_basic',
+            },
+          ],
+        },
+        { SYSTEM_CLIENT_ID: 'portal' }
+      )
+    ).toThrow(/listed twice/);
   });
 });

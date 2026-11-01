@@ -16,6 +16,7 @@ import {
   signInWithPassword,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { sessionIdOfCookie } from '../testing/session-cookie-value';
 import { NOT_VALID_BEFORE_MARGIN_MS } from './helpers/account-validity';
 
 /**
@@ -191,7 +192,7 @@ describe('an account enabled again does not bring back what it held before (#748
     const body = tokens.json() as { access_token: string; refresh_token: string };
     return {
       cookie,
-      sid: value.slice(0, value.lastIndexOf('.')),
+      sid: sessionIdOfCookie(value),
       accessToken: body.access_token,
       refreshToken: body.refresh_token,
     };

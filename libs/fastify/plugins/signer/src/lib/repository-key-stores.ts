@@ -80,6 +80,8 @@ export function createRepositoryKeyStore(db: DbClient): RealmKeyBootStore<DbClie
     updateStatus: keys.updateStatus,
     deleteByScope: keys.deleteByScope,
     lockRealm: keys.lockRealm,
+    getWrappedKey: (realmId: string, kid: string, tx: DbClient) =>
+      keys.getWrappedForSigner(realmId, kid, tx),
     anotherRealmPublishes: (
       realmId: string,
       identity: Readonly<Record<string, string>>,

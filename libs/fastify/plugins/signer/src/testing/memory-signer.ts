@@ -17,7 +17,10 @@ import {
 } from '@qauth-labs/server-keys/custody';
 
 import {
+  prepublishTokenKeys,
   rotateTokenKeys,
+  type TokenKeyPrepublication,
+  type TokenKeyPrepublicationOptions,
   type TokenKeyRotation,
   type TokenKeyRotationOptions,
 } from './key-rotation';
@@ -71,10 +74,20 @@ export interface TestSigner {
    */
   setKeyStatus(realmId: string, kid: string, status: StoredKeyStatus): void;
   /**
-   * Rotate the realm's `token_signing` keys of one algorithm (#492): a new
-   * key becomes active and the old one retired, published until its
-   * retention ends. See `rotateTokenKeys`. A signer whose refresh interval is
-   * not `0` sees it only after that interval.
+   * Publish a new `next` `token_signing` key of one algorithm in the realm
+   * (#494): in its JWKS at once, signing nothing until `rotateTokenKeys`
+   * activates it. See `prepublishTokenKeys`. A signer whose refresh interval
+   * is not `0` sees it only after that interval.
+   */
+  prepublishTokenKeys(
+    realmId: string,
+    options?: TokenKeyPrepublicationOptions
+  ): Promise<TokenKeyPrepublication>;
+  /**
+   * Rotate the realm's `token_signing` keys of one algorithm (#492): its
+   * pre-published `next` key, or a new one, becomes active and the old one
+   * retired, published until its retention ends. See `rotateTokenKeys`. A
+   * signer whose refresh interval is not `0` sees it only after that interval.
    */
   rotateTokenKeys(realmId: string, options?: TokenKeyRotationOptions): Promise<TokenKeyRotation>;
   /** Every store read the signer made, by method name, in order. */
@@ -101,6 +114,26 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
   const rows: MemoryRow[] = [];
   const issuers = new Map<string, string>();
   const storeReads: string[] = [];
+
+  /** A row with its sealed material, as `realm_keys` holds it. */
+  function wrappedKey(realmId: string, kid: string): WrappedSignerKey | undefined {
+    const row = rows.find(({ key }) => key.realmId === realmId && key.kid === kid);
+    if (row === undefined) return undefined;
+    const { key } = row;
+    return {
+      realmId: key.realmId,
+      purpose: key.purpose,
+      scopeId: key.scopeId,
+      kid: key.kid,
+      algorithm: key.algorithm,
+      status: key.status,
+      ciphertext: key.ciphertext,
+      iv: key.iv,
+      wrappedDek: key.wrappedDek,
+      kekRef: key.kekRef,
+      aadVersion: key.aadVersion,
+    };
+  }
 
   const keyStore: RealmKeyBootStore<null> = {
     transaction: async (work) => {
@@ -149,6 +182,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     deleteByScope: async () => [],
     lockRealm: async () => undefined,
+    getWrappedKey: async (realmId, kid) => wrappedKey(realmId, kid),
     anotherRealmPublishes: async (realmId, identity) =>
       rows.some(
         ({ key, publicJwk }) =>
@@ -191,22 +225,7 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
     },
     async getWrappedKey(realmId, kid): Promise<WrappedSignerKey | undefined> {
       storeReads.push('getWrappedKey');
-      const row = rows.find(({ key }) => key.realmId === realmId && key.kid === kid);
-      if (row === undefined) return undefined;
-      const { key } = row;
-      return {
-        realmId: key.realmId,
-        purpose: key.purpose,
-        scopeId: key.scopeId,
-        kid: key.kid,
-        algorithm: key.algorithm,
-        status: key.status,
-        ciphertext: key.ciphertext,
-        iv: key.iv,
-        wrappedDek: key.wrappedDek,
-        kekRef: key.kekRef,
-        aadVersion: key.aadVersion,
-      };
+      return wrappedKey(realmId, kid);
     },
     async listPublicKeys(realmId): Promise<readonly PublicKeyRecord[]> {
       storeReads.push('listPublicKeys');
@@ -274,6 +293,9 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
       const row = rows.find(({ key }) => key.realmId === realmId && key.kid === kid);
       if (row === undefined) throw new Error(`No key ${kid} in realm ${realmId}`);
       row.key = { ...row.key, status };
+    },
+    prepublishTokenKeys(realmId, prepublication) {
+      return prepublishTokenKeys(keyStore, factory, realmId, prepublication);
     },
     rotateTokenKeys(realmId, rotation) {
       return rotateTokenKeys(keyStore, factory, realmId, rotation);

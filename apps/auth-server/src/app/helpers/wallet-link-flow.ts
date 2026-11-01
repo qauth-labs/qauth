@@ -237,8 +237,12 @@ export async function startWalletLinkFlow(
   // ADDED to whatever this browser already holds: a user may have a wallet
   // login and a wallet link in flight at once, and replacing the cookie would
   // strand one of them.
-  setWalletFlowCookie(reply, [
-    ...readWalletFlowBindings(readCookie(request, WALLET_FLOW_COOKIE_NAME)),
+  await setWalletFlowCookie(fastify, reply, realm.id, [
+    ...(await readWalletFlowBindings(
+      fastify,
+      realm.id,
+      readCookie(request, WALLET_FLOW_COOKIE_NAME)
+    )),
     { handle, binder, expiresAt: invocation.expiresAt },
   ]);
 
@@ -355,7 +359,12 @@ export async function advanceWalletLinkFlow(
   const via = options.via ?? 'poll';
 
   // Read before the flow because the done-marker path below needs it too.
-  const binder = findWalletFlowBinder(readCookie(request, WALLET_FLOW_COOKIE_NAME), handle);
+  const binder = await findWalletFlowBinder(
+    fastify,
+    requestRealm(request).id,
+    readCookie(request, WALLET_FLOW_COOKIE_NAME),
+    handle
+  );
 
   // A flow is resumed only at a host of the realm it was started in (#489):
   // one of another realm is an unknown flow here, answered exactly as one,
@@ -454,7 +463,7 @@ export async function advanceWalletLinkFlow(
     // same browser, and clearing the whole cookie would strand it. The return
     // leg leaves the binding alone — see the JSDoc — so the original tab can
     // still prove it holds the flow when it comes looking for the marker.
-    dropWalletFlowBinding(request, reply, handle);
+    await dropWalletFlowBinding(fastify, request, reply, handle);
   }
 
   if (resolution.status === 'linked') {
@@ -539,7 +548,7 @@ async function resolveDoneMarker(
   }
 
   await deleteWalletFlowDoneMarker(fastify, handle);
-  dropWalletFlowBinding(request, reply, handle);
+  await dropWalletFlowBinding(fastify, request, reply, handle);
 
   switch (marker.outcome) {
     case 'linked':

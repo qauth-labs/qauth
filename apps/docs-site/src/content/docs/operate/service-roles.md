@@ -63,10 +63,11 @@ holds the signer ignores `SIGNER_URL` and warns.
 
 The check is by variable name. It cannot see the credentials a KEK provider
 adapter takes from its cloud SDK's own settings or from the machine's identity:
-grant the KMS permission to the signer nodes only. Two secrets are not keys of
-the signer yet and stay in the environment of the processes that use them:
-`SESSION_COOKIE_SECRET` (below) and `OID4VP_RESPONSE_KEY_SECRET`, which wraps
-the wallet response keys on `web` and `api` nodes.
+grant the KMS permission to the signer nodes only. One secret is not a key of
+the signer yet and stays in the environment of the processes that use it:
+`OID4VP_RESPONSE_KEY_SECRET`, which wraps the wallet response keys on `web` and
+`api` nodes. `SESSION_COOKIE_SECRET` is no longer one of them: the browser
+cookies are signed with the realm's cookie key from the signer (below).
 
 ## The internal listener
 
@@ -119,11 +120,12 @@ INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/web":"web"}
 ## What a split deployment can do today
 
 The internal listener runs, but the signer service it is for is not built
-yet (#497): no signer route answers on it. Until it is, a process without the signer cannot sign
-anything, and warns at boot:
+yet (#497): no signer route answers on it. Until it is, a process without the
+signer cannot sign anything, and warns at boot:
 
 - a request that needs a signature, an encryption or a cookie secret, such as
-  token issuance or an ID-JAG assertion, answers `503` with
+  token issuance, an ID-JAG assertion, or a browser page that reads or sets a
+  signed cookie (the sign-in, consent and wallet pages), answers `503` with
   `temporarily_unavailable`;
 - an event delivery waits: the `delivery` role holds it without spending an
   attempt and offers it again every 30 seconds, until a signer answers.
@@ -135,27 +137,33 @@ issues, so every process of a hybrid deployment sets it: a process without the
 signer verifies hybrid tokens with the realm's published ML-DSA-65 keys, and
 answers `503` when asked to sign one.
 
-So the split that works today keeps every signing role together:
+The browser cookies are signed with the realm's cookie key, which only the
+signer hands out (#493), so the browser-facing role needs a signer as much as
+the roles that sign tokens do. So the split that works today keeps `web` with
+every signing role, and only `admin`, which signs nothing, apart:
 
 ```bash
-# Browser-facing nodes: no KEK, no private key.
-SERVICE_ROLES=web
-SIGNER_URL=https://signer.internal:3443
-INTERNAL_TLS_CERT_PATH=/run/secrets/web.crt
-INTERNAL_TLS_KEY_PATH=/run/secrets/web.key
-INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
-
-# The nodes that sign: the KEK and the private keys live here only, and
-# the internal listener serves the other nodes over mutual TLS.
-SERVICE_ROLES=api,admin,signer,delivery
+# The nodes that sign and serve the browser: the KEK and the private keys live
+# here only, and the internal listener serves the other nodes over mutual TLS.
+SERVICE_ROLES=web,api,signer,delivery
 KEK_PATH=/run/secrets/qauth-kek
 JWT_PRIVATE_KEY_PATH=/run/secrets/qauth-ed25519.pem
 INTERNAL_HOST=0.0.0.0
 INTERNAL_TLS_CERT_PATH=/run/secrets/signer.crt
 INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
-INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/web":"web"}
+INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/admin":"admin"}
+
+# Admin nodes: no KEK, no private key.
+SERVICE_ROLES=admin
+SIGNER_URL=https://signer.internal:3443
+INTERNAL_TLS_CERT_PATH=/run/secrets/admin.crt
+INTERNAL_TLS_KEY_PATH=/run/secrets/admin.key
+INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
 ```
+
+Once the signer service ships (#497), a `web` node without the KEK gets the
+cookie keys from it and keeps them in memory, reading them again every minute.
 
 Wallet sign-in builds its signed request on the node that serves
 `/ui/wallet-login`, a `web` node, which may not hold the verifier key: a
@@ -166,11 +174,15 @@ deployment until the signer service ships. Route browser paths
 other path to the others at the reverse proxy. `POST /auth/verify` is the
 API's and stays on `api`: route `/auth/verify` by method.
 
-`SESSION_COOKIE_SECRET` is still read from the environment. The `web` and
-`api` roles read the session cookie (`api` for `/auth/logout`), so
-`NODE_ENV=production` requires it on a process holding either; an `admin`,
-`signer` or `delivery` process starts without it. It moves to the signer with
-the cookie key, after which only the `web` role receives it.
+The `web` and `api` roles read the session cookie (`api` for `/auth/logout`),
+with the realm's cookie key from the signer (#493). Only the browser-facing
+role receives the cookie keys from a signer service (ADR-019 Decision 9): on a
+process that cannot read them, `/auth/logout` still ends the user's sessions and
+tokens, and leaves the request's cookie for the next page to clear.
+`SESSION_COOKIE_SECRET` is optional on every process: only the key boot step, on
+a process that holds the signer, reads it, to import it into the default realm's
+key store or to replace the stored cookie key with it. `NODE_ENV=production`
+refuses every value QAuth's examples published, on every process.
 
 With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.

@@ -280,6 +280,28 @@ describe('spec-matrix — several reports (the unit and the wire suite, #450)', 
     expect(result.stderr).toContain('unproven: rfc9999 §2');
   });
 
+  it('says how many of a row’s proving tests ran over the wire, by their *.wire.test.ts file', () => {
+    const wire = {
+      testResults: [
+        {
+          name: '/fixture/repo/apps/wire-suite/src/suites/fixture.wire.test.ts',
+          assertionResults: [
+            { ancestorTitles: [], title: CITING, fullName: CITING, status: 'passed' },
+          ],
+        },
+      ],
+    };
+
+    const result = run({ reportBody: report([{ fullName: CITING }]), extraReports: [wire] });
+
+    expect(result.status).toBe(EXIT_OK);
+    const markdown = readFileSync(join(result.outDir, 'matrix.md'), 'utf8');
+    expect(markdown).toContain('2 test(s), 1 over the wire, e.g. ');
+    const json = JSON.parse(readFileSync(join(result.outDir, 'matrix.json'), 'utf8'));
+    const proving = json.specs[0].rows[0].provingTests as { file: string; wire: boolean }[];
+    expect(proving.map((test) => test.wire).sort()).toEqual([false, true]);
+  });
+
   it('names every report in the rendered matrix', () => {
     const result = run({ reportBody: unit, extraReports: [report([{ fullName: CITING }])] });
 
