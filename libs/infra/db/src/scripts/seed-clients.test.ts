@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildInsert, buildUpdate } from './seed-clients';
+import { buildInsert, buildUpdate, dropsClientCredentialsScopes } from './seed-clients';
 import { type ClientSpec, clientSpecSchema } from './seed-manifest';
 
 /**
@@ -27,5 +27,18 @@ describe('client_credentials_scopes rows (#891)', () => {
   it('writes NULL for an entry without one, so a rotation clears a list the manifest dropped', () => {
     expect(buildInsert('realm-id', spec(), 'hash').clientCredentialsScopes).toBeNull();
     expect(buildUpdate(spec(), 'hash').clientCredentialsScopes).toBeNull();
+  });
+
+  it('calls a rotation that would turn a stored list into NULL a drop, and nothing else', () => {
+    const listed = spec({ client_credentials_scopes: ['ssf:stream'] });
+    expect(dropsClientCredentialsScopes({ clientCredentialsScopes: ['ssf:stream'] }, spec())).toBe(
+      true
+    );
+    expect(dropsClientCredentialsScopes({ clientCredentialsScopes: [] }, spec())).toBe(true);
+    expect(dropsClientCredentialsScopes({ clientCredentialsScopes: ['ssf:stream'] }, listed)).toBe(
+      false
+    );
+    expect(dropsClientCredentialsScopes({ clientCredentialsScopes: null }, spec())).toBe(false);
+    expect(dropsClientCredentialsScopes({ clientCredentialsScopes: null }, listed)).toBe(false);
   });
 });

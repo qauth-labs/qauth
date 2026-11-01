@@ -30,11 +30,15 @@ export type Issued = {
   secret: string;
   action: Action;
   /**
-   * Why a `--rotate` entry that sets a first-party profile was refused (#631):
-   * its row was written by a developer, dynamic registration or a CIMD
-   * document, which can never be first party. Nothing was written.
+   * Why a `--rotate` entry was refused. Nothing was written.
+   * - `developer_owned`, `dynamic`, `cimd` (#631): the entry sets a
+   *   first-party profile on a row a developer, dynamic registration or a
+   *   CIMD document wrote, which can never be first party.
+   * - `client_credentials_scopes_dropped` (#891): the stored client narrows
+   *   its `client_credentials` grant and the entry has no
+   *   `client_credentials_scopes`, so the rewrite would lift the narrowing.
    */
-  refusal?: 'developer_owned' | 'dynamic' | 'cimd';
+  refusal?: 'developer_owned' | 'dynamic' | 'cimd' | 'client_credentials_scopes_dropped';
   /** Whether the write changed the client's first-party profile, policy or reason (#631). */
   firstPartyChanged?: boolean;
   /** How many refresh tokens removing the client's profile revoked (#631). */
@@ -80,6 +84,7 @@ export async function provisionClient(
         developerId: oauthClients.developerId,
         dynamicRegisteredAt: oauthClients.dynamicRegisteredAt,
         metadata: oauthClients.metadata,
+        clientCredentialsScopes: oauthClients.clientCredentialsScopes,
       })
       .from(oauthClients)
       .where(and(eq(oauthClients.realmId, realmId), eq(oauthClients.clientId, spec.client_id)))
@@ -97,6 +102,20 @@ export async function provisionClient(
       existing && spec.first_party_profile !== undefined ? ownershipRefusalOf(existing) : null;
     if (refusal !== null) {
       return { clientId: spec.client_id, secret: '', action: 'refused' as const, refusal };
+    }
+
+    // #891: a rotation rewrites every column from the entry, and an entry
+    // without the list writes NULL, which lets `client_credentials` issue
+    // every scope of `scopes` again. An operator who set the list by hand
+    // and rotates with a manifest that never named it would lift it without
+    // a word, so the entry is refused, by name, before a secret is issued.
+    if (existing && dropsClientCredentialsScopes(existing, spec)) {
+      return {
+        clientId: spec.client_id,
+        secret: '',
+        action: 'refused' as const,
+        refusal: 'client_credentials_scopes_dropped' as const,
+      };
     }
 
     const plaintextSecret = generateClientSecret();
@@ -156,6 +175,19 @@ export async function provisionClient(
 /* ------------------------------------------------------------------------ */
 /*                              Row builders                                */
 /* ------------------------------------------------------------------------ */
+
+/**
+ * Whether rewriting a stored client from `spec` would lift the narrowing of
+ * its `client_credentials` grant (#891): the row holds a list and the entry
+ * has none. To lift it on purpose, the operator clears the column by hand
+ * (`client_credentials_scopes = NULL`) before rotating.
+ */
+export function dropsClientCredentialsScopes(
+  stored: { clientCredentialsScopes: unknown },
+  spec: ClientSpec
+): boolean {
+  return stored.clientCredentialsScopes !== null && spec.client_credentials_scopes === undefined;
+}
 
 /**
  * The `client_credentials_scopes` column of a client entry (#891): the
