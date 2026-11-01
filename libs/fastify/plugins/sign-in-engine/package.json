@@ -12,6 +12,7 @@
     "fastify-plugin": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/infra-cache": "workspace:*",
     "@qauth-labs/infra-db": "workspace:*",
     "@qauth-labs/server-password": "workspace:*",
     "@qauth-labs/shared-testing": "workspace:*",
