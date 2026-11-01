@@ -1,10 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The deployment's CIMD tuning keys only: the switch and the trust policy are
+// the realm's (#534), read through `fastify.policyStore` from `CIMD` below.
 const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
-    CIMD_ENABLED: true,
-    CIMD_TRUST_POLICY: 'accept-any-https' as const,
-    CIMD_TRUSTED_DOMAINS: [] as string[],
     CIMD_CACHE_DEFAULT_TTL: 300,
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
@@ -19,6 +18,11 @@ vi.mock('../../config/env', () => ({ env: ENV }));
 // not the test file.
 vi.mock('./egress-get', () => ({ egressGet }));
 
+import { PolicyValidationError } from '@qauth-labs/fastify-plugin-realm-policy';
+
+import { testPolicyStore } from '../../testing/realm-policies';
+import { testRealm } from '../../testing/request-realm';
+import type { CimdPolicy } from './cimd-policy';
 import {
   cimdSentinelSecretHash,
   isAgentClient,
@@ -27,6 +31,17 @@ import {
 } from './client-resolution';
 
 const CIMD_ID = 'https://app.example.com/client.json';
+const REALM = testRealm({ id: 'realm-1' });
+
+/**
+ * The realm's CIMD policy (#534), which every stub's policy store hands out
+ * as `registration.cimd`: the seeded defaults before each test.
+ */
+const CIMD: { -readonly [K in keyof CimdPolicy]: CimdPolicy[K] } = {
+  enabled: true,
+  trustPolicy: 'accept-any-https',
+  trustedDomains: [],
+};
 
 function ok(body: unknown, headers: Record<string, string> = {}) {
   return { status: 200, body: JSON.stringify(body), headers };
@@ -62,6 +77,7 @@ function fastifyStub() {
         },
       },
       passwordHasher: { hashPassword: vi.fn(async () => 'argon2id$sentinel') },
+      policyStore: testPolicyStore({}, { registration: { cimd: CIMD } }),
     } as any,
     upserted,
   };
@@ -69,7 +85,9 @@ function fastifyStub() {
 
 beforeEach(() => {
   egressGet.mockReset();
-  ENV.CIMD_ENABLED = true;
+  CIMD.enabled = true;
+  CIMD.trustPolicy = 'accept-any-https';
+  CIMD.trustedDomains = [];
 });
 
 describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', () => {
@@ -78,7 +96,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     const preReg = { id: 'db-uuid', clientId: 'app-123', redirectUris: [], metadata: null };
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(preReg);
 
-    const { client } = await resolveClient(fastify, 'realm-1', 'app-123');
+    const { client } = await resolveClient(fastify, REALM, 'app-123');
 
     expect(client).toBe(preReg);
     expect(egressGet).not.toHaveBeenCalled();
@@ -89,7 +107,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     const preReg = { id: 'db-uuid', clientId: CIMD_ID, redirectUris: [], metadata: null };
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(preReg);
 
-    const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+    const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
     expect(client).toBe(preReg);
     expect(egressGet).not.toHaveBeenCalled();
@@ -109,7 +127,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       const stub = fastifyStub();
       stub.fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
       egressGet.mockResolvedValue(ok(DOC));
-      const { client } = await resolveClient(stub.fastify, 'realm-1', CIMD_ID);
+      const { client } = await resolveClient(stub.fastify, REALM, CIMD_ID);
       expect(client).not.toBeNull();
       // From here on the row exists, exactly as after a first authorize.
       stub.fastify.repositories.oauthClients.findByClientId.mockResolvedValue(stub.upserted[0]);
@@ -124,7 +142,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
         ok({ ...DOC, redirect_uris: ['https://app.example.com/new-cb'] })
       );
 
-      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
       expect(client!.redirectUris).toEqual(['https://app.example.com/new-cb']);
@@ -134,7 +152,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       const { fastify, upserted } = await materialise();
       egressGet.mockResolvedValue(ok(DOC));
 
-      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(client).toBe(upserted[0]);
       expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
@@ -172,7 +190,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       );
 
       const startedAt = performance.now();
-      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(performance.now() - startedAt).toBeLessThan(1000);
       expect(client).not.toBeNull();
@@ -181,9 +199,9 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
 
     it('fails closed once CIMD is switched off, even for a stored client', async () => {
       const { fastify } = await materialise();
-      ENV.CIMD_ENABLED = false;
+      CIMD.enabled = false;
 
-      const { client, reason } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client, reason } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(client).toBeNull();
       expect(reason).toBeDefined();
@@ -191,15 +209,11 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
 
     it('fails closed once the host leaves the trust allowlist', async () => {
       const { fastify } = await materialise();
-      (ENV as { CIMD_TRUST_POLICY: string }).CIMD_TRUST_POLICY = 'allowlist';
-      ENV.CIMD_TRUSTED_DOMAINS = ['other.example.com'];
-      try {
-        const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
-        expect(client).toBeNull();
-      } finally {
-        (ENV as { CIMD_TRUST_POLICY: string }).CIMD_TRUST_POLICY = 'accept-any-https';
-        ENV.CIMD_TRUSTED_DOMAINS = [];
-      }
+      CIMD.trustPolicy = 'allowlist';
+      CIMD.trustedDomains = ['other.example.com'];
+
+      const { client } = await resolveClient(fastify, REALM, CIMD_ID);
+      expect(client).toBeNull();
     });
 
     // ANT-2026-D0XJAT8S follow-up: a document that adds a redirect URI
@@ -216,7 +230,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       // The earlier document is still cached; drop it as its TTL would.
       fastify.redis.get.mockResolvedValue(null);
 
-      const { client, reason } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client, reason } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(client).toBeNull();
       expect(reason).toMatch(/^CIMD document refused: invalid_redirect_uri: /);
@@ -227,7 +241,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       const { fastify } = await materialise();
       egressGet.mockResolvedValue({ status: 404, body: '', headers: {} });
 
-      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(client).toBeNull();
     });
@@ -242,7 +256,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
         ok({ ...DOC, redirect_uris: ['https://app.example.com/new-cb'] })
       );
 
-      await resolveClient(fastify, 'realm-1', CIMD_ID);
+      await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledWith(
         expect.objectContaining({ enabled: false })
@@ -263,7 +277,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
         })
       );
 
-      await resolveClient(fastify, 'realm-1', CIMD_ID);
+      await resolveClient(fastify, REALM, CIMD_ID);
 
       const write = fastify.repositories.oauthClients.upsertCimdClient.mock.calls[0][0];
       expect(write).not.toHaveProperty('suspended');
@@ -276,7 +290,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       fastify.repositories.oauthClients.findByClientId.mockResolvedValue(suspendedRow);
       egressGet.mockResolvedValue(ok(DOC));
 
-      const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+      const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
       expect(client?.suspended).toBe(true);
       expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
@@ -294,7 +308,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       })
     );
 
-    const { client } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+    const { client } = await resolveClient(fastify, REALM, CIMD_ID);
 
     expect(client).not.toBeNull();
     expect(client!.clientId).toBe(CIMD_ID);
@@ -319,7 +333,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       })
     );
 
-    await resolveClient(fastify, 'realm-1', CIMD_ID);
+    await resolveClient(fastify, REALM, CIMD_ID);
 
     expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     // Sentinel is shaped like a genuine argon2id PHC string.
@@ -338,7 +352,7 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
       })
     );
 
-    const { client, reason } = await resolveClient(fastify, 'realm-1', CIMD_ID);
+    const { client, reason } = await resolveClient(fastify, REALM, CIMD_ID);
 
     expect(client).toBeNull();
     expect(reason).toMatch(/does not match/);
@@ -357,10 +371,99 @@ describe('resolveClient — pre-registered → CIMD priority (MCP 2025-11-25)', 
     const { fastify } = fastifyStub();
     fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
 
-    const { client, reason } = await resolveClient(fastify, 'realm-1', 'totally-unknown');
+    const { client, reason } = await resolveClient(fastify, REALM, 'totally-unknown');
 
     expect(client).toBeNull();
     expect(reason).toBe('invalid_client');
+    expect(egressGet).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveClient — the CIMD policy of the realm it is given (#534)', () => {
+  const DOC = {
+    client_id: CIMD_ID,
+    client_name: 'Example',
+    redirect_uris: ['https://app.example.com/cb'],
+  };
+  const OPEN = testRealm({ id: 'realm-open', name: 'open' });
+  const CLOSED = testRealm({ id: 'realm-closed', name: 'closed' });
+
+  /** A stub whose policy store hands each realm its own CIMD policy, by id. */
+  function twoRealmStub(policies: Record<string, CimdPolicy>) {
+    const stub = fastifyStub();
+    const stores = Object.fromEntries(
+      Object.entries(policies).map(([id, cimd]) => [
+        id,
+        testPolicyStore({}, { registration: { cimd } }),
+      ])
+    );
+    stub.fastify.policyStore = {
+      ofRealm: vi.fn((row: { id: string }) => stores[row.id].ofRealm(row as never)),
+    };
+    stub.fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
+    egressGet.mockResolvedValue(ok(DOC));
+    return stub;
+  }
+
+  it('resolves a URL client_id in a realm that accepts any host and refuses it in one whose allowlist is empty, whatever was cached', async () => {
+    const { fastify } = twoRealmStub({
+      [OPEN.id]: { enabled: true, trustPolicy: 'accept-any-https', trustedDomains: [] },
+      [CLOSED.id]: { enabled: true, trustPolicy: 'allowlist', trustedDomains: [] },
+    });
+
+    const open = await resolveClient(fastify, OPEN, CIMD_ID);
+    const closed = await resolveClient(fastify, CLOSED, CIMD_ID);
+
+    expect(open.client).toMatchObject({ realmId: OPEN.id, clientId: CIMD_ID });
+    expect(closed).toEqual({
+      client: null,
+      reason: 'client_id host is not in the CIMD trust allowlist',
+    });
+    // One fetch, for the open realm; the document it cached served no other.
+    expect(egressGet).toHaveBeenCalledOnce();
+    expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
+    expect(fastify.policyStore.ofRealm.mock.calls.map(([row]: [{ id: string }]) => row.id)).toEqual(
+      [OPEN.id, CLOSED.id]
+    );
+  });
+
+  it('treats a URL client_id as unknown in a realm with CIMD switched off', async () => {
+    const { fastify } = twoRealmStub({
+      [CLOSED.id]: { enabled: false, trustPolicy: 'accept-any-https', trustedDomains: [] },
+    });
+
+    const cimd = await resolveClient(fastify, CLOSED, CIMD_ID);
+    const unknown = await resolveClient(fastify, CLOSED, 'totally-unknown');
+
+    expect(cimd).toEqual({ client: null, reason: 'invalid_client' });
+    expect(cimd).toEqual(unknown);
+    expect(egressGet).not.toHaveBeenCalled();
+    expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+  });
+
+  it('reads no policy for a pre-registered client', async () => {
+    const { fastify } = fastifyStub();
+    fastify.repositories.oauthClients.findByClientId.mockResolvedValue({
+      id: 'db-uuid',
+      clientId: 'app-123',
+      redirectUris: [],
+      metadata: null,
+    });
+
+    await resolveClient(fastify, REALM, 'app-123');
+
+    expect(fastify.policyStore.ofRealm).not.toHaveBeenCalled();
+  });
+
+  it('fails with the store error, not an unknown client, when the realm stores policies the schema refuses', async () => {
+    const { fastify } = fastifyStub();
+    fastify.repositories.oauthClients.findByClientId.mockResolvedValue(undefined);
+    const refused = new PolicyValidationError('the stored policies are not valid', []);
+    fastify.policyStore.ofRealm.mockImplementation(() => {
+      throw refused;
+    });
+
+    await expect(resolveClient(fastify, REALM, CIMD_ID)).rejects.toBe(refused);
     expect(egressGet).not.toHaveBeenCalled();
   });
 });

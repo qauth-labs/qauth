@@ -3,7 +3,7 @@ title: MCP Quickstart
 description: Wire QAuth as the OAuth 2.1 authorization server for an MCP resource server, end to end.
 sidebar:
   order: 1
-lastVerified: '2026-07-27'
+lastVerified: '2026-11-01'
 ---
 
 This guide takes you from nothing to a **working MCP authorization handshake** on
@@ -293,7 +293,10 @@ CIMD for anything you deploy.
 | **CIMD** — Client ID Metadata Documents (MCP 2026-07-28, **preferred**)            | `client_id` is an **HTTPS URL** resolving to a metadata document  | Production clients with a stable, public metadata URL. A row IS persisted, but idempotently — keyed by the (validated) URL, so re-resolving updates one row instead of creating new ones; there is no record to spam. It is not manageable from the developer portal, by design ([ADR-012](/reference/records/adr/012-dynamic-client-ownership/)): edit the metadata document instead. |
 | **DCR** — Dynamic Client Registration (RFC 7591, **deprecated** by MCP 2026-07-28) | `POST /oauth/register`, **open mode** (no `initial_access_token`) | Local development and clients without a public URL. Scopes are **capped to the realm allowlist** (`DEFAULT_DYNAMIC_REGISTRATION_SCOPES`) — this is why Step 1 adds `mcp:read mcp:write`.                                                                                                                                                                                               |
 
-- **CIMD** is on by default (`CIMD_ENABLED=true`). It requires the client's
+- **CIMD** is on by default: `CIMD_ENABLED=true` seeds it on for each new
+  realm, and from then on the realm's own `registration.cimd` policy decides
+  ([Changing a realm's CIMD policy](/operate/docker/#changing-a-realms-cimd-policy)).
+  It requires the client's
   `client_id` URL to be fetchable over HTTPS; the AS validates it (URL ==
   `client_id`, redirect-URI checks, SSRF guards, size/TTL limits). A document
   may declare portless loopback redirects such as `http://127.0.0.1/callback`

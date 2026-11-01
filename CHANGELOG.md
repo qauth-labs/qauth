@@ -94,8 +94,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RealmSecretStore` names where secret fields go; the store itself comes with
   [#529], and until then a write that sets a secret is refused. The flows still
   read the environment until they move to the row ([#527], [#528], [#529],
-  [#534]); the token lifetimes moved with [#527], the sign-in policy with [#528]
-  (below). See **Realm policies move onto the realm row** in `operate/upgrades`.
+  [#534]); the token lifetimes moved with [#527], the sign-in policy with [#528],
+  the mail transport and sender with [#529] and CIMD with [#534] (below). See
+  **Realm policies move onto the realm row** in `operate/upgrades`.
 - **Stored realm policies of an earlier schema version are upgraded** ([#908],
   ADR-018 §5). A release that changes `REALM_POLICY_SCHEMA_VERSION` ships an
   upgrade from the version before it in `REALM_POLICY_UPGRADES` (none yet: the
@@ -1546,6 +1547,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **CIMD comes from the realm row** ([#534], ADR-019 Decisions 1 and 10,
+  ADR-007). Whether a realm accepts an HTTPS URL as a `client_id`, its trust
+  policy and its trusted domains are the realm's `registration.cimd` policy, so
+  two realms of one deployment can accept Client ID Metadata Document clients
+  differently. Client resolution at the authorization, consent and token
+  endpoints (client assertions included) reads it off the realm row the request
+  resolved to, with no query of its own, and the realm's discovery documents
+  advertise `client_id_metadata_document_supported` from it. A realm with CIMD
+  off treats a URL `client_id` as an unknown client; a realm with the
+  `allowlist` trust policy and no trusted domains accepts no CIMD client. The
+  realm's switch and trust policy are checked before the document cache is
+  read, so a document one realm resolved never lets its client into a realm
+  that refuses its host. `CIMD_ENABLED`, `CIMD_TRUST_POLICY` and
+  `CIMD_TRUSTED_DOMAINS` now only seed a new realm, and a realm that had no
+  policies at the first boot after the upgrade ([#516]): a later change of them
+  leaves an existing realm as it is, and the boot warns that each one set is
+  ignored. `CIMD_CACHE_DEFAULT_TTL`, `CIMD_CACHE_MAX_TTL`,
+  `CIMD_MAX_DOCUMENT_BYTES` and `CIMD_FETCH_TIMEOUT_MS` stay deployment
+  settings. A stored policy the schema refuses fails the realm's client
+  resolution and discovery with a server error rather than guess. Until the
+  admin API's realm policy update ([#517]) ships, `operate/docker` shows the
+  SQL that changes a realm's CIMD policy. `POST /oauth/register` already holds a
+  registration to the realm's own dynamic registration allowlist and drops a
+  scope outside it ([#516]); a new integration suite proves both against real
+  containers, and a test refuses any read of a migrated seed key outside the
+  boot steps.
+
 - **The verified-account gate, the password score and the failed-login lockout
   come from the realm row** ([#528], ADR-019 Decision 10). Each realm's
   `accounts.requireVerifiedAccount`, `password.minScore` and `bruteForce`
@@ -2566,20 +2594,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#599]: https://github.com/qauth-labs/qauth/issues/599
 [#600]: https://github.com/qauth-labs/qauth/issues/600
 [#601]: https://github.com/qauth-labs/qauth/issues/601
-[#616]: https://github.com/qauth-labs/qauth/issues/616
-[#627]: https://github.com/qauth-labs/qauth/issues/627
-[#628]: https://github.com/qauth-labs/qauth/issues/628
-[#639]: https://github.com/qauth-labs/qauth/issues/639
 [#614]: https://github.com/qauth-labs/qauth/issues/614
+[#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
-[#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
-[#615]: https://github.com/qauth-labs/qauth/issues/615
 [#633]: https://github.com/qauth-labs/qauth/issues/633
 [#637]: https://github.com/qauth-labs/qauth/issues/637
+[#639]: https://github.com/qauth-labs/qauth/issues/639
 [#642]: https://github.com/qauth-labs/qauth/issues/642
+[#646]: https://github.com/qauth-labs/qauth/issues/646
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845

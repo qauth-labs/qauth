@@ -60,9 +60,10 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../../config/env', () => ({
-  env: { CIMD_ENABLED: false },
+  env: {},
 }));
 
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
 import { tokenRealm } from '../../helpers/realm-url';
 import { authorizeQuerySchema } from '../../schemas/oauth';
@@ -120,6 +121,19 @@ async function buildApp(options: BuildAppOptions = {}): Promise<TestServer> {
   });
   // The realm resolver's decoration (#486): discovery is the request realm's.
   supplyRequestRealm(app, row);
+  // A realm with CIMD switched off (#534), so the documents are a plain
+  // OpenID Provider's.
+  app.decorate(
+    'policyStore',
+    testPolicyStore(
+      {},
+      {
+        registration: {
+          cimd: { enabled: false, trustPolicy: 'accept-any-https', trustedDomains: [] },
+        },
+      }
+    ) as never
+  );
   await app.register(wellKnownRoutes);
   await app.ready();
 

@@ -338,33 +338,43 @@ ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
-flows move to the stored values one area at a time: the verification
-link's lifetime and resend rule, and CIMD
-([#534](https://github.com/qauth-labs/qauth/issues/534)) still read the
-environment. The token lifetimes
-([#527](https://github.com/qauth-labs/qauth/issues/527)) come from the row:
-`ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN` and
-`REFRESH_TOKEN_LIFESPAN` set the lifetimes of a realm only while it has no
-policies (one a node of the previous release created during a rolling
-upgrade, until a node of this release boots again). So do the
-verified-account gate, the lowest password score and the failed sign-in
-lockout ([#528](https://github.com/qauth-labs/qauth/issues/528)):
-`REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_SCORE` and the four
-`FAILED_LOGIN_*` keys apply to a realm only while it has no policies, and each
-realm's own `accounts`, `password` and `bruteForce` policies apply once it has
-them. In particular, on a deployment that already ran this release, setting
-`REQUIRE_VERIFIED_ACCOUNT=false` no longer lets unverified accounts of the
-existing realms sign in; change the realm's stored policy instead. The mail transport and
-sender come from the row too
-([#529](https://github.com/qauth-labs/qauth/issues/529), see
-[Mail secrets move into the realm](#mail-secrets-move-into-the-realm)). The dynamic
-registration allowlist and the environment ceiling come from the row too:
-`/oauth/register` and the clients API no longer write
-`DEFAULT_DYNAMIC_REGISTRATION_SCOPES` into a realm's list. A realm that has its
-policies is held to its own list, even an empty one; a realm with none yet, to
-the list its fill will hold, which the first boot stores. Until an area has moved, the server still applies its
-keys to every realm, so keep them set. At every boot the server names each seed
-key that is still set, once:
+flows move to the stored values one area at a time. In this release these
+come from the row:
+
+- The token lifetimes
+  ([#527](https://github.com/qauth-labs/qauth/issues/527)):
+  `ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN` and
+  `REFRESH_TOKEN_LIFESPAN` set the lifetimes of a realm only while it has no
+  policies (one a node of the previous release created during a rolling
+  upgrade, until a node of this release boots again).
+- The verified-account gate, the lowest password score and the failed sign-in
+  lockout ([#528](https://github.com/qauth-labs/qauth/issues/528)):
+  `REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_SCORE` and the four
+  `FAILED_LOGIN_*` keys apply to a realm only while it has no policies, and
+  each realm's own `accounts`, `password` and `bruteForce` policies apply once
+  it has them. In particular, on a deployment that already ran this release,
+  setting `REQUIRE_VERIFIED_ACCOUNT=false` no longer lets unverified accounts
+  of the existing realms sign in; change the realm's stored policy instead.
+- The mail transport and sender
+  ([#529](https://github.com/qauth-labs/qauth/issues/529), see
+  [Mail secrets move into the realm](#mail-secrets-move-into-the-realm)).
+- Client registration
+  ([#534](https://github.com/qauth-labs/qauth/issues/534)). `/oauth/register`
+  and the clients API no longer write `DEFAULT_DYNAMIC_REGISTRATION_SCOPES`
+  into a realm's list. A realm that has its policies is held to its own list,
+  even an empty one; a realm with none yet, to the list its fill will hold,
+  which the first boot stores. Whether a realm accepts an HTTPS URL as a
+  `client_id`, its trust policy and its trusted domains are the realm's
+  `registration.cimd` policy, which the authorization, consent and token
+  endpoints and the realm's discovery documents read. `CIMD_ENABLED`,
+  `CIMD_TRUST_POLICY` and `CIMD_TRUSTED_DOMAINS` seed a new realm only; the
+  document cache, size and fetch timeout keys stay the deployment's.
+- The environment ceiling, which the server read from the row before.
+
+The verification link's lifetime and resend rule still read the environment.
+Until an area has moved, the server still applies its keys to every realm, so
+keep them set. At every boot the server names each seed key that is still set,
+once:
 
 - for a key whose policy the server reads from the row, a warning such as
   `DEFAULT_DYNAMIC_REGISTRATION_SCOPES only seeds new realms and is ignored`;
@@ -384,15 +394,18 @@ first boot stored the value each key had then. Change a key whose area has not
 moved yet, and the server applies the new value while it reads the area from
 the environment; the release that moves the area to the row applies the
 stored value instead, whatever the key says by then. A key tightened in the
-meantime, such as `CIMD_ENABLED=false`, would loosen again at that upgrade. So
-change the stored policy along with the key, not the key alone. The token
-lifetimes and the sign-in policy moved in the same release as the policies
-themselves: a deployment that upgrades from 0.1 stores those keys as they are
-at its first boot, and applies the stored values from then on.
+meantime, such as a lower `EMAIL_VERIFICATION_TOKEN_EXPIRY`, would loosen again
+at that upgrade. So change the stored policy along with the key, not the key
+alone. The token lifetimes, the sign-in policy and CIMD moved in the same
+release as the policies themselves: a deployment that upgrades from 0.1 stores
+those keys as they are at its first boot, and applies the stored values from
+then on.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
-this change: until it ships, no route changes them.
+this change: until it ships, no route changes them. To switch CIMD off for a
+realm meanwhile, or to hold it to an allowlist, see
+[Changing a realm's CIMD policy](/operate/docker/#changing-a-realms-cimd-policy).
 
 **A value the policy schema refuses stops the boot.** The schema is stricter
 than some keys were, so the server refuses to start, naming the key and never

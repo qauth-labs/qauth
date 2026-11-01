@@ -528,9 +528,13 @@ Decision 1):
   No other realm's key is in it.
 - `id_token_signing_alg_values_supported` follows the realm's active keys:
   `["RS256","EdDSA"]` when it has an active RS256 key, else `["EdDSA"]`.
-- The settings that add members belong to the deployment, and every realm
-  advertises them alike: `CIMD_ENABLED`, `DPOP_ENABLED`, and `ID_JAG_ENABLED`
-  once `ID_JAG_TRUSTED_ISSUERS` names an issuer.
+- `client_id_metadata_document_supported` follows the realm's CIMD policy
+  (`registration.cimd.enabled`,
+  [#534](https://github.com/qauth-labs/qauth/issues/534)): a realm that has
+  CIMD off omits it.
+- The settings that add the other members belong to the deployment, and every
+  realm advertises them alike: `DPOP_ENABLED`, and `ID_JAG_ENABLED` once
+  `ID_JAG_TRUSTED_ISSUERS` names an issuer.
 
 Every node that serves these documents (a process holding the `api` role, see
 [Service roles](/operate/service-roles/)) answers the same bytes for the same
@@ -553,8 +557,8 @@ Prefer discovering endpoint URLs from these documents over hard-coding paths.
 The AS metadata advertises `resource_indicators_supported: true`,
 `authorization_response_iss_parameter_supported: true` (RFC 9207 — `/oauth/authorize`
 returns `iss` on both success and error redirects, so the flag is not
-configurable), and, when enabled, `client_id_metadata_document_supported: true`
-(CIMD).
+configurable), and, when the realm's CIMD policy is on,
+`client_id_metadata_document_supported: true` (CIMD).
 
 ### Passkey association files
 

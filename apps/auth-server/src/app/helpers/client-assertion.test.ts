@@ -3,11 +3,10 @@ import type { FastifyInstance } from 'fastify';
 import { type CryptoKey, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The deployment's CIMD tuning keys only: the switch and the trust policy are
+// the realm's (#534), read through `fastify.policyStore` from `CIMD` below.
 const { ENV, egressGet } = vi.hoisted(() => ({
   ENV: {
-    CIMD_ENABLED: true,
-    CIMD_TRUST_POLICY: 'accept-any-https' as 'accept-any-https' | 'allowlist',
-    CIMD_TRUSTED_DOMAINS: [] as string[],
     CIMD_CACHE_DEFAULT_TTL: 300,
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
@@ -21,6 +20,9 @@ vi.mock('../../config/env', () => ({ env: ENV }));
 vi.mock('./egress-get', () => ({ egressGet }));
 
 import { blockedEgress } from '../../testing/egress';
+import { testPolicyStore } from '../../testing/realm-policies';
+import { testRealm } from '../../testing/request-realm';
+import type { CimdPolicy } from './cimd-policy';
 import {
   authenticateClientAssertion,
   CLIENT_ASSERTION_CLOCK_SKEW_LEEWAY_SECONDS,
@@ -30,7 +32,14 @@ import {
 
 const ISSUER = 'https://auth.example.com';
 /** The realm the request was resolved to, whose issuer is the only audience (#490). */
-const REALM = { id: 'realm-1', issuer: ISSUER };
+const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
+
+/** The realm's CIMD policy (#534), as every stub's policy store hands it out. */
+const CIMD: { -readonly [K in keyof CimdPolicy]: CimdPolicy[K] } = {
+  enabled: true,
+  trustPolicy: 'accept-any-https',
+  trustedDomains: [],
+};
 const TOKEN_ENDPOINT = `${ISSUER}/oauth/token`;
 const CLIENT_ID = 'pkjwt-client';
 const ASSERTION_TYPE = 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer';
@@ -94,6 +103,7 @@ function fastifyStub(client: ClientRow | null) {
         upsertCimdClient: vi.fn(),
       },
     },
+    policyStore: testPolicyStore({}, { registration: { cimd: CIMD } }),
   };
 }
 
@@ -116,9 +126,9 @@ let otherKeys: { privateKey: CryptoKey; publicKey: CryptoKey };
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  ENV.CIMD_ENABLED = true;
-  ENV.CIMD_TRUST_POLICY = 'accept-any-https';
-  ENV.CIMD_TRUSTED_DOMAINS = [];
+  CIMD.enabled = true;
+  CIMD.trustPolicy = 'accept-any-https';
+  CIMD.trustedDomains = [];
   es256 = await generateKeyPair('ES256', { extractable: true });
   es256Jwk = await exportJWK(es256.publicKey);
   otherKeys = await generateKeyPair('ES256', { extractable: true });
@@ -172,7 +182,7 @@ describe('authenticateClientAssertion — accepted', () => {
   });
 
   it("takes the audience from the request realm's issuer, not from JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
-    const realmB = { id: 'realm-b', issuer: 'https://b.example.com' };
+    const realmB = testRealm({ id: 'realm-b', issuer: 'https://b.example.com' });
     const stub = fastifyStub(clientRow({ jwks: jwkSet(es256Jwk) }));
 
     await expect(
@@ -698,7 +708,7 @@ describe('authenticateClientAssertion — rejected', () => {
 // Regression (ANT-2026-4V7HWAND): a materialised CIMD row is only a cache of
 // the metadata document (ADR-012 §3). The assertion path read the stored row
 // and went through `resolveClient` only when there was none, so once the row
-// existed, `CIMD_ENABLED=false`, the trust allowlist, a vanished document and
+// existed, CIMD switched off, the trust allowlist, a vanished document and
 // key rotation never reached a `private_key_jwt` CIMD client.
 describe('authenticateClientAssertion — re-resolves a materialised CIMD client', () => {
   const CIMD_ID = 'https://app.example.com/client.json';
@@ -778,7 +788,7 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
 
   it('fails closed once CIMD is switched off, even for a stored client', async () => {
     const stub = await materialise();
-    ENV.CIMD_ENABLED = false;
+    CIMD.enabled = false;
 
     await expect(
       authenticateClientAssertion(
@@ -791,8 +801,8 @@ describe('authenticateClientAssertion — re-resolves a materialised CIMD client
 
   it('fails closed once the host leaves the trust allowlist', async () => {
     const stub = await materialise();
-    ENV.CIMD_TRUST_POLICY = 'allowlist';
-    ENV.CIMD_TRUSTED_DOMAINS = ['other.example.com'];
+    CIMD.trustPolicy = 'allowlist';
+    CIMD.trustedDomains = ['other.example.com'];
 
     await expect(
       authenticateClientAssertion(

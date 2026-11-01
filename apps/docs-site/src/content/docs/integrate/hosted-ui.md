@@ -68,10 +68,10 @@ Decision 6):
   that URL's host, in its ASCII (`xn--`) form, with the registrable domain in
   bold. A host under a shared-hosting suffix (the private section of the Public
   Suffix List) is flagged. The host is all the screen shows, and all the server
-  verified: with the default `CIMD_TRUST_POLICY=accept-any-https`, a document
+  verified: with the default `accept-any-https` trust policy, a document
   anyone can publish on a host that serves anyone's files appears under that
-  host. A deployment that accepts third-party agents should use the
-  `allowlist` policy
+  host. A deployment that accepts third-party agents should give each realm
+  the `allowlist` trust policy
   ([CIMD](/operate/docker/#what-the-consent-screen-shows-for-a-cimd-client)).
 - A client the operator provisioned is shown by the domain the operator set on
   it: `verified_domain` in the `db:seed-oauth-clients` manifest.

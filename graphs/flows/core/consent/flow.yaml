@@ -1137,7 +1137,7 @@ states:
     title: Refuse a client_id that names no client
     description: Shown, not redirected, because no redirect URI is trusted yet.
     redirect: never
-    source: apps/auth-server/src/app/helpers/client-resolution.ts:236
+    source: apps/auth-server/src/app/helpers/client-resolution.ts:238
     response:
       status: 400
       body:

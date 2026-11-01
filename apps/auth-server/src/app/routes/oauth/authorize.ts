@@ -170,7 +170,7 @@ export default async function (fastify: FastifyInstance) {
     // idempotently materialised as a row) → unknown. A resolved CIMD
     // client is a real persisted row, so the existing auth-code /
     // refresh-token foreign keys work unchanged. See client-resolution.ts.
-    const { client, reason } = await resolveClient(fastify, realm.id, query.client_id);
+    const { client, reason } = await resolveClient(fastify, realm, query.client_id);
 
     if (!client) {
       // No client resolved: the `client_id` the request named is not one,

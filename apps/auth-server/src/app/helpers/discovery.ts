@@ -51,7 +51,8 @@ export interface DiscoveryMetadataInput {
    * draft-ietf-oauth-client-id-metadata-document-00 / MCP 2025-11-25.
    * When true, `client_id_metadata_document_supported: true` is advertised
    * so MCP clients know they can present an https-URL `client_id`. Defaults
-   * to false here; the route layer passes the env-gated value.
+   * to false here; the route layer passes the realm's
+   * `registration.cimd.enabled` (#534).
    */
   clientIdMetadataDocumentSupported?: boolean;
   /**
@@ -273,7 +274,7 @@ export function buildAuthorizationServerMetadata(
     // CIMD (draft-ietf-oauth-client-id-metadata-document-00 / MCP
     // 2025-11-25): advertise that an https-URL `client_id` resolves to a
     // metadata document fetched on demand. Only emitted when enabled so a
-    // deployment that turns CIMD off does not over-advertise.
+    // realm that turns CIMD off does not over-advertise.
     ...(input.clientIdMetadataDocumentSupported
       ? { client_id_metadata_document_supported: true }
       : {}),

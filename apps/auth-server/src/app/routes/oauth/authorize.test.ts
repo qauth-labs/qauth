@@ -3,7 +3,9 @@ import { InvalidRequestError, JWTExpiredError, JWTInvalidError } from '@qauth-la
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
+import type { CimdPolicy } from '../../helpers/cimd-policy';
 import type { RealmRow } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
 
@@ -1001,7 +1003,8 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     };
   }
 
-  function makeCimdFastify() {
+  /** `cimd`: the request realm's CIMD policy (#534); the seeded defaults (on) when absent. */
+  function makeCimdFastify(cimd?: CimdPolicy) {
     const ctx: {
       handler?: (req: any, reply: any) => Promise<unknown>;
       postHandler?: (req: any, reply: any) => Promise<unknown>;
@@ -1029,6 +1032,7 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
         }),
       },
       passwordHasher: { hashPassword: vi.fn(async () => 'argon2id$sentinel') },
+      policyStore: testPolicyStore({}, cimd === undefined ? {} : { registration: { cimd } }),
       repositories: {
         oauthClients: {
           // No pre-registered row → falls through to CIMD resolution.
@@ -1056,6 +1060,55 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     };
     return { fastify: fastify as FastifyInstance, ctx };
   }
+
+  // #534: the switch is the realm's. A realm that turned CIMD off answers a
+  // URL client_id exactly as it answers a client_id that names no client.
+  it('answers a URL client_id as an unknown client in a realm that switched CIMD off', async () => {
+    egressGet.mockReset();
+    egressGet.mockResolvedValue(cimdDoc(['https://app.example.com/callback']));
+
+    const refusals: unknown[] = [];
+    for (const clientId of [CIMD_ID, 'no-such-client']) {
+      const { fastify, ctx } = makeCimdFastify({
+        enabled: false,
+        trustPolicy: 'accept-any-https',
+        trustedDomains: [],
+      });
+      await authorizeRoute(fastify);
+      const { reply } = createReply();
+      const refusal = await ctx.handler!(
+        {
+          query: {
+            response_type: 'code',
+            client_id: clientId,
+            redirect_uri: 'https://app.example.com/callback',
+            code_challenge: 'A'.repeat(43),
+            code_challenge_method: 'S256',
+            state: 'xyz',
+          },
+          url: `/oauth/authorize?response_type=code&client_id=${encodeURIComponent(clientId)}`,
+          headers: {},
+          ip: '127.0.0.1',
+        },
+        reply
+      ).catch((err: unknown) => err);
+      expect(refusal).toBeInstanceOf(InvalidRequestError);
+      expect(fastify.repositories.oauthClients.upsertCimdClient).not.toHaveBeenCalled();
+      refusals.push({
+        message: (refusal as InvalidRequestError).message,
+        description: (refusal as InvalidRequestError).errorDescription,
+      });
+    }
+    expect(refusals[0]).toEqual(refusals[1]);
+    expect(egressGet).not.toHaveBeenCalled();
+    const failures = emitUserEventMock.mock.calls.filter(
+      ([, type]) => type === 'urn:qauth:event:authorization.failed:v1-rc.0'
+    );
+    expect(failures.map(([, , payload]) => payload)).toEqual([
+      { error: 'invalid_request', reason: 'unknown_client' },
+      { error: 'invalid_request', reason: 'unknown_client' },
+    ]);
+  });
 
   it('rejects when redirect_uri is not in the CIMD document (mismatch)', async () => {
     egressGet.mockReset();

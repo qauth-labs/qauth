@@ -88,10 +88,11 @@ const CLIENT_ASSERTION_MAX_ISSUER_LENGTH = 2048;
 /* -------------------------------------------------------------------------- */
 
 /**
- * The realm a client assertion is presented in: its id, where the client is
- * looked up, and its issuer, the only audience.
+ * The realm a client assertion is presented in, its whole row: its id, where
+ * the client is looked up, its issuer, the only audience, and its CIMD policy
+ * (#534), which a CIMD client's resolution follows.
  */
-export type ClientAssertionRealm = Pick<RealmRow, 'id' | 'issuer'>;
+export type ClientAssertionRealm = RealmRow;
 
 /**
  * The `aud` a client assertion may name: the issuer identifier of the realm the
@@ -149,8 +150,9 @@ function readAssertionSubject(assertion: string): string | null {
  * pre-registered → CIMD chain. A CIMD client (an https-URL `client_id`, CIMD
  * §6.2 — the case #384 exists to serve) is materialised on first use and
  * RE-resolved on every later one, as on the authorize, consent and
- * public-client paths (ADR-012 §3): `CIMD_ENABLED`, the trust policy and the
- * document's current key set are applied only inside `resolveClient`, so
+ * public-client paths (ADR-012 §3): the realm's CIMD switch and trust policy
+ * (#534) and the document's current key set are applied only inside
+ * `resolveClient`, so
  * reading the stored row directly would keep authenticating a client the
  * operator has switched off, or a key the client has rotated out
  * (ANT-2026-4V7HWAND).
@@ -161,10 +163,10 @@ function readAssertionSubject(assertion: string): string | null {
  */
 async function findAssertionClient(
   fastify: FastifyInstance,
-  realmId: string,
+  realm: ClientAssertionRealm,
   clientId: string
 ): Promise<OAuthClientLike | null> {
-  const { client } = await resolveClient(fastify, realmId, clientId);
+  const { client } = await resolveClient(fastify, realm, clientId);
   if (!client || !isClientUsable(client)) return null;
   return client;
 }
@@ -278,7 +280,7 @@ export async function authenticateClientAssertion(
   // 4. Resolve the registered client and confirm it is provisioned for this
   //    authentication method. A `client_secret_*` client MUST NOT be
   //    authenticable by assertion.
-  const client = await findAssertionClient(fastify, realm.id, claimedClientId);
+  const client = await findAssertionClient(fastify, realm, claimedClientId);
   if (!client) {
     throw new InvalidClientError();
   }

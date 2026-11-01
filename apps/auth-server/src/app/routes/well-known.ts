@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
 import { JWKS_CACHE_CONTROL } from '../constants';
+import { cimdPolicyOf } from '../helpers/cimd-policy';
 import {
   buildAuthorizationServerMetadata,
   buildOpenIdConfiguration,
@@ -54,16 +55,21 @@ export default async function (fastify: FastifyInstance) {
 
   /**
    * The input of a realm's discovery documents (#494). The realm decides the
-   * issuer, on which every endpoint URL is built (#490), and the ID-token
-   * signing algorithms, from its published keys (#491). The rest are
-   * deployment switches, the same for every realm: `CIMD_ENABLED`,
-   * `ID_JAG_ENABLED`, `DPOP_ENABLED` and the experimental items.
+   * issuer, on which every endpoint URL is built (#490), the ID-token
+   * signing algorithms, from its published keys (#491), and whether it
+   * accepts CIMD clients, from its policies (#534). The rest are deployment
+   * switches, the same for every realm: `ID_JAG_ENABLED`, `DPOP_ENABLED` and
+   * the experimental items.
    */
   const buildInput = async (realm: RealmRow): Promise<DiscoveryMetadataInput> => ({
     // ADR-019 Decision 1 (#490): the realm's issuer, from its row.
     issuer: realmIssuer(realm),
-    // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config.
-    clientIdMetadataDocumentSupported: env.CIMD_ENABLED,
+    // CIMD (MCP 2025-11-25): advertise on BOTH AS metadata and OIDC config,
+    // while the realm's policy accepts a URL `client_id` (#534), as its
+    // client resolution does: read off the resolver's row, so a change shows
+    // here within the resolver's cache time, and a client that cached the
+    // document within its own.
+    clientIdMetadataDocumentSupported: cimdPolicyOf(fastify, realm).enabled,
     // ADR-011 §4: gates the jwt-bearer grant type and the ID-JAG grant profile.
     // Both are advertised only while the flag is on AND the issuer allowlist is
     // not empty. With an empty list the token endpoint rejects every assertion,
@@ -93,10 +99,14 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'meta' },
     },
     async (request, reply) => {
+      // Built before the cache header is set, so a failure (a stored policy
+      // the schema refuses, #534, or the realm's keys) answers an error no
+      // cache keeps for an hour.
+      const document = buildAuthorizationServerMetadata(await buildInput(requestRealm(request)));
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildAuthorizationServerMetadata(await buildInput(requestRealm(request))));
+      return reply.send(document);
     }
   );
 
@@ -112,10 +122,12 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'meta' },
     },
     async (request, reply) => {
+      // As above: the cache header only on a document that was built.
+      const document = buildOpenIdConfiguration(await buildInput(requestRealm(request)));
       reply
         .header('Cache-Control', DISCOVERY_CACHE_CONTROL)
         .header('Content-Type', 'application/json; charset=utf-8');
-      return reply.send(buildOpenIdConfiguration(await buildInput(requestRealm(request))));
+      return reply.send(document);
     }
   );
 

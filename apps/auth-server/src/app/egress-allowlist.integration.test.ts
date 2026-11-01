@@ -177,6 +177,14 @@ describe('the egress allowlist (real containers)', () => {
     return app;
   }
 
+  /** The default realm's CIMD policy (#534): the seeded defaults, any HTTPS host. */
+  async function defaultRealmCimdPolicy(app: FastifyInstance) {
+    const { cimdPolicyOf } = await import('./helpers/cimd-policy');
+    const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm) throw new Error(`no realm ${E2E_REALM_NAME}`);
+    return cimdPolicyOf(app, realm);
+  }
+
   const get = (
     app: FastifyInstance,
     url: string,
@@ -292,7 +300,11 @@ describe('the egress allowlist (real containers)', () => {
       const { fetchClientJwkSet } = await import('./helpers/client-jwks');
 
       await expect(
-        fetchAndValidateCimdDocument(app, `${ISSUER}/client.json`)
+        fetchAndValidateCimdDocument(
+          app,
+          `${ISSUER}/client.json`,
+          await defaultRealmCimdPolicy(app)
+        )
       ).rejects.toMatchObject({ errorDescription: expect.stringContaining('CIMD fetch blocked') });
       await expect(fetchClientJwkSet(app, `${ISSUER}/jwks`)).rejects.toMatchObject({
         errorDescription: expect.stringContaining('client jwks_uri fetch blocked'),
@@ -365,7 +377,11 @@ describe('the egress allowlist (real containers)', () => {
       const { fetchAndValidateCimdDocument } = await import('./helpers/cimd');
 
       await expect(
-        fetchAndValidateCimdDocument(app, `https://127.0.0.1:${fixture.port}/client.json`)
+        fetchAndValidateCimdDocument(
+          app,
+          `https://127.0.0.1:${fixture.port}/client.json`,
+          await defaultRealmCimdPolicy(app)
+        )
       ).rejects.toMatchObject({ errorDescription: expect.stringContaining('CIMD fetch blocked') });
       await expect(
         get(app, `https://127.0.0.1:${fixture.port}/x`, 'operator', E2E_REALM_NAME)
@@ -378,7 +394,9 @@ describe('the egress allowlist (real containers)', () => {
       const { fetchAndValidateCimdDocument } = await import('./helpers/cimd');
       const clientId = `${fixture.origin}/client.json`;
 
-      await expect(fetchAndValidateCimdDocument(app, clientId)).resolves.toMatchObject({
+      await expect(
+        fetchAndValidateCimdDocument(app, clientId, await defaultRealmCimdPolicy(app))
+      ).resolves.toMatchObject({
         client_id: clientId,
         client_name: 'Local fixture client',
       });

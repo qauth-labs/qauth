@@ -158,10 +158,11 @@ which changes are security operations all come from it, and so does this page.
 
 Most of them already live on the realm row: the access, development access and refresh token
 lifetimes, the verified-account, password and brute-force policy, the environment ceiling, the
-scopes a dynamically registered client may hold, and the mail transport and sender. The rest are
-still read from the environment, for every realm: CIMD and the verification link's lifetime and
-resend rule. Nothing reads the \`admin\` group yet. Once a policy lives on the realm row, the
-environment only seeds a new realm's value, and the realm row owns it from then on.
+scopes a dynamically registered client may hold, whether and from which hosts the realm accepts a
+Client ID Metadata Document, and the mail transport and sender. The rest are still read from the
+environment, for every realm: the verification link's lifetime and resend rule. Nothing reads the
+\`admin\` group yet. Once a policy lives on the realm row, the environment only seeds a new
+realm's value, and the realm row owns it from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
 its secret store, encrypted with the realm's data-at-rest key, and the representation shows only

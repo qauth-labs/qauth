@@ -40,6 +40,7 @@ import {
   type FakeSessionSeed,
   type FakeSideRecordSeed,
 } from '../../../testing/browser-sessions';
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH } from '../../constants';
 import { fetchAndValidateCimdDocument } from '../../helpers/cimd';
@@ -197,6 +198,9 @@ function makeFastify() {
     sessionService: sessions.service,
     signer: sessions.signer,
     redis: sessions.redis,
+    // The realm's policies (#534): a CIMD client resolves under the seeded
+    // CIMD policy, any HTTPS host.
+    policyStore: testPolicyStore(),
     // Only the pending-authorization stash (`pending-authz:` keys, #316
     // follow-up) that a redirect to /ui/login writes still goes through
     // `sessionUtils`; the browser session does not.

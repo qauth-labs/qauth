@@ -9,14 +9,15 @@ import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
 
 /**
  * No code of the auth server reads an environment key whose policy it reads
- * from the realm row (ADR-019 Decision 10, #516, #528). Such a key only seeds
+ * from the realm row (ADR-019 Decision 10, #516, #528, #534). Such a key only seeds
  * a new realm's policies (`defaultsFromEnv` and the boot step, which take the
  * whole environment and name no key); a flow that read it again would let the
  * environment overrule a realm, and every realm would get one value.
  *
  * The keys are the registry's: every `realm-seed` key whose policy path is in
  * `POLICIES_READ_FROM_REALM_ROW`, under its current name and its old ones. A
- * read is `x.KEY`, `x['KEY']` or `{ KEY } = x`, in any source file under
+ * read is `x.KEY` or `x?.KEY`, `x['KEY']` or ``x[`KEY`]``, or a destructured
+ * `{ KEY }` in a declaration or a parameter, in any source file under
  * `apps/auth-server/src` but tests and test support. A key named in a comment,
  * a message or an object literal that sets it (the OpenAPI export's
  * environment) is not a read.
@@ -90,10 +91,10 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-describe('environment keys of policies read from the realm row (#528)', () => {
+describe('environment keys of policies read from the realm row (#528, #534)', () => {
   const keys = keysReadFromRealmRow();
 
-  it("covers the verified-account, password and brute-force keys, the old name of the gate's key included", () => {
+  it("covers the verified-account, password and brute-force keys (#528), the old name of the gate's key included", () => {
     for (const [key, path] of [
       ['REQUIRE_VERIFIED_ACCOUNT', 'accounts.requireVerifiedAccount'],
       ['REQUIRE_EMAIL_VERIFIED', 'accounts.requireVerifiedAccount'],
@@ -104,6 +105,25 @@ describe('environment keys of policies read from the realm row (#528)', () => {
       ['FAILED_LOGIN_LOCKOUT_DURATION', 'bruteForce.lockoutSeconds'],
     ]) {
       expect(keys.get(key), key).toBe(path);
+    }
+  });
+
+  it('covers the client registration keys (#534), and not the CIMD fetch tuning, which stays a deployment setting', () => {
+    for (const [key, path] of [
+      ['DEFAULT_DYNAMIC_REGISTRATION_SCOPES', 'registration.dynamicRegistrationAllowedScopes'],
+      ['CIMD_ENABLED', 'registration.cimd.enabled'],
+      ['CIMD_TRUST_POLICY', 'registration.cimd.trustPolicy'],
+      ['CIMD_TRUSTED_DOMAINS', 'registration.cimd.trustedDomains'],
+    ]) {
+      expect(keys.get(key), key).toBe(path);
+    }
+    for (const key of [
+      'CIMD_CACHE_DEFAULT_TTL',
+      'CIMD_CACHE_MAX_TTL',
+      'CIMD_MAX_DOCUMENT_BYTES',
+      'CIMD_FETCH_TIMEOUT_MS',
+    ]) {
+      expect(keys.has(key), key).toBe(false);
     }
   });
 
@@ -118,10 +138,13 @@ describe('environment keys of policies read from the realm row (#528)', () => {
           'const { PASSWORD_MIN_SCORE } = env;',
           'const { FAILED_LOGIN_WINDOW: window } = process.env;',
           'const c = process.env.PASSWORD_MIN_SCORE;',
+          'const d = env?.FAILED_LOGIN_WINDOW;',
+          'const e = env[`PASSWORD_MIN_SCORE`];',
+          'function f({ FAILED_LOGIN_WINDOW }: Env) {}',
         ].join('\n'),
         watched
       ).map((read) => read.line)
-    ).toEqual([1, 2, 3, 4, 5]);
+    ).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
     expect(
       readsIn(
         [
@@ -140,6 +163,8 @@ describe('environment keys of policies read from the realm row (#528)', () => {
     // The walk found the server's code, the handlers included.
     expect(files).toContain(join(SOURCE_ROOT, 'app/routes/auth/login.ts'));
     expect(files).toContain(join(SOURCE_ROOT, 'app/helpers/failed-login.ts'));
+    expect(files).toContain(join(SOURCE_ROOT, 'app/routes/oauth/register.ts'));
+    expect(files).toContain(join(SOURCE_ROOT, 'app/helpers/cimd.ts'));
 
     const unexpected: string[] = [];
     for (const file of files) {

@@ -90,7 +90,7 @@ on, and name the switch in the report.
 | `WALLET_FEDERATION_ENABLED`                 | `false` | Wallet sign-in over OID4VP 1.0: `/ui/wallet-*`, `/oid4vp/*`, account links |
 | `HYBRID_SIGNING_ENABLED`                    | `false` | ML-DSA-65 + Ed25519 hybrid signing (`SIGNING_ALGORITHM_MODE`)              |
 | `ID_JAG_ENABLED` + `ID_JAG_TRUSTED_ISSUERS` | `false` | Enterprise-managed authorization: consuming and minting ID-JAG             |
-| `CIMD_ENABLED`                              | `true`  | Client ID Metadata Documents. On by default                                |
+| `CIMD_ENABLED`                              | `true`  | Client ID Metadata Documents. On by default; per realm since #534          |
 
 ## What matters most and least
 

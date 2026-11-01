@@ -11,16 +11,24 @@ import type { RealmRow } from './request-realm';
  * seeds a new realm. The flows move to the stored values one area at a time:
  * the token lifetimes (#527, moved), the verified-account, password and
  * brute-force policy (#528, moved), the mail transport and sender (#529,
- * moved) and CIMD (#534). Until an area has moved, the server still reads its keys from
- * the environment for every realm, so the default realm's boot step says a
- * set key is ignored only for a path listed here; for any other it says the
- * server still applies the key. The issue that moves an area adds its paths.
+ * moved) and CIMD (#534, moved). Until an area has moved, the server still
+ * reads its keys from the environment for every realm, so the default realm's
+ * boot step says a set key is ignored only for a path listed here; for any
+ * other it says the server still applies the key. The issue that moves an
+ * area adds its paths.
  */
 export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // `/oauth/register` and the clients API (`routes/clients/index.ts`) cap a
   // client's scopes with the realm's list; the environment's list fills an
   // empty one only while the realm has no policies.
   'registration.dynamicRegistrationAllowedScopes',
+  // Client resolution (`resolveClient`, at the authorization, consent and
+  // token endpoints) and discovery (`cimdPolicyOf`, #534): whether a URL
+  // `client_id` is a CIMD client, and which hosts may name one. The CIMD
+  // fetch's cache lifetimes, size and timeout stay deployment settings.
+  'registration.cimd.enabled',
+  'registration.cimd.trustPolicy',
+  'registration.cimd.trustedDomains',
   // `resolveEnvironmentPolicy` (ADR-008): the realm's environment ceiling.
   'posture.maxEnvironmentLaxity',
   // The token endpoint and the legacy `/auth/login` (`tokenLifetimesOf`,

@@ -9,11 +9,9 @@ import { describe, expect, it, type Mock, vi } from 'vitest';
 
 // client-auth → client-resolution → cimd pulls in the env module; stub it so
 // the real env-schema parse (which needs DB/EMAIL vars) does not run in tests.
+// The CIMD switch and trust policy are the realm's (#534), not keys here.
 vi.mock('../../config/env', () => ({
   env: {
-    CIMD_ENABLED: true,
-    CIMD_TRUST_POLICY: 'accept-any-https',
-    CIMD_TRUSTED_DOMAINS: [],
     CIMD_CACHE_DEFAULT_TTL: 300,
     CIMD_CACHE_MAX_TTL: 3600,
     CIMD_MAX_DOCUMENT_BYTES: 65536,
@@ -21,6 +19,7 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
+import { testRealm } from '../../testing/request-realm';
 import { CLIENT_ASSERTION_TYPE_JWT_BEARER } from '../schemas/oauth';
 import {
   authenticateClient,
@@ -417,7 +416,7 @@ describe('classifyClientAuthentication (RFC 6749 §2.3 — one mechanism only)',
 
 describe('authenticateClientRequest', () => {
   /** The realm the token request was resolved to (#490). */
-  const REQUEST_REALM = { id: 'realm', issuer: 'https://auth.example.com' };
+  const REQUEST_REALM = testRealm({ id: 'realm', issuer: 'https://auth.example.com' });
 
   function stub(client: OAuthClientLike | null, passwordValid = true) {
     return {

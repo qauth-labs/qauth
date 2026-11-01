@@ -308,7 +308,7 @@ function acceptsClientSecret(method: string | undefined): boolean {
  */
 export async function authenticateClientPublicOrConfidential(
   fastify: FastifyInstance,
-  realmId: string,
+  realm: ClientAssertionRealm,
   request: FastifyRequest,
   bodyClientId: string | undefined,
   bodyClientSecret: string | undefined
@@ -319,7 +319,7 @@ export async function authenticateClientPublicOrConfidential(
   const hasBasic = /^Basic\s/i.test(request.headers.authorization ?? '');
   if (hasBasic || bodyClientSecret) {
     const creds = extractClientCredentials(request, bodyClientId, bodyClientSecret);
-    return authenticateClient(fastify, realmId, creds);
+    return authenticateClient(fastify, realm.id, creds);
   }
 
   // Public-client path: only `client_id` supplied. Resolve via the shared
@@ -332,7 +332,7 @@ export async function authenticateClientPublicOrConfidential(
   if (!bodyClientId) {
     throw new InvalidClientError();
   }
-  const { client } = await resolveClient(fastify, realmId, bodyClientId);
+  const { client } = await resolveClient(fastify, realm, bodyClientId);
   if (!client || !isClientUsable(client)) {
     throw new InvalidClientError();
   }
@@ -467,7 +467,7 @@ export async function authenticateClientRequest(
   }
   return authenticateClientPublicOrConfidential(
     fastify,
-    realm.id,
+    realm,
     request,
     params.client_id,
     params.client_secret
