@@ -14605,5 +14605,15 @@
       "url": "/",
       "description": "Default"
     }
+  ],
+  "tags": [
+    {
+      "name": "Developer API",
+      "description": "The developer API, `/developer/v1-rc.0`. A token whose only audience is `urn:qauth:aud:developer:v1-rc.0` reaches every operation here for its subject, reads and writes alike: the family checks the audience and the subject, and no scope. Only an operator can give a client that audience. An operation's `x-qauth-permission` (`clients.read`, `clients.write`, ...) names the permission it will need and is not enforced yet."
+    },
+    {
+      "name": "Account API",
+      "description": "The account API, `/account/v1-rc.0`. A token whose only audience is `urn:qauth:aud:account:v1-rc.0` reaches every operation here for its subject: the family checks the audience and the subject, and no scope. An operation's `x-qauth-permission` (`consents.read`, `consents.write`) names the permission it will need and is not enforced yet."
+    }
   ]
 }

@@ -38,7 +38,11 @@ is not limited to the families: every route that is not an OAuth protocol endpoi
   [admin permissions](/reference/admin-permissions/) page lists them with every permission and the
   built-in roles. The account and developer families define no scopes here: their guards check the
   token's audience, and that its subject is an active user or client of the request's realm
-  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change.
+  ([Family tokens](#family-tokens)). A route that needs a scope adds it in its own change. Until
+  then a token with the developer audience reaches the whole developer API for its subject, reads
+  and writes alike, and one with the account audience the whole account API. Only an operator can
+  give a client either audience (`urn:qauth:aud:` is reserved, below), so a client that lists the
+  developer audience is trusted as the developer portal is.
 
 ### Family tokens
 
@@ -536,6 +540,11 @@ protocol endpoint.
 | `x-qauth-effects`    | a list of effect tags              | Why an admin operation is a security operation ("defined by effect", ADR-019 Decision 7). Present and not empty exactly on security operations. The tags form a closed list, on [Security operations](/reference/security-operations/).                              |
 | `x-qauth-two-admin`  | `recommended`                      | Set on every security operation: the admin console recommends a second admin's approval. A realm chooses where it is mandatory; that is realm policy, not part of the document.                                                                                      |
 | `x-qauth-stability`  | `stable`, `experimental`           | Where the operation stands under ADR-018 §5. Required on every operation of the server, not only the families.                                                                                                                                                       |
+
+Only the admin API enforces `x-qauth-permission` today. On the developer and account APIs it
+names the permission an operation will need (`clients.read`, `clients.write`, `consents.read`,
+...), and nothing checks it yet: a token the family's guard accepts passes every operation of the
+family.
 
 On the admin API every id in `x-qauth-permission` is a permission of the
 [admin catalog](/reference/admin-permissions/), and not a retired one, and `x-qauth-class` is the
