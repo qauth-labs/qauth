@@ -24,7 +24,7 @@
       "executor": "nx:noop",
       "dependsOn": ["validate"],
       "metadata": {
-        "description": "Runs validate. CI's `affected (test)` job runs `nx affected -t test`, so this is how test-vectors:validate runs there."
+        "description": "Runs validate, so a local `nx affected -t test` checks the vectors. CI has no `test` leg; its `coverage` job runs test-vectors:validate itself."
       }
     }
   }

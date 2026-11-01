@@ -7,6 +7,7 @@ import {
   CAEP_TOKEN_CLAIMS_CHANGE,
   QAUTH_TOKEN_REVOKED,
 } from '../ssf-mapping';
+import { CLIENT_FIRST_PARTY_PROFILES } from './client';
 import { count, FIRST_RELEASE, oauthError, reason, recordId, scopeList, scopeMode } from './fields';
 
 /**
@@ -119,6 +120,43 @@ export const consentGranted = defineEventType({
       .boolean()
       .describe('Whether the user chose to remember the decision for later requests.'),
     dangerousScopes: scopeList('The granted scopes classed as dangerous.').optional(),
+  }),
+});
+
+/**
+ * The endpoints that decide an administrative consent. The authorization
+ * challenge endpoint (ADR-017 phase F1) adds its own path.
+ */
+export const ADMINISTRATIVE_CONSENT_PATHS = ['/oauth/authorize'] as const;
+
+export const consentAdministrative = defineEventType({
+  name: 'consent.administrative',
+  version: 1,
+  rc: 0,
+  description:
+    "The consent screen was skipped for an operator-flagged first-party client (ADR-017 Decision 9): the client's first-party profile stood for the user's consent to the requested scopes in its allowlist, none of them dangerous. QAuth stores no consent for the user; an authorization code was issued.",
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    basis: extensibleEnum(CLIENT_FIRST_PARTY_PROFILES).describe(
+      'The first-party profile an operator set on the client (ADR-017 Decision 2), which the waiver rests on: `web_redirect` or `native_backend`. The set may grow in a minor release.'
+    ),
+    scopes: scopeList(
+      'The scopes the waiver covered: the requested scopes in the client’s allowlist. A dangerous scope is never among them; it shows the consent screen.'
+    ),
+    resources: z
+      .array(z.string().min(1).max(2048))
+      .min(1)
+      .max(64)
+      .optional()
+      .describe(
+        'The RFC 8707 resource indicators of the request, which the code is bound to. Absent when the request named none.'
+      ),
+    path: extensibleEnum(ADMINISTRATIVE_CONSENT_PATHS).describe(
+      'The endpoint that skipped the screen: `/oauth/authorize`. The set may grow in a minor release.'
+    ),
   }),
 });
 
@@ -394,6 +432,7 @@ export const OAUTH_EVENT_TYPES = [
   stepUpRequired,
   stepUpElevated,
   consentGranted,
+  consentAdministrative,
   consentDenied,
   consentRevoked,
   tokenIssued,

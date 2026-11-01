@@ -14,10 +14,12 @@ import { EXPERIMENTAL_ITEMS } from './items';
 interface Config {
   readonly profile?: string;
   readonly wallet?: boolean;
+  readonly plugins?: boolean;
 }
 
 const SWITCHES: ExperimentalSwitches<Config> = {
   'oid4vp-1.0-base': (config) => config.wallet === true && config.profile === 'oid4vp-1.0-base',
+  'plugin-api': (config) => config.plugins === true,
 };
 
 const ids = (config: Config) => enabledExperimentalItems(config, SWITCHES).map((item) => item.id);
@@ -25,6 +27,11 @@ const ids = (config: Config) => enabledExperimentalItems(config, SWITCHES).map((
 describe('enabledExperimentalItems', () => {
   it('lists an item whose switch is on', () => {
     expect(ids({ wallet: true, profile: 'oid4vp-1.0-base' })).toEqual(['oid4vp-1.0-base']);
+    expect(ids({ plugins: true })).toEqual(['plugin-api']);
+    expect(ids({ wallet: true, profile: 'oid4vp-1.0-base', plugins: true })).toEqual([
+      'oid4vp-1.0-base',
+      'plugin-api',
+    ]);
   });
 
   it.each([
@@ -45,13 +52,23 @@ describe('enabledExperimentalItems', () => {
         switchValue: null,
       }),
     ];
-    const always = { 'oid4vp-1.0-base': () => true, unbuilt: () => true, 'in-an-sdk': () => true };
+    const always = {
+      'oid4vp-1.0-base': () => true,
+      'plugin-api': () => true,
+      unbuilt: () => true,
+      'in-an-sdk': () => true,
+    };
     expect(enabledExperimentalItems({}, always, items)).toEqual([]);
   });
 
   it('keeps registry order', () => {
     const items = [sampleItem({ id: 'b-item' }), sampleItem({ id: 'a-item' })];
-    const switches = { 'oid4vp-1.0-base': () => true, 'a-item': () => true, 'b-item': () => true };
+    const switches = {
+      'oid4vp-1.0-base': () => true,
+      'plugin-api': () => true,
+      'a-item': () => true,
+      'b-item': () => true,
+    };
     expect(enabledExperimentalItems({}, switches, items).map((item) => item.id)).toEqual([
       'b-item',
       'a-item',

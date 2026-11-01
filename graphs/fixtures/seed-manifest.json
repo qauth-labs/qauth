@@ -57,6 +57,31 @@
       "redirect_uris": ["https://consent-disabled.example/callback"],
       "require_pkce": true,
       "token_endpoint_auth_method": "none"
+    },
+    {
+      "client_id": "consent-native",
+      "name": "Consent replay native app backend",
+      "description": "The consent graph's native_backend first-party client (ADR-017 Decision 9): its every request counts as prompt=login. Replay fixture: never seed it into a deployment that serves real users.",
+      "grant_types": ["authorization_code", "refresh_token"],
+      "response_types": ["code"],
+      "scopes": ["openid", "profile"],
+      "redirect_uris": ["https://consent-native.example/callback"],
+      "require_pkce": true,
+      "token_endpoint_auth_method": "private_key_jwt",
+      "jwks": {
+        "keys": [
+          {
+            "kty": "OKP",
+            "crv": "Ed25519",
+            "x": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"
+          }
+        ]
+      },
+      "first_party_profile": "native_backend",
+      "first_party_policy": {
+        "flows": ["login"]
+      },
+      "first_party_reason": "Replay fixture: the consent graph's native app backend, operated by this deployment."
     }
   ]
 }

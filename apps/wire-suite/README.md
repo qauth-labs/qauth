@@ -48,7 +48,7 @@ test that cites a registered spec section counts as evidence for that row.
   `OpenID` and `OIDC` as spec names too — so keep them, and paths like
   `/.well-known/openid-configuration`, out of a title between the spec name and its sections.
 - **`src/suites/rate-limit/**` runs last**, in its own Vitest project (`wire-budget`,
-  `sequence.groupOrder` in `vitest.wire.config.ts`). It spends the registration budget of the
+  `sequence.groupOrder` in `vitest.wire.config.mts`). It spends the registration budget of the
   address the suite connects from, which would refuse every registration after it.
 
 ## Configuration

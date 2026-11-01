@@ -11,10 +11,22 @@ packages:
 verifyDepsBeforeRun: warn
 # Supply-chain cooldown: a version is resolved only once it has been on the
 # registry for 7 days (10080 minutes), long enough for a hijacked release to be
-# reported and pulled. A fix for an open advisory against this tree may be taken
-# before it is 7 days old by listing its exact version under
-# minimumReleaseAgeExclude; remove each once it matures.
+# reported and pulled. A version may be taken before it is 7 days old (a fix for
+# an open advisory against this tree, or a release the owner vouches for) by
+# listing its exact version under minimumReleaseAgeExclude with why and when it
+# matures; remove each once it matures.
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  # The owner's own package, provenance-signed (delurio-labs/delurio's release
+  # workflow at tag v0.5.0), the first version that reads graphs/domain/
+  # (delurio-labs/delurio#11, #563). Published 2026-11-01T11:06:02Z: remove after
+  # 2026-11-08T11:07Z.
+  - '@delurio/cli@0.5.0'
+  # The fix of aws/aws-sdk-js-v3#8393: @smithy/core 3.24.0–3.38.0 (all
+  # deprecated) hand a custom logger sensitive values nested in lists and maps
+  # unredacted. keys-aws-kms passes the KMS client no logger, so the tree was not
+  # exposed. Published 2026-10-30T23:11:40Z: remove after 2026-11-06T23:12Z.
+  - '@smithy/core@3.38.1'
 # Workspace deps are linked into consumers as injected (hard-linked) COPIES
 # rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
 # only self-contained when the workspace injects, and `--legacy` instead emits
@@ -396,6 +408,21 @@ catalog:
   '@types/zxcvbn': '^4.4.5'
   '@vitest/coverage-v8': '^5.0.5'
   '@vitest/ui': '^5.0.5'
+  # delurio's open checker of delurio-graph/0, the format of graphs/ (ADR-021,
+  # amendment of 2026-10-22): `nx run graphs:check` runs its `check` command.
+  # A root devDependency only: no app or lib imports it, and no shipped image
+  # carries it (the development and security-review images install every
+  # devDependency). EXACT pin: while delurio is 0.x a minor release can judge the
+  # same graphs differently (a new check, a stricter schema), so a bump is a
+  # reviewed change that moves the pin and the graphs together. 0.5.0 checks each
+  # graph file against its kind's JSON Schema (the `schema` rule), accepts the
+  # exit names of graphs/README.md, snake_case or `<error>.<cause>`, on final
+  # states only, and reads the `kind: domain` files of one directory as one
+  # domain, so graphs/domain/*.yaml are checked too. It is younger than
+  # minimumReleaseAge, so it is excluded above.
+  # Provenance-signed; no advisory names it or its four dependencies (ajv 8.20.0,
+  # ajv-formats 3.0.1, elkjs 0.12.0, yaml 2.9.1), all already in this tree.
+  '@delurio/cli': '0.5.0'
   drizzle-kit: '^0.31.11'
   esbuild: '^0.28.2'
   # Runs only `@nx/dependency-checks` on package.json files now (the

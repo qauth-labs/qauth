@@ -26,7 +26,7 @@ import { grantTypeEnum } from './enums';
  *
  * The sibling `migration-000*.integration.test.ts` files hardcode
  * `resolve(process.cwd(), 'libs/infra/db/drizzle')` because they only ever run
- * through the root `vitest.integration.config.ts`, from the workspace root.
+ * through the root `vitest.integration.config.mts`, from the workspace root.
  * This is a UNIT test, so it also runs under `nx run infra-db:test`, where the
  * cwd is the project directory — one hardcoded path cannot serve both.
  * `import.meta.url` is not an option either: this lib typechecks under a module

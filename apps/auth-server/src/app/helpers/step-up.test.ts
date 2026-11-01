@@ -245,6 +245,40 @@ describe('evaluateStepUp', () => {
       expect(d.requiresFreshLogin).toBe(true);
     });
   });
+
+  // ADR-017 Decision 9 (#633): a native_backend client's request asks for a
+  // fresh login whatever its own prompt says, and keeps that prompt.
+  describe('forceFreshLogin', () => {
+    const stale = { ...base, authTimeMs: NOW - 10 * 60_000 };
+
+    it('asks for a fresh login on a sign-in older than the window, as prompt=login does', () => {
+      expect(evaluateStepUp({ ...stale, forceFreshLogin: true }).requiresFreshLogin).toBe(true);
+      expect(evaluateStepUp({ ...stale, forceFreshLogin: false }).requiresFreshLogin).toBe(false);
+      expect(evaluateStepUp(stale).requiresFreshLogin).toBe(false);
+    });
+
+    it('accepts a sign-in within the window, so the return trip ends', () => {
+      const d = evaluateStepUp({ ...base, authTimeMs: NOW - 60_000, forceFreshLogin: true });
+      expect(d.requiresFreshLogin).toBe(false);
+    });
+
+    it("keeps the request's prompt=consent: the consent screen is still asked for", () => {
+      const d = evaluateStepUp({
+        ...base,
+        requestedScopes: ['email'],
+        priorConsentScopes: ['email'],
+        prompt: 'consent',
+        forceFreshLogin: true,
+      });
+      expect(d.requiresConsent).toBe(true);
+      expect(d.requiresFreshLogin).toBe(false);
+    });
+
+    it('holds for a development client too, unlike the dangerous-scope rule', () => {
+      const d = evaluateStepUp({ ...stale, enforceDangerousStepUp: false, forceFreshLogin: true });
+      expect(d.requiresFreshLogin).toBe(true);
+    });
+  });
 });
 
 describe('stepUpErrorForPromptNone', () => {

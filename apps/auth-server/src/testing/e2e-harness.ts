@@ -14,7 +14,6 @@ import type {
 } from '@qauth-labs/fastify-plugin-signer/src/testing/key-rotation';
 import { ServiceRoleBootError } from '@qauth-labs/server-config';
 import {
-  applyQauthMigrations,
   type StartedPostgres,
   type StartedRedis,
   startPostgresContainer,
@@ -38,7 +37,7 @@ import {
 import type { InternalRouteModule } from '../app/internal/route-manifest';
 
 /**
- * TEST SUPPORT — booting the REAL auth-server against throwaway containers
+ * TEST SUPPORT — booting the REAL auth-server against throwaway Postgres and Redis
  * (issue #240).
  *
  * The E2E suites in this app need the whole server, not a slice of it: the
@@ -57,11 +56,18 @@ import type { InternalRouteModule } from '../app/internal/route-manifest';
  * the fail-closed test (#296 Q1) expressible at all: it is a different
  * deployment, not a different request.
  *
- * ## Containers are shared, databases are not
+ * ## Servers are shared, databases are not
  *
- * One Postgres and one Redis per FILE (`vitest.integration.config.ts` runs files
- * serially). Between tests the domain tables are truncated and Redis is flushed,
- * so a leaked row or a stale flow record cannot make the next test pass.
+ * Files run side by side (`vitest.integration.config.mts`) on servers the
+ * integration global setup starts once
+ * (`libs/shared/testing/src/integration-global-setup.ts`): a Postgres server
+ * per worker slot and one Redis server. Each file gets a database of its own
+ * on its slot's Postgres server, copied from the migrated template, and a
+ * pair of logical databases on the Redis server, so no file sees another's
+ * rows or keys. Between tests the domain tables are truncated and the file's
+ * Redis database is flushed (`FLUSHDB`, never `FLUSHALL`, which would empty
+ * every file's), so a leaked row or a stale flow record cannot make the next
+ * test pass.
  */
 
 /** A running QAuth server plus everything needed to reset and stop it. */
@@ -87,28 +93,29 @@ export interface BootedAuthServer {
    */
   readonly internal?: FastifyInstance;
   readonly internalUrl?: string;
-  /** Close the server (and its pools), the admin and internal listeners with it. Containers survive. */
+  /** Close the server (and its pools), the admin and internal listeners with it. Databases survive. */
   close(): Promise<void>;
 }
 
-/** Containers shared by every deployment a suite boots. */
+/** The databases shared by every deployment a suite boots. */
 export interface E2eInfrastructure {
   readonly postgres: StartedPostgres;
   readonly redis: StartedRedis;
-  /** Stop and remove both containers. */
+  /** Drop the suite's Postgres database and empty its Redis databases. */
   teardown(): Promise<void>;
 }
 
 /**
- * Start Postgres + Redis and apply QAuth's generated migrations.
+ * A Postgres database with QAuth's generated migrations applied, and a Redis
+ * keyspace, both the suite's own on the servers the run shares.
  *
  * Call from `beforeAll` behind `requireDockerOrSkip()`.
  */
 export async function startE2eInfrastructure(): Promise<E2eInfrastructure> {
-  const postgres = await startPostgresContainer();
-  const redis = await startRedisContainer();
-
-  await applyQauthMigrations(postgres.connectionString);
+  const [postgres, redis] = await Promise.all([
+    startPostgresContainer({ schema: 'migrated' }),
+    startRedisContainer(),
+  ]);
 
   return {
     postgres,
@@ -158,7 +165,7 @@ const tokenKeyRotations = new WeakMap<
  *
  * The server's signer reads key lists at most once a minute, so it keeps
  * signing and verifying with what it read before. Boot another server on the
- * same containers to see the rotation, as a node that starts after it does.
+ * same databases to see the rotation, as a node that starts after it does.
  */
 export async function rotateRealmKeys(
   app: FastifyInstance,
@@ -186,7 +193,7 @@ const tokenKeyPrepublications = new WeakMap<
  * key of its own.
  *
  * As for a rotation, the server's signer reads key lists at most once a
- * minute: boot another server on the same containers to see the key.
+ * minute: boot another server on the same databases to see the key.
  */
 export async function prepublishRealmKeys(
   app: FastifyInstance,
@@ -201,9 +208,9 @@ export async function prepublishRealmKeys(
 }
 
 /**
- * Truncate every domain table and flush Redis, through the SERVER's own
- * connections, then put the default realm and its keys back as the boot steps
- * made them.
+ * Truncate every domain table and flush the suite's Redis database, through
+ * the SERVER's own connections, then put the default realm and its keys back
+ * as the boot steps made them.
  *
  * Deliberately not a second pool: the app already holds the only clients this
  * needs, and opening another would mean a test could reset a database the
@@ -211,7 +218,9 @@ export async function prepublishRealmKeys(
  */
 export async function resetE2eState(app: FastifyInstance): Promise<void> {
   await app.dbPool.query(truncateDomainTablesStatement());
-  await app.redis.flushall();
+  // FLUSHDB, not FLUSHALL: the Redis server is shared with the files that run
+  // at the same time, each in logical databases of its own.
+  await app.redis.flushdb();
   // The truncation took the default realm and its hosts with it, and every
   // request is routed by host (#486): put back what the boot step made, and
   // forget the hosts the resolver cached.
@@ -289,6 +298,12 @@ export interface BootAuthServerOptions {
    */
   readonly logStream?: { write(line: string): void };
   /**
+   * The lowest level `logStream` receives; `warn` by default. A suite that
+   * checks no log line holds a value (a plugin secret, #600) takes every
+   * line with `debug`.
+   */
+  readonly logLevel?: 'debug' | 'info' | 'warn';
+  /**
    * Run the default realm's boot step (#484), which needs the database. On by
    * default. A suite that boots against a database URL it never dials, to test
    * what registration accepts or refuses, turns it off.
@@ -338,6 +353,12 @@ export interface BootAuthServerOptions {
    * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
    */
   readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+  /**
+   * Replace the `import()` of an AuthMethod plugin package and the
+   * first-party list (#600), so a suite boots with fixture plugins. The app
+   * refuses it outside NODE_ENV=test.
+   */
+  readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
 }
 
 /** What a suite gives the internal listener (#496). */
@@ -409,7 +430,10 @@ export async function bootAuthServer(
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
       // The internal listener (#496): its address, its TLS files and its peers.
-      key.startsWith('INTERNAL_')
+      key.startsWith('INTERNAL_') ||
+      // The plugin runtime (#600): a boot that lists no plugin loads none.
+      key === 'AUTH_METHOD_PLUGINS' ||
+      key === 'PLUGIN_API_ENABLED'
     ) {
       delete process.env[key];
     }
@@ -438,7 +462,7 @@ export async function bootAuthServer(
   const server = Fastify({
     logger:
       options.logStream !== undefined
-        ? { level: 'warn', stream: options.logStream }
+        ? { level: options.logLevel ?? 'warn', stream: options.logStream }
         : process.env['E2E_DEBUG_LOG'] === '1',
     routerOptions: { ignoreTrailingSlash: true },
     // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
@@ -520,6 +544,9 @@ export async function bootAuthServer(
     ...(options.egressClientFactory === undefined
       ? {}
       : { egressClientFactory: options.egressClientFactory }),
+    ...(options.authMethodPlugins === undefined
+      ? {}
+      : { authMethodPlugins: options.authMethodPlugins }),
   });
   const { routes } = options;
   if (routes !== undefined) {

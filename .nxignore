@@ -6,6 +6,6 @@
 # exists. A worktree runs Nx from its own root, where this path does not apply,
 # so it stays fully functional.
 #
-# `vitest.config.ts` excludes `**/.claude/**` for the same underlying reason —
+# `vitest.config.mts` excludes `**/.claude/**` for the same underlying reason —
 # keep the two in step.
 .claude/

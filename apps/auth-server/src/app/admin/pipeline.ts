@@ -197,7 +197,7 @@ export class AdminCallsInFlight {
  * parses the retried one.
  */
 export interface RouteSchemaPart {
-  safeParse(value: unknown): { success: true; data: unknown } | { success: false };
+  safeParse(value: unknown): { success: true; data: unknown } | { success: false; error?: unknown };
 }
 
 /** The route of an admin operation, as the approval routes file a request of it. */

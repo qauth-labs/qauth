@@ -22,7 +22,6 @@ import {
 import { SignerKeyNotFoundError, UpstreamClientNotFoundError } from '@qauth-labs/server-keys';
 import { createKeyFactory, createLocalKekProvider } from '@qauth-labs/server-keys/custody';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -52,8 +51,7 @@ describe('signer wiring integration (real Postgres)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     database = createDatabase({ connectionString: container.connectionString });
     // Count what the repositories send: drizzle calls `query` on the pool.
     const pool = database.pool;

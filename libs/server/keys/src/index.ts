@@ -78,6 +78,7 @@ export {
   UpstreamClientNotFoundError,
 } from './lib/signer-errors';
 export {
+  AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
@@ -86,6 +87,7 @@ export {
   SIGNER_POLICY,
   type SignerCaller,
   type SignerGrant,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './lib/signer-policy';
 export {
   CLIENT_ASSERTION_TYP,

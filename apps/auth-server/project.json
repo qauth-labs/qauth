@@ -32,7 +32,7 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts apps/auth-server",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the Docker-backed wallet-federation E2E suite (testcontainers Postgres + Redis). Requires a running Docker daemon."

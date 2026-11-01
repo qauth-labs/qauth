@@ -435,6 +435,28 @@ export const oauthClients = pgTable(
     description: text('description'),
     redirectUris: jsonb('redirect_uris').notNull().$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
+    /**
+     * The scopes the `client_credentials` grant may issue to this client, out
+     * of {@link oauthClients.scopes} (issue #891). A `client_credentials`
+     * token names no user: its `sub` is the `client_id`. A client that also
+     * signs users in, such as a relying party that receives SSF events, would
+     * otherwise get a token without a user for every scope its users grant it
+     * (`notes:read`, say). Listing only `ssf:stream` here keeps those scopes on
+     * tokens a user granted.
+     *
+     * NULL (every row until an operator sets one) leaves the grant as it was:
+     * any scope of `scopes`. A list narrows it: the token endpoint refuses a
+     * scope outside the list with `invalid_scope`, and never issues one that
+     * `scopes` does not hold either. A stored value that is not a list of
+     * strings refuses every scope.
+     *
+     * OPERATOR-SET, like `id_jag_targets`: only the `db:seed-oauth-clients`
+     * manifest writes it. Dynamic registration, `/api/clients` and CIMD
+     * materialisation leave it NULL, `upsertCimdClient`'s conflict update does
+     * not name it, and `UpdateOAuthClient` excludes it, so no owner can take
+     * the operator's narrowing away.
+     */
+    clientCredentialsScopes: jsonb('client_credentials_scopes').$type<string[] | null>(),
     audience: jsonb('audience').$type<string[] | null>(),
     /**
      * The foreign parties this client may name in an Identity Assertion
@@ -728,6 +750,11 @@ export const oauthClients = pgTable(
       sql`${t.audience} IS NULL OR jsonb_typeof(${t.audience}) = 'array'`
     ),
     check('oauth_clients_id_jag_targets_is_array', sql`jsonb_typeof(${t.idJagTargets}) = 'array'`),
+    // #891: NULL, or a list. The token endpoint also re-checks the members.
+    check(
+      'oauth_clients_client_credentials_scopes_is_array',
+      sql`${t.clientCredentialsScopes} IS NULL OR jsonb_typeof(${t.clientCredentialsScopes}) = 'array'`
+    ),
     check(
       'oauth_clients_webauthn_allowed_origins_is_array',
       sql`jsonb_typeof(${t.webauthnAllowedOrigins}) = 'array'`

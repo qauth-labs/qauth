@@ -121,7 +121,7 @@ describe('describeSwitch', () => {
       'OID4VP_VERIFIER_PROFILE=oid4vp-1.0-base, with WALLET_FEDERATION_ENABLED=true',
     ],
     ['node-first-party', '@qauth-labs/node/first-party'],
-    ['plugin-api', 'none named yet'],
+    ['plugin-api', 'PLUGIN_API_ENABLED=true'],
   ])('describes the switch of %s', (id, text) => {
     const item = EXPERIMENTAL_ITEMS.find((candidate) => candidate.id === id);
     if (item === undefined) throw new Error(`${id} is not registered`);

@@ -32,6 +32,7 @@ describe('built-in roles (#507)', () => {
       'realms.read',
       'realms.export',
       'realms.import.plan',
+      'plugins.read',
       'approvals.read',
     ]);
   });
@@ -43,6 +44,8 @@ describe('built-in roles (#507)', () => {
       'realms.export',
       'realms.import.plan',
       'realms.policies.write',
+      'plugins.read',
+      'plugins.write',
       'approvals.read',
     ]);
   });
@@ -214,7 +217,10 @@ describe('effectivePermissions (#507)', () => {
   // Acceptance criterion of #507: the three scopes are independent.
   it('qauth:admin:write does not satisfy a read permission', () => {
     expect(effectivePermissions(['realms.read'], 'qauth:admin:write').size).toBe(0);
-    expect([...effectivePermissions(all, 'qauth:admin:write')]).toEqual(['realms.policies.write']);
+    expect([...effectivePermissions(all, 'qauth:admin:write')]).toEqual([
+      'realms.policies.write',
+      'plugins.write',
+    ]);
   });
 
   it('qauth:admin:security satisfies neither a read nor a write permission', () => {
@@ -223,6 +229,7 @@ describe('effectivePermissions (#507)', () => {
     ).toBe(0);
     expect([...effectivePermissions(all, ['qauth:admin:security'])]).toEqual([
       'realms.policies.security',
+      'plugins.security',
       'approvals.approve',
     ]);
   });

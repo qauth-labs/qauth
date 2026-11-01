@@ -24,7 +24,6 @@ import {
 } from '@qauth-labs/infra-db';
 import type { VerificationKey } from '@qauth-labs/server-keys';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -114,8 +113,7 @@ describe('realm key boot integration (real Postgres)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     for (let node = 0; node < 2; node++) {
       databases.push(createDatabase({ connectionString: container.connectionString }));
     }
@@ -409,8 +407,7 @@ describe('createRealmKey integration (real Postgres)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     database = createDatabase({ connectionString: container.connectionString });
   }, 180_000);
 

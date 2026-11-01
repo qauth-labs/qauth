@@ -8,7 +8,7 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts libs/fastify/plugins/realm-policy",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the Docker-backed policy store tests against the migrated schema (testcontainers Postgres): the four column-backed fields round-trip, a stale expected version changes nothing, and two nodes filling a realm at once leave one document. Requires a running Docker daemon."

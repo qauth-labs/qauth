@@ -7,11 +7,14 @@ vi.mock('../../config/env', () => ({
 }));
 
 import {
+  administrativeConsentFor,
+  administrativeConsentScopes,
   agentPersistenceLine,
   canSkipConsent,
   describeDuration,
   describeScope,
   filterRequestedScopes,
+  forcesLoginPrompt,
   isDynamicClientWithinBadgeWindow,
   isScopeSubset,
   type OAuthClientLike,
@@ -23,8 +26,33 @@ function client(overrides: Partial<OAuthClientLike> = {}): OAuthClientLike {
     scopes: ['read:foo', 'write:foo', 'email'],
     dynamicRegisteredAt: null,
     isAgent: false,
+    firstPartyProfile: null,
+    firstPartyPolicy: null,
+    tokenEndpointAuthMethod: 'client_secret_basic',
+    grantTypes: ['authorization_code', 'refresh_token'],
+    developerId: null,
+    metadata: null,
     ...overrides,
   };
+}
+
+/** An operator-flagged `web_redirect` client, such as the portal (ADR-017 Decision 2). */
+function webRedirect(overrides: Partial<OAuthClientLike> = {}): OAuthClientLike {
+  return client({
+    firstPartyProfile: 'web_redirect',
+    tokenEndpointAuthMethod: 'private_key_jwt',
+    ...overrides,
+  });
+}
+
+/** An operator-flagged `native_backend` client with the default policy. */
+function nativeBackend(overrides: Partial<OAuthClientLike> = {}): OAuthClientLike {
+  return client({
+    firstPartyProfile: 'native_backend',
+    firstPartyPolicy: { flows: ['login'] },
+    tokenEndpointAuthMethod: 'private_key_jwt',
+    ...overrides,
+  });
 }
 
 function consent(overrides: Partial<OAuthConsentLike> = {}): OAuthConsentLike {
@@ -166,6 +194,139 @@ describe('canSkipConsent', () => {
     expect(canSkipConsent(covering, agent, [], [])).toBe(false);
     expect(canSkipConsent(covering, client(), ['email'], [A])).toBe(true);
     expect(canSkipConsent(covering, agent, ['email'], [A])).toBe(false);
+  });
+});
+
+// ADR-017 Decision 9 (#633): the administrative consent of an operator-flagged
+// first-party client.
+describe('administrativeConsentFor', () => {
+  it('covers a web_redirect client asking for no dangerous scope, with its profile as the basis', () => {
+    expect(administrativeConsentFor(webRedirect(), ['read:foo', 'email'])).toEqual({
+      basis: 'web_redirect',
+      scopes: ['read:foo', 'email'],
+    });
+  });
+
+  it('covers a native_backend client whose policy parses', () => {
+    expect(administrativeConsentFor(nativeBackend(), ['email'])).toEqual({
+      basis: 'native_backend',
+      scopes: ['email'],
+    });
+  });
+
+  it('covers an empty scope set: the request asks for nothing to consent to', () => {
+    expect(administrativeConsentFor(webRedirect(), [])).toEqual({
+      basis: 'web_redirect',
+      scopes: [],
+    });
+  });
+
+  it('never covers a request with a dangerous scope, which shows the screen', () => {
+    expect(administrativeConsentFor(webRedirect(), ['read:foo', 'write:foo'])).toBeNull();
+    expect(
+      administrativeConsentFor(webRedirect({ scopes: ['agent:exec'] }), ['agent:exec'])
+    ).toBeNull();
+    expect(administrativeConsentFor(nativeBackend(), ['email', 'write:foo'])).toBeNull();
+  });
+
+  it('is null for a client without a profile: nothing else widens the waiver', () => {
+    expect(administrativeConsentFor(client(), ['email'])).toBeNull();
+    expect(
+      administrativeConsentFor(client({ tokenEndpointAuthMethod: 'private_key_jwt' }), ['email'])
+    ).toBeNull();
+  });
+
+  it('is null when the profile does not resolve (fail-closed resolver)', () => {
+    // Each row breaks one rule the database CHECKs hold, or carries a policy
+    // that does not parse: the resolver reads it as no profile.
+    for (const row of [
+      webRedirect({ tokenEndpointAuthMethod: 'client_secret_basic' }),
+      webRedirect({ developerId: '00000000-0000-4000-8000-000000000001' }),
+      webRedirect({ isAgent: true }),
+      webRedirect({ dynamicRegisteredAt: Date.now() }),
+      webRedirect({ metadata: { registrationType: 'cimd' } }),
+      webRedirect({ firstPartyPolicy: { flows: ['login'] } }),
+      webRedirect({ firstPartyProfile: 'native_attested' }),
+      nativeBackend({ firstPartyPolicy: null }),
+      nativeBackend({ firstPartyPolicy: { flows: ['login'], unknown: true } }),
+      nativeBackend({ grantTypes: ['refresh_token'] }),
+    ]) {
+      expect(administrativeConsentFor(row, ['email'])).toBeNull();
+    }
+  });
+});
+
+describe('administrativeConsentScopes', () => {
+  it("is a first-party client's requested scopes minus the dangerous ones", () => {
+    expect(administrativeConsentScopes(webRedirect(), ['read:foo', 'write:foo', 'email'])).toEqual([
+      'read:foo',
+      'email',
+    ]);
+    expect(administrativeConsentScopes(nativeBackend(), ['write:foo'])).toEqual([]);
+  });
+
+  it('is empty for a client whose profile does not resolve', () => {
+    expect(administrativeConsentScopes(client(), ['read:foo', 'email'])).toEqual([]);
+    expect(
+      administrativeConsentScopes(webRedirect({ developerId: 'someone' }), ['read:foo'])
+    ).toEqual([]);
+  });
+});
+
+describe('forcesLoginPrompt', () => {
+  it('holds for a native_backend client only', () => {
+    expect(forcesLoginPrompt(nativeBackend())).toBe(true);
+    expect(forcesLoginPrompt(webRedirect())).toBe(false);
+    expect(forcesLoginPrompt(client())).toBe(false);
+  });
+
+  it('does not hold for a native_backend row the resolver refuses', () => {
+    expect(forcesLoginPrompt(nativeBackend({ tokenEndpointAuthMethod: 'none' }))).toBe(false);
+    expect(forcesLoginPrompt(nativeBackend({ firstPartyPolicy: { flows: [] } }))).toBe(false);
+  });
+});
+
+describe('canSkipConsent with an administrative consent (ADR-017 Decision 9)', () => {
+  it('skips the screen for a first-party client with no stored consent', () => {
+    expect(canSkipConsent(undefined, webRedirect(), ['read:foo', 'email'], [])).toBe(true);
+    expect(canSkipConsent(undefined, nativeBackend(), ['email'], [])).toBe(true);
+  });
+
+  it('skips it whatever the stored consent says, revoked or narrower', () => {
+    const revoked = consent({ scopes: ['email'], revokedAt: Date.now() - 1000 });
+    expect(canSkipConsent(revoked, webRedirect(), ['read:foo', 'email'], [])).toBe(true);
+  });
+
+  it('covers the resources of the request without a stored grant for them', () => {
+    expect(canSkipConsent(undefined, webRedirect(), ['email'], ['https://rs.example/'])).toBe(true);
+  });
+
+  it('does not skip a dangerous scope without a stored consent', () => {
+    expect(canSkipConsent(undefined, webRedirect(), ['read:foo', 'write:foo'], [])).toBe(false);
+  });
+
+  // A caller that asks only this question, not `evaluateStepUp`, must still
+  // show a first-party client's dangerous scope, however it was granted before.
+  it('does not skip a dangerous scope under a stored consent that covers it', () => {
+    const covering = consent({
+      scopes: ['read:foo', 'write:foo'],
+      resourceScopes: { 'https://rs.example/': ['read:foo', 'write:foo'] },
+    });
+    expect(canSkipConsent(covering, webRedirect(), ['read:foo', 'write:foo'], [])).toBe(false);
+    expect(canSkipConsent(covering, nativeBackend(), ['write:foo'], [])).toBe(false);
+    expect(canSkipConsent(covering, webRedirect(), ['write:foo'], ['https://rs.example/'])).toBe(
+      false
+    );
+    // The same stored consent still skips it for a client without a profile.
+    expect(canSkipConsent(covering, client(), ['read:foo', 'write:foo'], [])).toBe(true);
+  });
+
+  it('leaves clients without a profile to the stored consent alone', () => {
+    expect(canSkipConsent(undefined, client(), ['email'], [])).toBe(false);
+    expect(
+      canSkipConsent(undefined, client({ tokenEndpointAuthMethod: 'private_key_jwt' }), [], [])
+    ).toBe(false);
+    expect(canSkipConsent(consent({ scopes: ['email'] }), client(), ['email'], [])).toBe(true);
   });
 });
 

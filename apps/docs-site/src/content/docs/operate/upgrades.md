@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -573,7 +573,14 @@ migration runner `SYSTEM_CLIENT_REDIRECT_URI` and one of
 `SYSTEM_CLIENT_ID` and `DEFAULT_REALM_NAME`, and the run that applies the
 migrations provisions it too (see
 [The system client](/operate/docker/#the-system-client)). The seed manifest's
-`system_client` section does the same.
+`system_client` section does the same. The profile also waives the consent
+screen
+([#633](https://github.com/qauth-labs/qauth/issues/633), ADR-017 Decision 9):
+once provisioned, the system client is issued codes at `/oauth/authorize`
+without it, unless a request asks for a dangerous scope or `prompt=consent`,
+and each such code is recorded as a
+[`consent.administrative`](/reference/events/#consentadministrative-v1-rc0)
+event.
 
 Nothing breaks if you do not, yet. An existing system client row is kept as
 it is, except that a row without the developer API's audience is given it
@@ -611,6 +618,36 @@ GRANT SELECT ("issuer") ON TABLE "realms" TO <delivery_role>;
 Nothing checks the grants at boot. Without this one, every SSF delivery
 attempt fails with `permission denied for table realms` and is retried until
 its attempts run out; the delivery role logs `a delivery route threw`.
+
+### Keep a relying party's `client_credentials` to the scopes it needs
+
+A `client_credentials` token names no user, and until this release the grant
+issued any scope of a client's `scopes`. So a relying party given the grant to
+manage its [SSF stream](/operate/ssf-transmitter/#register-a-receiver) could
+also get a token without a user for each scope its users grant it
+([#891](https://github.com/qauth-labs/qauth/issues/891)). Migration 0051 adds
+`oauth_clients.client_credentials_scopes`, nullable with no default and a CHECK
+every existing row passes: the scopes that grant may issue, out of `scopes`.
+NULL, every existing client's value, keeps the grant as it was, and the
+previous release keeps creating and updating clients on the new schema.
+
+After the upgrade, give every client that signs users in and holds
+`client_credentials` the list, an SSF receiver's `["ssf:stream"]`, in its seed
+manifest entry, and set it on the stored row (the seeder writes an existing
+client only with `--rotate`, which also issues a new secret). A later
+`--rotate` refuses an entry without the list for a client that has one, so the
+manifest and the row stay in step.
+
+The list takes effect on a node once that node runs this release. Until every
+node does, a node of the previous release, which does not read the column,
+still issues every scope of `scopes` on `client_credentials`. Setting the list
+during the roll does no harm: such a node's writes to the client, a `--rotate`
+of its seeder included, do not name the column and leave the list as it is.
+
+Rolling back to an earlier release without restoring the backup lifts every
+list, because its token endpoint ignores the column. The column and its values
+are kept, and the lists apply again once the nodes run this release again;
+restoring the backup from before the upgrade removes them with the column.
 
 ## Upgrading within 1.x
 

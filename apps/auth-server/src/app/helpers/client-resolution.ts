@@ -58,7 +58,7 @@ export interface ResolvedClient {
    */
   dpopBoundAccessTokens: boolean;
   redirectUris: string[];
-  tokenEndpointAuthMethod?: string;
+  tokenEndpointAuthMethod: string;
   /**
    * RFC 7591 §2 key set of a `private_key_jwt` client (#384), inline or by
    * reference. Surfaced here so the assertion verifier authenticates against
@@ -108,6 +108,21 @@ export interface ResolvedClient {
    * type-checks; absent reads as none.
    */
   verifiedDomain?: string | null;
+  /**
+   * `oauth_clients.developer_id`: the developer account that owns a client
+   * registered through the developer API, else null. Read here only by
+   * `resolveFirstPartyProfile`, which refuses a developer-owned row.
+   */
+  developerId: string | null;
+  /**
+   * `oauth_clients.first_party_profile` and `first_party_policy` (ADR-017
+   * Decision 2, #631): operator-set, never self-asserted. Read only through
+   * `resolveFirstPartyProfile` (shared-validation), which fails closed; the
+   * consent waiver and the native fresh login of ADR-017 Decision 9 rest on
+   * it. A CIMD row always holds null.
+   */
+  firstPartyProfile: string | null;
+  firstPartyPolicy: unknown;
   metadata: Record<string, unknown> | null;
 }
 
