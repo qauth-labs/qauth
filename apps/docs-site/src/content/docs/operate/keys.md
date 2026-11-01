@@ -178,10 +178,13 @@ out. The node that replaces it logs a warning with the new and the retired
 each boot warns about it, so a node that still has the old value during a
 rolling restart boots.
 
-To cut off a leaked cookie secret at once, replace it twice, restarting after
-each new secret: the second replacement drops the leaked key from the previous
-slot, and every cookie it signed stops verifying. Emergency retirement (#551)
-will do this in one step.
+To cut off a leaked cookie secret, replace it twice, restarting after each new
+secret: the second replacement drops the leaked key from the previous slot.
+A restarted node refuses the cookies it signed at once. A node that keeps
+running can accept them for up to about two minutes after the replacement, as
+it keeps a realm's cookie keys for up to a minute and the signer it reads them
+from keeps its own list for up to a minute too; restart every node to cut that
+window. Emergency retirement (#551) will do this in one step.
 
 If `SESSION_COOKIE_SECRET` holds a value from QAuth's own examples
 (`.env.example`, or the `.env.docker.example` of earlier releases), anyone can
