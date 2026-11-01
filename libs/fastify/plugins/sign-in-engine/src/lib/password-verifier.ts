@@ -27,9 +27,11 @@ export interface PasswordVerifierLog {
  * The two paths fail alike, so a failure tells no account from another: the
  * verification itself throws the same way on both (an outage the engine
  * refuses as `unavailable` for every identifier), while a failure to make the
- * dummy hash, which only misses meet, is logged and swallowed, and the next
- * miss makes a new one. The hasher answers `false` for a hash it cannot
- * read, as the engine's port asks.
+ * dummy hash, which only misses meet, is logged and swallowed. A miss that
+ * finds no dummy hash still spends one Argon2id computation, as a hit does:
+ * it makes a new dummy hash in place of the verification, which costs the
+ * same on the same thread pool, and keeps it for the next miss. The hasher
+ * answers `false` for a hash it cannot read, as the engine's port asks.
  */
 export function createArgon2PasswordVerifier(
   hasher: Argon2Hasher,
@@ -52,8 +54,16 @@ export function createArgon2PasswordVerifier(
         dummyHash ??= makeDummyHash();
         hash = await dummyHash;
       } catch (err) {
-        dummyHash = undefined;
         log.error({ err }, 'could not make the dummy password hash');
+        // The Argon2id computation this miss owes: a new dummy hash, made
+        // now and kept for the next miss.
+        dummyHash = makeDummyHash();
+        try {
+          await dummyHash;
+        } catch (again) {
+          dummyHash = undefined;
+          log.error({ err: again }, 'could not make the dummy password hash');
+        }
         return;
       }
       await hasher.verifyPassword(hash, presented);

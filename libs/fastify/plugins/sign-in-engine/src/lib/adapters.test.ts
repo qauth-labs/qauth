@@ -188,7 +188,7 @@ describe('the Argon2id password verifier', () => {
     ]);
   });
 
-  it('swallows a failure to make the dummy hash, and makes a new one on the next miss', async () => {
+  it('swallows a failure to make the dummy hash, and still spends one Argon2id computation on that miss', async () => {
     const argon = hasher();
     argon.hashPassword.mockRejectedValueOnce(new Error('argon2 failed'));
     const logger = log();
@@ -196,8 +196,25 @@ describe('the Argon2id password verifier', () => {
     await expect(verifier.verifyDecoy('guess')).resolves.toBeUndefined();
     expect(logger.error).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(logger.error.mock.calls)).not.toContain('guess');
+    // The miss made a new dummy hash in place of the verification it owed.
+    expect(argon.hashPassword).toHaveBeenCalledTimes(2);
+    expect(argon.verifyPassword).not.toHaveBeenCalled();
+    // The next miss verifies against it, making none.
     await verifier.verifyDecoy('guess');
     expect(argon.hashPassword).toHaveBeenCalledTimes(2);
+    expect(argon.verifyPassword).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a second failure to make the dummy hash, and tries again on the next miss', async () => {
+    const argon = hasher();
+    argon.hashPassword.mockRejectedValueOnce(new Error('argon2 failed'));
+    argon.hashPassword.mockRejectedValueOnce(new Error('argon2 failed again'));
+    const logger = log();
+    const verifier = createArgon2PasswordVerifier(argon, logger);
+    await expect(verifier.verifyDecoy('guess')).resolves.toBeUndefined();
+    expect(logger.error).toHaveBeenCalledTimes(2);
+    await verifier.verifyDecoy('guess');
+    expect(argon.hashPassword).toHaveBeenCalledTimes(3);
     expect(argon.verifyPassword).toHaveBeenCalledTimes(1);
   });
 
