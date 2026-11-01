@@ -2,7 +2,7 @@ import type { HybridSignedToken } from '@qauth-labs/core-crypto';
 import type { JWK } from 'jose';
 
 import type { SignerCaller } from './signer-policy';
-import type { JwsSigningPurpose } from './signer-typ';
+import type { JwsSigningPurpose, VerificationKeyPurpose } from './signer-typ';
 
 /**
  * The signer: the one component that uses a realm's private keys (ADR-019
@@ -111,6 +111,29 @@ export interface Signer {
   signClientAssertion(caller: SignerCaller, request: SignClientAssertionRequest): Promise<string>;
 
   /**
+   * Sign an OID4VP request object (a JWT-Secured Authorization Request,
+   * RFC 9101) with the realm's active `oid4vp_request_signing` key, the ES256
+   * key the verifier's X.509 certificate names (#546, HAIP 1.0 §5.1).
+   *
+   * The protected header is `alg: ES256`, `typ: oauth-authz-req+jwt` and
+   * `x5c`, the certificate chain the caller passes, leaf first. The payload is
+   * `iss`, set to the request's `client_id` (RFC 9101 §4: the issuer of a
+   * request object is its client), followed by `claims`. The signer checks
+   * that the leaf certificate holds the public half of the key it signs with,
+   * so a request object never carries a chain that names another key.
+   *
+   * @throws SignerAccessDeniedError when `caller` may not sign request objects
+   * @throws SignerRequestRefusedError when `claims` sets `iss` or has no
+   *   `client_id` string, the chain is not a list of base64 DER certificates,
+   *   its leaf does not parse or holds another key than the realm's active
+   *   one, or the request carries a field the operation does not take
+   * @throws SignerKeyNotFoundError when the realm has no active ES256
+   *   `oid4vp_request_signing` key
+   * @throws KeyCustodyError when the key cannot be unwrapped
+   */
+  signRequestObject(caller: SignerCaller, request: SignRequestObjectRequest): Promise<string>;
+
+  /**
    * The realm's cookie HMAC secrets: the active one, which signs, and the most
    * recently retired one, which only verifies until its retention ends (#542).
    * Each call returns fresh buffers that belong to the caller.
@@ -156,12 +179,14 @@ export interface Signer {
    * The public keys that may verify tokens of `purpose`: its `active` keys and
    * its `retired` keys still inside their publication window. A `next` key has
    * signed nothing and a `compromised` one verifies nothing, so neither is
-   * listed. ML-DSA-65 keys of a hybrid pair are listed with the rest.
+   * listed. ML-DSA-65 keys of a hybrid pair are listed with the rest. The
+   * purposes are `VERIFICATION_KEY_PURPOSES`: the `signJws` purposes and the
+   * OID4VP request key.
    */
   getVerificationKeys(
     caller: SignerCaller,
     realmId: string,
-    purpose: JwsSigningPurpose
+    purpose: VerificationKeyPurpose
   ): Promise<readonly VerificationKey[]>;
 
   /**
@@ -251,6 +276,23 @@ export interface SignClientAssertionRequest {
   readonly claims: Readonly<Record<string, unknown>>;
 }
 
+/** Input of {@link Signer.signRequestObject}. */
+export interface SignRequestObjectRequest {
+  readonly realmId: string;
+  /**
+   * The `x5c` header value: the verifier's certificate chain as base64 DER
+   * (RFC 7515 §4.1.6, the standard alphabet), leaf first, without its trust
+   * anchor. It is public configuration; the signer checks only that the leaf
+   * holds its key's public half, and the wallet validates the chain.
+   */
+  readonly certificateChain: readonly string[];
+  /**
+   * The authorization request parameters and the time claims, `client_id`
+   * among them, without `iss`: the signer sets `iss` to `client_id`.
+   */
+  readonly claims: Readonly<Record<string, unknown>>;
+}
+
 /** One cookie HMAC secret and the `kid` of the key that holds it. */
 export interface CookieSecret {
   readonly kid: string;
@@ -319,6 +361,7 @@ export const SIGNER_OPERATIONS = Object.freeze([
   'signHybrid',
   'signWebhook',
   'signClientAssertion',
+  'signRequestObject',
   'getCookieSecrets',
   'encrypt',
   'decrypt',

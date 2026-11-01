@@ -75,6 +75,9 @@ await fastify.register(signerPlugin, {
   `SESSION_COOKIE_SECRET` replaces the stored cookie key, found by opening each stored cookie key
   and comparing it with the secret in constant time. The replaced cookie key stays the realm's
   previous cookie key, so cookies it signed keep verifying until the next replacement.
+  `OID4VP_VERIFIER_SIGNING_KEY` becomes the realm's ES256 `oid4vp_request_signing` key the same
+  way (#546), and request objects are signed through the store (`signRequestObject`); the
+  certificate chain stays a variable.
 - A refusal rejects `ready()`. The message names the variables, never a value. See the
   [server-keys README](../../../server/keys/README.md#importing-the-key-variables) for the
   refusals.

@@ -38,6 +38,7 @@ export function createUnavailableSigner(
     signHybrid: refuse('signHybrid'),
     signWebhook: refuse('signWebhook'),
     signClientAssertion: refuse('signClientAssertion'),
+    signRequestObject: refuse('signRequestObject'),
     getCookieSecrets: refuse('getCookieSecrets'),
     encrypt: refuse('encrypt'),
     decrypt: refuse('decrypt'),

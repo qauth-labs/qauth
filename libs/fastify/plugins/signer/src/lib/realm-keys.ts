@@ -67,9 +67,13 @@ export interface RealmKeysDependencies {
  * stored cookie key, until rotation through the store ships (#544, #551).
  */
 export function keyVariableWarning(variable: string, purpose: KeyPurpose): string {
-  return purpose === 'cookie_hmac'
-    ? `${variable} is in the realm's key store, which signs the session cookie: the variable is read only at boot, where a different secret in it replaces the stored cookie key. Cookies the replaced key signed keep verifying until the next replacement. Remove it unless you may roll back to a release that signs the cookie with it.`
-    : `${variable} is in the realm's key store, which signs the tokens: the variable is read only at boot, where a new key in it replaces the stored key and unpublishes the old one at once. Remove it unless you may roll back to a release that signs with it.`;
+  if (purpose === 'cookie_hmac') {
+    return `${variable} is in the realm's key store, which signs the session cookie: the variable is read only at boot, where a different secret in it replaces the stored cookie key. Cookies the replaced key signed keep verifying until the next replacement. Remove it unless you may roll back to a release that signs the cookie with it.`;
+  }
+  if (purpose === 'oid4vp_request_signing') {
+    return `${variable} is in the realm's key store, which signs the OID4VP request objects: the variable is read only at boot, where a new key in it replaces the stored key. Keep the certificate chain variables, which are public and name the stored key. Remove ${variable} unless you may roll back to a release that signs with it.`;
+  }
+  return `${variable} is in the realm's key store, which signs the tokens: the variable is read only at boot, where a new key in it replaces the stored key and unpublishes the old one at once. Remove it unless you may roll back to a release that signs with it.`;
 }
 
 /**
@@ -86,9 +90,13 @@ export function keyReplacedWarning(
   algorithm: string,
   purpose: KeyPurpose = 'token_signing'
 ): string {
-  return purpose === 'cookie_hmac'
-    ? `${variables.join(' and ')} held a session cookie secret the realm's key store lacked: the store now holds it as the active cookie key, which signs every new cookie, and retired the key it replaced. Cookies that key signed keep verifying until the next replacement: replace a leaked secret twice.`
-    : `${variables.join(' and ')} held a new ${algorithm} key: the realm's key store now holds it as the active key, and retired and unpublished the key it replaced at once. Tokens that key signed no longer verify.`;
+  if (purpose === 'cookie_hmac') {
+    return `${variables.join(' and ')} held a session cookie secret the realm's key store lacked: the store now holds it as the active cookie key, which signs every new cookie, and retired the key it replaced. Cookies that key signed keep verifying until the next replacement: replace a leaked secret twice.`;
+  }
+  if (purpose === 'oid4vp_request_signing') {
+    return `${variables.join(' and ')} held a new OID4VP verifier key: the realm's key store now holds it as the active request-object key, and retired the key it replaced. The certificate chain must name the new key, or the boot stops.`;
+  }
+  return `${variables.join(' and ')} held a new ${algorithm} key: the realm's key store now holds it as the active key, and retired and unpublished the key it replaced at once. Tokens that key signed no longer verify.`;
 }
 
 /**
@@ -102,9 +110,13 @@ export function keyInactiveWarning(
   status: string,
   purpose: KeyPurpose = 'token_signing'
 ): string {
-  return purpose === 'cookie_hmac'
-    ? `${variables.join(' and ')} holds a session cookie secret the realm's key store holds as ${status}, not as its active cookie key, and the store does not make it active again: the active cookie key signs the session cookie. Set the variable to the active secret, or to a new secret to replace it.`
-    : `${variables.join(' and ')} holds an ${algorithm} key the realm's key store holds as ${status}, not as its active key, and the store does not make it active again: once tokens are signed through the key store, its active key signs. Set the variable to the active key, or to a new key to replace it.`;
+  if (purpose === 'cookie_hmac') {
+    return `${variables.join(' and ')} holds a session cookie secret the realm's key store holds as ${status}, not as its active cookie key, and the store does not make it active again: the active cookie key signs the session cookie. Set the variable to the active secret, or to a new secret to replace it.`;
+  }
+  if (purpose === 'oid4vp_request_signing') {
+    return `${variables.join(' and ')} holds an OID4VP verifier key the realm's key store holds as ${status}, not as its active key, and the store does not make it active again: its active key signs the request objects. Set the variable to the active key, or to a new key to replace it.`;
+  }
+  return `${variables.join(' and ')} holds an ${algorithm} key the realm's key store holds as ${status}, not as its active key, and the store does not make it active again: once tokens are signed through the key store, its active key signs. Set the variable to the active key, or to a new key to replace it.`;
 }
 
 /**

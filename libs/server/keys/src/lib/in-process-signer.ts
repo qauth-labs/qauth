@@ -1,3 +1,5 @@
+import { createPrivateKey, createPublicKey, X509Certificate } from 'node:crypto';
+
 import {
   extractJwsSigningInput,
   getSignatureBackend,
@@ -31,6 +33,7 @@ import {
   describePurpose,
   isPublishedAt,
   publicJwkOf,
+  publicKeyIdentity,
   realmJwksOf,
   resolveRealmId,
   sortForPublication,
@@ -49,6 +52,7 @@ import type {
   SignerOperation,
   SignHybridRequest,
   SignJwsRequest,
+  SignRequestObjectRequest,
   SignWebhookRequest,
   VerificationKey,
 } from './signer';
@@ -71,8 +75,10 @@ import {
   CLIENT_ASSERTION_TYP,
   isJwsSigningPurpose,
   isTypAllowed,
+  isVerificationKeyPurpose,
   type JwsSigningPurpose,
   type JwsTyp,
+  OID4VP_REQUEST_OBJECT_TYP,
 } from './signer-typ';
 import {
   formatWebhookSignature,
@@ -173,10 +179,16 @@ export interface InProcessSignerOptions {
 /**
  * An unwrapped key, as the cache holds it. `hmac` is the cookie HMAC secret,
  * which the signer hands out; `hmac-key` is any other HMAC secret, which only
- * signs.
+ * signs. A `jws` key of the OID4VP request purpose carries the identity of its
+ * public half (`publicKeyIdentity`), which `signRequestObject` compares with
+ * the certificate it is asked to name.
  */
 type LoadedKey =
-  | { readonly kind: 'jws'; readonly key: CryptoKey }
+  | {
+      readonly kind: 'jws';
+      readonly key: CryptoKey;
+      readonly publicIdentity?: Readonly<Record<string, string>>;
+    }
   | { readonly kind: 'ml-dsa'; readonly key: MlDsaKey }
   | { readonly kind: 'hmac'; readonly secret: Buffer }
   | { readonly kind: 'hmac-key'; readonly key: CryptoKey }
@@ -199,6 +211,7 @@ const REQUEST_FIELDS = {
   signHybrid: ['realmId', 'typ', 'claims'],
   signWebhook: ['realmId', 'subscriptionId', 'id', 'timestamp', 'body'],
   signClientAssertion: ['realmId', 'providerId', 'audience', 'algorithm', 'claims'],
+  signRequestObject: ['realmId', 'certificateChain', 'claims'],
   encrypt: ['realmId', 'plaintext', 'context'],
   decrypt: ['realmId', 'ciphertext', 'context'],
 } as const satisfies Partial<Record<SignerOperation, readonly string[]>>;
@@ -217,6 +230,15 @@ const CLIENT_ASSERTION_RESERVED_CLAIMS = ['iss', 'sub', 'aud'] as const;
 
 /** The longest client-assertion audience the signer accepts. */
 const MAX_AUDIENCE_LENGTH = 2048;
+
+/** The most certificates a request object's `x5c` carries (a leaf and its intermediates). */
+export const MAX_REQUEST_OBJECT_CHAIN_LENGTH = 10;
+
+/** The longest base64 certificate the signer accepts in a request object's `x5c`. */
+export const MAX_REQUEST_OBJECT_CERTIFICATE_LENGTH = 16_384;
+
+/** RFC 7515 §4.1.6: `x5c` members are base64, not base64url, with padding. */
+const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function isJwsKeyAlgorithm(value: unknown): value is JwsKeyAlgorithm {
   return typeof value === 'string' && Object.hasOwn(JWS_IMPORT_PARAMS, value);
@@ -471,7 +493,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         false,
         ['sign']
       );
-      return Object.freeze({ kind: 'jws', key });
+      if (purpose !== 'oid4vp_request_signing') return Object.freeze({ kind: 'jws', key });
+      // Derived from the material itself, not from the published row, so the
+      // check in signRequestObject is about the key that signs.
+      const publicIdentity = publicKeyIdentity(
+        createPublicKey(createPrivateKey({ key: material, format: 'der', type: 'pkcs8' })).export({
+          format: 'jwk',
+        }) as Record<string, unknown>
+      );
+      if (publicIdentity === undefined) {
+        throw new KeyDecryptionError({ detail: 'no public key identity' });
+      }
+      return Object.freeze({ kind: 'jws', key, publicIdentity });
     }
     switch (algorithm) {
       case 'ML-DSA-65': {
@@ -522,9 +555,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
     record: SignerKeyRecord,
     scopeId: string | null = null
   ) {
+    return (await loadedJwsKey(realmId, purpose, record, scopeId)).key;
+  }
+
+  async function loadedJwsKey(
+    realmId: string,
+    purpose: KeyPurpose,
+    record: SignerKeyRecord,
+    scopeId: string | null = null
+  ) {
     const loaded = await loadKey(identityOf(realmId, purpose, record, scopeId));
     if (loaded.kind !== 'jws') throw new KeyDecryptionError({ detail: 'not a JWS signing key' });
-    return loaded.key;
+    return loaded;
   }
 
   async function aesKey(realmId: string, record: SignerKeyRecord): Promise<CryptoKey> {
@@ -767,6 +809,43 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       );
     },
 
+    async signRequestObject(
+      caller: SignerCaller,
+      request: SignRequestObjectRequest
+    ): Promise<string> {
+      const fields = readRequest(request, REQUEST_FIELDS.signRequestObject);
+      authorize(caller, 'signRequestObject');
+      const realmId = resolveRealmId(fields['realmId']);
+      const chain = resolveCertificateChain(fields['certificateChain']);
+      const claims = resolveClaims(fields['claims']);
+      const clientId = claims['client_id'];
+      if (typeof clientId !== 'string' || clientId.length === 0) {
+        throw new SignerRequestRefusedError(
+          'MISSING_CLAIM',
+          'A request object carries client_id, a non-empty string; the signer sets iss to it'
+        );
+      }
+      const leafIdentity = certificateKeyIdentity(chain[0]);
+
+      const record = await activeKey(realmId, 'oid4vp_request_signing', 'ES256');
+      const loaded = await loadedJwsKey(realmId, 'oid4vp_request_signing', record);
+      if (
+        loaded.publicIdentity === undefined ||
+        !sameIdentity(loaded.publicIdentity, leafIdentity)
+      ) {
+        throw new SignerRequestRefusedError(
+          'CERTIFICATE_KEY_MISMATCH',
+          "The leaf certificate does not hold the public half of the realm's active " +
+            'oid4vp_request_signing key'
+        );
+      }
+      // No kid: the wallet finds the key in x5c[0], which the client_id names
+      // (OID4VP 1.0 §5.9.3), and the header stays what it was before #546.
+      return new SignJWT({ iss: clientId, ...claims } as JWTPayload)
+        .setProtectedHeader({ alg: 'ES256', typ: OID4VP_REQUEST_OBJECT_TYP, x5c: [...chain] })
+        .sign(loaded.key);
+    },
+
     async getCookieSecrets(
       caller: SignerCaller,
       realmIdInput: string,
@@ -804,13 +883,17 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
 
     async encrypt(caller: SignerCaller, request: EncryptRequest): Promise<string> {
       const fields = readRequest(request, REQUEST_FIELDS.encrypt);
-      authorize(caller, 'encrypt');
+      const context = resolveDataContext(fields['context']);
+      // A role may be limited to contexts with given prefixes (the web role's
+      // OID4VP response keys). The context is not echoed in the refusal.
+      if (!isSignerCallAllowed(caller, 'encrypt', context)) {
+        throw new SignerAccessDeniedError(isSignerCaller(caller) ? caller : undefined, 'encrypt');
+      }
       const realmId = resolveRealmId(fields['realmId']);
       const plaintext = fields['plaintext'];
       if (!(plaintext instanceof Uint8Array)) {
         throw new SignerRequestRefusedError('INVALID_PLAINTEXT', 'The plaintext is a byte array');
       }
-      const context = resolveDataContext(fields['context']);
 
       const record = await activeKey(realmId, 'data_at_rest', 'A256GCM');
       if (!isDataKid(record.kid)) {
@@ -853,7 +936,7 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       realmIdInput: string,
       purpose: string
     ): Promise<readonly VerificationKey[]> {
-      if (!isJwsSigningPurpose(purpose)) {
+      if (!isVerificationKeyPurpose(purpose)) {
         throw new SignerRequestRefusedError(
           'PURPOSE_NOT_ALLOWED',
           `${describePurpose(purpose)} has no verification keys`
@@ -943,6 +1026,69 @@ function resolveWebhookBody(body: unknown): Uint8Array {
     'INVALID_BODY',
     'A webhook body is a byte array or well-formed text'
   );
+}
+
+/**
+ * A request object's `x5c`: one to {@link MAX_REQUEST_OBJECT_CHAIN_LENGTH}
+ * standard-base64 certificates, each at most
+ * {@link MAX_REQUEST_OBJECT_CERTIFICATE_LENGTH} characters. A frozen copy, so
+ * what is checked is what is signed.
+ */
+function resolveCertificateChain(chain: unknown): readonly string[] {
+  const refusal = () =>
+    new SignerRequestRefusedError(
+      'INVALID_CERTIFICATE_CHAIN',
+      `A certificate chain is 1 to ${MAX_REQUEST_OBJECT_CHAIN_LENGTH} base64 DER certificates, ` +
+        'leaf first'
+    );
+  if (
+    !Array.isArray(chain) ||
+    chain.length === 0 ||
+    chain.length > MAX_REQUEST_OBJECT_CHAIN_LENGTH
+  ) {
+    throw refusal();
+  }
+  const copy = [...(chain as unknown[])];
+  for (const member of copy) {
+    if (
+      typeof member !== 'string' ||
+      member.length === 0 ||
+      member.length > MAX_REQUEST_OBJECT_CERTIFICATE_LENGTH ||
+      !STANDARD_BASE64.test(member)
+    ) {
+      throw refusal();
+    }
+  }
+  return Object.freeze(copy as string[]);
+}
+
+/** The public key identity a base64 DER certificate holds, or a refusal. */
+function certificateKeyIdentity(certificate: string): Readonly<Record<string, string>> {
+  let identity: Readonly<Record<string, string>> | undefined;
+  try {
+    const jwk = new X509Certificate(Buffer.from(certificate, 'base64')).publicKey.export({
+      format: 'jwk',
+    });
+    identity = publicKeyIdentity(jwk as Record<string, unknown>);
+  } catch {
+    // The parser's message is dropped: it may quote the input.
+    identity = undefined;
+  }
+  if (identity === undefined) {
+    throw new SignerRequestRefusedError(
+      'INVALID_CERTIFICATE_CHAIN',
+      'The leaf certificate does not parse or holds no public key the signer knows'
+    );
+  }
+  return identity;
+}
+
+function sameIdentity(
+  a: Readonly<Record<string, string>>,
+  b: Readonly<Record<string, string>>
+): boolean {
+  const names = Object.keys(a);
+  return names.length === Object.keys(b).length && names.every((name) => a[name] === b[name]);
 }
 
 function resolveTyp(purpose: JwsSigningPurpose, typ: unknown): JwsTyp {

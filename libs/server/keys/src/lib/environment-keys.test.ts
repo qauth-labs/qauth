@@ -309,6 +309,69 @@ describe('prepareEnvironmentKeys — cookie secret', () => {
   });
 });
 
+describe('prepareEnvironmentKeys — OID4VP verifier key (#546)', () => {
+  const VARIABLE = 'OID4VP_VERIFIER_SIGNING_KEY';
+
+  it.each(['pkcs8', 'sec1'] as const)(
+    'stores a %s P-256 key as PKCS#8 under its thumbprint',
+    async (type) => {
+      const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+      const pem = privateKey.export({ type, format: 'pem' }).toString();
+
+      const [key] = await prepareEnvironmentKeys(
+        { oid4vpRequestSigning: { privateKey: source(pem, VARIABLE) } },
+        { enabledSignatureAlgorithms: ED25519_ONLY }
+      );
+
+      const jwk = publicKey.export({ format: 'jwk' });
+      const thumbprint = await calculateJwkThumbprint(jwk as never, 'sha256');
+      expect(key).toMatchObject({
+        purpose: 'oid4vp_request_signing',
+        algorithm: 'ES256',
+        kid: thumbprint,
+        thumbprint,
+        variables: [VARIABLE],
+      });
+      expect(key.publicJwk).toEqual({ ...jwk, alg: 'ES256', use: 'sig', kid: thumbprint });
+      expect(key.publicJwk).not.toHaveProperty('d');
+      expect(
+        createPrivateKey({ key: key.material, format: 'der', type: 'pkcs8' }).equals(privateKey)
+      ).toBe(true);
+    }
+  );
+
+  it.each([
+    ['an Ed25519 key', ED25519.privateKey],
+    ['an RSA key', RSA.privateKey],
+    [
+      'a P-384 key',
+      generateKeyPairSync('ec', { namedCurve: 'secp384r1' })
+        .privateKey.export({ type: 'pkcs8', format: 'pem' })
+        .toString(),
+    ],
+  ])('refuses %s, naming the variable', async (_case, pem) => {
+    const error = await refusal(
+      prepareEnvironmentKeys(
+        { oid4vpRequestSigning: { privateKey: source(pem, `${VARIABLE}_PATH`) } },
+        { enabledSignatureAlgorithms: ED25519_ONLY }
+      )
+    );
+    expect(error.message).toContain(`${VARIABLE}_PATH must hold an EC P-256`);
+  });
+
+  it('refuses a value that is not a PEM key without quoting it', async () => {
+    const value = 'not-a-key-but-a-secret-looking-value';
+    const error = await refusal(
+      prepareEnvironmentKeys(
+        { oid4vpRequestSigning: { privateKey: source(value, VARIABLE) } },
+        { enabledSignatureAlgorithms: ED25519_ONLY }
+      )
+    );
+    expect(error.message).toContain(VARIABLE);
+    expect(JSON.stringify({ message: error.message, details: error.details })).not.toContain(value);
+  });
+});
+
 describe('prepareEnvironmentKeys — every key', () => {
   it('returns the keys in a fixed order', async () => {
     const keys = await prepareEnvironmentKeys(
@@ -317,10 +380,24 @@ describe('prepareEnvironmentKeys — every key', () => {
         mlDsa: { seed: source(SEED, 'JWT_MLDSA_PRIVATE_KEY') },
         rs256: { privateKey: source(RSA.privateKey, 'JWT_RS256_PRIVATE_KEY') },
         ed25519: { privateKey: source(ED25519.privateKey, 'JWT_PRIVATE_KEY') },
+        oid4vpRequestSigning: {
+          privateKey: source(
+            generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+              .privateKey.export({ type: 'pkcs8', format: 'pem' })
+              .toString(),
+            'OID4VP_VERIFIER_SIGNING_KEY'
+          ),
+        },
       },
       { enabledSignatureAlgorithms: HYBRID_CAPABLE }
     );
 
-    expect(keys.map((key) => key.algorithm)).toEqual(['EdDSA', 'RS256', 'ML-DSA-65', 'HS256']);
+    expect(keys.map((key) => key.algorithm)).toEqual([
+      'EdDSA',
+      'RS256',
+      'ML-DSA-65',
+      'HS256',
+      'ES256',
+    ]);
   });
 });

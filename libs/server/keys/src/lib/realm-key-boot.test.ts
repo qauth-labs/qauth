@@ -619,6 +619,91 @@ describe('bootRealmKeys — later boots', () => {
   });
 });
 
+describe('bootRealmKeys — the OID4VP verifier key (#546)', () => {
+  function verifierPem(type: 'pkcs8' | 'sec1' = 'pkcs8') {
+    const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+    return privateKey.export({ type, format: 'pem' }).toString();
+  }
+  const verifier = (value: string) => ({
+    oid4vpRequestSigning: { privateKey: source(value, 'OID4VP_VERIFIER_SIGNING_KEY') },
+  });
+
+  it('imports it once as the active, published ES256 request key, and finds it on later boots', async () => {
+    const store = createMemoryKeyStore();
+    const value = verifierPem('sec1');
+
+    const first = await boot(store, { environmentKeys: { ...UPGRADE, ...verifier(value) } });
+    const [key] = first.imported.filter((one) => one.purpose === 'oid4vp_request_signing');
+
+    expect(key).toMatchObject({
+      purpose: 'oid4vp_request_signing',
+      algorithm: 'ES256',
+      variables: ['OID4VP_VERIFIER_SIGNING_KEY'],
+    });
+    expect(storedKey(store, key.kid)).toMatchObject({ status: 'active', publishAt: NOW });
+    expect(store.rows.find((row) => row.key.kid === key.kid)?.publicJwk).toMatchObject({
+      kty: 'EC',
+      crv: 'P-256',
+      alg: 'ES256',
+      kid: key.kid,
+    });
+    expect(store.rows.find((row) => row.key.kid === key.kid)?.publicJwk).not.toHaveProperty('d');
+    // Stored as PKCS#8, whatever form the variable held.
+    const material = await open(store, key.kid, localProvider({ KEK: KEK_A }));
+    expect(
+      createPrivateKey({ key: material, format: 'der', type: 'pkcs8' }).equals(
+        createPrivateKey(value)
+      )
+    ).toBe(true);
+
+    const second = await boot(store, { now: () => LATER, environmentKeys: verifier(value) });
+    expect(second.imported).toEqual([]);
+    expect(second.alreadyStored).toEqual([key]);
+  });
+
+  it('replaces the stored key when the variable holds a new one', async () => {
+    const store = createMemoryKeyStore();
+    const { imported } = await boot(store, { environmentKeys: verifier(verifierPem()) });
+    const [old] = imported;
+
+    const result = await boot(store, {
+      now: () => LATER,
+      environmentKeys: verifier(verifierPem()),
+    });
+
+    const [replacement] = result.imported;
+    expect(result.replaced).toEqual([{ ...replacement, retiredKids: [old.kid] }]);
+    expect(storedKey(store, old.kid)).toMatchObject({
+      status: 'retired',
+      retireAt: LATER,
+      unpublishAt: LATER,
+    });
+  });
+
+  it('refuses to import it under the development KEK', async () => {
+    const store = createMemoryKeyStore();
+
+    const error = await refusal(
+      boot(store, {
+        kekProvider: localProvider({}, [] as never[]),
+        environmentKeys: verifier(verifierPem()),
+      })
+    );
+
+    expect(error.message).toContain('no KEK is set');
+    expect(error.details).toEqual({ variables: ['OID4VP_VERIFIER_SIGNING_KEY'] });
+    expect(store.rows.filter((row) => row.key.purpose === 'oid4vp_request_signing')).toEqual([]);
+  });
+
+  it('creates no request key when none is configured', async () => {
+    const store = createMemoryKeyStore();
+
+    await boot(store, { environmentKeys: UPGRADE });
+
+    expect(store.rows.filter((row) => row.key.purpose.startsWith('oid4vp'))).toEqual([]);
+  });
+});
+
 describe('bootRealmKeys — a fresh deployment', () => {
   it('generates the standard keys and an RS256 signing key', async () => {
     const store = createMemoryKeyStore();

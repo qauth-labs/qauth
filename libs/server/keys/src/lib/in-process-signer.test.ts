@@ -1,4 +1,10 @@
-import { createHmac, KeyObject, timingSafeEqual } from 'node:crypto';
+import {
+  createHmac,
+  createPublicKey,
+  generateKeyPairSync,
+  KeyObject,
+  timingSafeEqual,
+} from 'node:crypto';
 
 import {
   getSignatureBackend,
@@ -10,12 +16,13 @@ import {
   verifyWithHeader,
 } from '@qauth-labs/core-crypto';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
-import { decodeProtectedHeader, type JWK } from 'jose';
+import { compactVerify, decodeJwt, decodeProtectedHeader, importJWK, type JWK } from 'jose';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 
 import { KEK_A, KEK_B, localProvider } from '../testing/keks';
 import { createMemoryKeyStore, type MemoryKeyStore } from '../testing/memory-key-store';
 import { createMemorySignerStore, type MemorySignerStore } from '../testing/memory-signer-store';
+import { testCertificateFor } from '../testing/test-certificate';
 import { openKeyMaterial, sealKeyMaterial } from './envelope';
 import { isKeyCustodyError } from './errors';
 import { createInProcessSigner, type InProcessSignerOptions } from './in-process-signer';
@@ -28,6 +35,7 @@ import {
   SIGNER_OPERATIONS,
   type SignerOperation,
   type SignJwsRequest,
+  type SignRequestObjectRequest,
   type SignWebhookRequest,
 } from './signer';
 import {
@@ -40,8 +48,13 @@ import {
   SignerRequestRefusedError,
   UpstreamClientNotFoundError,
 } from './signer-errors';
-import { SIGNER_CALLERS, SIGNER_POLICY, type SignerCaller } from './signer-policy';
-import { JWS_TYP_BY_PURPOSE } from './signer-typ';
+import {
+  OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
+  SIGNER_CALLERS,
+  SIGNER_POLICY,
+  type SignerCaller,
+} from './signer-policy';
+import { JWS_TYP_BY_PURPOSE, OID4VP_REQUEST_OBJECT_TYP } from './signer-typ';
 
 const REALM_A = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e01';
 const REALM_B = '0190d7a2-6f4e-7c1a-9b3e-5a8d2c4f6e02';
@@ -74,8 +87,13 @@ interface Setup {
   readonly enabled: readonly SignatureAlgorithm[];
   /** With `scoped`: each realm's webhook secret, as `createKey` showed it. */
   readonly webhookSecrets: ReadonlyMap<string, string>;
+  /** With `scoped`: each realm's verifier certificate chain, naming its OID4VP request key. */
+  readonly verifierChains: ReadonlyMap<string, readonly string[]>;
   advance(ms: number): void;
 }
+
+/** Each scoped setup's verifier chains, for {@link CALLS}, which gets the signer only. */
+const VERIFIER_CHAINS = new WeakMap<Signer, ReadonlyMap<string, readonly string[]>>();
 
 interface SetupOptions {
   /** Hybrid signing for both the factory and the signer. */
@@ -86,8 +104,9 @@ interface SetupOptions {
   readonly signerKek?: KekProvider;
   readonly signer?: Partial<InProcessSignerOptions>;
   /**
-   * Also give each realm a webhook secret for {@link SUBSCRIPTION} and an
-   * RS256 client-assertion key and a configuration for {@link PROVIDER}.
+   * Also give each realm a webhook secret for {@link SUBSCRIPTION}, an RS256
+   * client-assertion key and a configuration for {@link PROVIDER}, and an
+   * OID4VP request key with a certificate that names it.
    */
   readonly scoped?: boolean;
 }
@@ -106,6 +125,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
   });
   const realms = options.realms ?? [REALM_A, REALM_B];
   const webhookSecrets = new Map<string, string>();
+  const verifierChains = new Map<string, readonly string[]>();
   for (const realmId of realms) {
     await factory.provisionRealmKeys(realmId);
     if (options.scoped === true) {
@@ -120,6 +140,8 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
         purpose: 'upstream_client_assertion',
         scopeId: PROVIDER,
       });
+      const [verifier] = await factory.createKey({ realmId, purpose: 'oid4vp_request_signing' });
+      verifierChains.set(realmId, [testCertificateFor(publicKeyOf(verifier.publicJwk))]);
     }
   }
 
@@ -148,6 +170,7 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     now: () => clock,
     ...options.signer,
   });
+  VERIFIER_CHAINS.set(signer, verifierChains);
   return {
     signer,
     store,
@@ -157,9 +180,35 @@ async function setup(options: SetupOptions = {}): Promise<Setup> {
     unwrap,
     enabled,
     webhookSecrets,
+    verifierChains,
     advance: (ms) => {
       clock += ms;
     },
+  };
+}
+
+function publicKeyOf(jwk: JWK | undefined): KeyObject {
+  if (jwk === undefined) throw new Error('no public JWK');
+  return createPublicKey({ key: jwk as JsonWebKey, format: 'jwk' });
+}
+
+/** A request object for `realmId`, signed under the chain its setup made. */
+function requestObject(
+  chains: ReadonlyMap<string, readonly string[]> | undefined,
+  overrides: Partial<SignRequestObjectRequest> = {}
+): SignRequestObjectRequest {
+  const realmId = overrides.realmId ?? REALM_A;
+  return {
+    realmId,
+    certificateChain: chains?.get(realmId) ?? [],
+    claims: {
+      client_id: 'x509_hash:abc',
+      response_type: 'vp_token',
+      nonce: 'n-1',
+      iat: NOW / 1000,
+      exp: NOW / 1000 + 300,
+    },
+    ...overrides,
   };
 }
 
@@ -1088,6 +1137,39 @@ describe('encrypt and decrypt', () => {
     ).rejects.toBeInstanceOf(SignerAccessDeniedError);
   });
 
+  it('lets web seal an OID4VP response key and api open it, and nothing else (#546)', async () => {
+    const { signer } = await setup();
+    const context = `${OID4VP_RESPONSE_KEY_CONTEXT_PREFIX}ephemeral-kid-1`;
+    const sealed = await signer.encrypt('web', { realmId: REALM_A, plaintext, context });
+
+    expect(await signer.decrypt('api', { realmId: REALM_A, ciphertext: sealed, context })).toEqual(
+      plaintext
+    );
+    // The web role mints the key and never reads it back.
+    await expect(
+      signer.decrypt('web', { realmId: REALM_A, ciphertext: sealed, context })
+    ).rejects.toBeInstanceOf(SignerAccessDeniedError);
+    for (const other of [undefined, 'realm_secrets:mail.smtp.password', 'secret-row']) {
+      const error = await signer
+        .encrypt('web', { realmId: REALM_A, plaintext, context: other })
+        .catch((e: unknown) => e);
+      expect(error, String(other)).toBeInstanceOf(SignerAccessDeniedError);
+      if (other !== undefined) expect((error as Error).message).not.toContain(other);
+    }
+  });
+
+  it('checks the encrypt context before it reads any key', async () => {
+    const { signer, unwrap } = await setup();
+
+    await expect(
+      signer.encrypt('web', { realmId: REALM_A, plaintext, context: 'secret-row' })
+    ).rejects.toBeInstanceOf(SignerAccessDeniedError);
+    expect(
+      await refusal(signer.encrypt('web', { realmId: REALM_A, plaintext, context: 1 as never }))
+    ).toBe('INVALID_CONTEXT');
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+
   it("refuses another realm's ciphertext", async () => {
     const { signer } = await setup();
     const ciphertext = await signer.encrypt('local', { realmId: REALM_A, plaintext });
@@ -1666,6 +1748,131 @@ describe('signClientAssertion', () => {
   });
 });
 
+describe('signRequestObject', () => {
+  it('signs an ES256 request object with the typ and x5c, iss set to client_id (#546)', async () => {
+    const { signer, verifierChains } = await setup({ scoped: true });
+    const request = requestObject(verifierChains);
+
+    const token = await signer.signRequestObject('web', request);
+
+    expect(decodeProtectedHeader(token)).toEqual({
+      alg: 'ES256',
+      typ: OID4VP_REQUEST_OBJECT_TYP,
+      x5c: verifierChains.get(REALM_A),
+    });
+    expect(decodeJwt(token)).toEqual({ iss: 'x509_hash:abc', ...request.claims });
+    // It verifies under the certificate's key, which is the published one.
+    const [published] = await signer.getVerificationKeys('web', REALM_A, 'oid4vp_request_signing');
+    expect(published).toMatchObject({ algorithm: 'ES256', status: 'active' });
+    expect(published.publicJwk).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' });
+    expect(published.publicJwk).not.toHaveProperty('d');
+    await expect(
+      compactVerify(token, await importJWK(published.publicJwk, 'ES256'))
+    ).resolves.toBeDefined();
+    // The realm JWKS never lists the verifier key.
+    expect((await signer.getJwks('web', REALM_A)).keys.map((key) => key.kid)).not.toContain(
+      published.kid
+    );
+  });
+
+  it("refuses a chain whose leaf names another key: another realm's, or a stranger's", async () => {
+    const { signer, verifierChains } = await setup({ scoped: true });
+    const stranger = testCertificateFor(
+      generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).publicKey
+    );
+
+    for (const certificateChain of [verifierChains.get(REALM_B) ?? [], [stranger]]) {
+      expect(
+        await refusal(
+          signer.signRequestObject('web', requestObject(verifierChains, { certificateChain }))
+        )
+      ).toBe('CERTIFICATE_KEY_MISMATCH');
+    }
+    // An intermediate after a matching leaf is the caller's to choose.
+    const chain = [...(verifierChains.get(REALM_A) ?? []), stranger];
+    await expect(
+      signer.signRequestObject('web', requestObject(verifierChains, { certificateChain: chain }))
+    ).resolves.toEqual(expect.any(String));
+  });
+
+  it('refuses a leaf with a key of another type', async () => {
+    const { signer, verifierChains } = await setup({ scoped: true });
+    const ed25519 = generateKeyPairSync('ed25519').publicKey;
+    // The helper signs with P-256 whatever key it certifies.
+    const certificate = testCertificateFor(ed25519);
+
+    expect(
+      await refusal(
+        signer.signRequestObject(
+          'web',
+          requestObject(verifierChains, { certificateChain: [certificate] })
+        )
+      )
+    ).toBe('CERTIFICATE_KEY_MISMATCH');
+  });
+
+  it.each([
+    ['an iss claim', { claims: { client_id: 'c', iss: 'evil' } }, 'RESERVED_CLAIM'],
+    ['no client_id', { claims: { nonce: 'n' } }, 'MISSING_CLAIM'],
+    ['a client_id that is not a string', { claims: { client_id: 1 } }, 'MISSING_CLAIM'],
+    ['an empty client_id', { claims: { client_id: '' } }, 'MISSING_CLAIM'],
+    ['claims that are not an object', { claims: [] }, 'INVALID_CLAIMS'],
+    ['an empty chain', { certificateChain: [] }, 'INVALID_CERTIFICATE_CHAIN'],
+    ['a chain that is not a list', { certificateChain: 'MIIB' }, 'INVALID_CERTIFICATE_CHAIN'],
+    [
+      'eleven certificates',
+      { certificateChain: Array(11).fill('AAAA') },
+      'INVALID_CERTIFICATE_CHAIN',
+    ],
+    ['a base64url member', { certificateChain: ['ab-_'] }, 'INVALID_CERTIFICATE_CHAIN'],
+    ['an unpadded member', { certificateChain: ['abc'] }, 'INVALID_CERTIFICATE_CHAIN'],
+    ['a member that is not a string', { certificateChain: [1] }, 'INVALID_CERTIFICATE_CHAIN'],
+    ['an overlong member', { certificateChain: ['A'.repeat(16_388)] }, 'INVALID_CERTIFICATE_CHAIN'],
+    ['a leaf that does not parse', { certificateChain: ['AAAA'] }, 'INVALID_CERTIFICATE_CHAIN'],
+    ['a realm id that is not a UUID', { realmId: 'realm-a' }, 'INVALID_REALM_ID'],
+    ['a caller-supplied key id', { kid: 'k' }, 'UNEXPECTED_FIELD'],
+    ['a caller-supplied typ', { typ: 'JWT' }, 'UNEXPECTED_FIELD'],
+    ['a caller-supplied header', { header: { alg: 'none' } }, 'UNEXPECTED_FIELD'],
+  ] as const)('refuses %s, and unwraps nothing', async (_case, change, reason) => {
+    const { signer, unwrap, verifierChains } = await setup({ scoped: true });
+    const request = {
+      ...requestObject(verifierChains),
+      ...change,
+    } as unknown as SignRequestObjectRequest;
+
+    expect(await refusal(signer.signRequestObject('web', request))).toBe(reason);
+    expect(unwrap).not.toHaveBeenCalled();
+  });
+
+  it('refuses a realm without the key', async () => {
+    const { signer, verifierChains } = await setup({ scoped: true, realms: [REALM_A] });
+
+    await expect(
+      signer.signRequestObject(
+        'web',
+        requestObject(verifierChains, {
+          realmId: REALM_B,
+          certificateChain: verifierChains.get(REALM_A),
+        })
+      )
+    ).rejects.toBeInstanceOf(SignerKeyNotFoundError);
+  });
+
+  it('is refused to every role but web and local', async () => {
+    const { signer, verifierChains, unwrap } = await setup({ scoped: true });
+
+    for (const caller of ['api', 'delivery', 'admin'] as const) {
+      await expect(
+        signer.signRequestObject(caller, requestObject(verifierChains))
+      ).rejects.toMatchObject({ code: 'SIGNER_ACCESS_DENIED', caller });
+    }
+    expect(unwrap).not.toHaveBeenCalled();
+    await expect(signer.signRequestObject('local', requestObject(verifierChains))).resolves.toEqual(
+      expect.any(String)
+    );
+  });
+});
+
 describe('getUpstreamJwks', () => {
   it("lists one provider's published keys, next included, and nothing of the realm JWKS", async () => {
     const { signer, factory, keys } = await setup({ scoped: true });
@@ -1743,6 +1950,8 @@ const CALLS: Record<SignerOperation, (signer: Signer, caller: SignerCaller) => P
   getJwks: (signer, caller) => signer.getJwks(caller, REALM_A),
   signWebhook: (signer, caller) => signer.signWebhook(caller, webhook()),
   signClientAssertion: (signer, caller) => signer.signClientAssertion(caller, assertion()),
+  signRequestObject: (signer, caller) =>
+    signer.signRequestObject(caller, requestObject(VERIFIER_CHAINS.get(signer))),
   getUpstreamJwks: (signer, caller) => signer.getUpstreamJwks(caller, REALM_A, PROVIDER),
 };
 
@@ -1754,14 +1963,15 @@ describe('caller policy', () => {
   it.each(cases)('%s calling %s follows SIGNER_POLICY', async (caller, operation) => {
     const { signer } = await setup({ hybrid: true, scoped: true });
     const grant = SIGNER_POLICY[caller];
-    // The table's decrypt uses a context outside every prefix list, so a role
-    // whose decrypt grant is a list (delivery) is refused it; the delivery test
-    // above covers a context inside its list.
+    // The table's encrypt and decrypt use no context, so a role whose grant is
+    // a list of prefixes (web's encrypt, delivery's and api's decrypt) is
+    // refused them; the encrypt and decrypt tests above cover a context inside
+    // each list.
     const allowed =
       operation === 'signJws'
         ? grant.signJws.includes('token_signing')
-        : operation === 'decrypt'
-          ? grant.decrypt === true
+        : operation === 'decrypt' || operation === 'encrypt'
+          ? grant[operation] === true
           : grant[operation];
 
     const result = CALLS[operation](signer, caller);
@@ -1922,6 +2132,7 @@ describe('key material', () => {
         'data_at_rest',
         'webhook_signing',
         'upstream_client_assertion',
+        'oid4vp_request_signing',
       ])
     );
 

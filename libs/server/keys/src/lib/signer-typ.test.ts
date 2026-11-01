@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  CLIENT_ASSERTION_TYP,
   isJwsSigningPurpose,
   isTypAllowed,
+  isVerificationKeyPurpose,
   JWS_SIGNING_PURPOSES,
   JWS_TYP_BY_PURPOSE,
+  OID4VP_REQUEST_OBJECT_TYP,
   REALM_JWKS_PURPOSES,
+  VERIFICATION_KEY_PURPOSES,
 } from './signer-typ';
 
 describe('JWS_TYP_BY_PURPOSE', () => {
@@ -54,4 +58,38 @@ describe('isJwsSigningPurpose', () => {
       expect(isJwsSigningPurpose(purpose)).toBe(false);
     }
   );
+});
+
+describe('the OID4VP request key (#546)', () => {
+  it('signs request objects with the RFC 9101 typ, which no signJws purpose signs', () => {
+    expect(OID4VP_REQUEST_OBJECT_TYP).toBe('oauth-authz-req+jwt');
+    expect(OID4VP_REQUEST_OBJECT_TYP).not.toBe(CLIENT_ASSERTION_TYP);
+    for (const purpose of JWS_SIGNING_PURPOSES) {
+      expect(isTypAllowed(purpose, OID4VP_REQUEST_OBJECT_TYP), purpose).toBe(false);
+    }
+    expect(isJwsSigningPurpose('oid4vp_request_signing')).toBe(false);
+  });
+
+  it('lists its verification keys besides the signJws purposes, and nothing else', () => {
+    expect(VERIFICATION_KEY_PURPOSES).toEqual([
+      'token_signing',
+      'event_signing',
+      'oid4vp_request_signing',
+    ]);
+    expect(Object.isFrozen(VERIFICATION_KEY_PURPOSES)).toBe(true);
+    expect(REALM_JWKS_PURPOSES).not.toContain('oid4vp_request_signing');
+    for (const purpose of VERIFICATION_KEY_PURPOSES) {
+      expect(isVerificationKeyPurpose(purpose), purpose).toBe(true);
+    }
+    for (const purpose of [
+      'oid4vp_response_encryption',
+      'cookie_hmac',
+      'data_at_rest',
+      'upstream_client_assertion',
+      'toString',
+      undefined,
+    ]) {
+      expect(isVerificationKeyPurpose(purpose), String(purpose)).toBe(false);
+    }
+  });
 });

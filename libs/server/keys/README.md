@@ -301,16 +301,18 @@ const result = await bootRealmKeys({
 // result.imported, .replaced, .alreadyStored, .inactive and .generated name keys by kid; no material.
 ```
 
-| Variable                                           | Becomes                                                                                     |
-| -------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `JWT_PRIVATE_KEY` (or `_PATH`)                     | The active Ed25519 `token_signing` key.                                                     |
-| `JWT_RS256_PRIVATE_KEY` (or `_PATH`)               | The active RS256 `token_signing` key.                                                       |
-| `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`)               | With hybrid signing on only: the ML-DSA-65 key, in one hybrid pair with the Ed25519 key.    |
-| `SESSION_COOKIE_SECRET`                            | The active `cookie_hmac` key, the secret's UTF-8 bytes.                                     |
-| `JWT_PUBLIC_KEY`, `JWT_RS256_PUBLIC_KEY` (`_PATH`) | Nothing: the public key is derived with `node:crypto`, and one that differs stops the boot. |
+| Variable                                           | Becomes                                                                                      |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `JWT_PRIVATE_KEY` (or `_PATH`)                     | The active Ed25519 `token_signing` key.                                                      |
+| `JWT_RS256_PRIVATE_KEY` (or `_PATH`)               | The active RS256 `token_signing` key.                                                        |
+| `JWT_MLDSA_PRIVATE_KEY` (or `_PATH`)               | With hybrid signing on only: the ML-DSA-65 key, in one hybrid pair with the Ed25519 key.     |
+| `SESSION_COOKIE_SECRET`                            | The active `cookie_hmac` key, the secret's UTF-8 bytes.                                      |
+| `OID4VP_VERIFIER_SIGNING_KEY` (or `_PATH`)         | The active ES256 `oid4vp_request_signing` key: EC P-256, PKCS#8 or SEC1 PEM, kept as PKCS#8. |
+| `JWT_PUBLIC_KEY`, `JWT_RS256_PUBLIC_KEY` (`_PATH`) | Nothing: the public key is derived with `node:crypto`, and one that differs stops the boot.  |
 
 - The `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, else the RFC 7638 thumbprint, as for a
-  generated key. The cookie key gets a random `kid`.
+  generated key. The cookie key gets a random `kid`. The OID4VP verifier key's `kid` is its
+  thumbprint: a request object names its key through `x5c`, not `kid`.
 - A signing key counts as stored when the realm has a published key with the same public key,
   whatever its `kid`. So the import happens once, and removing `JWT_RS256_KID` later changes nothing.
 - The cookie secret counts as stored when a stored `cookie_hmac` key holds the same bytes. It has
@@ -346,7 +348,11 @@ when:
 - a new key comes with a configured `kid` (`JWT_RS256_KID`, `JWT_MLDSA_KID`) that is already
   another stored key's: a new key needs a new `kid`.
 
-The `OID4VP_*` keys are not imported here; #546 moves the verifier key into the store.
+The OID4VP verifier key is imported like a signing key (#546): once, then a warning at each later
+boot until the variable is removed. Its certificate chain (`OID4VP_VERIFIER_CERTIFICATE_CHAIN*`)
+is public configuration and stays a variable; the auth server checks at boot that the chain's leaf
+names the stored key. `OID4VP_RESPONSE_KEY_SECRET` is not imported: the ephemeral response keys are
+sealed with the realm's `data_at_rest` key instead (see [Data at rest](#data-at-rest)).
 
 ## The signer
 
@@ -367,10 +373,12 @@ const token = await signer.signJws('api', {
 | `signHybrid({ realmId, typ, claims })`                                       | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                   |
 | `signWebhook({ realmId, subscriptionId, id, timestamp, body })`              | The `webhook-signature` header value. See [Webhook signatures](#webhook-signatures).                                                  |
 | `signClientAssertion({ realmId, providerId, audience, algorithm?, claims })` | A `private_key_jwt` client assertion toward an upstream provider. See [Client assertions](#client-assertions).                        |
+| `signRequestObject({ realmId, certificateChain, claims })`                   | An OID4VP request object signed by the realm's ES256 verifier key. See [Request objects](#request-objects).                           |
 | `getCookieSecrets(realmId, { kid? })`                                        | The active cookie HMAC secret and the most recently retired one, as fresh buffers; a `kid` its list lacks reads the store again.      |
 | `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                    |
 | `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                 |
 | `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.         |
+|                                                                              | The purposes are `token_signing`, `event_signing` and `oid4vp_request_signing` (`VERIFICATION_KEY_PURPOSES`).                         |
 | `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` keys in their window, `next` keys included, in a fixed order. No `event_signing` key. |
 | `getUpstreamJwks(realmId, providerId)`                                       | The JWKS of one upstream provider's client-assertion keys, by the same window rules as `getJwks`.                                     |
 
@@ -387,16 +395,20 @@ What the signer guarantees:
   | `token_signing` | `at+jwt`, `JWT` (ID token), `oauth-id-jag+jwt` (ID-JAG) |
   | `event_signing` | `secevent+jwt`, `logout+jwt`                            |
 
+  The scoped purposes and the OID4VP request key sign through their own operations, each with one
+  fixed `typ`: `client-authentication+jwt` (`CLIENT_ASSERTION_TYP`) and `oauth-authz-req+jwt`
+  (`OID4VP_REQUEST_OBJECT_TYP`).
+
 - **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
   `SignerAccessDeniedError`. Every role may read public keys.
 
-  | Role       | May call                                                                                                                                                                                   |
-  | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                            |
-  | `web`      | `getCookieSecrets`. It never signs anything.                                                                                                                                               |
-  | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:` or `auth-method-plugin:` context only. |
-  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                     |
-  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                    |
+  | Role       | May call                                                                                                                                                                                                           |
+  | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                                                    |
+  | `web`      | `getCookieSecrets`, `signRequestObject`, `encrypt` of an `oid4vp-response-key:` context only. It signs no token and decrypts nothing.                                                                              |
+  | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:` or `oid4vp-response-key:` context only. |
+  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                                             |
+  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                                            |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 
@@ -472,6 +484,31 @@ const assertion = await signer.signClientAssertion('api', {
 - `getUpstreamJwks(realmId, providerId)` serves the provider's published keys, for a provider that
   registers QAuth's public key or fetches it from a `jwks_uri`. The realm JWKS never lists them.
 
+### Request objects
+
+`signRequestObject` signs the OID4VP Authorization Request QAuth's verifier hands a wallet (a
+JWT-Secured Authorization Request, [RFC 9101](https://www.rfc-editor.org/rfc/rfc9101)), with the
+realm's active ES256 `oid4vp_request_signing` key (#546). The `web` role, which serves the wallet
+sign-in pages, holds no PEM and asks the signer.
+
+```typescript
+const requestObject = await signer.signRequestObject('web', {
+  realmId,
+  certificateChain: material.x5c, // base64 DER, leaf first, no trust anchor
+  claims: { ...authorizationRequest, iat, exp }, // client_id among them; no iss
+});
+```
+
+- The protected header is `alg: ES256`, `typ: oauth-authz-req+jwt` (`OID4VP_REQUEST_OBJECT_TYP`) and
+  `x5c`. It carries no `kid`: the wallet takes the key from `x5c[0]`, which the `client_id` names.
+- `iss` is the `client_id` claim (RFC 9101 §4); a claims set with `iss`, or without a `client_id`
+  string, is refused.
+- The leaf certificate must hold the public half of the key that signs, compared by curve and
+  coordinates. A chain that names another key is refused with `CERTIFICATE_KEY_MISMATCH`, so a
+  request object never carries an `x5c` its signature does not match. The chain is 1 to 10
+  standard-base64 certificates; the signer validates nothing else in it. The auth server validates
+  the chain against its trust anchors at boot, and the wallet does again.
+
 ### The in-process signer
 
 `createInProcessSigner` (from `/custody`) is the signer of a single deployment.
@@ -515,6 +552,17 @@ the 96-bit nonce and the AES-256-GCM ciphertext with its 128-bit tag, both base6
 associated data binds the realm id, the `kid` and the caller's `context` (at most 1024
 characters), each length-prefixed, so a ciphertext decrypts only in the realm and for the context it
 was made for. Pass the row it belongs to as `context`, so a ciphertext copied to another row fails.
+
+A role whose `encrypt` or `decrypt` grant is a list of prefixes uses only contexts that start with
+one of them. The contexts in use:
+
+| Context                         | What it seals                                                                    | Encrypts | Decrypts   |
+| ------------------------------- | -------------------------------------------------------------------------------- | -------- | ---------- |
+| `delivery:…`                    | An event destination's credentials.                                              | `api`    | `delivery` |
+| `realm_secrets:mail.…`          | A realm's mail transport secret.                                                 | `api`    | `api`      |
+| `upstream-oidc:client-secret:…` | An upstream provider's client secret.                                            | `api`    | `api`      |
+| `auth-method-plugin:…`          | An authentication-method plugin's secret.                                        | `api`    | `api`      |
+| `oid4vp-response-key:<kid>`     | An OID4VP request's ephemeral response-decryption key, until the wallet answers. | `web`    | `api`      |
 
 ## Testing
 
