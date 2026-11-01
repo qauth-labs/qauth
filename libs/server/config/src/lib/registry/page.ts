@@ -28,6 +28,7 @@ const OWNER_HEADINGS: Readonly<Record<KeyOwner, string>> = {
   'id-jag': 'Enterprise-managed authorization (ID-JAG)',
   passkeys: 'Passkeys',
   'wallet-federation': 'Wallet federation',
+  plugins: 'Plugins',
   'rate-limits': 'Rate limits',
   'developer-portal': 'Developer portal',
   testing: 'Testing',
