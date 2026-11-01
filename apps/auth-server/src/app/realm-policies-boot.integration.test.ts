@@ -254,6 +254,9 @@ describe('realm policies at boot on the auth server (#516)', () => {
         realm: 'master',
       }),
     ]);
+    // The allowlist changed in the environment, to a looser list: the stored,
+    // stricter one applies, and no further warning is needed (#529).
+    expect(secondWarnings.filter((line) => line.environment !== undefined)).toEqual([]);
     // The token lifetimes and the password policy still read the
     // environment (#527, #528): no warning tells the operator to drop them.
     expect(ignored.map((line) => line.variable)).not.toContain('ACCESS_TOKEN_LIFESPAN');

@@ -3,6 +3,7 @@ export * from './lib/secret-storage';
 export * from './lib/storage';
 // What the auth server works with, from the policy library it may not import.
 export {
+  compareSeedWithStored,
   defaultsFromEnv,
   type PolicyIssue,
   PolicySchemaVersionError,
@@ -23,6 +24,7 @@ export {
   type RealmSecretSeedReport,
   type RealmSecretStore,
   secretSeedsFromEnv,
+  type SeedComparison,
   seedKeysSetIn,
   type SetSeedKey,
 } from '@qauth-labs/server-realm-policy';

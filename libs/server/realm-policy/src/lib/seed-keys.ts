@@ -1,3 +1,7 @@
+import { isDeepStrictEqual } from 'node:util';
+
+import { compareDirection, sameEntries } from './direction';
+import { directionKind, isSetDirection } from './field';
 import { REALM_POLICY_ENV, REALM_POLICY_REGISTRY } from './realm-policies';
 import type { PolicyEnvReader, PolicyRegistry } from './registry';
 
@@ -38,4 +42,45 @@ export function seedKeysSetIn(
     }
   }
   return set;
+}
+
+/** How a seed key's value compares with a realm's stored value; see {@link compareSeedWithStored}. */
+export type SeedComparison = 'same' | 'stricter' | 'looser' | 'different';
+
+/**
+ * How the value a seed key gives a field compares with the value a realm
+ * stores (#529, from the review of #516): what the boot says about a seed
+ * key the environment still sets once the server reads the field from the
+ * realm row.
+ *
+ * - `same`: the two agree (a set field's lists in any order).
+ * - `stricter`: the environment's value is stricter, by the field's
+ *   direction; the stored, looser value applies.
+ * - `looser`: the environment's value is looser; the stored one applies.
+ * - `different`: they differ and the field has no order (`opaque`, such as
+ *   the mail transport's host).
+ *
+ * @throws TypeError when `path` is not a field of the registry
+ */
+export function compareSeedWithStored(
+  path: string,
+  seedValue: unknown,
+  storedValue: unknown,
+  registry: PolicyRegistry = REALM_POLICY_REGISTRY
+): SeedComparison {
+  const entry = registry.field(path);
+  if (entry === undefined) throw new TypeError(`${path} is not a field of the realm policies`);
+  const { direction } = entry.field;
+  if (
+    isDeepStrictEqual(seedValue, storedValue) ||
+    (isSetDirection(direction) && sameEntries(seedValue, storedValue))
+  ) {
+    return 'same';
+  }
+  if (directionKind(direction) === 'opaque') return 'different';
+  // From the stored value to the environment's: a tightening means the
+  // environment is the stricter one.
+  return compareDirection(direction, storedValue, seedValue) === 'tightening'
+    ? 'stricter'
+    : 'looser';
 }

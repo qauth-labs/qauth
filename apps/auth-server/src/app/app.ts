@@ -151,6 +151,10 @@ export function defaultRealmBootSettings(): DefaultRealmBootSettings {
       ...seedKey,
       readFromRealmRow: POLICIES_READ_FROM_REALM_ROW.has(seedKey.path),
     })),
+    // What each set key seeds, compared with the stored value of a policy
+    // the server reads from the row (#529): a stricter or another value is
+    // logged, so a key changed in the environment does not go unseen.
+    environmentSeeds: defaultsFromEnv(env),
   };
 }
 
