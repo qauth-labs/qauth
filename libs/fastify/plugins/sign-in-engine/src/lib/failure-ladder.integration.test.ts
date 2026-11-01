@@ -360,7 +360,10 @@ describe('the failure ladder over real Redis and Postgres', () => {
   it('refuses the round before any credential is checked when Redis is stopped', async (testCtx) => {
     if (!dockerUp) return testCtx.skip();
     await seed('down@example.com');
-    const stopped = await startRedisContainer();
+    // A container of the case's own: on the run's shared server, `stop()`
+    // only empties the suite's logical databases and the server keeps
+    // answering, so the store would never go down.
+    const stopped = await startRedisContainer({ privateContainer: true });
     const client = createRedisConnection({
       url: stopped.connectionUrl,
       logger: silent,
