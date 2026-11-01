@@ -165,6 +165,10 @@
             "user",
             "user_switch"
           ]
+        },
+        "sessionEnded": {
+          "type": "boolean",
+          "description": "For a user switch after the person signed in during this interaction: `true`. The browser session that sign-in started was ended, so no later sign-in or client on the browser continues it. Absent when the interaction held no browser session."
         }
       },
       "required": [

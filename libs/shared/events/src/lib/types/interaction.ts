@@ -87,6 +87,12 @@ export const interactionCancelled = defineEventType({
     reason: extensibleEnum(INTERACTION_CANCEL_REASONS).describe(
       '`user`: the person cancelled. `user_switch`: the person chose another account, and a new interaction for the same request replaced this one. The set may grow in a minor release.'
     ),
+    sessionEnded: z
+      .boolean()
+      .describe(
+        'For a user switch after the person signed in during this interaction: `true`. The browser session that sign-in started was ended, so no later sign-in or client on the browser continues it. Absent when the interaction held no browser session.'
+      )
+      .optional(),
   }),
 });
 
