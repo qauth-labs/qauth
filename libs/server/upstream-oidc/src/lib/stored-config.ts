@@ -4,6 +4,7 @@ import { UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX } from '@qauth-labs/server-keys';
 import { z } from 'zod';
 
 import {
+  UPSTREAM_ASSERTION_ALGORITHMS,
   upstreamEndpointsSchema,
   type UpstreamOidcConfig,
   type UpstreamOidcConfigInput,
@@ -138,7 +139,7 @@ export const storedUpstreamOidcConfigSchema = z.strictObject({
     }),
     z.strictObject({
       method: z.literal('private_key_jwt'),
-      signingAlgorithm: z.enum(['RS256', 'ES256', 'EdDSA']),
+      signingAlgorithm: z.enum(UPSTREAM_ASSERTION_ALGORITHMS),
     }),
   ]),
   scopes: z.array(z.string()),
