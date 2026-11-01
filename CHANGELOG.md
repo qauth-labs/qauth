@@ -1343,6 +1343,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   problem documents. A client of another developer is 404, as before. The
   domain logic is shared with the deprecated paths, which keep their shapes.
 
+- **`graphs:check`, delurio's check of the flow graphs** ([#560], ADR-021).
+  `graphs/` is now an Nx project, `graphs`, whose `check` target runs
+  `delurio check graphs --strict` with `@delurio/cli`, a root development
+  dependency pinned to 0.1.1: a graph that cannot be loaded, a broken assertion
+  or a main story that cannot be walked fails it. It needs no server and no
+  database, and is cached on `graphs/**`; no app, lib or image depends on
+  delurio. `graphs/README.md` now states QAuth's flow conventions: an effect
+  ends in `DONE` or `FAIL.<class>`, a protocol flow has one exit per cause,
+  named `<error>.<cause>`, every exit declares its response, and every flow is
+  complete (no unreachable state, no transition never taken, no dead end, no
+  effect without a failure path). delurio does not enforce those structural
+  rules yet, so they are review items until it does. CI runs the target from
+  [#568].
+
 ### Changed
 
 - **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
@@ -2284,6 +2298,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#550]: https://github.com/qauth-labs/qauth/issues/550
 [#552]: https://github.com/qauth-labs/qauth/issues/552
 [#553]: https://github.com/qauth-labs/qauth/issues/553
+[#560]: https://github.com/qauth-labs/qauth/issues/560
+[#568]: https://github.com/qauth-labs/qauth/issues/568
 [#577]: https://github.com/qauth-labs/qauth/issues/577
 [#578]: https://github.com/qauth-labs/qauth/issues/578
 [#590]: https://github.com/qauth-labs/qauth/issues/590
