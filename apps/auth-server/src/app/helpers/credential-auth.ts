@@ -60,10 +60,13 @@ export type PasswordCredentialCheck =
        */
       ignoredMark: boolean;
       /**
-       * `credential_data.email_verified`. For a password account this is the
-       * proof of a verified account, so it is the REQUIRE_VERIFIED_ACCOUNT gate source.
+       * Whether the account is verified: its primary identity is proved
+       * (ADR-017 Decision 5). A password account's identifier is its address,
+       * so for it the proof is the confirmed address,
+       * `credential_data.email_verified`. What the verified-account gate (the
+       * realm's `accounts.requireVerifiedAccount`) reads.
        */
-      emailVerified: boolean;
+      accountVerified: boolean;
       identity: VerifiedIdentity;
     };
 
@@ -133,7 +136,7 @@ export async function verifyPasswordCredential(
     status: 'ok',
     credential,
     ignoredMark: marked,
-    emailVerified: parsed.data.email_verified,
+    accountVerified: parsed.data.email_verified,
     identity,
   };
 }

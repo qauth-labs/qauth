@@ -218,11 +218,27 @@ function report(realm: string, issued: Issued[]): void {
     console.log('');
   }
 
-  if (refused.length > 0) {
+  const notFirstParty = refused.filter((r) => r.refusal !== 'client_credentials_scopes_dropped');
+  if (notFirstParty.length > 0) {
     console.error(
       'Refused, and left unchanged: these entries set first_party_profile on a client that ' +
         'can never be first party (a developer, dynamic registration or a CIMD document wrote it):\n  ' +
-        refused.map((r) => `${r.clientId} (${r.refusal})`).join(', ') +
+        notFirstParty.map((r) => `${r.clientId} (${r.refusal})`).join(', ') +
+        '\n'
+    );
+    process.exitCode = 1;
+  }
+
+  // #891: the stored client narrows its client_credentials grant, and the
+  // entry would lift that narrowing.
+  const scopesDropped = refused.filter((r) => r.refusal === 'client_credentials_scopes_dropped');
+  if (scopesDropped.length > 0) {
+    console.error(
+      'Refused, and left unchanged: these clients limit the scopes client_credentials may issue ' +
+        '(client_credentials_scopes), and their entries do not, so --rotate would lift the limit. ' +
+        'Add client_credentials_scopes to the entry, or to lift the limit on purpose set the ' +
+        'column to NULL first:\n  ' +
+        scopesDropped.map((r) => r.clientId).join(', ') +
         '\n'
     );
     process.exitCode = 1;

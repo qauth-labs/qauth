@@ -118,7 +118,7 @@ function callback(
 }
 
 async function signIn(s: Setup, person: FakeSignIn = PERSON) {
-  const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: ['en', 'tr-TR'] });
+  const start = await startUpstreamStep(s.method, { uiLocales: ['en', 'tr-TR'] }, s.host.context);
   const response = s.provider.authorize(new URL(start.redirectTo), person);
   const outcome = await callback(s, response, start.transaction);
   return { start, response, outcome };
@@ -154,7 +154,7 @@ describe('createUpstreamOidcMethod', () => {
 describe('start()', () => {
   it('sends the browser to the authorization endpoint with state, nonce and PKCE S256', async () => {
     const s = await setup();
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: ['en', 'x y'] });
+    const start = await startUpstreamStep(s.method, { uiLocales: ['en', 'x y'] }, s.host.context);
     const url = new URL(start.redirectTo);
     const transaction = start.transaction;
 
@@ -187,7 +187,7 @@ describe('start()', () => {
     const s = await setup();
     const starts: UpstreamStart<UpstreamOidcTransaction>[] = [];
     for (let i = 0; i < 3; i += 1) {
-      starts.push(await startUpstreamStep(s.method, s.host.context, { uiLocales: [] }));
+      starts.push(await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context));
     }
     for (const member of ['state', 'nonce', 'codeVerifier'] as const) {
       expect(new Set(starts.map((start) => start.transaction[member])).size).toBe(3);
@@ -196,7 +196,7 @@ describe('start()', () => {
 
   it('asks for form_post when the config says so', async () => {
     const s = await setup('client_secret_basic', { responseMode: 'form_post' });
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     expect(new URL(start.redirectTo).searchParams.get('response_mode')).toBe('form_post');
   });
 
@@ -208,7 +208,7 @@ describe('start()', () => {
         jwks: `${ISSUER}/jwks`,
       },
     });
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     const url = new URL(start.redirectTo);
     expect(url.searchParams.get('tenant')).toBe('t1');
     expect(url.searchParams.getAll('state')).toEqual([start.transaction.state]);
@@ -217,7 +217,7 @@ describe('start()', () => {
   it('rejects when discovery fails, so the engine never sends the browser anywhere', async () => {
     const s = await setup();
     s.provider.tamper.discovery = { issuer: 'https://evil.example.com' };
-    await expect(startUpstreamStep(s.method, s.host.context, { uiLocales: [] })).rejects.toThrow(
+    await expect(startUpstreamStep(s.method, { uiLocales: [] }, s.host.context)).rejects.toThrow(
       /issuer/
     );
   });
@@ -243,7 +243,7 @@ describe('start()', () => {
       return down;
     }
 
-    const start = (s: Setup) => startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = (s: Setup) => startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
 
     it('shares one call among concurrent starts', async () => {
       const s = await setup();
@@ -430,7 +430,7 @@ describe('the callback', () => {
 
   it('ends as declined when the person declines at the provider', async () => {
     const s = await setup();
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     const outcome = await callback(
       s,
       { error: 'access_denied', state: start.transaction.state, iss: ISSUER },
@@ -447,7 +447,7 @@ describe('the callback', () => {
     ['a code the provider never issued', { code: 'forged' }, 'provider_error'],
   ] as const)('ends as failed for %s', async (_name, extra, reason) => {
     const s = await setup();
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     const outcome = await callback(
       s,
       { state: start.transaction.state, iss: ISSUER, ...extra },
@@ -458,7 +458,7 @@ describe('the callback', () => {
 
   it('refuses a state that is not the transaction’s, before it spends the code', async () => {
     const s = await setup();
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     const response = s.provider.authorize(new URL(start.redirectTo), PERSON);
     const outcome = await callback(s, { ...response, state: 'A'.repeat(43) }, start.transaction);
     expect(outcome).toEqual({ kind: 'failed', reason: 'transaction_mismatch' });
@@ -603,7 +603,7 @@ describe('the callback', () => {
 describe('the iss response parameter (RFC 9207)', () => {
   it('refuses a response that names another issuer', async () => {
     const s = await setup();
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     const response = s.provider.authorize(new URL(start.redirectTo), PERSON);
     const outcome = await callback(
       s,
@@ -616,7 +616,7 @@ describe('the iss response parameter (RFC 9207)', () => {
 
   it('refuses a response without iss from a provider that says it sends one', async () => {
     const s = await setup();
-    const start = await startUpstreamStep(s.method, s.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(s.method, { uiLocales: [] }, s.host.context);
     const withoutIss = { ...s.provider.authorize(new URL(start.redirectTo), PERSON) };
     delete withoutIss['iss'];
     expect(await callback(s, withoutIss, start.transaction)).toEqual({
@@ -650,7 +650,7 @@ describe('mix-up defence: a response for provider A at provider B’s callback',
 
   it('is refused with A’s transaction: B holds no transaction of A’s', async () => {
     const { a, b } = await twoProviders();
-    const start = await startUpstreamStep(a.method, a.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(a.method, { uiLocales: [] }, a.host.context);
     const response = a.provider.authorize(new URL(start.redirectTo), PERSON);
     // As if the host had handed B's handler what A started.
     const outcome = await callback(b, response, start.transaction);
@@ -662,7 +662,7 @@ describe('mix-up defence: a response for provider A at provider B’s callback',
   it('is refused when A and B are two aliases of one issuer', async () => {
     const a = await setup('client_secret_basic', {}, { type: 'oidc_a' });
     const b = await setup('client_secret_basic', {}, { type: 'oidc_b' });
-    const start = await startUpstreamStep(a.method, a.host.context, { uiLocales: [] });
+    const start = await startUpstreamStep(a.method, { uiLocales: [] }, a.host.context);
     const response = a.provider.authorize(new URL(start.redirectTo), PERSON);
     expect(await callback(b, response, start.transaction)).toEqual({
       kind: 'failed',
@@ -680,8 +680,8 @@ describe('mix-up defence: a response for provider A at provider B’s callback',
 
   it('is refused with B’s own transaction when the response names A as its issuer', async () => {
     const { a, b } = await twoProviders();
-    const startA = await startUpstreamStep(a.method, a.host.context, { uiLocales: [] });
-    const startB = await startUpstreamStep(b.method, b.host.context, { uiLocales: [] });
+    const startA = await startUpstreamStep(a.method, { uiLocales: [] }, a.host.context);
+    const startB = await startUpstreamStep(b.method, { uiLocales: [] }, b.host.context);
     const response = a.provider.authorize(new URL(startA.redirectTo), PERSON);
     const outcome = await callback(
       b,
@@ -704,8 +704,8 @@ describe('mix-up defence: a response for provider A at provider B’s callback',
       {},
       { type: 'oidc_b', issuer: 'https://b.example.com', issParameter: false }
     );
-    const startA = await startUpstreamStep(a.method, a.host.context, { uiLocales: [] });
-    const startB = await startUpstreamStep(b.method, b.host.context, { uiLocales: [] });
+    const startA = await startUpstreamStep(a.method, { uiLocales: [] }, a.host.context);
+    const startB = await startUpstreamStep(b.method, { uiLocales: [] }, b.host.context);
     const response = a.provider.authorize(new URL(startA.redirectTo), PERSON);
     const outcome = await callback(
       b,

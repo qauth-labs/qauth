@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -167,8 +167,9 @@ always sent.
 
 The body carries no user id: anything that differed between a new account and an
 existing one would answer the question this endpoint must not. Show a "check your
-inbox" screen, never "account created" or "address taken". With
-`REQUIRE_VERIFIED_ACCOUNT` on (the default), the account can sign in only after
+inbox" screen, never "account created" or "address taken". While the realm
+requires verified accounts (`accounts.requireVerifiedAccount`, the default), the
+account can sign in only after
 its owner has verified it; until then [`POST /auth/login`](#post-authlogin)
 answers it with the same `401` as a wrong password.
 
@@ -214,7 +215,8 @@ locked out, or inside the account's wait on the
 with `Retry-After`), `503` (the failure ladder's store is unavailable; nothing
 was checked; `Retry-After: 5`).
 The `401` is the same for an unknown address, a wrong password, a disabled
-account and, with `REQUIRE_VERIFIED_ACCOUNT` on (the default), an account whose
+account and, while the realm requires verified accounts
+(`accounts.requireVerifiedAccount`, the default), an account whose
 address is not verified yet: registering an address and then logging in must not
 tell a free address from a registered one.
 Renew the access token with the [`refresh_token` grant](/integrate/oauth-flow/#refresh-token-rotation)
@@ -415,7 +417,7 @@ Key contract facts:
 ```json
 {
   "access_token": "eyJ…",
-  "refresh_token": "a1b2…", // omitted for client_credentials, token-exchange, and a code approved without a stored consent
+  "refresh_token": "a1b2…", // omitted for client_credentials, token-exchange, and a code no stored consent covers (its scopes at each resource)
   "id_token": "eyJ…", // authorization_code grant only, when `openid` was granted
   "expires_in": 900,
   "token_type": "Bearer",

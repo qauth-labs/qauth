@@ -113,7 +113,7 @@ describe('wire-suite configuration', () => {
 
       const run = spawnSync(
         process.execPath,
-        [vitest, 'run', '--config', 'vitest.wire.config.ts'],
+        [vitest, 'run', '--config', 'vitest.wire.config.mts'],
         {
           cwd: PROJECT_ROOT,
           env,

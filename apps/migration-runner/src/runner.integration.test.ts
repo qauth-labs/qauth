@@ -17,7 +17,6 @@ import { MIGRATION_LOCK_NAME } from '@qauth-labs/infra-db/migrations';
 import {
   appendQauthMigration,
   applyQauthMigrations,
-  createPostgresDatabase,
   QAUTH_MIGRATIONS_FOLDER,
   qauthMigrationsFolderWithFirst,
   qauthMigrationTags,
@@ -88,7 +87,6 @@ async function until(condition: () => Promise<boolean> | boolean, what: string):
 describe('migration runner (built program, testcontainers Postgres)', () => {
   let container: StartedPostgres | undefined;
   let dockerUp = false;
-  let databases = 0;
   const folders: string[] = [];
 
   beforeAll(async () => {
@@ -108,13 +106,13 @@ describe('migration runner (built program, testcontainers Postgres)', () => {
     await container?.stop();
   });
 
-  /** A new, empty database on the container, by URL. */
+  /** A new, empty database on the server, by URL; dropped with the suite's own. */
   async function freshDatabase(ctx: { skip: () => void }): Promise<string> {
     if (!dockerUp || !container) {
       ctx.skip();
       throw new Error('unreachable');
     }
-    return createPostgresDatabase(container.connectionString, `runner_${++databases}`);
+    return container.createDatabase();
   }
 
   /** Run one query on a database and disconnect. */

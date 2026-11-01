@@ -1,13 +1,24 @@
+import {
+  type FirstPartyClientFields,
+  type FirstPartyProfile,
+  resolveFirstPartyProfile,
+} from '@qauth-labs/shared-validation';
+
 import { env } from '../../config/env';
 import { isAgentClient } from './client-resolution';
+import { isDangerousScope } from './step-up';
 
 /**
  * Minimal view of an oauth_clients row consumed by the consent-screen
  * helpers. Kept local to avoid an `@nx/enforce-module-boundaries`
  * violation (`scope:app` → `scope:infra`) — the full types still live in
  * `@qauth-labs/infra-db` and repositories return them directly.
+ *
+ * It carries the fields `resolveFirstPartyProfile` reads (ADR-017 Decision
+ * 2), required, so the consent decision always sees the operator-set
+ * first-party profile the waiver of {@link administrativeConsentFor} rests on.
  */
-export interface OAuthClientLike {
+export interface OAuthClientLike extends FirstPartyClientFields {
   scopes: string[];
   dynamicRegisteredAt: number | null;
   /**
@@ -98,15 +109,94 @@ export function filterRequestedScopes(
 }
 
 /**
+ * An administrative consent (ADR-017 Decision 9): the operator's first-party
+ * profile on the client stands for the user's consent, so no consent screen
+ * is shown and no `oauth_consents` row is written.
+ */
+export interface AdministrativeConsent {
+  /** The client's resolved first-party profile, the waiver's basis. */
+  readonly basis: FirstPartyProfile;
+  /** The scopes it covers: the requested ones, already in the client's allowlist. */
+  readonly scopes: readonly string[];
+}
+
+/**
+ * A first-party client's administrative consent set (ADR-017 Decision 4):
+ * the requested scopes, already filtered by the client's allowlist, minus the
+ * dangerous ones (`isDangerousScope`). Empty for a client whose first-party
+ * profile does not resolve (`resolveFirstPartyProfile`, fail-closed).
+ *
+ * `/oauth/authorize` passes it to `evaluateStepUp` as a first-party client's
+ * prior-consent scopes, so a dangerous scope is always an elevation there:
+ * the consent screen shows it, and a stored consent does not hide it.
+ */
+export function administrativeConsentScopes(
+  client: FirstPartyClientFields,
+  requestedScopes: readonly string[]
+): string[] {
+  if (resolveFirstPartyProfile(client) === null) return [];
+  return requestedScopes.filter((scope) => !isDangerousScope(scope));
+}
+
+/**
+ * The administrative consent that covers this request, or `null` (ADR-017
+ * Decision 9). It covers the request when the client's first-party profile
+ * resolves and no requested scope is dangerous: the administrative consent
+ * set is then the whole request. Nothing else widens it: any client whose
+ * profile does not resolve (no profile, a row that breaks the profile's
+ * rules, a policy that does not parse) gets `null`, and a dangerous scope
+ * gets `null` for every client, so the screen shows it.
+ *
+ * `prompt=consent` is not read here: `evaluateStepUp` turns it into
+ * `requiresConsent`, which every caller checks before it skips the screen.
+ * RFC 8707 resources need no stored grant either: the operator vouched for
+ * the client that names them, and a QAuth API audience the client does not
+ * list was refused before the consent decision.
+ */
+export function administrativeConsentFor(
+  client: FirstPartyClientFields,
+  requestedScopes: readonly string[]
+): AdministrativeConsent | null {
+  const profile = resolveFirstPartyProfile(client);
+  if (profile === null) return null;
+  if (requestedScopes.some(isDangerousScope)) return null;
+  return { basis: profile.profile, scopes: [...requestedScopes] };
+}
+
+/**
+ * Whether every `/oauth/authorize` request of this client asks for a fresh
+ * login as `prompt=login` does (ADR-017 Decision 9): its first-party profile
+ * resolves to `native_backend`. Passed to `evaluateStepUp` as
+ * `forceFreshLogin`, whatever the request's own `prompt` says, since the
+ * backend builds that URL and QAuth does not rely on the parameter arriving
+ * intact. The browser leg of a native app then completes only on a sign-in
+ * within the window `prompt=login` allows, never on an older live session.
+ */
+export function forcesLoginPrompt(client: FirstPartyClientFields): boolean {
+  return resolveFirstPartyProfile(client)?.profile === 'native_backend';
+}
+
+/**
  * Whether the consent screen can be skipped for this (user, client) given
  * the existing consent row and the scopes and RFC 8707 resources being
  * requested now.
  *
- * Returns false when:
+ * Returns true, whatever the consent row, when an administrative consent
+ * covers the request ({@link administrativeConsentFor}): an operator-flagged
+ * first-party client asking for no dangerous scope (ADR-017 Decision 9).
+ * That is the one condition beside a stored consent.
+ *
+ * Otherwise returns false when:
  *   - the client is an AI agent (fail-closed `isAgentClient`): every
  *     authorization of an agent shows the screen, which names it as an agent
  *     and says how long it may keep working, even when a stored consent
  *     covers the request (ADR-015 Decision 11, ADR-014 §11)
+ *   - the client's first-party profile resolves and a requested scope is
+ *     dangerous (`isDangerousScope`): such a client sees the screen for it
+ *     even when a stored consent covers the request (ADR-017 Decision 9).
+ *     `/oauth/authorize` reaches the same answer through `evaluateStepUp`,
+ *     whose prior-consent scopes for such a client leave dangerous ones out;
+ *     this keeps it for a caller that asks only this question
  *   - no active consent row exists
  *   - the requested scopes are not a subset of the granted ones
  *   - the scopes were not granted for every requested resource
@@ -129,6 +219,10 @@ export function canSkipConsent(
   requestedResources: readonly string[]
 ): boolean {
   if (isAgentClient(client)) return false;
+  if (resolveFirstPartyProfile(client) !== null && requestedScopes.some(isDangerousScope)) {
+    return false;
+  }
+  if (administrativeConsentFor(client, requestedScopes) !== null) return true;
   if (!consent) return false;
   if (consent.revokedAt !== null) return false;
   if (isDynamicClientWithinBadgeWindow(client)) return false;

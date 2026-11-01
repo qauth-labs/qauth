@@ -13,12 +13,6 @@ vi.mock('../../../config/env', () => ({
   env: {
     VERIFICATION_RATE_LIMIT: 10,
     VERIFICATION_RATE_WINDOW: 900,
-    // The login routes' failed-login lockout, which the password check here
-    // shares (UZ1HDHZP).
-    FAILED_LOGIN_TRACKING_ENABLED: true,
-    FAILED_LOGIN_MAX_ATTEMPTS: 5,
-    FAILED_LOGIN_WINDOW: 900,
-    FAILED_LOGIN_LOCKOUT_DURATION: 900,
   },
 }));
 
@@ -26,6 +20,7 @@ import {
   createFakePasswordAttempts,
   type FakePasswordAttempts,
 } from '../../../testing/password-attempts';
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import verifyRoute from './verify';
@@ -146,6 +141,10 @@ function createFastifyStub() {
     redis: createMemoryRedis(),
     // The per-account failure ladder (#615): every attempt reserved by default.
     passwordAttempts: createFakePasswordAttempts(),
+    // The login routes' failed-login lockout, which the password check here
+    // shares (UZ1HDHZP), under the realm's brute-force policy (#528): the
+    // seeded default, 5 failures in 900 s lock for 900 s.
+    policyStore: testPolicyStore(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx };

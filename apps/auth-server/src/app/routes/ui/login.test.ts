@@ -32,9 +32,9 @@ vi.mock('../../helpers/failed-login', () => ({
   resetFailedAttempts: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { env } from '../../../config/env';
 import { createBrowserSessionFixture, sessionCookie } from '../../../testing/browser-sessions';
 import { createFakePasswordAttempts } from '../../../testing/password-attempts';
+import { type TestPolicyOverrides, testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import {
@@ -115,8 +115,8 @@ function withRealm(handler: RouteHandler): RouteHandler {
 
 function makeFastify() {
   const ctx: TestContext = {};
-  // The session service (#488) and the Redis that holds the per-user index of
-  // browser sessions `/auth/logout` ends and the session's side record.
+  // The session service (#488) and the Redis that holds the session's side
+  // record.
   const sessions = createBrowserSessionFixture();
   const fastify: any = {
     withTypeProvider: () => ({
@@ -152,6 +152,11 @@ function makeFastify() {
     sessionService: sessions.service,
     signer: sessions.signer,
     redis: sessions.redis,
+    // The realm's account policies (#528), read from the request's realm
+    // row: the seeded defaults, but with the verified-account gate off, so
+    // the credential-flow tests can sign in any fixture; the gate tests turn
+    // it on.
+    policyStore: testPolicyStore({}, { accounts: { requireVerifiedAccount: false } }),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     // The per-account failure ladder (#615): every attempt reserved.
     passwordAttempts: createFakePasswordAttempts(),
@@ -318,8 +323,6 @@ describe('UI /ui/login — CSRF defence', () => {
     });
     // The cookie names the new session.
     expect(sessionCookieSet(state.setCookies)).toBe(await sessionCookie(fastify, session));
-    // The new session is recorded under its user, so `/auth/logout` can end it.
-    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([session.sid]));
 
     // The sign-in is recorded for its user, without the session id or the
     // return path.
@@ -420,6 +423,8 @@ describe('UI /ui/login — CSRF defence', () => {
 
   describe("POST shares the API login's failed-login lockout and email-verified gate", () => {
     const LOCKOUT_IDS = [`email:${hashEmail('user@example.com')}`, 'ip:127.0.0.1'];
+    /** The realm's brute-force policy (#528): the seeded default. */
+    const BRUTE_FORCE = { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 };
 
     async function postLogin(options: {
       verifies: boolean;
@@ -427,8 +432,16 @@ describe('UI /ui/login — CSRF defence', () => {
       ip?: string;
       /** The realm of the host the request named; {@link REALM} when absent. */
       realm?: RealmRow;
+      /** That realm's policies (#528); the stub's, gate off, when absent. */
+      policies?: TestPolicyOverrides;
     }) {
       const { fastify, ctx, sessions } = makeFastify();
+      if (options.policies !== undefined) {
+        fastify.policyStore = testPolicyStore(
+          {},
+          options.policies
+        ) as unknown as FastifyInstance['policyStore'];
+      }
       await loginRoute(fastify);
       const getReply = createReply();
       // The login page of the same realm: its CSRF cookie is bound to it (#493).
@@ -473,7 +486,6 @@ describe('UI /ui/login — CSRF defence', () => {
       vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
       vi.mocked(recordSuccessfulLogin).mockClear();
       vi.mocked(resetFailedAttempts).mockClear();
-      (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
     });
 
     it('refuses a locked-out identifier (429) before any credential check', async () => {
@@ -481,7 +493,12 @@ describe('UI /ui/login — CSRF defence', () => {
 
       const { fastify, state, sessions } = await postLogin({ verifies: true });
 
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(
+        expect.anything(),
+        REALM.id,
+        BRUTE_FORCE,
+        LOCKOUT_IDS
+      );
       expect(state.statusCode).toBe(429);
       expect(state.headers['Retry-After']).toBe('120');
       expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
@@ -499,7 +516,12 @@ describe('UI /ui/login — CSRF defence', () => {
       const { fastify, state } = await postLogin({ verifies: false });
 
       expect(state.statusCode).toBe(401);
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(
+        expect.anything(),
+        REALM.id,
+        BRUTE_FORCE,
+        LOCKOUT_IDS
+      );
       // Counted on the way in, not after argon2 has returned, so concurrent
       // guesses cannot outrun the counter (ROIQJSAT); a failure leaves it counted.
       expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
@@ -517,13 +539,18 @@ describe('UI /ui/login — CSRF defence', () => {
         'password',
         'user@example.com'
       );
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), 'realm-2', LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(
+        expect.anything(),
+        'realm-2',
+        BRUTE_FORCE,
+        LOCKOUT_IDS
+      );
     });
 
     it('keys the ip: identifier on the /64 of an IPv6 client', async () => {
       await postLogin({ verifies: false, ip: '2001:db8:1:2:aaaa:bbbb:cccc:7' });
 
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, [
+      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, BRUTE_FORCE, [
         LOCKOUT_IDS[0],
         'ip:2001:db8:1:2::',
       ]);
@@ -541,14 +568,15 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(recordSuccessfulLogin).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         REALM.id,
+        BRUTE_FORCE,
         attempt,
         [LOCKOUT_IDS[0]]
       );
       expect(resetFailedAttempts).not.toHaveBeenCalled();
     });
 
-    it('refuses an unverified credential exactly as a wrong password when REQUIRE_VERIFIED_ACCOUNT is on (ANT-2026-SPEMY9GU)', async () => {
-      (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = true;
+    it("refuses an unverified credential exactly as a wrong password when the realm's verified-account gate is on (ANT-2026-SPEMY9GU, #528)", async () => {
+      const gateOn: TestPolicyOverrides = { accounts: { requireVerifiedAccount: true } };
 
       /** What the browser sees, with the per-run CSRF token masked. */
       const seen = (state: Awaited<ReturnType<typeof postLogin>>['state']) => ({
@@ -565,12 +593,12 @@ describe('UI /ui/login — CSRF defence', () => {
 
       // A just-registered FREE address, signed in with the password its
       // registrant chose: right password, unverified account.
-      const fresh = await postLogin({ verifies: true, emailVerified: false });
+      const fresh = await postLogin({ verifies: true, emailVerified: false, policies: gateOn });
       const freshFloorFirst = floorFirst();
       const freshEvents = [...emitUserEventMock.mock.calls];
       // The same attempt on an address that was already registered: wrong
       // password for the owner's verified account.
-      const taken = await postLogin({ verifies: false, emailVerified: true });
+      const taken = await postLogin({ verifies: false, emailVerified: true, policies: gateOn });
 
       expect(seen(fresh.state)).toEqual(seen(taken.state));
       expect(fresh.state.statusCode).toBe(401);
@@ -581,7 +609,12 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(floorFirst()).toBe(true);
       expect(fresh.sessions.service.create).not.toHaveBeenCalled();
       // Stays counted as a failed attempt.
-      expect(registerLoginAttempt).toHaveBeenCalledWith(expect.anything(), REALM.id, LOCKOUT_IDS);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(
+        expect.anything(),
+        REALM.id,
+        BRUTE_FORCE,
+        LOCKOUT_IDS
+      );
       expect(recordSuccessfulLogin).not.toHaveBeenCalled();
       expect(resetFailedAttempts).not.toHaveBeenCalled();
       // The reason is kept where only operators read it, with the unverified
@@ -603,11 +636,43 @@ describe('UI /ui/login — CSRF defence', () => {
       expect(emitUserEventMock).toHaveBeenCalledTimes(2);
     });
 
-    it('still signs in an unverified credential when an operator turns REQUIRE_VERIFIED_ACCOUNT off', async () => {
-      const { state, sessions } = await postLogin({ verifies: true, emailVerified: false });
+    it('still signs in an unverified credential in a realm whose verified-account gate is off (#528)', async () => {
+      const { state, sessions } = await postLogin({
+        verifies: true,
+        emailVerified: false,
+        policies: { accounts: { requireVerifiedAccount: false } },
+      });
 
       expect(state.statusCode).toBe(302);
       expect(sessions.service.create).toHaveBeenCalledOnce();
+    });
+
+    it("refuses without naming verification in a realm whose gate is off: the text follows the realm's gate (#528)", async () => {
+      const { state } = await postLogin({
+        verifies: false,
+        policies: { accounts: { requireVerifiedAccount: false } },
+      });
+
+      expect(state.statusCode).toBe(401);
+      expect(String(state.body)).toContain('Invalid email or password.');
+      expect(String(state.body)).not.toContain('confirm your email address');
+    });
+
+    it("counts the attempt under the brute-force policy of the request's realm, read from its row (#528)", async () => {
+      const realm = testRealm({ id: 'realm-2' });
+      const { fastify } = await postLogin({
+        verifies: false,
+        realm,
+        policies: { bruteForce: { maxAttempts: 2, lockoutSeconds: 60 } },
+      });
+
+      expect(fastify.policyStore.ofRealm).toHaveBeenCalledWith(realm);
+      expect(registerLoginAttempt).toHaveBeenCalledWith(
+        expect.anything(),
+        'realm-2',
+        { enabled: true, maxAttempts: 2, windowSeconds: 900, lockoutSeconds: 60 },
+        LOCKOUT_IDS
+      );
     });
   });
 
@@ -828,7 +893,7 @@ describe('UI /ui/login — the per-account failure ladder (#615)', () => {
 
   async function setup(options: { verifies: boolean; credential?: Record<string, unknown> }) {
     vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
-    (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
+    // makeFastify's realm policies leave the verified-account gate off (#528).
     const { fastify, ctx, sessions } = makeFastify();
     await loginRoute(fastify);
     const getReply = createReply();

@@ -54,15 +54,16 @@ scope:
     - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer, an endpoint host)
       give one answer and are drawn as one exit'
     - 'with RATE_LIMIT_ENABLED=false neither rate limit is applied'
-    - 'with FAILED_LOGIN_TRACKING_ENABLED=false no attempt is counted and no address is ever locked out; a cache
-      failure while an attempt is counted fails open: the attempt is let through, and what was counted stays counted'
-    - 'an attempt that reaches the threshold together with another one, which armed the lockout first, was counted on
+    - 'in a realm whose brute-force policy is off (bruteForce.enabled false, which FAILED_LOGIN_TRACKING_ENABLED=false
+      seeds in a new realm, #528) no attempt is counted and no address is ever locked out; a cache failure while an
+      attempt is counted fails open: the attempt is let through, and what was counted stays counted'
+    - "an attempt that reaches the threshold together with another one, which armed the lockout first, was counted on
       its way in: it is refused as locked out and gives its count back best effort, so a cache failure at that moment
-      leaves it counted; its Retry-After is then the full FAILED_LOGIN_LOCKOUT_DURATION, not the seconds left'
-    - 'LOGIN_RATE_LIMIT must stay above FAILED_LOGIN_MAX_ATTEMPTS (the defaults are 5 and 5) for one client address to
-      meet the lockout: at or below it, the login limit refuses that address with its 429 by the request after its
-      last counted failure, and the lockout page is never shown to it, though the lockout still holds against
-      attempts on the same account from other addresses. binding.yaml sets the limit above the threshold'
+      leaves it counted; its Retry-After is then the realm's full bruteForce.lockoutSeconds, not the seconds left"
+    - "LOGIN_RATE_LIMIT must stay above the realm's bruteForce.maxAttempts (the defaults are 5 and 5) for one client
+      address to meet the lockout: at or below it, the login limit refuses that address with its 429 by the request
+      after its last counted failure, and the lockout page is never shown to it, though the lockout still holds against
+      attempts on the same account from other addresses. binding.yaml sets the limit above the threshold"
     - 'a password credential whose credential_data is malformed, or whose provider identity disagrees with its row,
       answers like a wrong password and logs an error; one whose users row is missing answers like a disabled user
       and logs an error. Neither happens in normal operation'
@@ -124,8 +125,9 @@ context:
         the POST carries no login-CSRF cookie, one whose signature does not verify, or one whose value is not the
         posted csrf_token
       lockedOut: >-
-        the address being signed in to, or the client address, is locked out: FAILED_LOGIN_MAX_ATTEMPTS attempts were
-        counted on it within FAILED_LOGIN_WINDOW seconds, and FAILED_LOGIN_LOCKOUT_DURATION seconds have not passed;
+        the address being signed in to, or the client address, is locked out: the realm's bruteForce.maxAttempts
+        attempts were counted on it within its bruteForce.windowSeconds, and its bruteForce.lockoutSeconds have not
+        passed (#528: the realm's policies, which the FAILED_LOGIN_* keys seed in a new realm);
         or this attempt reached the threshold together with another one, which armed the lockout first
       ladderUnavailable: "the failure ladder's store (Redis) or the realm's cookie key cannot be read in time"
       ladderWait: >-
@@ -151,8 +153,12 @@ context:
     values: [true, false]
     initial: any
     say:
-      'true': 'REQUIRE_VERIFIED_ACCOUNT is on: unset, blank or true, the default'
-      'false': 'REQUIRE_VERIFIED_ACCOUNT=false, or its deprecated name REQUIRE_EMAIL_VERIFIED=false'
+      'true': >-
+        the realm's accounts.requireVerifiedAccount is on, the default (#528); REQUIRE_VERIFIED_ACCOUNT unset, blank
+        or true seeds it so in a new realm
+      'false': >-
+        the realm's accounts.requireVerifiedAccount is off; REQUIRE_VERIFIED_ACCOUNT=false, or its deprecated name
+        REQUIRE_EMAIL_VERIFIED=false, seeds it so in a new realm
   returnTo:
     values: [resume, path, unsafe]
     initial: any
@@ -171,7 +177,7 @@ context:
         and the parked value is an /oauth/authorize URL
       spent: >-
         the handle, of 1 to 100 characters, is not 43 base64url characters, or names no parked request: unknown,
-        expired or already resumed; or its parked value is not an /oauth/authorize URL; or the store cannot be read
+        expired or already resumed; or its parked value is not an /oauth/authorize URL
   attemptCounted: { values: [false, true], initial: false }
   # the attempt was counted on the account's failure ladder (#615)
   attemptReserved: { values: [false, true], initial: false }
@@ -220,6 +226,8 @@ failures:
   creatingSession: { from: browserSessionStore, server: [server_error] }
   updatingLastLogin: { from: User.updateLastLogin, server: [server_error] }
   recordingSignIn: { from: eventStore, server: [server_error] }
+  # consumePendingAuthorization swallows a store error, and the resume handler answers the spent handle's 400 page
+  consumingHandle: { from: pendingAuthorizationStore, store: [bad_request] }
 
 # The main story: /oauth/authorize sent a browser with no session here; the user signs in with a verified account, and
 # the browser goes back to the authorization request it came from.
@@ -237,18 +245,18 @@ initial: idle
 states:
   idle:
     title: Wait for a sign-in request
-    source: apps/auth-server/src/app/routes/ui/login.ts:226
+    source: apps/auth-server/src/app/routes/ui/login.ts:227
     on:
       SHOW:
         target: showResolvingRealm
         say: >-
           GET /ui/login arrives: sent by /oauth/authorize or the consent screen with return_to=/ui/resume/<handle>, or
           opened directly
-        source: apps/auth-server/src/app/routes/ui/login.ts:227
+        source: apps/auth-server/src/app/routes/ui/login.ts:228
       SUBMIT:
         target: submitResolvingRealm
         say: 'POST /ui/login arrives for a page this walk did not render'
-        source: apps/auth-server/src/app/routes/ui/login.ts:274
+        source: apps/auth-server/src/app/routes/ui/login.ts:275
       RESUME:
         target: resumeResolvingRealm
         say: 'GET /ui/resume/<handle> arrives for a handle this walk did not sign in for'
@@ -293,7 +301,7 @@ states:
   showValidatingQuery:
     title: Check the query against the page's schema
     description: return_to is optional, and one string. A repeated return_to arrives as a list, which the schema refuses.
-    source: apps/auth-server/src/app/routes/ui/login.ts:238
+    source: apps/auth-server/src/app/routes/ui/login.ts:239
     always:
       - guard: inputInvalid
         target: validation_error.query
@@ -301,7 +309,7 @@ states:
         source: apps/auth-server/src/app/plugins/error-handler.ts:264
       - target: showReadingCsrfCookie
         say: 'the query matches the schema'
-        source: apps/auth-server/src/app/routes/ui/login.ts:246
+        source: apps/auth-server/src/app/routes/ui/login.ts:247
 
   showReadingCsrfCookie:
     title: Read the login-CSRF cookie
@@ -309,7 +317,7 @@ states:
       A login-CSRF cookie whose signature verifies is reused, so a page refreshed or opened in a second tab keeps
       matching the cookie; otherwise a new value of 32 random bytes is minted and set. return_to is checked here too,
       and an unsafe one is replaced by / on the page.
-    source: apps/auth-server/src/app/routes/ui/login.ts:251
+    source: apps/auth-server/src/app/routes/ui/login.ts:252
     always:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
@@ -317,7 +325,7 @@ states:
         source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - target: rendered
         say: 'the page has its CSRF value'
-        source: apps/auth-server/src/app/routes/ui/login.ts:256
+        source: apps/auth-server/src/app/routes/ui/login.ts:257
 
   rendered:
     title: Show the sign-in page
@@ -326,7 +334,7 @@ states:
       The same value is in the signed cookie, as <kid>.<value>.<mac>: the HMAC-SHA256, under the realm's cookie key
       that kid names, of the cookie's name, the realm id, the kid and the value, which a page of another site can
       neither read nor forge.
-    source: apps/auth-server/src/app/routes/ui/login.ts:263
+    source: apps/auth-server/src/app/routes/ui/login.ts:264
     response:
       status: 200
       headers:
@@ -351,7 +359,7 @@ states:
       SUBMIT:
         target: submitResolvingRealm
         say: 'the user types the address and the password, and the browser posts the form'
-        source: apps/auth-server/src/app/routes/ui/login.ts:175
+        source: apps/auth-server/src/app/routes/ui/login.ts:176
 
   # POST /ui/login
 
@@ -378,7 +386,7 @@ states:
       LOGIN_RATE_LIMIT requests per LOGIN_RATE_WINDOW seconds, for each client address and realm, whatever the
       request ends in. This is the limiter, not the lockout: it counts requests, before the form is read, and its
       refusal is the error handler's problem document, not the page.
-    source: apps/auth-server/src/app/routes/ui/login.ts:286
+    source: apps/auth-server/src/app/routes/ui/login.ts:287
     always:
       - guard: rateLimited
         target: too_many_requests.login_limit
@@ -386,7 +394,7 @@ states:
         source: apps/auth-server/src/app/plugins/rate-limit.ts:25
       - target: submitValidatingForm
         say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/ui/login.ts:286
+        source: apps/auth-server/src/app/routes/ui/login.ts:287
 
   submitValidatingForm:
     title: Check the form against the login form schema
@@ -394,7 +402,7 @@ states:
       loginFormSchema in apps/auth-server/src/app/schemas/auth.ts: email of 1 to 254 characters, with no format check,
       so that the refusal page can show what was typed; a password of at least one character, bounded; return_to
       optional; csrf_token of at least one character.
-    source: apps/auth-server/src/app/routes/ui/login.ts:282
+    source: apps/auth-server/src/app/routes/ui/login.ts:283
     always:
       - guard: inputInvalid
         target: validation_error.form
@@ -407,7 +415,7 @@ states:
   readingCsrfCookie:
     title: Read the login-CSRF cookie
     description: return_to is checked here too, and an unsafe one becomes /.
-    source: apps/auth-server/src/app/routes/ui/login.ts:303
+    source: apps/auth-server/src/app/routes/ui/login.ts:304
     always:
       - guard: cookieMalformed
         target: server_error.malformed_cookie
@@ -415,7 +423,7 @@ states:
         source: apps/auth-server/src/app/helpers/session-cookie.ts:337
       - target: checkingCsrf
         say: 'the cookie is absent or decodes'
-        source: apps/auth-server/src/app/routes/ui/login.ts:303
+        source: apps/auth-server/src/app/routes/ui/login.ts:304
 
   checkingCsrf:
     title: Check the posted CSRF value against the cookie
@@ -423,15 +431,15 @@ states:
       The signed double-submit defence against login CSRF: the cookie's signature, then a timing-safe comparison of
       its value with csrf_token. It runs before anything reads the database, so a forged post never reaches a
       password check; request.csrf_rejected is recorded.
-    source: apps/auth-server/src/app/routes/ui/login.ts:308
+    source: apps/auth-server/src/app/routes/ui/login.ts:309
     always:
       - guard: csrfMismatch
         target: forbidden.csrf_mismatch
         say: 'the cookie is missing, forged or holds another value'
-        source: apps/auth-server/src/app/routes/ui/login.ts:308
+        source: apps/auth-server/src/app/routes/ui/login.ts:309
       - target: checkingLockout
         say: "the posted value is the cookie's"
-        source: apps/auth-server/src/app/routes/ui/login.ts:333
+        source: apps/auth-server/src/app/routes/ui/login.ts:334
 
   checkingLockout:
     title: Refuse a locked-out address, else count the attempt
@@ -439,9 +447,9 @@ states:
       Two identifiers, both kept per realm and shared with POST /auth/login: the hash of the normalized address, and
       the client address (an IPv6 one by its /64). A locked-out identifier refuses the attempt before anything is
       counted. Otherwise the attempt is counted on both before the password is looked at, and the attempt that
-      reaches FAILED_LOGIN_MAX_ATTEMPTS arms the lockout on its way in, so that guesses sent at once cannot outrun the
-      counter.
-    source: apps/auth-server/src/app/helpers/failed-login.ts:83
+      reaches the realm's bruteForce.maxAttempts arms the lockout on its way in, so that guesses sent at once cannot
+      outrun the counter.
+    source: apps/auth-server/src/app/helpers/failed-login.ts:94
     always:
       - guard: lockedOut
         target: too_many_requests.locked_out
@@ -449,11 +457,11 @@ states:
         say: >-
           an identifier is locked out; the floor is waited out, then user.sign_in_failed is recorded with the reason
           locked_out
-        source: apps/auth-server/src/app/routes/ui/login.ts:364
+        source: apps/auth-server/src/app/routes/ui/login.ts:373
       - target: reservingAttempt
         effect: [countAttempt]
         say: 'the attempt is counted on the address being signed in to and on the client address'
-        source: apps/auth-server/src/app/helpers/failed-login.ts:104
+        source: apps/auth-server/src/app/helpers/failed-login.ts:116
 
   reservingAttempt:
     title: Reserve the attempt on the account's failure ladder
@@ -465,7 +473,7 @@ states:
       time. An address that signed in to the account in the last 30 days skips the wait and is still counted. Any
       error of the store, or of the cookie key the HMACs are derived from, refuses the attempt before a credential is
       read.
-    source: apps/auth-server/src/app/routes/ui/login.ts:386
+    source: apps/auth-server/src/app/routes/ui/login.ts:395
     always:
       - guard: ladderUnavailable
         target: service_unavailable.ladder
@@ -473,14 +481,14 @@ states:
         say: >-
           the ladder cannot answer; the floor is waited out, then user.sign_in_failed is recorded with the reason
           internal_error
-        source: apps/auth-server/src/app/routes/ui/login.ts:392
+        source: apps/auth-server/src/app/routes/ui/login.ts:401
       - guard: ladderWait
         target: too_many_requests.ladder_wait
         effect: [waitFloor]
         say: >-
           the account is inside its wait; the floor is waited out, then user.sign_in_failed is recorded with the
           reason locked_out
-        source: apps/auth-server/src/app/routes/ui/login.ts:404
+        source: apps/auth-server/src/app/routes/ui/login.ts:413
       - target: checkingPassword
         effect: [reserveAttempt]
         say: "the attempt is counted on the account's ladder, and the next wait set"
@@ -491,7 +499,7 @@ states:
     description: >-
       The password credential of the normalized address in this realm, then Argon2id against its hash. With no
       credential the password is verified against a decoy hash, so every outcome costs one verification.
-    source: apps/auth-server/src/app/routes/ui/login.ts:418
+    source: apps/auth-server/src/app/routes/ui/login.ts:427
     invoke: { action: UserCredential.findByRealmProviderSub }
     on:
       DONE:
@@ -516,22 +524,23 @@ states:
   checkingVerified:
     title: Apply the verified-account gate
     description: >-
-      F-08: under REQUIRE_VERIFIED_ACCOUNT, a password account is used only once its address is confirmed. It is read
-      from the credential, before the users row, so an unconfirmed disabled account is refused here.
-    source: apps/auth-server/src/app/routes/ui/login.ts:431
+      F-08: under the realm's accounts.requireVerifiedAccount (#528), a password account is used only once its address
+      is confirmed. It is read from the credential, before the users row, so an unconfirmed disabled account is refused
+      here.
+    source: apps/auth-server/src/app/routes/ui/login.ts:441
     always:
       - guard: unverifiedUnderTheGate
         target: invalid_credentials.email_not_verified
         effect: [waitFloor]
         say: 'the address is not confirmed, and the gate is on; the floor is waited out'
-        source: apps/auth-server/src/app/routes/ui/login.ts:447
+        source: apps/auth-server/src/app/routes/ui/login.ts:457
       - target: findingUser
         say: 'the address is confirmed, or the gate is off'
-        source: apps/auth-server/src/app/routes/ui/login.ts:434
+        source: apps/auth-server/src/app/routes/ui/login.ts:444
 
   findingUser:
     title: Read the user, for its enabled flag
-    source: apps/auth-server/src/app/routes/ui/login.ts:436
+    source: apps/auth-server/src/app/routes/ui/login.ts:446
     invoke: { action: User.findById }
     on:
       DONE:
@@ -539,10 +548,10 @@ states:
           target: invalid_credentials.account_disabled
           effect: [waitFloor]
           say: 'the user is disabled; the floor is waited out'
-          source: apps/auth-server/src/app/routes/ui/login.ts:447
+          source: apps/auth-server/src/app/routes/ui/login.ts:457
         - target: clearingFailures
           say: 'the user is enabled'
-          source: apps/auth-server/src/app/routes/ui/login.ts:484
+          source: apps/auth-server/src/app/routes/ui/login.ts:494
       FAIL.server:
         target: server_error.store
         say: 'the database fails'
@@ -557,27 +566,27 @@ states:
       address. On the failure ladder the password's counter is cleared, the client address becomes known to the
       account for 30 days, and a disabled mark the unarmed hard action ignored is cleared. Best effort: a cache
       failure here is logged and ignored.
-    source: apps/auth-server/src/app/helpers/failed-login.ts:152
+    source: apps/auth-server/src/app/helpers/failed-login.ts:165
     always:
       - target: creatingSession
         say: 'the attempt is settled'
-        source: apps/auth-server/src/app/routes/ui/login.ts:493
+        source: apps/auth-server/src/app/routes/ui/login.ts:505
 
   creatingSession:
     title: Create a new browser session
     description: >-
       Always a new session with a new sid, whatever cookie the browser sent: the session-fixation defence. The
-      session service stores it in Postgres with the request's address and User-Agent and the sign-in time, records it
-      under the user for /auth/logout, and keeps the signed-in address in the session's side record for the consent
-      screen.
-    source: apps/auth-server/src/app/routes/ui/login.ts:493
+      session service stores it in Postgres with the request's address and User-Agent and the sign-in time, where
+      /auth/logout finds it by its user (#912), and the signed-in address is kept in the session's side record for the
+      consent screen.
+    source: apps/auth-server/src/app/routes/ui/login.ts:505
     invoke: { external: browserSessionStore }
     on:
       DONE:
         target: updatingLastLogin
         effect: [createSession]
         say: 'the session is created, with a new sid; no cookie the request carried is read'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:60
+        source: apps/auth-server/src/app/helpers/browser-session.ts:59
       FAIL.server:
         target: server_error.store
         say: 'the session store fails'
@@ -585,7 +594,7 @@ states:
 
   updatingLastLogin:
     title: Record the time of the sign-in on the user
-    source: apps/auth-server/src/app/routes/ui/login.ts:500
+    source: apps/auth-server/src/app/routes/ui/login.ts:512
     invoke: { action: User.updateLastLogin }
     on:
       DONE:
@@ -600,7 +609,7 @@ states:
   recordingSignIn:
     title: Record the sign-in
     description: The event urn:qauth:event:user.signed_in:v1-rc.0, with the method password.
-    source: apps/auth-server/src/app/routes/ui/login.ts:501
+    source: apps/auth-server/src/app/routes/ui/login.ts:513
     invoke: { external: eventStore }
     on:
       DONE:
@@ -608,18 +617,18 @@ states:
           target: redirectedToResume
           effect: [clearCsrfCookie]
           say: 'return_to resumes an authorization request; the session cookie is set and the login-CSRF one cleared'
-          source: apps/auth-server/src/app/routes/ui/login.ts:514
+          source: apps/auth-server/src/app/routes/ui/login.ts:526
         - guard: pathReturn
           target: signed_in
           effect: [clearCsrfCookie]
           say: 'return_to is a same-origin path; the session cookie is set and the login-CSRF one cleared'
-          source: apps/auth-server/src/app/routes/ui/login.ts:514
+          source: apps/auth-server/src/app/routes/ui/login.ts:526
         - target: signed_in.to_root
           effect: [clearCsrfCookie]
           say: >-
             return_to is absent or unsafe, so the browser goes to /; the session cookie is set and the login-CSRF one
             cleared
-          source: apps/auth-server/src/app/routes/ui/login.ts:296
+          source: apps/auth-server/src/app/routes/ui/login.ts:297
       FAIL.server:
         target: server_error.store
         say: 'the event store fails'
@@ -630,7 +639,7 @@ states:
     description: >-
       The success answer of the POST, as for signed_in, with /ui/resume/<handle> as its Location. The browser follows
       it at once.
-    source: apps/auth-server/src/app/routes/ui/login.ts:514
+    source: apps/auth-server/src/app/routes/ui/login.ts:526
     response:
       status: 302
       headers:
@@ -699,6 +708,10 @@ states:
           effect: [burnHandle]
           say: 'the handle is deleted, and its authorize URL read back'
           source: apps/auth-server/src/app/helpers/pending-authorization.ts:254
+      FAIL.store:
+        target: bad_request.handle_spent
+        say: 'the store cannot be read or the handle not deleted, which is answered as a spent handle, never a 500'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:255
 
   # Exits
 
@@ -719,7 +732,7 @@ states:
     type: final
     title: Send the signed-in browser to return_to
     description: The session cookie is set, and the login-CSRF cookie is cleared now that the sign-in succeeded.
-    source: apps/auth-server/src/app/routes/ui/login.ts:514
+    source: apps/auth-server/src/app/routes/ui/login.ts:526
     response:
       status: 302
       headers:
@@ -738,7 +751,7 @@ states:
       return_to was absent, or isSafeReturnTo refused it: an absolute URL, a protocol-relative one (//host or /\host),
       one with a character the URL parser drops, one that resolves to another origin, or one over 16 KiB. QAuth is
       not an open redirector.
-    source: apps/auth-server/src/app/routes/ui/login.ts:296
+    source: apps/auth-server/src/app/routes/ui/login.ts:297
     response:
       status: 302
       headers:
@@ -756,7 +769,7 @@ states:
     description: >-
       The form is shown again with a new CSRF value, set in a new cookie, so the user can retry; the typed address is
       kept and the password is not. No password is checked and nothing is counted.
-    source: apps/auth-server/src/app/routes/ui/login.ts:320
+    source: apps/auth-server/src/app/routes/ui/login.ts:321
     response:
       status: 403
       headers:
@@ -776,15 +789,15 @@ states:
       Not counted, and no password is checked, even the right one. The answer waits out the 500 ms floor that every
       refused credential waits, so it takes as long as a wrong password. Distinct from the login limit, which is the
       rate limiter's problem document.
-    source: apps/auth-server/src/app/routes/ui/login.ts:376
+    source: apps/auth-server/src/app/routes/ui/login.ts:385
     response:
       status: 429
       headers:
         Content-Type: text/html; charset=utf-8
         Cache-Control: no-store
         Retry-After: >-
-          the seconds left on the lockout; the full FAILED_LOGIN_LOCKOUT_DURATION for an attempt that lost the race to
-          arm it
+          the seconds left on the lockout; the realm's full bruteForce.lockoutSeconds for an attempt that lost the race
+          to arm it
       body: >-
         the sign-in form again, with the error "Too many failed sign-in attempts. Please try again later.", the typed
         address, return_to (/ when unsafe) and the CSRF value of the cookie, which stays set
@@ -795,7 +808,7 @@ states:
     description: >-
       Not counted, and no password is checked, even the right one; the answer waits out the 500 ms floor. The page is
       the lockout's: it does not say which of the two refused the attempt.
-    source: apps/auth-server/src/app/routes/ui/login.ts:413
+    source: apps/auth-server/src/app/routes/ui/login.ts:422
     response:
       status: 429
       headers:
@@ -812,7 +825,7 @@ states:
     description: >-
       Fail closed: no credential is read and no password checked. The answer waits out the 500 ms floor, and the
       error is logged for operators.
-    source: apps/auth-server/src/app/routes/ui/login.ts:402
+    source: apps/auth-server/src/app/routes/ui/login.ts:411
     response:
       status: 503
       headers:
@@ -829,7 +842,7 @@ states:
     description: >-
       user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
       and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:478
+    source: apps/auth-server/src/app/routes/ui/login.ts:488
     response: &invalidCredentials
       status: 401
       headers:
@@ -837,8 +850,8 @@ states:
         Cache-Control: no-store
       body: >-
         the sign-in form again, with the typed address, return_to (/ when unsafe), the CSRF value of the cookie, which
-        stays set, and the error "Invalid email or password." While REQUIRE_VERIFIED_ACCOUNT is on, the error goes on:
-        "If you have just registered, confirm your email address first with the link we sent you."
+        stays set, and the error "Invalid email or password." While the realm's accounts.requireVerifiedAccount is on,
+        the error goes on: "If you have just registered, confirm your email address first with the link we sent you."
 
   invalid_credentials.wrong_password:
     type: final
@@ -846,7 +859,7 @@ states:
     description: >-
       user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The attempt stays counted,
       and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:478
+    source: apps/auth-server/src/app/routes/ui/login.ts:488
     response: *invalidCredentials
 
   invalid_credentials.email_not_verified:
@@ -856,7 +869,7 @@ states:
       user.sign_in_failed is recorded with the reason email_not_verified and the user as its subject; the answer is the
       wrong password's (it was a 403 of its own until ANT-2026-SPEMY9GU, which let anyone tell a free address from a
       registered one). The attempt stays counted, and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:478
+    source: apps/auth-server/src/app/routes/ui/login.ts:488
     response: *invalidCredentials
 
   invalid_credentials.account_disabled:
@@ -865,15 +878,16 @@ states:
     description: >-
       The password was right. user.sign_in_failed is recorded with the reason invalid_credentials and no subject. The
       attempt stays counted, and the answer waits out the 500 ms floor.
-    source: apps/auth-server/src/app/routes/ui/login.ts:478
+    source: apps/auth-server/src/app/routes/ui/login.ts:488
     response: *invalidCredentials
 
   bad_request.handle_spent:
     type: final
     title: Tell the user the authorization request has expired
     description: >-
-      Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, with no link
-      and no redirect: the user starts again from the application, which still holds the PKCE verifier.
+      Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, and so does a
+      store that cannot read or delete the handle, with no link and no redirect: the user starts again from the
+      application, which still holds the PKCE verifier.
     source: apps/auth-server/src/app/routes/ui/resume.ts:123
     response:
       status: 400
@@ -960,7 +974,7 @@ states:
     type: final
     title: Refuse a POST over the login limit
     description: The rate limiter's problem document, not the page; distinct from the lockout.
-    source: apps/auth-server/src/app/routes/ui/login.ts:286
+    source: apps/auth-server/src/app/routes/ui/login.ts:287
     response:
       status: 429
       headers:
@@ -1018,36 +1032,36 @@ assertions:
     say: >-
       No session is created for a form that does not carry the cookie's own CSRF value, or that any earlier check
       refuses: a page of another site cannot sign the browser in to an account of its choosing
-    source: apps/auth-server/src/app/routes/ui/login.ts:308
+    source: apps/auth-server/src/app/routes/ui/login.ts:309
   - id: no-session-for-a-refused-account
     never: 'sessionCreated and (noCredential or wrongPassword or userDisabled or unverifiedUnderTheGate)'
     say: >-
       A session is created only for an existing, enabled account and its right password, and under the gate only for
       a confirmed address
-    source: apps/auth-server/src/app/routes/ui/login.ts:447
+    source: apps/auth-server/src/app/routes/ui/login.ts:457
   - id: attempt-counted-before-the-password
     never: "state == 'checkingPassword' and not attemptCounted"
     say: 'Every password checked has been counted first, so guesses sent at once cannot outrun the lockout'
-    source: apps/auth-server/src/app/helpers/failed-login.ts:104
+    source: apps/auth-server/src/app/helpers/failed-login.ts:116
   - id: attempt-reserved-on-the-ladder-before-the-password
     never: "state == 'checkingPassword' and not attemptReserved"
     say: >-
       Every password checked has been reserved on the account's failure ladder first, so parallel guesses reach the
       verifier no more often than guesses sent one at a time (#615)
-    source: apps/auth-server/src/app/routes/ui/login.ts:386
+    source: apps/auth-server/src/app/routes/ui/login.ts:395
   - id: ladder-refusals-check-no-password
     never: >-
       state in ['too_many_requests.ladder_wait', 'service_unavailable.ladder'] and (attemptReserved or decoyVerified)
     say: >-
       An attempt inside the account's wait, or one the ladder cannot answer, is refused before any credential is read
       or password checked, and is not counted on the ladder
-    source: apps/auth-server/src/app/routes/ui/login.ts:404
+    source: apps/auth-server/src/app/routes/ui/login.ts:413
   - id: locked-out-checks-no-password
     never: "state == 'too_many_requests.locked_out' and attemptCounted"
     say: >-
       A locked-out attempt is refused before any password is checked, the right one too, and leaves no count behind:
       one that lost the race to arm the lockout gives back what it counted
-    source: apps/auth-server/src/app/routes/ui/login.ts:364
+    source: apps/auth-server/src/app/routes/ui/login.ts:373
   - id: csrf-before-the-lockout-and-the-database
     never: >-
       gate in ['malformedCookie', 'csrfMismatch'] and (attemptCounted or attemptReserved or state in
@@ -1055,7 +1069,7 @@ assertions:
     say: >-
       The CSRF pair is checked before the lockout is read or the attempt counted, and before the database is read: a
       forged post can neither lock an account out nor probe a password
-    source: apps/auth-server/src/app/routes/ui/login.ts:308
+    source: apps/auth-server/src/app/routes/ui/login.ts:309
   - id: every-refused-credential-waits-the-floor
     never: >-
       state in ['too_many_requests.locked_out', 'too_many_requests.ladder_wait', 'service_unavailable.ladder',
@@ -1064,7 +1078,7 @@ assertions:
     say: >-
       Every refused credential, the lockout and the ladder's refusals answer only once 500 ms have passed since the
       request arrived, so the time of the answer does not tell the causes apart
-    source: apps/auth-server/src/app/routes/ui/login.ts:448
+    source: apps/auth-server/src/app/routes/ui/login.ts:458
   - id: unknown-address-verifies-the-decoy
     never: "state == 'invalid_credentials.unknown_identifier' and not decoyVerified"
     say: 'An address with no account still costs one Argon2id verification, against the decoy hash'
@@ -1074,15 +1088,15 @@ assertions:
     say: >-
       A sign-in always creates a new session with a new sid, whatever session cookie the browser sent: the
       session-fixation defence
-    source: apps/auth-server/src/app/routes/ui/login.ts:493
+    source: apps/auth-server/src/app/routes/ui/login.ts:505
   - id: success-clears-the-login-csrf-cookie
     never: "state in ['redirectedToResume', 'signed_in', 'signed_in.to_root'] and not csrfCookieCleared"
     say: 'A successful sign-in clears the login-CSRF cookie, so its value cannot be reused'
-    source: apps/auth-server/src/app/routes/ui/login.ts:512
+    source: apps/auth-server/src/app/routes/ui/login.ts:524
   - id: only-same-origin-redirects
     never: "state in ['signed_in', 'redirectedToResume'] and returnTo == 'unsafe'"
     say: 'A sign-in redirects only to a same-origin relative path, else to /'
-    source: apps/auth-server/src/app/routes/ui/login.ts:296
+    source: apps/auth-server/src/app/routes/ui/login.ts:297
   - id: resumed-handle-is-burned
     never: "state == 'authorization_resumed' and not handleBurned"
     say: >-

@@ -14,6 +14,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { withoutAdminAudience } from '../../helpers/admin-scopes';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { clientAddressKey } from '../../helpers/client-address';
@@ -80,10 +81,19 @@ export default async function (fastify: FastifyInstance) {
       const realm = requestRealm(request);
 
       try {
+        // The realm's verified-account gate and brute-force policy (#528),
+        // from the resolver's row: no query.
+        const policies = accountPoliciesOf(fastify, realm);
+
         // Reject early if this identifier is currently locked out; otherwise
         // count the attempt now, before the password is looked at, so that
         // guesses sent concurrently cannot outrun the counter (#115).
-        const lockout = await registerLoginAttempt(fastify.redis, realm.id, lockoutIdentifiers);
+        const lockout = await registerLoginAttempt(
+          fastify.redis,
+          realm.id,
+          policies.bruteForce,
+          lockoutIdentifiers
+        );
         if (lockout.locked) {
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'locked_out' });
           logAuthEvent(request, 'user.login.failure', false, {
@@ -138,11 +148,13 @@ export default async function (fastify: FastifyInstance) {
           password,
         });
 
-        // Verified-account gate (F-08), on by default (`REQUIRE_VERIFIED_ACCOUNT`,
-        // deprecated alias `REQUIRE_EMAIL_VERIFIED`). For a password account
-        // the proof is the confirmed address: since #228 the gate reads
-        // credential_data.email_verified, the authoritative source (the legacy
-        // users.email_verified column was dropped in #261).
+        // Verified-account gate (F-08): the realm's
+        // `accounts.requireVerifiedAccount` (#528), on by default, which
+        // `REQUIRE_VERIFIED_ACCOUNT` (old name `REQUIRE_EMAIL_VERIFIED`) seeds
+        // in a new realm. For a password account the proof is the confirmed
+        // address: since #228 the gate reads credential_data.email_verified,
+        // the authoritative source (the legacy users.email_verified column was
+        // dropped in #261).
         //
         // An unverified account is refused EXACTLY like a wrong password: the
         // same 401 and message, the same floor, the same order of work, the
@@ -153,7 +165,7 @@ export default async function (fastify: FastifyInstance) {
         // registered one (the owner's password: 401). ANT-2026-SPEMY9GU.
         // Only the server-side log line and event keep the reason.
         const unverified =
-          check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
+          check.status === 'ok' && !check.accountVerified && policies.requireVerifiedAccount;
 
         // The users row supplies the stable subject id plus session/event/log
         // fields. The row must exist for any live credential (FK), so a miss
@@ -305,7 +317,9 @@ export default async function (fastify: FastifyInstance) {
         // count: its counter holds the failures of every account guessed at
         // from it, and registration is open, so logging in to an account of
         // one's own must not clear them.
-        await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
+        await recordSuccessfulLogin(fastify.redis, realm.id, policies.bruteForce, lockout, [
+          emailIdentifier,
+        ]);
         // The ladder: the password's counter is cleared, this address becomes
         // known to the account, and a disabled mark the unarmed hard action
         // ignored is cleared (#615).

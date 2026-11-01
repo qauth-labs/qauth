@@ -12,6 +12,7 @@ import { FEDERATION_KEYS } from './federation';
 import { INTERNAL_LISTENER_KEYS } from './internal-listener';
 import { KEK_KEYS } from './kek';
 import { PASSKEY_KEYS } from './passkeys';
+import { PLUGIN_KEYS } from './plugins';
 import { RATE_LIMIT_KEYS } from './rate-limits';
 import { REGISTRATION_KEYS } from './registration';
 import { SERVER_KEYS } from './server';
@@ -45,6 +46,7 @@ export const SERVER_CONFIG_KEYS: readonly ConfigKey[] = [
   ...RATE_LIMIT_KEYS,
   ...FEDERATION_KEYS,
   ...PASSKEY_KEYS,
+  ...PLUGIN_KEYS,
 ];
 
 /**

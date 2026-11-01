@@ -3,7 +3,7 @@ title: Observability Guide
 description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, Prometheus metrics, events as OpenTelemetry logs, and alerting.
 sidebar:
   order: 3
-lastVerified: '2026-10-24'
+lastVerified: '2026-11-01'
 ---
 
 This guide covers QAuth's observability surface: structured logging, request-id
@@ -109,11 +109,13 @@ Failed logins are tracked per realm and identifier (email **hash** and source IP
 in Redis (`apps/auth-server/src/app/helpers/failed-login.ts`). Each realm counts
 its own: the same address in two realms is two accounts, and a source address
 locked out in one realm is not locked out in another. The rate limits keep a
-bucket per realm and address the same way. After
-`FAILED_LOGIN_MAX_ATTEMPTS` failures inside `FAILED_LOGIN_WINDOW`, the identifier
-is locked out for `FAILED_LOGIN_LOCKOUT_DURATION` seconds; further login attempts
-return `429 Too Many Requests` with a `Retry-After` header before any credential
-verification.
+bucket per realm and address the same way. Each realm also sets its own
+thresholds, in its `bruteForce` policies on the realm row
+([Realm policies](/reference/realm-policies/)): after `maxAttempts` failures
+inside `windowSeconds`, the identifier is locked out for `lockoutSeconds`;
+further login attempts return `429 Too Many Requests` with a `Retry-After`
+header before any credential verification. A realm whose `bruteForce.enabled`
+is off counts nothing and never locks out.
 
 - An attempt is counted **before** its password is verified, so guesses sent
   concurrently cannot outrun the counter. A login that ends in a server error
@@ -124,8 +126,7 @@ verification.
   The source address's counter keeps the failures other attempts left on it
   until they decay; the success gives back only its own count. Users behind
   one shared address (an office NAT, or one IPv6 `/64`) therefore share its
-  `FAILED_LOGIN_MAX_ATTEMPTS` failures per window, and signing in does not
-  clear them.
+  `maxAttempts` failures per window, and signing in does not clear them.
 - All cache operations are **best-effort / fail-open**: if Redis is unavailable,
   logins are never blocked by the tracker — though an instance-wide Redis outage
   still fails the request earlier, at the app-wide rate-limiter's `onRequest`
@@ -136,15 +137,20 @@ verification.
 
 ### Configuration
 
-| Variable                        | Default | Description                            |
-| ------------------------------- | ------- | -------------------------------------- |
-| `FAILED_LOGIN_TRACKING_ENABLED` | `true`  | Master switch for throttling/lockout.  |
-| `FAILED_LOGIN_MAX_ATTEMPTS`     | `5`     | Failures in the window before lockout. |
-| `FAILED_LOGIN_WINDOW`           | `900`   | Sliding window in seconds (15 min).    |
-| `FAILED_LOGIN_LOCKOUT_DURATION` | `900`   | Lockout duration in seconds (15 min).  |
+The four keys seed the `bruteForce` policies of a new realm, and of a realm that
+had no policies at the first boot after the upgrade that put them on the row.
+Once a realm has its policies, a change of a key leaves it as it is: change the
+realm's stored policy instead.
 
-None of these reach the container under Docker Compose — see the Compose caveat
-below.
+| Variable                        | Seeds                       | Default | Description                            |
+| ------------------------------- | --------------------------- | ------- | -------------------------------------- |
+| `FAILED_LOGIN_TRACKING_ENABLED` | `bruteForce.enabled`        | `true`  | Master switch for throttling/lockout.  |
+| `FAILED_LOGIN_MAX_ATTEMPTS`     | `bruteForce.maxAttempts`    | `5`     | Failures in the window before lockout. |
+| `FAILED_LOGIN_WINDOW`           | `bruteForce.windowSeconds`  | `900`   | Sliding window in seconds (15 min).    |
+| `FAILED_LOGIN_LOCKOUT_DURATION` | `bruteForce.lockoutSeconds` | `900`   | Lockout duration in seconds (15 min).  |
+
+Under Docker Compose they reach the container only because they are listed — see
+the Compose caveat below.
 
 ### Per-account failure ladder
 

@@ -206,8 +206,7 @@ function makeFastify(realm: RealmRow = REALM) {
   const routes = new Map<string, Handler>();
   const sessionUtils = createSessionUtils();
   const responseCodes = createResponseCodes();
-  // The session service (#488) and the Redis of the per-user index of browser
-  // sessions that `/auth/logout` ends and of the session's side record.
+  // The session service (#488) and the Redis of the session's side record.
   const sessions = createBrowserSessionFixture();
   const register = (method: string) => (url: string, _opts: unknown, handler: Handler) => {
     routes.set(`${method} ${url}`, (request, reply) => {
@@ -877,8 +876,6 @@ describe('wallet login — completion', () => {
     ).resolves.toMatchObject({
       identifier: 'user@example.com',
     });
-    // Recorded under its user, so `/auth/logout` can end it.
-    expect(sessions.redis.sets.get('user-browser-sessions:user-1')).toEqual(new Set([created.sid]));
   });
 
   it.each([

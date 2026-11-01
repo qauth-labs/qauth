@@ -4,6 +4,7 @@ import {
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
+import { createPasswordValidators } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -24,6 +25,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
+import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
@@ -150,9 +152,16 @@ function createFastifyStub() {
         invalidateCredentialTokens: vi.fn().mockResolvedValue(undefined),
       },
     },
-    passwordValidator: {
-      validatePasswordStrength: vi.fn().mockReturnValue({ valid: true, feedback: [] }),
+    // One validator for every score; a test steers its answer, or swaps in
+    // the real validators.
+    passwordValidators: {
+      forMinScore: vi.fn().mockReturnValue({
+        validatePasswordStrength: vi.fn().mockReturnValue({ valid: true, feedback: [] }),
+      }),
     },
+    // The realm's lowest password score (#528), read from the request's
+    // realm row: the seeded default, 2.
+    policyStore: testPolicyStore(),
     passwordHasher: {
       hashPassword: vi.fn().mockResolvedValue('$argon2id$hashed'),
     },
@@ -592,12 +601,75 @@ describe('POST /auth/register', () => {
     await registerRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
 
-    (fastify.passwordValidator.validatePasswordStrength as unknown as Mock).mockReturnValue({
+    (
+      fastify.passwordValidators.forMinScore(2).validatePasswordStrength as unknown as Mock
+    ).mockReturnValue({
       valid: false,
       feedback: ['too short'],
     });
 
     await expect(ctx.handler(requestFixture(), createReply())).rejects.toThrow(WeakPasswordError);
     expect(fastify.db.transaction).not.toHaveBeenCalled();
+  });
+
+  describe("the realm's password score (#528)", () => {
+    // zxcvbn scores 'monkey12345' 1.
+    const SCORE_ONE = 'monkey12345';
+
+    /** Register `password` in a realm whose lowest score is `minScore`, with the real validators. */
+    async function registerIn(minScore: number, password: string, realmId?: string) {
+      const { fastify, ctx } = createFastifyStub();
+      fastify.policyStore = testPolicyStore(
+        {},
+        { password: { minScore } }
+      ) as unknown as FastifyInstance['policyStore'];
+      fastify.passwordValidators = createPasswordValidators();
+      await registerRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      const request = {
+        ...requestFixture(),
+        body: { email: 'new@example.com', password, ...(realmId === undefined ? {} : { realmId }) },
+      };
+      const outcome = await ctx.handler(request, createReply()).then(
+        () => 'accepted',
+        (error: Error) => error.name
+      );
+      return { fastify, outcome };
+    }
+
+    it('accepts a weak password in a realm with minScore 1 and refuses it in a realm with minScore 3', async () => {
+      const lenient = await registerIn(1, SCORE_ONE);
+      const strict = await registerIn(3, SCORE_ONE);
+
+      expect(lenient.outcome).toBe('accepted');
+      expect(strict.outcome).toBe('WeakPasswordError');
+      expect(strict.fastify.db.transaction).not.toHaveBeenCalled();
+    });
+
+    it('refuses it under the seeded default score, 2, as before #528', async () => {
+      expect((await registerIn(2, SCORE_ONE)).outcome).toBe('WeakPasswordError');
+    });
+
+    it("asks for the validator of the request's realm's score, read from its row", async () => {
+      const { fastify, ctx } = createFastifyStub();
+      fastify.policyStore = testPolicyStore(
+        {},
+        { password: { minScore: 4 } }
+      ) as unknown as FastifyInstance['policyStore'];
+      await registerRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(requestFixture(), createReply());
+
+      expect(fastify.policyStore.ofRealm).toHaveBeenCalledWith(REALM);
+      expect(fastify.passwordValidators.forMinScore).toHaveBeenCalledExactlyOnceWith(4);
+    });
+
+    it('checks the password before a realmId in the body, as before: a weak one is refused first', async () => {
+      const otherRealm = '0190e3c4-0000-7000-8000-0000000000ff';
+
+      expect((await registerIn(3, SCORE_ONE, otherRealm)).outcome).toBe('WeakPasswordError');
+      expect((await registerIn(1, SCORE_ONE, otherRealm)).outcome).toBe('BadRequestError');
+    });
   });
 });

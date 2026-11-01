@@ -132,6 +132,15 @@ export interface StepUpInput {
    * Defaults to `true` so existing two-call sites keep the strict behaviour.
    */
   enforceDangerousStepUp?: boolean;
+  /**
+   * Ask for a fresh authentication as `prompt=login` does, without the
+   * request carrying it (ADR-017 Decision 9): every request of a
+   * `native_backend` first-party client. The same freshness window applies.
+   * It is an input of its own, never a rewrite of {@link prompt}, so a
+   * request's own `prompt=consent` still asks for the consent screen.
+   * Defaults to `false`.
+   */
+  forceFreshLogin?: boolean;
 }
 
 /** The step-up decision. */
@@ -176,7 +185,8 @@ export interface StepUpDecision {
  *     no client opt-in and a stale prior grant cannot satisfy it. Both the
  *     authorize skip-consent path and the consent mint path share this, so
  *     they agree.
- *  4. `prompt=login` ⇒ `requiresFreshLogin`.
+ *  4. `prompt=login`, or `forceFreshLogin` (a `native_backend` client, ADR-017
+ *     Decision 9) ⇒ `requiresFreshLogin`.
  *  5. `max_age` present and the authentication is older than it ⇒
  *     `requiresFreshLogin`. Age is floored to whole seconds to match OIDC
  *     `auth_time` granularity (OIDC Core §2), so a just-completed login (a
@@ -215,7 +225,9 @@ export function evaluateStepUp(input: StepUpInput): StepUpDecision {
   // one performed within the freshness window counts — otherwise the post-login
   // return trip would re-trigger the same requirement and loop.
   const authIsFresh = authAgeMs <= input.freshAuthWindowMs;
-  const loginRequirement = (dangerousForcesLogin || input.prompt === 'login') && !authIsFresh;
+  const loginRequirement =
+    (dangerousForcesLogin || input.prompt === 'login' || input.forceFreshLogin === true) &&
+    !authIsFresh;
 
   // `max_age` is enforced exactly against the request value (not widened by the
   // freshness window) BUT at OIDC second-granularity: floor the age to whole

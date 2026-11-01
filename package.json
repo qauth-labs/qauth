@@ -39,7 +39,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "nx run-many -t test --all --coverage",
     "test:affected": "nx affected -t test",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.mts"
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx}": [
@@ -50,6 +50,7 @@
   "devDependencies": {
     "@commitlint/cli": "catalog:",
     "@commitlint/config-conventional": "catalog:",
+    "@delurio/cli": "catalog:",
     "@nx/esbuild": "catalog:",
     "@nx/eslint": "catalog:",
     "@nx/eslint-plugin": "catalog:",

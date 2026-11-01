@@ -9,7 +9,7 @@ The `@qauth-labs/shared-testing` library provides:
 - **Fastify Test Helpers**: Utilities for building and managing test Fastify instances
 - **Supertest Helpers**: Utilities for making HTTP requests in tests
 - **Test Fixtures**: Reusable test data factories for users, realms, and other entities
-- **Docker Integration Testing**: A disposable PostgreSQL testcontainer for repository integration tests
+- **Docker Integration Testing**: Postgres and Redis databases of each suite's own on shared testcontainers servers, for integration tests
 - **Type-Safe API**: Full TypeScript support
 
 ## Installation
@@ -23,7 +23,8 @@ import {
   createTestRequest,
   createRealmFixture,
   startPostgresContainer,
-  isDockerAvailable,
+  startRedisContainer,
+  requireDockerOrSkip,
   POSTGRES_IMAGE,
 } from '@qauth-labs/shared-testing';
 ```
@@ -191,26 +192,90 @@ const realms = createRealmFixtures(5);
 
 ### Docker Integration Testing
 
-For repository/integration suites that need a real database, the library exposes
-a disposable PostgreSQL [testcontainer](https://testcontainers.com/). It starts a
-throwaway `postgres:18-alpine` container (the same image as docker-compose;
-PostgreSQL 18 is required for native `uuidv7()`), waits until Postgres is genuinely
-ready, and hands you a connection string to run migrations and tests against.
+For repository and end-to-end suites that need a real Postgres or Redis, the
+library hands each suite databases of its own on throwaway
+[testcontainers](https://testcontainers.com/) servers: `postgres:18-alpine` and
+`redis:7-alpine`, the images docker-compose runs (PostgreSQL 18 is required for
+native `uuidv7()`).
 
-#### `startPostgresContainer(): Promise<StartedPostgres>`
+#### How the servers are shared
 
-Starts a disposable PostgreSQL 18 container and resolves once it is accepting
-connections. Requires a running Docker daemon. The returned `StartedPostgres` has:
+`vitest.integration.config.mts` runs the integration files side by side, and its
+global setup (`src/integration-global-setup.ts`) starts the servers once per
+`vitest` run:
 
-- `connectionString: string` — node-postgres / Drizzle compatible URL
-- `port: number` — the host port mapped to the container's `5432`
-- `stop(): Promise<void>` — stop and remove the container
+- **One Postgres server per worker slot** (`maxWorkers` of them), each with a
+  template database that has every generated migration applied. A slot runs one
+  file at a time, so the files on a server follow one another and never overlap.
+  One server for the whole run would not do: a server's transaction horizon
+  (`pg_snapshot_xmin(pg_current_snapshot())`) spans its databases, and the event
+  store reads it to decide which events are final, so a write transaction open in
+  one suite's database would hold back another suite's event delivery and
+  retention.
+- **One Redis server**, on which each suite gets a pair of logical databases no
+  other suite of the run is given (`redis://…/<n>`).
+
+The setup passes the servers to the workers through the environment
+(`QAUTH_TEST_SHARED_POSTGRES_URLS`, `QAUTH_TEST_SHARED_POSTGRES_TEMPLATE`,
+`QAUTH_TEST_SHARED_REDIS_URL`). Without a reachable Docker daemon it starts
+nothing: the suites skip, or fail on CI, through `requireDockerOrSkip()` as
+before. Without the setup (another config), every suite gets containers of its
+own.
+
+`QAUTH_INTEGRATION_WORKERS` sets how many files run at once (and so how many
+Postgres servers start). The default is 3 on CI and half the cores, at most 4,
+locally.
+
+#### `startPostgresContainer(options?): Promise<StartedPostgres>`
+
+A new database for the suite on its slot's shared server, or a container of its
+own. Options:
+
+- `schema: 'empty' | 'migrated'` — `'empty'` (the default) for a suite that
+  applies migrations itself, all or some of them; `'migrated'` for a copy of the
+  migrated template, which saves applying every migration again.
+- `privateContainer: true` — a Postgres container of the suite's own. Use it for a
+  suite that stops, kills, pauses or restarts the server, changes a server-wide
+  setting, terminates backends it does not own, or creates a cluster-wide object
+  (a role, a tablespace): on a shared server that would reach the suites that run
+  on it after this one.
+
+The returned `StartedPostgres` has:
+
+- `connectionString: string` — node-postgres / Drizzle compatible URL of the suite's database
+- `port: number` — the host port the server listens on
+- `createDatabase(): Promise<string>` — a further empty database on the same
+  server, uniquely named, for a suite that needs one per case
+- `stop(): Promise<void>` — drop the suite's databases (shared server) or stop and
+  remove the container (private)
+
+A query that reads the server as a whole (`pg_locks`, `pg_stat_activity`) should
+keep to the suite's database (`datname = current_database()`, or
+`database = (SELECT oid FROM pg_database WHERE datname = current_database())`):
+the server holds other suites' databases too, and copies of one template share
+their tables' OIDs.
+
+#### `startRedisContainer(options?): Promise<StartedRedis>`
+
+A pair of logical databases for the suite on the run's shared Redis server, or,
+with `privateContainer: true`, a container of its own. Use the private container
+for a suite that stops or reconfigures the server, or relies on what spans
+logical databases (pub/sub, keyspace notifications, `FLUSHALL`). Reset a suite's
+keys with `FLUSHDB`, never `FLUSHALL`, which would empty every suite's.
+
+The returned `StartedRedis` has `connectionUrl`, `spareConnectionUrl` (the second
+logical database, for a node that must share no key with the others), `port` and
+`stop()` (empty both databases, or stop the private container).
+
+#### `requireDockerOrSkip(): Promise<boolean>`
+
+The Docker gate every suite calls in its `beforeAll`: `true` when a daemon is
+reachable; `false` locally when it is not, so the suite skips; and it throws on
+CI, so a daemon-less runner cannot turn the suite into a green no-op.
 
 #### `isDockerAvailable(): Promise<boolean>`
 
-Best-effort probe for a reachable Docker daemon. Call it first so suites can
-`describe.skip` (instead of failing) on CI lanes or sandboxes where Docker is
-absent.
+The raw probe behind `requireDockerOrSkip()`. Prefer the gate in suites.
 
 #### `POSTGRES_IMAGE`
 
@@ -222,27 +287,28 @@ on or reuse it.
 ```typescript
 import { describe, it, beforeAll, afterAll, expect } from 'vitest';
 import {
+  requireDockerOrSkip,
   startPostgresContainer,
-  isDockerAvailable,
   type StartedPostgres,
 } from '@qauth-labs/shared-testing';
 
-const dockerAvailable = await isDockerAvailable();
-
-describe.skipIf(!dockerAvailable)('OAuth clients repository (integration)', () => {
-  let pg: StartedPostgres;
+describe('OAuth clients repository (integration)', () => {
+  let pg: StartedPostgres | undefined;
+  let dockerUp = false;
 
   beforeAll(async () => {
-    pg = await startPostgresContainer();
-    // Connect with pg/Drizzle and apply migrations against pg.connectionString…
+    dockerUp = await requireDockerOrSkip();
+    if (!dockerUp) return;
+    pg = await startPostgresContainer({ schema: 'migrated' });
     // e.g. process.env.DATABASE_URL = pg.connectionString;
   }, 120_000); // pulling/booting the image can take a while on a cold cache
 
   afterAll(async () => {
-    await pg.stop();
+    await pg?.stop();
   });
 
-  it('persists a row', async () => {
+  it('persists a row', async (ctx) => {
+    if (!dockerUp || !pg) return ctx.skip();
     // run repository code against pg.connectionString
     expect(pg.port).toBeGreaterThan(0);
   });
@@ -342,15 +408,27 @@ Creates multiple realm fixtures, each with a distinct generated name.
 
 ### Docker Integration Testing
 
-#### `startPostgresContainer(): Promise<StartedPostgres>`
+#### `startPostgresContainer(options?): Promise<StartedPostgres>`
 
-Starts a disposable `postgres:18-alpine` container for integration tests and
-resolves once it is ready. Returns `{ connectionString, port, stop() }`.
+A database of the suite's own on its worker slot's shared Postgres server (empty,
+or a copy of the migrated template with `schema: 'migrated'`), or a private
+container with `privateContainer: true`. Returns
+`{ connectionString, port, createDatabase(), stop() }`.
+
+#### `startRedisContainer(options?): Promise<StartedRedis>`
+
+A pair of logical databases of the suite's own on the run's shared Redis server,
+or a private container with `privateContainer: true`. Returns
+`{ connectionUrl, spareConnectionUrl, port, stop() }`.
+
+#### `requireDockerOrSkip(): Promise<boolean>`
+
+`true` when a Docker daemon is reachable; `false` locally when not (skip the
+suite); throws on CI.
 
 #### `isDockerAvailable(): Promise<boolean>`
 
-Resolves `true` when a Docker daemon is reachable, `false` otherwise (use to skip
-integration suites gracefully).
+Resolves `true` when a Docker daemon is reachable, `false` otherwise.
 
 #### `POSTGRES_IMAGE: string`
 
@@ -384,7 +462,8 @@ This library is used by test suites across the QAuth monorepo. It provides commo
 - `fastify`: Fast HTTP server framework
 - `supertest`: HTTP assertion library
 - `vitest`: Test runner
-- `testcontainers`: Disposable Docker containers for integration tests (Postgres harness)
+- `testcontainers`: Disposable Docker containers for integration tests (Postgres and Redis)
+- `ioredis`: Hands each suite its logical Redis databases on the shared server, and empties them
 
 ## License
 

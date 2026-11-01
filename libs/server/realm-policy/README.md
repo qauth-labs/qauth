@@ -133,8 +133,14 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
   boot wins and a plain write of the row is never overwritten.
 - Members of a stored document this release does not know (a later release's) are skipped on read
   and carried over on write, so a node of the previous release never drops them during a rolling
-  upgrade. A document of another schema version is not written: `update` refuses it
-  (`PolicySchemaVersionError`) and `seedRealms` leaves it as it is (`skipped`).
+  upgrade.
+- A document of an older schema version is read through the upgrades from its version
+  (`REALM_POLICY_UPGRADES`, #908): `update` patches the upgraded document and stores it under this
+  release's version, and `seedRealms` does so once at boot (`upgraded`). A document of a later
+  version is read with this release's schema and never written: `update` refuses it
+  (`PolicySchemaVersionError`, `reason: 'newer'`) and `seedRealms` leaves it as it is (`skipped`).
+  One of an older version that no upgrade reaches is refused on read and on write, never read with
+  the new schema, and `seedRealms` reports it (`skipped`, `reason: 'no-upgrade'`).
 - A list a fill keeps from the row loses its repeats, as `defaultsFromEnv` drops them.
 - `seedKeysSetIn(process.env)` names the seed keys the environment sets, which a realm with
   policies ignores.
@@ -144,6 +150,14 @@ await store.seedRealms(tx); // at boot: fill realms with no policies, complete m
 `REALM_POLICY_SCHEMA_VERSION` is `1-rc.0`. Before QAuth 1.0.0 a breaking change raises the rc
 number; from 1.0.0 it is `1`, and every change inside it is additive: a new field with a default,
 never a removal.
+
+A release that changes the version ships an upgrade from the one before it, appended to
+`REALM_POLICY_UPGRADES` (`src/lib/upgrades.ts`): a function from a stored document of the old
+version to one of the new, never looser than stored. `src/lib/version.ts` lists what else the
+change ships (a test, the storage's join and the secret store's move when a field they hold
+moves, a release note on the rolling upgrade). The contract test fails while the upgrades do not
+lead from the first stored version, `FIRST_REALM_POLICY_SCHEMA_VERSION`, to the current one.
+`compareSchemaVersions` orders two versions: `1-rc.0` < `1-rc.1` < `1` < `2-rc.0`.
 
 ## Tests
 

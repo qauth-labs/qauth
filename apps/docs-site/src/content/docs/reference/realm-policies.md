@@ -3,7 +3,7 @@ title: Realm policies
 description: Every realm policy field with its default, the environment key that seeds it, which way is stricter and when a change is a security operation, generated from the schema in libs/server/realm-policy.
 sidebar:
   order: 8
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 <!-- Generated from libs/server/realm-policy by its tests. Do not edit by hand: change the schema and run `pnpm nx test server-realm-policy -- -u`. -->
@@ -15,11 +15,12 @@ They are defined once, as a typed schema with a version, in `libs/server/realm-p
 realm representation, the realm file, the diff of two configurations and the rule that decides
 which changes are security operations all come from it, and so does this page.
 
-Today most of them are still read from the environment, for every realm. Some already live on the
-realm row: the access, development access and refresh token lifetimes, the environment ceiling, the
-scopes a dynamically registered client may hold, and the mail transport and sender. Nothing reads
-the `admin` group yet. Once the policies live on the realm row, the environment only seeds a new
-realm's values, and the realm row owns them from then on.
+Most of them already live on the realm row: the access, development access and refresh token
+lifetimes, the verified-account, password and brute-force policy, the environment ceiling, the
+scopes a dynamically registered client may hold, and the mail transport and sender. The rest are
+still read from the environment, for every realm: CIMD and the verification link's lifetime and
+resend rule. Nothing reads the `admin` group yet. Once a policy lives on the realm row, the
+environment only seeds a new realm's value, and the realm row owns it from then on.
 
 A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
 its secret store, encrypted with the realm's data-at-rest key, and the representation shows only
@@ -148,6 +149,12 @@ promised: a breaking change raises `<M>`
 1.0.0 it is `1`, and inside version 1 every change is additive: a new field comes with a default,
 and no field is removed. Other areas add their groups to the same schema, such as browser sessions
 and sign-in methods; a group's name is taken once.
+
+A realm keeps its policies under the schema version they were written in. A release that changes
+the version reads a document of an older one through an upgrade it ships, which never reads a
+field looser than stored, and its first boot stores the document under the new version. A
+document of a later version, which a newer node wrote during a rolling upgrade, is read with the
+older node's schema and never written by it.
 
 The effects named above are the closed list of 11 effect tags on
 [Security operations](/reference/security-operations/).

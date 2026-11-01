@@ -201,7 +201,7 @@ describe('findStaleStatusClaims — fixtures', () => {
  * owner decision, not an oversight: it is a planning record that calls
  * already-shipped work "in progress" by design (that's what a PRD's status
  * column is for), so scanning it would make this guard permanently red for
- * a reason unrelated to documentation drift. See vitest.config.ts / nx.json
+ * a reason unrelated to documentation drift. See vitest.config.mts / nx.json
  * for this repo's existing convention of commenting exclusions like this
  * one rather than leaving them unexplained.
  */

@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-01'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -31,8 +31,8 @@ token so a legitimate retry can succeed; a `401` (bad credentials,
 `apps/auth-server/src/app/routes/ui/login.ts:347`) **reuses** the existing
 cookie's token unchanged, since that cookie is still valid — only the
 credentials were wrong. An account whose address is not verified yet gets that
-same `401` page while `REQUIRE_VERIFIED_ACCOUNT` is on (the default), so the
-page cannot be used to tell a just-registered free address from a registered
+same `401` page while the realm requires verified accounts
+(`accounts.requireVerifiedAccount`, the default), so the page cannot be used to tell a just-registered free address from a registered
 one; its message mentions confirming the address for that reason.
 
 The session is stored in Postgres, with Redis as a cache in front of it, in
@@ -139,6 +139,47 @@ changes between the page and the decision (a Client ID Metadata Document can
 change it) gets nothing from that decision: the browser goes back to
 `/oauth/authorize`, which shows the page the client needs now.
 
+### A first-party client
+
+An operator can mark a client as first party: the seed manifest's
+`first_party_profile` ([Docker](/operate/docker/)), which no registration path
+can set
+([ADR-017](/reference/records/adr/017-first-party-login/) Decisions 2
+and 9). For such a client the operator's decision stands in for the user's
+consent, an administrative consent:
+
+- `/oauth/authorize` issues a code without this screen when none of the
+  requested scopes is dangerous (`write:*`, `agent:admin`, `agent:exec`) and
+  the request does not carry `prompt=consent`. Under `prompt=none` it issues
+  the code too, for a `web_redirect` client.
+- The waiver stores nothing for the user. Unless the user once remembered a
+  consent for the client on this screen, the client is not listed under
+  `/consents`, and `/oauth/token` returns no `refresh_token` for such a code,
+  as for an approval with **Remember this decision** unticked. A remembered
+  consent that covers the code's scopes, at each resource indicator the code
+  is bound to, still yields one.
+- Every such code is recorded as a
+  [`consent.administrative`](/reference/events/#consentadministrative-v1-rc0)
+  event: the profile it rests on, the scopes and resource indicators it
+  covered, and the endpoint.
+- A dangerous scope or `prompt=consent` shows this screen, as for any client,
+  even when a stored consent covers the request. Under `prompt=none` such a
+  request answers `login_required` when a fresh sign-in is due (a dangerous
+  scope on a sign-in more than two minutes old), else `consent_required`.
+- A client whose profile is `native_backend`, the backend of a native app, has
+  every request treated as `prompt=login`, whatever the request says: a
+  browser that already holds a session meets the login page unless its sign-in
+  is less than two minutes old, and `prompt=none` answers `login_required`
+  however recent the sign-in. A `POST /ui/consent` for such a client asks for
+  the same fresh sign-in. So a native app's browser leg completes only on a
+  sign-in of the last two minutes, the window `prompt=login` gives every
+  client, never on an older session. Its own `prompt=consent` still shows this
+  screen.
+
+A client whose profile does not hold, because its row breaks one of the
+profile's rules or its policy does not parse, is treated as a client without
+one.
+
 ## `/ui/resume/{handle}`
 
 `GET /ui/resume/{handle}` is where a login round-trip lands after a
@@ -218,7 +259,7 @@ it in the redirect:
 
 Redis was already on that path before #319, and not marginally: the
 Redis-backed `@fastify/rate-limit` plugin is registered app-wide
-(`apps/auth-server/src/app/app.ts:260`) ahead of both route sweeps (lines 294
+(`apps/auth-server/src/app/app.ts:931`) ahead of both route sweeps (lines 294
 and 301), against the same `fastify.redis` client
 (`apps/auth-server/src/app/plugins/rate-limit.ts:28`); `RATE_LIMIT_ENABLED`
 defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);

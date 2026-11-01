@@ -164,6 +164,7 @@ function emptyDatabase(): {
       seedRealms: vi.fn(async (): Promise<RealmPolicySeedReport> => ({
         filled: [],
         completed: [],
+        upgraded: [],
         skipped: [],
       })),
     },
@@ -423,7 +424,7 @@ describe('bootDefaultRealm and the passkey RP ID (#467, #553)', () => {
 
 describe('bootDefaultRealm and the realm policies (#516)', () => {
   const REALM_ID = '019a0000-0000-7000-8000-000000000001';
-  const NOTHING: RealmPolicySeedReport = { filled: [], completed: [], skipped: [] };
+  const NOTHING: RealmPolicySeedReport = { filled: [], completed: [], upgraded: [], skipped: [] };
   const settings = {
     realmName: 'master',
     jwtIssuer: 'https://auth.example.com',
@@ -718,7 +719,9 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
   it('warns for a realm whose policies another schema version wrote, which it left as they are', async () => {
     const { deps, warn } = existingRealm({
       ...NOTHING,
-      skipped: [{ realmId: REALM_ID, realmName: 'master', schemaVersion: '1-rc.7' }],
+      skipped: [
+        { realmId: REALM_ID, realmName: 'master', schemaVersion: '1-rc.7', reason: 'newer' },
+      ],
     });
 
     await bootDefaultRealm(deps, { ...settings, seedKeysSet: [] });
@@ -726,6 +729,47 @@ describe('bootDefaultRealm and the realm policies (#516)', () => {
     expect(warn).toHaveBeenCalledWith(
       { realm: 'master', realmId: REALM_ID, schemaVersion: '1-rc.7' },
       'realm policies of another schema version left as they are: a node of this release does not complete them'
+    );
+  });
+
+  it('says it upgraded a realm of an earlier schema version, and names no seed key the upgrade used', async () => {
+    const { deps, warn, info, realm } = existingRealm({
+      ...NOTHING,
+      upgraded: [
+        { realmId: REALM_ID, realmName: 'master', from: '1-rc.0', paths: ['password.minScore'] },
+      ],
+    });
+
+    const result = await bootDefaultRealm(deps, settings);
+
+    expect(info).toHaveBeenCalledWith(
+      {
+        realm: 'master',
+        realmId: realm.id,
+        schemaVersion: '1-rc.0',
+        policies: ['password.minScore'],
+      },
+      "realm policies of an earlier schema version upgraded to this release's"
+    );
+    // PASSWORD_MIN_SCORE gave the upgraded document its field: it was used.
+    expect(variablesOf(warn)).toEqual(['DEFAULT_DYNAMIC_REGISTRATION_SCOPES']);
+    // The row as the upgrade left it.
+    expect(result.realm.policiesVersion).toBe(2);
+  });
+
+  it('warns for a realm of an earlier schema version that no upgrade reaches, which it left as it is', async () => {
+    const { deps, warn } = existingRealm({
+      ...NOTHING,
+      skipped: [
+        { realmId: REALM_ID, realmName: 'master', schemaVersion: '1-rc.0', reason: 'no-upgrade' },
+      ],
+    });
+
+    await bootDefaultRealm(deps, { ...settings, seedKeysSet: [] });
+
+    expect(warn).toHaveBeenCalledWith(
+      { realm: 'master', realmId: REALM_ID, schemaVersion: '1-rc.0' },
+      'realm policies of an earlier schema version that no upgrade of this release reaches left as they are: every read of them through the policy store is refused'
     );
   });
 

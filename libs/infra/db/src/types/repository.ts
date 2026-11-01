@@ -49,7 +49,9 @@ export type NewOAuthClient = InferInsertModel<typeof oauthClients>;
  * manifest writes a client's ID-JAG targets. `webauthnAllowedOrigins` is left
  * out too (#467): the operator sets a client's passkey origins through the
  * same manifest. So is `dpopBoundAccessTokens` (#480): a client that could
- * clear it could obtain the bearer tokens its operator meant to refuse.
+ * clear it could obtain the bearer tokens its operator meant to refuse. And
+ * `clientCredentialsScopes` (#891): an owner who could clear it could mint
+ * tokens without a user for the scopes its users grant it.
  */
 export type UpdateOAuthClient = Partial<
   Omit<
@@ -62,6 +64,7 @@ export type UpdateOAuthClient = Partial<
     | 'idJagTargets'
     | 'webauthnAllowedOrigins'
     | 'dpopBoundAccessTokens'
+    | 'clientCredentialsScopes'
     // #593: the verified domain is admin state (`clients.update`, a security
     // operation), so no owner or self-registration path may write it.
     | 'verifiedDomain'

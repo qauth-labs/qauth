@@ -52,6 +52,15 @@ export type OAuthClientLike = {
   suspended?: boolean;
   grantTypes: string[];
   scopes: string[];
+  /**
+   * #891 the scopes the `client_credentials` grant may issue, out of
+   * {@link scopes}: a client that also signs users in lists only those it
+   * needs as itself, so it gets no token without a user for its users' scopes.
+   * Operator-set through the seed manifest only. NULL, or absent for older
+   * callers, ⇒ any scope of `scopes`. Read through
+   * `clientCredentialsScopeAllowlist` in `routes/oauth/token.ts`.
+   */
+  clientCredentialsScopes?: string[] | null;
   audience: string[] | null;
   /**
    * ADR-011 (#434) the foreign parties this client may name in an ID-JAG: mint

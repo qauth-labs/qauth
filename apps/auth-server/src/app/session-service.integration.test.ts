@@ -2,7 +2,6 @@ import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin } from '@qauth-labs/fastify-plugin-db';
 import { sessionCacheKey, sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   type StartedRedis,
@@ -156,7 +155,7 @@ describe('the session service on a real Postgres and Redis', () => {
   /** Two nodes sharing Postgres and Redis. */
   let nodeA: FastifyInstance | undefined;
   let nodeB: FastifyInstance | undefined;
-  /** A third node with Redis of its own (another database index) and a 1 s cache time. */
+  /** A third node with Redis of its own (the spare logical database) and a 1 s cache time. */
   let nodeC: FastifyInstance | undefined;
   let realmId = '';
   let userId = '';
@@ -173,7 +172,7 @@ describe('the session service on a real Postgres and Redis', () => {
     nodeB = await startNode(shared);
     nodeC = await startNode({
       ...shared,
-      redisUrl: infra.redis.connectionUrl.replace(/\/0$/, '/1'),
+      redisUrl: infra.redis.spareConnectionUrl,
       cacheTtlSeconds: 1,
     });
     await countLastSeenWrites(nodeA);
@@ -366,8 +365,11 @@ describe('the session service with Redis stopped', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    [postgres, redis] = await Promise.all([startPostgresContainer(), startRedisContainer()]);
-    await applyQauthMigrations(postgres.connectionString);
+    // The case stops Redis: a server of its own, not the run's shared one.
+    [postgres, redis] = await Promise.all([
+      startPostgresContainer({ schema: 'migrated' }),
+      startRedisContainer({ privateContainer: true }),
+    ]);
     node = await startNode({
       databaseUrl: postgres.connectionString,
       redisUrl: redis.connectionUrl,
@@ -431,8 +433,11 @@ describe('the session service with Postgres stopped', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    [postgres, redis] = await Promise.all([startPostgresContainer(), startRedisContainer()]);
-    await applyQauthMigrations(postgres.connectionString);
+    // The case stops Postgres: a server of its own, not the run's shared one.
+    [postgres, redis] = await Promise.all([
+      startPostgresContainer({ schema: 'migrated', privateContainer: true }),
+      startRedisContainer(),
+    ]);
     node = await startNode({
       databaseUrl: postgres.connectionString,
       redisUrl: redis.connectionUrl,

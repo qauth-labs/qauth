@@ -8,7 +8,9 @@
  *   fill once, keeping the row values the server read before;
  * - two nodes filling a realm at once leave one consistent document, and a
  *   fill never overwrites a plain UPDATE of the row it waited on;
- * - a secret never reaches `realms.policies`.
+ * - a secret never reaches `realms.policies`;
+ * - a document of an earlier schema version is read upgraded, and written
+ *   once under the new version by the next release's boot (#908).
  *
  * Requires Docker; self-skips without it.
  */
@@ -20,16 +22,20 @@ import {
   type Realm,
 } from '@qauth-labs/infra-db';
 import {
+  BUILT_IN_POLICY_GROUPS,
+  createPolicyRegistry,
   createPolicyStore,
   defaultsFromEnv,
+  PASSWORD_POLICY_GROUP,
+  type PolicySchemaUpgrade,
   PolicyVersionConflictError,
+  REALM_POLICY_ENV,
   REALM_POLICY_SCHEMA_VERSION,
   type RealmPolicies,
   type RealmPolicyStore,
   type RealmSecretStore,
 } from '@qauth-labs/server-realm-policy';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -55,8 +61,7 @@ describe('policy store over the realms table (integration)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     database = createDatabase({ connectionString: container.connectionString });
     // A second pool, as a second node has.
     second = createDatabase({ connectionString: container.connectionString });
@@ -229,6 +234,71 @@ describe('policy store over the realms table (integration)', () => {
     ).toEqual(['openid']);
   });
 
+  it("upgrades a document of an earlier schema version once, at the next release's boot (#908)", async () => {
+    const realms = createRealmsRepository(db().db, {
+      seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
+    });
+    const realm = await realms.create({ name: 'earlier' });
+    await storeOn(db()).update(realm.id, { password: { minScore: 4 } }, { expectedVersion: 1 });
+
+    // The release that changes the version to 1-rc.1 and renames
+    // password.minScore, whose seed it reads as 0: looser than stored.
+    const registry = createPolicyRegistry({ version: '1-rc.1', env: REALM_POLICY_ENV });
+    for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
+      registry.registerPolicyGroup(
+        name,
+        name === 'password' ? { minimumScore: PASSWORD_POLICY_GROUP.minScore } : shape
+      );
+    }
+    const rename: PolicySchemaUpgrade = {
+      from: REALM_POLICY_SCHEMA_VERSION,
+      to: '1-rc.1',
+      upgrade(document) {
+        const password = document['password'] as Record<string, unknown>;
+        password['minimumScore'] = password['minScore'];
+        delete password['minScore'];
+        return document;
+      },
+    };
+    const next = createPolicyStore({
+      storage: createRealmPolicyStorage(db().db, realms),
+      seeds: registry.defaultsFromEnv({ PASSWORD_MIN_SCORE: '0' }),
+      registry,
+      upgrades: [rename],
+    });
+
+    expect(await next.get(realm.id)).toMatchObject({
+      version: 2,
+      schemaVersion: '1-rc.1',
+      policies: { password: { minimumScore: 4 } },
+    });
+    expect((await row(realm.id)).policy_schema_version).toBe(REALM_POLICY_SCHEMA_VERSION);
+
+    expect((await next.seedRealms()).upgraded).toEqual([
+      { realmId: realm.id, realmName: 'earlier', from: REALM_POLICY_SCHEMA_VERSION, paths: [] },
+    ]);
+    const stored = await row(realm.id);
+    expect(stored).toMatchObject({ policy_schema_version: '1-rc.1', policies_version: 3 });
+    expect((stored['policies'] as Record<string, unknown>)['password']).toEqual({
+      minimumScore: 4,
+    });
+    expect((await next.seedRealms()).upgraded).toEqual([]);
+    // A node of the previous release, during the roll, reads it with its own
+    // schema: the renamed field as its seed (3), looser than stored, which is
+    // why version.ts has such a change stop the old nodes first. It never
+    // writes it.
+    const previous = storeOn(db());
+    expect(await previous.get(realm.id)).toMatchObject({
+      version: 3,
+      schemaVersion: '1-rc.1',
+      policies: { password: { minScore: 3 } },
+    });
+    await expect(previous.update(realm.id, {}, { expectedVersion: 3 })).rejects.toMatchObject({
+      name: 'PolicySchemaVersionError',
+      reason: 'newer',
+    });
+  });
+
   it("writes no policy column through the repository's plain update", async () => {
     const realms = createRealmsRepository(db().db, {
       seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
@@ -299,6 +369,7 @@ describe('policy store over the realms table (integration)', () => {
     expect(await storeOn(db(), later).seedRealms()).toEqual({
       filled: [],
       completed: [],
+      upgraded: [],
       skipped: [],
     });
     expect(await row(kept)).toEqual(before);
@@ -362,7 +433,7 @@ describe('policy store over the realms table (integration)', () => {
       await b;
 
       expect(reportA.filled).toMatchObject([{ realmId: id, realmName: 'race' }]);
-      expect(reportB).toEqual({ filled: [], completed: [], skipped: [] });
+      expect(reportB).toEqual({ filled: [], completed: [], upgraded: [], skipped: [] });
       const stored = await storeOn(db()).get(id);
       expect(stored?.version).toBe(1);
       expect(fillOf(stored?.policies)).toBe('A');
@@ -446,7 +517,8 @@ describe('policy store over the realms table (integration)', () => {
         const {
           rows: [waiting],
         } = await db().pool.query<{ count: string }>(
-          `SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'`
+          `SELECT count(*) FROM pg_stat_activity
+            WHERE datname = current_database() AND wait_event_type = 'Lock'`
         );
         if (Number(waiting.count) > 0) return;
         await new Promise((resolve) => setTimeout(resolve, 25));

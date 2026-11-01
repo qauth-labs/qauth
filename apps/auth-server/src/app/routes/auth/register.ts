@@ -14,6 +14,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS, REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { hashEmail, logAuthEvent } from '../../helpers/auth-events';
 import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
@@ -88,9 +89,10 @@ async function claimAddressMailSlot(
  *   link and no token.
  * - Unverified account: its verification link again, with a fresh token, as
  *   `POST /auth/resend-verification` would send it. A notice saying "sign in"
- *   would be a dead end here: an unverified account cannot sign in while
- *   `REQUIRE_VERIFIED_ACCOUNT` is on, and the usual reason to register twice is
- *   a first mail that never arrived. It gives nobody a new power:
+ *   would be a dead end here: an unverified account cannot sign in while its
+ *   realm's verified-account gate is on (`accounts.requireVerifiedAccount`,
+ *   #528), and the usual reason to register twice is a first mail that never
+ *   arrived. It gives nobody a new power:
  *   `/auth/verify` needs the account's password as well as the token, so a
  *   mailbox owner cannot verify an account someone else registered with their
  *   address, and resend-verification already sends this mail to anyone who
@@ -167,10 +169,10 @@ async function mailExistingAccount(
  *
  * The answer does not depend on the address, but a later login could:
  * registering an address with a password of one's choice and then logging in
- * with it would succeed only for an address that was free. With
- * `REQUIRE_VERIFIED_ACCOUNT` on (the default) the login routes refuse an
- * unverified account exactly as they refuse a wrong password, which closes
- * that too.
+ * with it would succeed only for an address that was free. With the realm's
+ * verified-account gate on (`accounts.requireVerifiedAccount`, the default)
+ * the login routes refuse an unverified account exactly as they refuse a
+ * wrong password, which closes that too.
  */
 export default async function (fastify: FastifyInstance) {
   const background = createBackgroundTasks(fastify);
@@ -205,9 +207,18 @@ export default async function (fastify: FastifyInstance) {
       // Email is already validated by Zod schema, just normalize it
       const normalizedEmail = normalizeEmail(email);
 
-      // Validate password strength using injected validator. Independent of
-      // whether the address is registered, so it may answer early.
-      const passwordStrength = fastify.passwordValidator.validatePasswordStrength(password);
+      // The realm of the host the request named (#487), independent of the
+      // address. The resolver has already refused a disabled realm.
+      const realm = requestRealm(request);
+
+      // Validate password strength against the lowest score of that realm
+      // (`password.minScore`, #528), from the resolver's row: no query.
+      // Independent of whether the address is registered, so it may answer
+      // early.
+      const { passwordMinScore } = accountPoliciesOf(fastify, realm);
+      const passwordStrength = fastify.passwordValidators
+        .forMinScore(passwordMinScore)
+        .validatePasswordStrength(password);
       if (!passwordStrength.valid) {
         throw new WeakPasswordError(
           'Password does not meet strength requirements',
@@ -215,13 +226,10 @@ export default async function (fastify: FastifyInstance) {
         );
       }
 
-      // The realm of the host the request named (#487), also independent of
-      // the address. The host chooses the realm: a `realmId` in the body may
-      // only name that same realm, and any other value is refused as an
-      // unknown one, so a body cannot place an account in the realm of
-      // another host, and the answer tells nothing about the realms there.
-      // The resolver has already refused a disabled realm.
-      const realm = requestRealm(request);
+      // The host chooses the realm: a `realmId` in the body may only name that
+      // same realm, and any other value is refused as an unknown one, so a
+      // body cannot place an account in the realm of another host, and the
+      // answer tells nothing about the realms there.
       if (realmId !== undefined && realmId.toLowerCase() !== realm.id) {
         throw new BadRequestError(`Invalid realmId: ${realmId}`);
       }

@@ -36,8 +36,8 @@ import { isWalletAttributeIssuerStillTrusted } from './wallet-verification';
  * authorization_code (access + ID token from ONE call), refresh rotation,
  * RFC 8693 token exchange, the RFC 7523 jwt-bearer grant, and userinfo. The
  * `/auth/login` token is granted no scope and carries neither claim. The
- * login-time REQUIRE_VERIFIED_ACCOUNT gate is a separate control and does not
- * read this.
+ * login-time verified-account gate (`accounts.requireVerifiedAccount`) is a
+ * separate control and does not read this.
  */
 export type EmailClaims = { email: string; email_verified: true } | Record<string, never>;
 

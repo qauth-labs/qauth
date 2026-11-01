@@ -65,20 +65,20 @@ Every line below is `await`ed except where noted, so the order in the file is th
 
 | #   | Registration                                                        | What it contributes                                   |
 | --- | ------------------------------------------------------------------- | ----------------------------------------------------- |
-| 1   | `databasePlugin`, `apps/auth-server/src/app/app.ts:56`              | Postgres pool + the `repositories` decorator          |
-| 2   | `cachePlugin`, `apps/auth-server/src/app/app.ts:70`                 | Redis (`lazyConnect: true`) as `fastify.redis`        |
-| 3   | `passwordPlugin`, `apps/auth-server/src/app/app.ts:84`              | argon2id hasher + strength scoring                    |
-| 4   | `pkcePlugin`, `apps/auth-server/src/app/app.ts:95`                  | PKCE challenge verification helpers                   |
-| 5   | `assertTrustedIssuersUsable`, `apps/auth-server/src/app/app.ts:127` | **Boot check** — not a plugin                         |
-| 6   | `federationPlugin`, `apps/auth-server/src/app/app.ts:129`           | The ADR-003 `providerRegistry` decorator              |
-| 7   | `emailPlugin`, `apps/auth-server/src/app/app.ts:174`                | Resend / SMTP / mock provider                         |
-| 8   | `jwtPlugin`, `apps/auth-server/src/app/app.ts:186`                  | Signing keys, JWKS, revocation callback               |
-| 9   | `rateLimitPlugin`, `apps/auth-server/src/app/app.ts:231`            | `@fastify/rate-limit` wiring                          |
-| 10  | `securityHeadersPlugin`, `apps/auth-server/src/app/app.ts:236`      | Helmet: CSP, HSTS, frame options                      |
-| 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:240`            | Echoes the request id back on the response            |
-| 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:241`              | Prometheus registry                                   |
-| 13  | `cors`, `apps/auth-server/src/app/app.ts:259`                       | Fail-closed in production when `CORS_ORIGIN` is unset |
-| 14  | `formbody`, `apps/auth-server/src/app/app.ts:754`                   | Form-encoded body parsing                             |
+| 1   | `databasePlugin`, `apps/auth-server/src/app/app.ts:660`             | Postgres pool + the `repositories` decorator          |
+| 2   | `cachePlugin`, `apps/auth-server/src/app/app.ts:824`                | Redis (`lazyConnect: true`) as `fastify.redis`        |
+| 3   | `passwordPlugin`, `apps/auth-server/src/app/app.ts:872`             | argon2id hasher + strength scoring                    |
+| 4   | `pkcePlugin`, `apps/auth-server/src/app/app.ts:888`                 | PKCE challenge verification helpers                   |
+| 5   | `assertTrustedIssuersUsable`, `apps/auth-server/src/app/app.ts:312` | **Boot check** — not a plugin                         |
+| 6   | `federationPlugin`, `apps/auth-server/src/app/app.ts:436`           | The ADR-003 `providerRegistry` decorator              |
+| 7   | `emailPlugin`, `apps/auth-server/src/app/app.ts:490`                | Resend / SMTP / mock provider                         |
+| 8   | `jwtPlugin`, `apps/auth-server/src/app/app.ts:539`                  | Signing keys, JWKS, revocation callback               |
+| 9   | `rateLimitPlugin`, `apps/auth-server/src/app/app.ts:931`            | `@fastify/rate-limit` wiring                          |
+| 10  | `securityHeadersPlugin`, `apps/auth-server/src/app/app.ts:947`      | Helmet: CSP, HSTS, frame options                      |
+| 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:809`            | Echoes the request id back on the response            |
+| 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:954`              | Prometheus registry                                   |
+| 13  | `cors`, `apps/auth-server/src/app/app.ts:1092`                      | Fail-closed in production when `CORS_ORIGIN` is unset |
+| 14  | `formbody`, `apps/auth-server/src/app/app.ts:1101`                  | Form-encoded body parsing                             |
 
 Then three registrations whose **relative** order is the subject of the rest of this page, so this
 table deliberately does not pin them to line numbers:
@@ -114,7 +114,7 @@ the missing plugin.
 
 ### `formbody` must precede routes — verified
 
-`@fastify/formbody` at `apps/auth-server/src/app/app.ts:754`, with its own comment:
+`@fastify/formbody` at `apps/auth-server/src/app/app.ts:1101`, with its own comment:
 
 > RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection) both mandate
 > `application/x-www-form-urlencoded` for request bodies. Fastify ships with a JSON parser by
@@ -169,13 +169,13 @@ so.
 
 ### Security headers, request-id, metrics, CORS — the comments overstate this
 
-`securityHeadersPlugin` at `apps/auth-server/src/app/app.ts:236` carries a comment saying to
+`securityHeadersPlugin` at `apps/auth-server/src/app/app.ts:947` carries a comment saying to
 register before routes
 
 > so every response — including the server-rendered login/consent pages and error responses —
 > carries the CSP, HSTS, frame-options and related hardening headers.
 
-and `apps/auth-server/src/app/app.ts:239` says request-id propagation and the metrics registry
+and `apps/auth-server/src/app/app.ts:949` says request-id propagation and the metrics registry
 "must be available before routes are loaded".
 
 **Fastify does not require this.** `onRequest` / `onSend` hooks are collected at `preReady`, after
@@ -330,7 +330,7 @@ time. They are not symmetrical, and the difference is worth getting right.
 ### `assertTrustedIssuersUsable` — refuses the boot, ungated
 
 `assertTrustedIssuersUsable(env.OID4VP_TRUSTED_ISSUERS)` at
-`apps/auth-server/src/app/app.ts:127`, implemented at
+`apps/auth-server/src/app/app.ts:312`, implemented at
 `libs/server/federation/src/trust/assert-trusted-issuers.ts:63`, throws
 `InvalidConfigurationError` on an `OID4VP_TRUSTED_ISSUERS` map the runtime could not use.
 
@@ -368,7 +368,7 @@ gate #5 below consults.
 
 ### `createConfiguredProviders` — refuses the boot, but only when the flag is on
 
-`createConfiguredProviders`, `apps/auth-server/src/app/app.ts:130`, implemented at
+`createConfiguredProviders`, `apps/auth-server/src/app/app.ts:437`, implemented at
 `libs/fastify/plugins/federation/src/lib/configured-providers.ts:302`, is a **pure function of
 config** — no I/O, no Fastify, no database — that returns the provider list the registry is seeded
 with. `PasswordProvider` is unconditional

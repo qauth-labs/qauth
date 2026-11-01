@@ -20,7 +20,6 @@ import path from 'node:path';
 import {
   appendQauthMigration,
   applyQauthMigrations,
-  createPostgresDatabase,
   qauthMigrationsFolderWithFirst,
   qauthMigrationTags,
   requireDockerOrSkip,
@@ -99,7 +98,6 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
   let redis: StartedRedis | undefined;
   let jwt: PemKeyPair | undefined;
   let dockerUp = false;
-  let databases = 0;
   const folders: string[] = [];
   const servers: StartedServer[] = [];
 
@@ -126,13 +124,13 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
     await postgres?.stop();
   });
 
-  /** A new, empty database on the container, by URL. */
+  /** A new, empty database on the server, by URL; dropped with the suite's own. */
   async function freshDatabase(ctx: { skip: () => void }): Promise<string> {
     if (!dockerUp || !postgres) {
       ctx.skip();
       throw new Error('unreachable');
     }
-    return createPostgresDatabase(postgres.connectionString, `boot_check_${++databases}`);
+    return postgres.createDatabase();
   }
 
   /** A database with every migration but the last, as an older release left it. */
