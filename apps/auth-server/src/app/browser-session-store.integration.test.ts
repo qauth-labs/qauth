@@ -34,8 +34,8 @@ import type { RealmRow } from './helpers/request-realm';
  * CSRF values live in a Redis side record and never in Postgres, `/oauth/token`
  * and `/auth/login` create no row, and a cookie of one realm names no session
  * at another realm's host. "Sign out everywhere" (`/auth/logout`) ends every
- * session of the user in Postgres, even when Redis has lost the per-user index
- * of the user's sessions (#912).
+ * session of the user in Postgres, with no per-user index of the user's
+ * sessions in Redis to lose (#912).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -359,7 +359,7 @@ describe('browser sessions on the session service (#488, real containers)', () =
     expect(atA.statusCode).toBe(200);
   }, 60_000);
 
-  it('sign out everywhere ends every session of the user in Postgres after Redis lost the per-user index (#912)', async () => {
+  it('sign out everywhere ends every session of the user in Postgres, with no per-user index in Redis (#912)', async () => {
     const { app, realm, userId } = await boot();
     const bystanderId = await registerPasswordAccount(app, BYSTANDER_EMAIL);
     const first = await signIn(app);
@@ -370,19 +370,21 @@ describe('browser sessions on the session service (#488, real containers)', () =
     const consents = (jar: CookieJar) =>
       app.inject({ method: 'GET', url: '/consents', headers: { cookie: jar.header() as string } });
 
-    // Each browser is signed in, and the page put each session in the cache
-    // and wrote its side record.
+    // Each browser is signed in. Each of the user's sessions is in the session
+    // cache and has its side record, both written at sign-in.
     for (const jar of [first, second, bystander]) {
       expect((await consents(jar)).statusCode).toBe(200);
     }
     const sideRecords = ownSids.map((sid) => `browser-session-side:${realm.id}:${sid}`);
     expect(await app.redis.exists(...sideRecords)).toBe(2);
 
-    // Redis loses the per-user index: an eviction, a restart without
-    // persistence, a failover.
+    // The per-user index of the user's sessions that logout once read, and
+    // that an eviction, a restart without persistence or a failover could
+    // lose: sign-in no longer writes one, and the key is deleted as such a
+    // Redis would have lost it.
     const index = `user-browser-sessions:${userId}`;
-    expect((await app.redis.smembers(index)).sort()).toEqual([...ownSids].sort());
-    expect(await app.redis.del(index)).toBe(1);
+    expect(await app.redis.exists(index)).toBe(0);
+    await app.redis.del(index);
 
     // The developer portal's server signs the user out everywhere.
     const login = await app.inject({
