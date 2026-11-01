@@ -1347,6 +1347,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when it is signed (`signAccessToken`'s new `expiresNotAfter`), not only
   when its lifetime is computed.
 
+- **BREAKING (operators): the token lifetime keys are bounded** ([#527]).
+  `ACCESS_TOKEN_LIFESPAN` and `DEV_ACCESS_TOKEN_LIFESPAN` above 86400 s (a day),
+  or `REFRESH_TOKEN_LIFESPAN` above 7776000 s (90 days), now refuse to boot.
+  Lower them before upgrading; a realm row above the same bounds is refused
+  like any invalid policy (see the entry above).
 - **The developer portal's token carries the developer audience** ([#524]).
   The system client is created with `urn:qauth:aud:developer:v1-rc.0`, and a
   boot step gives it to the system client of every realm that has one, so
@@ -2259,6 +2264,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#631]: https://github.com/qauth-labs/qauth/issues/631
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845
+[#857]: https://github.com/qauth-labs/qauth/issues/857
 
 ### Deprecated
 
@@ -2285,6 +2291,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fetch process can no longer exhaust the server's memory** ([#857]). The
+  egress client's fetch processes answer over a plain socket of size-capped
+  frames instead of Node's IPC channel, which deserialized a message whole
+  before any check ran. Each frame's cap depends on the process's state, a
+  frame over its cap is refused before its payload is read, and every header,
+  `location` and failure message is bounded before it is decoded. A process
+  that sends what it may not is killed and its call fails.
 - **A token signed by a retired key keeps verifying until the key's retention
   ends** ([#492], ADR-019 Decision 9, ADR-001). The server picks a token's key
   by its `kid` and `alg` together (`selectJwksKey`) among the realm's
