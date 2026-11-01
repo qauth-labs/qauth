@@ -59,7 +59,7 @@ import type { InternalRouteModule } from '../app/internal/route-manifest';
  *
  * ## Containers are shared, databases are not
  *
- * One Postgres and one Redis per FILE (`vitest.integration.config.ts` runs files
+ * One Postgres and one Redis per FILE (`vitest.integration.config.mts` runs files
  * serially). Between tests the domain tables are truncated and Redis is flushed,
  * so a leaked row or a stale flow record cannot make the next test pass.
  */

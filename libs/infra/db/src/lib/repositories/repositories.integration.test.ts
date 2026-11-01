@@ -16,7 +16,7 @@
  * indistinguishable from a pass.
  *
  * Tagged via the `*.integration.test.ts` suffix so the fast unit run and the
- * coverage gate (vitest.config.ts) exclude it — CI runs it via the dedicated
+ * coverage gate (vitest.config.mts) exclude it — CI runs it via the dedicated
  * `test-integration` target in the `integration` job of ci.yml.
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';

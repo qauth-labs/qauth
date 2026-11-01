@@ -126,7 +126,7 @@ jobs:
         run: node scripts/action-refs/check.mjs .github/workflows
 
   # Coverage gate: a single repo-wide vitest run enforces the global
-  # thresholds in vitest.config.ts and fails CI on a regression. Run
+  # thresholds in vitest.config.mts and fails CI on a regression. Run
   # separately from the affected per-project `test` targets (which write
   # per-project coverage dirs) so the threshold is evaluated once across
   # the whole fast unit suite. The Docker-backed integration suite (#167,
@@ -192,7 +192,7 @@ jobs:
         run: node --experimental-strip-types scripts/check-issue-state-claims.mts
 
   # The `affected` and `coverage` jobs above can never exercise real DDL: every
-  # unit suite mocks the repositories, and both vitest.config.ts and the
+  # unit suite mocks the repositories, and both vitest.config.mts and the
   # coverage gate exclude `*.integration.test.ts`. So the testcontainers suites
   # are the ONLY assertion that the generated migrations produce the schema the
   # code expects — e.g. that `authorization_codes.state`/`.nonce` are unbounded

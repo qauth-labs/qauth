@@ -67,7 +67,7 @@ describe('upgrade-test configuration', () => {
 
       const run = spawnSync(
         process.execPath,
-        [vitest, 'run', '--config', 'vitest.upgrade.config.ts', '--project', 'smoke'],
+        [vitest, 'run', '--config', 'vitest.upgrade.config.mts', '--project', 'smoke'],
         { cwd: PROJECT_ROOT, env, encoding: 'utf8', timeout: 60_000 }
       );
       const output = `${run.stdout}\n${run.stderr}`;

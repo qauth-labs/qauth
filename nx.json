@@ -201,10 +201,10 @@
   "namedInputs": {
     "sharedGlobals": [
       "{workspaceRoot}/.github/workflows/ci.yml",
-      // Every project's vitest.config.ts mergeConfig()s the root one, so a
+      // Every project's vitest.config.mts mergeConfig()s the root one, so a
       // change there (exclude globs, coverage thresholds) must invalidate every
       // test target. The @nx/vitest inferred targets do not list it themselves.
-      "{workspaceRoot}/vitest.config.ts",
+      "{workspaceRoot}/vitest.config.mts",
       // Every project tsconfig but the developer portal's extends this one.
       // Nx 23's inferred typecheck targets listed it as an input; Nx 24's hash
       // only `default` and `^default`, so without it a compiler-option change
