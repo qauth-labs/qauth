@@ -337,8 +337,7 @@ ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
-flows move to the stored values one area at a time: the sign-in policy
-([#528](https://github.com/qauth-labs/qauth/issues/528)), the verification
+flows move to the stored values one area at a time: the verification
 link's lifetime and resend rule, and CIMD
 ([#534](https://github.com/qauth-labs/qauth/issues/534)) still read the
 environment. The token lifetimes
@@ -346,7 +345,15 @@ environment. The token lifetimes
 `ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN` and
 `REFRESH_TOKEN_LIFESPAN` set the lifetimes of a realm only while it has no
 policies (one a node of the previous release created during a rolling
-upgrade, until a node of this release boots again). The mail transport and
+upgrade, until a node of this release boots again). So do the
+verified-account gate, the lowest password score and the failed sign-in
+lockout ([#528](https://github.com/qauth-labs/qauth/issues/528)):
+`REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_SCORE` and the four
+`FAILED_LOGIN_*` keys apply to a realm only while it has no policies, and each
+realm's own `accounts`, `password` and `bruteForce` policies apply once it has
+them. In particular, on a deployment that already ran this release, setting
+`REQUIRE_VERIFIED_ACCOUNT=false` no longer lets unverified accounts of the
+existing realms sign in; change the realm's stored policy instead. The mail transport and
 sender come from the row too
 ([#529](https://github.com/qauth-labs/qauth/issues/529), see
 [Mail secrets move into the realm](#mail-secrets-move-into-the-realm)). The dynamic
@@ -378,9 +385,9 @@ the environment; the release that moves the area to the row applies the
 stored value instead, whatever the key says by then. A key tightened in the
 meantime, such as `CIMD_ENABLED=false`, would loosen again at that upgrade. So
 change the stored policy along with the key, not the key alone. The token
-lifetimes moved in the same release as the policies themselves: a deployment
-that upgrades from 0.1 stores the lifetime keys as they are at its first boot,
-and issues the stored lifetimes from then on.
+lifetimes and the sign-in policy moved in the same release as the policies
+themselves: a deployment that upgrades from 0.1 stores those keys as they are
+at its first boot, and applies the stored values from then on.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after

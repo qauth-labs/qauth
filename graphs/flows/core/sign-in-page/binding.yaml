@@ -20,6 +20,8 @@ server:
   # QAuth's settings for every replay of this flow, over the shared binding's. Each is set explicitly, the defaults
   # included, so that a changed default cannot change what the replay proves. A scenario's `server` is merged over
   # this one, and the replay starts a server of its own for a scenario that changes it.
+  # The four account keys seed the realm policies of a fresh database's default realm (#528): a realm that already
+  # has its policies keeps its own, so a scenario that changes one starts on a fresh database.
   env:
     REQUIRE_VERIFIED_ACCOUNT: 'true' # the default: unset or blank also mean true. Its deprecated name,
     # REQUIRE_EMAIL_VERIFIED, stays unset: the boot fails when the two names disagree.

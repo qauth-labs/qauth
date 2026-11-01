@@ -40,7 +40,7 @@ import type { FastifyPluginAsync } from 'fastify';
  *
  * - `dpop`: `fastify.dpop`; `jwt` needs it too.
  * - `jwt`: `fastify.jwtUtils` and `fastify.requireJwt`.
- * - `password`: `fastify.passwordHasher` and `fastify.passwordValidator`.
+ * - `password`: `fastify.passwordHasher` and `fastify.passwordValidators`.
  * - `pkce`: `fastify.pkceUtils`.
  * - `federation`: `fastify.providerRegistry`, with the wallet configuration's
  *   boot checks.

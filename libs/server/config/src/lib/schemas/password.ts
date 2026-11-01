@@ -14,6 +14,9 @@ export const passwordEnvSchema = z.object({
    * Minimum password strength score (0-4)
    * 0: Very weak, 1: Weak, 2: Fair, 3: Good, 4: Strong
    *
+   * The seed of a new realm's `password.minScore` (#528): registration checks
+   * a password against the realm's own score, read from the realm row.
+   *
    * Blank is unset, so the default. `z.coerce.number()` alone reads `''` as
    * `0`, the weakest score, and it seeds a new realm's `password.minScore`
    * (#514), which reads blank as unset.
