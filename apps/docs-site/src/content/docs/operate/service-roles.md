@@ -3,7 +3,7 @@ title: Service roles
 description: Run the auth server as one process, or split it into web, api, admin, signer and delivery processes with SERVICE_ROLES, and keep keys on the signer only.
 sidebar:
   order: 12
-lastVerified: '2026-10-26'
+lastVerified: '2026-11-01'
 ---
 
 The auth server is one codebase that starts as one or more **service roles**
@@ -20,7 +20,7 @@ key.
 | `web`      | The browser-session endpoints: authorize, the sign-in, consent and wallet pages, the consent list and wallet linking.                                                                                                                                                 | `interaction-expiry`: audits sign-in interactions that expired; `session-expiry`: marks browser sessions past their end; `session-purge`: deletes ended sessions after `SESSION_RETENTION_DAYS` |
 | `api`      | Token, introspection, revocation, userinfo, dynamic registration, discovery, JWKS, the OID4VP endpoints a wallet calls, the account and developer APIs, the SSF transmitter and the legacy `/auth` routes.                                                            | `purge-expired`: expired codes, tokens and wallet state; `ssf-subject-sweep`: SSF user subjects whose relation ended                                                                            |
 | `admin`    | The admin API's internal listener while `ADMIN_API_ENABLED` is on (off by default), on `ADMIN_API_HOST` and `ADMIN_API_PORT` (`127.0.0.1`, port `3002`, by default). No admin operation and no key operation has shipped yet, so it serves only its OpenAPI document. | —                                                                                                                                                                                               |
-| `signer`   | The KEK, every private key and the signer. It runs the default realm's key boot step.                                                                                                                                                                                 | Key rotation, when it ships                                                                                                                                                                     |
+| `signer`   | The KEK, every private key and the signer. It runs the default realm's key boot step. While the roles are split, it also runs the [internal listener](#the-internal-listener), with mutual TLS.                                                                       | Key rotation, when it ships                                                                                                                                                                     |
 | `delivery` | The event delivery reader, which sends the SSF streams.                                                                                                                                                                                                               | `event-retention`                                                                                                                                                                               |
 
 Every role answers `/health` and `/metrics` for its own process. Write the
@@ -68,11 +68,59 @@ the signer yet and stay in the environment of the processes that use them:
 `SESSION_COOKIE_SECRET` (below) and `OID4VP_RESPONSE_KEY_SECRET`, which wraps
 the wallet response keys on `web` and `api` nodes.
 
+## The internal listener
+
+A process that holds `signer` while the roles are split runs a further HTTP
+server, the internal listener, for the other roles' calls to the signer
+service (ADR-019 Decision 8). It binds to `INTERNAL_HOST` and `INTERNAL_PORT`
+(`127.0.0.1`, port `3443`, by default): set `INTERNAL_HOST` to an address the
+other nodes reach. A single process (`SERVICE_ROLES=all`) signs in-process
+and runs none.
+
+It serves mutual TLS only, TLS 1.3 and HTTP/1.1:
+
+- `INTERNAL_TLS_CERT_PATH` and `INTERNAL_TLS_KEY_PATH` hold the certificate it
+  serves, and `INTERNAL_TLS_CA_PATH` the CA certificates that issue every
+  peer's. A client that presents no certificate, or one another CA issued,
+  gets no HTTP answer.
+- `INTERNAL_PEER_ROLES` maps a subject alternative name (SAN) of a peer's
+  certificate to the role the peer calls as, as a JSON object. A key with a
+  `:` is a URI SAN, such as a SPIFFE ID, compared exactly; any other key is a
+  DNS SAN, compared without regard to case. Wildcards and IP addresses are
+  refused. A peer whose certificate holds no mapped SAN, or SANs mapped to two
+  roles, gets `403` on every path.
+- The listener reads its three files again every five seconds and serves new
+  ones with no restart, once a rotation has written both the certificate and
+  its key. A mesh's or a SPIFFE agent's certificates are files like any other,
+  so either can issue them.
+
+The process refuses to start, naming each setting, when the three files or
+`INTERNAL_PEER_ROLES` are missing: the signer is never served without mutual
+TLS. `INTERNAL_PORT` must differ from `PORT`, and from `ADMIN_API_PORT` where
+the admin API runs. Every internal route sits under `/internal/`, and the
+public listener serves none of them. The listener is not routed by host: an
+internal route takes the realm from the request, not from the `Host` header.
+Plain HTTP is allowed only to a single process bound to loopback, and no
+request there has a peer role.
+
+The admin API keeps [its own listener](#the-admin-listener) and its own rule:
+a peer certificate grants nothing there.
+
+```bash
+# The signer's nodes: the internal listener, reachable by the other nodes.
+SERVICE_ROLES=api,admin,signer,delivery
+INTERNAL_HOST=0.0.0.0
+INTERNAL_TLS_CERT_PATH=/run/secrets/signer.crt
+INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
+INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
+INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/web":"web"}
+```
+
 ## What a split deployment can do today
 
-The signer service and the internal listener it answers on are not built yet.
-Until they are, a process without the signer cannot sign anything, and warns
-at boot:
+The internal listener runs, but the signer service it is for is not built
+yet (#497): no signer route answers on it. Until it is, a process without the signer cannot sign
+anything, and warns at boot:
 
 - a request that needs a signature, an encryption or a cookie secret, such as
   token issuance or an ID-JAG assertion, answers `503` with
@@ -97,10 +145,16 @@ INTERNAL_TLS_CERT_PATH=/run/secrets/web.crt
 INTERNAL_TLS_KEY_PATH=/run/secrets/web.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
 
-# The nodes that sign: the KEK and the private keys live here only.
+# The nodes that sign: the KEK and the private keys live here only, and
+# the internal listener serves the other nodes over mutual TLS.
 SERVICE_ROLES=api,admin,signer,delivery
 KEK_PATH=/run/secrets/qauth-kek
 JWT_PRIVATE_KEY_PATH=/run/secrets/qauth-ed25519.pem
+INTERNAL_HOST=0.0.0.0
+INTERNAL_TLS_CERT_PATH=/run/secrets/signer.crt
+INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
+INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
+INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/web":"web"}
 ```
 
 Wallet sign-in builds its signed request on the node that serves
@@ -120,6 +174,8 @@ the cookie key, after which only the `web` role receives it.
 
 With `ENABLE_SWAGGER` on, only a process holding `api` serves the Swagger UI
 and its spec under `/docs`.
+
+## The admin listener
 
 A process holding `admin` runs the admin API on a second listener, beside the
 public one, while `ADMIN_API_ENABLED` is on. It is off by default until the

@@ -20,9 +20,11 @@ import type { FastifyPluginAsync } from 'fastify';
  *   the legacy `/auth/*` routes (the `api` and `meta` surfaces).
  * - Every role registers `/health` and `/metrics`: each process answers for
  *   itself, whatever else it serves.
- * - `admin`, `signer` and `delivery` have no route of their own yet. The admin
- *   API (#511) and the signer service (#497) arrive on the internal listener
- *   (#496); delivery serves no inbound request.
+ * - `admin`, `signer` and `delivery` have no route here. The admin API runs
+ *   on its own listener (#511, `admin/listener.ts`), the signer service
+ *   (#497) on the internal listener, whose routes have a manifest of their
+ *   own (#496, `internal/route-manifest.ts`), and delivery serves no inbound
+ *   request.
  *
  * `route-manifest.test.ts` checks each entry against its module: the plugins
  * and repositories its code reaches, its prefix (the directory's name, or the
