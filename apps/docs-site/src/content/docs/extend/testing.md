@@ -107,13 +107,22 @@ pnpm test:integration
 ```
 
 Defined at `libs/infra/db/project.json:8`, running `vitest.integration.config.mts`, which includes
-only `**/*.integration.test.ts`, runs files serially (one Postgres container per file), and allows
-60s per test for a cold image pull. There are eight such suites today, across **two** projects. Five sit under
-`libs/infra/db/src/lib/` — repositories, identity repositories, OID4VP request state, and two
-migration suites. Three more live in `apps/auth-server/src/app/` (wallet-federation, HAIP and
-credential-status E2E), which is why `apps/auth-server` carries its own `test-integration`
-target: since #240 its wallet-federation E2E boots the real server against testcontainers
-Postgres **and** Redis.
+only `**/*.integration.test.ts` and allows 60s per test for a cold image pull. Every project with
+such suites carries its own `test-integration` target; `libs/infra/db` (repositories and migration
+suites) and `apps/auth-server` hold most of them. Since #240 the auth server's E2E suites boot the
+real server against testcontainers Postgres **and** Redis.
+
+Files run side by side, on servers the config's global setup
+(`libs/shared/testing/src/integration-global-setup.ts`) starts once per `vitest` run: a Postgres
+server per worker slot, each with a template database migrated once, and one Redis server. Each file
+gets a database of its own (a copy of the template, or an empty one for a suite that applies
+migrations itself) and a pair of logical Redis databases, so no file sees another's rows or keys.
+Postgres is per slot rather than one server for the run because a server's transaction horizon spans
+its databases and the event store reads it. A suite that stops a server or creates roles asks for a
+private container (`privateContainer`). `QAUTH_INTEGRATION_WORKERS` sets how many files run at once:
+3 on CI by default, half the cores (at most 4) locally. The
+[`shared-testing` README](../../../../../../libs/shared/testing/README.md#docker-integration-testing)
+has the details.
 
 **This is the only tier that exercises real DDL, and that is not a nice-to-have.** The comment
 above the `integration` job in `ci.yml` states the reasoning better than a paraphrase would:
@@ -134,7 +143,7 @@ failure anywhere else.
 
 Locally, an integration suite skips when Docker is not running. On CI it does not: inside
 `requireDockerOrSkip` there is a CI branch that throws instead of skipping
-(`libs/shared/testing/src/lib/pg-testcontainer.ts:117`), with a message explaining that skipping
+(`libs/shared/testing/src/lib/pg-testcontainer.ts:361`), with a message explaining that skipping
 "turns the run into a green no-op". The `integration` job in `ci.yml` runs on
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
