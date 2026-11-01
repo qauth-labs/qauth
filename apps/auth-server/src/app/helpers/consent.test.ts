@@ -305,6 +305,22 @@ describe('canSkipConsent with an administrative consent (ADR-017 Decision 9)', (
     expect(canSkipConsent(undefined, webRedirect(), ['read:foo', 'write:foo'], [])).toBe(false);
   });
 
+  // A caller that asks only this question, not `evaluateStepUp`, must still
+  // show a first-party client's dangerous scope, however it was granted before.
+  it('does not skip a dangerous scope under a stored consent that covers it', () => {
+    const covering = consent({
+      scopes: ['read:foo', 'write:foo'],
+      resourceScopes: { 'https://rs.example/': ['read:foo', 'write:foo'] },
+    });
+    expect(canSkipConsent(covering, webRedirect(), ['read:foo', 'write:foo'], [])).toBe(false);
+    expect(canSkipConsent(covering, nativeBackend(), ['write:foo'], [])).toBe(false);
+    expect(canSkipConsent(covering, webRedirect(), ['write:foo'], ['https://rs.example/'])).toBe(
+      false
+    );
+    // The same stored consent still skips it for a client without a profile.
+    expect(canSkipConsent(covering, client(), ['read:foo', 'write:foo'], [])).toBe(true);
+  });
+
   it('leaves clients without a profile to the stored consent alone', () => {
     expect(canSkipConsent(undefined, client(), ['email'], [])).toBe(false);
     expect(

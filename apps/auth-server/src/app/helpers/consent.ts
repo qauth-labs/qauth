@@ -191,6 +191,12 @@ export function forcesLoginPrompt(client: FirstPartyClientFields): boolean {
  *     authorization of an agent shows the screen, which names it as an agent
  *     and says how long it may keep working, even when a stored consent
  *     covers the request (ADR-015 Decision 11, ADR-014 §11)
+ *   - the client's first-party profile resolves and a requested scope is
+ *     dangerous (`isDangerousScope`): such a client sees the screen for it
+ *     even when a stored consent covers the request (ADR-017 Decision 9).
+ *     `/oauth/authorize` reaches the same answer through `evaluateStepUp`,
+ *     whose prior-consent scopes for such a client leave dangerous ones out;
+ *     this keeps it for a caller that asks only this question
  *   - no active consent row exists
  *   - the requested scopes are not a subset of the granted ones
  *   - the scopes were not granted for every requested resource
@@ -213,6 +219,9 @@ export function canSkipConsent(
   requestedResources: readonly string[]
 ): boolean {
   if (isAgentClient(client)) return false;
+  if (resolveFirstPartyProfile(client) !== null && requestedScopes.some(isDangerousScope)) {
+    return false;
+  }
   if (administrativeConsentFor(client, requestedScopes) !== null) return true;
   if (!consent) return false;
   if (consent.revokedAt !== null) return false;
