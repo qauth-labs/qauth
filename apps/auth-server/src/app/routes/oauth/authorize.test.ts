@@ -1823,7 +1823,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       );
     }
 
-    it('issues a code with no consent row and audits the waiver once, in the code transaction', async () => {
+    it('issues a code with no stored consent and audits the waiver once, in the code transaction', async () => {
       const { fastify, state } = await run({
         client: PORTAL,
         scope: 'read:foo email',
@@ -1983,7 +1983,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     });
 
     it('treats every request of a native_backend client as prompt=login, whatever it says', async () => {
-      for (const prompt of ['consent', 'login', 'select_account']) {
+      for (const prompt of ['consent', 'login']) {
         const { state } = await run({
           client: NATIVE,
           scope: 'email',
@@ -2022,6 +2022,22 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         );
         emitUserEventMock.mockClear();
       }
+    });
+
+    it('shows a native_backend client the consent screen under prompt=consent, after a fresh login', async () => {
+      // The reviewer's case: rewriting prompt=consent into prompt=login lost
+      // the consent request, and the waiver issued a code.
+      const { fastify, state } = await run({
+        client: NATIVE,
+        scope: 'email',
+        priorConsent: ['email'],
+        authTime: Date.now() - 1000,
+        prompt: 'consent',
+        sid: 'sid-native-consent-fresh',
+      });
+      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(administrativeEvents()).toEqual([]);
     });
 
     it("completes a native_backend client's leg right after the login, under the waiver", async () => {

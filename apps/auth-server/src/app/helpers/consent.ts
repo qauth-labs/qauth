@@ -164,12 +164,13 @@ export function administrativeConsentFor(
 }
 
 /**
- * Whether every `/oauth/authorize` request of this client is treated as
- * carrying `prompt=login` (ADR-017 Decision 9): its first-party profile
- * resolves to `native_backend`. The browser leg of a native app must never
- * complete from a live QAuth session without a visible login, whatever the
- * request's own `prompt` says, since the backend builds that URL and QAuth
- * does not rely on the parameter arriving intact.
+ * Whether every `/oauth/authorize` request of this client asks for a fresh
+ * login as `prompt=login` does (ADR-017 Decision 9): its first-party profile
+ * resolves to `native_backend`. Passed to `evaluateStepUp` as
+ * `forceFreshLogin`, whatever the request's own `prompt` says, since the
+ * backend builds that URL and QAuth does not rely on the parameter arriving
+ * intact. The browser leg of a native app then completes only on a sign-in
+ * within the window `prompt=login` allows, never on an older live session.
  */
 export function forcesLoginPrompt(client: FirstPartyClientFields): boolean {
   return resolveFirstPartyProfile(client)?.profile === 'native_backend';

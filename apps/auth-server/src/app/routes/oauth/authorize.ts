@@ -440,14 +440,16 @@ export default async function (fastify: FastifyInstance) {
     // administrative consent set, the requested scopes minus dangerous ones,
     // and never its stored consent, so a dangerous scope is always an
     // elevation: the consent screen shows it, however it was granted before.
-    // A `native_backend` client's request is treated as `prompt=login`,
-    // whatever its own `prompt` says (`prompt=none` is answered below), so
-    // its browser leg never completes from a live session without a visible
-    // login; the backend builds that URL, and QAuth does not rely on the
-    // parameter arriving intact.
-    const requestedPrompt = parsePromptMode(query.prompt);
+    // A `native_backend` client's request asks for a fresh login as
+    // `prompt=login` does, whatever its own `prompt` says (`prompt=none` is
+    // answered below): the backend builds that URL, and QAuth does not rely
+    // on the parameter arriving intact. Its browser leg then completes only
+    // on a sign-in within STEP_UP_FRESH_AUTH_WINDOW_MS, the window
+    // `prompt=login` gives every client, never on an older live session. The
+    // request's own `prompt` stays as sent, so `prompt=consent` still shows
+    // the consent screen.
+    const prompt = parsePromptMode(query.prompt);
     const forcedLogin = forcesLoginPrompt(client);
-    const prompt = forcedLogin && requestedPrompt !== 'none' ? 'login' : requestedPrompt;
     const firstParty = resolveFirstPartyProfile(client) !== null;
     const stepUp = evaluateStepUp({
       requestedScopes: scopes,
@@ -464,6 +466,7 @@ export default async function (fastify: FastifyInstance) {
       // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login
       // for a development client; explicit prompt/max_age still enforced.
       enforceDangerousStepUp: policy.agentStepUpEnforced,
+      forceFreshLogin: forcedLogin,
     });
 
     // OIDC Core §3.1.2.1: `prompt=none` forbids ANY user-facing UI. If
@@ -523,8 +526,9 @@ export default async function (fastify: FastifyInstance) {
       // stashed server-side under a handle, same as the no-session branch
       // above (#316 follow-up), so this path cannot regrow the header either.
       //
-      // The event names the request's own `prompt`; the reason says when the
-      // client's `native_backend` profile asked for the login instead.
+      // The reason says when the client's `native_backend` profile asked for
+      // the login; the event still lists the request's dangerous scopes and
+      // its own `prompt` and `max_age`.
       await emitUserEvent(
         request,
         'urn:qauth:event:step_up.required:v1-rc.0',
@@ -532,7 +536,7 @@ export default async function (fastify: FastifyInstance) {
           reason: forcedLogin ? 'native_profile_login_required' : 'fresh_authentication_required',
           elevatedScopes: stepUp.elevated,
           dangerousScopes: stepUp.dangerous,
-          ...(requestedPrompt === null ? {} : { prompt: requestedPrompt }),
+          ...(prompt === null ? {} : { prompt }),
           ...(query.max_age === undefined ? {} : { maxAge: query.max_age }),
         },
         userEvent
@@ -573,7 +577,9 @@ export default async function (fastify: FastifyInstance) {
     // Every path that reaches this point skipped the consent screen on the
     // strength of `existingConsent`, or of the administrative consent of a
     // first-party client, which needs no row and is recorded below with the
-    // code (`consent.administrative`). The row read is only a snapshot: a
+    // code (`consent.administrative`). The waiver is decided on the client
+    // as this request read it: a profile an operator removes while the
+    // request runs is not locked against. The row read is only a snapshot: a
     // revocation can commit between it and the insert, and the code would be
     // issued on a consent that no longer exists (DELETE /api/consents/:id
     // already answered 204). So the decision is taken again on the row,

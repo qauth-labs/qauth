@@ -314,6 +314,21 @@ describe('administrative consent and the native fresh login (#633, real containe
     ]);
   });
 
+  it('shows a native_backend client the consent screen under prompt=consent, on a fresh sign-in', async () => {
+    const app = server();
+    const { cookie } = await signedInUser(app);
+
+    // The sign-in is seconds old, so the forced login is met; prompt=consent
+    // is the request's own and still asks for the screen.
+    await expectConsentScreen(
+      app,
+      cookie,
+      await authorize(app, cookie, NATIVE_ID, { prompt: 'consent' })
+    );
+    expect(await codesOf(app, NATIVE_ID)).toBe(0);
+    expect(await administrativeEvents(app)).toEqual([]);
+  });
+
   it('answers a native_backend client with login_required under prompt=none, however fresh the session', async () => {
     const app = server();
     const { cookie } = await signedInUser(app);
