@@ -15,6 +15,12 @@ verifyDepsBeforeRun: warn
 # before it is 7 days old by listing its exact version under
 # minimumReleaseAgeExclude; remove each once it matures.
 minimumReleaseAge: 10080
+minimumReleaseAgeExclude:
+  # The fix of aws/aws-sdk-js-v3#8393: @smithy/core 3.24.0–3.38.0 (all
+  # deprecated) hand a custom logger sensitive values nested in lists and maps
+  # unredacted. keys-aws-kms passes the KMS client no logger, so the tree was not
+  # exposed. Published 2026-10-30T23:11:40Z: remove after 2026-11-06T23:12Z.
+  - '@smithy/core@3.38.1'
 # Workspace deps are linked into consumers as injected (hard-linked) COPIES
 # rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
 # only self-contained when the workspace injects, and `--legacy` instead emits
