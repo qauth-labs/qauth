@@ -147,11 +147,15 @@ response is a final state of its own, so a test can reach every error:
   answer an unknown address, a wrong password, an unconfirmed account and a disabled one alike, so
   that nobody can tell which addresses have accounts. They are still four exits, because they are
   four causes, and a test that sees one answer differently names the cause that changed. What
-  makes two exits one is the same response for the same cause: the same status, error and cause.
+  makes two exits one is the same response for the same cause: the same status, error and cause,
+  where the error and the cause are read from the exit's name.
 
 delurio's SPEC.md (§1, "Text") asks for camelCase identifiers, and delurio 0.2.0 and later enforce
-it with a schema check that refuses these names. QAuth pins 0.1.1, which has no schema check, until
-the names and delurio agree (#560).
+it with a schema check that refuses these names. QAuth keeps them: the name is where a reader, and
+the rule against duplicate exits, finds the error and the cause, and protocol error codes are
+snake_case. delurio is to accept `<error>` and `<error>.<cause>` as the names of final states
+(decided 2026-11-01, #560). Until a delurio release does, QAuth pins 0.1.1, which has no schema
+check.
 
 A flow that a library answers rather than an endpoint, such as the sign-in engine
 (`flows/core/sign-in`) or the upstream step (`flows/federation/upstream-step`), returns data to its
