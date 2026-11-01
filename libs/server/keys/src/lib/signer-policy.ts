@@ -60,6 +60,36 @@ const PUBLIC_READS = { getVerificationKeys: true, getJwks: true, getUpstreamJwks
  */
 export const DELIVERY_SECRET_CONTEXT_PREFIX = 'delivery:';
 
+/**
+ * The `context` prefix of a realm's mail transport secret, the SMTP password
+ * or the Resend API key (`realm_secrets:mail.<field>`, #529): one of the two
+ * kinds of `data_at_rest` ciphertext the `api` role may decrypt, for the
+ * realm's mail sender. `@qauth-labs/server-realm-policy` makes the context
+ * (`realmSecretContext`); this library may not import it, so both pin the
+ * string in their tests.
+ */
+export const REALM_MAIL_SECRET_CONTEXT_PREFIX = 'realm_secrets:mail.';
+
+/**
+ * The `context` prefix of an upstream OpenID Provider's client secret
+ * (`upstream-oidc:client-secret:<realm id>:<provider type>:<destination>`,
+ * #601): another kind of `data_at_rest` ciphertext the `api` role may
+ * decrypt, so the host can open a provider's stored config for the code
+ * exchange, as it already signs that provider's client assertions (#547).
+ * `@qauth-labs/server-upstream-oidc` builds its contexts from this constant.
+ */
+export const UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX = 'upstream-oidc:client-secret:';
+
+/**
+ * The `context` prefix of an AuthMethod plugin's secret config member
+ * (`auth-method-plugin:<plugin id>:<path>`, #600): the third kind of
+ * `data_at_rest` ciphertext the `api` role may decrypt, so the host can open a
+ * realm's plugin config for the plugin's context, which signs that plugin's
+ * client assertions as `api` too. The auth server builds its contexts from
+ * this constant (`authMethodPluginSecretContext`).
+ */
+export const AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX = 'auth-method-plugin:';
+
 const NOTHING_ELSE = {
   signJws: [],
   signHybrid: false,
@@ -76,8 +106,16 @@ const NOTHING_ELSE = {
  * - `web` gets the cookie HMAC secrets, the one secret ADR-019 Decision 9 hands
  *   to a role outside the signer. It never signs a token.
  * - `api` signs access and ID tokens (`token_signing`, hybrid included), signs
- *   client assertions toward upstream providers (#547), and uses the
- *   `data_at_rest` key.
+ *   client assertions toward upstream providers (#547), and encrypts with the
+ *   `data_at_rest` key. It decrypts only three kinds of stored secret: a
+ *   realm's mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}),
+ *   which its mail sender sends with (#529); an upstream provider's client
+ *   secret ({@link UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX}), which the code
+ *   exchange with that provider sends (#601); and an AuthMethod plugin's
+ *   secret member ({@link AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX}), which
+ *   the plugin's context is built with (#600). Nothing else of the role
+ *   decrypts. No granted prefix is the start of another role's, so no grant
+ *   reaches another role's secrets.
  * - `delivery` signs Security Event Tokens and logout tokens
  *   (`event_signing`) and webhook messages (#547). It holds no secret: it
  *   sends the message to the signer and gets the signature header back. It
@@ -109,7 +147,11 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signHybrid: true,
     signClientAssertion: true,
     encrypt: true,
-    decrypt: true,
+    decrypt: [
+      REALM_MAIL_SECRET_CONTEXT_PREFIX,
+      UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+      AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+    ],
     ...PUBLIC_READS,
   },
   delivery: {

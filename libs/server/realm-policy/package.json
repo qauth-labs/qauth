@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/server-config": "workspace:*",
+    "@qauth-labs/server-egress": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "tslib": "catalog:",
     "zod": "catalog:"

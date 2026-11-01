@@ -10,8 +10,14 @@
     "tslib": "catalog:"
   },
   "devDependencies": {
+    "@fastify/formbody": "catalog:",
+    "@qauth-labs/fastify-plugin-signer": "workspace:*",
+    "@qauth-labs/server-egress": "workspace:*",
+    "@qauth-labs/server-keys": "workspace:*",
+    "@qauth-labs/server-upstream-oidc": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
+    "jose": "catalog:",
     "vitest": "catalog:"
   }
 }

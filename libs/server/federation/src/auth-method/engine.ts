@@ -99,10 +99,10 @@ export type UpstreamStepCompletion =
  */
 export async function startUpstreamStep<TConfig, TTransaction>(
   method: AuthMethod<TConfig, TTransaction>,
-  context: AuthMethodContext<TConfig>,
-  request: UpstreamStartRequest
+  request: UpstreamStartRequest,
+  context: AuthMethodContext<TConfig>
 ): Promise<UpstreamStart<TTransaction>> {
-  const answer: unknown = await method.start(context, request);
+  const answer: unknown = await method.start(request, context);
   if (typeof answer !== 'object' || answer === null) {
     throw new AuthMethodFaultError(method.type, 'start() did not answer an object');
   }

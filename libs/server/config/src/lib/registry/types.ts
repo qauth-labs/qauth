@@ -52,6 +52,7 @@ export type KeyOwner =
   | 'id-jag'
   | 'passkeys'
   | 'wallet-federation'
+  | 'plugins'
   | 'rate-limits'
   | 'developer-portal'
   | 'testing';

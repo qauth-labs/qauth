@@ -16,9 +16,19 @@ realm representation, the realm file, the diff of two configurations and the rul
 which changes are security operations all come from it, and so does this page.
 
 Today most of them are still read from the environment, for every realm. Some already live on the
-realm row: the access, development access and refresh token lifetimes, the environment ceiling and
-the scopes a dynamically registered client may hold. Nothing reads the `admin` group yet. Once the policies live on the realm row, the environment only seeds a
-new realm's values, and the realm row owns them from then on.
+realm row: the access, development access and refresh token lifetimes, the environment ceiling, the
+scopes a dynamically registered client may hold, and the mail transport and sender. Nothing reads
+the `admin` group yet. Once the policies live on the realm row, the environment only seeds a new
+realm's values, and the realm row owns them from then on.
+
+A secret field, such as the SMTP password, is never in the policies: the realm keeps its value in
+its secret store, encrypted with the realm's data-at-rest key, and the representation shows only
+whether it is set (`passwordSet`). The environment seeds the first realm's secrets once, at the
+first boot that can encrypt them. A policy update that selects the `smtp` transport without its
+host, port, user, sender address and password, or `resend` without its sender address and API key,
+is refused, and so is one that selects `smtp` or changes its host, port or TLS mode without giving
+the password again, or that names `localhost`, a non-public IP address or a cloud metadata address as
+its SMTP host when the operator's `SMTP_ALLOWED_HOSTS` does not list it (a metadata address never).
 
 Schema version: `1-rc.0`.
 

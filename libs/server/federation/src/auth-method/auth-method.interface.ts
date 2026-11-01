@@ -96,8 +96,8 @@ export interface AuthMethod<TConfig = unknown, TTransaction = unknown> extends C
    * when the provider's discovery document cannot be read.
    */
   start(
-    context: AuthMethodContext<TConfig>,
-    request: UpstreamStartRequest
+    request: UpstreamStartRequest,
+    context: AuthMethodContext<TConfig>
   ): Promise<UpstreamStart<TTransaction>>;
 }
 
@@ -194,6 +194,16 @@ export interface AuthMethodEgressRequest {
    * chose.
    */
   readonly source: 'operator' | 'admin' | 'remote_document';
+  /**
+   * What a redirect answer does: `follow` (the default) follows it, each
+   * target checked as the first URL was, within the host client's redirect
+   * cap; `error` follows none, and a redirect answer rejects the call before
+   * anything is sent to its target. A call that carries a credential in its
+   * body (a client secret, an assertion, a code) uses `error`: a `307` or
+   * `308` would otherwise send that body on to wherever the redirect points.
+   * It can only tighten the host client's caps, never lift them.
+   */
+  readonly redirect?: 'follow' | 'error';
 }
 
 /**

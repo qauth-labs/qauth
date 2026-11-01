@@ -78,6 +78,7 @@ Directory nesting under `libs/` is a readability convention. **The `scope:` tag 
 | `libs/server/email`                   | `@qauth-labs/server-email`                  | `scope:server`                         |
 | `libs/server/step-grammar`            | `@qauth-labs/server-step-grammar`           | `scope:server`                         |
 | `libs/server/sign-in-engine`          | `@qauth-labs/server-sign-in-engine`         | `scope:server`                         |
+| `libs/server/upstream-oidc`           | `@qauth-labs/server-upstream-oidc`          | `scope:server`                         |
 | `libs/fastify/plugins/db`             | `@qauth-labs/fastify-plugin-db`             | `scope:fastify`                        |
 | `libs/fastify/plugins/cache`          | `@qauth-labs/fastify-plugin-cache`          | `scope:fastify`                        |
 | `libs/fastify/plugins/jwt`            | `@qauth-labs/fastify-plugin-jwt`            | `scope:fastify`                        |

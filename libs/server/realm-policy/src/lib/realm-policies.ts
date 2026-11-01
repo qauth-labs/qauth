@@ -11,7 +11,12 @@ import {
 import type { z } from 'zod';
 
 import type { PolicyField } from './field';
-import { BUILT_IN_POLICY_GROUPS } from './groups';
+import {
+  BUILT_IN_POLICY_GROUPS,
+  createMailTransportRule,
+  mailTransportIssues,
+  type MailTransportRuleOptions,
+} from './groups';
 import {
   createPolicyRegistry,
   type JsonSchemaObject,
@@ -23,6 +28,7 @@ import {
   type PolicySeedEnv,
   type PolicyView,
 } from './registry';
+import type { PolicyRule } from './rules';
 
 /**
  * The realm policies of QAuth: one registry holding the built-in groups
@@ -101,6 +107,19 @@ for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
 }
 
 /**
+ * The rules over a whole document that every policy update of a realm must
+ * pass (#529): the mail transport has what it sends with, and its SMTP host
+ * is one a realm may name ({@link createMailTransportRule}), with the hosts
+ * `options.allowedSmtpHosts` lets a realm name although they are not public.
+ */
+export function realmPolicyRules(options: MailTransportRuleOptions = {}): readonly PolicyRule[] {
+  return Object.freeze([createMailTransportRule(options)]);
+}
+
+/** {@link realmPolicyRules} with no SMTP host the operator allows. */
+export const REALM_POLICY_RULES: readonly PolicyRule[] = Object.freeze([mailTransportIssues]);
+
+/**
  * Add a group of realm policies, as another area of QAuth does for its own
  * settings (sessions, sign-in methods, brand). The name is taken once: a
  * second group of the same name, in any case, is refused, and so is every
@@ -134,6 +153,18 @@ export function diffPolicies(
  */
 export function defaultsFromEnv(env: PolicySeedEnv): RealmPolicies {
   return REALM_POLICY_REGISTRY.defaultsFromEnv(env) as RealmPolicies;
+}
+
+/**
+ * The secret values the environment seeds, by field path (#529): what the
+ * boot stores in the first realm's secret store, once. Read as the server
+ * reads each key; a blank value is unset.
+ *
+ * @throws PolicySeedError when a value cannot seed its field (the error
+ *   names the key and the path, never the value)
+ */
+export function secretSeedsFromEnv(env: PolicySeedEnv): ReadonlyMap<string, string> {
+  return REALM_POLICY_REGISTRY.secretSeedsFromEnv(env);
 }
 
 /** The JSON Schema (draft 2020-12) of a view of the realm policies, `representation` by default. */

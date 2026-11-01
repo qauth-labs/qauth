@@ -1,3 +1,5 @@
+import type { SmtpConnectionPolicy } from '../lib/smtp-destination';
+
 /**
  * Configuration for Mock email provider
  */
@@ -38,11 +40,10 @@ export interface SmtpProviderConfig {
   };
   /** Default sender email address */
   fromAddress?: string;
-  /** Additional SMTP options (optional) */
-  options?: {
-    /** Require TLS */
-    requireTLS?: boolean;
-    /** Ignore TLS certificate errors (not recommended for production) */
-    ignoreTLS?: boolean;
-  };
+  /**
+   * Where the connection may go and whether it may stay plaintext: the
+   * operator's switches (`SMTP_ALLOWED_HOSTS`, `SMTP_ALLOW_PLAINTEXT`).
+   * Strict when absent: public addresses only, and STARTTLS required.
+   */
+  connection?: SmtpConnectionPolicy;
 }

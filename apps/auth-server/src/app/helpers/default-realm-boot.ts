@@ -3,6 +3,8 @@ import {
   RelyingPartyIdLockedError,
 } from '@qauth-labs/fastify-plugin-federation';
 import {
+  compareSeedWithStored,
+  type RealmPolicies,
   RealmPolicySeedRefusedError,
   type RealmPolicySeedReport,
   type SetSeedKey,
@@ -59,7 +61,10 @@ import {
  *    reads its policy from the realm row, and otherwise a line that the
  *    stored policy ignores it but the server still applies it to every realm
  *    until that policy moves to the row (`realm-policy-readers.ts`), and that
- *    the stored value applies from then on, whatever the key says. For each
+ *    the stored value applies from then on, whatever the key says. For a key
+ *    of a policy read from the row, a second warning when the key is
+ *    stricter than the stored value, or differs from it where the policy has
+ *    no order (#529); nothing more when they agree. For each
  *    realm step 3 filled, a warning names each field its row kept that
  *    differs from the environment's seed (the ceiling, a non-empty allowlist).
  *
@@ -191,6 +196,28 @@ export function seedKeyStillAppliedNote(key: string, realmName: string, path: st
 }
 
 /**
+ * Logged once per boot, as a warning, for each seed key the environment
+ * sets to a stricter value than the default realm stores, where the server
+ * reads the policy from the realm row (#529, from the review of #516): the
+ * stored, looser value applies. An operator who tightened the key while the
+ * server still read it from the environment gets the stored value back when
+ * the area moves to the row, so the line says so.
+ */
+export function seedKeyStricterWarning(key: string, realmName: string, path: string): string {
+  return `${key} is stricter than the stored ${path} of the realm "${realmName}", and the stored value applies: the environment only seeds. To keep ${key}'s value, store it through the realm's policies`;
+}
+
+/**
+ * Logged once per boot, as a warning, for each seed key the environment
+ * sets to another value than the default realm stores, for a policy with no
+ * order (such as the mail transport's host), where the server reads it from
+ * the realm row (#529): the stored value applies.
+ */
+export function seedKeyDiffersWarning(key: string, realmName: string, path: string): string {
+  return `${key} differs from the stored ${path} of the realm "${realmName}", and the stored value applies: the environment only seeds. To use ${key}'s value, store it through the realm's policies`;
+}
+
+/**
  * Logged once, as a warning, for each field the boot's fill kept from a
  * realm's row although the environment seeds another value (#516): the
  * environment ceiling, or a dynamic registration allowlist that holds a scope.
@@ -229,6 +256,14 @@ export interface DefaultRealmBootSettings {
    * logged once. Absent, none.
    */
   readonly seedKeysSet?: readonly SeedKeyInEnvironment[];
+  /**
+   * The policies the environment seeds (`defaultsFromEnv`, #516). Given, each
+   * key of `seedKeysSet` the realm ignores while the server reads its policy
+   * from the realm row is compared with the stored value (#529): a stricter
+   * or, for a policy with no order, another value is logged. Absent, no
+   * comparison.
+   */
+  readonly environmentSeeds?: RealmPolicies;
 }
 
 /**
@@ -238,7 +273,8 @@ export interface DefaultRealmBootSettings {
 export interface DefaultRealmBootDependencies {
   readonly db: Pick<FastifyInstance['db'], 'transaction'>;
   readonly realms: FastifyInstance['repositories']['realms'];
-  readonly policies: Pick<FastifyInstance['policyStore'], 'seedRealms'>;
+  readonly policies: Pick<FastifyInstance['policyStore'], 'seedRealms'> &
+    Partial<Pick<FastifyInstance['policyStore'], 'ofRealm'>>;
   readonly log: Pick<FastifyBaseLogger, 'info' | 'warn'>;
 }
 
@@ -346,6 +382,18 @@ export async function bootDefaultRealm(
     const fields = { variable: key, realm: result.realm.name, policy: path };
     if (readFromRealmRow) {
       deps.log.warn(fields, seedKeyIgnoredWarning(key, result.realm.name, path));
+      const comparison = storedComparison(deps, settings, result.realm, path);
+      if (comparison === 'stricter') {
+        deps.log.warn(
+          { ...fields, environment: comparison },
+          seedKeyStricterWarning(key, result.realm.name, path)
+        );
+      } else if (comparison === 'different') {
+        deps.log.warn(
+          { ...fields, environment: comparison },
+          seedKeyDiffersWarning(key, result.realm.name, path)
+        );
+      }
     } else {
       deps.log.info(fields, seedKeyStillAppliedNote(key, result.realm.name, path));
     }
@@ -365,6 +413,42 @@ export async function bootDefaultRealm(
     'default realm ready'
   );
   return result;
+}
+
+/** The value at a dotted `path` of a policy document. */
+function policyValueAt(document: unknown, path: string): unknown {
+  let node: unknown = document;
+  for (const segment of path.split('.')) {
+    if (typeof node !== 'object' || node === null || !Object.hasOwn(node, segment)) {
+      return undefined;
+    }
+    node = (node as Record<string, unknown>)[segment];
+  }
+  return node;
+}
+
+/**
+ * Step 7 (#529): how the environment's seed of `path` compares with the
+ * value the realm stores, or `undefined` without the seeds or the store's
+ * `ofRealm`. A stored document the schema refuses is not compared: the
+ * flows that read it say so themselves.
+ */
+function storedComparison(
+  deps: DefaultRealmBootDependencies,
+  settings: DefaultRealmBootSettings,
+  realm: RealmRow,
+  path: string
+) {
+  if (settings.environmentSeeds === undefined || deps.policies.ofRealm === undefined) {
+    return undefined;
+  }
+  let stored: unknown;
+  try {
+    stored = policyValueAt(deps.policies.ofRealm(realm).policies, path);
+  } catch {
+    return undefined;
+  }
+  return compareSeedWithStored(path, policyValueAt(settings.environmentSeeds, path), stored);
 }
 
 /** Whether step 3 wrote the policies of the realm `realmId`. */

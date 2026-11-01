@@ -158,12 +158,42 @@ function approvalSummary(approval: AdminApproval): NonNullable<AdminChange['chan
   };
 }
 
-/** `value` as the route's schema part parses it, or a refusal naming the part. */
+/** The most refusal reasons a filing's 400 names. */
+const MAX_NAMED_REASONS = 5;
+
+/**
+ * The messages of a failed parse's `custom` issues: the reasons a route's own
+ * refinements give, fixed strings its schema writes, such as a plugin
+ * configure's "config holds a secret member". No other issue's message is
+ * named, since one such as an unrecognized key's quotes the request.
+ */
+function customReasons(error: unknown): string[] {
+  const issues = (error as { issues?: unknown } | null | undefined)?.issues;
+  if (!Array.isArray(issues)) return [];
+  const reasons = issues
+    .filter(
+      (issue: unknown): issue is { code: 'custom'; message: string } =>
+        typeof issue === 'object' &&
+        issue !== null &&
+        (issue as { code?: unknown }).code === 'custom' &&
+        typeof (issue as { message?: unknown }).message === 'string'
+    )
+    .map((issue) => issue.message);
+  return [...new Set(reasons)].slice(0, MAX_NAMED_REASONS);
+}
+
+/**
+ * `value` as the route's schema part parses it, or a refusal naming the part
+ * and the reasons the route's own refinements give ({@link customReasons}).
+ */
 function parsedPart(part: RouteSchemaPart | undefined, value: unknown, name: string): unknown {
   if (part === undefined) return value;
   const parsed = part.safeParse(value);
   if (!parsed.success) {
-    throw new BadRequestError(`The ${name} of the operation do not pass its route's validation`);
+    const reasons = customReasons(parsed.error);
+    throw new BadRequestError(
+      `The ${name} of the operation do not pass its route's validation${reasons.length > 0 ? `: ${reasons.join('; ')}` : ''}`
+    );
   }
   return parsed.data;
 }

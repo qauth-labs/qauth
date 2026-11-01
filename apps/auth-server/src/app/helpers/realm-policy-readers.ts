@@ -10,11 +10,11 @@ import type { RealmRow } from './request-realm';
  * Since #516 every realm stores its policies, and the environment only
  * seeds a new realm. The flows move to the stored values one area at a time:
  * the token lifetimes (#527, moved), the verified-account, password and
- * brute-force policy (#528), mail (#529) and CIMD (#534). Until an area has moved, the
- * server still reads its keys from the environment for every realm, so the
- * default realm's boot step says a set key is ignored only for a path listed
- * here; for any other it says the server still applies the key. The issue
- * that moves an area adds its paths.
+ * brute-force policy (#528), the mail transport and sender (#529, moved) and
+ * CIMD (#534). Until an area has moved, the server still reads its keys from
+ * the environment for every realm, so the default realm's boot step says a
+ * set key is ignored only for a path listed here; for any other it says the
+ * server still applies the key. The issue that moves an area adds its paths.
  */
 export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // `/oauth/register` and the clients API (`routes/clients/index.ts`) cap a
@@ -31,6 +31,20 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // The token endpoint: the ceiling of a token for the admin API (ADR-019
   // Decision 7), which no environment key seeds.
   'tokens.adminAccessTokenLifespanSeconds',
+  // The realm's mail sender (`helpers/realm-secrets.ts`, #529): its
+  // transport and sender, read for every mail. The SMTP password and the
+  // Resend API key are secrets, seeded once into the realm's secret store,
+  // not listed here. The verification link's lifetime and the resend rule
+  // (`mail.verificationTokenExpirySeconds`,
+  // `mail.invalidateExistingTokensOnResend`) are still read from the
+  // environment.
+  'mail.provider',
+  'mail.fromAddress',
+  'mail.fromName',
+  'mail.smtp.host',
+  'mail.smtp.port',
+  'mail.smtp.secure',
+  'mail.smtp.user',
 ]);
 
 /**

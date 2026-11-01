@@ -469,9 +469,17 @@ describe('policy store over the realms table (integration)', () => {
       seeds: { policies: { document: SEEDS, schemaVersion: REALM_POLICY_SCHEMA_VERSION } },
     }).create({ name: 'secrets' });
 
+    // A complete smtp transport: the mail rule (#529) refuses one without its
+    // host, port, user, sender address and password.
     await store.update(
       realm.id,
-      { mail: { provider: 'smtp', smtp: { host: 'smtp.example.com', password: SECRET } } },
+      {
+        mail: {
+          provider: 'smtp',
+          fromAddress: 'no-reply@example.com',
+          smtp: { host: 'smtp.example.com', port: 587, user: 'mailer', password: SECRET },
+        },
+      },
       { expectedVersion: 1 }
     );
 

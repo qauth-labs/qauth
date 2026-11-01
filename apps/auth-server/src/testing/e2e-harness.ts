@@ -289,6 +289,12 @@ export interface BootAuthServerOptions {
    */
   readonly logStream?: { write(line: string): void };
   /**
+   * The lowest level `logStream` receives; `warn` by default. A suite that
+   * checks no log line holds a value (a plugin secret, #600) takes every
+   * line with `debug`.
+   */
+  readonly logLevel?: 'debug' | 'info' | 'warn';
+  /**
    * Run the default realm's boot step (#484), which needs the database. On by
    * default. A suite that boots against a database URL it never dials, to test
    * what registration accepts or refuses, turns it off.
@@ -338,6 +344,12 @@ export interface BootAuthServerOptions {
    * The listener listens on an ephemeral port: `BootedAuthServer.internalUrl`.
    */
   readonly internalListener?: () => InternalListenerFixture | Promise<InternalListenerFixture>;
+  /**
+   * Replace the `import()` of an AuthMethod plugin package and the
+   * first-party list (#600), so a suite boots with fixture plugins. The app
+   * refuses it outside NODE_ENV=test.
+   */
+  readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
 }
 
 /** What a suite gives the internal listener (#496). */
@@ -393,6 +405,10 @@ export async function bootAuthServer(
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
+      // The mail transport's seeds (#529): SMTP_PASSWORD or RESEND_API_KEY
+      // left by one boot would seed the next one's realm.
+      key.startsWith('SMTP_') ||
+      key.startsWith('RESEND_') ||
       key.startsWith('JWT_') ||
       // A key variable too (#493): a boot that leaves it out boots without it.
       key === 'SESSION_COOKIE_SECRET' ||
@@ -405,7 +421,10 @@ export async function bootAuthServer(
       key === 'SERVICE_ROLES' ||
       key === 'SIGNER_URL' ||
       // The internal listener (#496): its address, its TLS files and its peers.
-      key.startsWith('INTERNAL_')
+      key.startsWith('INTERNAL_') ||
+      // The plugin runtime (#600): a boot that lists no plugin loads none.
+      key === 'AUTH_METHOD_PLUGINS' ||
+      key === 'PLUGIN_API_ENABLED'
     ) {
       delete process.env[key];
     }
@@ -416,7 +435,8 @@ export async function bootAuthServer(
   // first import's parsed `env` would be reused for every later boot.
   vitest.vi.resetModules();
 
-  const { app, defaultRealmBootSettings } = await import('../app/app');
+  const { app, defaultRealmBootSettings, realmSecretSeedSettings } = await import('../app/app');
+  const { seedRealmSecrets } = await import('../app/helpers/realm-secrets');
   const { createAdminServer } = await import('../app/admin/listener');
   const { createInternalServer } = await import('../app/internal/listener');
   const { readInternalTlsFiles } = await import('../app/internal/tls-files');
@@ -433,7 +453,7 @@ export async function bootAuthServer(
   const server = Fastify({
     logger:
       options.logStream !== undefined
-        ? { level: 'warn', stream: options.logStream }
+        ? { level: options.logLevel ?? 'warn', stream: options.logStream }
         : process.env['E2E_DEBUG_LOG'] === '1',
     routerOptions: { ignoreTrailingSlash: true },
     // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
@@ -515,6 +535,9 @@ export async function bootAuthServer(
     ...(options.egressClientFactory === undefined
       ? {}
       : { egressClientFactory: options.egressClientFactory }),
+    ...(options.authMethodPlugins === undefined
+      ? {}
+      : { authMethodPlugins: options.authMethodPlugins }),
   });
   const { routes } = options;
   if (routes !== undefined) {
@@ -536,7 +559,7 @@ export async function bootAuthServer(
     // The environment as this server booted with it: a later boot of another
     // server rewrites `process.env`.
     const bootEnvironment = { ...process.env };
-    const quiet = { info: () => undefined, warn: () => undefined };
+    const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
     const bootRealmKeys = (realmName: string, withVariables: boolean) =>
       bootRealmKeysWithKekEnv(
         {
@@ -552,6 +575,8 @@ export async function bootAuthServer(
           environmentKeys: withVariables ? keyVariableSettings(env, bootEnvironment) : {},
         }
       );
+    // Read now: a later boot of another server rewrites `process.env`.
+    const secretSeedSettings = realmSecretSeedSettings();
     defaultRealmReboots.set(server, async () => {
       await bootDefaultRealm(
         {
@@ -563,6 +588,20 @@ export async function bootAuthServer(
         defaultRealmBootSettings()
       );
       await bootRealmKeys(defaultRealmBootSettings().realmName, true);
+      // The realms' secrets (#529), as the boot seeds them once the default
+      // realm's keys exist.
+      const secrets = server.realmSecretStore;
+      if (secrets !== null) {
+        await seedRealmSecrets(
+          {
+            realms: server.repositories.realms,
+            policies: server.policyStore,
+            secrets,
+            log: quiet,
+          },
+          secretSeedSettings
+        );
+      }
     });
     realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
     const keyDependencies = {
@@ -929,9 +968,9 @@ export async function registerPasswordAccount(
   const emailService = app.emailService;
   const original = emailService.sendVerificationEmail;
   const tokens: string[] = [];
-  emailService.sendVerificationEmail = async (to, token, link, options) => {
+  emailService.sendVerificationEmail = async (realmId, to, token, link, options) => {
     if (to === email) tokens.push(token);
-    return original.call(emailService, to, token, link, options);
+    return original.call(emailService, realmId, to, token, link, options);
   };
   try {
     const response = await app.inject({

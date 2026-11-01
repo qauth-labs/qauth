@@ -122,6 +122,17 @@
 >   operator and never by a realm admin, a client, an end user or a fetched document. It uses mutual
 >   TLS 1.3 only, knows the server by a pinned certificate SAN, follows no redirect, never leaves
 >   the base URL's path, and caps the time and the size of each response.
+>
+> **Amended 2026-11-01** with the maintainer's decision of that day on a realm's mail transport
+> (#529, PR #937). A realm's SMTP relay is read from its policies, so once the admin API writes them
+> (#517) a realm admin chooses the host. The egress client speaks HTTP only.
+>
+> - Decision 8: a realm's SMTP connection is outside the egress client and applies the same
+>   destination rules itself. It resolves the host for each message, checks every address and
+>   connects only to a checked public unicast address, with the host name as the TLS server name. A
+>   private, loopback or link-local host is reached only when the operator lists it in
+>   `SMTP_ALLOWED_HOSTS`, and a cloud metadata address never. STARTTLS is required unless the
+>   operator sets `SMTP_ALLOW_PLAINTEXT`. Neither switch is a realm setting.
 
 ## Context
 
@@ -771,8 +782,10 @@ the allowlist to name; the adapter uses TLS only, follows no redirect and caps t
 of each response (amendment of 2026-10-27). Traffic between QAuth's own roles over the internal
 listener is not an outbound call to a configured third party and stays outside the client too: the
 internal client reaches only a role of the same deployment, such as the signer service at
-`SIGNER_URL`, over mutual TLS with the server's identity pinned (amendment of 2026-11-01). The
-client:
+`SIGNER_URL`, over mutual TLS with the server's identity pinned (amendment of 2026-11-01). A realm's
+SMTP connection is outside it as well, because the client speaks HTTP only; it applies the same
+destination rules itself, with STARTTLS required unless the operator sets `SMTP_ALLOW_PLAINTEXT`
+(second amendment of 2026-11-01). The client:
 
 - serves every HTTP method, not only `GET`;
 - uses `https` only, with no credentials in the URL;

@@ -243,9 +243,9 @@ describe('every absolute URL comes from the realm row (#490)', () => {
     const emailService = app.emailService;
     const original = emailService.sendVerificationEmail;
     const links: string[] = [];
-    emailService.sendVerificationEmail = async (to, token, link, options) => {
+    emailService.sendVerificationEmail = async (realmId, to, token, link, options) => {
       if (to === email) links.push(link.baseUrl);
-      return original.call(emailService, to, token, link, options);
+      return original.call(emailService, realmId, to, token, link, options);
     };
     try {
       const response = await app.inject({

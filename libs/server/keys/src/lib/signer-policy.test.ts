@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 
 import { SIGNER_OPERATIONS } from './signer';
 import {
+  AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
+  REALM_MAIL_SECRET_CONTEXT_PREFIX,
   SIGNER_CALLERS,
   SIGNER_POLICY,
   type SignerCaller,
+  UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './signer-policy';
 import { JWS_SIGNING_PURPOSES } from './signer-typ';
 
@@ -50,7 +53,6 @@ describe('SIGNER_POLICY', () => {
         'signHybrid',
         'signClientAssertion',
         'encrypt',
-        'decrypt',
         'getVerificationKeys',
         'getJwks',
         'getUpstreamJwks',
@@ -99,12 +101,79 @@ describe('SIGNER_POLICY', () => {
       expect(isSignerCallAllowed('delivery', 'decrypt', context), String(context)).toBe(false);
     }
     // A grant of `true` takes any context, or none.
-    expect(isSignerCallAllowed('api', 'decrypt')).toBe(true);
-    expect(isSignerCallAllowed('api', 'decrypt', 'anything')).toBe(true);
+    expect(isSignerCallAllowed('local', 'decrypt')).toBe(true);
+    expect(isSignerCallAllowed('local', 'decrypt', 'anything')).toBe(true);
     expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'encrypt'))).toEqual([
       'local',
       'api',
     ]);
+  });
+
+  it("lets api decrypt only a realm's mail secret, an upstream client secret and a plugin secret (#529, #601, #600)", () => {
+    // Pinned as strings: server-realm-policy makes the mail contexts without
+    // importing this library, and a changed prefix must fail here.
+    expect(REALM_MAIL_SECRET_CONTEXT_PREFIX).toBe('realm_secrets:mail.');
+    expect(UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX).toBe('upstream-oidc:client-secret:');
+    expect(AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX).toBe('auth-method-plugin:');
+    expect(SIGNER_POLICY.api.decrypt).toEqual([
+      REALM_MAIL_SECRET_CONTEXT_PREFIX,
+      UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
+      AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+    ]);
+    // The contexts `realmSecretContext` of server-realm-policy,
+    // `upstreamClientSecretContext` of server-upstream-oidc and
+    // `authMethodPluginSecretContext` of the auth server make.
+    for (const context of [
+      'realm_secrets:mail.smtp.password',
+      'realm_secrets:mail.resend.apiKey',
+      `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
+      'auth-method-plugin:corp:clientSecret',
+    ]) {
+      expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
+    }
+    for (const context of [
+      undefined,
+      '',
+      'delivery:ssf_streams.x:1',
+      'delivery:upstream-oidc:client-secret:realm-1:oidc_corp',
+      'realm_secrets:admin.x',
+      'realm_secrets:mailx',
+      'upstream-oidc:client-secretx',
+      'upstream-oidc:other:realm-1',
+      'Upstream-oidc:client-secret:realm-1:oidc_corp',
+      'auth-method-pluginx:corp:clientSecret',
+      'Auth-method-plugin:corp:clientSecret',
+      'oid4vp_request_states.key:1',
+    ]) {
+      expect(isSignerCallAllowed('api', 'decrypt', context), String(context)).toBe(false);
+    }
+    // Neither the browser-facing role nor delivery opens a provider's or a plugin's secret.
+    for (const caller of ['web', 'delivery', 'admin'] as const) {
+      for (const context of [
+        'upstream-oidc:client-secret:realm-1:oidc_corp',
+        'auth-method-plugin:corp:clientSecret',
+      ]) {
+        expect(isSignerCallAllowed(caller, 'decrypt', context), `${caller} ${context}`).toBe(false);
+      }
+    }
+  });
+
+  it("grants no role a decrypt prefix that is the start of another role's", () => {
+    const granted = SIGNER_CALLERS.flatMap((caller) => {
+      const { decrypt } = SIGNER_POLICY[caller];
+      return Array.isArray(decrypt) ? decrypt.map((prefix: string) => ({ caller, prefix })) : [];
+    });
+    expect(granted.length).toBeGreaterThan(0);
+    for (const one of granted) {
+      expect(one.prefix, one.caller).not.toBe('');
+      for (const other of granted) {
+        if (other.caller === one.caller) continue;
+        expect(
+          other.prefix.startsWith(one.prefix),
+          `${one.caller}'s ${one.prefix} starts ${other.caller}'s ${other.prefix}`
+        ).toBe(false);
+      }
+    }
   });
 
   it('gives the cookie secrets to web and local only', () => {
