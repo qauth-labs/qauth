@@ -289,6 +289,12 @@ export interface BootAuthServerOptions {
    */
   readonly logStream?: { write(line: string): void };
   /**
+   * The lowest level `logStream` receives; `warn` by default. A suite that
+   * checks no log line holds a value (a plugin secret, #600) takes every
+   * line with `debug`.
+   */
+  readonly logLevel?: 'debug' | 'info' | 'warn';
+  /**
    * Run the default realm's boot step (#484), which needs the database. On by
    * default. A suite that boots against a database URL it never dials, to test
    * what registration accepts or refuses, turns it off.
@@ -442,7 +448,7 @@ export async function bootAuthServer(
   const server = Fastify({
     logger:
       options.logStream !== undefined
-        ? { level: 'warn', stream: options.logStream }
+        ? { level: options.logLevel ?? 'warn', stream: options.logStream }
         : process.env['E2E_DEBUG_LOG'] === '1',
     routerOptions: { ignoreTrailingSlash: true },
     // As in `main.ts`: `request.host` reads `X-Forwarded-Host` only from a
