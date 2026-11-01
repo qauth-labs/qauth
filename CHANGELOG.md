@@ -1354,7 +1354,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   functions reach `/developer/v1-rc.0` for clients, API keys and consents, read
   each list page by page, and name the client's `ETag` in `If-Match` when they
   save it, so an edit to a client changed in another tab is refused ("this
-  client was changed since you opened it") rather than overwriting it.
+  client was changed since you opened it") rather than overwriting it. A
+  secret regeneration changes the client too, and the page takes the `ETag`
+  its answer carries, so the next save is not refused as stale.
 
 - **The auth server no longer creates a secret-based system client** ([#631],
   ADR-017 phase F0). When a realm has no system client yet, the first sign-in
