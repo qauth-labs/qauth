@@ -16,6 +16,11 @@ interface CredentialRow {
   readonly userId: string;
   readonly realmId: string;
   readonly credentialData: Record<string, unknown>;
+  /**
+   * The failure ladder's disabled mark (#615): when the hard action disabled
+   * the credential, in epoch ms, else `null`. Absent reads as no mark.
+   */
+  readonly disabledAt?: number | null;
 }
 
 /**
@@ -48,6 +53,18 @@ export interface AccountDirectoryLog {
   error(details: Record<string, unknown>, message: string): void;
 }
 
+/** Options of {@link createRepositoryAccountDirectory}. */
+export interface AccountDirectoryOptions {
+  /**
+   * Whether the failure ladder's hard action is armed (#615), asked at run
+   * time and only for a credential that carries a disabled mark: while it is,
+   * a marked credential is unusable; while it is not, the mark is ignored and
+   * reported as such, so a successful sign-in clears it. An error refuses the
+   * lookup, so the round fails closed. Absent: never armed.
+   */
+  readonly hardActionArmed?: (realmId: string) => Promise<boolean>;
+}
+
 /**
  * The sign-in engine's account directory over the auth server's repositories
  * (ADR-002: `users` is the identity anchor, credentials live in
@@ -66,13 +83,28 @@ export interface AccountDirectoryLog {
  *   the realm, and whether it holds a live admin grant seen from the realm
  *   (#510). An account that exists so costs one read more than none before
  *   the password is checked, not four.
- * - No factor is disabled yet: `user_credentials.disabled_at` comes with the
- *   ladder's hard action (#615).
+ * - A credential the failure ladder's hard action marked
+ *   (`user_credentials.disabled_at`, #615) is disabled only while the hard
+ *   action is armed, which is asked only when a mark is there. It still counts
+ *   as bound: the account holds it, and only the owner's reset clears it.
+ *   While the hard action is unarmed the mark is ignored: the password is
+ *   usable and reported with `ignoredMark`, so a successful sign-in clears it.
  */
 export function createRepositoryAccountDirectory(
   stores: AccountDirectoryRepositories,
-  log: AccountDirectoryLog
+  log: AccountDirectoryLog,
+  options: AccountDirectoryOptions = {}
 ): AccountDirectory {
+  const armed = options.hardActionArmed ?? (async () => false);
+  /** Whether each row is disabled: its mark, honoured only while the hard action is armed. */
+  const disabledOf = async (
+    realmId: string,
+    rows: readonly CredentialRow[]
+  ): Promise<boolean[]> => {
+    const marked = rows.map((row) => row.disabledAt !== undefined && row.disabledAt !== null);
+    const honoured = marked.some(Boolean) ? await armed(realmId) : false;
+    return marked.map((mark) => mark && honoured);
+  };
   return Object.freeze({
     async findByIdentifier(realmId: string, identifier: string): Promise<SignInCandidate | null> {
       const credential = await stores.userCredentials.findByRealmProviderSub(
@@ -94,13 +126,16 @@ export function createRepositoryAccountDirectory(
           'malformed credential_data on password credential'
         );
       }
+      const marked = credential.disabledAt !== undefined && credential.disabledAt !== null;
+      const disabled = (await disabledOf(realmId, [credential]))[0] === true;
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,
         verified: data.success && data.data.email_verified,
         password: Object.freeze({
-          disabled: false,
+          disabled,
           hash: data.success ? data.data.password_hash : null,
+          ...(marked && !disabled ? { ignoredMark: true } : {}),
         }),
       });
     },
@@ -116,9 +151,16 @@ export function createRepositoryAccountDirectory(
         await stores.userCredentials.findAllByUserIdAndType(user.id, WEBAUTHN_PROVIDER_TYPE)
       );
       const grants = await stores.adminGrants.listLive(realmId, user.id);
+      const disabled = await disabledOf(realmId, [...passwords, ...passkeys]);
       const factors: BoundFactor[] = [
-        ...passwords.map(() => ({ type: 'password' as const, disabled: false })),
-        ...passkeys.map(() => ({ type: 'passkey' as const, disabled: false })),
+        ...passwords.map((_, index) => ({
+          type: 'password' as const,
+          disabled: disabled[index] === true,
+        })),
+        ...passkeys.map((_, index) => ({
+          type: 'passkey' as const,
+          disabled: disabled[passwords.length + index] === true,
+        })),
       ];
       return Object.freeze({
         userId: user.id,

@@ -509,6 +509,9 @@ importers:
       '@qauth-labs/fastify-plugin-sessions':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/sessions
+      '@qauth-labs/fastify-plugin-sign-in-engine':
+        specifier: workspace:*
+        version: link:../../libs/fastify/plugins/sign-in-engine
       '@qauth-labs/fastify-plugin-signer':
         specifier: workspace:*
         version: link:../../libs/fastify/plugins/signer
@@ -1083,6 +1086,9 @@ importers:
         specifier: 'catalog:'
         version: 6.0.1
     devDependencies:
+      '@qauth-labs/infra-cache':
+        specifier: workspace:*
+        version: link:../../../infra/cache
       '@qauth-labs/infra-db':
         specifier: workspace:*
         version: link:../../../infra/db

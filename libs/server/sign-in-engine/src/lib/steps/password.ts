@@ -1,5 +1,15 @@
-import type { LadderHook, LadderReservation } from '../hooks';
-import type { AccountDirectory, PasswordVerifier, SignInAccount } from '../ports';
+import {
+  type LadderHook,
+  type LadderReservation,
+  type LadderSettlement,
+  NOTHING_DUE,
+} from '../hooks';
+import type {
+  AccountDirectory,
+  PasswordHardAction,
+  PasswordVerifier,
+  SignInAccount,
+} from '../ports';
 import { fromStore, SignInStoreUnavailableError } from '../store';
 import type { StepHandler, StepVerdict, VerdictAudit } from './handler';
 
@@ -8,9 +18,11 @@ export interface PasswordStepDependencies {
   readonly accounts: AccountDirectory;
   readonly passwords: PasswordVerifier;
   readonly ladder: LadderHook;
+  /** The ladder's hard action (#615): at the hard ceiling, and for an ignored mark a success clears. */
+  readonly hardAction: PasswordHardAction;
   /** `REQUIRE_VERIFIED_ACCOUNT`: an unverified account is refused like a wrong password. */
   readonly requireVerifiedAccount: boolean;
-  /** Told when settling a reservation failed: reported, never answered. */
+  /** Told when settling a reservation or the hard action failed: reported, never answered. */
   readonly onSettleFailure?: (error: SignInStoreUnavailableError) => void;
 }
 
@@ -35,23 +47,44 @@ export interface PasswordStepDependencies {
  *    (ANT-2026-SPEMY9GU; PRO-15 verifies it inline instead). Each refusal
  *    settles the attempt as a failure. Only the audit record's reason tells
  *    them apart.
+ *    When the failure counted at the ladder's hard ceiling (#615) and the
+ *    identifier names an enabled account with a password not yet disabled,
+ *    the hard action is called: it disables the password only while it is
+ *    armed. A disabled user is never changed.
  * 5. Otherwise settle the attempt as a success: the password proved the
- *    account.
+ *    account, and its counter is cleared. A disabled mark the lookup ignored
+ *    (the hard action unarmed) is cleared too, as a reset would.
  *
- * Settling never changes the answer: the attempt is already counted as a
- * failure, so a settle that fails is reported and leaves it so, whichever
- * way the password went.
+ * Settling and the hard action never change the answer: the attempt is
+ * already counted as a failure, so a settle that fails is reported and leaves
+ * it so, whichever way the password went, and a hard action that fails is
+ * reported and fires again at the run's next failure.
  */
 export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<'password'> {
-  const settle = async (reservation: LadderReservation, outcome: 'success' | 'failure') => {
+  const report = (port: string, error: unknown) => {
     try {
-      await reservation.settle(outcome);
+      deps.onSettleFailure?.(new SignInStoreUnavailableError(port, error));
+    } catch {
+      // A reporter that fails must not change the password's verdict either.
+    }
+  };
+  const settle = async (
+    reservation: LadderReservation,
+    outcome: 'success' | 'failure'
+  ): Promise<LadderSettlement> => {
+    try {
+      const settled = await reservation.settle(outcome);
+      return settled?.ceilingReached === true ? settled : NOTHING_DUE;
     } catch (error) {
-      try {
-        deps.onSettleFailure?.(new SignInStoreUnavailableError('ladder', error));
-      } catch {
-        // A reporter that fails must not change the password's verdict either.
-      }
+      report('ladder', error);
+      return NOTHING_DUE;
+    }
+  };
+  const hardAction = async (call: () => Promise<void>) => {
+    try {
+      await call();
+    } catch (error) {
+      report('hardAction', error);
     }
   };
   const handler: StepHandler<'password'> = {
@@ -69,7 +102,12 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
       const identifierHmac = await round.identifierHmac();
 
       const reservation = await fromStore('ladder', () =>
-        deps.ladder.reserve({ realmId: round.realmId, identifierHmac, factor: 'password' })
+        deps.ladder.reserve({
+          realmId: round.realmId,
+          identifierHmac,
+          factor: 'password',
+          ...(round.endUserIp === undefined ? {} : { endUserIp: round.endUserIp }),
+        })
       );
       if (reservation.kind === 'wait') {
         return {
@@ -93,8 +131,15 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
         valid = await fromStore('passwords', () => deps.passwords.verify(hash, presented));
       }
 
+      const target = (userId: string) => ({ realmId: round.realmId, userId, identifier });
       const refuse = async (audit: VerdictAudit): Promise<StepVerdict> => {
-        await settle(reservation, 'failure');
+        const settled = await settle(reservation, 'failure');
+        // The hard action, for an account that exists and is enabled, whose
+        // password was usable: not already disabled, its data readable. A
+        // disabled user is never changed.
+        if (settled.ceilingReached && candidate !== null && candidate.enabled && hash !== null) {
+          await hardAction(() => deps.hardAction.ceilingReached(target(candidate.userId)));
+        }
         return { kind: 'refused', error: 'invalid_credentials', audit };
       };
       if (candidate === null || !valid) return refuse({ reason: 'invalid_credentials' });
@@ -104,6 +149,11 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
         return refuse({ reason: 'email_not_verified' });
       }
       await settle(reservation, 'success');
+      // A mark the lookup ignored while the hard action is unarmed: a
+      // successful sign-in clears it, as a reset does (ADR-017 Decision 7).
+      if (password?.ignoredMark === true) {
+        await hardAction(() => deps.hardAction.clearIgnoredMark(target(candidate.userId)));
+      }
       return {
         kind: 'proved',
         account: {

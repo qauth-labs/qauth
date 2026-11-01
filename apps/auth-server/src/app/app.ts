@@ -66,6 +66,7 @@ import {
 import { keyVariableSettings, kidlessTokenKeyIds } from './helpers/key-variables';
 import { SYSTEM_CLIENT_AUDIENCE } from './helpers/oauth-client';
 import { oid4vpResponseKeySecret } from './helpers/oid4vp-response-key';
+import { createServerPasswordAttempts } from './helpers/password-attempts';
 import type { RealmHostLookup } from './helpers/realm-host-cache';
 import { logRefusedMailTransports } from './helpers/realm-mail-transport';
 import { POLICIES_READ_FROM_REALM_ROW } from './helpers/realm-policy-readers';
@@ -882,6 +883,16 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       // score (`password.minScore`, #528), which registration reads from the
       // realm row; PASSWORD_MIN_SCORE only seeds it in a new realm.
     });
+  }
+
+  // The per-account failure ladder (#615, ADR-017 Decision 7): the legacy
+  // login routes reserve each attempt on it before a password is read, over
+  // the cache plugin's Redis, keyed on HMACs derived from the realm's cookie
+  // key. Any error of it refuses the attempt before a credential is checked.
+  // Its hard action writes `userCredentials`, which every login route that
+  // needs the plugin reads anyway (the route manifest lists it).
+  if (plugins.has('failureLadder')) {
+    fastify.decorate('passwordAttempts', createServerPasswordAttempts(fastify));
   }
 
   if (plugins.has('pkce')) {

@@ -17,13 +17,21 @@ export {
   type HookRound,
   type LadderHook,
   type LadderReservation,
+  type LadderSettlement,
   type LadderVerdict,
   type LimitVerdict,
   NO_LADDER,
+  NOTHING_DUE,
   type RequestVerdict,
   type SignInHooks,
 } from './lib/hooks';
 export { IDENTIFIER_MAX_BYTES, readIdentifier } from './lib/identifier';
+export {
+  checkLadderPolicy,
+  type LadderPolicy,
+  ladderWaitMs,
+  PASSWORD_LADDER_POLICY,
+} from './lib/ladder';
 export {
   type AccountDirectory,
   type AuditSink,
@@ -36,7 +44,10 @@ export {
   type MfaMode,
   type MfaPolicy,
   type MfaPolicyReader,
+  NO_HARD_ACTION,
   NO_SECOND_FACTOR_POLICY,
+  type PasswordHardAction,
+  type PasswordHardActionInput,
   type PasswordVerifier,
   SIGN_IN_AUDIT_REASONS,
   type SignInAccount,

@@ -51,6 +51,9 @@ import type { FastifyPluginAsync } from 'fastify';
  * - `egress`: `fastify.egress`, the SSRF-safe client of the outbound calls a
  *   route makes for a configuration value or a request (CIMD documents,
  *   client and issuer JWKS, ID-JAG discovery; ADR-019 Decision 8, #481).
+ * - `failureLadder`: `fastify.passwordAttempts`, the per-account failure
+ *   ladder the legacy login routes reserve on before a password is read
+ *   (#615, ADR-017 Decision 7).
  */
 export const ROLE_PLUGINS = [
   'dpop',
@@ -63,6 +66,7 @@ export const ROLE_PLUGINS = [
   'ssf',
   'eventDelivery',
   'egress',
+  'failureLadder',
 ] as const;
 
 /** One of {@link ROLE_PLUGINS}. */
@@ -182,7 +186,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'auth/login',
     prefix: '/auth',
     roles: ['api'],
-    plugins: ['egress', 'federation', 'jwt', 'password'],
+    plugins: ['egress', 'failureLadder', 'federation', 'jwt', 'password'],
     repositories: ['events', 'oauthClients', 'refreshTokens', 'userCredentials', 'users'],
     load: () => import('./routes/auth/login'),
   },
@@ -228,7 +232,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'auth/verify',
     prefix: '/auth',
     roles: ['api'],
-    plugins: ['email', 'password'],
+    plugins: ['email', 'failureLadder', 'password'],
     repositories: ['emailVerificationTokens', 'userAttributes', 'userCredentials', 'users'],
     load: () => import('./routes/auth/verify'),
   },
@@ -389,7 +393,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'ui/login',
     prefix: '/ui',
     roles: ['web'],
-    plugins: ['federation', 'password', 'sessions'],
+    plugins: ['failureLadder', 'federation', 'password', 'sessions'],
     repositories: ['events', 'userCredentials', 'users'],
     load: () => import('./routes/ui/login'),
   },
@@ -405,7 +409,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'ui/verify',
     prefix: '/ui',
     roles: ['web'],
-    plugins: ['email', 'password'],
+    plugins: ['email', 'failureLadder', 'password'],
     repositories: ['emailVerificationTokens', 'userAttributes', 'userCredentials', 'users'],
     load: () => import('./routes/ui/verify'),
   },

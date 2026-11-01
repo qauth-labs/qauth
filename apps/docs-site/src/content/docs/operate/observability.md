@@ -152,6 +152,53 @@ realm's stored policy instead.
 Under Docker Compose they reach the container only because they are listed — see
 the Compose caveat below.
 
+### Per-account failure ladder
+
+Beside that lock, every password attempt at `POST /auth/login` and
+`POST /ui/login`, and every password the email verification checks
+(`POST /auth/verify`, `POST /ui/verify`), is reserved on the per-account
+failure ladder (ADR-017 Decision 7), the one the sign-in engine uses too. It is not configurable and
+does not depend on the realm's `bruteForce` policy: a realm whose lock is off
+(`bruteForce.enabled` false) still counts on the ladder.
+
+- **Counted before the check.** One Redis script reads the account's wait,
+  refuses an attempt inside it, and otherwise counts the attempt as a failure
+  and sets the next wait, so parallel guesses meet the same ladder as guesses
+  sent one at a time. A correct password clears the count.
+- **The wait.** From 5 consecutive failures the next attempt waits
+  2^(n−5) seconds, capped at 15 minutes. An attempt inside the wait gets
+  `429 Too Many Requests` with `Retry-After`, like a locked one, and is neither
+  verified nor counted; it counts as `reason="locked_out"` on
+  `qauth_login_attempts_total`.
+- **Known IPs.** An end-user IP with a successful sign-in to the account in
+  the last 30 days skips the wait (the 16 most recent per account), and its
+  attempts still count toward the hard action.
+- **No address in Redis.** The keys are
+  `sign-in-ladder:{<realm id>:<identifier HMAC>}:password` and
+  `…:known-ips`: the identifier and each known IP are kept as keyed HMACs,
+  derived from the realm's cookie HMAC secret. A rotation of that secret
+  starts every account's count afresh within a minute. A run of failures is
+  kept 30 days after its last counted failure.
+- **Redis memory.** Every address tried, held by an account or not, keeps a
+  small hash for 30 days, so a spray of made-up addresses grows Redis for a
+  month (the per-IP rate limits bound how fast). Size Redis for it. When Redis
+  is full, `noeviction` refuses new counts, and so every password sign-in
+  (fail closed); a `volatile-*` or `allkeys-*` policy may evict a count
+  instead, which gives that account its free tries again.
+- **Fail closed.** Unlike the lock above, a Redis error, or a call slower than
+  2 s, refuses the attempt with `503` and `Retry-After: 5` before any
+  credential is checked, and logs `sign-in failure ladder unavailable` at
+  `error`.
+- **The hard action.** At 100 consecutive counted failures the password is
+  disabled (`user_credentials.disabled_at`), the owner is notified and the
+  operator alerted with the `error` log `password disabled by the failure
+  ladder`. It is armed only while the realm's hosted password reset is on and
+  the deployment can send the notice; neither ships yet, so today every
+  failure from the 100th on only logs the warning `password failure ladder reached its hard
+  ceiling; the hard action is unarmed, so the password stays usable`, with the
+  realm and the user. A mark found while the hard action is unarmed is
+  ignored, and the next successful sign-in clears it and logs a warning.
+
 ## Metrics (`GET /metrics`)
 
 QAuth exposes Prometheus metrics in text exposition format at `GET /metrics`

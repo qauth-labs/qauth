@@ -37,6 +37,13 @@ export interface RoundContext {
   readonly serves?: readonly StepName[];
   /** When the request arrived, in epoch milliseconds: the timing floor counts from it. Absent means now. */
   readonly receivedAt?: number;
+  /**
+   * The end-user IP, as the limiters key it (an IPv6 address by its /64): the
+   * request's address on the Interaction API, the signed `qauth_end_user_ip`
+   * claim at the FiPA endpoint (ADR-017 Decision 7). The ladder's known-IP
+   * exemption reads it; absent, no attempt is exempt.
+   */
+  readonly endUserIp?: string;
   /** Where the round's audit records go. */
   readonly audit: AuditSink;
 }

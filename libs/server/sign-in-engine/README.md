@@ -18,7 +18,8 @@ const engine = createSignInEngine({
   policy: NO_SECOND_FACTOR_POLICY, // MfaPolicyReader: read on every round
   identifierDigest, // the identifier's keyed HMAC
   requireVerifiedAccount: true, // REQUIRE_VERIFIED_ACCOUNT
-  hooks: {}, // limits, request, botChallenge, ladder: later issues fill them
+  hooks: { ladder }, // limits, request, botChallenge: later issues fill them; ladder: #615
+  passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [], // the steps later issues add
 });
 
@@ -73,7 +74,8 @@ authentication, run before the call). The first unmet rule produces the answer.
    it (ADR-017 Decision 4).
 6. The first factor (rule 7), offered alike to every account until one succeeds: the password
    required, with any other first factor beside it. The password answer is reserved on the
-   `ladder` hook (PRO-12, #615) before it is verified.
+   `ladder` hook (PRO-12, #615) before it is verified: inside the account's wait it is refused as
+   `throttled`, neither verified nor counted.
 7. After a first factor (rule 8): the downgrade rule (the transaction must prove the account's
    strongest bound factor; a disabled factor still counts as bound), then the MFA policy just read
    (a policy that requires a second factor needs `mfa` in the `amr`). A rule no registered step can
@@ -112,6 +114,25 @@ authentication, run before the call). The first unmet rule produces the answer.
   offered; after one, the account's remaining usable methods that can meet the rules. An email
   code can never be registered as a sign-in step.
 
+## The failure ladder
+
+`PASSWORD_LADDER_POLICY` (`src/lib/ladder.ts`) is the password's ladder (ADR-017 Decision 7): from
+5 consecutive failures the next attempt waits 2^(n−5) seconds, capped at 15 minutes; an end-user IP
+with a successful sign-in to the account in the last 30 days skips the wait and still counts; 100
+consecutive counted failures fire the hard action; a run is kept 30 days after its last counted
+failure. A correct password clears its own counter and no other (`onSuccess: 'clear'`); a counter
+of failures alone only takes the attempt back (`withdraw`). The store applies the policy (the auth
+server's is a Redis script in `@qauth-labs/fastify-plugin-sign-in-engine`); `ladderWaitMs` and
+`checkLadderPolicy` are the one source every store and test reads.
+
+A failure counted at the ceiling, for an enabled account whose usable password it was, calls
+`passwordHardAction.ceilingReached`; the adapter disables the password only while the hard action
+is armed (the realm's hosted reset is on and the deployment can send the owner the notice, asked at
+run time). While it is not, the directory reports a disabled mark as `ignoredMark` and the password
+stays usable, and a sign-in that proves it calls `clearIgnoredMark`. Neither call changes the
+answer: a failure is reported through `onUnavailable`. `src/testing/memory-ladder.ts` is an
+in-memory ladder with the same rules, for tests.
+
 ## Audit records
 
 Each processed step writes one record through the round's `audit` sink: `passed`, `refused` or
@@ -144,4 +165,3 @@ email code (#638) is never an authenticator.
   ones it offered: a challenge handler whose params change every round needs the offered params kept
   first.
 - The policy has no storage yet: `NO_SECOND_FACTOR_POLICY` is the default until it has one.
-- `user_credentials.disabled_at` does not exist yet (#615): the adapters report no factor disabled.

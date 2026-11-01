@@ -1,3 +1,7 @@
+import {
+  type PasswordAttempt,
+  SignInStoreUnavailableError,
+} from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
@@ -12,6 +16,7 @@ import { clientAddressKey } from '../../helpers/client-address';
 import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
+import { ladderEndUserIp } from '../../helpers/password-attempts';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -42,6 +47,9 @@ import { type LoginForm, loginFormSchema } from '../../schemas/auth';
  * own origin so we cannot be abused as an open redirector. Any failing
  * input falls back to `/`.
  */
+
+/** The `Retry-After` of a sign-in refused because the failure ladder's store failed (#615). */
+const LADDER_UNAVAILABLE_RETRY_SECONDS = 5;
 
 /** The sign-in page's HTML: the form, an optional refusal and the wallet link. */
 function loginPage(opts: {
@@ -378,6 +386,43 @@ export default async function (fastify: FastifyInstance) {
         return renderRefusal(429, 'Too many failed sign-in attempts. Please try again later.');
       }
 
+      // The per-account failure ladder (#615), beside the lock above and
+      // shared with POST /auth/login and the sign-in engine: the attempt is
+      // reserved before the password is read. One inside the account's wait
+      // is refused like a locked one, neither verified nor counted; a store
+      // that fails refuses the attempt before any credential is checked.
+      let attempt: PasswordAttempt;
+      try {
+        attempt = await fastify.passwordAttempts.reserve({
+          realmId: realm.id,
+          identifier: normalizedEmail,
+          ...ladderEndUserIp(request),
+        });
+      } catch (error) {
+        if (!(error instanceof SignInStoreUnavailableError)) throw error;
+        fastify.log.error({ err: error, port: error.port }, 'sign-in failure ladder unavailable');
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+          { method: 'password', reason: 'internal_error' },
+          { realmId: realm.id, actor: 'user' }
+        );
+        reply.header('Retry-After', String(LADDER_UNAVAILABLE_RETRY_SECONDS));
+        return renderRefusal(503, 'Sign-in is unavailable right now. Please try again shortly.');
+      }
+      if (attempt.kind === 'wait') {
+        await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+          { method: 'password', reason: 'locked_out' },
+          { realmId: realm.id, actor: 'user' }
+        );
+        reply.header('Retry-After', String(attempt.retryAfterSeconds));
+        return renderRefusal(429, 'Too many failed sign-in attempts. Please try again later.');
+      }
+
       // Password check via the user_credentials read path (#228); the enabled
       // gate below still reads the users row.
       const check = await verifyPasswordCredential(fastify, {
@@ -414,6 +459,21 @@ export default async function (fastify: FastifyInstance) {
       }
 
       if (check.status !== 'ok' || unverified || !user || !user.enabled) {
+        // The attempt stays counted on the ladder; at its hard ceiling the
+        // hard action (#615) may disable the usable password of an enabled
+        // account, read only then. A disabled user is never changed.
+        const refusedUserId =
+          check.status === 'ok'
+            ? check.credential.userId
+            : check.status === 'invalid'
+              ? check.userId
+              : undefined;
+        await attempt.failed(async () => {
+          if (refusedUserId === undefined) return null;
+          const owner =
+            user ?? (await fastify.repositories.users.findById(realm.id, refusedUserId));
+          return owner?.enabled === true ? { userId: owner.id } : null;
+        });
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         // The unverified account is a known user, and the event's subject.
         await emitUserEvent(
@@ -438,6 +498,10 @@ export default async function (fastify: FastifyInstance) {
       await recordSuccessfulLogin(fastify.redis, realm.id, policies.bruteForce, lockout, [
         emailIdentifier,
       ]);
+      // The ladder: the password's counter is cleared, this address becomes
+      // known to the account, and a mark the unarmed hard action ignored is
+      // cleared (#615).
+      await attempt.succeeded({ userId: user.id, ignoredMark: check.ignoredMark });
 
       // Session-fixation defense: always a new session, with a new `sid`, on
       // a successful credential check, even if the browser already had one.

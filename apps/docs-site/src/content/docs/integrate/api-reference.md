@@ -209,7 +209,11 @@ its developer signs in again (see
 [API conventions](/reference/api-conventions/#issuing-a-family-audience)). It
 is not a sign-in at `GET /oauth/authorize`, which takes only the browser session.
 
-Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited).
+Errors: `400` (validation), `401` (invalid credentials), `429` (rate limited,
+locked out, or inside the account's wait on the
+[per-account failure ladder](/operate/observability/#per-account-failure-ladder);
+with `Retry-After`), `503` (the failure ladder's store is unavailable; nothing
+was checked; `Retry-After: 5`).
 The `401` is the same for an unknown address, a wrong password, a disabled
 account and, while the realm requires verified accounts
 (`accounts.requireVerifiedAccount`, the default), an account whose
@@ -255,8 +259,9 @@ Errors: `400` (malformed token, or an unknown, expired or used token: one
 answer for all of them), `401` `INVALID_CREDENTIALS` (wrong password; the token
 is not consumed, so the request can be retried), `409` (the address is already
 verified), `429` (rate limited, or the account is locked out: wrong passwords
-here count toward the same failed-login lockout as `POST /auth/login`, and the
-`429` carries `Retry-After`).
+here count toward the same failed-login lockout and per-account failure ladder
+as `POST /auth/login`, and the `429` carries `Retry-After`), `503` (the failure
+ladder's store is unavailable; the password was not checked; `Retry-After: 5`).
 
 ### `GET /auth/verify`
 
@@ -288,17 +293,18 @@ the realm's primary host only (`421` on an endpoint host).
 `csrf_token`) answers a page with the status `POST /auth/verify` answers for the
 same outcome:
 
-| Status | Outcome                                                                  |
-| ------ | ------------------------------------------------------------------------ |
-| `200`  | Verified. The account can sign in.                                       |
-| `400`  | Unknown, expired or used token (one page for all), or a malformed body.  |
-| `401`  | Wrong password. The form stays; nothing is consumed.                     |
-| `403`  | CSRF pair missing or mismatched. The form comes back with a fresh token. |
-| `409`  | The address is already verified.                                         |
-| `429`  | Rate limited, or locked out by the failed-login lockout (`Retry-After`). |
+| Status | Outcome                                                                                        |
+| ------ | ---------------------------------------------------------------------------------------------- |
+| `200`  | Verified. The account can sign in.                                                             |
+| `400`  | Unknown, expired or used token (one page for all), or a malformed body.                        |
+| `401`  | Wrong password. The form stays; nothing is consumed.                                           |
+| `403`  | CSRF pair missing or mismatched. The form comes back with a fresh token.                       |
+| `409`  | The address is already verified.                                                               |
+| `429`  | Rate limited, or locked out by the failed-login lockout or the failure ladder (`Retry-After`). |
+| `503`  | The failure ladder's store is unavailable; nothing was checked (`Retry-After`).                |
 
 It has the rate limit of `POST /auth/verify`, and wrong passwords count toward
-the same failed-login lockout. This page is interim: the email-code step (#638)
+the same failed-login lockout and failure ladder. This page is interim: the email-code step (#638)
 and the hosted account verification UI (#644) replace link verification.
 
 ### `POST /auth/resend-verification`

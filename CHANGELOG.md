@@ -1121,6 +1121,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user is resolved. The sign-in graph `graphs/flows/core/sign-in` now describes
   the engine (proposed), and the captured graph of the `/ui/login` page moved
   to `graphs/flows/core/sign-in-page`.
+- **The per-account failure ladder** ([#615], ADR-017 Decisions 5 and 7,
+  ADR-020 §3, NIST SP 800-63B-4 §3.2.2). Wrong passwords are counted per
+  account in Redis, before the password is checked: one Redis script reads the
+  account's wait, refuses an attempt that falls inside it, and otherwise counts
+  the attempt and sets the next wait, so 200 guesses sent in parallel reach the
+  password check no more often than the same guesses sent one at a time. From
+  5 consecutive failures the next attempt waits 2^(n−5) seconds, capped at 15
+  minutes; an attempt inside the wait gets `429` with `Retry-After`, is not
+  verified and is not counted. A correct password clears the password's
+  counter and no other. An end-user IP with a successful sign-in to the
+  account in the last 30 days skips the wait (up to 16 per account) and still
+  counts toward the hard action. A run of failures is kept 30 days after its
+  last counted failure. The counter is keyed on a keyed HMAC of the realm and
+  the normalised identifier, whether or not an account holds it, and known IPs
+  are kept as keyed HMACs too, so no Redis key or value holds an address; both
+  keys are derived with HKDF from the realm's cookie HMAC secret under labels
+  of their own (`urn:qauth:key-use:end-user-ip-hmac:v1-rc.0` for the IPs), and
+  no new secret is added. A rotation of that secret starts every run afresh. A
+  Redis error or a call slower than 2 s refuses the attempt with `503` and
+  `Retry-After: 5` before any credential is checked. `POST /auth/login` and
+  `POST /ui/login`, and the password check of the email verification
+  (`POST /auth/verify`, `POST /ui/verify`), reserve and count on the ladder
+  beside their own lock (the realm's `bruteForce` policy, unchanged), and the
+  sign-in engine's `ladder` hook is the same ladder. At 100 consecutive counted
+  failures the hard action disables the password
+  (`user_credentials.disabled_at`, migration `0052`), alerts the
+  operator (the error log `password disabled by the failure ladder`) and
+  notifies the owner, but only while it is armed: while the realm's hosted
+  password reset is on ([#642]) and the deployment can send the notice
+  ([#637]), asked at run time. Neither ships yet, so the hard action stays
+  unarmed: each failure from the 100th on logs a warning, the credential
+  lookup ignores a disabled mark, and the next successful sign-in clears it.
+  The notice is sent without being awaited, so a slow mail transport cannot
+  tell, by the answer's timing, an account from a made-up address. The two
+  sign-in flow graphs (`graphs/flows/core/sign-in-page`, `sign-in-token`)
+  draw the reservation, the wait and the unavailable store.
 - **Service roles and a role switch** ([#495], ADR-019 Decisions 8 and 9).
   `SERVICE_ROLES` (stable) starts the auth server as `all`, the default and
   unchanged single process, or as a comma-separated list of `web`, `api`,
@@ -2540,7 +2576,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#631]: https://github.com/qauth-labs/qauth/issues/631
+[#615]: https://github.com/qauth-labs/qauth/issues/615
 [#633]: https://github.com/qauth-labs/qauth/issues/633
+[#637]: https://github.com/qauth-labs/qauth/issues/637
+[#642]: https://github.com/qauth-labs/qauth/issues/642
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845

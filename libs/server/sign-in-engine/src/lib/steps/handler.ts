@@ -44,6 +44,8 @@ export interface StepRound {
   readonly transaction: SignInTransaction;
   /** The transaction's identifier, once it holds one. */
   readonly identifier?: string;
+  /** The round's end-user IP, for the ladder's known-IP exemption (`RoundContext.endUserIp`). */
+  readonly endUserIp?: string;
   /**
    * The identifier's keyed HMAC, computed at most once a round. Throws
    * `SignInStoreUnavailableError` when the key cannot be read.

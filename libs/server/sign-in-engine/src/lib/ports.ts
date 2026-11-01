@@ -47,8 +47,16 @@ export interface SignInCandidate {
    * The account's password, when it has one: whether it is disabled, and its
    * Argon2id hash, `null` when the credential's data cannot be read. Without
    * a usable one the engine verifies against the dummy hash and refuses.
+   *
+   * `disabled` is the ladder's disabled mark while the hard action is armed
+   * (#615); while it is unarmed the lookup ignores a mark, reports it as
+   * `ignoredMark`, and a successful sign-in clears it.
    */
-  readonly password: { readonly disabled: boolean; readonly hash: string | null } | null;
+  readonly password: {
+    readonly disabled: boolean;
+    readonly hash: string | null;
+    readonly ignoredMark?: boolean;
+  } | null;
 }
 
 /** What rule 8 needs of the account a factor proved: read only after the proof. */
@@ -89,6 +97,42 @@ export interface PasswordVerifier {
    */
   verifyDecoy(presented: string): Promise<void>;
 }
+
+/** Which password the hard action is about: the one `identifier` names in the realm, of `userId`. */
+export interface PasswordHardActionInput {
+  readonly realmId: string;
+  readonly userId: string;
+  /** The normalised identifier: the password credential's own key. */
+  readonly identifier: string;
+}
+
+/**
+ * The hard action of the password's failure ladder (ADR-017 Decision 7,
+ * #615). The engine calls it after the verdict is made, and a failure of it
+ * never changes the answer: it is reported through `onUnavailable`.
+ */
+export interface PasswordHardAction {
+  /**
+   * A failure of the password counted at or past the ladder's hard ceiling,
+   * for an account that exists and is enabled: disable the password, notify
+   * the owner and alert the operator. Only while the hard action is armed,
+   * which the adapter checks at run time (the hosted reset is on and the
+   * deployment can send the notices); unarmed, it changes nothing. Idempotent.
+   */
+  ceilingReached(input: PasswordHardActionInput): Promise<void>;
+  /**
+   * The password proved the account while the lookup ignored its disabled
+   * mark (the hard action unarmed): clear the mark, as the owner's reset
+   * would.
+   */
+  clearIgnoredMark(input: PasswordHardActionInput): Promise<void>;
+}
+
+/** No hard action: a ceiling disables nothing and a mark stays. The default, for tests. */
+export const NO_HARD_ACTION: PasswordHardAction = Object.freeze({
+  ceilingReached: async () => undefined,
+  clearIgnoredMark: async () => undefined,
+});
 
 /** How a realm or a client sets MFA (ADR-020): off, optional, required, or required for admins. */
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;
