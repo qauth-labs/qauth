@@ -16,7 +16,7 @@
  * indistinguishable from a pass.
  *
  * Tagged via the `*.integration.test.ts` suffix so the fast unit run and the
- * coverage gate (vitest.config.ts) exclude it — CI runs it via the dedicated
+ * coverage gate (vitest.config.mts) exclude it — CI runs it via the dedicated
  * `test-integration` target in the `integration` job of ci.yml.
  */
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
@@ -46,7 +46,7 @@ describe('repository integration (real Postgres)', () => {
   // test self-skips so non-Docker lanes stay green instead of failing.
   let dockerUp = false;
 
-  // Container startup is paid once for the whole suite.
+  // Database setup is paid once for the whole suite.
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
@@ -781,15 +781,18 @@ describe('repository integration (real Postgres)', () => {
     }
 
     /**
-     * Wait until `count` sessions wait for an advisory lock: proof that the
-     * requests reached Postgres and block on the lock, not merely that they
-     * have not answered yet.
+     * Wait until `count` sessions of this database wait for an advisory
+     * lock: proof that the requests reached Postgres and block on the lock,
+     * not merely that they have not answered yet. Only this database: the
+     * server holds other suites' databases too.
      */
     async function untilWaitingOnAdvisoryLocks(count: number): Promise<void> {
       const deadline = Date.now() + 10_000;
       for (;;) {
         const { rows } = await db().database.pool.query<{ waiting: string }>(
-          `SELECT count(*) AS waiting FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`
+          `SELECT count(*) AS waiting FROM pg_locks
+            WHERE locktype = 'advisory' AND NOT granted
+              AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`
         );
         if (Number(rows[0].waiting) >= count) return;
         if (Date.now() > deadline) {

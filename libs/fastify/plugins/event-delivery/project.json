@@ -8,7 +8,7 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts libs/fastify/plugins/event-delivery",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the Docker-backed delivery role tests against the migrated schema (testcontainers Postgres): a crashed worker's event delivered again, two workers, retries on a fake clock, a destination that is down. Requires a running Docker daemon."

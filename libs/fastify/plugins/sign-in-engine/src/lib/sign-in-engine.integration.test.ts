@@ -32,7 +32,6 @@ import {
 } from '@qauth-labs/server-sign-in-engine';
 import { STEP_URNS } from '@qauth-labs/server-step-grammar';
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   startPostgresContainer,
@@ -56,8 +55,7 @@ describe('the sign-in engine over the server adapters (real Postgres)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    container = await startPostgresContainer();
-    await applyQauthMigrations(container.connectionString);
+    container = await startPostgresContainer({ schema: 'migrated' });
     database = createDatabase({ connectionString: container.connectionString });
     const { db } = database;
     const hasher = createPasswordHasher();

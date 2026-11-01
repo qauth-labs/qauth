@@ -96,8 +96,8 @@ export interface AuthMethod<TConfig = unknown, TTransaction = unknown> extends C
    * when the provider's discovery document cannot be read.
    */
   start(
-    context: AuthMethodContext<TConfig>,
-    request: UpstreamStartRequest
+    request: UpstreamStartRequest,
+    context: AuthMethodContext<TConfig>
   ): Promise<UpstreamStart<TTransaction>>;
 }
 

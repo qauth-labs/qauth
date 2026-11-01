@@ -130,7 +130,15 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     // policy store refuses a write of a secret, and cannot tell one set.
     summary: 'the admin API and key operations, on the internal listener',
     plugins: ['jwt'],
-    repositories: ['users', 'adminGrants', 'adminAuditLog', 'adminApprovals', 'realmSecrets'],
+    // The plugin operations (#600) read and write `realmAuthMethodPlugins`.
+    repositories: [
+      'users',
+      'adminGrants',
+      'adminAuditLog',
+      'adminApprovals',
+      'realmSecrets',
+      'realmAuthMethodPlugins',
+    ],
   },
   signer: {
     // The in-process signer and its key boot step are registered for this role

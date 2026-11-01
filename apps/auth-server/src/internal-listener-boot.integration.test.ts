@@ -25,7 +25,6 @@ import { connect, createServer } from 'node:net';
 import path from 'node:path';
 
 import {
-  applyQauthMigrations,
   requireDockerOrSkip,
   type StartedPostgres,
   type StartedRedis,
@@ -137,9 +136,8 @@ describe('the internal listener of src/main.ts (#496, testcontainers)', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    postgres = await startPostgresContainer();
+    postgres = await startPostgresContainer({ schema: 'migrated' });
     redis = await startRedisContainer();
-    await applyQauthMigrations(postgres.connectionString);
     jwt = await generateJwtPem();
     pki = createInternalPki();
     tls = writeTlsFiles(pki.issue({ uris: [SIGNER_SAN] }), pki.caPem);

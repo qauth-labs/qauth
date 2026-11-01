@@ -92,7 +92,8 @@ describe('the DPoP replay store with Redis gone', () => {
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
-    redis = await startRedisContainer();
+    // The case stops Redis: a server of its own, not the run's shared one.
+    redis = await startRedisContainer({ privateContainer: true });
     client = new Redis(redis.connectionUrl);
   }, 180_000);
 

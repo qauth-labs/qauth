@@ -22,9 +22,10 @@ describe('the experimental-feature registry', () => {
     ]);
   });
 
-  it('marks only the oid4vp-1.0-base verifier profile as built', () => {
+  it('marks only the oid4vp-1.0-base verifier profile and the plugin API as built', () => {
     expect(EXPERIMENTAL_ITEMS.filter((item) => item.built).map((item) => item.id)).toEqual([
       'oid4vp-1.0-base',
+      'plugin-api',
     ]);
   });
 

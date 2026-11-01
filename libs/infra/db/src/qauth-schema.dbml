@@ -210,6 +210,7 @@ Table "oauth_clients" {
   "description" text
   "redirect_uris" jsonb [not null, note: "Array of allowed redirect URIs"]
   "scopes" jsonb [not null, default: `'[]'::jsonb`, note: "Default OAuth scopes"]
+  "client_credentials_scopes" jsonb [note: "The scopes the client_credentials grant may issue, out of scopes; NULL = any of them; set only through the seed manifest (#891)"]
   "enabled" boolean [not null, default: true]
   "require_pkce" boolean [not null, default: true, note: "PKCE required by default (OAuth 2.1)"]
   "token_endpoint_auth_method" "token_endpoint_auth_method" [not null, default: 'client_secret_post']

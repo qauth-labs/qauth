@@ -116,6 +116,17 @@ interface PasswordValidationConfig {
 
 **Throws**: `ZodError` if the configuration is invalid
 
+#### `createPasswordValidators(): PasswordValidators`
+
+Creates the password validators of a server whose realms each set their own lowest score (`password.minScore`, #528): `forMinScore(minScore)` returns the validator for that score, built with `createPasswordValidator` on first use and cached by score, so at most five are ever built. A score outside 0-4 throws a `ZodError` and is not cached. The auth server's password plugin decorates the result as `fastify.passwordValidators`.
+
+```typescript
+import { createPasswordValidators } from '@qauth-labs/shared-validation';
+
+const validators = createPasswordValidators();
+const result = validators.forMinScore(realmMinScore).validatePasswordStrength(password);
+```
+
 #### `PasswordValidator` Interface
 
 ```typescript

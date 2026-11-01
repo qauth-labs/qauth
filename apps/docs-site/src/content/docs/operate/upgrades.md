@@ -338,8 +338,7 @@ ceiling or an allowlist that does not follow the environment is named once.
 
 **Later changes of the environment change no realm.** Once a realm has its
 policies, its row owns them: a seed key only seeds a realm created later. The
-flows move to the stored values one area at a time: the sign-in policy
-([#528](https://github.com/qauth-labs/qauth/issues/528)), the verification
+flows move to the stored values one area at a time: the verification
 link's lifetime and resend rule, and CIMD
 ([#534](https://github.com/qauth-labs/qauth/issues/534)) still read the
 environment. The token lifetimes
@@ -347,7 +346,15 @@ environment. The token lifetimes
 `ACCESS_TOKEN_LIFESPAN`, `DEV_ACCESS_TOKEN_LIFESPAN` and
 `REFRESH_TOKEN_LIFESPAN` set the lifetimes of a realm only while it has no
 policies (one a node of the previous release created during a rolling
-upgrade, until a node of this release boots again). The mail transport and
+upgrade, until a node of this release boots again). So do the
+verified-account gate, the lowest password score and the failed sign-in
+lockout ([#528](https://github.com/qauth-labs/qauth/issues/528)):
+`REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_SCORE` and the four
+`FAILED_LOGIN_*` keys apply to a realm only while it has no policies, and each
+realm's own `accounts`, `password` and `bruteForce` policies apply once it has
+them. In particular, on a deployment that already ran this release, setting
+`REQUIRE_VERIFIED_ACCOUNT=false` no longer lets unverified accounts of the
+existing realms sign in; change the realm's stored policy instead. The mail transport and
 sender come from the row too
 ([#529](https://github.com/qauth-labs/qauth/issues/529), see
 [Mail secrets move into the realm](#mail-secrets-move-into-the-realm)). The dynamic
@@ -379,9 +386,9 @@ the environment; the release that moves the area to the row applies the
 stored value instead, whatever the key says by then. A key tightened in the
 meantime, such as `CIMD_ENABLED=false`, would loosen again at that upgrade. So
 change the stored policy along with the key, not the key alone. The token
-lifetimes moved in the same release as the policies themselves: a deployment
-that upgrades from 0.1 stores the lifetime keys as they are at its first boot,
-and issues the stored lifetimes from then on.
+lifetimes and the sign-in policy moved in the same release as the policies
+themselves: a deployment that upgrades from 0.1 stores those keys as they are
+at its first boot, and applies the stored values from then on.
 
 Changing a realm's stored policies is the admin API's realm policy update
 ([#517](https://github.com/qauth-labs/qauth/issues/517)), which comes after
@@ -574,7 +581,14 @@ migration runner `SYSTEM_CLIENT_REDIRECT_URI` and one of
 `SYSTEM_CLIENT_ID` and `DEFAULT_REALM_NAME`, and the run that applies the
 migrations provisions it too (see
 [The system client](/operate/docker/#the-system-client)). The seed manifest's
-`system_client` section does the same.
+`system_client` section does the same. The profile also waives the consent
+screen
+([#633](https://github.com/qauth-labs/qauth/issues/633), ADR-017 Decision 9):
+once provisioned, the system client is issued codes at `/oauth/authorize`
+without it, unless a request asks for a dangerous scope or `prompt=consent`,
+and each such code is recorded as a
+[`consent.administrative`](/reference/events/#consentadministrative-v1-rc0)
+event.
 
 Nothing breaks if you do not, yet. An existing system client row is kept as
 it is, except that a row without the developer API's audience is given it
@@ -612,6 +626,36 @@ GRANT SELECT ("issuer") ON TABLE "realms" TO <delivery_role>;
 Nothing checks the grants at boot. Without this one, every SSF delivery
 attempt fails with `permission denied for table realms` and is retried until
 its attempts run out; the delivery role logs `a delivery route threw`.
+
+### Keep a relying party's `client_credentials` to the scopes it needs
+
+A `client_credentials` token names no user, and until this release the grant
+issued any scope of a client's `scopes`. So a relying party given the grant to
+manage its [SSF stream](/operate/ssf-transmitter/#register-a-receiver) could
+also get a token without a user for each scope its users grant it
+([#891](https://github.com/qauth-labs/qauth/issues/891)). Migration 0051 adds
+`oauth_clients.client_credentials_scopes`, nullable with no default and a CHECK
+every existing row passes: the scopes that grant may issue, out of `scopes`.
+NULL, every existing client's value, keeps the grant as it was, and the
+previous release keeps creating and updating clients on the new schema.
+
+After the upgrade, give every client that signs users in and holds
+`client_credentials` the list, an SSF receiver's `["ssf:stream"]`, in its seed
+manifest entry, and set it on the stored row (the seeder writes an existing
+client only with `--rotate`, which also issues a new secret). A later
+`--rotate` refuses an entry without the list for a client that has one, so the
+manifest and the row stay in step.
+
+The list takes effect on a node once that node runs this release. Until every
+node does, a node of the previous release, which does not read the column,
+still issues every scope of `scopes` on `client_credentials`. Setting the list
+during the roll does no harm: such a node's writes to the client, a `--rotate`
+of its seeder included, do not name the column and leave the list as it is.
+
+Rolling back to an earlier release without restoring the backup lifts every
+list, because its token endpoint ignores the column. The column and its values
+are kept, and the lists apply again once the nodes run this release again;
+restoring the backup from before the upgrade removes them with the column.
 
 ## Upgrading within 1.x
 

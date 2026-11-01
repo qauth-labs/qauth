@@ -16,7 +16,7 @@ export const ACCOUNT_KEYS = defineKeys([
     default: 'true',
     since: '0.1.0',
     aliases: [{ name: 'REQUIRE_EMAIL_VERIFIED', deprecatedSince: '0.1.0' }],
-    docs: 'Refuse a password login, with the same answer as a wrong password, until the account is verified; for a password account, by its confirmed email address.',
+    docs: "Refuse a password login, with the same answer as a wrong password, until the account is verified (for a password account, by its confirmed email address), that seeds `accounts.requireVerifiedAccount` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'SYSTEM_CLIENT_ID',
@@ -35,7 +35,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: '2',
     since: '0.1.0',
-    docs: 'The strength score, from 0 (very weak) to 4 (strong), a new password must reach.',
+    docs: "The strength score, from 0 (very weak) to 4 (strong), a new password must reach, that seeds `password.minScore` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'PASSWORD_MEMORY_COST',
@@ -81,7 +81,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: 'true',
     since: '0.1.0',
-    docs: 'Lock an identifier out after repeated failed logins; with it off, failed logins are only logged.',
+    docs: "Lock an identifier out after repeated failed logins (with it off, failed logins are only logged), that seeds `bruteForce.enabled` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'FAILED_LOGIN_MAX_ATTEMPTS',
@@ -91,7 +91,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: '5',
     since: '0.1.0',
-    docs: 'How many failed logins for one identifier, inside `FAILED_LOGIN_WINDOW`, start a lockout.',
+    docs: "How many failed logins for one identifier, inside the window, start a lockout, that seeds `bruteForce.maxAttempts` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'FAILED_LOGIN_WINDOW',
@@ -101,7 +101,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: '900',
     since: '0.1.0',
-    docs: 'The window, in seconds, over which failed logins are counted.',
+    docs: "The window, in seconds, over which failed logins are counted, that seeds `bruteForce.windowSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'FAILED_LOGIN_LOCKOUT_DURATION',
@@ -111,7 +111,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: '900',
     since: '0.1.0',
-    docs: 'How long, in seconds, a locked-out identifier is refused before any credential check.',
+    docs: "How long, in seconds, a locked-out identifier is refused before any credential check, that seeds `bruteForce.lockoutSeconds` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'SESSION_COOKIE_SECRET',

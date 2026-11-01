@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { MIN_RESPONSE_TIME_MS } from '../../constants';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { hashEmail } from '../../helpers/auth-events';
 import { createBrowserSession } from '../../helpers/browser-session';
 import { clientAddressKey } from '../../helpers/client-address';
@@ -200,12 +201,12 @@ function loginPage(opts: {
 /**
  * The one refusal text for a sign-in that did not succeed: unknown address,
  * wrong password, disabled account and, under the verified-account gate, an
- * unverified one. The text cannot say which. While the gate is on it names the
- * unverified case among the possibilities, so a person who has just registered
- * knows to open the verification mail first.
+ * unverified one. The text cannot say which. While the realm's gate is on
+ * (#528) it names the unverified case among the possibilities, so a person who
+ * has just registered knows to open the verification mail first.
  */
-function signInRefusal(): string {
-  return env.REQUIRE_VERIFIED_ACCOUNT
+function signInRefusal(requireVerifiedAccount: boolean): string {
+  return requireVerifiedAccount
     ? 'Invalid email or password. If you have just registered, confirm your email address first with the link we sent you.'
     : 'Invalid email or password.';
 }
@@ -332,6 +333,9 @@ export default async function (fastify: FastifyInstance) {
       const realm = requestRealm(request);
       const emailIdentifier = `email:${hashEmail(normalizedEmail)}`;
       const lockoutIdentifiers = [emailIdentifier, `ip:${clientAddressKey(request)}`];
+      // The realm's verified-account gate and brute-force policy (#528), from
+      // the resolver's row: no query.
+      const policies = accountPoliciesOf(fastify, realm);
 
       const renderRefusal = (statusCode: number, error: string) => {
         reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -353,7 +357,12 @@ export default async function (fastify: FastifyInstance) {
 
       // Refuse a locked-out identifier, else count the attempt before the
       // password is looked at (#115), exactly as POST /auth/login does.
-      const lockout = await registerLoginAttempt(fastify.redis, realm.id, lockoutIdentifiers);
+      const lockout = await registerLoginAttempt(
+        fastify.redis,
+        realm.id,
+        policies.bruteForce,
+        lockoutIdentifiers
+      );
       if (lockout.locked) {
         await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
         // No subject, and never the typed address: the attempt names no user.
@@ -377,15 +386,16 @@ export default async function (fastify: FastifyInstance) {
         password: body.password,
       });
 
-      // Verified-account gate (F-08), identical to POST /auth/login: with
-      // `REQUIRE_VERIFIED_ACCOUNT` on (the default) an unverified credential
-      // gets no session, so it cannot complete an OAuth/OIDC flow through the
-      // hosted UI either. It is refused EXACTLY like a wrong password (same
-      // 401 page, same floor, same order of work, still counted): a page of
-      // its own told a just-registered free address from a registered one
-      // (ANT-2026-SPEMY9GU). Only the event keeps the reason.
+      // Verified-account gate (F-08), identical to POST /auth/login: with the
+      // realm's `accounts.requireVerifiedAccount` on (the default; #528) an
+      // unverified credential gets no session, so it cannot complete an
+      // OAuth/OIDC flow through the hosted UI either. It is refused EXACTLY
+      // like a wrong password (same 401 page, same floor, same order of work,
+      // still counted): a page of its own told a just-registered free address
+      // from a registered one (ANT-2026-SPEMY9GU). Only the event keeps the
+      // reason.
       const unverified =
-        check.status === 'ok' && !check.emailVerified && env.REQUIRE_VERIFIED_ACCOUNT;
+        check.status === 'ok' && !check.accountVerified && policies.requireVerifiedAccount;
 
       // The session's issue time, taken before the account is read (#748): a
       // disablement that commits after the read is not seen by it.
@@ -419,13 +429,15 @@ export default async function (fastify: FastifyInstance) {
             actor: 'user',
           }
         );
-        return renderRefusal(401, signInRefusal());
+        return renderRefusal(401, signInRefusal(policies.requireVerifiedAccount));
       }
 
       // As on POST /auth/login: the account's state is cleared; the source
       // address only gets back this attempt's own count, not the failures
       // other attempts left on it.
-      await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
+      await recordSuccessfulLogin(fastify.redis, realm.id, policies.bruteForce, lockout, [
+        emailIdentifier,
+      ]);
 
       // Session-fixation defense: always a new session, with a new `sid`, on
       // a successful credential check, even if the browser already had one.

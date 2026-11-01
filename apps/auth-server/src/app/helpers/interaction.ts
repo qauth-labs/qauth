@@ -40,7 +40,13 @@ import {
   writeInteractionState,
 } from './interaction-record';
 import { requestRealm } from './request-realm';
-import { sessionCookieHeader } from './session-cookie';
+import {
+  clearSessionCookie,
+  readCookie,
+  SESSION_COOKIE_NAME,
+  sessionCookieHeader,
+  verifySessionCookie,
+} from './session-cookie';
 import { emitUserEvent } from './user-events';
 
 /**
@@ -87,7 +93,12 @@ import { emitUserEvent } from './user-events';
  * ceremony. A browser session the failed answer created is ended. An answer
  * that outlasts the interaction's expiry is refused, and so is a finish or a
  * cancel that the expiry sweep beat to the interaction: what the sweep reports
- * expired never also finishes.
+ * expired never also finishes. A finish is refused the same way when the
+ * browser session its sign-in started has ended since (#963): a sign-out in
+ * another tab, a revoke, the session's own end, or a user switch that ended it
+ * and then failed. No request completes under a session that was signed out.
+ * Nothing was written, so the turn is given back, as after a refused answer:
+ * the interaction can still be cancelled or switched until it expires.
  *
  * ## Expiry
  *
@@ -196,7 +207,7 @@ export type InteractionSwitchResult =
   | { readonly kind: 'switched'; readonly id: string; readonly expiresAt: number };
 
 /** Why a request was refused: logged, never answered. */
-type RefusalReason = 'malformed' | 'unknown' | 'expired' | 'binding';
+type RefusalReason = 'malformed' | 'unknown' | 'expired' | 'binding' | 'session_ended';
 
 function refuse(request: FastifyRequest, reason: RefusalReason): never {
   request.log.info({ interactionRefused: reason }, 'interaction request refused');
@@ -443,7 +454,9 @@ function withAmr(amr: readonly string[], added: readonly string[] = []): string[
  *   again with the old cookie.
  * - `finished`: the interaction ends; its secret leaves the cookie, and the
  *   request and the transaction go back to the caller, which completes or
- *   denies the authorization request (#628).
+ *   denies the authorization request (#628). Only while the browser session
+ *   the sign-in started is live (#963): a finish after it ended gets the
+ *   answer an ended interaction gets, and the interaction stays at its step.
  *
  * Each processed answer is audited (`interaction.answered`).
  *
@@ -545,6 +558,25 @@ async function endUnusedSession(
   });
 }
 
+/**
+ * Whether the browser session the interaction's sign-in started is still live,
+ * for a finish (#963): the session service holds it in the interaction's
+ * realm, for the interaction's user, before its end and its idle limit. A
+ * sign-out in another tab, a sign-out everywhere, a revoke and a user switch
+ * that ended it each leave it not live. A transaction with no session, where
+ * nobody authenticated, has none to check. A session service that cannot
+ * answer throws: the finish fails, closed, and the turn is given back.
+ */
+async function signInSessionIsLive(
+  request: FastifyRequest,
+  taken: InteractionRecord
+): Promise<boolean> {
+  const { sid, userId } = taken.transaction;
+  if (sid === undefined) return true;
+  const session = await request.server.sessionService.get({ realmId: taken.realmId, sid });
+  return session !== null && session.userId === userId;
+}
+
 /** {@link answerInteraction} once the turn is taken: decide, then write what was decided. */
 async function settleAnswer(
   request: FastifyRequest,
@@ -578,6 +610,10 @@ async function settleAnswer(
     });
 
   if (decision.kind === 'finished') {
+    // The request completes under the session the sign-in started: one that
+    // has ended since is refused before anything ends (#963). Nothing is
+    // written, so the turn is given back.
+    if (!(await signInSessionIsLive(request, taken))) refuse(request, 'session_ended');
     const owned = await deleteInteraction(redis, taken, bound.idHash);
     settled.done = true;
     // The sweep claimed it first and reports it expired: it does not finish.
@@ -714,13 +750,110 @@ export async function cancelInteraction(
 }
 
 /**
+ * End the browser sessions a user switch leaves behind (#896): the one the
+ * interaction's authentication started, and the session the browser's cookie
+ * names when that is a later one of the same user, such as a sign-in again in
+ * another tab (#964). Kept, either would sign the browser in as the first user
+ * wherever the person goes next, should they abandon the new ceremony: on a
+ * shared device, the next person or the next client would get the previous
+ * user's session. Keeping them would be a multi-account model, which ADR-017
+ * does not describe. A cookie session of another user stays: that user signed
+ * in on this browser since, and is not the one the person switches away from.
+ *
+ * The person ends them as their user, as a sign-out does: the switch is made
+ * by the browser that holds the flow cookie of the first user's interaction.
+ * Ended while the switch holds the turn and before the interaction is
+ * deleted: when an end fails, or the session service cannot read the
+ * cookie's session, the turn is given back and the interaction stays as it
+ * was, so a retry switches again; the switch never goes on while a session it
+ * ends is still live. Ending a session twice is safe, so a retry ends nothing
+ * new.
+ *
+ * @returns `undefined` when the interaction held no session (a switch before
+ *   anyone authenticated in it, which ends nothing: the account chooser's
+ *   "Use another account", #658); otherwise whether the browser's cookie
+ *   names a session this ended, and is to be cleared
+ */
+async function endSwitchedSessions(
+  request: FastifyRequest,
+  taken: InteractionRecord,
+  idHash: string
+): Promise<{ readonly clearCookie: boolean } | undefined> {
+  const { sid, userId } = taken.transaction;
+  if (sid === undefined || userId === undefined) return undefined;
+  const { realmId } = taken;
+  try {
+    await endFirstUserSession(request, realmId, sid, userId);
+    const named = await switchCookieSessionId(request, realmId);
+    if (named === null || named === sid) return { clearCookie: named === sid };
+    const later = await request.server.sessionService.get({ realmId, sid: named });
+    if (later === null || later.userId !== userId) return { clearCookie: false };
+    await endFirstUserSession(request, realmId, named, userId);
+    return { clearCookie: true };
+  } catch (error) {
+    await giveTurnBack(request, taken, idHash);
+    throw error;
+  }
+}
+
+/** End one of the first user's sessions at a user switch: a sign-out by that user. */
+async function endFirstUserSession(
+  request: FastifyRequest,
+  realmId: string,
+  sid: string,
+  userId: string
+): Promise<void> {
+  await endBrowserSession(
+    request.server,
+    realmId,
+    sid,
+    'sign_out',
+    { type: 'user', id: userId },
+    userId
+  );
+}
+
+/**
+ * The session the browser's session cookie names at a user switch, read as
+ * `/auth/logout` reads it, or `null` when it names none that verifies. Best
+ * effort (#493): the cookie verifies only with the realm's cookie keys, and a
+ * signer this process cannot reach must not fail a switch. Then this is
+ * `null`, logged: the session the sign-in started still ends, the cookie
+ * stays, and the next page that reads it clears it if its session has ended.
+ */
+async function switchCookieSessionId(
+  request: FastifyRequest,
+  realmId: string
+): Promise<string | null> {
+  try {
+    return await verifySessionCookie(
+      request.server,
+      realmId,
+      readCookie(request, SESSION_COOKIE_NAME)
+    );
+  } catch (error) {
+    request.log.warn(
+      { reason: error instanceof Error ? error.name : 'unknown_error' },
+      'the session cookie could not be checked at a user switch; it stays, and only the session the sign-in started was ended'
+    );
+    return null;
+  }
+}
+
+/**
  * The user switch ("Not you?", "Use another account"; #619, #658): end this
  * interaction and start a new one for the same authorization request, at the
  * identifier step, bound to a new flow secret that replaces this one's.
  * Nothing proved here carries over (ADR-017, one subject per transaction):
- * the new transaction is empty. The old id gets the generic expired answer
- * from now on. The new interaction keeps the request's absolute expiry: one
- * authorization request has one lifetime, and switching never extends it.
+ * the new transaction is empty. A switch made after the person authenticated
+ * also ends the browser session that authentication started, and the session
+ * the browser's cookie names when it is the same user's, and clears that
+ * cookie (#896, #964); `interaction.cancelled` records it (`sessionEnded`). A
+ * switch before anyone authenticated ends no session, so a browser already
+ * signed in when the interaction started stays signed in (#964). The old id
+ * gets the generic expired answer from now on. The new interaction keeps the
+ * request's absolute expiry: one authorization request has one lifetime, and
+ * switching never extends it.
  *
  * @param identifierStep - the identifier step as the engine offers it (its
  *   alternatives); the plain identifier step when absent
@@ -738,11 +871,17 @@ export async function switchInteractionUser(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
+  // The first user's sessions end first. When the sweep claimed the
+  // interaction meanwhile, they stay ended: the person asked to leave them,
+  // and the cookie that names one is cleared on its next read.
+  const ended = await endSwitchedSessions(request, taken, bound.idHash);
   if (!(await deleteTaken(request, taken, bound.idHash))) refuse(request, 'expired');
+  if (ended?.clearCookie === true) clearSessionCookie(reply);
   await emitInteractionEvent(request, taken, 'urn:qauth:event:interaction.cancelled:v1-rc.0', {
     interaction: taken.ref,
     step: taken.step.name,
     reason: 'user_switch',
+    ...(ended === undefined ? {} : { sessionEnded: true }),
   });
   const started = await createInteraction(request, reply, {
     request: taken.request,

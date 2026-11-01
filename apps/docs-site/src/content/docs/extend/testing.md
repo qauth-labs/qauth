@@ -26,7 +26,7 @@ The fast suite. Vitest, no containers, no network. Every project has an inferred
 (`nx.json:107`), so `pnpm exec nx test auth-server` runs one project's suite and
 `pnpm exec nx run-many -t test --all` runs all of them.
 
-Root config: `vitest.config.ts`. Each project's own `vitest.config.ts` merges it, which is why
+Root config: `vitest.config.mts`. Each project's own `vitest.config.mts` merges it, which is why
 `nx.json:164` lists the root config under `sharedGlobals` — a change to the exclude globs or the
 coverage thresholds must invalidate every project's cached `test` result, and the inferred targets
 do not list it themselves.
@@ -106,27 +106,36 @@ pnpm exec nx run infra-db:test-integration
 pnpm test:integration
 ```
 
-Defined at `libs/infra/db/project.json:8`, running `vitest.integration.config.ts`, which includes
-only `**/*.integration.test.ts`, runs files serially (one Postgres container per file), and allows
-60s per test for a cold image pull. There are eight such suites today, across **two** projects. Five sit under
-`libs/infra/db/src/lib/` — repositories, identity repositories, OID4VP request state, and two
-migration suites. Three more live in `apps/auth-server/src/app/` (wallet-federation, HAIP and
-credential-status E2E), which is why `apps/auth-server` carries its own `test-integration`
-target: since #240 its wallet-federation E2E boots the real server against testcontainers
-Postgres **and** Redis.
+Defined at `libs/infra/db/project.json:8`, running `vitest.integration.config.mts`, which includes
+only `**/*.integration.test.ts` and allows 60s per test for a cold image pull. Every project with
+such suites carries its own `test-integration` target; `libs/infra/db` (repositories and migration
+suites) and `apps/auth-server` hold most of them. Since #240 the auth server's E2E suites boot the
+real server against testcontainers Postgres **and** Redis.
+
+Files run side by side, on servers the config's global setup
+(`libs/shared/testing/src/integration-global-setup.ts`) starts once per `vitest` run: a Postgres
+server per worker slot, each with a template database migrated once, and one Redis server. Each file
+gets a database of its own (a copy of the template, or an empty one for a suite that applies
+migrations itself) and a pair of logical Redis databases, so no file sees another's rows or keys.
+Postgres is per slot rather than one server for the run because a server's transaction horizon spans
+its databases and the event store reads it. A suite that stops a server or creates roles asks for a
+private container (`privateContainer`). `QAUTH_INTEGRATION_WORKERS` sets how many files run at once:
+3 on CI by default, half the cores (at most 4) locally. The
+[`shared-testing` README](../../../../../../libs/shared/testing/README.md#docker-integration-testing)
+has the details.
 
 **This is the only tier that exercises real DDL, and that is not a nice-to-have.** The comment
 above the `integration` job in `ci.yml` states the reasoning better than a paraphrase would:
 
 > The `affected` and `coverage` jobs above can never exercise real DDL: every unit suite mocks the
-> repositories, and both vitest.config.ts and the coverage gate exclude `*.integration.test.ts`.
+> repositories, and both vitest.config.mts and the coverage gate exclude `*.integration.test.ts`.
 > So the testcontainers suites are the ONLY assertion that the generated migrations produce the
 > schema the code expects — e.g. that `authorization_codes.state`/`.nonce` are unbounded `text`
 > and not the varchar(255) that broke long opaque `state` (#316). Left unwired, a lost migration
 > file or a re-narrowed column would sail through a fully green CI.
 
-Both exclusions it names are real and worth seeing for yourself: `vitest.config.ts:23` keeps these
-suites out of the fast run, and `vitest.config.ts:62` keeps them out of the coverage report. A
+Both exclusions it names are real and worth seeing for yourself: `vitest.config.mts:23` keeps these
+suites out of the fast run, and `vitest.config.mts:62` keeps them out of the coverage report. A
 migration that never got committed, or a column quietly re-narrowed by a schema edit, produces no
 failure anywhere else.
 
@@ -134,7 +143,7 @@ failure anywhere else.
 
 Locally, an integration suite skips when Docker is not running. On CI it does not: inside
 `requireDockerOrSkip` there is a CI branch that throws instead of skipping
-(`libs/shared/testing/src/lib/pg-testcontainer.ts:117`), with a message explaining that skipping
+(`libs/shared/testing/src/lib/pg-testcontainer.ts:361`), with a message explaining that skipping
 "turns the run into a green no-op". The `integration` job in `ci.yml` runs on
 a GitHub-hosted runner, which ships a Docker daemon, so the throw is unreachable in practice — it
 exists so that a runner _without_ one fails loudly instead of reporting success.
@@ -148,7 +157,7 @@ repository change runs it and a docs-only pull request pays nothing.
 pnpm exec vitest run --coverage
 ```
 
-Thresholds live in the root config at `vitest.config.ts:69` — statements 70, branches 55,
+Thresholds live in the root config at `vitest.config.mts:69` — statements 70, branches 55,
 functions 65, lines 70 — and the comment there is explicit that they sit comfortably below today's
 numbers so the gate passes now and fails on a real regression, to be ratcheted up as the
 container-backed suite grows.
@@ -287,7 +296,7 @@ Four rules keep it honest:
 - **It refuses to start without `QAUTH_WIRE_ALLOW_WRITES=1`**, because it registers users and uses
   clients on the server it targets.
 - **Its `*.wire.test.ts` files never run in the fast tier.** The root config excludes them; only
-  `apps/wire-suite/vitest.wire.config.ts` includes them. The suite's own unit tests — the
+  `apps/wire-suite/vitest.wire.config.mts` includes them. The suite's own unit tests — the
   configuration guard and the helpers — run with Tier 1.
 - **Every OAuth and discovery operation has a wire test.** A wire test names the operation it
   calls, as in `call('POST /oauth/token', …)`, and a unit test,
