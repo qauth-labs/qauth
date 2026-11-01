@@ -158,7 +158,8 @@ Beside that lock, every password attempt at `POST /auth/login` and
 `POST /ui/login`, and every password the email verification checks
 (`POST /auth/verify`, `POST /ui/verify`), is reserved on the per-account
 failure ladder (ADR-017 Decision 7), the one the sign-in engine uses too. It is not configurable and
-does not depend on `FAILED_LOGIN_TRACKING_ENABLED`.
+does not depend on the realm's `bruteForce` policy: a realm whose lock is off
+(`bruteForce.enabled` false) still counts on the ladder.
 
 - **Counted before the check.** One Redis script reads the account's wait,
   refuses an attempt inside it, and otherwise counts the attempt as a failure

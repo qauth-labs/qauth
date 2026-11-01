@@ -1143,8 +1143,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Retry-After: 5` before any credential is checked. `POST /auth/login` and
   `POST /ui/login`, and the password check of the email verification
   (`POST /auth/verify`, `POST /ui/verify`), reserve and count on the ladder
-  beside their own lock (`FAILED_LOGIN_*`, unchanged), and the sign-in
-  engine's `ladder` hook is the same ladder. At 100 consecutive counted
+  beside their own lock (the realm's `bruteForce` policy, unchanged), and the
+  sign-in engine's `ladder` hook is the same ladder. At 100 consecutive counted
   failures the hard action disables the password
   (`user_credentials.disabled_at`, migration `0052`), alerts the
   operator (the error log `password disabled by the failure ladder`) and
