@@ -1,4 +1,12 @@
-import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
+import {
+  type PasswordAttempt,
+  SignInStoreUnavailableError,
+} from '@qauth-labs/fastify-plugin-sign-in-engine';
+import {
+  InvalidCredentialsError,
+  TemporarilyUnavailableError,
+  TooManyRequestsError,
+} from '@qauth-labs/shared-errors';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import { randomUUID } from 'crypto';
 import type { FastifyInstance } from 'fastify';
@@ -21,6 +29,9 @@ import { requestRealm } from '../../helpers/request-realm';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
 import { type LoginRequest, loginResponseSchema, loginSchema } from '../../schemas/auth';
+
+/** The `Retry-After` of a login refused because the failure ladder's store failed (#615). */
+const LADDER_UNAVAILABLE_RETRY_SECONDS = 5;
 
 /**
  * Login route
@@ -86,6 +97,38 @@ export default async function (fastify: FastifyInstance) {
           throw new TooManyRequestsError('Too many failed login attempts. Please try again later.');
         }
 
+        // The per-account failure ladder (#615, ADR-017 Decision 7), beside
+        // the lock above and shared with /ui/login and the sign-in engine:
+        // keyed on the address's keyed HMAC, it reserves the attempt before
+        // the password is read. An attempt inside the account's wait is
+        // refused like a locked one, neither verified nor counted; a store
+        // that fails refuses the attempt before any credential is checked.
+        let attempt: PasswordAttempt;
+        try {
+          attempt = await fastify.passwordAttempts.reserve({
+            realmId: realm.id,
+            identifier: normalizedEmail,
+            endUserIp: clientAddressKey(request),
+          });
+        } catch (error) {
+          if (!(error instanceof SignInStoreUnavailableError)) throw error;
+          fastify.log.error({ err: error, port: error.port }, 'sign-in failure ladder unavailable');
+          throw new TemporarilyUnavailableError(LADDER_UNAVAILABLE_RETRY_SECONDS, {
+            reason: 'sign_in_store_unavailable',
+            port: error.port,
+          });
+        }
+        if (attempt.kind === 'wait') {
+          fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'locked_out' });
+          logAuthEvent(request, 'user.login.failure', false, {
+            emailHash,
+            reason: 'locked_out',
+          });
+          reply.header('Retry-After', String(attempt.retryAfterSeconds));
+          await ensureMinimumResponseTime(startTime, MIN_RESPONSE_TIME_MS.LOGIN);
+          throw new TooManyRequestsError('Too many failed login attempts. Please try again later.');
+        }
+
         // Password check via the user_credentials read path (#228): lookup on
         // (realm_id, 'password', external_sub), argon2 against
         // credential_data.password_hash, provider-normalized identity.
@@ -137,6 +180,23 @@ export default async function (fastify: FastifyInstance) {
         // accounting) — as /ui/login does. The attempt, counted before
         // verification, stays counted (#115).
         if (check.status !== 'ok' || unverified || !user || !user.enabled) {
+          // The attempt stays counted on the ladder. At its hard ceiling the
+          // hard action (#615) may disable the password of an enabled
+          // account whose usable password this was; a disabled user is never
+          // changed. The account is read only then.
+          const refusedUserId =
+            check.status === 'ok'
+              ? check.credential.userId
+              : check.status === 'invalid'
+                ? check.userId
+                : undefined;
+          await attempt.failed(async () => {
+            if (refusedUserId === undefined) return null;
+            const owner =
+              user ?? (await fastify.repositories.users.findById(realm.id, refusedUserId));
+            return owner?.enabled === true ? { userId: owner.id } : null;
+          });
+
           // Structured log of the failed login (#125): IP + email *hash* only,
           // never the password or the raw email. The metric label stays
           // `invalid_credentials` for an unverified account too: `/metrics` is
@@ -246,6 +306,10 @@ export default async function (fastify: FastifyInstance) {
         // from it, and registration is open, so logging in to an account of
         // one's own must not clear them.
         await recordSuccessfulLogin(fastify.redis, realm.id, lockout, [emailIdentifier]);
+        // The ladder: the password's counter is cleared, this address becomes
+        // known to the account, and a disabled mark the unarmed hard action
+        // ignored is cleared (#615).
+        await attempt.succeeded({ userId: user.id, ignoredMark: check.ignoredMark });
         fastify.metrics.loginAttempts.inc({ result: 'success' });
         fastify.metrics.tokensIssued.inc({ type: 'access', grant_type: 'password' });
         fastify.metrics.tokensIssued.inc({ type: 'refresh', grant_type: 'password' });

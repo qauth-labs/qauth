@@ -1,5 +1,10 @@
 import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
-import { InvalidCredentialsError, TooManyRequestsError } from '@qauth-labs/shared-errors';
+import { SignInStoreUnavailableError } from '@qauth-labs/fastify-plugin-sign-in-engine';
+import {
+  InvalidCredentialsError,
+  TemporarilyUnavailableError,
+  TooManyRequestsError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -31,6 +36,7 @@ vi.mock('../../../config/env', () => ({
 
 import { env } from '../../../config/env';
 import { createFakeSessionService } from '../../../testing/browser-sessions';
+import { createFakePasswordAttempts } from '../../../testing/password-attempts';
 import { testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
@@ -176,6 +182,8 @@ function createFastifyStub() {
       tokensIssued: { inc: vi.fn() },
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // The per-account failure ladder (#615): every attempt reserved.
+    passwordAttempts: createFakePasswordAttempts(),
   };
 
   return { fastify: fastify as FastifyInstance, ctx, sessionService };
@@ -1177,5 +1185,139 @@ describe('POST /auth/login', () => {
     await expect(login('victim-5@example.com', 'Spring2026!')).rejects.toThrow(
       TooManyRequestsError
     );
+  });
+});
+
+describe('POST /auth/login — the per-account failure ladder (#615)', () => {
+  type Ladder = ReturnType<typeof createFakePasswordAttempts>;
+
+  async function setup(options: { verifies: boolean; credential?: Record<string, unknown> }) {
+    const { fastify, ctx } = createFastifyStub();
+    await loginRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture(options.credential));
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(userFixture());
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(options.verifies);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      id: 'sc-uuid',
+      clientId: 'system',
+      audience: ['urn:qauth:aud:developer:v1-rc.0'],
+    });
+    (fastify.jwtUtils.signAccessToken as unknown as Mock).mockResolvedValue('jwt');
+    const ladder = fastify.passwordAttempts as unknown as Ladder;
+    ladder.atCeiling = true;
+    const reply = createReply();
+    const login = () =>
+      handler(
+        {
+          body: { email: 'User@Example.com', password: 'pw' },
+          ip: '2001:db8:1:2:aaaa:bbbb:cccc:7',
+          headers: { 'user-agent': 'vitest' },
+          log: requestLog(),
+        },
+        reply
+      );
+    return { fastify, ladder, login, reply };
+  }
+
+  it('reserves the attempt for the normalised address and the client address key, before the account is read', async () => {
+    const { fastify, ladder, login } = await setup({ verifies: false });
+    await expect(login()).rejects.toThrow(InvalidCredentialsError);
+    expect(ladder.reserve).toHaveBeenCalledExactlyOnceWith({
+      realmId: REALM.id,
+      identifier: 'user@example.com',
+      endUserIp: '2001:db8:1:2::',
+    });
+    expect(ladder.reserve.mock.invocationCallOrder[0]).toBeLessThan(
+      (fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock).mock
+        .invocationCallOrder[0]
+    );
+  });
+
+  it('refuses an attempt inside the wait with 429 and Retry-After, verifying nothing', async () => {
+    const { fastify, ladder, login, reply } = await setup({ verifies: true });
+    ladder.reserve.mockResolvedValueOnce({ kind: 'wait', retryAfterSeconds: 8 });
+    await expect(login()).rejects.toThrow(TooManyRequestsError);
+    expect(reply.headers['Retry-After']).toBe('8');
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+  });
+
+  it('fails closed: a ladder that cannot answer refuses with 503 before any credential is checked', async () => {
+    const { fastify, ladder, login } = await setup({ verifies: true });
+    ladder.reserve.mockRejectedValueOnce(
+      new SignInStoreUnavailableError('ladder', new Error('ECONNREFUSED'))
+    );
+    await expect(login()).rejects.toThrow(TemporarilyUnavailableError);
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+  });
+
+  it('settles a wrong password as a failure, naming the enabled account for the hard action', async () => {
+    const { ladder, login } = await setup({ verifies: false });
+    await expect(login()).rejects.toThrow(InvalidCredentialsError);
+    const [attempt] = ladder.reserved;
+    expect(attempt.failed).toHaveBeenCalledTimes(1);
+    expect(attempt.account).toEqual({ userId: 'user-1' });
+    expect(attempt.succeeded).not.toHaveBeenCalled();
+  });
+
+  it('names no account for an unknown address or a disabled user', async () => {
+    const unknown = await setup({ verifies: false });
+    (
+      unknown.fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(undefined);
+    await expect(unknown.login()).rejects.toThrow(InvalidCredentialsError);
+    expect(unknown.ladder.reserved[0].account).toBeNull();
+
+    const disabled = await setup({ verifies: true });
+    (disabled.fastify.repositories.users.findById as unknown as Mock).mockResolvedValue(
+      userFixture({ enabled: false })
+    );
+    await expect(disabled.login()).rejects.toThrow(InvalidCredentialsError);
+    expect(disabled.ladder.reserved[0].account).toBeNull();
+  });
+
+  it('settles a sign-in as a success', async () => {
+    const { ladder, login } = await setup({ verifies: true });
+    await expect(login()).resolves.toMatchObject({ access_token: 'jwt' });
+    expect(ladder.reserved[0].succeeded).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      ignoredMark: false,
+    });
+    expect(ladder.hardActionArmed).not.toHaveBeenCalled();
+  });
+
+  it('signs in through a disabled mark while the hard action is unarmed, and has it cleared', async () => {
+    const { ladder, login } = await setup({
+      verifies: true,
+      credential: { disabledAt: 1_793_491_200_000 },
+    });
+    await expect(login()).resolves.toMatchObject({ access_token: 'jwt' });
+    expect(ladder.hardActionArmed).toHaveBeenCalledWith(REALM.id);
+    expect(ladder.reserved[0].succeeded).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      ignoredMark: true,
+    });
+  });
+
+  it('refuses a disabled password while the hard action is armed, with one decoy verification', async () => {
+    const { fastify, ladder, login } = await setup({
+      verifies: true,
+      credential: { disabledAt: 1_793_491_200_000 },
+    });
+    ladder.hardActionArmed.mockResolvedValue(true);
+    await expect(login()).rejects.toThrow(InvalidCredentialsError);
+    const verify = fastify.passwordHasher.verifyPassword as unknown as Mock;
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(verify.mock.calls[0][0]).not.toBe('hash');
+    // Already disabled: no account for the hard action.
+    expect(ladder.reserved[0].account).toBeNull();
+    expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
   });
 });

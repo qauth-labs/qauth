@@ -1,4 +1,5 @@
 import { createPasswordProvider } from '@qauth-labs/fastify-plugin-federation';
+import { SignInStoreUnavailableError } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -33,6 +34,7 @@ vi.mock('../../helpers/failed-login', () => ({
 
 import { env } from '../../../config/env';
 import { createBrowserSessionFixture, sessionCookie } from '../../../testing/browser-sessions';
+import { createFakePasswordAttempts } from '../../../testing/password-attempts';
 import { testRealm } from '../../../testing/request-realm';
 import { hashEmail } from '../../helpers/auth-events';
 import {
@@ -151,6 +153,8 @@ function makeFastify() {
     signer: sessions.signer,
     redis: sessions.redis,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // The per-account failure ladder (#615): every attempt reserved.
+    passwordAttempts: createFakePasswordAttempts(),
   };
   return { fastify: fastify as FastifyInstance, ctx, sessions };
 }
@@ -816,5 +820,118 @@ describe('UI /ui/login — the email field is bounded', () => {
     const form = { password: 'pw', csrf_token: 'csrf' };
     expect(schema.safeParse({ ...form, email: atBound }).success).toBe(true);
     expect(schema.safeParse({ ...form, email: `a${atBound}` }).success).toBe(false);
+  });
+});
+
+describe('UI /ui/login — the per-account failure ladder (#615)', () => {
+  type Ladder = ReturnType<typeof createFakePasswordAttempts>;
+
+  async function setup(options: { verifies: boolean; credential?: Record<string, unknown> }) {
+    vi.mocked(registerLoginAttempt).mockClear().mockResolvedValue({ locked: false });
+    (env as { REQUIRE_VERIFIED_ACCOUNT?: boolean }).REQUIRE_VERIFIED_ACCOUNT = false;
+    const { fastify, ctx, sessions } = makeFastify();
+    await loginRoute(fastify);
+    const getReply = createReply();
+    await ctx.get!({ query: {}, headers: {}, ip: '127.0.0.1' }, getReply.reply);
+    const cookieValue = csrfCookieValue(getReply.state.setCookies);
+    const rawToken = cookieValue.split('.')[1];
+    (
+      fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock
+    ).mockResolvedValue(credentialFixture(options.credential));
+    (fastify.repositories.users.findById as unknown as Mock).mockResolvedValue({
+      id: 'user-1',
+      enabled: true,
+    });
+    (fastify.passwordHasher.verifyPassword as unknown as Mock).mockResolvedValue(options.verifies);
+    const ladder = fastify.passwordAttempts as unknown as Ladder;
+    ladder.atCeiling = true;
+    const post = async () => {
+      const { reply, state } = createReply();
+      await ctx.post!(
+        {
+          body: { email: 'User@Example.com', password: 'pw', csrf_token: rawToken },
+          headers: { cookie: `__Host-qauth_login_csrf=${cookieValue}` },
+          ip: '2001:db8:1:2:aaaa:bbbb:cccc:7',
+        },
+        reply
+      );
+      return state;
+    };
+    return { fastify, ladder, post, sessions };
+  }
+
+  it('reserves the attempt after its own lock and before the account is read', async () => {
+    const { fastify, ladder, post } = await setup({ verifies: false });
+    expect((await post()).statusCode).toBe(401);
+    expect(ladder.reserve).toHaveBeenCalledExactlyOnceWith({
+      realmId: REALM.id,
+      identifier: 'user@example.com',
+      endUserIp: '2001:db8:1:2::',
+    });
+    expect(vi.mocked(registerLoginAttempt).mock.invocationCallOrder[0]).toBeLessThan(
+      ladder.reserve.mock.invocationCallOrder[0]
+    );
+    expect(ladder.reserve.mock.invocationCallOrder[0]).toBeLessThan(
+      (fastify.repositories.userCredentials.findByRealmProviderSub as unknown as Mock).mock
+        .invocationCallOrder[0]
+    );
+    expect(ladder.reserved[0].account).toEqual({ userId: 'user-1' });
+  });
+
+  it('refuses an attempt inside the wait with 429 and Retry-After, verifying nothing', async () => {
+    const { fastify, ladder, post, sessions } = await setup({ verifies: true });
+    ladder.reserve.mockResolvedValueOnce({ kind: 'wait', retryAfterSeconds: 16 });
+    const state = await post();
+    expect(state.statusCode).toBe(429);
+    expect(state.headers['Retry-After']).toBe('16');
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(sessions.service.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      { method: 'password', reason: 'locked_out' },
+      { realmId: REALM.id, actor: 'user' }
+    );
+  });
+
+  it('fails closed: a ladder that cannot answer refuses with 503 before any credential is checked', async () => {
+    const { fastify, ladder, post, sessions } = await setup({ verifies: true });
+    ladder.reserve.mockRejectedValueOnce(
+      new SignInStoreUnavailableError('ladder', new Error('ECONNREFUSED'))
+    );
+    const state = await post();
+    expect(state.statusCode).toBe(503);
+    expect(state.headers['Retry-After']).toBeDefined();
+    expect(fastify.repositories.userCredentials.findByRealmProviderSub).not.toHaveBeenCalled();
+    expect(fastify.passwordHasher.verifyPassword).not.toHaveBeenCalled();
+    expect(sessions.service.create).not.toHaveBeenCalled();
+  });
+
+  it('settles a sign-in as a success, and clears a mark the unarmed hard action ignored', async () => {
+    const { ladder, post } = await setup({
+      verifies: true,
+      credential: { disabledAt: 1_793_491_200_000 },
+    });
+    expect((await post()).statusCode).toBe(302);
+    expect(ladder.reserved[0].succeeded).toHaveBeenCalledExactlyOnceWith({
+      userId: 'user-1',
+      ignoredMark: true,
+    });
+  });
+
+  it('refuses a disabled password while the hard action is armed', async () => {
+    const { fastify, ladder, post, sessions } = await setup({
+      verifies: true,
+      credential: { disabledAt: 1_793_491_200_000 },
+    });
+    ladder.hardActionArmed.mockResolvedValue(true);
+    expect((await post()).statusCode).toBe(401);
+    expect(fastify.passwordHasher.verifyPassword).toHaveBeenCalledTimes(1);
+    expect((fastify.passwordHasher.verifyPassword as unknown as Mock).mock.calls[0][0]).not.toBe(
+      'hash'
+    );
+    expect(sessions.service.create).not.toHaveBeenCalled();
+    expect(ladder.reserved[0].account).toBeNull();
   });
 });

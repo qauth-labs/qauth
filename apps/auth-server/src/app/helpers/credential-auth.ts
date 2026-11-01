@@ -31,16 +31,34 @@ type UserCredential = NonNullable<
  * - malformed `credential_data` → the same decoy, `log.error` for operators,
  *   and a generic invalid result — the client sees the same 401 as a wrong
  *   password, never a 500 (a distinct status would leak account state)
+ * - a password the failure ladder's hard action disabled
+ *   (`user_credentials.disabled_at`, #615) → the same decoy and a generic
+ *   invalid result, but only while the hard action is armed; while it is not,
+ *   the mark is ignored and reported (`ignoredMark`), so a successful sign-in
+ *   clears it
  */
 
 export type PasswordCredentialCheck =
   /** No password credential exists for this email in the realm. */
   | { status: 'not_found' }
-  /** Credential exists but the check failed (bad password, malformed data, invariant breach). */
-  | { status: 'invalid' }
+  /** Credential exists but the check failed (bad password, malformed data, a disabled mark, invariant breach). */
+  | {
+      status: 'invalid';
+      /**
+       * The account whose usable password was refused: the failure ladder's
+       * hard action may disable it (#615). Absent when the password was not
+       * usable: malformed, or already disabled.
+       */
+      userId?: string;
+    }
   | {
       status: 'ok';
       credential: UserCredential;
+      /**
+       * The credential carries a disabled mark the lookup ignored because the
+       * hard action is unarmed (#615): the sign-in clears it.
+       */
+      ignoredMark: boolean;
       /**
        * `credential_data.email_verified`. For a password account this is the
        * proof of a verified account, so it is the REQUIRE_VERIFIED_ACCOUNT gate source.
@@ -65,6 +83,15 @@ export async function verifyPasswordCredential(
     return { status: 'not_found' };
   }
 
+  // The failure ladder's disabled mark (#615), honoured only while the hard
+  // action is armed, asked only when a mark is there. An error refuses the
+  // sign-in (fail closed).
+  const marked = credential.disabledAt !== null && credential.disabledAt !== undefined;
+  if (marked && (await fastify.passwordAttempts.hardActionArmed(params.realmId))) {
+    await verifyAgainstDecoyHash(fastify, params.password);
+    return { status: 'invalid' };
+  }
+
   const parsed = passwordCredentialDataSchema.safeParse(credential.credentialData);
   if (!parsed.success) {
     // Data corruption, not user error: surface loudly to operators (this log
@@ -82,7 +109,7 @@ export async function verifyPasswordCredential(
     params.password
   );
   if (!passwordValid) {
-    return { status: 'invalid' };
+    return { status: 'invalid', userId: credential.userId };
   }
 
   const provider = fastify.providerRegistry.resolve(PASSWORD_PROVIDER_TYPE);
@@ -105,6 +132,7 @@ export async function verifyPasswordCredential(
   return {
     status: 'ok',
     credential,
+    ignoredMark: marked,
     emailVerified: parsed.data.email_verified,
     identity,
   };
