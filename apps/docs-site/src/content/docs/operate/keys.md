@@ -176,7 +176,11 @@ verifying the cookies it signed until the next replacement, so nobody is signed
 out. The node that replaces it logs a warning with the new and the retired
 `kid`. A variable that holds a cookie key the store retired changes nothing, and
 each boot warns about it, so a node that still has the old value during a
-rolling restart boots.
+rolling restart boots. To tell a new secret from a retired key, the boot opens
+every stored cookie key, so a retired one sealed under a KEK that is no longer
+configured refuses the boot of any node whose secret differs from the active
+key: keep `KEK_PREVIOUS` set after a KEK rotation until every cookie key is
+re-wrapped.
 
 To cut off a leaked cookie secret, replace it twice, restarting after each new
 secret: the second replacement drops the leaked key from the previous slot.
