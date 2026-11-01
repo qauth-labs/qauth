@@ -390,13 +390,13 @@ What the signer guarantees:
 - **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
   `SignerAccessDeniedError`. Every role may read public keys.
 
-  | Role       | May call                                                                                                                                                            |
-  | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                     |
-  | `web`      | `getCookieSecrets`. It never signs anything.                                                                                                                        |
-  | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.` or `upstream-oidc:client-secret:` context only. |
-  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                              |
-  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                             |
+  | Role       | May call                                                                                                                                                                                   |
+  | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                            |
+  | `web`      | `getCookieSecrets`. It never signs anything.                                                                                                                                               |
+  | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:` or `auth-method-plugin:` context only. |
+  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                     |
+  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                    |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 

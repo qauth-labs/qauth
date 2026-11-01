@@ -376,7 +376,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'clients.update',
     ['token-content', 'posture-loosening'],
     `${ADR_019}, #518, #632`,
-    'Change a client: its redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, environment or agent-type fields.',
+    'Change a client: its redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, environment or agent-type fields.',
     [
       clientCase(
         'adds a redirect URI',
@@ -408,6 +408,19 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
         name: 'changes the verified domain',
         request: patch(CLIENT, { verifiedDomain: 'other.example' }),
         state: { ...CLIENT_STATE, verifiedDomain: 'app.example' },
+        effects: ['token-content'],
+      },
+      // #891: the scopes a token that names no user may carry.
+      {
+        name: 'lifts the client_credentials scope list',
+        request: patch(CLIENT, { clientCredentialsScopes: null }),
+        state: { ...CLIENT_STATE, clientCredentialsScopes: ['ssf:stream'] },
+        effects: ['token-content'],
+      },
+      {
+        name: 'widens the client_credentials scope list',
+        request: patch(CLIENT, { clientCredentialsScopes: ['ssf:stream', 'notes:read'] }),
+        state: { ...CLIENT_STATE, clientCredentialsScopes: ['ssf:stream'] },
         effects: ['token-content'],
       },
       clientCase('loosens the environment', { environment: 'development' }, ['posture-loosening']),

@@ -130,24 +130,24 @@ Redis cache configuration.
 
 Password hashing and validation configuration.
 
-| Variable               | Type   | Default | Description              |
-| ---------------------- | ------ | ------- | ------------------------ |
-| `PASSWORD_MIN_SCORE`   | number | `2`     | Min strength score (0-4) |
-| `PASSWORD_MEMORY_COST` | number | `65536` | Argon2 memory cost (KB)  |
-| `PASSWORD_TIME_COST`   | number | `3`     | Argon2 iterations        |
-| `PASSWORD_PARALLELISM` | number | `4`     | Argon2 parallelism       |
+| Variable               | Type   | Default | Description                                                             |
+| ---------------------- | ------ | ------- | ----------------------------------------------------------------------- |
+| `PASSWORD_MIN_SCORE`   | number | `2`     | Min strength score (0-4), the seed of a new realm's `password.minScore` |
+| `PASSWORD_MEMORY_COST` | number | `65536` | Argon2 memory cost (KB)                                                 |
+| `PASSWORD_TIME_COST`   | number | `3`     | Argon2 iterations                                                       |
+| `PASSWORD_PARALLELISM` | number | `4`     | Argon2 parallelism                                                      |
 
 ### authEnvSchema
 
 Authentication-specific configuration.
 
-| Variable                    | Type    | Default  | Description                                    |
-| --------------------------- | ------- | -------- | ---------------------------------------------- |
-| `DEFAULT_REALM_NAME`        | string  | `master` | Default realm name                             |
-| `REQUIRE_VERIFIED_ACCOUNT`  | boolean | `true`   | Refuse password login by an unverified account |
-| `REGISTRATION_RATE_LIMIT`   | number  | `3`      | Max registrations/window                       |
-| `REGISTRATION_RATE_WINDOW`  | number  | `3600`   | Registration window (sec)                      |
-| `MAX_CLIENTS_PER_DEVELOPER` | number  | `100`    | Most OAuth clients one developer may own       |
+| Variable                    | Type    | Default  | Description                                                                                                 |
+| --------------------------- | ------- | -------- | ----------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_REALM_NAME`        | string  | `master` | Default realm name                                                                                          |
+| `REQUIRE_VERIFIED_ACCOUNT`  | boolean | `true`   | Refuse password login by an unverified account, the seed of a new realm's `accounts.requireVerifiedAccount` |
+| `REGISTRATION_RATE_LIMIT`   | number  | `3`      | Max registrations/window                                                                                    |
+| `REGISTRATION_RATE_WINDOW`  | number  | `3600`   | Registration window (sec)                                                                                   |
+| `MAX_CLIENTS_PER_DEVELOPER` | number  | `100`    | Most OAuth clients one developer may own                                                                    |
 
 `MAX_CLIENTS_PER_DEVELOPER` counts the clients a developer created through
 `POST /api/clients` and the ones it registered through `POST /oauth/register`
@@ -199,7 +199,10 @@ Log presentation, request-id propagation, the Prometheus `/metrics` surface, and
 failed-login throttling: `LOG_PRETTY`, `REQUEST_ID_HEADER`, `METRICS_ENABLED`,
 `FAILED_LOGIN_TRACKING_ENABLED`, `FAILED_LOGIN_MAX_ATTEMPTS`,
 `FAILED_LOGIN_WINDOW`, `FAILED_LOGIN_LOCKOUT_DURATION`. (`LOG_LEVEL` itself lives
-in `baseEnvSchema`.)
+in `baseEnvSchema`.) The four `FAILED_LOGIN_*` keys, `PASSWORD_MIN_SCORE` and
+`REQUIRE_VERIFIED_ACCOUNT` are `realm-seed` keys: they seed a new realm's
+`bruteForce`, `password` and `accounts` policies, and the auth server reads a
+realm's own policies from the realm row (#528).
 
 ### cryptoEnvSchema
 

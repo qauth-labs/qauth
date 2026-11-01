@@ -7,7 +7,7 @@
     "test-integration": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "vitest run --config vitest.integration.config.ts deploy/reference/proxy",
+        "command": "vitest run --config vitest.integration.config.mts {projectRoot}",
         "cwd": "{workspaceRoot}"
       },
       "description": "Run the reference nginx configuration (#482, ADR-019 Decisions 1, 5 and 8), unchanged, in front of a stub auth server and a stub ceremony app, and check each rule: host routing and 421, /ui/* to the ceremony app on the normalised path, 404 for path variants, Cookie stripping, the /ui/* response headers, X-Forwarded-* overwriting, and 404 for /metrics and /internal/*. Requires a running Docker daemon and openssl. CI's `integration` job runs it when this project is affected."

@@ -221,7 +221,7 @@ The email verification token has expired.
 
 **Code** `interaction_expired` · **Status** 410 · **Title** Interaction expired
 
-The interaction is unknown, expired or finished, or the flow cookie does not belong to it. The answer does not say which.
+The interaction is unknown, expired or finished, the flow cookie does not belong to it, or a finish came after the browser session its sign-in started had ended. The answer does not say which.
 
 ## `request-timeout`
 

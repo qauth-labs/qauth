@@ -10,6 +10,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
 import { env } from '../../../config/env';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { verifyEmailAddress } from '../../helpers/email-verification';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
@@ -127,9 +128,12 @@ export default async function (fastify: FastifyInstance) {
         });
 
       try {
+        const realm = requestRealm(request);
         const { email } = await verifyEmailAddress(fastify, request, reply, {
-          // The token is looked up in the realm the host named only (#489).
-          realmId: requestRealm(request).id,
+          // The token is looked up in the realm the host named only (#489),
+          // and the password check counts under its brute-force policy (#528).
+          realmId: realm.id,
+          bruteForce: accountPoliciesOf(fastify, realm).bruteForce,
           token: body.token,
           password: body.password,
         });

@@ -41,7 +41,7 @@ function withMembers(members: Partial<Record<'start' | 'verify' | 'extractAttrib
 describe('startUpstreamStep', () => {
   it("answers the method's redirect and a frozen copy of its transaction", async () => {
     const method = createSampleAuthMethod();
-    const start = await startUpstreamStep(method, contextOf(method), { uiLocales: [] });
+    const start = await startUpstreamStep(method, { uiLocales: [] }, contextOf(method));
 
     const url = new URL(start.redirectTo);
     expect(url.origin + url.pathname).toBe(SAMPLE_CONFIG.authorizationEndpoint);
@@ -62,7 +62,7 @@ describe('startUpstreamStep', () => {
         binding: BINDING,
       }),
     });
-    const start = await startUpstreamStep(method, contextOf(method), { uiLocales: [] });
+    const start = await startUpstreamStep(method, { uiLocales: [] }, contextOf(method));
     expect(start.redirectTo).toBe('https://provider.example/authorize?q=a%20b');
   });
 
@@ -76,7 +76,7 @@ describe('startUpstreamStep', () => {
     [42, 'a redirect that is not a string'],
   ])('refuses the redirect %j', async (redirectTo, problem) => {
     const method = withMembers({ start: async () => ({ redirectTo, transaction: {} }) });
-    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
+    await expect(startUpstreamStep(method, { uiLocales: [] }, contextOf(method))).rejects.toThrow(
       new AuthMethodFaultError('oidc_sample', `start() answered ${problem}`)
     );
   });
@@ -97,7 +97,7 @@ describe('startUpstreamStep', () => {
     const method = withMembers({
       start: async () => ({ redirectTo: 'https://provider.example/authorize', transaction }),
     });
-    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
+    await expect(startUpstreamStep(method, { uiLocales: [] }, contextOf(method))).rejects.toThrow(
       AuthMethodFaultError
     );
   });
@@ -109,7 +109,7 @@ describe('startUpstreamStep', () => {
         transaction: {},
       }),
     });
-    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
+    await expect(startUpstreamStep(method, { uiLocales: [] }, contextOf(method))).rejects.toThrow(
       'start() answered a redirect longer than 8192 characters'
     );
   });
@@ -128,7 +128,7 @@ describe('startUpstreamStep', () => {
         binding,
       }),
     });
-    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toThrow(
+    await expect(startUpstreamStep(method, { uiLocales: [] }, contextOf(method))).rejects.toThrow(
       'start() answered a binding that is not 22 to 512 base64url characters'
     );
   });
@@ -136,7 +136,7 @@ describe('startUpstreamStep', () => {
   it("lets start()'s own rejection through unchanged", async () => {
     const failure = new Error('discovery failed');
     const method = withMembers({ start: async () => Promise.reject(failure) });
-    await expect(startUpstreamStep(method, contextOf(method), { uiLocales: [] })).rejects.toBe(
+    await expect(startUpstreamStep(method, { uiLocales: [] }, contextOf(method))).rejects.toBe(
       failure
     );
   });
@@ -158,7 +158,7 @@ describe('completeUpstreamStep', () => {
   /** Run the sample's callback for a fresh start, and hand its outcome on. */
   async function signedIn(method = createSampleAuthMethod()) {
     const context = contextOf(method);
-    const start = await startUpstreamStep(method, context, { uiLocales: [] });
+    const start = await startUpstreamStep(method, { uiLocales: [] }, context);
     const state = new URL(start.redirectTo).searchParams.get('state') ?? '';
     const route = method.routes.find((r) => r.kind === 'callback');
     if (route?.kind !== 'callback') throw new Error('no callback route');
@@ -234,7 +234,7 @@ describe('completeUpstreamStep', () => {
       },
       log,
     });
-    const start = await startUpstreamStep(method, context, { uiLocales: [] });
+    const start = await startUpstreamStep(method, { uiLocales: [] }, context);
     const route = method.routes.find((r) => r.kind === 'callback');
     if (route?.kind !== 'callback') throw new Error('no callback route');
     const outcome = await route.handle(

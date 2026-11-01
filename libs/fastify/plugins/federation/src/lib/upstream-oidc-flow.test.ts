@@ -293,9 +293,11 @@ async function boot(
   app.get('/test/start', async (request, reply) => {
     const id = flowId(request) ?? crypto.randomUUID();
     const registered = app.providerRegistry.resolveAuthMethod(type);
-    const start = await startUpstreamStep(registered, await contextFor(registered), {
-      uiLocales: ['en'],
-    });
+    const start = await startUpstreamStep(
+      registered,
+      { uiLocales: ['en'] },
+      await contextFor(registered)
+    );
     pending.set(id, { binding: start.binding, transaction: start.transaction });
     reply.header('set-cookie', `${FLOW_COOKIE}=${id}; Path=/; Secure; HttpOnly; SameSite=Lax`);
     return reply.redirect(start.redirectTo, 303);

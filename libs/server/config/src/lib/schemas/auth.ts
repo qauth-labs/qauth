@@ -96,7 +96,10 @@ export const authEnvSchema = z.object({
   SYSTEM_CLIENT_ID: z.string().optional().default('system'),
 
   /**
-   * Require a verified account before password login succeeds.
+   * Require a verified account before password login succeeds: the seed of a
+   * new realm's `accounts.requireVerifiedAccount` (#528). The auth server
+   * reads each realm's own policy from the realm row; a later change of this
+   * key leaves a realm that has its policies as it is.
    *
    * Email is a user attribute, not the trust gate. The gate is a verified
    * account. For a password account, the proof is still a confirmed address:

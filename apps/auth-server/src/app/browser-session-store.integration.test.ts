@@ -33,7 +33,9 @@ import type { RealmRow } from './helpers/request-realm';
  * consent screen find it through `fastify.sessionService`, the consent screen's
  * CSRF values live in a Redis side record and never in Postgres, `/oauth/token`
  * and `/auth/login` create no row, and a cookie of one realm names no session
- * at another realm's host.
+ * at another realm's host. "Sign out everywhere" (`/auth/logout`) ends every
+ * session of the user in Postgres, with no per-user index of the user's
+ * sessions in Redis to lose (#912).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -41,6 +43,8 @@ import type { RealmRow } from './helpers/request-realm';
 
 const HOST_B = 'beta.example.com';
 const EMAIL = 'session-owner@example.com';
+/** Another account of the realm, whose session a sign-out of {@link EMAIL} leaves alone. */
+const BYSTANDER_EMAIL = 'session-bystander@example.com';
 const CLIENT_ID = 'e2e-session-client';
 const REDIRECT_URI = 'https://client.example.com/callback';
 const SCOPES = ['openid', 'email'];
@@ -65,6 +69,7 @@ interface SessionRow {
   user_agent: string | null;
   expires_at: string;
   revoked_at: string | null;
+  revoked_reason: string | null;
   created_at: string;
 }
 
@@ -120,7 +125,7 @@ describe('browser sessions on the session service (#488, real containers)', () =
   }
 
   /** Sign in through the real `/ui/login` form, from a known address and user agent. */
-  async function signIn(app: FastifyInstance): Promise<CookieJar> {
+  async function signIn(app: FastifyInstance, email = EMAIL): Promise<CookieJar> {
     const jar = new CookieJar();
     const page = await app.inject({ method: 'GET', url: '/ui/login' });
     jar.absorb(page.headers['set-cookie']);
@@ -130,7 +135,7 @@ describe('browser sessions on the session service (#488, real containers)', () =
       remoteAddress: CLIENT_ADDRESS,
       headers: { ...FORM, 'user-agent': USER_AGENT, cookie: jar.header() as string },
       payload: new URLSearchParams({
-        email: EMAIL,
+        email,
         password: E2E_PASSWORD,
         csrf_token: extractCsrfToken(page.body),
       }).toString(),
@@ -352,5 +357,77 @@ describe('browser sessions on the session service (#488, real containers)', () =
       headers: { cookie: jar.header() as string },
     });
     expect(atA.statusCode).toBe(200);
+  }, 60_000);
+
+  it('sign out everywhere ends every session of the user in Postgres, with no per-user index in Redis (#912)', async () => {
+    const { app, realm, userId } = await boot();
+    const bystanderId = await registerPasswordAccount(app, BYSTANDER_EMAIL);
+    const first = await signIn(app);
+    const second = await signIn(app);
+    const bystander = await signIn(app, BYSTANDER_EMAIL);
+    const ownSids = [sidOf(first), sidOf(second)];
+    /** The signed-in page each browser opens, through the session lookup. */
+    const consents = (jar: CookieJar) =>
+      app.inject({ method: 'GET', url: '/consents', headers: { cookie: jar.header() as string } });
+
+    // Each browser is signed in. Each of the user's sessions is in the session
+    // cache and has its side record, both written at sign-in.
+    for (const jar of [first, second, bystander]) {
+      expect((await consents(jar)).statusCode).toBe(200);
+    }
+    const sideRecords = ownSids.map((sid) => `browser-session-side:${realm.id}:${sid}`);
+    expect(await app.redis.exists(...sideRecords)).toBe(2);
+
+    // The per-user index of the user's sessions that logout once read, and
+    // that an eviction, a restart without persistence or a failover could
+    // lose: sign-in no longer writes one, and the key is deleted as such a
+    // Redis would have lost it.
+    const index = `user-browser-sessions:${userId}`;
+    expect(await app.redis.exists(index)).toBe(0);
+    await app.redis.del(index);
+
+    // The developer portal's server signs the user out everywhere.
+    const login = await app.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: EMAIL, password: E2E_PASSWORD },
+    });
+    expect(login.statusCode).toBe(200);
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/auth/logout',
+      headers: { authorization: `Bearer ${login.json<{ access_token: string }>().access_token}` },
+    });
+    expect(logout.statusCode).toBe(200);
+
+    // Every session of the user is ended in Postgres; the other account's is not.
+    const rows = await sessionRows(app);
+    const own = rows.filter((row) => row.user_id === userId);
+    expect(own.map((row) => row.id).sort()).toEqual([...ownSids].sort());
+    for (const row of own) {
+      expect(row.revoked_at).not.toBeNull();
+      expect(row.revoked_reason).toBe('sign_out_everywhere');
+    }
+    expect(rows.filter((row) => row.user_id === bystanderId)).toEqual([
+      expect.objectContaining({ id: sidOf(bystander), revoked_at: null }),
+    ]);
+    expect(await app.redis.exists(...sideRecords)).toBe(0);
+
+    // And refused at the next request of each browser, though each session
+    // was in the cache: the page answers 401 and clears the cookie, and
+    // /oauth/authorize shows the login page again.
+    for (const jar of [first, second]) {
+      const page = await consents(jar);
+      expect(page.statusCode).toBe(401);
+      expect(String(page.headers['set-cookie'])).toContain(`${SESSION_COOKIE_NAME}=;`);
+      const authorize = await app.inject({
+        method: 'GET',
+        url: authorizeUrl(pkcePair().challenge),
+        headers: { cookie: jar.header() as string },
+      });
+      expect(authorize.statusCode).toBe(302);
+      expect(authorize.headers['location']).toMatch(/^\/ui\/login\?/);
+    }
+    expect((await consents(bystander)).statusCode).toBe(200);
   }, 60_000);
 });
