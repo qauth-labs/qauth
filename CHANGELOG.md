@@ -94,7 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `RealmSecretStore` names where secret fields go; the store itself comes with
   [#529], and until then a write that sets a secret is refused. The flows still
   read the environment until they move to the row ([#527], [#528], [#529],
-  [#534]); the token lifetimes moved with [#527] (below). See **Realm policies move
+  [#534]); the token lifetimes moved with [#527] and CIMD with [#534] (below).
+  See **Realm policies move
   onto the realm row** in `operate/upgrades`.
 - **Each realm sends its mail through its own transport and sender** ([#529],
   ADR-019 Decisions 7, 9 and 10). The mail sender reads a realm's `mail.*`
@@ -1412,6 +1413,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   domain logic is shared with the deprecated paths, which keep their shapes.
 
 ### Changed
+
+- **CIMD comes from the realm row** ([#534], ADR-019 Decisions 1 and 10,
+  ADR-007). Whether a realm accepts an HTTPS URL as a `client_id`, its trust
+  policy and its trusted domains are the realm's `registration.cimd` policy, so
+  two realms of one deployment can accept Client ID Metadata Document clients
+  differently. Client resolution at the authorization, consent and token
+  endpoints (client assertions included) reads it off the realm row the request
+  resolved to, with no query of its own, and the realm's discovery documents
+  advertise `client_id_metadata_document_supported` from it. A realm with CIMD
+  off treats a URL `client_id` as an unknown client; a realm with the
+  `allowlist` trust policy and no trusted domains accepts no CIMD client. The
+  realm's switch and trust policy are checked before the document cache is
+  read, so a document one realm resolved never lets its client into a realm
+  that refuses its host. `CIMD_ENABLED`, `CIMD_TRUST_POLICY` and
+  `CIMD_TRUSTED_DOMAINS` now only seed a new realm, and a realm that had no
+  policies at the first boot after the upgrade ([#516]): a later change of them
+  leaves an existing realm as it is, and the boot warns that each one set is
+  ignored. `CIMD_CACHE_DEFAULT_TTL`, `CIMD_CACHE_MAX_TTL`,
+  `CIMD_MAX_DOCUMENT_BYTES` and `CIMD_FETCH_TIMEOUT_MS` stay deployment
+  settings. A stored policy the schema refuses fails the realm's client
+  resolution and discovery with a server error rather than guess. Until the
+  admin API's realm policy update ([#517]) ships, `operate/docker` shows the
+  SQL that changes a realm's CIMD policy. `POST /oauth/register` already holds a
+  registration to the realm's own dynamic registration allowlist and drops a
+  scope outside it ([#516]); a new integration suite proves both against real
+  containers, and a test refuses any read of a migrated seed key outside the
+  boot steps.
 
 - **Token lifetimes come from the realm row** ([#527], ADR-019 Decision 10,
   ADR-008 §5). The access, development access and refresh token lifetimes are

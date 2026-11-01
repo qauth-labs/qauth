@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-10-25'
+lastVerified: '2026-11-01'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -468,19 +468,43 @@ For **development** with `docker-compose.dev.yml`, set `NODE_ENV=development` an
 
 CIMD is the recommended MCP client-registration mechanism (see [ADR-007](/reference/records/adr/007-mcp-first-positioning/)) — MCP Authorization 2026-07-28 says authorization servers and MCP clients **SHOULD** support it, and deprecates RFC 7591 dynamic registration in its favour. When a `client_id` is an HTTPS URL, the auth-server fetches and validates the client's metadata document on demand instead of persisting a registration record. All settings have safe defaults — none are required to run.
 
-| Variable                  | Required | Default            | Description                                                                                               |
-| ------------------------- | -------- | ------------------ | --------------------------------------------------------------------------------------------------------- |
-| `CIMD_ENABLED`            | No       | `true`             | Master switch. When `false`, URL-formatted `client_id`s are rejected with `invalid_client`.               |
-| `CIMD_TRUST_POLICY`       | No       | `accept-any-https` | `accept-any-https` (any validating HTTPS document) or `allowlist` (only hosts in `CIMD_TRUSTED_DOMAINS`). |
-| `CIMD_TRUSTED_DOMAINS`    | No       | _(empty)_          | Comma/space-separated host allowlist for `allowlist` policy. A leading `*.` permits subdomains.           |
-| `CIMD_CACHE_DEFAULT_TTL`  | No       | `300`              | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                        |
-| `CIMD_CACHE_MAX_TTL`      | No       | `3600`             | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                      |
-| `CIMD_MAX_DOCUMENT_BYTES` | No       | `65536`            | Maximum document size in bytes.                                                                           |
-| `CIMD_FETCH_TIMEOUT_MS`   | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                        |
+Whether a realm accepts CIMD clients, and from which hosts, is the realm's own policy: `registration.cimd.enabled`, `trustPolicy` and `trustedDomains` on [Realm policies](/reference/realm-policies/) ([#534](https://github.com/qauth-labs/qauth/issues/534)). The authorization, consent and token endpoints and the realm's discovery documents read it off the realm row, so two realms of one deployment can differ. `CIMD_ENABLED`, `CIMD_TRUST_POLICY` and `CIMD_TRUSTED_DOMAINS` only seed it, for a new realm and for a realm that had no policies at the first boot after the upgrade that put them on the row: a later change of them leaves every existing realm as it is (see [Changing a realm's CIMD policy](#changing-a-realms-cimd-policy)). The cache, size and timeout settings stay the deployment's.
+
+| Variable                  | Required | Default            | Description                                                                                                                                                                             |
+| ------------------------- | -------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CIMD_ENABLED`            | No       | `true`             | Seeds a new realm's switch. A realm with it off treats a URL-formatted `client_id` as an unknown client and does not advertise `client_id_metadata_document_supported`.                 |
+| `CIMD_TRUST_POLICY`       | No       | `accept-any-https` | Seeds a new realm's trust policy: `accept-any-https` (any validating HTTPS document) or `allowlist` (only the realm's trusted domains).                                                 |
+| `CIMD_TRUSTED_DOMAINS`    | No       | _(empty)_          | Seeds a new realm's trusted domains, comma/space-separated, for the `allowlist` policy. A leading `*.` permits subdomains. An `allowlist` realm with no domains accepts no CIMD client. |
+| `CIMD_CACHE_DEFAULT_TTL`  | No       | `300`              | Cache TTL (seconds) when the document carries no usable `Cache-Control`/`Expires`.                                                                                                      |
+| `CIMD_CACHE_MAX_TTL`      | No       | `3600`             | Hard upper bound (seconds) on any cached document, regardless of upstream `max-age`.                                                                                                    |
+| `CIMD_MAX_DOCUMENT_BYTES` | No       | `65536`            | Maximum document size in bytes.                                                                                                                                                         |
+| `CIMD_FETCH_TIMEOUT_MS`   | No       | `5000`             | Per-fetch timeout in milliseconds.                                                                                                                                                      |
+
+A fetched document is cached per URL, for every realm. Each realm's switch and trust policy are checked before the cache is read, so a document one realm resolved never lets its client into a realm that refuses the host.
 
 A metadata document and a client's `jwks_uri` are fetched through the egress client and never reach a private, loopback or link-local address, whatever the configuration: the client named them, and the [egress allowlist](#outbound-calls-and-the-egress-allowlist) applies only to destinations the operator or an admin set.
 
-> **Note:** the `CIMD_*` variables are optional and default-safe, so the stack runs without them, and `.env.docker.example` does not list them. The `auth-server` `environment:` map does, so setting them in `.env` takes effect. Be deliberate about `CIMD_TRUST_POLICY`: it defaults to `accept-any-https`, which returns before `CIMD_TRUSTED_DOMAINS` is consulted — so populating the domain list alone changes nothing until you also set `CIMD_TRUST_POLICY=allowlist`.
+> **Note:** the `CIMD_*` variables are optional and default-safe, so the stack runs without them, and `.env.docker.example` does not list them. The `auth-server` `environment:` map does, so setting them in `.env` seeds the realms the server creates. Be deliberate about the trust policy: it defaults to `accept-any-https`, which returns before the trusted domains are consulted — so populating the domain list alone changes nothing until the trust policy is also `allowlist`.
+
+#### Changing a realm's CIMD policy
+
+Until the admin API's realm policy update ([#517](https://github.com/qauth-labs/qauth/issues/517)) ships, no route changes a realm's CIMD policy, and the environment keys no longer do. To switch CIMD off for a realm meanwhile, or to hold it to an allowlist, change its stored policies in Postgres:
+
+```sql
+-- Switch CIMD off for the realm `master`.
+UPDATE realms
+   SET policies = jsonb_set(policies, '{registration,cimd,enabled}', 'false')
+ WHERE name = 'master' AND policies_version > 0;
+
+-- Or accept CIMD clients of the realm `master` only from these hosts.
+UPDATE realms
+   SET policies = jsonb_set(
+         jsonb_set(policies, '{registration,cimd,trustPolicy}', '"allowlist"'),
+         '{registration,cimd,trustedDomains}', '["client.example.com", "*.example.org"]')
+ WHERE name = 'master' AND policies_version > 0;
+```
+
+The update raises the realm's `policies_version`, and every node applies it within the realm resolver's cache time (30 s by default), with no restart; a client may hold the realm's discovery documents for up to an hour (`max-age=3600`). Write a domain in lower case, with at least two labels and no IP address: a value the [policy schema](/reference/realm-policies/#registration) refuses fails the realm's token, authorization and discovery requests until it is corrected. `policies_version > 0` leaves alone a realm that has no policies yet, which runs on the environment until a boot fills it.
 
 #### Hostile document hosts
 
@@ -503,9 +527,11 @@ never runs that handshake on the thread that serves requests:
   when memory runs out.
 
 Neither makes a hostile host free: a caller who names enough domains still keeps fetches busy until
-their deadlines. The mitigation is `CIMD_TRUST_POLICY=allowlist`: the server then fetches a Client
-ID Metadata Document only from the hosts in `CIMD_TRUSTED_DOMAINS`, so an unauthenticated caller
-can no longer pick the host.
+their deadlines. The mitigation is the `allowlist` trust policy, in every realm that accepts CIMD
+clients: the server then fetches a Client ID Metadata Document only from the realm's trusted
+domains, so an unauthenticated caller can no longer pick the host. `CIMD_TRUST_POLICY=allowlist`
+and `CIMD_TRUSTED_DOMAINS` seed it for a new realm; set an existing realm's as in
+[Changing a realm's CIMD policy](#changing-a-realms-cimd-policy).
 
 #### What the consent screen shows for a CIMD client
 
@@ -517,9 +543,9 @@ domain) lets anyone publish a document there, and the screen shows that
 client under the provider's host. The registrable domain is in bold and a host
 under a shared-hosting suffix of the Public Suffix List is flagged, but a
 provider's own domain that is not on that list is not. A deployment that
-accepts third-party agents or MCP clients should set
-`CIMD_TRUST_POLICY=allowlist` and list in `CIMD_TRUSTED_DOMAINS` only hosts
-whose every document comes from the party the user expects.
+accepts third-party agents or MCP clients should give each realm the
+`allowlist` trust policy and list in its trusted domains only hosts whose every
+document comes from the party the user expects.
 
 #### Granting scopes to a CIMD client
 
@@ -545,7 +571,7 @@ A CIMD client starts with no scopes, so it is granted none of the scopes it asks
 - Until the client's first authorization, its row has no redirect URI. That authorization reads the document and fills the row in, and later re-resolutions never change the grant.
 - The grant is a ceiling: the user still consents, for each resource.
 - The seed refuses an entry whose `client_id` belongs to a client that is not a CIMD client, and changes nothing for it.
-- The client resolves only while `CIMD_ENABLED` is `true` and the trust policy accepts its host.
+- The client resolves only while its realm's CIMD policy is on and the realm's trust policy accepts its host.
 
 ### Redirect URI schemes for native apps
 

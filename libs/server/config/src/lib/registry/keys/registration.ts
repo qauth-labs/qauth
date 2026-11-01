@@ -52,7 +52,7 @@ export const REGISTRATION_KEYS = defineKeys([
     owner: 'client-registration',
     default: 'true',
     since: '0.1.0',
-    docs: 'Accept an HTTPS URL as a `client_id` and fetch its Client ID Metadata Document on demand.',
+    docs: "Whether an HTTPS URL is accepted as a `client_id`, its Client ID Metadata Document fetched on demand, that seeds `registration.cimd.enabled` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, client resolution and discovery read the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'CIMD_TRUST_POLICY',
@@ -62,7 +62,7 @@ export const REGISTRATION_KEYS = defineKeys([
     owner: 'client-registration',
     default: 'accept-any-https',
     since: '0.1.0',
-    docs: 'Which hosts a Client ID Metadata Document may come from: `accept-any-https`, or `allowlist` for the hosts in `CIMD_TRUSTED_DOMAINS` only.',
+    docs: "Which hosts a Client ID Metadata Document may come from, `accept-any-https` or `allowlist` for the trusted domains only, that seeds `registration.cimd.trustPolicy` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, client resolution and discovery read the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'CIMD_TRUSTED_DOMAINS',
@@ -72,7 +72,7 @@ export const REGISTRATION_KEYS = defineKeys([
     owner: 'client-registration',
     default: '',
     since: '0.1.0',
-    docs: 'The hosts `CIMD_TRUST_POLICY=allowlist` accepts, separated by spaces or commas, where a leading `*.` matches subdomains.',
+    docs: "The hosts the `allowlist` trust policy accepts, separated by spaces or commas, where a leading `*.` matches subdomains, that seeds `registration.cimd.trustedDomains` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, client resolution and discovery read the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'CIMD_CACHE_DEFAULT_TTL',
