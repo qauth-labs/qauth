@@ -418,19 +418,37 @@ The realm's representation says only whether each is set (`passwordSet`,
 **The first boot stores the environment's secret, once.** After the key boot
 step, a node that holds the signer stores `SMTP_PASSWORD` (or
 `RESEND_API_KEY`) of the environment in the default realm's secret store, and
-records a key the environment does not set as unset. The log says
+records a key the environment does not set as unset, unless the realm's stored
+transport needs it (`SMTP_PASSWORD` for `smtp`): that one stays unrecorded,
+and the first boot whose environment sets it stores it. The log says
 `realm secret seeded from the environment` at `info`. From then on the stored
 value is used, and no later boot reads the key for that realm: each boot warns
 `SMTP_PASSWORD only seeds the first realm's mail.smtp.password at its first
 boot, and is ignored` while the key is still set. Remove both keys from the
 environment once every node runs this release; until then a realm that a node
-of the previous release created during the roll still sends with them. A realm
-created later gets its own password through a policy update.
+of the previous release created during the roll still sends with them.
+
+**Other realms get the environment's secret where it is theirs.** The first
+boot after the upgrade fills every realm's policies from the environment, the
+mail transport included. Each realm whose stored transport is the
+environment's and needs a secret it has no row for gets the environment's
+value at that boot, or at the first later boot that can encrypt it (a realm
+with no data-at-rest key yet is logged and tried again). Nothing is recorded
+for a realm whose transport needs nothing.
+
+**`SMTP_PASSWORD` goes only to its own server.** No realm whose stored
+`mail.smtp.host`, `port` or `user` differs from `SMTP_HOST`, `SMTP_PORT` and
+`SMTP_USER` is given `SMTP_PASSWORD`: the boot logs
+`SMTP_PASSWORD is not stored in the realm "..."` as an error instead. Point the
+environment at the realm's server, or set the realm's password through a policy
+update. For the same reason a policy update that selects `smtp`, or changes
+`mail.smtp.host`, `port` or `secure`, must give `mail.smtp.password` again.
 
 **A mail transport that lacks a setting no longer stops the boot.**
 `EMAIL_PROVIDER=smtp` without `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER` or
 `SMTP_PASSWORD`, or `resend` without `RESEND_API_KEY`, used to refuse to start.
-Now the realm's policy update refuses such a transport (422), the boot warns
+Now the realm's policy update refuses such a transport (422
+`unprocessable_content`, with one JSON Pointer per refused field), the boot warns
 for each setting or secret the default realm's stored transport lacks
 (`the realm "master" cannot send mail: its mail.smtp.host is required ...`), and
 a mail through it fails, logging the missing path.

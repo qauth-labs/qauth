@@ -107,15 +107,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value encrypted with the realm's data-at-rest key by the signer, under a
   context that names the field, and CHECKs refuse anything but that ciphertext.
   The representation (`policyStore.representation`) shows only `passwordSet`
-  and `apiKeySet`; logs, errors and the audit diff never carry a value. The
-  first boot that can encrypt stores `SMTP_PASSWORD` or `RESEND_API_KEY` in the
-  default realm, once, and records an unset one; later boots ignore both keys
-  for it and warn while they are set. A policy update that selects `smtp`
-  without its host, port, user, sender address and password, or `resend`
-  without its sender address and API key, is refused (`RealmPolicyRefusedError`,
-  422 `unprocessable_content`); the boot no longer refuses such an environment,
-  and warns for each setting or secret the default realm's stored transport
-  lacks. Until the admin API's policy update ([#517]) ships, a mail secret is
+  and `apiKeySet`; logs, errors and the audit diff never carry a value. Only
+  the mail sender is handed the store's reader of a value (no decorator holds
+  one), and the signer lets the `api` role decrypt only a context under
+  `realm_secrets:mail.`. The first boot that can encrypt stores
+  `SMTP_PASSWORD` or `RESEND_API_KEY` in the default realm, once, and records
+  an unset one, unless the realm's stored transport needs it: then a later
+  boot whose environment sets it still stores it. Every other realm whose
+  stored transport is the environment's and needs the secret (as the
+  upgrade's fill leaves each realm) gets it too, and nothing is recorded
+  there; `SMTP_PASSWORD` goes to no realm whose stored SMTP host, port or user
+  is not `SMTP_HOST`, `SMTP_PORT` and `SMTP_USER`, which is logged as an error.
+  Later boots ignore both keys for a realm that has the secret and warn while
+  they are set. A policy update that selects `smtp` without its host, port,
+  user, sender address and password, or `resend` without its sender address
+  and API key, is refused (422 `unprocessable_content`, with a JSON Pointer
+  per refused field in `errors`), and so is one that selects `smtp` or changes
+  its host, port or TLS mode without giving the password again; an update
+  that changes nothing of `mail` is not checked, and a gap the realm already
+  had does not refuse an update. The boot no longer refuses an incomplete
+  environment, and warns for each setting or secret the default realm's
+  stored transport lacks. Until the admin API's policy update ([#517]) ships, a mail secret is
   replaced by deleting its `realm_secrets` row and restarting with the new
   value, as `operate/upgrades` describes. Mail is
   sent from `EMAIL_FROM_NAME <EMAIL_FROM_ADDRESS>`, as the realm stores them.
