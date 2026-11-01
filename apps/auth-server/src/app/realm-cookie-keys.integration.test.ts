@@ -18,6 +18,7 @@ import {
   signInWithPassword,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { SIGNER_LISTENER } from '../testing/service-role-env';
 import { SESSION_COOKIE, sessionCookieParts } from '../testing/session-cookie-value';
 
 /**
@@ -274,7 +275,13 @@ describe('the browser cookies on the realm cookie key (#493, real containers)', 
     const all = await bootFresh({ SESSION_COOKIE_SECRET: undefined });
     const generatedKid = await activeCookieKid(all);
 
-    const web = await bootOn({ SESSION_COOKIE_SECRET: undefined, SERVICE_ROLES: 'web,signer' });
+    // A split process holding the signer serves it on the internal listener
+    // (#496), so it boots with that listener's settings.
+    const web = await bootOn({
+      ...SIGNER_LISTENER,
+      SESSION_COOKIE_SECRET: undefined,
+      SERVICE_ROLES: 'web,signer',
+    });
     expect(process.env['SESSION_COOKIE_SECRET']).toBeUndefined();
 
     const jar = await signInWithPassword(web, EMAIL);

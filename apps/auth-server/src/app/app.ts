@@ -65,6 +65,8 @@ import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-b
 import { isJtiRevoked } from './helpers/token-revocation';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
 import { provisionedVerifierMaterial } from './helpers/verifier-identity';
+import { installInternalApi, type InternalApiOptions } from './internal/listener';
+import { publicInternalRouteProblem } from './internal/route-manifest';
 import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
@@ -82,6 +84,7 @@ import {
   repositoriesFor,
   routeRolesProblem,
   servesAdminListener,
+  servesInternalListener,
   ServiceRoleBootError,
 } from './service-roles';
 
@@ -198,6 +201,15 @@ export interface AppOptions {
    * other members are test support.
    */
   adminListener?: AdminApiOptions & { readonly server: FastifyInstance };
+  /**
+   * The internal listener (ADR-019 Decision 8, #496): the Fastify instance
+   * `createInternalServer` built, on which the app installs the internal
+   * routes of this process's roles once its own plugins are registered
+   * (`internal/listener.ts`), and which it closes when it closes. `main.ts`
+   * passes one when the process's roles need it (`servesInternalListener`);
+   * the app refuses one otherwise. `modules` is test support.
+   */
+  internalListener?: Omit<InternalApiOptions, 'roles'> & { readonly server: FastifyInstance };
 }
 
 declare module 'fastify' {
@@ -522,6 +534,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     eventDeliveryRoutes,
     egressClientFactory,
     adminListener,
+    internalListener,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -998,10 +1011,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   }
 
   // Over every route of the app, a plugin's as well as a route module's: an
-  // admin route registers only on the admin listener (#511), and every route
-  // names its roles.
+  // admin route registers only on the admin listener (#511), an internal one
+  // only on the internal listener (#496), and every route names its roles.
   const unplaced = registeredRoutes
-    .map((route) => publicRouteProblem(route) ?? routeRolesProblem(route, roles))
+    .map(
+      (route) =>
+        publicRouteProblem(route) ??
+        publicInternalRouteProblem(route) ??
+        routeRolesProblem(route, roles)
+    )
     .filter((problem) => problem !== undefined);
   if (unplaced.length > 0) {
     throw new Error(unplaced.join('\n'));
@@ -1018,5 +1036,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     }
     const { server: adminServer, ...adminOptions } = adminListener;
     await installAdminApi(adminServer, fastify, adminOptions);
+  }
+
+  // The internal listener (ADR-019 Decision 8, #496), on a process whose
+  // roles need it: it shares the database, cache and signer plugins above,
+  // registers the internal routes of this process's roles, and closes before
+  // the plugins it shares.
+  if (internalListener !== undefined) {
+    if (!servesInternalListener(roles, internalListener.modules)) {
+      throw new Error(
+        `The internal listener runs only on a process that holds the signer while the roles are split, or whose roles serve an internal route (SERVICE_ROLES=${describeServiceRoles(roles)})`
+      );
+    }
+    const { server: internalServer, ...internalOptions } = internalListener;
+    await installInternalApi(internalServer, fastify, { ...internalOptions, roles });
   }
 }

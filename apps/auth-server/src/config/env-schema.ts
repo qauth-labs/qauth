@@ -13,6 +13,7 @@ import {
   eventRetentionEnvSchema,
   eventTelemetryEnvSchema,
   federationEnvSchema,
+  internalListenerEnvSchema,
   isPublishedSessionCookieSecret,
   issuerKeysEnvSchema,
   keyAttestationEnvSchema,
@@ -70,6 +71,11 @@ export const envSchema = z
     // ADMIN_API_ENABLED (default off until #517 and #520), ADMIN_API_HOST
     // (default loopback) and ADMIN_API_PORT, for a process holding `admin`.
     ...adminApiEnvSchema.shape,
+    // The internal listener (ADR-019 Decision 8, #496): INTERNAL_HOST
+    // (default loopback), INTERNAL_PORT and INTERNAL_PEER_ROLES, for a process
+    // whose roles need it. Its TLS files are the service roles' above; the
+    // app checks them against the roles at boot.
+    ...internalListenerEnvSchema.shape,
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,

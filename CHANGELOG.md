@@ -1196,6 +1196,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+- **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
+  process that holds the `signer` role while the roles are split runs one more
+  HTTP server, on `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port
+  `3443`, by default; advanced keys), for the other roles' calls to the signer
+  service ([#497] adds its routes). A single process runs none. It serves
+  HTTP/1.1 over TLS 1.3 only and requires a client certificate that
+  `INTERNAL_TLS_CA_PATH` issued: a client with none, or one from another CA,
+  gets no HTTP answer. A CA file that holds a public root CA, as a system
+  bundle does, is refused, and one with no `CA:TRUE` certificate, or a key file
+  its group or others may read, is warned of. The new `INTERNAL_PEER_ROLES`
+  maps a subject alternative name of the peer's certificate (a DNS name, or a
+  URI such as a SPIFFE ID) to the role it calls as, `request.peerRole`, and
+  refuses `signer`, which never calls as a peer; a peer whose SANs it does not
+  map, or map to two roles, gets `403` `forbidden` on every path. Each internal
+  route module names the peer roles that may call it, and a peer of another
+  role gets `403` on its routes. A request on a connection whose peer
+  certificate has expired since the handshake, or that was made before the TLS
+  files were last reloaded, gets `403` too; every `403` closes its connection,
+  so the peer connects again. The certificate, key and CA files are read again
+  every five seconds and applied with no restart once a rotation is complete.
+  The listener holds at most 1024 connections at once. Its routes register by
+  role from an internal route manifest, all under `/internal/`, which the
+  public listener refuses to register. Such a process refuses to start without
+  the three TLS files and `INTERNAL_PEER_ROLES`, naming each, before it waits
+  for the database. The listener is not routed by host, shares the app's
+  database pool, cache and signer, and closes at the same time as the admin
+  listener. The admin API keeps its own listener and its own rule: a peer
+  certificate grants nothing there. `createInternalClient`
+  (`apps/auth-server/src/app/internal/client.ts`) is how the other roles call
+  it: `https` only, the server known by `expectedServerSan` rather than its
+  host name, every request kept below the base URL's path, a keep-alive pool
+  (a request whose pooled connection the server had just closed is sent once
+  more on a new one), a deadline and a cap on each answer, and credentials
+  that can be reloaded.
 - **Client display data and the verified domain** ([#593], ADR-019 Decision 6).
   One function in the auth server says who a client is from the server's own
   records, as the Interaction API's `ClientDisplay`: the host of a CIMD client's
@@ -1416,6 +1450,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user whose stored consent covers the request, but the consent screen answers
   a new user `invalid_request` (400). The upgrade guide (`operate/upgrades`)
   gives a query that finds such clients before you upgrade.
+- **A split process holding the signer needs the internal listener's TLS
+  files** ([#496]). A process whose `SERVICE_ROLES` names `signer` but not every
+  role, such as `api,admin,signer,delivery`, now refuses to start unless
+  `INTERNAL_TLS_CERT_PATH`, `INTERNAL_TLS_KEY_PATH`, `INTERNAL_TLS_CA_PATH` and
+  `INTERNAL_PEER_ROLES` are set, and listens on `INTERNAL_PORT` (`3443` by
+  default) besides `PORT`. A single process (`SERVICE_ROLES=all`, the default)
+  is unchanged and binds nothing new.
 - **The request log censors `code`, `id_token` and `access_token` in logged
   URLs** ([#599]), as it censors `response_code` and `token`: an upstream
   provider's authorization code rides in an AuthMethod's callback URL, and a
@@ -2214,6 +2255,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#493]: https://github.com/qauth-labs/qauth/issues/493
 [#494]: https://github.com/qauth-labs/qauth/issues/494
 [#495]: https://github.com/qauth-labs/qauth/issues/495
+[#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508

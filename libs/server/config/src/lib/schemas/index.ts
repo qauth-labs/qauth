@@ -46,6 +46,17 @@ export {
   type StatusListTrustAnchorEnvLike,
   type VerifierSigningEnvLike,
 } from './federation';
+export {
+  DEFAULT_INTERNAL_HOST,
+  DEFAULT_INTERNAL_PORT,
+  type InternalListenerEnv,
+  internalListenerEnvSchema,
+  type InternalPeerRoles,
+  parsePeerSan,
+  type PeerSan,
+  peerSanKey,
+  type PeerSanType,
+} from './internal-listener';
 export { type IssuerKeysEnv, issuerKeysEnvSchema, type PerIssuerKeySets } from './issuer-keys';
 export {
   type JwtEnv,

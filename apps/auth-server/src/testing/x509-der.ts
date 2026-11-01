@@ -31,8 +31,8 @@ import {
  * ## What is implemented
  *
  * Only what those fixtures exercise: ECDSA P-256 keys, `ecdsa-with-SHA256`, a
- * single-CN name, a validity window, `basicConstraints`, `keyUsage` and
- * `dNSName` SANs. It is a TEST helper and must not become a
+ * single-CN name, a validity window, `basicConstraints`, `keyUsage`, and
+ * `dNSName` and `uniformResourceIdentifier` SANs. It is a TEST helper and must not become a
  * certificate-issuing utility. The hostile certificate whose key is slow to
  * decode (ANT-2026-3OJSXV7G) lives with the egress library's tests, in
  * `libs/server/egress/src/testing/hostile-handshake.ts`.
@@ -152,14 +152,21 @@ function basicConstraints(isCa: boolean): Buffer {
   );
 }
 
-/** `subjectAltName` holding `dNSName` entries (`[2] IMPLICIT IA5String`). */
-function subjectAltName(dnsNames: readonly string[]): Buffer {
+/**
+ * `subjectAltName` holding `dNSName` entries (`[2] IMPLICIT IA5String`), then
+ * `uniformResourceIdentifier` entries (`[6] IMPLICIT IA5String`), such as a
+ * SPIFFE ID.
+ */
+function subjectAltName(dnsNames: readonly string[], uris: readonly string[] = []): Buffer {
   return extension(
     '2.5.29.17',
     false,
     der(
       TAG.SEQUENCE,
-      Buffer.concat(dnsNames.map((name) => der(0x80 | 2, Buffer.from(name, 'ascii'))))
+      Buffer.concat([
+        ...dnsNames.map((name) => der(0x80 | 2, Buffer.from(name, 'ascii'))),
+        ...uris.map((uri) => der(0x80 | 6, Buffer.from(uri, 'ascii'))),
+      ])
     )
   );
 }
@@ -227,6 +234,10 @@ export interface CreateTestCertificateOptions {
   readonly keyUsage?: readonly TestKeyUsage[];
   /** `dNSName` SAN entries. */
   readonly dnsNames?: readonly string[];
+  /** `uniformResourceIdentifier` SAN entries, after the DNS names. */
+  readonly uris?: readonly string[];
+  /** The key to certify; a fresh EC P-256 key unless set. */
+  readonly keyPair?: { readonly privateKey: KeyObject; readonly publicKey: KeyObject };
   readonly notBefore?: Date;
   readonly notAfter?: Date;
 }
@@ -240,14 +251,15 @@ let nextSerial = 1;
  * @returns the certificate plus its DER, PEM, `x5c` form and keys.
  */
 export function createTestCertificate(options: CreateTestCertificateOptions): TestCertificate {
-  const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const { privateKey, publicKey } =
+    options.keyPair ?? generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
   const notBefore = options.notBefore ?? new Date(Date.now() - 3_600_000);
   const notAfter = options.notAfter ?? new Date(Date.now() + 30 * 24 * 3_600_000);
 
   const extensions: Buffer[] = [basicConstraints(options.ca === true)];
   if (options.keyUsage !== undefined) extensions.push(keyUsageExtension(options.keyUsage));
-  if (options.dnsNames !== undefined && options.dnsNames.length > 0) {
-    extensions.push(subjectAltName(options.dnsNames));
+  if ((options.dnsNames?.length ?? 0) > 0 || (options.uris?.length ?? 0) > 0) {
+    extensions.push(subjectAltName(options.dnsNames ?? [], options.uris ?? []));
   }
 
   const tbs = der(
