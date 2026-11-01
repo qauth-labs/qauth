@@ -204,8 +204,8 @@ export function createUpstreamOidcMethod(
   };
 
   async function start(
-    context: AuthMethodContext<UpstreamOidcConfig>,
-    request: UpstreamStartRequest
+    request: UpstreamStartRequest,
+    context: AuthMethodContext<UpstreamOidcConfig>
   ): Promise<UpstreamStart<UpstreamOidcTransaction>> {
     const { config } = context;
     const metadata = await metadataFor(context);
