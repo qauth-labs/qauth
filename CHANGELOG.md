@@ -1146,7 +1146,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beside their own lock (`FAILED_LOGIN_*`, unchanged), and the sign-in
   engine's `ladder` hook is the same ladder. At 100 consecutive counted
   failures the hard action disables the password
-  (`user_credentials.disabled_at`, migration `0050`), alerts the
+  (`user_credentials.disabled_at`, migration `0052`), alerts the
   operator (the error log `password disabled by the failure ladder`) and
   notifies the owner, but only while it is armed: while the realm's hosted
   password reset is on ([#642]) and the deployment can send the notice
