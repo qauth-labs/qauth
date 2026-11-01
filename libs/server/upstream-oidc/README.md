@@ -61,6 +61,33 @@ the view an API or event may carry, with neither the secret nor its ciphertext.
 client's address checks on every endpoint without calling it, and reports one finding:
 `invalid_config`, `discovery_unavailable`, `invalid_document` or `destination_refused`.
 
+## Rules for the code that uses it
+
+- **Tie the subject to the issuer.** `externalSub` is the provider's bare `sub`, and the provider
+  type (`oidc_<alias>`) does not name the issuer, while only `iss` and `sub` together identify a
+  person (OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer (the ID
+  token's claims win over userinfo's). The sign-in flow (#639) must store that issuer with the
+  credential and refuse a mismatch, or the provider administration (#714) must refuse an issuer
+  change while credentials exist: otherwise re-pointing `oidc_corp` at another provider lets
+  that provider's user with an equal `sub` sign in as an existing one.
+- **Open the stored config before building the context.** The method's `configSchema` takes the
+  plaintext `clientSecret`; the stored form holds `clientSecretSealed`. A host calls
+  `openUpstreamOidcConfig` and hands the result to `createAuthMethodContext`, with a signer caller
+  role that may `decrypt` (and `signClientAssertion`, for `private_key_jwt`): `api` or `local`
+  today, not `web`.
+- **One client id.** For `private_key_jwt` the form's `client_id` is the config's `clientId`, and
+  the assertion's `iss` and `sub` are the client id the signer's upstream-provider record names;
+  the two must agree.
+- **Caps.** Each call's deadline and size cap apply on top of the egress client's own: a call
+  past its deadline is abandoned (the egress client still bounds it), and an answer over its
+  cap is refused after the egress client has read it, within its own cap.
+- **Discovery is lenient where the document is silent.** A document that omits
+  `token_endpoint_auth_methods_supported`, `response_modes_supported` or
+  `response_types_supported` is taken at its word for the configured method and mode; one that
+  lists them must list what the config uses.
+- **The assertion's `aud`** is the issuer identifier alone (draft-ietf-oauth-rfc7523bis). A
+  provider that wants its token endpoint there is not served yet.
+
 ## Tests
 
 ```sh

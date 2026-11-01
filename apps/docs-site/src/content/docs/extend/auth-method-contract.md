@@ -268,6 +268,14 @@ read it); `openUpstreamOidcConfig` decrypts it for the method's context; and
 `describeUpstreamOidcConfig` is the view an API or event may carry, with neither the secret nor its
 ciphertext. Where the stored form lives is #714's and #600's.
 
+**What the sign-in flow must add.** `externalSub` is the provider's bare `sub`, and the type
+`oidc_<alias>` does not name the issuer, while only `iss` and `sub` together identify a person
+(OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer, so the upstream
+sign-in flow (#639) stores it with the credential and refuses a mismatch, or provider
+administration (#714) refuses an issuer change while credentials exist. The host opens the stored
+config with a signer caller role that may decrypt and sign client assertions (`api` or `local`
+today).
+
 **At registration.** `checkUpstreamOidcProvider(egressClient, realmName, config)` runs discovery
 and the egress client's address checks on every endpoint without calling it, and answers one
 finding: `invalid_config`, `discovery_unavailable`, `invalid_document` or `destination_refused`.
