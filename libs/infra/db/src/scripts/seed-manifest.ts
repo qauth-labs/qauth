@@ -27,6 +27,7 @@ import {
   tokenEndpointAuthMethodEnum,
 } from '../lib/schema/enums';
 import { systemClientSpecSchema } from '../lib/system-client/provision';
+import { publicJwkSchema } from '../lib/system-client/public-jwk';
 
 // Reuse pgEnum values to stay in lock-step with the database schema. If
 // someone adds a grant type or auth method to the enum, the manifest
@@ -37,20 +38,14 @@ const tokenEndpointAuthMethodZ = z.enum(tokenEndpointAuthMethodEnum.enumValues);
 const agentModeZ = z.enum(agentModeEnum.enumValues);
 
 /**
- * A single JWK inside a manifest-supplied key set. Deliberately loose about
- * which members are present (the verifier decides that) but STRICT about one
- * thing: no private-key material. `d` is the private exponent/scalar for RSA,
- * EC and OKP alike; `k` is a symmetric key. The AS only ever needs a client's
- * PUBLIC key to verify a `private_key_jwt` assertion, so a manifest carrying a
- * private component is an operator mistake worth failing loudly on rather than
+ * A single JWK inside a manifest-supplied key set: public only, with the
+ * members its key type needs (`publicJwkSchema`, shared with the system
+ * client's provisioner). The AS only ever needs a client's PUBLIC key to
+ * verify a `private_key_jwt` assertion, so a manifest carrying a private
+ * component is an operator mistake worth failing loudly on rather than
  * silently persisting into the database.
  */
-const clientJwkZ = z
-  .object({ kty: z.string().min(1) })
-  .catchall(z.unknown())
-  .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
-    message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
-  });
+const clientJwkZ = publicJwkSchema;
 
 /**
  * One operator-set passkey origin (#467), written in the form a browser puts in

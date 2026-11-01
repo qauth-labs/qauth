@@ -44,6 +44,13 @@ describe('systemClientSpecSchema (#631)', () => {
     for (const spec of [
       { redirect_uris: [CALLBACK], jwks: { keys: [{ ...JWKS.keys[0], d: 'private' }] } },
       { redirect_uris: [CALLBACK], jwks: { keys: [{ kty: 'oct', k: 'c2VjcmV0' }] } },
+      // An RSA key's primes without `d` are private material too.
+      {
+        redirect_uris: [CALLBACK],
+        jwks: { keys: [{ kty: 'RSA', n: 'bg', e: 'AQAB', p: 'cA', q: 'cQ' }] },
+      },
+      // A key the token endpoint could never verify an assertion with.
+      { redirect_uris: [CALLBACK], jwks: { keys: [{ kty: 'OKP' }] } },
       { redirect_uris: [CALLBACK], jwks: { keys: [] } },
       { redirect_uris: [CALLBACK], jwks_uri: 'http://portal.example.com/jwks.json' },
     ]) {

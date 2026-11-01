@@ -52,6 +52,7 @@ import {
   recordFirstPartyChange,
 } from '../first-party/first-party-change';
 import { oauthClients, realms } from '../schema/core';
+import { publicJwkSchema } from './public-jwk';
 
 /** The `client_id` the auth server uses when `SYSTEM_CLIENT_ID` is unset. */
 export const DEFAULT_SYSTEM_CLIENT_ID = 'system';
@@ -65,18 +66,6 @@ export const DEFAULT_SYSTEM_CLIENT_REASON =
 
 /** The grants the portal's redirect flow uses. */
 const SYSTEM_CLIENT_GRANT_TYPES = ['authorization_code', 'refresh_token'] as const;
-
-/**
- * One public JWK. Loose about the members, as the verifier decides those, but
- * never a private one: `d` is the private part of an RSA, EC or OKP key and
- * `k` a symmetric key.
- */
-const publicJwkSchema = z
-  .object({ kty: z.string().min(1) })
-  .catchall(z.unknown())
-  .refine((jwk) => !('d' in jwk) && !('k' in jwk), {
-    message: 'jwks must contain PUBLIC keys only (a "d" or "k" member was present)',
-  });
 
 /**
  * The portal's callback: a URI the consent screen can describe, on `https`,
