@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAccountClient, OPERATIONS } from '../generated/account-api';
-import { expandPath, queryString, UnexpectedStatusError } from './runtime';
+import {
+  checkBaseUrl,
+  expandPath,
+  queryString,
+  UnexpectedBodyError,
+  UnexpectedStatusError,
+} from './runtime';
 
 const PASSKEY_ID = '019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b';
 
@@ -122,6 +128,53 @@ describe('the account API client', () => {
       fetch,
     });
     await expect(client.profileGet()).rejects.toBeInstanceOf(UnexpectedStatusError);
+  });
+
+  it('refuses a declared status whose body is not the JSON it promises', async () => {
+    const html = vi.fn(
+      async () =>
+        new Response('<html>Service unavailable</html>', {
+          status: 503,
+          headers: { 'content-type': 'text/html' },
+        })
+    );
+    const broken = vi.fn(
+      async () =>
+        new Response('{"code":', {
+          status: 503,
+          headers: { 'content-type': 'application/problem+json' },
+        })
+    );
+    for (const fetch of [html, broken]) {
+      const client = createAccountClient({
+        baseUrl: 'https://auth.example.com',
+        accessToken: 'at',
+        fetch,
+      });
+      await expect(client.profileGet()).rejects.toBeInstanceOf(UnexpectedBodyError);
+    }
+  });
+
+  it('takes an https origin only, http on a loopback host, and nothing else', () => {
+    expect(checkBaseUrl('https://auth.example.com')).toBe('https://auth.example.com');
+    expect(checkBaseUrl('https://auth.example.com/')).toBe('https://auth.example.com');
+    expect(checkBaseUrl('http://localhost:3000')).toBe('http://localhost:3000');
+    expect(checkBaseUrl('http://[::1]:3000')).toBe('http://[::1]:3000');
+    for (const refused of [
+      'http://auth.example.com',
+      'https://user:pass@auth.example.com',
+      'https://auth.example.com/prefix',
+      'https://auth.example.com?',
+      'https://auth.example.com/?a=b',
+      'https://auth.example.com#',
+      'ftp://auth.example.com',
+      'auth.example.com',
+    ]) {
+      expect(() => checkBaseUrl(refused), refused).toThrow(TypeError);
+    }
+    expect(() =>
+      createAccountClient({ baseUrl: 'http://auth.example.com', accessToken: 'at', fetch: vi.fn() })
+    ).toThrow(/https/);
   });
 
   it('refuses a path parameter that would leave its segment', async () => {

@@ -67,6 +67,8 @@ export interface OperationInfo {
   readonly actChain: string;
   /** Every status the document declares for it. */
   readonly statuses: readonly number[];
+  /** The declared statuses whose answer has no body, such as 204. */
+  readonly emptyStatuses: readonly number[];
 }
 
 /** What one operation takes: its parameters by location, and its body. */
@@ -110,6 +112,51 @@ export class UnexpectedStatusError extends Error {
     this.status = response.status;
     this.response = response;
   }
+}
+
+/**
+ * An answer with a declared status whose body is not the JSON document the
+ * status promises, such as a proxy's HTML page under 413 or 503. The client
+ * does not hand back a body of the wrong type.
+ */
+export class UnexpectedBodyError extends Error {
+  readonly status: number;
+  readonly response: Response;
+
+  constructor(operation: OperationInfo, response: Response, reason: string) {
+    super(`${operation.method} ${operation.path} answered ${response.status} with ${reason}`);
+    this.name = 'UnexpectedBodyError';
+    this.status = response.status;
+    this.response = response;
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/**
+ * Check `baseUrl` once: an origin under `https` (plain `http` only on a
+ * loopback host, for development), with no user, path, query or fragment, so
+ * the token cannot go in clear or to a path the API does not serve.
+ *
+ * @throws TypeError for any other value
+ */
+export function checkBaseUrl(baseUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new TypeError('baseUrl is not a URL');
+  }
+  const secure =
+    url.protocol === 'https:' || (url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname));
+  if (!secure) throw new TypeError('baseUrl must use https, or http on a loopback host');
+  if (url.username !== '' || url.password !== '') {
+    throw new TypeError('baseUrl must not carry a user or a password');
+  }
+  if (url.pathname !== '/' || url.search !== '' || url.hash !== '' || /[?#]$/.test(baseUrl)) {
+    throw new TypeError('baseUrl must be an origin, with no path, query or fragment');
+  }
+  return url.origin;
 }
 
 /**
@@ -175,7 +222,7 @@ export async function callOperation<O extends OperationShape>(
   request: O['request'],
   init?: CallInit
 ): Promise<OperationResult<O>> {
-  const target = `${options.baseUrl}${expandPath(operation.path, request.path, operation.pathPatterns)}`;
+  const target = `${checkBaseUrl(options.baseUrl)}${expandPath(operation.path, request.path, operation.pathPatterns)}`;
   const url = `${target}${queryString(operation.query, request.query)}`;
   const accessToken =
     typeof options.accessToken === 'function' ? await options.accessToken() : options.accessToken;
@@ -208,6 +255,17 @@ export async function callOperation<O extends OperationShape>(
   if (!operation.statuses.includes(response.status)) {
     throw new UnexpectedStatusError(operation, response);
   }
-  const data = isJson(response.headers.get('content-type')) ? await response.json() : undefined;
+  if (operation.emptyStatuses.includes(response.status)) {
+    return { status: response.status, data: undefined, response } as OperationResult<O>;
+  }
+  if (!isJson(response.headers.get('content-type'))) {
+    throw new UnexpectedBodyError(operation, response, 'a body that is not JSON');
+  }
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new UnexpectedBodyError(operation, response, 'a JSON body that does not parse');
+  }
   return { status: response.status, data, response } as OperationResult<O>;
 }

@@ -26,7 +26,10 @@ if (change.status === 401 && change.data.code === 'insufficient_user_authenticat
 
 A result is typed by its status: the body the document declares for it. A status the document does
 not declare for the operation, such as a proxy's 502 or a redirect, rejects with
-`UnexpectedStatusError`; the client never follows a redirect, which would carry the token on. The
+`UnexpectedStatusError`; the client never follows a redirect, which would carry the token on. A
+declared status whose body is not the JSON it promises, such as a proxy's HTML page under 503,
+rejects with `UnexpectedBodyError`. `baseUrl` must be an `https` origin (`http` only on a loopback
+host), with no user, path, query or fragment; `createAccountClient` throws otherwise. The
 token goes under `Bearer`, or under `DPoP` with the proof `dpopProof` signs for each request.
 `OPERATIONS` records what each operation asks of the token (`freshAuthentication`, `actChain`).
 `fetch` is required: the client picks no transport of its own, so the backend decides how its

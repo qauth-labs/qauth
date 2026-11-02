@@ -336,7 +336,12 @@ function operationInfo(entry: OperationEntry): string {
     parametersIn(operation, 'header')
   )}, bodyMediaType: ${body === undefined ? 'undefined' : literal(body.mediaType)}, freshAuthentication: ${literal(
     operation['x-qauth-fresh-authentication']
-  )}, actChain: ${literal(operation['x-qauth-act-chain'])}, statuses: [${Object.keys(operation.responses).join(', ')}] },`;
+  )}, actChain: ${literal(operation['x-qauth-act-chain'])}, statuses: [${Object.keys(operation.responses).join(', ')}], emptyStatuses: [${Object.entries(
+    operation.responses
+  )
+    .filter(([, response]) => response.content === undefined)
+    .map(([status]) => status)
+    .join(', ')}] },`;
 }
 
 function clientMethod(entry: OperationEntry): string {
@@ -361,7 +366,12 @@ export function renderClient(document: Schema, source: string): string {
  * \`pnpm exec nx run shared-account-client:generate\`. Do not edit it by
  * hand: the tests fail while it differs from what the generator writes.
  */`,
-    `import { type AccountClientOptions, type CallInit, callOperation } from '../lib/runtime';`,
+    `import {
+  type AccountClientOptions,
+  type CallInit,
+  callOperation,
+  checkBaseUrl,
+} from '../lib/runtime';`,
     `/** The version label of the document this client was generated from. */
 export const ACCOUNT_API_VERSION = ${literal(info.version)};`,
     ...componentDeclarations(components),
@@ -377,8 +387,11 @@ ${operations.map(operationInfo).join('\n')}
  * A client of the account API, for a backend that holds the person's access
  * token, such as the account console's. \`baseUrl\` is the auth server's origin
  * for the realm; the token goes to it alone.
+ *
+ * @throws TypeError when \`baseUrl\` is not an \`https\` origin (\`http\` only on a loopback host)
  */
 export function createAccountClient(options: AccountClientOptions) {
+  checkBaseUrl(options.baseUrl);
   return {
 ${operations.map(clientMethod).join('\n')}
   };

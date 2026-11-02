@@ -5,7 +5,12 @@
  * hand: the tests fail while it differs from what the generator writes.
  */
 
-import { type AccountClientOptions, type CallInit, callOperation } from '../lib/runtime';
+import {
+  type AccountClientOptions,
+  type CallInit,
+  callOperation,
+  checkBaseUrl,
+} from '../lib/runtime';
 
 /** The version label of the document this client was generated from. */
 export const ACCOUNT_API_VERSION = 'v1-rc.0';
@@ -28,6 +33,7 @@ export interface Problem {
     | 'unauthorized'
     | 'access_token_expired'
     | 'invalid_access_token'
+    | 'invalid_dpop_proof'
     | 'insufficient_user_authentication'
     | 'forbidden'
     | 'delegated_token_refused'
@@ -342,7 +348,7 @@ export interface SecurityLogPage {
 
 /** The app an entry concerns. */
 export interface ClientReference {
-  /** The app’s OAuth `client_id`. */
+  /** The app’s OAuth `client_id`. A console makes it a link only when it is an `https` URL. */
   client_id: string;
   /** The name the app declared about itself. */
   client_name?: string;
@@ -384,7 +390,7 @@ export interface AddressChangeConfirmRequest {
 export interface Consent {
   /** The consent’s id. */
   id: string;
-  /** The app’s OAuth `client_id`, which may be a URL (a Client ID Metadata Document client). */
+  /** The app’s OAuth `client_id`, which may be a URL (a Client ID Metadata Document client). A console makes it a link only when it is an `https` URL. */
   client_id: string;
   /** The name the app declared about itself. */
   client_name: string;
@@ -428,13 +434,13 @@ export interface DeletionRequest {
 export interface NotificationPreferences {
   /** Where notices go: the contact address, or only the security log for an account without one. */
   delivery: 'email' | 'security_log';
-  /** Every notice, in a fixed order. */
+  /** Every notice the server sends, in a fixed order. */
   notices: NoticePreference[];
 }
 
 /** One security notice. */
 export interface NoticePreference {
-  /** The notice. */
+  /** The notice. A minor release may add notices, such as the new-agent-grant notice of ADR-020 §3; a console shows one it does not know by its `mandatory` and `enabled` alone. */
   notice:
     | 'new_device'
     | 'password_changed'
@@ -447,7 +453,8 @@ export interface NoticePreference {
     | 'send_ceiling_reached'
     | 'second_factor_failed'
     | 'identifier_changed'
-    | 'account_deleted';
+    | 'account_deleted'
+    | (string & {});
   /** Whether it always goes out: no setting switches it off. */
   mandatory: boolean;
   /** Whether the account receives it now. */
@@ -898,6 +905,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.profile.update': {
     method: 'PATCH',
@@ -909,6 +917,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 412, 413, 415, 421, 422, 428, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.signInMethods.get': {
     method: 'GET',
@@ -920,6 +929,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.password.change': {
     method: 'POST',
@@ -931,6 +941,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor',
     actChain: 'refused',
     statuses: [204, 400, 401, 403, 404, 413, 415, 421, 422, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.passkeys.list': {
     method: 'GET',
@@ -942,6 +953,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.passkeys.get': {
     method: 'GET',
@@ -953,6 +965,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 404, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.passkeys.update': {
     method: 'PATCH',
@@ -961,9 +974,10 @@ export const OPERATIONS = {
     query: [],
     headers: ['If-Match'],
     bodyMediaType: 'application/merge-patch+json',
-    freshAuthentication: 'strongest-factor',
+    freshAuthentication: 'none',
     actChain: 'refused',
     statuses: [200, 400, 401, 403, 404, 412, 413, 415, 421, 422, 428, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.passkeys.delete': {
     method: 'DELETE',
@@ -972,9 +986,10 @@ export const OPERATIONS = {
     query: [],
     headers: [],
     bodyMediaType: undefined,
-    freshAuthentication: 'strongest-factor',
+    freshAuthentication: 'strongest-factor-or-recovery-code',
     actChain: 'refused',
     statuses: [204, 400, 401, 403, 404, 409, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.totp.enrollment.create': {
     method: 'POST',
@@ -986,6 +1001,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor-or-recovery-code',
     actChain: 'refused',
     statuses: [201, 400, 401, 403, 409, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.totp.enrollment.confirm': {
     method: 'POST',
@@ -997,6 +1013,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor-or-recovery-code',
     actChain: 'refused',
     statuses: [200, 400, 401, 403, 404, 413, 415, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.totp.delete': {
     method: 'DELETE',
@@ -1005,9 +1022,10 @@ export const OPERATIONS = {
     query: [],
     headers: [],
     bodyMediaType: undefined,
-    freshAuthentication: 'strongest-factor',
+    freshAuthentication: 'strongest-factor-or-recovery-code',
     actChain: 'refused',
     statuses: [204, 400, 401, 403, 404, 409, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.recoveryCodes.get': {
     method: 'GET',
@@ -1019,6 +1037,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.recoveryCodes.regenerate': {
     method: 'POST',
@@ -1030,6 +1049,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor',
     actChain: 'refused',
     statuses: [200, 400, 401, 403, 409, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.sessions.list': {
     method: 'GET',
@@ -1041,6 +1061,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.sessions.delete': {
     method: 'DELETE',
@@ -1052,6 +1073,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [204, 400, 401, 403, 404, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.sessions.endAll': {
     method: 'POST',
@@ -1063,6 +1085,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [204, 400, 401, 403, 413, 415, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.securityLog.list': {
     method: 'GET',
@@ -1074,6 +1097,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.securityLog.report': {
     method: 'POST',
@@ -1085,6 +1109,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'refused',
     statuses: [204, 400, 401, 403, 404, 409, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.addresses.get': {
     method: 'GET',
@@ -1096,6 +1121,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.addressChange.create': {
     method: 'POST',
@@ -1107,6 +1133,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor',
     actChain: 'refused',
     statuses: [202, 400, 401, 403, 413, 415, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.addressChange.confirm': {
     method: 'POST',
@@ -1118,6 +1145,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor',
     actChain: 'refused',
     statuses: [200, 400, 401, 403, 404, 413, 415, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.consents.list': {
     method: 'GET',
@@ -1129,6 +1157,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.consents.delete': {
     method: 'DELETE',
@@ -1140,6 +1169,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [204, 400, 401, 403, 404, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.deletion.get': {
     method: 'GET',
@@ -1151,6 +1181,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
   'account.deletion.create': {
     method: 'POST',
@@ -1162,6 +1193,7 @@ export const OPERATIONS = {
     freshAuthentication: 'strongest-factor',
     actChain: 'refused',
     statuses: [204, 400, 401, 403, 413, 415, 421, 429, 500, 503],
+    emptyStatuses: [204],
   },
   'account.notificationPreferences.get': {
     method: 'GET',
@@ -1173,6 +1205,7 @@ export const OPERATIONS = {
     freshAuthentication: 'none',
     actChain: 'accepted',
     statuses: [200, 400, 401, 403, 421, 429, 500, 503],
+    emptyStatuses: [],
   },
 } as const;
 
@@ -1180,8 +1213,11 @@ export const OPERATIONS = {
  * A client of the account API, for a backend that holds the person's access
  * token, such as the account console's. `baseUrl` is the auth server's origin
  * for the realm; the token goes to it alone.
+ *
+ * @throws TypeError when `baseUrl` is not an `https` origin (`http` only on a loopback host)
  */
 export function createAccountClient(options: AccountClientOptions) {
+  checkBaseUrl(options.baseUrl);
   return {
     /** Read the profile: `account.profile.get`. */
     profileGet: (request: Operations['account.profile.get']['request'] = {}, init?: CallInit) =>

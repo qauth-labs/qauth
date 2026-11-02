@@ -6,5 +6,6 @@ export {
   type DpopProofInput,
   type FetchLike,
   type OperationResult,
+  UnexpectedBodyError,
   UnexpectedStatusError,
 } from './lib/runtime';
