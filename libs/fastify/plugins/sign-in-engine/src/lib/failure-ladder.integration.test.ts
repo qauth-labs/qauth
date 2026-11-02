@@ -346,7 +346,7 @@ describe('the failure ladder over real Redis and Postgres', () => {
     });
   });
 
-  it('keeps a counter a day below the free failures and 30 days from its first wait, the same keys and times whether or not an account holds the identifier (#969)', async (testCtx) => {
+  it('keeps a counter 2 days after its last failure below the free failures and 30 days once it has reached a wait, the same keys and times whether or not an account holds the identifier (#969)', async (testCtx) => {
     if (!dockerUp || redis === undefined) return testCtx.skip();
     const cache = redis;
     await seed('held@example.com');
@@ -371,23 +371,45 @@ describe('the failure ladder over real Redis and Postgres', () => {
       }
     };
 
-    // The clock stands still: no wait holds an attempt back below the free failures.
-    for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures - 1; i += 1) {
+    /** One wrong password at each identifier. */
+    const failEach = async () => {
       for (const identifier of identifiers) {
         expect(isRefusedCredential(await attempt(identifier, 'wrong'))).toBe(true);
       }
-    }
+    };
+    /** Cut every key of both identifiers to 10 s, so the next failure must set its TTL again. */
+    const shorten = async () => {
+      for (const hmac of hmacs) {
+        for (const key of await cache.keys(`sign-in-ladder:{${realmId}:${hmac}}:*`)) {
+          await cache.pexpire(key, 10_000);
+        }
+      }
+    };
+
+    // The clock stands still: no wait holds an attempt back below the free failures.
+    for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures - 2; i += 1) await failEach();
+    await shorten();
+    await failEach();
     const runs = await Promise.all(identifiers.map((identifier) => counter(identifier)));
     for (const run of runs) expect(run).toMatchObject({ n: '4' });
-    for (const hmac of hmacs)
+    for (const hmac of hmacs) {
       expectTtls(await keysOf(hmac), PASSWORD_LADDER_POLICY.freeRetentionMs);
-
-    // The failure that sets the first wait keeps the run, now for 30 days.
-    for (const identifier of identifiers) {
-      expect(isRefusedCredential(await attempt(identifier, 'wrong'))).toBe(true);
     }
+
+    // The failure that sets the first wait keeps the run, now 30 days after it.
+    await shorten();
+    await failEach();
     for (const [i, identifier] of identifiers.entries()) {
       expect(await counter(identifier)).toMatchObject({ n: '5', run: runs[i]?.run });
+    }
+    for (const hmac of hmacs) expectTtls(await keysOf(hmac), PASSWORD_LADDER_POLICY.retentionMs);
+
+    // Once the wait is over, each further failure keeps the run 30 days after it.
+    now += PASSWORD_LADDER_POLICY.firstWaitMs;
+    await shorten();
+    await failEach();
+    for (const [i, identifier] of identifiers.entries()) {
+      expect(await counter(identifier)).toMatchObject({ n: '6', run: runs[i]?.run });
     }
     for (const hmac of hmacs) expectTtls(await keysOf(hmac), PASSWORD_LADDER_POLICY.retentionMs);
   });
@@ -396,7 +418,9 @@ describe('the failure ladder over real Redis and Postgres', () => {
     if (!dockerUp || redis === undefined) return testCtx.skip();
     const cache = redis;
     // Times Redis can let pass in a test: 4 free failures, a 50 ms longest wait,
-    // a 300 ms free retention and the 30-day retention.
+    // a 300 ms free retention and the 30-day retention. The known-IP time is a
+    // value of its own (7 days), so the script cannot read it in a retention's
+    // place unseen; no hard ceiling, whose rule a 300 ms free retention fails.
     const ladder = createRedisFailureLadder(cache, {
       ipDigest,
       now: () => now,
@@ -406,6 +430,8 @@ describe('the failure ladder over real Redis and Postgres', () => {
           firstWaitMs: 1,
           maxWaitMs: 50,
           freeRetentionMs: 300,
+          knownIpMs: 7 * 86_400_000,
+          hardCeiling: null,
         },
       },
     });
@@ -425,7 +451,9 @@ describe('the failure ladder over real Redis and Postgres', () => {
     await fail('free-only@example.com', PASSWORD_LADDER_POLICY.freeFailures - 1);
     await fail('waited@example.com', PASSWORD_LADDER_POLICY.freeFailures);
     expect(await cache.pttl(free)).toBeLessThanOrEqual(300);
-    expect(await cache.pttl(waited)).toBeGreaterThan(PASSWORD_LADDER_POLICY.retentionMs - 60_000);
+    const waitedTtl = await cache.pttl(waited);
+    expect(waitedTtl).toBeLessThanOrEqual(PASSWORD_LADDER_POLICY.retentionMs);
+    expect(waitedTtl).toBeGreaterThan(PASSWORD_LADDER_POLICY.retentionMs - 60_000);
 
     await vi.waitFor(async () => expect(await cache.exists(free)).toBe(0), {
       timeout: 5_000,

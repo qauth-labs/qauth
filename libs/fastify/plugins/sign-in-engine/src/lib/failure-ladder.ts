@@ -36,10 +36,10 @@ import {
  *   run's consecutive counted failures (`n`), until when an attempt waits
  *   (`until`, epoch ms) and the run's id (`run`), kept after the last counted
  *   failure `freeRetentionMs` while `n` is below `freeFailures` and
- *   `retentionMs` from then on (#969): a spray of made-up identifiers, each
- *   tried once, ages out in a day, and an account under attack keeps its run.
- *   The retention follows the count alone, so it is the same whether or not
- *   an account holds the identifier;
+ *   `retentionMs` once it is not (#969): a spray that tries each made-up
+ *   identifier a few times ages out in 2 days, and an account under attack
+ *   keeps its run. The retention follows the count alone, so it is the same
+ *   whether or not an account holds the identifier;
  * - `sign-in-ladder:{<realm id>:<identifier HMAC>}:known-ips`: a sorted set of
  *   end-user IP HMACs, scored by their last successful sign-in.
  *

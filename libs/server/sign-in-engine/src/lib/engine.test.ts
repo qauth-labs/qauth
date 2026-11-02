@@ -1926,7 +1926,7 @@ describe('the failure ladder (#615)', () => {
         }
       };
 
-      // Below the free failures: kept a day after the last one.
+      // Below the free failures: kept 2 days after the last one.
       for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures - 1; i += 1) await failBoth();
       expect(kept(hmacs.held)).toEqual(kept(hmacs.unheld));
       expect(kept(hmacs.held).password).toEqual({

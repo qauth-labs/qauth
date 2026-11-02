@@ -25,6 +25,8 @@ const IDENTIFIER = 'alice@example.com';
 const IP = '203.0.113.7';
 const OTHER_IP = '198.51.100.9';
 const DAY = 86_400_000;
+/** The password ladder's retention of a run that has not reached a wait: 2 days. */
+const FREE = PASSWORD_LADDER_POLICY.freeRetentionMs;
 
 /** A keyed HMAC as the digests make it: base64url, never the input. */
 const hmacOf = (label: string, value: string) =>
@@ -342,14 +344,15 @@ describe('the Redis failure ladder', () => {
     expect(await attempt()).toMatchObject({ kind: 'reserved' });
   });
 
-  it('ends a run that never reached a wait 1 day after its last counted failure (#969)', async () => {
+  it('ends a run that never reached a wait 2 days after its last counted failure (#969)', async () => {
     const { redis, attempt, fail, advance, counter, now } = setup();
+    expect(FREE).toBe(2 * DAY);
     await fail(3);
-    advance(DAY - 1);
+    advance(FREE - 1);
     await fail(1);
     const run = counter()?.get('run');
-    expect(redis.expiries.get(COUNTER)).toBe(now() + DAY);
-    advance(DAY - 1);
+    expect(redis.expiries.get(COUNTER)).toBe(now() + FREE);
+    advance(FREE - 1);
     expect(counter()?.get('n')).toBe('4');
     advance(1);
     expect(counter()).toBeUndefined();
@@ -363,7 +366,7 @@ describe('the Redis failure ladder', () => {
     const { redis, attempt, fail, advance, counter, now } = setup();
     await fail(4);
     const run = counter()?.get('run');
-    advance(DAY - 1);
+    advance(FREE - 1);
     await fail(1);
     expect(counter()).toEqual(
       new Map([
@@ -389,12 +392,13 @@ describe('the Redis failure ladder', () => {
     await (await reserved(IP)).settle('success');
     expect(redis.expiries.get(KNOWN_IPS)).toBe(now() + 30 * DAY);
     await fail(1, IP);
-    expect(redis.expiries.get(COUNTER)).toBe(now() + DAY);
+    expect(redis.expiries.get(COUNTER)).toBe(now() + FREE);
     expect(redis.expiries.get(KNOWN_IPS)).toBe(now() + 30 * DAY);
   });
 
   it('sends both retentions to the script, in its argument order', async () => {
-    const { redis, attempt, now } = setup();
+    // Every time a distinct value, so no two arguments can trade places unseen.
+    const { redis, attempt, now } = setup({ ...PASSWORD_LADDER_POLICY, knownIpMs: 7 * DAY });
     await attempt();
     const sent = redis.sent.slice(-11);
     expect(sent).toEqual([
@@ -405,8 +409,8 @@ describe('the Redis failure ladder', () => {
       '1000',
       String(15 * 60_000),
       String(30 * DAY),
-      String(DAY),
-      String(30 * DAY),
+      String(2 * DAY),
+      String(7 * DAY),
       hmacOf('ip', IP),
       expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
     ]);
