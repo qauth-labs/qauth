@@ -53,6 +53,7 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
   ],
   'tokens.adminAccessTokenLifespanSeconds': [null, 'lower-is-stricter', 'loosening'],
   'accounts.requireVerifiedAccount': ['REQUIRE_VERIFIED_ACCOUNT', 'true-is-stricter', 'loosening'],
+  'password.minLength': ['PASSWORD_MIN_LENGTH', 'higher-is-stricter', 'loosening'],
   'password.minScore': ['PASSWORD_MIN_SCORE', 'higher-is-stricter', 'loosening'],
   'bruteForce.enabled': ['FAILED_LOGIN_TRACKING_ENABLED', 'true-is-stricter', 'loosening'],
   'bruteForce.maxAttempts': ['FAILED_LOGIN_MAX_ATTEMPTS', 'lower-is-stricter', 'loosening'],

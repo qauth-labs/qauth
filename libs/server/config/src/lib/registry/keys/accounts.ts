@@ -38,6 +38,16 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: "The strength score, from 0 (very weak) to 4 (strong), a new password must reach, that seeds `password.minScore` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
+    name: 'PASSWORD_MIN_LENGTH',
+    tier: 'stable',
+    role: 'realm-seed',
+    seeds: 'password.minLength',
+    owner: 'accounts',
+    default: '15',
+    since: '0.2.0',
+    docs: "The fewest characters (Unicode code points, after NFC normalisation) a new password must have, from 8 to 64 (below 8 fails the boot, and below 15 boots with a warning, since NIST SP 800-63B-4 allows a shorter minimum only for a password used within multi-factor authentication), that seeds `password.minLength` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
+  },
+  {
     name: 'PASSWORD_MEMORY_COST',
     tier: 'advanced',
     role: 'deployment',

@@ -29,6 +29,16 @@ export interface AccountPolicies {
   readonly requireVerifiedAccount: boolean;
   /** `password.minScore`: the lowest zxcvbn score, 0 to 4, a new password may have. */
   readonly passwordMinScore: number;
+  /**
+   * `password.minLength` (#634): the fewest code points, after NFC
+   * normalisation, a new password may have, 8 to 64.
+   */
+  readonly passwordMinLength: number;
+  /**
+   * `mail.fromName`: the name the realm's mail goes out under, the service's
+   * name as its users see it, which a new password may not be (#634).
+   */
+  readonly serviceName: string;
   /** `bruteForce`: the failed-login lockout of the realm's identifiers. */
   readonly bruteForce: BruteForcePolicy;
 }
@@ -42,8 +52,8 @@ export interface AccountPolicies {
  * count, or never. A change of a realm's policies reaches its next request
  * once the row is read again (the resolver's cache time), without a restart.
  *
- * `REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_SCORE` and the `FAILED_LOGIN_*`
- * keys only seed these policies. A realm with none yet (counter 0: created by
+ * `REQUIRE_VERIFIED_ACCOUNT`, `PASSWORD_MIN_LENGTH`, `PASSWORD_MIN_SCORE` and
+ * the `FAILED_LOGIN_*` keys only seed these policies. A realm with none yet (counter 0: created by
  * a node of the previous release during a rolling upgrade, until a boot fills
  * it) reads the environment's seeds, which are what the server read before
  * #528 and what its fill will store, so nothing changes when the fill lands.
@@ -59,10 +69,12 @@ export function accountPoliciesOf(
   sources: { readonly policyStore: Pick<RealmPolicyStoreOfRealms, 'ofRealm'> },
   realm: RealmRow
 ): AccountPolicies {
-  const { accounts, password, bruteForce } = sources.policyStore.ofRealm(realm).policies;
+  const { accounts, password, bruteForce, mail } = sources.policyStore.ofRealm(realm).policies;
   return Object.freeze({
     requireVerifiedAccount: accounts.requireVerifiedAccount,
     passwordMinScore: password.minScore,
+    passwordMinLength: password.minLength,
+    serviceName: mail.fromName,
     bruteForce: Object.freeze({
       enabled: bruteForce.enabled,
       maxAttempts: bruteForce.maxAttempts,

@@ -36,6 +36,7 @@ import {
 } from '@qauth-labs/fastify-plugin-signer';
 import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
 import {
+  passwordPolicyWarnings,
   resolveStatusListTrustAnchorPems,
   resolveVerifierCertificateChainPems,
 } from '@qauth-labs/server-config';
@@ -642,6 +643,12 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   for (const warning of roleCheck.warnings) {
     fastify.log.warn({ variable: warning.variable }, warning.message);
   }
+  // A minimum password length below NIST's 15 for a password that may be the
+  // only factor (#634, ADR-017 Decision 8): allowed down to 8, which the
+  // environment schema enforces, and logged, since it seeds new realms.
+  for (const warning of passwordPolicyWarnings(env)) {
+    fastify.log.warn({ variable: warning.variable }, warning.message);
+  }
   const plugins = pluginsFor(roles);
 
   // The route modules of this process's roles, imported now, all at once and
@@ -928,9 +935,10 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         // with 503 and `Retry-After` (#751); see `helpers/client-auth.ts`.
         queueLimit: env.PASSWORD_HASH_QUEUE_LIMIT,
       },
-      // No password strength score here: each realm sets its own lowest
-      // score (`password.minScore`, #528), which registration reads from the
-      // realm row; PASSWORD_MIN_SCORE only seeds it in a new realm.
+      // No password policy here: each realm sets its own minimum length and
+      // lowest score (`password.minLength`, `password.minScore`, #528, #634),
+      // which registration reads from the realm row; PASSWORD_MIN_LENGTH and
+      // PASSWORD_MIN_SCORE only seed them in a new realm.
     });
   }
 

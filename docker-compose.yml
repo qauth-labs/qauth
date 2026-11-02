@@ -155,6 +155,7 @@ services:
       PASSWORD_TIME_COST: ${PASSWORD_TIME_COST:-3}
       PASSWORD_PARALLELISM: ${PASSWORD_PARALLELISM:-4}
       PASSWORD_MIN_SCORE: ${PASSWORD_MIN_SCORE:-2}
+      PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-15}
       # Client-secret checks beyond this many waiting Argon2 jobs answer 503
       # with Retry-After at once instead of queueing.
       PASSWORD_HASH_QUEUE_LIMIT: ${PASSWORD_HASH_QUEUE_LIMIT:-32}
