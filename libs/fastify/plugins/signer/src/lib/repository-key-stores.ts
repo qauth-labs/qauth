@@ -11,6 +11,8 @@ import type {
   StoredPublicKey,
 } from '@qauth-labs/server-keys/custody';
 
+import type { KekCanaryStore } from './key-custody-check';
+
 /**
  * The key library's storage ports over the repositories of
  * `@qauth-labs/infra-db` (ADR-019 Decision 9, issues #461, #463 and #464).
@@ -42,6 +44,19 @@ export function createRepositorySignerKeyStore(db: DbClient): SignerKeyStore {
     // `signClientAssertion` finds no provider and signs nothing.
     findUpstreamClient: async () => undefined,
   } satisfies SignerKeyStore);
+}
+
+/**
+ * What the signer's readiness check reads (#500): the canary keys, one per KEK
+ * reference in use, and each one's wrapped row through the one read that
+ * returns wrapped material.
+ */
+export function createRepositoryKekCanaryStore(db: DbClient): KekCanaryStore {
+  const keys = createRealmKeysRepository(db);
+  return Object.freeze({
+    listKekCanaries: (limit: number) => keys.listKekCanaries(limit),
+    getWrappedKey: (realmId: string, kid: string) => keys.getWrappedForSigner(realmId, kid),
+  } satisfies KekCanaryStore);
 }
 
 /**
