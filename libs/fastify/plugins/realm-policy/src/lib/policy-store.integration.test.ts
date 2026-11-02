@@ -191,7 +191,7 @@ describe('policy store over the realms table (integration)', () => {
     await store.update(realm.id, { password: { minScore: 4 } }, { expectedVersion: 2 });
     expect((await store.get(realm.id))?.policies).toEqual({
       ...read?.policies,
-      password: { minScore: 4 },
+      password: { minLength: 15, minScore: 4 },
     });
   });
 
@@ -247,7 +247,12 @@ describe('policy store over the realms table (integration)', () => {
     for (const [name, shape] of Object.entries(BUILT_IN_POLICY_GROUPS)) {
       registry.registerPolicyGroup(
         name,
-        name === 'password' ? { minimumScore: PASSWORD_POLICY_GROUP.minScore } : shape
+        name === 'password'
+          ? {
+              minLength: PASSWORD_POLICY_GROUP.minLength,
+              minimumScore: PASSWORD_POLICY_GROUP.minScore,
+            }
+          : shape
       );
     }
     const rename: PolicySchemaUpgrade = {
@@ -280,6 +285,7 @@ describe('policy store over the realms table (integration)', () => {
     const stored = await row(realm.id);
     expect(stored).toMatchObject({ policy_schema_version: '1-rc.1', policies_version: 3 });
     expect((stored['policies'] as Record<string, unknown>)['password']).toEqual({
+      minLength: 15,
       minimumScore: 4,
     });
     expect((await next.seedRealms()).upgraded).toEqual([]);
@@ -385,11 +391,11 @@ describe('policy store over the realms table (integration)', () => {
     const report = await storeOn(db()).seedRealms();
 
     expect(report.completed).toEqual([
-      { realmId: id, realmName: 'partial', paths: ['password.minScore'] },
+      { realmId: id, realmName: 'partial', paths: ['password.minLength', 'password.minScore'] },
     ]);
     expect(await row(id)).toMatchObject({
       policies_version: (version as number) + 1,
-      policies: expect.objectContaining({ password: { minScore: 3 } }),
+      policies: expect.objectContaining({ password: { minLength: 15, minScore: 3 } }),
     });
     expect((await storeOn(db()).seedRealms()).completed).toEqual([]);
   });

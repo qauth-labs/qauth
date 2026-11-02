@@ -10,10 +10,12 @@ declare module 'fastify' {
   interface FastifyInstance {
     passwordHasher: PasswordHasher;
     /**
-     * Password strength validators by minimum score (#528):
-     * `forMinScore(score)` for the lowest score of the realm the password is
-     * chosen in, built once per score and kept. No score is fixed at
-     * registration, since each realm sets its own.
+     * The one password policy's validators (#528, #634, ADR-017 Decision 8):
+     * `forPolicy({ minLength, minScore })` for the policy of the realm the
+     * password is chosen in, built once per policy and kept. No policy is
+     * fixed at registration, since each realm sets its own. Every route that
+     * stores a new password checks it here and hashes the NFC form it
+     * returns.
      */
     passwordValidators: PasswordValidators;
   }
@@ -33,9 +35,11 @@ declare module 'fastify' {
  *   },
  * });
  *
- * // Use in routes, with the lowest score of the realm (`password.minScore`)
- * const result = fastify.passwordValidators.forMinScore(minScore).validatePasswordStrength(password);
- * const hash = await fastify.passwordHasher.hashPassword(password);
+ * // Use in routes, with the realm's policy (`password.minLength`, `password.minScore`)
+ * const result = fastify.passwordValidators.forPolicy({ minLength, minScore }).check(password, { email });
+ * if (result.valid) {
+ *   const hash = await fastify.passwordHasher.hashPassword(result.password);
+ * }
  * ```
  */
 export const passwordPlugin = fp<PasswordPluginOptions>(

@@ -3,7 +3,7 @@ title: API conventions
 description: The rules every route of the admin, account and developer APIs follows — paths, names, errors, paging, concurrency, OpenAPI extensions and versioning.
 sidebar:
   order: 3
-lastVerified: '2026-10-31'
+lastVerified: '2026-11-02'
 ---
 
 QAuth has three API families: admin, account and developer
@@ -521,7 +521,9 @@ document, sent as `application/problem+json` (ADR-019 Decision 7, decided 2026-1
   error code for a request that presented none (`unauthorized`, RFC 6750 §3.1). A 403 says `insufficient_scope`, with the `scope`, only when a token with that
   scope would be let through; a refusal no scope can lift, such as the developer client limit,
   carries a challenge with no error code, so a client does not go back for a wider token.
-- A weak password's feedback is a list of `errors` under the pointer `/password`.
+- A refused new password (`weak_password`) lists why in `reasons` (`too_short`, `too_long`,
+  `blocklisted`, `too_weak`; a minor release may add reasons), and a message for each, then any
+  feedback, as `errors` under the pointer `/password`.
 - The shared schema is `Problem` (`#/components/schemas/Problem` in the OpenAPI document), and a
   route declares its error responses with `problemResponses(...)` from
   `apps/auth-server/src/app/api-conventions/problem.ts`.

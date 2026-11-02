@@ -32,7 +32,7 @@ const TABLE_DEFAULTS: RealmPolicies = {
     adminAccessTokenLifespanSeconds: 600,
   },
   accounts: { requireVerifiedAccount: true },
-  password: { minScore: 2 },
+  password: { minLength: 15, minScore: 2 },
   bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
   registration: {
     dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
@@ -508,14 +508,16 @@ describe('diffPolicies', () => {
   it('refuses a document with an unknown member, naming its path and not its value', () => {
     let caught: unknown;
     try {
-      diffPolicies(TABLE_DEFAULTS, { password: { minScore: 2, minLength: 'hunter2-hunter2' } });
+      diffPolicies(TABLE_DEFAULTS, {
+        password: { minLength: 15, minScore: 2, maxAgeDays: 'hunter2-hunter2' },
+      });
     } catch (error) {
       caught = error;
     }
     expect(caught).toBeInstanceOf(PolicyValidationError);
     const issues = (caught as PolicyValidationError).issues;
     expect(issues.map((issue) => issue.path)).toEqual(['password']);
-    expect(JSON.stringify(issues)).toContain('minLength');
+    expect(JSON.stringify(issues)).toContain('maxAgeDays');
     expect(JSON.stringify(issues)).not.toContain('hunter2');
   });
 });

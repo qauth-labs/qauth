@@ -3,7 +3,7 @@ title: API Reference
 description: Hand-written reference for every path in QAuth's committed OpenAPI spec.
 sidebar:
   order: 4
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-02'
 ---
 
 Hand-written reference for QAuth's HTTP endpoints. The **authoritative, always-current**
@@ -170,11 +170,11 @@ always sent.
 
 **Request** (`application/json`)
 
-| Field      | Type           | Required | Notes                                         |
-| ---------- | -------------- | -------- | --------------------------------------------- |
-| `email`    | string (email) | yes      | At most 254 characters (RFC 5321).            |
-| `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
-| `realmId`  | string (uuid)  | no       | Must be the realm of the request's host.      |
+| Field      | Type           | Required | Notes                                        |
+| ---------- | -------------- | -------- | -------------------------------------------- |
+| `email`    | string (email) | yes      | At most 254 characters (RFC 5321).           |
+| `password` | string         | yes      | The realm's password policy applies (below). |
+| `realmId`  | string (uuid)  | no       | Must be the realm of the request's host.     |
 
 **`202 Accepted`** (`Cache-Control: no-store`)
 
@@ -193,8 +193,20 @@ answers it with the same `401` as a wrong password.
 The account is created in the realm of the host the request names. A `realmId`
 in the body picks no other realm: any value but that realm's id is refused.
 
-Errors: `400` (validation, or a `realmId` that is not the host's realm), `422`
-(`WEAK_PASSWORD`, with `feedback`), `429` (rate limited). None of them depends on
+The password must meet the realm's password policy (ADR-017 Decision 8): at
+least `password.minLength` characters (15 by default), counted after Unicode
+NFC normalisation; at most 256 UTF-16 code units as typed; not, as a whole and
+ignoring case, a common word or password, the address, its local part or
+domain, or the service's or realm's name; and a zxcvbn score of at least
+`password.minScore` (2 by default). No mix of character types is required.
+Mark the fields for password managers: `autocomplete="username"` on the
+address and `autocomplete="new-password"` on the password.
+
+Errors: `400` (validation, a password over 256 UTF-16 code units among it, or
+a `realmId` that is not the host's realm), `422` (`weak_password`, whose
+`reasons` list why the password was refused: `too_short`, `blocklisted`,
+`too_weak`; `errors` carries a message for each, whose pointer names the
+password field), `429` (rate limited). None of them depends on
 whether the address is registered. Before 2026-10-19 this endpoint answered `201`
 with the new user and `409` for a registered address (breaking change, listed in
 `CHANGELOG.md`).

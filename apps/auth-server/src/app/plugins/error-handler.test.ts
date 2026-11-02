@@ -120,6 +120,13 @@ async function buildApp(): Promise<FastifyInstance> {
   app.post('/auth/password', async () => {
     throw new WeakPasswordError(undefined, ['Add another word or two.', 'Avoid common phrases.']);
   });
+  app.post('/auth/password-policy', async () => {
+    throw new WeakPasswordError(
+      'Password does not meet the password policy',
+      ['Password must be at least 15 characters', 'Password is too easy to guess'],
+      ['too_short', 'too_weak']
+    );
+  });
   app.get('/auth/oauth-class', async () => {
     throw new InvalidRequestError('the cursor has expired');
   });
@@ -507,6 +514,26 @@ describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
         { pointer: '/password', message: expect.any(String) },
       ]);
       expect(bodyOf(response)).not.toHaveProperty('feedback');
+      // A refusal that names no reasons sends none.
+      expect(bodyOf(response)).not.toHaveProperty('reasons');
+
+      await app.close();
+    });
+
+    it("lists a refused password's reasons in reasons[], beside a message for each (#634)", async () => {
+      const app = await buildApp();
+
+      const response = await app.inject({ method: 'POST', url: '/auth/password-policy' });
+
+      expect(response.statusCode).toBe(422);
+      expect(bodyOf(response)).toMatchObject({
+        code: 'weak_password',
+        reasons: ['too_short', 'too_weak'],
+        errors: [
+          { pointer: '/password', message: 'Password must be at least 15 characters' },
+          { pointer: '/password', message: 'Password is too easy to guess' },
+        ],
+      });
 
       await app.close();
     });

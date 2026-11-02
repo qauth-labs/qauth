@@ -1,5 +1,6 @@
 import { STATUS_CODES } from 'node:http';
 
+import { PASSWORD_REJECTION_REASONS } from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 /**
@@ -343,7 +344,8 @@ export const PROBLEM_CODES = {
     status: 422,
     type: 'weak-password',
     title: 'Weak password',
-    description: 'The new password is too weak. `errors` carries the feedback under `/password`.',
+    description:
+      'The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`), and `errors` carries a message for each, then any feedback, under `/password`.',
   },
   precondition_required: {
     status: 428,
@@ -483,11 +485,18 @@ export const problemSchema = z
     code: z.string().meta({ 'x-extensible-enum': Object.keys(PROBLEM_CODES) }),
     trace_id: z.string(),
     errors: z.array(problemFieldErrorSchema).optional(),
+    reasons: z
+      .array(z.string().meta({ 'x-extensible-enum': [...PASSWORD_REJECTION_REASONS] }))
+      .optional()
+      .meta({
+        description:
+          'For `weak_password`: why the new password was refused, in the order checked. A later release may add reasons.',
+      }),
   })
   .meta({
     id: PROBLEM_SCHEMA_ID,
     description:
-      'RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong.',
+      'RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong. `reasons` lists why a new password was refused (`weak_password`).',
   });
 
 export type ProblemDocument = z.infer<typeof problemSchema>;

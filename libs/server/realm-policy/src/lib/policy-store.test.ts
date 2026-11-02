@@ -444,7 +444,7 @@ describe('createPolicyStore — update', () => {
     expect(snapshot.version).toBe(1);
     expect(snapshot.policies).toEqual({
       ...SEEDS,
-      password: { minScore: 4 },
+      password: { ...SEEDS.password, minScore: 4 },
       posture: { maxEnvironmentLaxity: 'development' },
     });
     expect(rows.get('realm-old')?.schemaVersion).toBe(REALM_POLICY_REGISTRY.version);
@@ -721,7 +721,11 @@ describe('createPolicyStore — seedRealms', () => {
       {
         realmId: 'realm-a',
         realmName: 'master',
-        paths: ['tokens.developmentAccessTokenLifespanSeconds', 'password.minScore'],
+        paths: [
+          'tokens.developmentAccessTokenLifespanSeconds',
+          'password.minLength',
+          'password.minScore',
+        ],
       },
     ]);
     expect(rows.get('realm-a')).toMatchObject({ version: 4, document: SEEDS });

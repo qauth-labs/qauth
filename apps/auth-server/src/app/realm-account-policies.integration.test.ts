@@ -55,8 +55,12 @@ const HOST_A = 'auth.example.com';
 const HOST_B = 'beta.example.com';
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const WRONG_PASSWORD = 'Wrong-Password-For-This-Account-7!';
-/** zxcvbn scores it 1: weak, below the seeded lowest score of 2. */
-const SCORE_ONE_PASSWORD = 'monkey12345';
+/**
+ * zxcvbn scores it 1: weak, below the seeded lowest score of 2. Sixteen
+ * characters and in no dictionary, so only the score refuses it, never the
+ * minimum length (#634) or the blocklist.
+ */
+const SCORE_ONE_PASSWORD = 'monkey1234567890';
 /** A source address of its own, for guesses whose lockout must not reach the suite's other sign-ins. */
 const GUESSER = '198.51.100.7';
 
@@ -252,7 +256,7 @@ describe('account policies read from the realm row (#528, real containers)', () 
     for (const realmId of [defaultId, betaId]) {
       const { policies } = (await app.policyStore.get(realmId)) ?? {};
       expect(policies?.accounts).toEqual({ requireVerifiedAccount: true });
-      expect(policies?.password).toEqual({ minScore: 2 });
+      expect(policies?.password).toEqual({ minLength: 15, minScore: 2 });
       expect(policies?.bruteForce).toEqual({
         enabled: true,
         maxAttempts: 5,

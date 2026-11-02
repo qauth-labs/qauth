@@ -1,6 +1,7 @@
 import {
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  presentedPasswordFor,
   type VerifiedIdentity,
 } from '@qauth-labs/fastify-plugin-federation';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
@@ -31,6 +32,8 @@ type UserCredential = NonNullable<
  * - malformed `credential_data` → the same decoy, `log.error` for operators,
  *   and a generic invalid result — the client sees the same 401 as a wrong
  *   password, never a 500 (a distinct status would leak account state)
+ * - a credential that records the NFC marker (#634) is verified on the
+ *   presented password in NFC, one without it on the password as typed
  * - a password the failure ladder's hard action disabled
  *   (`user_credentials.disabled_at`, #615) → the same decoy and a generic
  *   invalid result, but only while the hard action is armed; while it is not,
@@ -107,9 +110,11 @@ export async function verifyPasswordCredential(
     return { status: 'invalid' };
   }
 
+  // In NFC when the credential records the marker of the one password
+  // policy, as typed when it records none (#634).
   const passwordValid = await fastify.passwordHasher.verifyPassword(
     parsed.data.password_hash,
-    params.password
+    presentedPasswordFor(parsed.data, params.password)
   );
   if (!passwordValid) {
     return { status: 'invalid', userId: credential.userId };

@@ -1603,6 +1603,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`POST /auth/register` applies one password policy, with a minimum of 15
+  characters** ([#634], ADR-017 Decision 8, NIST SP 800-63B-4 §3.1.1.2). This
+  is the announced change of ADR-017's first phase: every deployment refuses,
+  from this release, a new password the policy does not meet. In order: the
+  length as typed (at most 256 UTF-16 code units, `too_long`, before anything
+  else runs; on this route the request schema refuses a longer password
+  first, with the `400` `validation_error` it answered before); Unicode NFC
+  normalisation, after which a password lengthened past 256 is `too_long` too;
+  a minimum length counted in code points, 15 by default (`too_short`); a
+  whole-password blocklist of zxcvbn's dictionaries and the context words (the
+  address, its local part and the part before a `+` tag, its domain and the
+  domain's labels, the realm's mail sender name and the realm's name),
+  compared ignoring case and the spaces around the password, and never as a
+  substring (`blocklisted`); and the zxcvbn score floor `password.minScore`, 2
+  by default (`too_weak`, also the answer for an unpaired UTF-16 surrogate,
+  which is not text and would be hashed as U+FFFD). There are no composition
+  rules and no periodic change. The `422` `weak_password` problem document
+  gains a `reasons` member listing every reason found, and `errors` carries a
+  message for each under `/password`, then zxcvbn's feedback. The new realm
+  policy `password.minLength` (8 to 64) holds the minimum; the new
+  `PASSWORD_MIN_LENGTH` (default 15) seeds it in a new realm and in a realm
+  stored without it, at the first boot of this release. A value below 8 fails
+  the boot, and one below 15 boots with a warning: NIST allows a shorter
+  minimum only for a password used within multi-factor authentication, while a
+  password can still be the only factor here. New passwords are hashed after
+  NFC normalisation, and their credential records it as
+  `credential_data.password_normalization: "nfc"`; the password sign-ins
+  (`/auth/login`, `/ui/login`), the email verification and the sign-in engine
+  verify such a credential on the presented password in NFC, so two spellings
+  of the same text sign in. Existing passwords are kept: a credential without
+  the marker is verified on the password as typed, as before, and no existing
+  password is checked against the policy. The developer portal marks its
+  address field as the username and shows a message for each reason.
+
+  **Action for operators**: tell users who register through
+  `POST /auth/register` that a password needs at least 15 characters (a
+  passphrase of a few words meets it). To keep a shorter minimum, set
+  `PASSWORD_MIN_LENGTH` (8 or more) before the first boot of this release, or
+  change the realm's `password.minLength` afterwards; read the rolling upgrade
+  note in the upgrade guide first.
+
 - **`/health` is liveness, `/ready` is new, and the metrics move to the
   internal listener** ([#500], ADR-019 Decisions 1 and 8). `GET /health`
   answers `200` while the process serves, with the service roles it runs
@@ -2717,6 +2758,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#631]: https://github.com/qauth-labs/qauth/issues/631
 [#633]: https://github.com/qauth-labs/qauth/issues/633
+[#634]: https://github.com/qauth-labs/qauth/issues/634
 [#637]: https://github.com/qauth-labs/qauth/issues/637
 [#639]: https://github.com/qauth-labs/qauth/issues/639
 [#642]: https://github.com/qauth-labs/qauth/issues/642

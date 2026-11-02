@@ -5,6 +5,7 @@ import {
   createPasswordProvider,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  presentedPasswordFor,
   SELF_REPORTED_SOURCE,
 } from './password.provider';
 
@@ -96,10 +97,52 @@ describe('PasswordProvider (ADR-003)', () => {
 
   describe('credential_data shape ownership', () => {
     it('buildPasswordCredentialData emits the exact snake_case shape', () => {
-      expect(buildPasswordCredentialData('$argon2id$h', true)).toEqual({
+      expect(buildPasswordCredentialData('$argon2id$h', true, null)).toEqual({
         password_hash: '$argon2id$h',
         email_verified: true,
       });
+    });
+
+    it('records the NFC marker of a password hashed under the policy (#634)', () => {
+      const data = buildPasswordCredentialData('$argon2id$h', false, 'nfc');
+
+      expect(data).toEqual({
+        password_hash: '$argon2id$h',
+        email_verified: false,
+        password_normalization: 'nfc',
+      });
+      expect(passwordCredentialDataSchema.parse(data)).toEqual(data);
+    });
+
+    it('reads a credential without the marker, as every credential before #634 is', () => {
+      const parsed = passwordCredentialDataSchema.parse({
+        password_hash: '$argon2id$h',
+        email_verified: true,
+      });
+
+      expect(parsed.password_normalization).toBeUndefined();
+    });
+
+    it('refuses a marker of another value, rather than verify the password the wrong way', () => {
+      for (const marker of ['nfd', 'NFC', 'nfkc', true, '']) {
+        expect(
+          passwordCredentialDataSchema.safeParse({
+            password_hash: '$argon2id$h',
+            email_verified: true,
+            password_normalization: marker,
+          }).success
+        ).toBe(false);
+      }
+    });
+
+    it('presents the password in NFC to a credential with the marker, and as typed to one without', () => {
+      const composed = 'caf\u00e9-terrace-at-night';
+      const decomposed = 'cafe\u0301-terrace-at-night';
+
+      expect(presentedPasswordFor({ password_normalization: 'nfc' }, decomposed)).toBe(composed);
+      expect(presentedPasswordFor({ password_normalization: 'nfc' }, composed)).toBe(composed);
+      expect(presentedPasswordFor({}, decomposed)).toBe(decomposed);
+      expect(presentedPasswordFor({}, composed)).toBe(composed);
     });
 
     it('passwordCredentialDataSchema accepts forward-compatible sibling keys', () => {

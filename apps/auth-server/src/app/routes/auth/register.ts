@@ -182,7 +182,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). Password must meet strength requirements.',
+          "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). The password must meet the realm's password policy: at least `password.minLength` characters (15 by default) after NFC normalisation, at most 256 UTF-16 code units, not a common word or password or the address, service or realm name as a whole, and a zxcvbn score of at least `password.minScore`. A password over 256 UTF-16 code units is refused by the request schema with a 400 `validation_error`, before the policy runs. A refusal by the policy is a 422 `weak_password` whose `reasons` say why (`too_short`, `blocklisted`, `too_weak`).",
         tags: ['Auth'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400, 422],
@@ -211,18 +211,30 @@ export default async function (fastify: FastifyInstance) {
       // address. The resolver has already refused a disabled realm.
       const realm = requestRealm(request);
 
-      // Validate password strength against the lowest score of that realm
-      // (`password.minScore`, #528), from the resolver's row: no query.
+      // The one password policy (ADR-017 Decision 8, #634) of that realm
+      // (`password.minLength`, `password.minScore`), from the resolver's row:
+      // no query. The length as typed first (at most PASSWORD_MAX_LENGTH code
+      // units, which the body schema already bounds), then NFC, the minimum
+      // length, the whole-password blocklist with the address and the
+      // service and realm names as context words, and the score floor.
       // Independent of whether the address is registered, so it may answer
-      // early.
-      const { passwordMinScore } = accountPoliciesOf(fastify, realm);
-      const passwordStrength = fastify.passwordValidators
-        .forMinScore(passwordMinScore)
-        .validatePasswordStrength(password);
-      if (!passwordStrength.valid) {
+      // early, with every reason found.
+      const policies = accountPoliciesOf(fastify, realm);
+      const checked = fastify.passwordValidators
+        .forPolicy({
+          minLength: policies.passwordMinLength,
+          minScore: policies.passwordMinScore,
+        })
+        .check(password, {
+          email: normalizedEmail,
+          serviceName: policies.serviceName,
+          realmName: realm.name,
+        });
+      if (!checked.valid) {
         throw new WeakPasswordError(
-          'Password does not meet strength requirements',
-          passwordStrength.feedback
+          'Password does not meet the password policy',
+          [...checked.feedback],
+          checked.reasons
         );
       }
 
@@ -236,8 +248,10 @@ export default async function (fastify: FastifyInstance) {
 
       // From here on the address decides the outcome, and the caller must not
       // be able to tell which. Everything up to the transaction runs the same
-      // on both paths, the expensive hash included.
-      const passwordHash = await fastify.passwordHasher.hashPassword(password);
+      // on both paths, the expensive hash included. The hash is of the
+      // password in NFC, and the credential records that (#634), so every
+      // verifier normalises the presented password the same way.
+      const passwordHash = await fastify.passwordHasher.hashPassword(checked.password);
 
       // Provider-normalized identity + attributes (ADR-003) — pure, so it
       // runs before the transaction.
@@ -286,7 +300,11 @@ export default async function (fastify: FastifyInstance) {
                 realmId: realm.id,
                 providerType: PASSWORD_PROVIDER_TYPE,
                 externalSub: identity.externalSub,
-                credentialData: buildPasswordCredentialData(passwordHash, false),
+                credentialData: buildPasswordCredentialData(
+                  passwordHash,
+                  false,
+                  checked.normalization
+                ),
               },
               tx
             )

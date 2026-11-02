@@ -50,6 +50,9 @@ function RegisterPage() {
 
     const { code, message, details } = result.error;
 
+    // A refused password (#634): a message for each reason it was refused
+    // (too short, too long, a common word or this account's address, too
+    // easy to guess), then any feedback, all under the password field.
     if (code === 'WEAK_PASSWORD') {
       const feedback = Array.isArray(details) ? (details as string[]).join(' ') : message;
       setFormState({
@@ -119,12 +122,15 @@ function RegisterPage() {
         ) : null}
 
         <form onSubmit={(e) => void handleSubmit(e)} noValidate className="space-y-4">
+          {/* Marked for password managers (#634): the address is the account's
+              username, and the password a new one, so a manager offers to
+              generate it and saves it under that address. */}
           <FormField label="Email" htmlFor="email" error={fieldErrors.email}>
             <Input
               id="email"
               name="email"
               type="email"
-              autoComplete="email"
+              autoComplete="username"
               required
               aria-invalid={fieldErrors.email ? 'true' : undefined}
             />

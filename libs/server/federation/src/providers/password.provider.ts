@@ -1,4 +1,9 @@
-import { normalizeEmail } from '@qauth-labs/shared-validation';
+import {
+  normalizeEmail,
+  PASSWORD_NORMALIZATION_NFC,
+  passwordForVerification,
+  type PasswordNormalization,
+} from '@qauth-labs/shared-validation';
 import { z } from 'zod';
 
 import type {
@@ -29,8 +34,10 @@ import type {
  * `provider_type='password'` ({@link passwordCredentialDataSchema},
  * {@link buildPasswordCredentialData}): `{ password_hash, email_verified }`
  * with snake_case keys — the exact shape written by the #226 backfill and read
- * by the auth routes. A camelCase drift here would pass every DB constraint
- * and strand every login, so nothing else may hand-roll this object.
+ * by the auth routes — and, since #634, the optional normalisation marker
+ * `password_normalization`. A camelCase drift here would pass every DB
+ * constraint and strand every login, so nothing else may hand-roll this
+ * object.
  */
 
 /** `user_credentials.provider_type` / registry key for this provider. */
@@ -62,10 +69,19 @@ export type PasswordVerifyInput = z.infer<typeof passwordVerifyInputSchema>;
  * `credential_data` JSONB shape for `provider_type='password'` rows.
  * Deliberately NOT `.strict()`: later issues may add sibling keys to
  * `credential_data`, and readers of today's binary must keep parsing then.
+ *
+ * `password_normalization` (#634, ADR-017 Decision 8) records how the
+ * password was normalised before it was hashed: `'nfc'` for a password set
+ * under the one password policy, absent for one set before it, which was
+ * hashed as typed. Every verifier presents the password the way the marker
+ * says ({@link presentedPasswordFor}). A marker of another value fails this
+ * schema, so a credential this release cannot verify correctly is refused as
+ * unreadable rather than checked the wrong way.
  */
 export const passwordCredentialDataSchema = z.object({
   password_hash: z.string().min(1),
   email_verified: z.boolean(),
+  password_normalization: z.literal(PASSWORD_NORMALIZATION_NFC).optional(),
 });
 
 export type PasswordCredentialData = z.infer<typeof passwordCredentialDataSchema>;
@@ -73,15 +89,40 @@ export type PasswordCredentialData = z.infer<typeof passwordCredentialDataSchema
 /**
  * Build the `credential_data` object for a password credential row. The only
  * sanctioned constructor of this shape (see module JSDoc).
+ *
+ * @param passwordHash - The Argon2id hash of the password in the form
+ *   `normalization` names.
+ * @param emailVerified - Whether the address is confirmed.
+ * @param normalization - The normalisation the password went through before
+ *   it was hashed: the `normalization` the password policy's check returned
+ *   for a new password, `null` for a hash of a password as typed (one carried
+ *   over from elsewhere). Required, so no caller records a hash without saying
+ *   which.
  */
 export function buildPasswordCredentialData(
   passwordHash: string,
-  emailVerified: boolean
+  emailVerified: boolean,
+  normalization: PasswordNormalization | null
 ): PasswordCredentialData {
   return {
     password_hash: passwordHash,
     email_verified: emailVerified,
+    ...(normalization === null ? {} : { password_normalization: normalization }),
   };
+}
+
+/**
+ * The presented password to verify against a credential's hash: in NFC when
+ * the credential records the NFC marker, as typed when it records none (#634).
+ * Every password verifier goes through this, so two spellings of one text
+ * verify against a hash made under the policy, and a password set before it
+ * still verifies as it was typed.
+ */
+export function presentedPasswordFor(
+  credential: Pick<PasswordCredentialData, 'password_normalization'>,
+  presented: string
+): string {
+  return passwordForVerification(presented, credential.password_normalization);
 }
 
 /**

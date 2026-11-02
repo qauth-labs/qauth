@@ -159,6 +159,23 @@ describe('the repository account directory', () => {
     ).toMatchObject({ enabled: false, verified: false });
   });
 
+  it("carries the credential's normalisation marker to the password step (#634)", async () => {
+    const { repos } = stubStores({
+      credential: { password_hash: 'hash', email_verified: true, password_normalization: 'nfc' },
+    });
+    expect(
+      await createRepositoryAccountDirectory(repos, log()).findByIdentifier(REALM, IDENTIFIER)
+    ).toMatchObject({ password: { disabled: false, hash: 'hash', normalization: 'nfc' } });
+
+    // A credential from before the marker has none.
+    const { repos: legacy } = stubStores({});
+    const account = await createRepositoryAccountDirectory(legacy, log()).findByIdentifier(
+      REALM,
+      IDENTIFIER
+    );
+    expect(account?.password).not.toHaveProperty('normalization');
+  });
+
   it('gives an unreadable credential no hash, and logs it without its data', async () => {
     const { repos } = stubStores({ credential: { password_hash: 42 } });
     const logger = log();

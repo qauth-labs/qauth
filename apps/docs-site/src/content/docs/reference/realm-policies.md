@@ -91,9 +91,10 @@ needs what its strictest change needs.
 
 ### `password`
 
-| Field               | Default | Seeded from          | Stricter when | Class                                                      | Description                                                             |
-| ------------------- | ------- | -------------------- | ------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `password.minScore` | `2`     | `PASSWORD_MIN_SCORE` | higher        | `security` when loosened (`credential-path`), else `write` | The lowest zxcvbn strength score, from 0 to 4, a new password may have. |
+| Field                | Default | Seeded from           | Stricter when | Class                                                      | Description                                                                                                                                                                                                  |
+| -------------------- | ------- | --------------------- | ------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `password.minLength` | `15`    | `PASSWORD_MIN_LENGTH` | higher        | `security` when loosened (`credential-path`), else `write` | The fewest characters (Unicode code points, after NFC normalisation) a new password may have, from 8 to 64; below 15 is a recorded deviation from NIST SP 800-63B-4 while a password can be the only factor. |
+| `password.minScore`  | `2`     | `PASSWORD_MIN_SCORE`  | higher        | `security` when loosened (`credential-path`), else `write` | The lowest zxcvbn strength score, from 0 to 4, a new password may have.                                                                                                                                      |
 
 ### `bruteForce`
 

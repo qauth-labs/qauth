@@ -1,4 +1,16 @@
 /**
+ * zxcvbn's frequency lists: the words of its dictionaries (common passwords,
+ * English words, names, words from television and film), by dictionary, most
+ * frequent first. Like the matcher module, not part of zxcvbn's documented
+ * API; `password.ts` reads them for its whole-password blocklist.
+ */
+declare module 'zxcvbn/lib/frequency_lists' {
+  const frequencyLists: Readonly<Record<string, readonly string[]>>;
+
+  export default frequencyLists;
+}
+
+/**
  * zxcvbn's matcher module. It is not part of zxcvbn's documented API and
  * `@types/zxcvbn` does not declare it; only what `password.ts` and its tests
  * touch is declared here.

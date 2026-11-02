@@ -58,6 +58,13 @@ describe('LoginPage component', () => {
     expect(html).toContain('type="password"');
   });
 
+  it('marks the fields for password managers: the address as the username, the current password', () => {
+    // React 19 preserves camelCase attribute names in renderToString output.
+    const html = renderToString(<PageComponent />);
+    expect(html).toContain('autoComplete="username"');
+    expect(html).toContain('autoComplete="current-password"');
+  });
+
   it('renders the submit button', () => {
     const html = renderToString(<PageComponent />);
     expect(html).toContain('Log in');

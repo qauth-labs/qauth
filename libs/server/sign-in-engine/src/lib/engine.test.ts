@@ -1217,6 +1217,40 @@ describe('what the second review of #614 pinned', () => {
   });
 });
 
+describe("the password's normalisation marker (#634)", () => {
+  /** One text, two spellings: composed (U+00E9) and decomposed (e + U+0301). */
+  const COMPOSED = 'caf\u00e9-terrace-at-night';
+  const DECOMPOSED = 'cafe\u0301-terrace-at-night';
+
+  it('verifies either spelling against a hash made in NFC when the credential records the marker', async () => {
+    for (const presented of [COMPOSED, DECOMPOSED]) {
+      const built = build({
+        [IDENTIFIER]: passwordAccount(USER, COMPOSED, {
+          password: { disabled: false, hash: fakeHash(COMPOSED), normalization: 'nfc' },
+        }),
+      });
+      const { second } = await signIn(built, presented);
+      expect(second).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+    }
+  });
+
+  it('verifies a credential without the marker on the password as typed', async () => {
+    const asTyped = build({ [IDENTIFIER]: passwordAccount(USER, DECOMPOSED) });
+    expect((await signIn(asTyped, DECOMPOSED)).second).toMatchObject({
+      kind: 'complete',
+      signIn: { subject: USER },
+    });
+
+    const otherSpelling = build({ [IDENTIFIER]: passwordAccount(USER, DECOMPOSED) });
+    const { second } = await signIn(otherSpelling, COMPOSED);
+    expect(second).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'password', error: 'invalid_credentials' } },
+    });
+    expect(second.transaction).not.toHaveProperty('subject');
+  });
+});
+
 describe('a disabled user', () => {
   it('gets the ordinary invalid-credentials answer, no subject and nothing to mint', async () => {
     const built = build({ [IDENTIFIER]: kindAccount('disabled') });

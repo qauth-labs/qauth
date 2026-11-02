@@ -106,6 +106,19 @@
               ],
               "additionalProperties": false
             }
+          },
+          "reasons": {
+            "description": "For `weak_password`: why the new password was refused, in the order checked. A later release may add reasons.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "x-extensible-enum": [
+                "too_short",
+                "too_long",
+                "blocklisted",
+                "too_weak"
+              ]
+            }
           }
         },
         "required": [
@@ -116,7 +129,7 @@
           "trace_id"
         ],
         "additionalProperties": {},
-        "description": "RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong."
+        "description": "RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong. `reasons` lists why a new password was refused (`weak_password`)."
       },
       "OAuthError": {
         "type": "object",
@@ -1031,7 +1044,7 @@
         "tags": [
           "Auth"
         ],
-        "description": "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). Password must meet strength requirements.",
+        "description": "Register a password account. Answers every address with the same 202 and message, whether it was free or already registered; the next step arrives by email (a verification link for a new account, a notice for an existing one). The password must meet the realm's password policy: at least `password.minLength` characters (15 by default) after NFC normalisation, at most 256 UTF-16 code units, not a common word or password or the address, service or realm name as a whole, and a zxcvbn score of at least `password.minScore`. A password over 256 UTF-16 code units is refused by the request schema with a 400 `validation_error`, before the policy runs. A refusal by the policy is a 422 `weak_password` whose `reasons` say why (`too_short`, `blocklisted`, `too_weak`).",
         "requestBody": {
           "required": true,
           "content": {

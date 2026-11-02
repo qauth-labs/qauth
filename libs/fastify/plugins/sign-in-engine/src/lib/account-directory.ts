@@ -135,6 +135,9 @@ export function createRepositoryAccountDirectory(
         password: Object.freeze({
           disabled,
           hash: data.success ? data.data.password_hash : null,
+          ...(data.success && data.data.password_normalization !== undefined
+            ? { normalization: data.data.password_normalization }
+            : {}),
           ...(marked && !disabled ? { ignoredMark: true } : {}),
         }),
       });

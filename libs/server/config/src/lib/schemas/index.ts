@@ -76,7 +76,12 @@ export {
   keyAttestationEnvSchema,
 } from './key-attestation';
 export { type ObservabilityEnv, observabilityEnvSchema } from './observability';
-export { type PasswordEnv, passwordEnvSchema } from './password';
+export {
+  type PasswordEnv,
+  passwordEnvSchema,
+  type PasswordPolicyWarning,
+  passwordPolicyWarnings,
+} from './password';
 export {
   MAX_AUTH_METHOD_PLUGINS,
   MAX_PLUGIN_PACKAGE_NAME_LENGTH,

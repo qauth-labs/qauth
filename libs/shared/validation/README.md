@@ -118,13 +118,38 @@ interface PasswordValidationConfig {
 
 #### `createPasswordValidators(): PasswordValidators`
 
-Creates the password validators of a server whose realms each set their own lowest score (`password.minScore`, #528): `forMinScore(minScore)` returns the validator for that score, built with `createPasswordValidator` on first use and cached by score, so at most five are ever built. A score outside 0-4 throws a `ZodError` and is not cached. The auth server's password plugin decorates the result as `fastify.passwordValidators`.
+Creates the password validators of a server whose realms each set their own password policy (`password.minLength` and `password.minScore`, #528, #634): `forPolicy({ minLength, minScore })` returns the policy validator for that pair, built with `createPasswordPolicyValidator` on first use and cached by the pair. A policy out of bounds (a minimum length outside 8-64, a score outside 0-4) throws a `ZodError` and is not cached. The auth server's password plugin decorates the result as `fastify.passwordValidators`.
 
 ```typescript
 import { createPasswordValidators } from '@qauth-labs/shared-validation';
 
 const validators = createPasswordValidators();
-const result = validators.forMinScore(realmMinScore).validatePasswordStrength(password);
+const checked = validators
+  .forPolicy({ minLength: realmMinLength, minScore: realmMinScore })
+  .check(password, { email, serviceName, realmName });
+```
+
+#### `createPasswordPolicyValidator(policy?: Partial<PasswordPolicy>): PasswordPolicyValidator`
+
+The one password policy every new password meets (#634, ADR-017 Decision 8). `check(password, context?)` runs, in order:
+
+1. A password longer than 256 UTF-16 code units is refused as `too_long`, and nothing else runs.
+2. The password is normalised to Unicode NFC. One that NFC lengthens past 256 code units is `too_long` too.
+3. Fewer code points than `minLength` (default 15, the NIST SP 800-63B-4 minimum for a password used alone) is `too_short`.
+4. The whole password, lowercased and with or without the spaces around it, being a common password or word (zxcvbn's frequency lists) or one of the context words (the address, its local part and the part before a `+` tag, its domain and each of its labels but the last, the service, realm and client names) is `blocklisted`. A password that only contains one of them is not.
+5. A zxcvbn score below `minScore`, with the context words as user inputs, is `too_weak`, and so is an unpaired UTF-16 surrogate, which is not text and would be hashed as U+FFFD.
+
+A refusal returns `{ valid: false, reasons, feedback }`, every reason found in that order. An accepted password returns `{ valid: true, password, normalization: 'nfc', score }`: hash `password` (the NFC form) and record `normalization` on the credential, so a verifier can present the password the same way (`passwordForVerification`).
+
+```typescript
+import { createPasswordPolicyValidator } from '@qauth-labs/shared-validation';
+
+const checked = createPasswordPolicyValidator({ minLength: 15, minScore: 2 }).check(password, {
+  email,
+});
+if (!checked.valid) {
+  console.log(checked.reasons); // e.g. ['too_short', 'blocklisted']
+}
 ```
 
 #### `PasswordValidator` Interface

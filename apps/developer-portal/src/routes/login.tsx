@@ -63,7 +63,7 @@ function LoginPage() {
 
         <form onSubmit={(e) => void handleSubmit(e)} noValidate className="space-y-4">
           <FormField label="Email" htmlFor="email">
-            <Input id="email" name="email" type="email" autoComplete="email" required />
+            <Input id="email" name="email" type="email" autoComplete="username" required />
           </FormField>
 
           <FormField label="Password" htmlFor="password">

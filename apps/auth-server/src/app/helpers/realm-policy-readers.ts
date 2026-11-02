@@ -42,8 +42,10 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   // The password sign-ins (`/auth/login`, `/ui/login`) and the email
   // verification (`accountPoliciesOf` in `helpers/account-policies.ts`,
   // #528): the verified-account gate and the failed-login lockout.
-  // Registration: the lowest password score.
+  // Registration: the password policy's minimum length (#634) and lowest
+  // score.
   'accounts.requireVerifiedAccount',
+  'password.minLength',
   'password.minScore',
   'bruteForce.enabled',
   'bruteForce.maxAttempts',

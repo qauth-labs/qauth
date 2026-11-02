@@ -11,10 +11,12 @@ describe('accountPoliciesOf (#528)', () => {
     return { policyStore: { ofRealm: vi.fn(() => ({ policies }) as never) } };
   }
 
-  it('reads the verified-account gate, the password score and the brute-force policy from the row it is given', () => {
+  it('reads the verified-account gate, the password policy, the service name and the brute-force policy from the row it is given', () => {
     const from = sources({
       REQUIRE_VERIFIED_ACCOUNT: 'false',
       PASSWORD_MIN_SCORE: '3',
+      PASSWORD_MIN_LENGTH: '12',
+      EMAIL_FROM_NAME: 'Acme Sign-in',
       FAILED_LOGIN_TRACKING_ENABLED: 'true',
       FAILED_LOGIN_MAX_ATTEMPTS: '7',
       FAILED_LOGIN_WINDOW: '120',
@@ -25,6 +27,8 @@ describe('accountPoliciesOf (#528)', () => {
     expect(accountPoliciesOf(from, realm)).toEqual({
       requireVerifiedAccount: false,
       passwordMinScore: 3,
+      passwordMinLength: 12,
+      serviceName: 'Acme Sign-in',
       bruteForce: { enabled: true, maxAttempts: 7, windowSeconds: 120, lockoutSeconds: 60 },
     });
     // The resolver's row, read once: no query.
@@ -48,10 +52,12 @@ describe('accountPoliciesOf (#528)', () => {
     expect(lax.bruteForce.enabled).toBe(false);
   });
 
-  it("gives a realm seeded with no key the server's defaults of before #528: verified accounts, score 2, 5 failures in 900 s lock for 900 s", () => {
+  it("gives a realm seeded with no key the server's defaults: verified accounts, score 2, 5 failures in 900 s lock for 900 s, and the password policy's 15 characters (#634)", () => {
     expect(accountPoliciesOf(sources(), testRealm({ id: 'r', policiesVersion: 1 }))).toEqual({
       requireVerifiedAccount: true,
       passwordMinScore: 2,
+      passwordMinLength: 15,
+      serviceName: 'QAuth',
       bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
     });
   });
