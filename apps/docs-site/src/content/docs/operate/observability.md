@@ -379,7 +379,11 @@ address and needs no realm host.
   the metrics, and any other request is refused. A scraper on the same host, or
   in the same network namespace such as a sidecar, reads
   `http://127.0.0.1:3443/internal/metrics`. With `INTERNAL_HOST` set to any
-  other address and no TLS files, the process refuses to boot.
+  other address and no TLS files, the process refuses to boot. Loopback is the
+  only proof of who calls here: a proxy on the host or in the pod that forwards
+  outside traffic to a loopback address, as some service-mesh sidecars do, makes
+  every caller it forwards a local one. Behind such a proxy, give the listener
+  the TLS files and a `metrics` peer.
 
 The route has no rate limit. The listener refuses every caller without a role
 before any route, and a scraper polls at its own interval.
@@ -390,12 +394,19 @@ use for the internal listener, the listener too.
 > listed.** The `auth-server` service in `docker-compose.yml` declares an
 > explicit `environment:` map and no `env_file:`, so that map is an
 > **allowlist**: only the variables named in it are forwarded. Every variable on
-> this page is on it — `METRICS_ENABLED`, `LOG_PRETTY`, `LOG_REDACT_PATHS`,
-> `REQUEST_ID_HEADER` and the four `FAILED_LOGIN_*` settings are forwarded as
-> bare `VAR:` entries, a null value that Compose resolves from `.env` (or the
-> shell) and omits entirely when unset, so an unset variable still falls through
-> to its schema default. `METRICS_ENABLED=false` in `.env` therefore does
-> unregister `GET /internal/metrics`.
+> this page but the internal listener's is on it — `METRICS_ENABLED`,
+> `LOG_PRETTY`, `LOG_REDACT_PATHS`, `REQUEST_ID_HEADER` and the four
+> `FAILED_LOGIN_*` settings are forwarded as bare `VAR:` entries, a null value
+> that Compose resolves from `.env` (or the shell) and omits entirely when
+> unset, so an unset variable still falls through to its schema default.
+> `METRICS_ENABLED=false` in `.env` therefore does unregister
+> `GET /internal/metrics`.
+>
+> The internal listener's settings (`INTERNAL_HOST`, `INTERNAL_PORT`, the three
+> `INTERNAL_TLS_*` files and `INTERNAL_PEER_ROLES`) are not on it, so under
+> Compose the metrics answer on `http://127.0.0.1:3443/internal/metrics` inside
+> the container only. A scraper in another container needs an override file that
+> adds them to the map and mounts the TLS files.
 >
 > The allowlist itself is the thing to remember: a variable you add to `.env`
 > later is **not** reachable from Compose until you also add it to that map.
