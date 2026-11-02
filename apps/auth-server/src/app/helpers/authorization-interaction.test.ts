@@ -2,25 +2,33 @@ import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contra
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { checkAuthorizationRequest, decideAuthorization, liveBrowserSession, continueInteraction } =
-  vi.hoisted(() => ({
-    checkAuthorizationRequest: vi.fn(),
-    decideAuthorization: vi.fn(),
-    liveBrowserSession: vi.fn(),
-    continueInteraction: vi.fn(),
-  }));
+const {
+  checkAuthorizationRequest,
+  decideAuthorization,
+  liveBrowserSession,
+  continueInteraction,
+  emitUserEvent,
+} = vi.hoisted(() => ({
+  checkAuthorizationRequest: vi.fn(),
+  decideAuthorization: vi.fn(),
+  liveBrowserSession: vi.fn(),
+  continueInteraction: vi.fn(),
+  emitUserEvent: vi.fn(),
+}));
 
 vi.mock('./authorization-request', () => ({ checkAuthorizationRequest, decideAuthorization }));
 vi.mock('./browser-session', () => ({ liveBrowserSession }));
 vi.mock('./interaction', () => ({ continueInteraction }));
+vi.mock('./user-events', () => ({ emitUserEvent }));
 
 import { testRealm } from '../../testing/request-realm';
 import {
   authorizationInteractionStart,
+  cancelAuthorization,
   CONSENT_STEP,
   consentStep,
-  type FinishedAuthorization,
   finishAuthorization,
+  type FinishedAuthorization,
   identifierPrefill,
 } from './authorization-interaction';
 import type { InteractionRequest } from './interaction-record';
@@ -54,6 +62,9 @@ const SESSION = {
 } as const;
 
 const TARGET = { realm: REALM, iss: ISS, client: { clientId: 'notes-app' } };
+
+/** The request of a cancel, on the realm's host. */
+const realmRequest = { realm: REALM } as unknown as FastifyRequest;
 
 const fastify = {} as FastifyInstance;
 const request = {} as FastifyRequest;
@@ -293,5 +304,30 @@ describe('finishAuthorization', () => {
 
     expect(location.searchParams.get('error')).toBe('invalid_scope');
     expect(continueInteraction).not.toHaveBeenCalled();
+    expect(emitUserEvent).toHaveBeenCalledWith(
+      request,
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_scope', reason: 'consent_step_unshowable' },
+      { realmId: REALM.id, userId: 'user-1', clientId: 'notes-app', actor: 'user' }
+    );
+  });
+});
+
+describe('cancelAuthorization', () => {
+  it('checks the request again, then redirects with access_denied, its state and iss', async () => {
+    const location = new URL(await cancelAuthorization(fastify, realmRequest, REQUEST));
+
+    expect(checkAuthorizationRequest).toHaveBeenCalledWith(fastify, realmRequest, REQUEST);
+    expect(`${location.origin}${location.pathname}`).toBe(REQUEST.redirect_uri);
+    expect(location.searchParams.get('error')).toBe('access_denied');
+    expect(location.searchParams.get('state')).toBe(REQUEST.state);
+    expect(location.searchParams.get('iss')).toBe(REALM.issuer);
+  });
+
+  it('throws what the checks throw: no redirect for a client disabled since', async () => {
+    const refused = new Error('client is disabled');
+    checkAuthorizationRequest.mockRejectedValue(refused);
+
+    await expect(cancelAuthorization(fastify, realmRequest, REQUEST)).rejects.toBe(refused);
   });
 });

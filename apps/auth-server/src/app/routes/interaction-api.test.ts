@@ -4,7 +4,11 @@ import {
   INTERACTION_API_PREFIX,
   stepUrn,
 } from '@qauth-labs/shared-interaction-contract';
-import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type FastifyRequest,
+  type LightMyRequestResponse,
+} from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -81,16 +85,33 @@ const finishAuthorization = vi.hoisted(() =>
   )
 );
 
+/**
+ * Where a cancelled interaction's authorization request goes (#628): the
+ * access_denied redirect, here without the checks it runs again first, which
+ * `authorization-interaction.test.ts` covers.
+ */
+const cancelAuthorization = vi.hoisted(() => vi.fn());
+
 vi.mock('../helpers/authorization-interaction', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../helpers/authorization-interaction')>();
-  return { ...actual, finishAuthorization };
+  const { interactionCancelRedirect } = await import('../helpers/interaction-redirect');
+  const { requestRealm } = await import('../helpers/request-realm');
+  cancelAuthorization.mockImplementation(
+    async (_fastify: unknown, request: FastifyRequest, cancelled: InteractionRequest) =>
+      interactionCancelRedirect(requestRealm(request), cancelled)
+  );
+  return { ...actual, finishAuthorization, cancelAuthorization };
 });
 
 import { createBrowserSessionFixture } from '../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
 import { CONSENT_STEP } from '../helpers/authorization-interaction';
-import { IDENTIFIER_STEP, type InteractionStep } from '../helpers/interaction-record';
+import {
+  IDENTIFIER_STEP,
+  type InteractionRequest,
+  type InteractionStep,
+} from '../helpers/interaction-record';
 import { answerRouteNotFound } from '../helpers/request-bounds';
 import { SESSION_COOKIE_NAME } from '../helpers/session-cookie';
 import { emitUserEvent } from '../helpers/user-events';
@@ -284,6 +305,7 @@ beforeEach(async () => {
   vi.mocked(emitUserEvent).mockClear();
   engine.advance.mockReset();
   finishAuthorization.mockClear();
+  cancelAuthorization.mockClear();
   app = await buildApp();
 });
 
@@ -654,6 +676,11 @@ describe('the cancel (#616)', () => {
     expect(location.searchParams.get('error')).toBe('access_denied');
     expect(location.searchParams.get('state')).toBe(AUTHORIZE_REQUEST.state);
     expect(location.searchParams.get('iss')).toBe(ORIGIN);
+    // The request the record holds goes through the checks again (#628).
+    expect(cancelAuthorization).toHaveBeenCalledOnce();
+    expect(cancelAuthorization.mock.calls[0]?.[2]).toMatchObject({
+      redirect_uri: AUTHORIZE_REQUEST.redirect_uri,
+    });
   });
 
   it('answers JSON with the redirect', async () => {

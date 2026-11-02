@@ -26,7 +26,11 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
 import { accountPoliciesOf } from '../helpers/account-policies';
 import { UnsupportedMediaTypeError } from '../helpers/api-request-errors';
-import { CONSENT_STEP, finishAuthorization } from '../helpers/authorization-interaction';
+import {
+  cancelAuthorization,
+  CONSENT_STEP,
+  finishAuthorization,
+} from '../helpers/authorization-interaction';
 import {
   answerInteraction,
   cancelInteraction,
@@ -39,7 +43,6 @@ import {
 } from '../helpers/interaction';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
-import { interactionCancelRedirect } from '../helpers/interaction-redirect';
 import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
@@ -72,7 +75,9 @@ import { emitUserEvent } from '../helpers/user-events';
  * form post gets `303 See Other` to the ceremony page of the interaction,
  * where the next step is read, or to the final redirect: the page needs no
  * JavaScript. Both targets are built from the interaction record and the
- * realm row, never from the request (`helpers/interaction-redirect.ts`).
+ * realm row, never from the request (`helpers/interaction-redirect.ts`), once
+ * the authorization request it holds is checked again
+ * (`helpers/authorization-interaction.ts`, #628).
  *
  * Every response is `Cache-Control: no-store`, sends no CORS header (the
  * routes are on the `browser` surface, which the CORS plugin never answers)
@@ -687,7 +692,7 @@ export default async function (fastify: FastifyInstance) {
         return respond(request, reply, parsed.encoding, { location: ceremonyPageUrl(request) });
       }
       return respond(request, reply, parsed.encoding, {
-        location: interactionCancelRedirect(requestRealm(request), result.request),
+        location: await cancelAuthorization(fastify, request, result.request),
       });
     }
   );

@@ -10,6 +10,7 @@ import type { AuthorizeQuery } from '../schemas/oauth';
 import type { AuthorizationErrorParams } from './authorization-error';
 import {
   type AuthorizationOutcome,
+  type AuthorizationTarget,
   checkAuthorizationRequest,
   decideAuthorization,
 } from './authorization-request';
@@ -26,9 +27,12 @@ import {
   type InteractionStep,
   type InteractionTransaction,
 } from './interaction-record';
+import { interactionCancelRedirect } from './interaction-redirect';
 import { buildRedirectUrl } from './oauth-redirect';
 import { buildRealmUrl } from './realm-url';
+import { requestRealm } from './request-realm';
 import { isDangerousScope } from './step-up';
+import { emitUserEvent } from './user-events';
 
 /**
  * THE AUTHORIZATION REQUEST'S INTERACTIONS (#628, ADR-019 Decision 6): with
@@ -51,7 +55,9 @@ import { isDangerousScope } from './step-up';
  * and issues the code (`mintAuthorizationCode`) or starts the next interaction
  * of the request. It runs only after the interaction ended: the code is never
  * minted while the interaction is still answerable, and a finish the expiry
- * sweep beat issues nothing (`answerInteraction` refuses it first).
+ * sweep beat issues nothing (`answerInteraction` refuses it first). When the
+ * person cancels, {@link cancelAuthorization} checks the request again the
+ * same way before it sends the browser to the client.
  */
 
 /** The consent step's name (`urn:qauth:ia:consent:v1-rc.0`). */
@@ -169,6 +175,30 @@ export function authorizationInteractionStart(
   return { step, personal: {}, transaction };
 }
 
+/**
+ * Record the refusal of a request the consent step cannot show, as the
+ * endpoint records every other refusal (`authorization.failed`), for the
+ * signed-in user the consent was for.
+ */
+export async function recordUnshowableConsent(
+  request: FastifyRequest,
+  target: AuthorizationTarget,
+  session: BrowserSession,
+  error: AuthorizationErrorParams
+): Promise<void> {
+  await emitUserEvent(
+    request,
+    'urn:qauth:event:authorization.failed:v1-rc.0',
+    { error: error.error, reason: 'consent_step_unshowable' },
+    {
+      realmId: target.realm.id,
+      userId: session.userId,
+      clientId: target.client.clientId,
+      actor: 'user',
+    }
+  );
+}
+
 /** What an interaction that finished hands back (`answerInteraction` `finished`). */
 export interface FinishedAuthorization {
   readonly request: InteractionRequest;
@@ -229,7 +259,12 @@ export async function finishAuthorization(
     case 'sign_in':
     case 'consent': {
       const start = authorizationInteractionStart(outcome, query, target.iss, session);
-      if ('error' in start) return buildRedirectUrl(query.redirect_uri, start.error);
+      if ('error' in start) {
+        // `authorizationInteractionStart` answers an error only for a consent,
+        // which is always for a session.
+        if (session !== null) await recordUnshowableConsent(request, target, session, start.error);
+        return buildRedirectUrl(query.redirect_uri, start.error);
+      }
       const next = await continueInteraction(request, reply, finished.continuation, {
         request: query,
         ...start,
@@ -237,4 +272,26 @@ export async function finishAuthorization(
       return buildRealmUrl(target.realm, ceremonyPagePath(next.id));
     }
   }
+}
+
+/**
+ * Where a cancelled interaction of an authorization request ends (#616,
+ * #628): the client's `redirect_uri` with `error=access_denied`, its `state`
+ * and `iss`, once the request is checked again as the endpoint checks it, as
+ * {@link finishAuthorization} does. The interaction may have started long
+ * before (`INTERACTION_TTL`): a client disabled since, or a redirect URI
+ * removed since, gets no redirect.
+ *
+ * @throws InvalidRequestError or UnauthorizedClientError, as the endpoint,
+ *   when the client or its redirect URI no longer qualify
+ */
+export async function cancelAuthorization(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  cancelled: InteractionRequest
+): Promise<string> {
+  // A `refused` request (a dpop_jkt DPoP, switched on since, cannot read)
+  // still has a redirect URI the client holds: the person's cancel stands.
+  await checkAuthorizationRequest(fastify, request, cancelled);
+  return interactionCancelRedirect(requestRealm(request), cancelled);
 }

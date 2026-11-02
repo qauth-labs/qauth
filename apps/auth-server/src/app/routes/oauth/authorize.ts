@@ -6,7 +6,10 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { env } from '../../../config/env';
 import { AUTHORIZE_BODY_LIMIT_BYTES } from '../../constants';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
-import { authorizationInteractionStart } from '../../helpers/authorization-interaction';
+import {
+  authorizationInteractionStart,
+  recordUnshowableConsent,
+} from '../../helpers/authorization-interaction';
 import {
   type AuthorizationOutcome,
   type AuthorizationTarget,
@@ -167,6 +170,10 @@ export default async function (fastify: FastifyInstance) {
   ) => {
     const start = authorizationInteractionStart(outcome, query, target.iss, browserSession);
     if ('error' in start) {
+      // Only a consent, which is always for a session, can be refused here.
+      if (browserSession !== null) {
+        await recordUnshowableConsent(request, target, browserSession, start.error);
+      }
       return sendAuthorizationError(reply, target.client, query.redirect_uri, start.error);
     }
     const started = await startInteraction(request, reply, { request: query, ...start });

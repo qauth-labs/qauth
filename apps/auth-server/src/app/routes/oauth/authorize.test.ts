@@ -3181,6 +3181,12 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
     expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
     expect(location.searchParams.get('iss')).toBeTruthy();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'invalid_scope', reason: 'consent_step_unshowable' },
+      expect.objectContaining({ userId: 'user-1', actor: 'user' })
+    );
   });
 
   it('starts no interaction for prompt=none, signed in or not', async () => {
