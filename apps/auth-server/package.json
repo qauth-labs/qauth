@@ -47,6 +47,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-account-contract": "workspace:*",
     "@qauth-labs/shared-test-vectors": "workspace:*",
     "@qauth-labs/shared-testing": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
