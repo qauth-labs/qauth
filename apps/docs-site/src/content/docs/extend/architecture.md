@@ -77,7 +77,7 @@ Every line below is `await`ed except where noted, so the order in the file is th
 | 10  | `securityHeadersPlugin`, `apps/auth-server/src/app/app.ts:947`      | Helmet: CSP, HSTS, frame options                      |
 | 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:809`            | Echoes the request id back on the response            |
 | 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:954`              | Prometheus registry                                   |
-| 13  | `cors`, `apps/auth-server/src/app/app.ts:1092`                      | Fail-closed in production when `CORS_ORIGIN` is unset |
+| 13  | `corsPlugin`, `apps/auth-server/src/app/app.ts:1141`                | Fail-closed in production when `CORS_ORIGIN` is unset |
 | 14  | `formbody`, `apps/auth-server/src/app/app.ts:1101`                  | Form-encoded body parsing                             |
 
 Then three registrations whose **relative** order is the subject of the rest of this page, so this

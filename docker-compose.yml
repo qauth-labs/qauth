@@ -186,7 +186,9 @@ services:
       SMTP_ALLOWED_HOSTS: ${SMTP_ALLOWED_HOSTS:-}
 
       # CORS — fail-closed in production when unset (no wildcard default). Set
-      # CORS_ORIGIN explicitly to allow cross-origin callers (e.g. the portal).
+      # CORS_ORIGIN explicitly to allow cross-origin callers (e.g. the portal,
+      # or a browser-based client calling the token endpoint). The sign-in and
+      # consent pages, /oauth/authorize among them, never answer CORS.
       CORS_ORIGIN: ${CORS_ORIGIN:-}
 
       # Wallet Federation (ADR-004, epic #231) — both forwarded so the

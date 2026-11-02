@@ -2671,6 +2671,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **No CORS at the authorization endpoint** ([#930]). `@fastify/cors` answered
+  for every route, so with `CORS_ORIGIN` set, or in any environment but
+  production, `/oauth/authorize` answered CORS preflights and sent
+  `Access-Control-Allow-Origin` like the token endpoint. OAuth 2.1
+  (draft-ietf-oauth-v2-1-17 §3.1) says CORS MUST NOT be supported there: the
+  client sends the user agent to it and never calls it. The authorization
+  endpoint and the other `browser` routes (the `/ui/*` sign-in, consent and
+  wallet pages, `/consents`, `/auth/link/wallet` and the verification page
+  `GET /auth/verify`) now send no `Access-Control-*` header in any
+  environment, and a preflight for one of them gets the `404` of a path no
+  route serves. No cross-origin caller needs them: a page is navigated to, and
+  a call the session cookie authorizes could not be made cross-origin before
+  either, since the CORS answers never allowed credentials. Every other route
+  keeps CORS as before, and a browser-based client's origin still goes in
+  `CORS_ORIGIN`, for its calls to the token endpoint.
+
 - **A client key set that carries an RSA private key is refused** ([#935]).
   The key sets a client publishes, in its Client ID Metadata Document's `jwks`
   or at its `jwks_uri`, were refused only for a `d` or `k` member. An RSA key
@@ -2853,6 +2869,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#644]: https://github.com/qauth-labs/qauth/issues/644
 [#748]: https://github.com/qauth-labs/qauth/issues/748
 [#912]: https://github.com/qauth-labs/qauth/issues/912
+[#930]: https://github.com/qauth-labs/qauth/issues/930
 [#935]: https://github.com/qauth-labs/qauth/issues/935
 
 ## [0.1.3] - 2026-10-21

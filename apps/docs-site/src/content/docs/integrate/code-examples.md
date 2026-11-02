@@ -152,6 +152,11 @@ A public SPA client (no secret) using the Web Crypto API for PKCE. Register the
 client first with `token_endpoint_auth_method: "none"` and your `redirect_uri`
 (see the [OAuth Flow, step 0](/integrate/oauth-flow/#0-prerequisites--a-client)).
 
+The app calls the token endpoint and UserInfo from its own origin, so the
+operator lists that origin in [`CORS_ORIGIN`](/operate/configuration/). The
+sign-in itself is a redirect to `/oauth/authorize`, which answers no CORS
+(OAuth 2.1 §3.1): never `fetch()` it.
+
 ```js
 // auth.js — drop into a SPA; serves the redirect at /callback
 const QAUTH = 'http://localhost:3000';

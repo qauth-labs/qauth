@@ -77,7 +77,7 @@
       "section": "4",
       "level": "SHOULD",
       "quote": "The openid-configuration endpoint SHOULD support the use of Cross-Origin Resource Sharing (CORS) [CORS] and/or other methods as appropriate to enable JavaScript Clients and other Browser-Based Clients to access it.",
-      "applies": "apps/auth-server/src/app/app.ts — @fastify/cors is registered with origin: false in production unless CORS_ORIGIN is set, so the discovery document is not readable cross-origin by default.",
+      "applies": "apps/auth-server/src/app/plugins/cors.ts — @fastify/cors is registered with origin: false in production unless CORS_ORIGIN is set, so the discovery document is not readable cross-origin by default.",
       "status": "waived",
       "reason": "QAuth's production CORS posture is deny-by-default (F-06): the server's own login and consent flows are same-origin, and a wildcard on every route to satisfy a SHOULD on one document would widen the whole JSON API to cross-origin reads. An operator who needs browser-based clients sets CORS_ORIGIN, which restores the SHOULD for that origin. A per-route CORS allowance scoped to the three /.well-known documents would satisfy the SHOULD without the wide posture, and is the shape any revisit should take.",
       "decision": "apps/auth-server/src/app/app.ts",

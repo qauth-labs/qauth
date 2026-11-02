@@ -171,7 +171,10 @@ export const envSchema = z
     /**
      * CORS allowed origin (app-specific). When unset in `production` the
      * server denies all cross-origin requests (fail-closed); in non-production
-     * it falls back to `*` for local dev convenience.
+     * it falls back to `*` for local dev convenience. A browser-based client's
+     * origin goes here, for its calls to the token endpoint. The `browser`
+     * routes, the authorization endpoint among them, answer no CORS whatever
+     * it holds (#930, `app/plugins/cors.ts`).
      */
     CORS_ORIGIN: z.string().optional(),
     /**
