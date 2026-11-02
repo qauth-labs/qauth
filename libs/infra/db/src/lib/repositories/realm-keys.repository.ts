@@ -3,7 +3,7 @@ import {
   isUniqueConstraintError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, asc, eq, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 
 import type {
   NewRealmKeyInput,
@@ -132,6 +132,16 @@ export function createRealmKeysRepository(defaultDb: DbClient): RealmKeysReposit
         .from(realmKeys)
         .where(and(...conditions))
         .orderBy(asc(realmKeys.createdAt), asc(realmKeys.id));
+    },
+
+    async listKekCanaries(limit: number, tx?: DbClient): Promise<RealmKey[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker
+        .selectDistinctOn([realmKeys.kekRef], REALM_KEY_COLUMNS)
+        .from(realmKeys)
+        .where(inArray(realmKeys.status, ['active', 'next']))
+        .orderBy(asc(realmKeys.kekRef), desc(realmKeys.createdAt), desc(realmKeys.id))
+        .limit(limit);
     },
 
     async listPublicByRealm(realmId: string, tx?: DbClient): Promise<RealmPublicKey[]> {

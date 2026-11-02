@@ -601,6 +601,31 @@ describe('realm_keys integration (real Postgres)', () => {
       expect(wrapped).toMatchObject({ kekRef: row.kekRef, aadVersion: 1 });
     });
 
+    it('listKekCanaries names the newest active or next key per KEK reference, no wrapped columns', async () => {
+      const realmA = await seedRealm();
+      const realmB = await seedRealm();
+      await keys.create({ key: keyRow(realmA, { kekRef: 'kek-a' }) });
+      const newestA = await keys.create({
+        key: keyRow(realmA, { kekRef: 'kek-a', status: 'next' }),
+      });
+      const onlyB = await keys.create({ key: keyRow(realmB, { kekRef: 'kek-b' }) });
+      // A retired key's KEK reference is no longer in use: insertKeyRow seals under `kek`.
+      await insertKeyRow(realmB, { status: 'retired' });
+
+      const canaries = await keys.listKekCanaries(8);
+
+      expect(canaries.map((key) => [key.kekRef, key.realmId, key.kid])).toEqual([
+        ['kek-a', realmA, newestA.kid],
+        ['kek-b', realmB, onlyB.kid],
+      ]);
+      for (const key of canaries) {
+        for (const column of ['ciphertext', 'iv', 'wrappedDek']) {
+          expect(key).not.toHaveProperty(column);
+        }
+      }
+      await expect(keys.listKekCanaries(1)).resolves.toHaveLength(1);
+    });
+
     it("never opens another realm's key by kid", async () => {
       const realmA = await seedRealm();
       const realmB = await seedRealm();

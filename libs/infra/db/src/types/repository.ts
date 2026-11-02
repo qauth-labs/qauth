@@ -1031,6 +1031,13 @@ export interface RealmKeysRepository {
    */
   listByRealm(realmId: string, filter?: RealmKeyFilter, tx?: DbClient): Promise<RealmKey[]>;
   /**
+   * The keys the signer's readiness check unwraps (#500), without their
+   * wrapped material: for each KEK reference that a key in use (`active` or
+   * `next`) is wrapped under, in any realm, the newest such key. At most
+   * `limit` keys, ordered by KEK reference.
+   */
+  listKekCanaries(limit: number, tx?: DbClient): Promise<RealmKey[]>;
+  /**
    * Every `realm_public_keys` row of a realm, whatever its status or
    * publication window, ordered by purpose, `publish_at` and `kid`. The signer
    * builds the realm's JWKS and verification keys from them (#464). Public
