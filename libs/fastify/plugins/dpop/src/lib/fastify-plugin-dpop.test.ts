@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { CACHE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-cache';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import fp from 'fastify-plugin';
 import { calculateJwkThumbprint, CompactSign, exportJWK, generateKeyPair, type JWK } from 'jose';
 import { describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import {
   dpopPlugin,
   type DpopPluginOptions,
   type DpopRequestCheck,
+  type DpopService,
 } from './fastify-plugin-dpop';
 
 const ORIGIN = 'https://auth.example.com';
@@ -303,76 +304,68 @@ describe('createDpopService (#520)', () => {
   const ADMIN_BASE = 'https://admin.auth.example.com/';
 
   /**
-   * A bare server whose `dpop` is a service of its own, as the admin
-   * listener's is, and whose one route checks its proof with it.
+   * Check `dpop` with `service` as a request for GET /admin/v1-rc.0/realms/r1
+   * (the method, URL and header are all the service reads): the proof's
+   * thumbprint, or the refusal's error and reason.
    */
-  async function serviceApp(
-    redis: ReturnType<typeof fakeRedis>,
-    options: { iatWindowSeconds?: number; now?: () => number } = {}
-  ): Promise<FastifyInstance> {
-    const app = Fastify({ logger: false });
-    app.decorate('dpop', createDpopService(redis, { baseUrl: ADMIN_BASE, ...options }));
-    app.setErrorHandler((error, _request, reply) =>
-      error instanceof DpopProofError
-        ? reply.code(400).send({ error: error.error, reason: error.reason })
-        : reply.code(500).send({ error: String(error) })
-    );
-    app.get('/admin/v1-rc.0/realms/:realmId', async (request) => {
-      if (app.dpop === null) throw new Error('no DPoP service');
-      return { thumbprint: (await app.dpop.verifyRequest(request)).thumbprint };
-    });
-    await app.ready();
-    return app;
+  async function check(
+    service: DpopService,
+    dpop: string
+  ): Promise<{ thumbprint: string } | { error: string; reason: string }> {
+    const request = {
+      method: 'GET',
+      url: '/admin/v1-rc.0/realms/r1',
+      headers: { dpop },
+    } as unknown as FastifyRequest;
+    try {
+      return { thumbprint: (await service.verifyRequest(request)).thumbprint };
+    } catch (error) {
+      if (!(error instanceof DpopProofError)) throw error;
+      return { error: error.error, reason: error.reason };
+    }
   }
-
-  const call = (app: FastifyInstance, dpop: string) =>
-    app.inject({ method: 'GET', url: '/admin/v1-rc.0/realms/r1', headers: { dpop } });
 
   it('compares htu with its own base URL, without its trailing slash, and the request path', async () => {
     const redis = fakeRedis();
-    const app = await serviceApp(redis);
-    try {
-      const key = await proofKey();
-      const admin = await call(
-        app,
-        await proof(key, {
-          htm: 'GET',
-          htu: 'https://admin.auth.example.com/admin/v1-rc.0/realms/r1',
-        })
-      );
-      expect(admin.json()).toEqual({ thumbprint: key.thumbprint });
-      // A proof for the same path under the issuer's origin names another URL.
-      const issuer = await call(
-        app,
-        await proof(key, { htm: 'GET', htu: `${ORIGIN}/admin/v1-rc.0/realms/r1` })
-      );
-      expect(issuer.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
-      // Recorded in the one store the server's own proofs go to.
-      expect([...redis.keys.keys()]).toEqual([
-        expect.stringMatching(new RegExp(`^${DPOP_REPLAY_KEY_PREFIX}`)),
-      ]);
-    } finally {
-      await app.close();
-    }
+    const service = createDpopService(redis, { baseUrl: ADMIN_BASE });
+    const key = await proofKey();
+    const admin = await check(
+      service,
+      await proof(key, {
+        htm: 'GET',
+        htu: 'https://admin.auth.example.com/admin/v1-rc.0/realms/r1',
+      })
+    );
+    expect(admin).toEqual({ thumbprint: key.thumbprint });
+    // A proof for the same path under the issuer's origin names another URL.
+    const issuer = await check(
+      service,
+      await proof(key, { htm: 'GET', htu: `${ORIGIN}/admin/v1-rc.0/realms/r1` })
+    );
+    expect(issuer).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
+    // Recorded in the one store the server's own proofs go to.
+    expect([...redis.keys.keys()]).toEqual([
+      expect.stringMatching(new RegExp(`^${DPOP_REPLAY_KEY_PREFIX}`)),
+    ]);
   });
 
   it('holds iat to the window it is given, and keeps a used proof longer than twice the window', async () => {
     const now = Date.now();
     const redis = fakeRedis();
-    const app = await serviceApp(redis, { iatWindowSeconds: 30, now: () => now });
-    try {
-      const key = await proofKey();
-      const htu = 'https://admin.auth.example.com/admin/v1-rc.0/realms/r1';
-      const iat = Math.floor(now / 1000);
-      const old = await call(app, await proof(key, { htm: 'GET', htu, iat: iat - 31 }));
-      expect(old.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'iat' });
-      const fresh = await call(app, await proof(key, { htm: 'GET', htu, iat: iat - 29 }));
-      expect(fresh.statusCode).toBe(200);
-      const [ttl] = [...redis.keys.values()];
-      expect(ttl).toBeGreaterThanOrEqual(2 * 30 * 1000);
-    } finally {
-      await app.close();
-    }
+    const service = createDpopService(redis, {
+      baseUrl: ADMIN_BASE,
+      iatWindowSeconds: 30,
+      now: () => now,
+    });
+    const key = await proofKey();
+    const htu = 'https://admin.auth.example.com/admin/v1-rc.0/realms/r1';
+    const iat = Math.floor(now / 1000);
+    const old = await check(service, await proof(key, { htm: 'GET', htu, iat: iat - 31 }));
+    expect(old).toEqual({ error: 'invalid_dpop_proof', reason: 'iat' });
+    const fresh = await check(service, await proof(key, { htm: 'GET', htu, iat: iat - 29 }));
+    expect(fresh).toEqual({ thumbprint: key.thumbprint });
+    const [ttl] = [...redis.keys.values()];
+    expect(ttl).toBeGreaterThanOrEqual(2 * 30 * 1000);
   });
 
   it('refuses a base URL that is not an absolute http(s) URL when it is built', () => {
