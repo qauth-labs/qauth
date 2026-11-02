@@ -269,6 +269,28 @@ function interactionIdOf(request: FastifyRequest): string {
 }
 
 /**
+ * The step read's rate-limit key: the realm and the interaction, by the id's
+ * hash, as the record is kept. The ceremony app's server reads the step for
+ * every browser (ADR-019 Decision 6), so the caller's address would put every
+ * person signing in behind one bucket. A junk id, which never reaches Redis,
+ * counts per realm and address, through {@link realmRateLimitKey}.
+ */
+export function interactionReadRateLimitKey(request: FastifyRequest): string {
+  const id = interactionIdOf(request);
+  if (!isInteractionId(id)) return realmRateLimitKey(request);
+  return `${request.realm?.id ?? ''}:interaction:${interactionIdHash(id)}`;
+}
+
+/**
+ * An answer's rate-limit key: {@link realmRateLimitKey} with the bucket the
+ * parsed body falls in, {@link CREDENTIAL_BUCKET} when it carries a
+ * credential and `:step` otherwise.
+ */
+export function interactionAnswerRateLimitKey(request: FastifyRequest): string {
+  return `${realmRateLimitKey(request)}${carriesCredential(request.body) ? CREDENTIAL_BUCKET : ':step'}`;
+}
+
+/**
  * Answer a processed request: JSON gets the next step view or the final
  * redirect; a form post gets `303` to the ceremony page or to the final
  * redirect.
@@ -510,16 +532,8 @@ export default async function (fastify: FastifyInstance) {
   const stepReadRateLimit = {
     max: authorizeMax,
     timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-    // The ceremony app's server reads the step for every browser (ADR-019
-    // Decision 6), so the caller's address would put every person signing in
-    // behind one bucket: the read counts per interaction, by the id's hash,
-    // as the record is kept. A junk id, which never reaches Redis, counts
-    // per address.
-    keyGenerator: (request: FastifyRequest) => {
-      const id = interactionIdOf(request);
-      if (!isInteractionId(id)) return realmRateLimitKey(request);
-      return `${request.realm?.id ?? ''}:interaction:${interactionIdHash(id)}`;
-    },
+    // Per interaction, not per address: see interactionReadRateLimitKey.
+    keyGenerator: interactionReadRateLimitKey,
   };
   const personalReadRateLimit = {
     max: authorizeMax,
@@ -532,8 +546,7 @@ export default async function (fastify: FastifyInstance) {
   // before a password, the authorization endpoint's.
   const answerRateLimit = {
     hook: 'preHandler' as const,
-    keyGenerator: (request: FastifyRequest) =>
-      `${realmRateLimitKey(request)}${carriesCredential(request.body) ? CREDENTIAL_BUCKET : ':step'}`,
+    keyGenerator: interactionAnswerRateLimitKey,
     max: (request: FastifyRequest, key: string) =>
       key.endsWith(CREDENTIAL_BUCKET) ? env.LOGIN_RATE_LIMIT : authorizeMax(request),
     timeWindow: (_request: FastifyRequest, key: string) =>
