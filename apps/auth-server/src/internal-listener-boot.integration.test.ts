@@ -14,7 +14,10 @@
  *   certificate it serves with no restart; SIGTERM stops it.
  * - Without the TLS files, the same process exits 1 naming each missing
  *   setting, never listens on the public port, and opens no internal port.
- * - A single process opens no internal port.
+ * - A single process serves its metrics there and nothing else (#500): over
+ *   mutual TLS with the TLS files, to a peer mapped to `metrics`, and in
+ *   plain HTTP on loopback without them. With METRICS_ENABLED=false it opens
+ *   no internal port.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -305,19 +308,73 @@ describe('the internal listener of src/main.ts (#496, testcontainers)', () => {
     ]) {
       expect(failure).toContain(`${variable} is required`);
     }
-    expect(failure).toContain('so the signer routes are not registered without it');
+    expect(failure).toContain('so no internal route is registered without it');
     expect(logged(server, 'Server listening on ')()).toBe(false);
     expect(logged(server, 'Internal listener listening')()).toBe(false);
     expect(await accepts(server.internalPort)).toBe(false);
   });
 
-  it('opens no internal port in a single process, whatever its TLS settings', async (ctx) => {
-    const server = await startServer(ctx, tlsSettings());
+  it('serves a single process its metrics alone on the internal listener, over mutual TLS with the TLS files (#500)', async (ctx) => {
+    const server = await startServer(ctx, {
+      ...tlsSettings(),
+      INTERNAL_PEER_ROLES: JSON.stringify({
+        'spiffe://qauth.test/web': 'web',
+        'spiffe://qauth.test/prometheus': 'metrics',
+      }),
+    });
     await until(logged(server, 'Server listening on '), 'the server to listen', server);
+    expect(
+      logged(
+        server,
+        `Internal listener listening on https://127.0.0.1:${server.internalPort} (mutual TLS)`
+      )()
+    ).toBe(true);
 
-    expect(logged(server, 'Internal listener listening')()).toBe(false);
-    expect(await accepts(server.internalPort)).toBe(false);
+    const scraper = pki.issue({ uris: ['spiffe://qauth.test/prometheus'] });
+    const metrics = await clientOf(server, scraper).request({
+      method: 'GET',
+      path: '/internal/metrics',
+    });
+    expect(metrics.status).toBe(200);
+    expect(metrics.body.toString()).toMatch(/^qauth_/m);
+
+    // Another peer role may not read them, and a single process registers
+    // no other internal route: it calls its own signer in-process.
+    const web = pki.issue({ uris: ['spiffe://qauth.test/web'] });
+    const refused = await clientOf(server, web).request({
+      method: 'GET',
+      path: '/internal/metrics',
+    });
+    expect(refused.status).toBe(403);
+    const signer = await clientOf(server, web).request({ method: 'POST', path: SIGNER_PATH });
+    expect(signer.status).toBe(404);
+
+    // The public listener serves no metrics.
+    expect((await fetch(`http://127.0.0.1:${server.port}/metrics`)).status).toBe(404);
     server.child.kill('SIGTERM');
     expect(await server.exited).toBe(0);
+  });
+
+  it('serves a single process its metrics in plain HTTP on loopback without the TLS files, and nothing with METRICS_ENABLED=false (#500)', async (ctx) => {
+    const plain = await startServer(ctx);
+    await until(logged(plain, 'Server listening on '), 'the server to listen', plain);
+    expect(
+      logged(
+        plain,
+        `Internal listener listening on http://127.0.0.1:${plain.internalPort} (plain HTTP, loopback callers only)`
+      )()
+    ).toBe(true);
+    const metrics = await fetch(`http://127.0.0.1:${plain.internalPort}/internal/metrics`);
+    expect(metrics.status).toBe(200);
+    expect(await metrics.text()).toMatch(/^qauth_/m);
+    plain.child.kill('SIGTERM');
+    expect(await plain.exited).toBe(0);
+
+    const off = await startServer(ctx, { ...tlsSettings(), METRICS_ENABLED: 'false' });
+    await until(logged(off, 'Server listening on '), 'the server to listen', off);
+    expect(logged(off, 'Internal listener listening')()).toBe(false);
+    expect(await accepts(off.internalPort)).toBe(false);
+    off.child.kill('SIGTERM');
+    expect(await off.exited).toBe(0);
   });
 });

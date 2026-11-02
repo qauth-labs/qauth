@@ -55,7 +55,7 @@ export const RATE_LIMIT_KEYS = defineKeys([
   ...rateLimit(
     'HEALTH_RATE_LIMIT_MAX',
     'HEALTH_RATE_LIMIT_WINDOW',
-    'health endpoint requests',
+    "requests per client address to each of `/health` and `/ready`, counted in the process's memory",
     '1000',
     '60'
   ),

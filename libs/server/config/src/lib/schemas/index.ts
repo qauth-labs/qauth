@@ -49,9 +49,13 @@ export {
 export {
   DEFAULT_INTERNAL_HOST,
   DEFAULT_INTERNAL_PORT,
+  INTERNAL_PEER_ROLE_NAMES,
   type InternalListenerEnv,
   internalListenerEnvSchema,
+  type InternalPeerRole,
   type InternalPeerRoles,
+  isInternalPeerRole,
+  METRICS_PEER_ROLE,
   parsePeerSan,
   type PeerSan,
   peerSanKey,

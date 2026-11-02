@@ -375,7 +375,7 @@ describe('what the roles load beside their routes (#495)', () => {
     }
   });
 
-  it('gives the event store gauges of /metrics to the role that reads the store', () => {
+  it('gives the event store gauges of the metrics to the role that reads the store', () => {
     // The gauges are registered only where the repositories are loaded, so a
     // role without them simply has no gauge; delivery reads the store.
     const reached = reach(join(APP_DIR, 'plugins', 'metrics.ts'));

@@ -216,9 +216,9 @@ describe('registration does not reveal whether an address is registered (real co
       expect(uiFree.statusCode).toBe(uiTaken.statusCode);
       expect(masked(uiFree, FREE)).toBe(masked(uiTaken, VICTIM));
 
-      // `/metrics` is unauthenticated: no label of its own for the refusal.
-      const metrics = await app.inject({ method: 'GET', url: '/metrics' });
-      expect(metrics.body).not.toContain('email_not_verified');
+      // A scraper reads the metrics: no label of its own for the refusal.
+      const metrics = await app.metrics.registry.metrics();
+      expect(metrics).not.toContain('email_not_verified');
 
       // What did happen reaches only the mailbox, and the victim is unharmed.
       await vi.waitFor(() => expect(notices).toHaveBeenCalledWith(expect.any(String), VICTIM));

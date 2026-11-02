@@ -7,7 +7,7 @@
  * this test: an unclassified route fails it. The second half checks the
  * classes themselves against the rule ADR-019 Decisions 1 and 8 give: the
  * routes that read or set the browser session cookie are `browser`, `/health`
- * is the one `none` route, and everything else is `api` or `meta`.
+ * and `/ready` are the `none` routes (#500), and everything else is `api` or `meta`.
  *
  * The app boots with every switch that registers a route turned on, the
  * maximal surface of `openapi-export.ts`, so the wallet routes and the passkey
@@ -183,11 +183,12 @@ describe('route surface classes of the assembled app (#486)', () => {
       '/.well-known/ssf-configuration',
       '/ssf/stream',
       '/ssf/jwks.json',
-      '/metrics',
       '*',
     ]) {
       expect(urls, url).toContain(url);
     }
+    // The metrics are on the internal listener only (#500).
+    expect(urls).not.toContain('/metrics');
   });
 
   it('gives every route a surface class', () => {
@@ -207,9 +208,9 @@ describe('route surface classes of the assembled app (#486)', () => {
     }
   });
 
-  it('classes /health, and nothing else, as none', () => {
+  it('classes /health and /ready, and nothing else, as none', () => {
     const none = routes.filter((route) => route.config?.surface === 'none');
-    expect(new Set(none.map((route) => route.url))).toEqual(new Set(['/health']));
+    expect(new Set(none.map((route) => route.url))).toEqual(new Set(['/health', '/ready']));
   });
 });
 

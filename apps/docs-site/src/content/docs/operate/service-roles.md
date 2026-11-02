@@ -23,8 +23,10 @@ key.
 | `signer`   | The KEK, every private key and the signer. It runs the default realm's key boot step. While the roles are split, it also runs the [internal listener](#the-internal-listener), with mutual TLS.                                                                                                     | Key rotation, when it ships                                                                                                                                                                     |
 | `delivery` | The event delivery reader, which sends the SSF streams.                                                                                                                                                                                                                                             | `event-retention`                                                                                                                                                                               |
 
-Every role answers `/health` and `/metrics` for its own process. Write the
-roles as a comma-separated list, such as `SERVICE_ROLES=web` or
+Every role answers `/health` (liveness) and `/ready` (the checks its roles
+need) for its own process on the public port, and serves its metrics on the
+internal listener ([Health and readiness](/operate/observability/#health-and-readiness)).
+Write the roles as a comma-separated list, such as `SERVICE_ROLES=web` or
 `SERVICE_ROLES=api,signer,delivery`; `all` stands alone.
 
 A process registers only what its roles use:
@@ -77,14 +79,19 @@ the realm's cookie key from the signer (below).
 
 ## The internal listener
 
-A process that holds `signer` while the roles are split runs a further HTTP
-server, the internal listener, for the other roles' calls to the signer
-service (ADR-019 Decision 8). It binds to `INTERNAL_HOST` and `INTERNAL_PORT`
-(`127.0.0.1`, port `3443`, by default): set `INTERNAL_HOST` to an address the
-other nodes reach. A single process (`SERVICE_ROLES=all`) signs in-process
-and runs none.
+A further HTTP server of the process, the internal listener, serves what only
+other parts of the deployment call (ADR-019 Decision 8): a process that holds
+`signer` while the roles are split serves the other roles' calls to the signer
+service there, and every process serves its metrics there to a scraper while
+`METRICS_ENABLED` is on (`GET /internal/metrics`, see
+[Observability](/operate/observability/#who-can-read-the-metrics)). It binds
+to `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port `3443`, by default):
+set `INTERNAL_HOST` to an address the other nodes and the scraper reach. A
+single process (`SERVICE_ROLES=all`) signs in-process and serves the metrics
+alone there; without the internal TLS files it serves them in plain HTTP, on a
+loopback address only.
 
-It serves mutual TLS only, TLS 1.3 and HTTP/1.1:
+With the internal TLS files it serves mutual TLS only, TLS 1.3 and HTTP/1.1:
 
 - `INTERNAL_TLS_CERT_PATH` and `INTERNAL_TLS_KEY_PATH` hold the certificate it
   serves, and `INTERNAL_TLS_CA_PATH` the CA certificates that issue every
@@ -95,9 +102,10 @@ It serves mutual TLS only, TLS 1.3 and HTTP/1.1:
   readable by the server's user only (such as a Kubernetes secret's
   `defaultMode: 0400`): the server warns when its group or others may read it.
 - `INTERNAL_PEER_ROLES` maps a subject alternative name (SAN) of a peer's
-  certificate to the role the peer calls as, as a JSON object. A key with a
-  `:` is a URI SAN, such as a SPIFFE ID, compared exactly; any other key is a
-  DNS SAN, compared without regard to case. Wildcards, IP addresses and the
+  certificate to the role the peer calls as, as a JSON object, or to
+  `metrics` for a metrics scraper, which may read the metrics and nothing
+  else. A key with a `:` is a URI SAN, such as a SPIFFE ID, compared exactly;
+  any other key is a DNS SAN, compared without regard to case. Wildcards, IP addresses and the
   `signer` role are refused: the signer serves the listener and never calls
   it. A peer whose certificate holds no mapped SAN, or SANs mapped to two
   roles, gets `403` on every path.
@@ -114,9 +122,10 @@ It serves mutual TLS only, TLS 1.3 and HTTP/1.1:
   peer connects again under the files served then.
 - It holds at most 1024 connections at once.
 
-The process refuses to start, naming each setting, when the three files or
-`INTERNAL_PEER_ROLES` are missing: the signer is never served without mutual
-TLS. `INTERNAL_PORT` must differ from `PORT`, and from `ADMIN_API_PORT` where
+A process whose roles are split refuses to start, naming each setting, when
+the three files or `INTERNAL_PEER_ROLES` are missing: neither the signer nor
+the metrics are served without mutual TLS there. Map a scraper's SAN to
+`metrics`, or set `METRICS_ENABLED=false` on a process no scraper reads. `INTERNAL_PORT` must differ from `PORT`, and from `ADMIN_API_PORT` where
 the admin API runs. Every internal route sits under `/internal/`, and the
 public listener serves none of them. The listener is not routed by host: an
 internal route takes the realm from the request, not from the `Host` header.
@@ -167,15 +176,18 @@ INTERNAL_HOST=0.0.0.0
 INTERNAL_TLS_CERT_PATH=/run/secrets/signer.crt
 INTERNAL_TLS_KEY_PATH=/run/secrets/signer.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
-INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/admin":"admin"}
+INTERNAL_PEER_ROLES={"spiffe://example.org/qauth/admin":"admin","spiffe://example.org/prometheus":"metrics"}
 
 # Admin nodes: no KEK, no private key. Their certificate holds the SAN
 # spiffe://example.org/qauth/admin, which the signer's nodes map to admin.
+# Their own internal listener serves their metrics to the scraper.
 SERVICE_ROLES=admin
 SIGNER_URL=https://signer.internal:3443
+INTERNAL_HOST=0.0.0.0
 INTERNAL_TLS_CERT_PATH=/run/secrets/admin.crt
 INTERNAL_TLS_KEY_PATH=/run/secrets/admin.key
 INTERNAL_TLS_CA_PATH=/run/secrets/internal-ca.crt
+INTERNAL_PEER_ROLES={"spiffe://example.org/prometheus":"metrics"}
 ```
 
 Once the signer service ships (#497), a `web` node without the KEK gets the
@@ -207,11 +219,19 @@ and its spec under `/docs`.
 
 A process holding `admin` runs the admin API on a second listener, beside the
 public one, while `ADMIN_API_ENABLED` is on. It is off by default until the
-first admin operations (#517) and DPoP-bound admin tokens (#520) ship. The
-listener binds to loopback, and until #520 a production process refuses an
-`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`).
-The listener grants nothing for a caller's network position: every admin call
-needs an admin token, except `GET /admin/v1-rc.0/openapi.json`
+first admin operations (#517) ship. The listener binds to loopback by default.
+Every admin call carries a DPoP-bound admin token and a proof for
+`ADMIN_API_BASE_URL` followed by the call's path (#520), so where the listener
+runs, the boot requires `ADMIN_API_BASE_URL`, the URL clients address the admin
+API at, and `DPOP_ENABLED=true`; a process that runs the token endpoint needs
+`DPOP_ENABLED=true` too, to issue admin tokens. The listener may then sit on
+any address, behind a load balancer that terminates TLS and forwards to
+`ADMIN_API_HOST` and `ADMIN_API_PORT`: a proof binds an admin call to its
+method and URL, not to its body, so in production `ADMIN_API_BASE_URL` must be
+`https`, unless both it and `ADMIN_API_HOST` name loopback, for a listener
+reached from the machine alone. It grants nothing for a caller's network position: every
+admin call needs a DPoP-bound admin token, except
+`GET /admin/v1-rc.0/openapi.json`
 ([API conventions](/reference/api-conventions/#the-admin-listener)). The public
 listener never serves the admin API. `ADMIN_API_PORT` must differ from `PORT`.
 

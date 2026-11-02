@@ -130,7 +130,10 @@ const adminServer = servesAdminListener(env.SERVICE_ROLES, env.ADMIN_API_ENABLED
 
 // The internal listener (ADR-019 Decision 8, #496): a further Fastify
 // instance, on a process whose roles need it, such as one that holds the
-// signer while the roles are split. Built in `start()`, once the logger can
+// signer while the roles are split, and on every process while
+// METRICS_ENABLED is on, where a scraper reads its metrics (#500): a single
+// process without the internal TLS files serves it in plain HTTP on a
+// loopback address. Built in `start()`, once the logger can
 // report a refusal: `internalListenerPlan` says whether it runs and how,
 // `readInternalTlsFiles` reads and checks its TLS files, and
 // `createInternalServer` gives it the rules above and mutual TLS. The app
@@ -177,9 +180,9 @@ async function start() {
     }
 
     // The internal listener, before anything waits on the database: a
-    // process whose roles split and that would serve the signer without
-    // mutual TLS stops here, naming each setting it lacks, and no route of
-    // the signer is ever registered. Its TLS files are read and checked now,
+    // process whose roles split and that would serve the signer or its
+    // metrics without mutual TLS stops here, naming each setting it lacks,
+    // and no internal route is ever registered. Its TLS files are read and checked now,
     // so a file that cannot be read or a key that is not the certificate's
     // own stops the boot too.
     const internalPlan = internalListenerPlan(env);
@@ -190,6 +193,11 @@ async function start() {
       internalServer = createInternalServer({
         loggerInstance: server.log.child({ listener: 'internal' }),
         peerRoles: internalPlan.peerRoles,
+        // A single process without the internal TLS files: plain HTTP on a
+        // loopback address, where a local scraper reads the metrics (#500).
+        ...(internalPlan.plainHttpPeerRole === undefined
+          ? {}
+          : { plainHttpPeerRole: internalPlan.plainHttpPeerRole }),
         ...(internalPlan.tls === undefined
           ? {}
           : {
@@ -253,7 +261,7 @@ async function start() {
       await internalServer.listen({ port: internalPlan.port, host: internalPlan.host });
       const scheme = internalPlan.tls === undefined ? 'http' : 'https';
       server.log.info(
-        `Internal listener listening on ${scheme}://${internalPlan.host}:${internalPlan.port}${internalPlan.tls === undefined ? '' : ' (mutual TLS)'}`
+        `Internal listener listening on ${scheme}://${internalPlan.host}:${internalPlan.port}${internalPlan.tls === undefined ? ' (plain HTTP, loopback callers only)' : ' (mutual TLS)'}`
       );
     }
 

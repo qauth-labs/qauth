@@ -103,7 +103,7 @@ export const SERVER_KEYS = defineKeys([
     owner: 'observability',
     default: 'true',
     since: '0.1.0',
-    docs: 'Serve Prometheus metrics at `GET /metrics`.',
+    docs: 'Serve Prometheus metrics at `GET /internal/metrics` on the internal listener, never on the public one; the listener runs on every process while this is on.',
   },
   {
     name: 'DEFAULT_REALM_NAME',

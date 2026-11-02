@@ -93,7 +93,7 @@ async function stopNode(app: FastifyInstance | undefined): Promise<void> {
   await app.close().catch(() => undefined);
 }
 
-/** The total of a session counter's `result`, as the node's /metrics reports it. */
+/** The total of a session counter's `result`, as the node's metrics report it. */
 async function counted(counter: Counter<'result'>, result: string): Promise<number> {
   const { values } = await counter.get();
   return values

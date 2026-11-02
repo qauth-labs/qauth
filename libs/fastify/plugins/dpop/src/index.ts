@@ -4,6 +4,7 @@ export {
   type DpopAlgorithm,
   type DpopErrorCode,
   DpopProofError,
+  type DpopRedisClient,
   type DpopRejectionReason,
   type VerifiedDpopProof,
 } from '@qauth-labs/server-dpop';

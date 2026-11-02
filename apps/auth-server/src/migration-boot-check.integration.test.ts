@@ -144,6 +144,9 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
 
   async function startServer(databaseUrl: string, waitMs: number): Promise<StartedServer> {
     if (!redis || !jwt) throw new Error('no infrastructure');
+    const port = await freePort();
+    let internalPort = await freePort();
+    while (internalPort === port) internalPort = await freePort();
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -151,7 +154,10 @@ describe('migration check at boot (src/main.ts, testcontainers Postgres)', () =>
         ...REQUIRED_TEST_ENVIRONMENT,
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
-        PORT: String(await freePort()),
+        PORT: String(port),
+        // Every process runs the internal listener for its metrics (#500):
+        // a free port rather than the default 3443.
+        INTERNAL_PORT: String(internalPort),
         DATABASE_URL: databaseUrl,
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,

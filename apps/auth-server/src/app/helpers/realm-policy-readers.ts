@@ -107,6 +107,15 @@ export interface TokenLifetimes {
 }
 
 /**
+ * The longest an access token for the admin API ever lives, in seconds
+ * (ADR-019 Decision 7, #520): the bound of the realm policy
+ * `tokens.adminAccessTokenLifespanSeconds`, applied again here, so that no
+ * stored value, not even one written by hand past the policy schema, lets an
+ * admin token live longer.
+ */
+export const ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS = 900;
+
+/**
  * A realm's token lifetimes (ADR-019 Decision 10, #527), from the realm row
  * the flow already loaded (the realm resolver's, which the environment
  * policy reads too): no query. So two realms of one deployment can issue
@@ -123,6 +132,9 @@ export interface TokenLifetimes {
  * the development and admin lifetimes its fill will store, the environment's
  * seed and the schema's default. The fill moves the same values onto the row,
  * so the lifetimes do not change when it lands.
+ *
+ * The admin lifetime is never above {@link ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS}
+ * (#520), whatever the policy holds.
  *
  * The store reads the whole document, so a value the schema refuses in any
  * group, not only `tokens`, fails the request (a server error, logged) rather
@@ -144,18 +156,22 @@ export function tokenLifetimesOf(
   realm: RealmRow
 ): TokenLifetimes {
   const { tokens } = sources.policyStore.ofRealm(realm).policies;
+  const adminAccessTokenLifespanSeconds = Math.min(
+    tokens.adminAccessTokenLifespanSeconds,
+    ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS
+  );
   if (realm.policiesVersion > 0) {
     return Object.freeze({
       accessTokenLifespanSeconds: tokens.accessTokenLifespanSeconds,
       developmentAccessTokenLifespanSeconds: tokens.developmentAccessTokenLifespanSeconds,
       refreshTokenLifespanSeconds: tokens.refreshTokenLifespanSeconds,
-      adminAccessTokenLifespanSeconds: tokens.adminAccessTokenLifespanSeconds,
+      adminAccessTokenLifespanSeconds,
     });
   }
   return Object.freeze({
     accessTokenLifespanSeconds: sources.jwtUtils.getAccessTokenLifespan(),
     developmentAccessTokenLifespanSeconds: tokens.developmentAccessTokenLifespanSeconds,
     refreshTokenLifespanSeconds: sources.jwtUtils.getRefreshTokenLifespan(),
-    adminAccessTokenLifespanSeconds: tokens.adminAccessTokenLifespanSeconds,
+    adminAccessTokenLifespanSeconds,
   });
 }

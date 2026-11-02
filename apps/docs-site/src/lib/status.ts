@@ -113,7 +113,7 @@ export const DELIVERY_TRACKS: DeliveryTrack[] = [
     name: 'OIDC conformance + hardening',
     state: 'shipped',
     summary:
-      'Security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, structured logging + `/metrics`, failed-login lockout.',
+      'Security headers, CSRF, secure cookies, OIDC ID token/nonce/claims, structured logging + Prometheus metrics, failed-login lockout.',
   },
   {
     id: 'T5',

@@ -958,6 +958,50 @@ describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
       await app.close();
     });
 
+    describe('on a server that takes DPoP-bound tokens only (`dpopOnly`, the admin listener, #520)', () => {
+      async function buildDpopOnlyApp(): Promise<FastifyInstance> {
+        const app = Fastify({ logger: false });
+        app.decorate('dpop', { algorithms: ['ES256', 'EdDSA'] } as never);
+        await app.register(errorHandler, { dpopOnly: true });
+        app.get('/admin/v1-rc.0/realms/:realmId/token', async () => {
+          throw new JWTInvalidError('The admin API takes a DPoP-bound access token only');
+        });
+        app.get('/admin/v1-rc.0/realms/:realmId/none', async () => {
+          throw new MissingAccessTokenError();
+        });
+        return app;
+      }
+
+      it('answers a Bearer token with a DPoP invalid_token challenge, in a problem document', async () => {
+        const app = await buildDpopOnlyApp();
+        const response = await app.inject({
+          method: 'GET',
+          url: '/admin/v1-rc.0/realms/r1/token',
+          headers: { authorization: 'Bearer some.token.value' },
+        });
+        expect(response.statusCode).toBe(401);
+        expect(response.headers['www-authenticate']).toMatch(
+          /^DPoP error="invalid_token", error_description="[^"]*", algs="ES256 EdDSA"$/
+        );
+        expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
+        await app.close();
+      });
+
+      it('answers a request with no credential with a DPoP challenge that names no error', async () => {
+        const app = await buildDpopOnlyApp();
+        for (const headers of [{}, { authorization: 'Bearer ' }]) {
+          const response = await app.inject({
+            method: 'GET',
+            url: '/admin/v1-rc.0/realms/r1/none',
+            headers,
+          });
+          expect(response.statusCode).toBe(401);
+          expect(response.headers['www-authenticate']).toBe('DPoP algs="ES256 EdDSA"');
+        }
+        await app.close();
+      });
+    });
+
     it('keeps the Bearer challenge for a DPoP-scheme request while DPoP is off', async () => {
       const app = await buildDpopApp(false);
       const response = await app.inject({

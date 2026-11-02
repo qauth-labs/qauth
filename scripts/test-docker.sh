@@ -119,11 +119,12 @@ else
     exit 1
 fi
 
-# Wait for auth-server to be healthy
-echo "⏳ Waiting for auth-server to be healthy..."
+# Wait for auth-server to be ready: /ready answers 200 once Postgres, Redis
+# and the KEK do, where /health only says the process serves.
+echo "⏳ Waiting for auth-server to be ready..."
 timeout=60
 elapsed=0
-while ! curl -f http://localhost:3000/health > /dev/null 2>&1; do
+while ! curl -f http://localhost:3000/ready > /dev/null 2>&1; do
     sleep 2
     elapsed=$((elapsed + 2))
     if [ $elapsed -ge $timeout ]; then

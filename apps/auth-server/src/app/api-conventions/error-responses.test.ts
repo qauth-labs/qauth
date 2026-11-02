@@ -92,8 +92,10 @@ describe.each(Object.entries(DOCUMENTS))(
     });
 
     it('lists 421 and 500 on every operation of a realm', () => {
+      // The probes answer on any host, with no realm (#500).
+      const probes = new Set(['GET /health', 'GET /ready']);
       for (const [operation, { responses = {} }] of operations) {
-        if (operation === 'GET /health') continue;
+        if (probes.has(operation)) continue;
         expect(Object.keys(responses), operation).toContain('500');
         expect(Object.keys(responses), operation).toContain('421');
       }

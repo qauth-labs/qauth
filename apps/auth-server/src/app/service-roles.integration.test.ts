@@ -15,7 +15,7 @@ import {
   type PemKeyPair,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
-import { SIGNER_LISTENER } from '../testing/service-role-env';
+import { SIGNER_LISTENER, SIGNER_SERVICE } from '../testing/service-role-env';
 import { SERVICE_ROLE_NAMES } from './service-roles';
 
 /**
@@ -24,7 +24,7 @@ import { SERVICE_ROLE_NAMES } from './service-roles';
  *
  * Each test boots the real auth-server under one `SERVICE_ROLES` value and
  * reads what it registered and answers: the route set of each role, `/health`
- * on every role, the refusal of key material and of a missing signer address
+ * and `/ready` on every role (#500), the refusal of key material and of a missing signer address
  * on a process without the signer, and the repositories a role leaves
  * unbuilt.
  *
@@ -98,20 +98,17 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'POST /developer/v1-rc.0/clients',
   'POST /developer/v1-rc.0/clients/:clientId/api-keys',
   'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',
+  // Readiness, beside the liveness of /health (#500).
+  'GET /ready',
 ];
+
+/** The routes removed since: the metrics moved to the internal listener (#500). */
+const DEFAULT_ROUTES_REMOVED_SINCE: ReadonlySet<string> = new Set(['GET /metrics']);
 
 const MACHINE_CLIENT_ID = 'roles-machine-client';
 const MACHINE_SECRET = 'roles-machine-secret-of-at-least-32-characters';
 const MACHINE_SCOPE = 'reports:read';
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' } as const;
-
-/** The signer service settings of a process without the signer; never dialled here. */
-const SIGNER_SERVICE: Record<string, string> = {
-  SIGNER_URL: 'https://signer.internal:3443',
-  INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
-  INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
-  INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
-};
 
 /** `METHOD /url` for each method of each route. */
 function operations(routes: readonly RouteOptions[]): Set<string> {
@@ -182,11 +179,13 @@ describe('service roles (#495)', () => {
   it("registers today's route set in a single process (SERVICE_ROLES=all)", async () => {
     const { routes } = await boot('all');
     const expected = new Set(
-      [...DEFAULT_ROUTES_BEFORE_THE_MANIFEST, ...DEFAULT_ROUTES_ADDED_SINCE].flatMap((operation) =>
-        operation.startsWith('GET ')
-          ? [operation, `HEAD ${operation.slice('GET '.length)}`]
-          : [operation]
-      )
+      [...DEFAULT_ROUTES_BEFORE_THE_MANIFEST, ...DEFAULT_ROUTES_ADDED_SINCE]
+        .filter((operation) => !DEFAULT_ROUTES_REMOVED_SINCE.has(operation))
+        .flatMap((operation) =>
+          operation.startsWith('GET ')
+            ? [operation, `HEAD ${operation.slice('GET '.length)}`]
+            : [operation]
+        )
     );
     expect(operations(routes)).toEqual(expected);
     for (const route of routes) {
@@ -233,15 +232,26 @@ describe('service roles (#495)', () => {
   });
 
   it.each(['all', ...SERVICE_ROLE_NAMES])(
-    'answers /health with SERVICE_ROLES=%s',
+    'answers /health and /ready with SERVICE_ROLES=%s, running the checks of its roles',
     async (serviceRoles) => {
       const { app } = await boot(serviceRoles);
+      const roles = serviceRoles === 'all' ? SERVICE_ROLE_NAMES : [serviceRoles];
       const health = await app.inject({ method: 'GET', url: '/health' });
       expect(health.statusCode).toBe(200);
-      expect(health.json()).toMatchObject({
-        status: 'ok',
-        services: { database: 'connected', redis: 'connected' },
-      });
+      expect(health.json()).toMatchObject({ status: 'ok', roles });
+
+      const ready = await app.inject({ method: 'GET', url: '/ready' });
+      expect(ready.json()).toMatchObject({ status: 'ok', roles });
+      expect(ready.statusCode).toBe(200);
+      const expected: Record<string, readonly string[]> = {
+        all: ['database', 'redis', 'kek', 'outbox'],
+        web: ['database', 'redis'],
+        api: ['database', 'redis'],
+        admin: ['database', 'redis'],
+        signer: ['database', 'kek'],
+        delivery: ['database', 'outbox'],
+      };
+      expect(Object.keys(ready.json<{ checks: object }>().checks)).toEqual(expected[serviceRoles]);
     }
   );
 

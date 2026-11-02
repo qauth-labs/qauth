@@ -82,8 +82,14 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ['openid', 'admin:org'],
         aud: ['https://api.example.com', API_FAMILY_AUDIENCES.account],
+        dpopBound: true,
       })
-    ).resolves.toEqual({ scopes: ['openid', 'admin:org'], withheld: [], audienceRefused: false });
+    ).resolves.toEqual({
+      scopes: ['openid', 'admin:org'],
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: false,
+    });
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
   });
@@ -97,11 +103,13 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ['openid', ...ALL_ADMIN_SCOPES, 'profile'],
         aud: ADMIN,
+        dpopBound: true,
       })
     ).resolves.toEqual({
       scopes: ['openid', 'qauth:admin:read', 'profile'],
       withheld: ['qauth:admin:write', 'qauth:admin:security'],
       audienceRefused: false,
+      proofMissing: false,
     });
   });
 
@@ -113,8 +121,14 @@ describe('adminIssuance', () => {
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
       aud: ADMIN,
+      dpopBound: true,
     });
-    expect(decision).toEqual({ scopes: ALL_ADMIN_SCOPES, withheld: [], audienceRefused: false });
+    expect(decision).toEqual({
+      scopes: ALL_ADMIN_SCOPES,
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: false,
+    });
   });
 
   it("reads a custom role's permissions for its classes", async () => {
@@ -127,6 +141,7 @@ describe('adminIssuance', () => {
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
       aud: ADMIN,
+      dpopBound: true,
     });
     expect(decision.scopes).toEqual(['qauth:admin:security']);
   });
@@ -140,11 +155,13 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ['openid', ...ALL_ADMIN_SCOPES],
         aud: [ADMIN],
+        dpopBound: true,
       })
     ).resolves.toEqual({
       scopes: ['openid'],
       withheld: ALL_ADMIN_SCOPES,
       audienceRefused: true,
+      proofMissing: false,
     });
   });
 
@@ -160,8 +177,9 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ['openid'],
         aud: ADMIN,
+        dpopBound: true,
       })
-    ).resolves.toMatchObject({ scopes: ['openid'], audienceRefused: true });
+    ).resolves.toMatchObject({ scopes: ['openid'], audienceRefused: true, proofMissing: false });
   });
 
   it('gives nothing to a token that names no account', async () => {
@@ -173,11 +191,13 @@ describe('adminIssuance', () => {
         userId: null,
         scopes: ['read:foo', ...ALL_ADMIN_SCOPES],
         aud: ADMIN,
+        dpopBound: true,
       })
     ).resolves.toEqual({
       scopes: ['read:foo'],
       withheld: ALL_ADMIN_SCOPES,
       audienceRefused: true,
+      proofMissing: false,
     });
     expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
   });
@@ -190,8 +210,9 @@ describe('adminIssuance', () => {
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
       aud: ADMIN,
+      dpopBound: true,
     });
-    expect(decision).toMatchObject({ scopes: [], audienceRefused: true });
+    expect(decision).toMatchObject({ scopes: [], audienceRefused: true, proofMissing: false });
   });
 
   it('withholds admin scopes from a client that does not list the admin audience, or registered itself', async () => {
@@ -208,8 +229,14 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ALL_ADMIN_SCOPES,
         aud: 'https://api.example.com',
+        dpopBound: true,
       });
-      expect(decision).toEqual({ scopes: [], withheld: ALL_ADMIN_SCOPES, audienceRefused: false });
+      expect(decision).toEqual({
+        scopes: [],
+        withheld: ALL_ADMIN_SCOPES,
+        audienceRefused: false,
+        proofMissing: false,
+      });
     }
   });
 
@@ -222,8 +249,14 @@ describe('adminIssuance', () => {
       userId: USER,
       scopes: odd,
       aud: ADMIN,
+      dpopBound: true,
     });
-    expect(decision).toEqual({ scopes: [], withheld: odd, audienceRefused: false });
+    expect(decision).toEqual({
+      scopes: [],
+      withheld: odd,
+      audienceRefused: false,
+      proofMissing: false,
+    });
   });
 
   it("counts only the grants that fit the realm rule for the account's realm", async () => {
@@ -240,8 +273,9 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ALL_ADMIN_SCOPES,
         aud: ADMIN,
+        dpopBound: true,
       })
-    ).resolves.toMatchObject({ scopes: [], audienceRefused: true });
+    ).resolves.toMatchObject({ scopes: [], audienceRefused: true, proofMissing: false });
   });
 
   it("reads the account and its grants in the request's realm only (#489)", async () => {
@@ -253,8 +287,9 @@ describe('adminIssuance', () => {
         userId: USER,
         scopes: ALL_ADMIN_SCOPES,
         aud: ADMIN,
+        dpopBound: true,
       })
-    ).resolves.toMatchObject({ scopes: [], audienceRefused: true });
+    ).resolves.toMatchObject({ scopes: [], audienceRefused: true, proofMissing: false });
     expect(fastify.repositories.users.findById).toHaveBeenCalledWith(REALM_A, USER);
     expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
 
@@ -264,8 +299,109 @@ describe('adminIssuance', () => {
       userId: USER,
       scopes: ALL_ADMIN_SCOPES,
       aud: ADMIN,
+      dpopBound: true,
     });
     expect(fastify.repositories.adminGrants.listLive).toHaveBeenCalledWith(OPERATOR, USER);
+  });
+});
+
+describe('adminIssuance without a DPoP proof (#520)', () => {
+  it('withholds the admin scopes the grants allow, and says the proof is missing', async () => {
+    const fastify = server([grant(null, 'security-admin')]);
+    await expect(
+      adminIssuance(fastify, {
+        realmId: OPERATOR,
+        client: ADMIN_CLIENT,
+        userId: USER,
+        scopes: ['openid', ...ALL_ADMIN_SCOPES],
+        aud: 'https://api.example.com',
+        dpopBound: false,
+      })
+    ).resolves.toEqual({
+      scopes: ['openid'],
+      withheld: ALL_ADMIN_SCOPES,
+      audienceRefused: false,
+      proofMissing: true,
+    });
+  });
+
+  it('says the proof is missing for the admin audience the grants allow', async () => {
+    const fastify = server([grant(REALM_A, 'viewer')]);
+    await expect(
+      adminIssuance(fastify, {
+        realmId: OPERATOR,
+        client: ADMIN_CLIENT,
+        userId: USER,
+        scopes: ['openid'],
+        aud: ADMIN,
+        dpopBound: false,
+      })
+    ).resolves.toEqual({
+      scopes: ['openid'],
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: true,
+    });
+  });
+
+  it('answers an account with no grant as with a proof: the audience refused, no proof asked for', async () => {
+    const fastify = server([]);
+    for (const dpopBound of [true, false]) {
+      await expect(
+        adminIssuance(fastify, {
+          realmId: OPERATOR,
+          client: ADMIN_CLIENT,
+          userId: USER,
+          scopes: ['openid', ...ALL_ADMIN_SCOPES],
+          aud: ADMIN,
+          dpopBound,
+        })
+      ).resolves.toEqual({
+        scopes: ['openid'],
+        withheld: ALL_ADMIN_SCOPES,
+        audienceRefused: true,
+        proofMissing: false,
+      });
+    }
+  });
+
+  it('asks for no proof when the grants allow none of the admin scopes asked for', async () => {
+    const fastify = server([grant(REALM_A, 'viewer')]);
+    await expect(
+      adminIssuance(fastify, {
+        realmId: OPERATOR,
+        client: ADMIN_CLIENT,
+        userId: USER,
+        scopes: ['openid', 'qauth:admin:security'],
+        aud: 'https://api.example.com',
+        dpopBound: false,
+      })
+    ).resolves.toEqual({
+      scopes: ['openid'],
+      withheld: ['qauth:admin:security'],
+      audienceRefused: false,
+      proofMissing: false,
+    });
+  });
+
+  it('reads nothing and asks for no proof for a token with no qauth: scope and no admin audience', async () => {
+    const fastify = server([grant(null, 'security-admin')]);
+    await expect(
+      adminIssuance(fastify, {
+        realmId: OPERATOR,
+        client: ADMIN_CLIENT,
+        userId: USER,
+        scopes: ['openid'],
+        aud: 'https://api.example.com',
+        dpopBound: false,
+      })
+    ).resolves.toEqual({
+      scopes: ['openid'],
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: false,
+    });
+    expect(fastify.repositories.adminGrants.listLive).not.toHaveBeenCalled();
   });
 });
 

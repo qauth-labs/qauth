@@ -156,7 +156,8 @@ log "starting auth-server on http://localhost:${PORT}"
 
 healthy=false
 for _ in $(seq 1 90); do
-  body="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/health" 2>/dev/null || true)"
+  # Ready, not only alive: /ready answers 200 once Postgres, Redis and the KEK do.
+  body="$(curl -fsS --max-time 2 "http://127.0.0.1:${PORT}/ready" 2>/dev/null || true)"
   case "$body" in
     *'"status":"ok"'*)
       healthy=true

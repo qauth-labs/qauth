@@ -1018,8 +1018,8 @@ different cache policies. Two paths, two schemas.
 
 **Decision — the tiles aggregate from `audit_logs`, never from the Prometheus registry.** The
 registry is a per-process `Registry` instance created at plugin registration
-(`apps/auth-server/src/app/plugins/metrics.ts:46`) and served by `GET /metrics`
-(`apps/auth-server/src/app/routes/metrics.ts:22`). It is process-local, it resets on restart, and
+(`apps/auth-server/src/app/plugins/metrics.ts:46`) and served by `GET /internal/metrics` on the
+internal listener (`apps/auth-server/src/app/internal/routes/metrics.ts`). It is process-local, it resets on restart, and
 behind replicas each process holds a different partial count. It is also global — it has no notion
 of which developer owns what — so it could not answer a per-developer question even if it were
 durable. `audit_logs` is durable, attributable and indexed. See
@@ -1106,8 +1106,9 @@ and would not throttle a single developer looping from many addresses.
   absorbs repeat traffic, so this only bounds a caller deliberately missing the cache.
 
 Both are ordinary `config.rateLimit` blocks in the route definition, the same mechanism
-`POST /api/clients` uses. Neither is rate-limit-exempt: `GET /metrics` is exempt because a scraper
-polls it (`apps/auth-server/src/app/routes/metrics.ts:31`), and that reasoning does not transfer to a
+`POST /api/clients` uses. Neither is rate-limit-exempt: `GET /internal/metrics` has no rate limit
+because a scraper polls it, on a listener that admits only known peers
+(`apps/auth-server/src/app/internal/routes/metrics.ts`), and that reasoning does not transfer to a
 developer-facing endpoint.
 
 **Decision — the tiles render an "as of" relative timestamp.** A number that can be 60 seconds

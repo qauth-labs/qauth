@@ -26,8 +26,9 @@ export const observabilityEnvSchema = z.object({
   REQUEST_ID_HEADER: z.string().min(1).default('x-request-id'),
 
   /**
-   * Enable the Prometheus `GET /metrics` endpoint. Defaults to on; set to
-   * `false` to suppress the route (e.g. when metrics are scraped out of band).
+   * Enable the Prometheus metrics endpoint, `GET /internal/metrics` on the
+   * internal listener (#500). Defaults to on, and then every process runs
+   * the internal listener; set to `false` to serve no metrics.
    */
   METRICS_ENABLED: z
     .enum(['true', 'false', '1', '0'])

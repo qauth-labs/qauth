@@ -19,6 +19,7 @@ import {
   describeServiceRoles,
   internalListenerPlan,
   isKeyMaterialVariable,
+  isLoopbackHost,
   isSingleProcess,
   pluginsFor,
   repositoriesFor,
@@ -30,7 +31,20 @@ import {
   type ServiceRoleSettings,
 } from './service-roles';
 
-/** The settings of a process with `roles` that reaches the signer service. */
+/** INTERNAL_PEER_ROLES as the configuration reads it. */
+const PEER_ROLES = internalListenerEnvSchema.parse({
+  INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
+}).INTERNAL_PEER_ROLES;
+
+/** INTERNAL_PEER_ROLES naming a metrics scraper only (#500). */
+const METRICS_PEERS = internalListenerEnvSchema.parse({
+  INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/prometheus': 'metrics' }),
+}).INTERNAL_PEER_ROLES;
+
+/**
+ * The settings of a process with `roles` that reaches the signer service, and
+ * serves its metrics to a scraper on the internal listener (#500).
+ */
 function splitSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRoleSettings {
   return {
     SERVICE_ROLES: roles,
@@ -38,13 +52,9 @@ function splitSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRole
     INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
     INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
     INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+    INTERNAL_PEER_ROLES: METRICS_PEERS,
   };
 }
-
-/** INTERNAL_PEER_ROLES as the configuration reads it. */
-const PEER_ROLES = internalListenerEnvSchema.parse({
-  INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
-}).INTERNAL_PEER_ROLES;
 
 /** A split process holding the signer, with its internal listener's mutual TLS. */
 function signerSettings(roles: ServiceRoleSettings['SERVICE_ROLES']): ServiceRoleSettings {
@@ -357,12 +367,25 @@ describe('checkServiceRoles', () => {
   });
 
   it('requires SIGNER_URL and the internal TLS files without the signer', () => {
-    const check = checkServiceRoles({ SERVICE_ROLES: ['delivery'] }, {});
+    const check = checkServiceRoles({ SERVICE_ROLES: ['delivery'], METRICS_ENABLED: false }, {});
     expect(check.problems.map((problem) => problem.variable)).toEqual([
       'SIGNER_URL',
       'INTERNAL_TLS_CERT_PATH',
       'INTERNAL_TLS_KEY_PATH',
       'INTERNAL_TLS_CA_PATH',
+    ]);
+    // With the metrics on, the internal listener needs the same files and a
+    // peer: each file is named once.
+    expect(
+      checkServiceRoles({ SERVICE_ROLES: ['delivery'] }, {}).problems.map(
+        (problem) => problem.variable
+      )
+    ).toEqual([
+      'INTERNAL_TLS_CERT_PATH',
+      'INTERNAL_TLS_KEY_PATH',
+      'INTERNAL_TLS_CA_PATH',
+      'INTERNAL_PEER_ROLES',
+      'SIGNER_URL',
     ]);
   });
 
@@ -391,22 +414,95 @@ describe('checkServiceRoles', () => {
 });
 
 describe('the internal listener (#496)', () => {
-  it('runs on a process that holds the signer while the roles are split, and only there', () => {
+  it('runs on a process that holds the signer while the roles are split, and only there, with the metrics off', () => {
     expect(isSingleProcess(SERVICE_ROLE_NAMES)).toBe(true);
     expect(isSingleProcess(['web', 'api', 'admin', 'signer'])).toBe(false);
-    expect(servesInternalListener(SERVICE_ROLE_NAMES)).toBe(false);
+    expect(servesInternalListener(SERVICE_ROLE_NAMES, [])).toBe(false);
     for (const roles of [
       ['signer'],
       ['api', 'signer'],
       ['web', 'api', 'admin', 'signer'],
     ] as const) {
-      expect(servesInternalListener(roles), roles.join()).toBe(true);
+      expect(servesInternalListener(roles, []), roles.join()).toBe(true);
     }
     for (const roles of [['web'], ['api'], ['admin'], ['delivery'], ['web', 'api']] as const) {
-      expect(servesInternalListener(roles), roles.join()).toBe(false);
+      expect(servesInternalListener(roles, []), roles.join()).toBe(false);
     }
-    expect(internalListenerPlan({ SERVICE_ROLES: SERVICE_ROLE_NAMES })).toEqual({ serves: false });
-    expect(internalListenerPlan(splitSettings(['web']))).toEqual({ serves: false });
+    expect(
+      internalListenerPlan({ SERVICE_ROLES: SERVICE_ROLE_NAMES, METRICS_ENABLED: false })
+    ).toEqual({ serves: false });
+    expect(internalListenerPlan({ ...splitSettings(['web']), METRICS_ENABLED: false })).toEqual({
+      serves: false,
+    });
+  });
+
+  it('runs on every process while METRICS_ENABLED is on, for the metrics (#500)', () => {
+    for (const roles of [
+      SERVICE_ROLE_NAMES,
+      ['web'],
+      ['api'],
+      ['admin'],
+      ['delivery'],
+      ['signer'],
+    ] as const) {
+      expect(servesInternalListener(roles), roles.join()).toBe(true);
+    }
+    // A process without the signer serves the metrics over its mutual TLS.
+    expect(internalListenerPlan(splitSettings(['web']))).toEqual({
+      serves: true,
+      problems: [],
+      host: '127.0.0.1',
+      port: 3443,
+      peerRoles: METRICS_PEERS,
+      tls: {
+        certPath: '/run/secrets/internal.crt',
+        keyPath: '/run/secrets/internal.key',
+        caPath: '/run/secrets/internal-ca.crt',
+      },
+    });
+    // Without a peer to admit, it names INTERNAL_PEER_ROLES, and the way out.
+    const check = checkServiceRoles(
+      { ...splitSettings(['web']), INTERNAL_PEER_ROLES: undefined },
+      {}
+    );
+    expect(check.problems.map((problem) => problem.variable)).toEqual(['INTERNAL_PEER_ROLES']);
+    expect(check.problems[0]?.message).toContain('serves its metrics on the internal listener');
+    expect(check.problems[0]?.message).toContain('or set METRICS_ENABLED=false');
+  });
+
+  it('serves the metrics of a single process in plain HTTP on a loopback address without the TLS files (#500)', () => {
+    for (const host of [undefined, '127.0.0.1', '127.0.0.2', 'localhost', '::1', '[::1]']) {
+      expect(
+        internalListenerPlan({ SERVICE_ROLES: SERVICE_ROLE_NAMES, INTERNAL_HOST: host }),
+        String(host)
+      ).toEqual({
+        serves: true,
+        problems: [],
+        host: host ?? '127.0.0.1',
+        port: 3443,
+        peerRoles: new Map(),
+        plainHttpPeerRole: 'metrics',
+      });
+    }
+    // Any other address needs mutual TLS.
+    for (const host of ['0.0.0.0', '::', '10.0.0.5', 'metrics.internal']) {
+      const plan = internalListenerPlan({ SERVICE_ROLES: SERVICE_ROLE_NAMES, INTERNAL_HOST: host });
+      expect(plan.serves && plan.problems.map((problem) => problem.variable), host).toEqual([
+        'INTERNAL_HOST',
+      ]);
+    }
+    // With the TLS files, mutual TLS on any address, and no plain HTTP.
+    const plan = internalListenerPlan({
+      SERVICE_ROLES: SERVICE_ROLE_NAMES,
+      INTERNAL_HOST: '0.0.0.0',
+      INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
+      INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
+      INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+      INTERNAL_PEER_ROLES: METRICS_PEERS,
+    });
+    expect(plan.serves && plan.problems).toEqual([]);
+    expect(plan).not.toHaveProperty('plainHttpPeerRole');
+    expect(plan).toHaveProperty('tls');
   });
 
   it('serves mutual TLS with the three files and the peer roles, on loopback by default', () => {
@@ -441,7 +537,7 @@ describe('the internal listener (#496)', () => {
     ]);
     const error = new ServiceRoleBootError(check.problems);
     expect(error.message).toContain(
-      'INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so the signer routes are not registered without it'
+      'INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so no internal route is registered without it'
     );
   });
 
@@ -511,8 +607,8 @@ describe('the internal listener (#496)', () => {
     ).toEqual([]);
   });
 
-  it('runs no internal listener in a single process, even once a role of its own serves an internal route', () => {
-    // No module ships until #497; a signer module and an api one stand in.
+  it('runs no internal listener in a single process for a module of its own roles, only for the metrics', () => {
+    // No such module ships until #497; a signer module and an api one stand in.
     const load = async () => ({ default: async () => undefined });
     const modules = [
       {
@@ -548,8 +644,39 @@ describe('the internal listener (#496)', () => {
     ]);
   });
 
-  it('keeps a process without the signer as it was: no listener, its client settings only', () => {
+  it('runs a listener on a process without the signer for its metrics only (#500)', () => {
     expect(checkServiceRoles(splitSettings(['web']), {}).problems).toEqual([]);
+    expect(internalListenerPlan({ ...splitSettings(['web']), METRICS_ENABLED: false })).toEqual({
+      serves: false,
+    });
+  });
+});
+
+describe('isLoopbackHost', () => {
+  it('admits localhost, 127.0.0.0/8 and ::1, and nothing else', () => {
+    for (const host of [
+      'localhost',
+      'LocalHost',
+      '127.0.0.1',
+      '127.1.2.3',
+      '::1',
+      '[::1]',
+      '0:0:0:0:0:0:0:1',
+    ]) {
+      expect(isLoopbackHost(host), host).toBe(true);
+    }
+    for (const host of [
+      '0.0.0.0',
+      '::',
+      '10.0.0.1',
+      '128.0.0.1',
+      '::ffff:127.0.0.1',
+      'localhost.',
+      'example.com',
+      '',
+    ]) {
+      expect(isLoopbackHost(host), host).toBe(false);
+    }
   });
 });
 
