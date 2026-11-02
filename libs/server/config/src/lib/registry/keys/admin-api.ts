@@ -13,7 +13,7 @@ export const ADMIN_API_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: "The URL clients call the admin API's listener at, such as `https://admin.auth.example.com`, with a path when a proxy serves the listener under one and strips it; every admin call carries a DPoP proof whose `htu` must be this URL followed by the request's path, never a URL taken from the request, and a process that runs the listener refuses to start without it.",
+    docs: "The URL clients call the admin API's listener at, such as `https://admin.auth.example.com`, with a path when a proxy serves the listener under one and strips it; every admin call carries a DPoP proof whose `htu` must be this URL followed by the request's path, never a URL taken from the request, and a process that runs the listener refuses to start without it; in production it must be `https` (terminate TLS in front of the listener), unless both it and `ADMIN_API_HOST` name loopback.",
   },
   {
     name: 'ADMIN_API_ENABLED',

@@ -105,7 +105,7 @@ describe('the admin listener port', () => {
  * Admin tokens are DPoP-bound (#520): a process that runs the admin listener
  * needs DPoP and the base URL the proofs name, and listens wherever the
  * operator binds it, in production too (the loopback-only rule of #511 held
- * until then).
+ * until then), behind an https base URL there.
  */
 describe('the admin listener address, base URL and DPoP', () => {
   const parse = (extra: Record<string, string>) =>
@@ -137,6 +137,45 @@ describe('the admin listener address, base URL and DPoP', () => {
       ).toBeUndefined();
     }
   );
+
+  it('refuses a plain http base URL in production, unless it and the listener are loopback', () => {
+    const production = { ...listener, NODE_ENV: 'production' };
+    for (const [baseUrl, host] of [
+      ['http://admin.auth.example.com', '127.0.0.1'],
+      ['http://10.0.4.12:3002', '0.0.0.0'],
+      // A loopback URL names nothing a remote caller could not name too.
+      ['http://127.0.0.1:3002', '0.0.0.0'],
+    ]) {
+      const issue = issueOn('ADMIN_API_BASE_URL', {
+        ...production,
+        ADMIN_API_BASE_URL: baseUrl,
+        ADMIN_API_HOST: host,
+      });
+      expect(issue?.message).toContain('must be an https URL in production (#520)');
+    }
+    for (const [baseUrl, host] of [
+      ['https://admin.auth.example.com', '0.0.0.0'],
+      ['http://127.0.0.1:3002', '127.0.0.1'],
+      ['http://localhost:3002', 'localhost'],
+      ['http://[::1]:3002', '::1'],
+    ]) {
+      expect(
+        issueOn('ADMIN_API_BASE_URL', {
+          ...production,
+          ADMIN_API_BASE_URL: baseUrl,
+          ADMIN_API_HOST: host,
+        })
+      ).toBeUndefined();
+    }
+    // Outside production, any http base URL.
+    expect(
+      issueOn('ADMIN_API_BASE_URL', {
+        ...listener,
+        ADMIN_API_BASE_URL: 'http://admin.qauth.test',
+        ADMIN_API_HOST: '0.0.0.0',
+      })
+    ).toBeUndefined();
+  });
 
   it('accepts a process that runs the listener with DPoP on and a base URL', () => {
     expect(issueOn('ADMIN_API_BASE_URL', listener)).toBeUndefined();

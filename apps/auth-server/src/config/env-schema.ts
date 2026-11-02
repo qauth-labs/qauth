@@ -1,3 +1,5 @@
+import { BlockList, isIPv4, isIPv6 } from 'node:net';
+
 import {
   adminApiEnvSchema,
   assuranceEnvSchema,
@@ -37,6 +39,20 @@ import { z } from 'zod';
  * would starve the requests of any role.
  */
 export const JOBS_MIN_DB_POOL_MAX = 2;
+
+/** The loopback addresses: 127.0.0.0/8 and ::1. */
+const LOOPBACK = new BlockList();
+LOOPBACK.addSubnet('127.0.0.0', 8, 'ipv4');
+LOOPBACK.addAddress('::1', 'ipv6');
+
+/** Whether `host`, an address, a name or a URL's bracketed IPv6 host, is loopback or `localhost`. */
+function isLoopbackHost(host: string): boolean {
+  const bare = host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
+  if (bare.toLowerCase() === 'localhost') return true;
+  if (isIPv4(bare)) return LOOPBACK.check(bare, 'ipv4');
+  if (isIPv6(bare)) return LOOPBACK.check(bare, 'ipv6');
+  return false;
+}
 
 /**
  * Auth server environment schema
@@ -247,6 +263,23 @@ export const envSchema = z
           message:
             'DPOP_ENABLED must be true where the admin API runs: every admin call carries a DPoP-bound admin token (#520).',
         });
+      }
+      // A proof binds the call's method and URL, not its body or its answer:
+      // in production the calls travel over TLS. Plain http only to a
+      // listener reached from this machine alone, as through an SSH tunnel.
+      if (env.NODE_ENV === 'production' && env.ADMIN_API_BASE_URL !== undefined) {
+        const base = new URL(env.ADMIN_API_BASE_URL);
+        if (
+          base.protocol === 'http:' &&
+          !(isLoopbackHost(base.hostname) && isLoopbackHost(env.ADMIN_API_HOST))
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['ADMIN_API_BASE_URL'],
+            message:
+              'ADMIN_API_BASE_URL must be an https URL in production (#520): a DPoP proof binds an admin call to its method and URL, not to its body, so the calls travel over TLS. Plain http is allowed only when both it and ADMIN_API_HOST name loopback.',
+          });
+        }
       }
     }
 
