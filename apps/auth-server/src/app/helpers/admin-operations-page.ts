@@ -192,7 +192,8 @@ operation of the OpenAPI document as \`x-qauth-effects\`
 - A security operation runs only with a fresh approval bound to that exact request
   ([API conventions](/reference/api-conventions/#approvals)). So each one an admin route performs
   registers a renderer (\`render\`): what its approver is shown of one request, typed display data
-  built from the stored request alone. The admin listener refuses to boot such a route without
+  built from the filed request alone, when the approval is filed. The approval stores it, and never
+  the body. The admin listener refuses to boot such a route without
   one. Filing an approval (\`approvals.create\`) and withdrawing one (\`approvals.cancel\`) need
   what the operation it is for needs, so they declare every effect and permission and decide per
   request; they are the only security operations that run without an approval.

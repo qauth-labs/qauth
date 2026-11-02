@@ -1,6 +1,6 @@
 import type { AdminApproval } from '@qauth-labs/fastify-plugin-db';
 
-import { sameDigest } from './canonical-request';
+import { type CanonicalRequest, opHashOf, sameDigest } from './canonical-request';
 
 /**
  * THE APPROVAL GATE'S DECISION (ADR-019 Decision 7, issue #512). Pure: the
@@ -19,11 +19,11 @@ export const APPROVAL_HEADER = 'qauth-approval';
  * - `malformed-header`: `QAuth-Approval` is not one UUID.
  * - `uncanonical-request`: the call has no canonical form, such as a binary body.
  * - `not-found`: no approval of the realm has that id.
+ * - `denied`, `cancelled`, `consumed`, `expired`: the approval is closed. Its
+ *   nonce was overwritten then, so no call matches it any more.
  * - `request-mismatch`: the approval was filed for another request: another
  *   operation, method, path parameter, query, body, realm or requester.
- * - `expired`: its five minutes are over.
- * - `pending`, `denied`, `cancelled`, `consumed`: where it stands instead of
- *   `approved`.
+ * - `pending`: it still lacks an approval.
  * - `used-meanwhile`: it was approved when the gate read it, and used or
  *   withdrawn before the operation's transaction could consume it.
  */
@@ -48,19 +48,25 @@ export function approvalIdOf(header: string | string[] | undefined): string | nu
   return UUID.test(value) ? value.toLowerCase() : null;
 }
 
+/** What the gate reads of a stored approval. */
+export type GatedApprovalRecord = Pick<AdminApproval, 'opHash' | 'nonce' | 'status' | 'expiresAt'>;
+
 /**
- * Why `approval` does not approve the call whose `request_hash` is
- * `requestHash` at `now`, or `null` when it does: it exists in the realm, was
- * filed for exactly this request by this requester, has not expired, and is
- * `approved`.
+ * Why `approval` does not approve the call whose canonical request is
+ * `request` at `now`, or `null` when it does: it exists in the realm, is open,
+ * the call's `op_hash` with the approval's nonce is the stored one (exactly
+ * this request, by this requester), it has not expired, and it is `approved`.
  */
 export function approvalRefusal(
-  approval: Pick<AdminApproval, 'requestHash' | 'status' | 'expiresAt'> | undefined,
-  requestHash: Buffer,
+  approval: GatedApprovalRecord | undefined,
+  request: CanonicalRequest,
   now: number
 ): ApprovalRefusal | null {
   if (approval === undefined) return 'not-found';
-  if (!sameDigest(approval.requestHash, requestHash)) return 'request-mismatch';
+  // A closed approval's nonce is not the one its op_hash was computed with:
+  // every call would be a mismatch, so its status is the reason.
+  if (approval.status !== 'pending' && approval.status !== 'approved') return approval.status;
+  if (!sameDigest(opHashOf(request, approval.nonce), approval.opHash)) return 'request-mismatch';
   if (now >= approval.expiresAt) return 'expired';
   if (approval.status !== 'approved') return approval.status;
   return null;

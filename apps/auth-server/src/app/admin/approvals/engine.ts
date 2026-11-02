@@ -3,11 +3,10 @@ import { ForbiddenError, NotFoundError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
 import { resolveAdminAuthority } from '../../helpers/admin-authority';
-import { OPERATION_REGISTRY, type OperationRegistry } from '../../helpers/admin-operations';
 import { ADMIN_SCOPE_LIST } from '../../helpers/admin-scopes';
 import { ApprovalStateError } from '../../helpers/approval-required';
 import { buildRealmUrl, type RealmUrlSource } from '../../helpers/realm-url';
-import { type DisplayField, type OperationDisplay, renderOperation } from './display';
+import { type DisplayField, type OperationDisplay, storedDisplay } from './display';
 import {
   type ApprovalChallenge,
   type ApprovalFactor,
@@ -89,17 +88,16 @@ export function approvalsRequiredFor(): number {
 }
 
 /**
- * The display data of `approval` while it is open, rendered from the stored
- * request (`renderOperation`); `null` once it is used, cancelled, denied or
- * expired: no approver is shown it any more, and its body may be gone.
+ * The display data of `approval` while it is open: what the operation's
+ * renderer made of the request when it was filed, as stored then
+ * ({@link storedDisplay}); `null` once it is used, cancelled, denied or
+ * expired, since no approver is shown it any more.
+ *
+ * @throws {ApprovalRenderError} when an open approval stored no display data
  */
-export function openApprovalDisplay(
-  approval: AdminApproval,
-  registry: OperationRegistry,
-  now: number
-): OperationDisplay | null {
+export function openApprovalDisplay(approval: AdminApproval, now: number): OperationDisplay | null {
   const status = shownStatus(approval, now);
-  return status === 'pending' || status === 'approved' ? renderOperation(approval, registry) : null;
+  return status === 'pending' || status === 'approved' ? storedDisplay(approval.display) : null;
 }
 
 /** What a factor sees of `approval`. */
@@ -139,8 +137,8 @@ export interface ApprovalResource {
   readonly usedAt: string | null;
   readonly approvalUrl: string;
   /**
-   * The operation as an approver sees it, while the approval is open
-   * (`pending` or `approved`); `null` once it is not, its body dropped.
+   * The operation as an approver sees it, as stored when the approval was
+   * filed, while it is open (`pending` or `approved`); `null` once it is not.
    */
   readonly display: (Omit<OperationDisplay, 'fields'> & { readonly fields: DisplayField[] }) | null;
 }
@@ -156,15 +154,14 @@ export function approvalResource(
     readonly display: OperationDisplay | null;
   }
 ): ApprovalResource {
-  const stored = approval.canonicalRequest;
   return {
     id: approval.id,
     realmId: approval.realmId,
     status: shownStatus(approval, context.now),
     operation: approval.operationId,
-    method: String(stored['method']),
-    params: (stored['params'] ?? {}) as Record<string, unknown>,
-    query: (stored['query'] ?? {}) as Record<string, unknown>,
+    method: approval.method,
+    params: approval.params,
+    query: approval.query,
     reason: approval.reason,
     requester: {
       kind: approval.requesterKind,
@@ -276,8 +273,6 @@ export interface ApprovalDecision {
 
 /** Options of the engine's functions. */
 export interface ApprovalEngineOptions {
-  /** The registry the approval's operation renders from. Defaults to the server's own. */
-  readonly registry?: OperationRegistry;
   /** The clock, in epoch milliseconds. Defaults to `Date.now`. */
   readonly now?: () => number;
 }
@@ -357,7 +352,8 @@ async function approvalTheApproverMayDecide(
 
 /**
  * Begin an approval on the approval page: the challenge the approver's
- * factor answers, and the operation as the page shows it.
+ * factor answers, and the operation as the page shows it, as stored when the
+ * approval was filed.
  *
  * @throws as {@link completeApproval} does, before the factor is asked
  */
@@ -373,7 +369,7 @@ export async function startApproval(
 }> {
   const now = (options.now ?? Date.now)();
   const { approval, approver } = await approvalTheApproverMayDecide(fastify, decision, now);
-  const display = renderOperation(approval, options.registry ?? OPERATION_REGISTRY);
+  const display = storedDisplay(approval.display);
   const challenge = await factor.createChallenge(approvalForFactor(approval), approver);
   return { challenge, display, expiresAt: approval.expiresAt };
 }

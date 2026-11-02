@@ -131,9 +131,11 @@ export interface ClassifyInput {
 }
 
 /**
- * What `render` sees of a request an approval was filed for: the stored
- * canonical request's operation id, method, path parameters, query and body,
- * frozen. Nothing the requester wrote about it (the reason) is in it.
+ * What `render` sees of a request an approval is filed for: the canonical
+ * request's operation id, method, path parameters, query and body, frozen.
+ * Nothing the requester wrote about it (the reason) is in it. It runs once,
+ * when the approval is filed; the approval stores what it returns, and never
+ * the body.
  */
 export interface RenderInput {
   readonly operationId: string;
@@ -204,12 +206,13 @@ export interface AdminOperationDefinition<State = unknown> {
    */
   stateVersion?(state: State): string;
   /**
-   * What an approver is shown of one request (#512), from the stored request
-   * alone: pure and synchronous. Required on every security operation an
-   * admin route performs: the admin pipeline refuses to boot such a route
-   * without it. Only a security operation renders. Every reader of the
-   * approval gets what it returns, so it never shows a secret value of the
-   * request, such as a credential the body sets: it says one is set.
+   * What an approver is shown of one request (#512), from the filed request
+   * alone, once, when the approval is filed: pure and synchronous. Required
+   * on every security operation an admin route performs: the admin pipeline
+   * refuses to boot such a route without it. Only a security operation
+   * renders. The approval stores what it returns, and every reader of the
+   * approval gets it, so it never shows a secret value of the request, such
+   * as a credential the body sets: it says one is set.
    */
   render?(request: RenderInput): RenderedOperation;
 }

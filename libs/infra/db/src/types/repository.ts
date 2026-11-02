@@ -1512,7 +1512,7 @@ export interface AdminAuditEntry {
   diff?: { change: AdminAuditDiff; annotations: FieldAnnotations } | null;
   /** The approvals the operation ran on, with the members their type names only. */
   approvals?: readonly AdminAuditApproval[];
-  /** SHA-256 (32 bytes) of the canonical request an approval is bound to. */
+  /** The approval's `op_hash` (32 bytes): SHA-256 of its canonical request with its nonce. */
   requestDigest?: Buffer | null;
   /** The id under which QAuth logged the request, at most 128 characters. */
   traceId?: string | null;

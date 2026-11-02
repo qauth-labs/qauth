@@ -106,7 +106,8 @@ export type ApprovalShownStatus = AdminApproval['status'] | 'expired';
 
 /**
  * The status the API shows at `now`: an approval that was never used, denied
- * or cancelled is `expired` from its expiry on, whatever its stored status.
+ * or cancelled is `expired` from its expiry on, whatever its stored status,
+ * before the expiry sweep stores `expired` on it too.
  */
 export function shownStatus(
   approval: Pick<AdminApproval, 'status' | 'expiresAt'>,
@@ -129,7 +130,9 @@ export function approvalVersion(approval: Pick<AdminApproval, 'status' | 'approv
 export function parseApprovalVersion(
   version: string
 ): { readonly status: AdminApproval['status']; readonly approvalCount: number } | undefined {
-  const match = /^(pending|approved|denied|cancelled|consumed)\.(0|[1-9][0-9]?)$/.exec(version);
+  const match = /^(pending|approved|denied|cancelled|consumed|expired)\.(0|[1-9][0-9]?)$/.exec(
+    version
+  );
   if (match === null) return undefined;
   return { status: match[1] as AdminApproval['status'], approvalCount: Number(match[2]) };
 }

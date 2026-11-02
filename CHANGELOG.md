@@ -1433,14 +1433,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parameters, query and body, and an optional reason), reads it with
   `GET …/approvals/{approvalId}` and may withdraw it with
   `POST …/approvals/{approvalId}/cancel` (`If-Match` on the version its `ETag`
-  gave). Migration 0045 adds `admin_approvals`. The server keeps the canonical
-  request (operation id, method, path parameters, query, body, realm and
-  requester, RFC 8785): `request_hash` without the server's nonce, which the
-  gate recomputes from the retried call, and `op_hash` with it, which an
-  approver's factor signs a challenge derived from. The retry consumes the
-  approval with one conditional update in its own transaction, so it runs once,
-  and an operation that rolls back leaves the approval usable until it expires,
-  five minutes after it was filed. Filing and withdrawing take the
+  gave). Migration 0045 adds `admin_approvals`, and 0054 ([#901]) takes the
+  request body out of it. An approval binds the canonical request (operation
+  id, method, path parameters, query, body, realm and requester, RFC 8785)
+  through `op_hash`, its SHA-256 with a nonce the server draws: the gate
+  computes the retried call's `op_hash` with the stored nonce and compares the
+  two, and an approver's factor signs a challenge derived from it. The
+  approval keeps the method, path parameters and query, never the body, which
+  may hold a secret, and no hash of the request without the nonce. The retry
+  consumes the approval with one conditional update in its own transaction, so
+  it runs once, and an operation that rolls back leaves the approval usable
+  until it expires, five minutes after it was filed. Filing and withdrawing take the
   classification of the operation they name, reading needs `approvals.read`,
   and anyone but the requester and an eligible approver gets 404. A human
   requester's own fresh step-up is the one approval an operation needs today;
@@ -1455,13 +1458,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carries `approvalUrl`, `/approvals/{realmId}/{approvalId}` on the requester
   realm's issuer, built from its row. Every security
   operation registers a renderer, and the admin listener refuses to boot one
-  without it: the approver sees typed display data rendered from the stored
-  request, every string length-capped with its control, bidirectional, format
-  and other default-ignorable characters, private-use and unassigned code
+  without it: the approver sees typed display data rendered from the request
+  when the approval is filed and stored with it, every string length-capped
+  with its control, bidirectional, format and other default-ignorable
+  characters, private-use and unassigned code
   points and spaces other than U+0020 shown escaped and its backslashes
   doubled, and the requester's reason apart, as quoted text. A consumed,
-  cancelled or denied approval drops the operation's body, which may hold a
-  secret; no job removes approvals, so one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
+  cancelled, denied or expired approval has its nonce overwritten with random
+  bytes, so neither its `op_hash` nor the audit log's copy of it can be tested
+  against a guessed body (a dump, replica or WAL archive taken while it was
+  open still holds both, so a secret that can be guessed is safe in a body
+  only as long as those copies are); the `approval-expiry` job, every minute on the
+  `admin` role, stores `expired` on one that expired unused. No job removes
+  approvals.
   Filing, approving, declining, withdrawing and consuming each write the admin
   audit log; the operation's own row lists the approvals it ran on.
 - **Operator-set first-party client profiles** ([#631], ADR-017 Decision 2).
@@ -2795,6 +2804,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#857]: https://github.com/qauth-labs/qauth/issues/857
 [#891]: https://github.com/qauth-labs/qauth/issues/891
 [#896]: https://github.com/qauth-labs/qauth/issues/896
+[#901]: https://github.com/qauth-labs/qauth/issues/901
 [#908]: https://github.com/qauth-labs/qauth/issues/908
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963

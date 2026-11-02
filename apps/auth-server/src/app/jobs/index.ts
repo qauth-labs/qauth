@@ -6,6 +6,11 @@ import {
 import type { FastifyInstance } from 'fastify';
 
 import {
+  APPROVAL_EXPIRY_JOB_NAME,
+  APPROVAL_EXPIRY_ROLE,
+  createApprovalExpiryJob,
+} from './approval-expiry';
+import {
   createEventRetentionJob,
   EVENT_RETENTION_JOB_NAME,
   EVENT_RETENTION_ROLE,
@@ -41,6 +46,7 @@ import {
 } from './ssf-subject-sweep';
 
 export * from './advisory-lock';
+export * from './approval-expiry';
 export * from './event-retention';
 export * from './interaction-expiry';
 export * from './job-runner';
@@ -112,6 +118,14 @@ export const SERVER_JOBS: readonly ServerJobPlacement[] = [
     role: SSF_SUBJECT_SWEEP_ROLE,
     repositories: ['ssfStreams'],
     create: (fastify) => createSsfSubjectSweepJob(fastify.repositories),
+  },
+  {
+    // The approvals for security operations that expired unused (#901):
+    // marked expired, their nonce overwritten.
+    name: APPROVAL_EXPIRY_JOB_NAME,
+    role: APPROVAL_EXPIRY_ROLE,
+    repositories: ['adminApprovals'],
+    create: (fastify) => createApprovalExpiryJob(fastify.repositories),
   },
   {
     // The Interaction API's expired interactions (#592): audited and cleared.
