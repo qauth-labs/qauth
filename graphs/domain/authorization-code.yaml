@@ -22,8 +22,9 @@ actions:
       - 'it waits for a redemption in flight, which holds its code row until the refresh token it mints is committed'
 
   AuthorizationCode.mint:
-    # internal: invoked by core.consent and by the consent skip of /oauth/authorize (not graphed yet), with no route
-    # and no actor policy; mintAuthorizationCode is the one place every code is minted (ADR-017 Decision 10)
+    # internal: invoked by core.consent and by core.authorization (the consent skip of /oauth/authorize, and the finish
+    # of its interaction), with no route and no actor policy; mintAuthorizationCode is the one place every code is
+    # minted (ADR-017 Decision 10)
     source: apps/auth-server/src/app/helpers/authorization-code.ts:103
     body:
       type: object
