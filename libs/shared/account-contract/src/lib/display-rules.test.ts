@@ -225,7 +225,6 @@ describe('the display rule (ADR-019 Decision 6)', () => {
       .map(({ at }) => at);
     expect(declared.sort()).toEqual(
       [
-        'ClientDisplay.declaredName',
         'ClientReference.client_id',
         'ClientReference.client_name',
         'Consent.client_id',

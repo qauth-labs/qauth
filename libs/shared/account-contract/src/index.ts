@@ -35,7 +35,6 @@ export {
   type SecurityLogKindName,
   type SecurityLogSource,
 } from './lib/security-log';
-// The copies of the Interaction API contract's builders and client display,
-// which the auth server's tests keep equal to the originals.
-export { assetSchema, clientDisplaySchema, EXAMPLE_CLIENT } from './lib/client-display';
+// The copy of the Interaction API contract's builders, which the auth
+// server's tests keep equal to the originals.
 export * from './lib/schema-kit';

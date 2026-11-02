@@ -58,5 +58,5 @@ checks that need one run in the auth server's `api-conventions/account-contract.
 document against the official OpenAPI 3.1 schema (the Interaction API contract's vendored copy) and
 the API conventions check; the security log's kinds against the event registry, both ways; the
 problem codes, the prefix and the audience against the server's tables; the served account
-operations against the contract; and the copies of `schema-kit.ts` and `ClientDisplay` against the
-Interaction API contract's originals.
+operations against the contract; and the copy of `schema-kit.ts` against the Interaction API
+contract's original.

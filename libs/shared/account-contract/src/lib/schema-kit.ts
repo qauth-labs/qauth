@@ -83,30 +83,8 @@ export function dateTime(description: string): JsonSchema {
   };
 }
 
-/** A DNS host name in its ASCII form (IDNs as `xn--` labels), lower case. */
-export function host(description: string): JsonSchema {
-  return {
-    type: 'string',
-    minLength: 1,
-    maxLength: 253,
-    pattern: '^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)*[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$',
-    description,
-  };
-}
-
 /** Printable ASCII without space, `"`, `<`, `>` and `\`: the characters a URI may carry unescaped. */
 const URI_CHARACTERS = '[!#-;=?-\\[\\]-~]';
-
-/** An `https` URL. */
-export function httpsUrl(maxLength: number, description: string): JsonSchema {
-  return {
-    type: 'string',
-    format: 'uri',
-    maxLength,
-    pattern: `^https://${URI_CHARACTERS}+$`,
-    description,
-  };
-}
 
 /**
  * An absolute URI of any scheme (a redirect to a native app uses its own
@@ -121,20 +99,6 @@ export function absoluteUri(maxLength: number, description: string): JsonSchema 
     maxLength,
     pattern: `^[a-z][a-z0-9+.-]*:${URI_CHARACTERS}+$`,
     not: { type: 'string', pattern: '^(?:javascript|data|vbscript|file|blob):' },
-    description,
-  };
-}
-
-/**
- * A path on the realm origin, such as `/ui/assets/logo-3f9a1c2e.svg`. Never
- * `//…`, which a browser reads as another host, and no `.` or `..` segment.
- */
-export function sameOriginPath(description: string): JsonSchema {
-  return {
-    type: 'string',
-    minLength: 2,
-    maxLength: 255,
-    pattern: '^(?:/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$',
     description,
   };
 }

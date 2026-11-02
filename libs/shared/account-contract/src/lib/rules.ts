@@ -56,7 +56,7 @@ export const VERSIONING_RULES: readonly string[] = [
 
 /** What the auth server serves today, and what the account API replaces. */
 export const STATUS_RULES: readonly string[] = [
-  `This document is the contract, published before the implementation. The auth server serves two of its operations today, \`account.consents.list\` and \`account.consents.delete\`; the others arrive with the account console’s backend. The served consent items do not carry \`client\` yet.`,
+  `This document is the contract, published before the implementation. The auth server serves two of its operations today, \`account.consents.list\` and \`account.consents.delete\`; the others arrive with the account console’s backend. The two served operations still answer errors with the auth server’s general problem document, which may carry \`detail\` and \`errors[].message\`; the implementation of this contract narrows them to its problem document.`,
   '`GET /consents` and `DELETE /consents/{id}`, which the hosted UI calls with the session cookie and an `X-CSRF-Token` header, are deprecated aliases of `account.consents.list` and `account.consents.delete`. They are removed when the account console replaces the hosted UI’s consents page.',
   '`GET /api/consents` and `DELETE /api/consents/{id}`, and their replacements `/developer/v1-rc.0/consents`, list and revoke a person’s consents with a developer-audience token. A person’s consents are managed in the account console, not the developer portal (ADR-020), so they are removed with the hosted UI’s routes, and `account.consents.*` is the only way left.',
 ];

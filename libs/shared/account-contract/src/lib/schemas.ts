@@ -691,12 +691,11 @@ export const consentSchema = object(
       'The app’s OAuth `client_id`, which may be a URL (a Client ID Metadata Document client).'
     ),
     client_name: displayText('declared', 255, 'The name the app declared about itself.'),
-    client: ref('ClientDisplay'),
     scopes: array(scopeToken, 0, 64, 'The scopes the person granted.'),
     grantedAt: dateTime('When the consent was first given.'),
   },
   ['id', 'client_id', 'client_name', 'scopes', 'grantedAt'],
-  'A connected app: an active consent the person gave. When `client` is present a console leads with it (its verified domain first, ADR-019 Decision 6); it always marks the declared name as declared. The consents the auth server serves today do not carry `client` yet.'
+  'A connected app: an active consent the person gave. `client_name` is what the app declared about itself, and a console marks it as declared (ADR-019 Decision 6). A later version may add the verified display data the Interaction API shows for a client, as an optional member.'
 );
 
 // ---------------------------------------------------------------------------

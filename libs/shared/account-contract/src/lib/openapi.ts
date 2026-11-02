@@ -1,4 +1,3 @@
-import { assetSchema, clientDisplaySchema } from './client-display';
 import {
   ACCOUNT_API_AUDIENCE,
   ACCOUNT_API_PREFIX,
@@ -415,8 +414,6 @@ export function buildAccountOpenApi(): OpenApiDocument {
         AddressChangeConfirmRequest: addressChangeConfirmRequestSchema,
         Consent: consentSchema,
         ConsentPage: PAGES.ConsentPage,
-        ClientDisplay: clientDisplaySchema,
-        Asset: assetSchema,
         DeletionPreview: deletionPreviewSchema,
         DeletionRequest: deletionRequestSchema,
         NotificationPreferences: notificationPreferencesSchema,

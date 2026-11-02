@@ -1,4 +1,3 @@
-import { EXAMPLE_CLIENT } from './client-display';
 import type { ActChainRule, FreshAuthenticationRule } from './identifiers';
 import { NOTICE_NAMES, NOTICES } from './notices';
 import { ACCOUNT_PROBLEM_CODES, type AccountProblemCodeName } from './problems';
@@ -696,7 +695,6 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
             id: CONSENT_ID,
             client_id: 'https://app.example.com/oauth/client.json',
             client_name: 'Example Notes',
-            client: EXAMPLE_CLIENT,
             scopes: ['openid', 'profile', 'notes:read'],
             grantedAt: '2026-10-12T15:03:27Z',
           },

@@ -380,7 +380,7 @@ export interface AddressChangeConfirmRequest {
   code: string;
 }
 
-/** A connected app: an active consent the person gave. When `client` is present a console leads with it (its verified domain first, ADR-019 Decision 6); it always marks the declared name as declared. The consents the auth server serves today do not carry `client` yet. */
+/** A connected app: an active consent the person gave. `client_name` is what the app declared about itself, and a console marks it as declared (ADR-019 Decision 6). A later version may add the verified display data the Interaction API shows for a client, as an optional member. */
 export interface Consent {
   /** The consent’s id. */
   id: string;
@@ -388,7 +388,6 @@ export interface Consent {
   client_id: string;
   /** The name the app declared about itself. */
   client_name: string;
-  client?: ClientDisplay;
   /** The scopes the person granted. */
   scopes: string[];
   /** When the consent was first given. */
@@ -401,57 +400,6 @@ export interface ConsentPage {
   items: Consent[];
   /** The cursor of the next page; `null` on the last page. */
   nextCursor: string | null;
-}
-
-/** Who the client is, as the auth server’s own records say (#593). Client-supplied text is untrusted: no logo comes from a client-supplied URL, and an unverified client shows none. */
-export interface ClientDisplay {
-  /** How the client is known, which decides what is verified (ADR-019 Decision 6): a Client ID Metadata Document client (the host of its client id URL), a client an admin registered (the domain the admin set), a federation client (its entity id and trust marks), or a dynamically registered or developer-portal client (nothing: the screen says the app is unverified). */
-  kind: 'cimd' | 'admin_registered' | 'federation' | 'unverified';
-  /** For `cimd` and `admin_registered`: the verified domain, which the screen shows first. */
-  verifiedDomain?: {
-    /** The verified host, in ASCII (punycode) form. */
-    host: string;
-    /** The part of `host` the screen highlights: its registrable domain. */
-    registrableDomain: string;
-    /** Whether `host` sits under a shared-hosting suffix, from the private section of the Public Suffix List: the screen flags it. */
-    sharedHosting: boolean;
-  };
-  /** For `federation`: the entity id and its validated trust marks. */
-  federation?: {
-    /** The federation entity id. */
-    entityId: string;
-    /** The trust marks the server validated. */
-    trustMarks: Array<{
-      /** The trust mark type. */
-      id: string;
-      /** The trust mark issuer’s entity id. */
-      issuer: string;
-    }>;
-  };
-  /** Where the code goes, from the redirect URI the request was bound to. Absent when no code goes anywhere, as on a logout. Always present on the `consent` step of an `unverified` client, whose screen shows where the code goes as the only fact it can check (ADR-019 Decision 6). */
-  redirect?: {
-    /** Where the authorization code goes: a web host, a loopback address (shown as "this device", with a warning), or a native app’s own URI scheme. */
-    target: 'host' | 'this_device' | 'app';
-    /** For `host`: the host that receives the code. */
-    host?: string;
-    /** For `app`: the URI scheme of the app. */
-    scheme?: string;
-  };
-  /** The name the client declared about itself: length-capped and stripped. The screen marks it as declared and never shows it above or instead of the verified data. */
-  declaredName?: string;
-  logo?: Asset;
-  /** Whether the client registered itself recently: the screen shows a badge. */
-  newClient: boolean;
-}
-
-/** An image an admin uploaded, re-encoded by the server and served from the realm origin. Never a URL a client supplied (ADR-019 Decision 6). */
-export interface Asset {
-  /** Where the realm origin serves the image. */
-  url: string;
-  /** Its width in pixels. */
-  width: number;
-  /** Its height in pixels. */
-  height: number;
 }
 
 /** What deleting the account removes. Audit and event records stay, apart from the account (ADR-018 §3). */
