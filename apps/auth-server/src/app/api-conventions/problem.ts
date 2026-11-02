@@ -190,6 +190,20 @@ export const PROBLEM_CODES = {
     description:
       'An Interaction API answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field.',
   },
+  invalid_current_password: {
+    status: 400,
+    type: 'invalid-current-password',
+    title: 'Invalid current password',
+    description:
+      'The current password a password change names is wrong. It counts on the account’s failure ladder, as a failed sign-in does.',
+  },
+  invalid_code: {
+    status: 400,
+    type: 'invalid-code',
+    title: 'Invalid code',
+    description:
+      'A one-time code in the request is wrong, expired or used, such as the first TOTP code of an enrolment or a code mailed to an address. It counts on the account’s failure ladder for that code.',
+  },
   unauthorized: {
     status: 401,
     type: 'unauthorized',
@@ -228,6 +242,13 @@ export const PROBLEM_CODES = {
     title: 'Invalid DPoP proof',
     description: 'The DPoP proof is missing or not valid for this request (RFC 9449 §7.1).',
   },
+  insufficient_user_authentication: {
+    status: 401,
+    type: 'insufficient-user-authentication',
+    title: 'Insufficient user authentication',
+    description:
+      'The operation needs fresh authentication and the sign-in behind the token is too old or lacks the account’s strongest bound factor (RFC 9470 §3). `max_age` and the `WWW-Authenticate` challenge say how fresh the next sign-in must be.',
+  },
   forbidden: {
     status: 403,
     type: 'forbidden',
@@ -246,6 +267,20 @@ export const PROBLEM_CODES = {
     title: 'Approval required',
     description:
       'The admin operation is a security operation and runs only with a fresh approval bound to it. The request did not run.',
+  },
+  delegated_token_refused: {
+    status: 403,
+    type: 'delegated-token-refused',
+    title: 'Delegated token refused',
+    description:
+      'The token is an act-chain token (RFC 8693 `act`), and the operation changes a credential, an identifier, the contact address or a linked account, or deletes the account: only the person may do that (ADR-019 Decision 7).',
+  },
+  disabled_by_realm: {
+    status: 403,
+    type: 'disabled-by-realm',
+    title: 'Disabled by realm',
+    description:
+      'The realm’s policy does not let a person do this themselves, such as deleting the account or changing the sign-in address. An admin can.',
   },
   not_found: {
     status: 404,
@@ -282,6 +317,20 @@ export const PROBLEM_CODES = {
     type: 'verification-token-used',
     title: 'Verification token used',
     description: 'The email verification token has already been used.',
+  },
+  last_credential: {
+    status: 409,
+    type: 'last-credential',
+    title: 'Last credential',
+    description:
+      'The change would leave the account with no way to sign in, such as removing the only passkey of a passkey-only account.',
+  },
+  second_factor_required: {
+    status: 409,
+    type: 'second-factor-required',
+    title: 'Second factor required',
+    description:
+      'The change would remove the last second factor while the realm’s policy requires one for the account.',
   },
   verification_token_expired: {
     status: 410,
