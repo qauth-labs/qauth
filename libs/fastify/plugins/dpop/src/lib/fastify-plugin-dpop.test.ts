@@ -302,21 +302,25 @@ describe('dpopPlugin (#480)', () => {
 describe('createDpopService (#520)', () => {
   const ADMIN_BASE = 'https://admin.auth.example.com/';
 
-  /** A bare server whose one route checks its proof with a service of its own. */
+  /**
+   * A bare server whose `dpop` is a service of its own, as the admin
+   * listener's is, and whose one route checks its proof with it.
+   */
   async function serviceApp(
     redis: ReturnType<typeof fakeRedis>,
     options: { iatWindowSeconds?: number; now?: () => number } = {}
   ): Promise<FastifyInstance> {
-    const service = createDpopService(redis, { baseUrl: ADMIN_BASE, ...options });
     const app = Fastify({ logger: false });
+    app.decorate('dpop', createDpopService(redis, { baseUrl: ADMIN_BASE, ...options }));
     app.setErrorHandler((error, _request, reply) =>
       error instanceof DpopProofError
         ? reply.code(400).send({ error: error.error, reason: error.reason })
         : reply.code(500).send({ error: String(error) })
     );
-    app.get('/admin/v1-rc.0/realms/:realmId', async (request) => ({
-      thumbprint: (await service.verifyRequest(request)).thumbprint,
-    }));
+    app.get('/admin/v1-rc.0/realms/:realmId', async (request) => {
+      if (app.dpop === null) throw new Error('no DPoP service');
+      return { thumbprint: (await app.dpop.verifyRequest(request)).thumbprint };
+    });
     await app.ready();
     return app;
   }
