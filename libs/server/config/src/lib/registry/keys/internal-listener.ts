@@ -14,7 +14,7 @@ export const INTERNAL_LISTENER_KEYS = defineKeys([
     owner: 'server',
     default: '127.0.0.1',
     since: '0.2.0',
-    docs: "The address the internal listener binds to, loopback by default; the listener runs only on a process whose `SERVICE_ROLES` holds `signer` but not every role, for the other roles' calls to the signer service, and serves mutual TLS only, while a single process runs none.",
+    docs: "The address the internal listener binds to, loopback by default; the listener runs on a process whose `SERVICE_ROLES` holds `signer` but not every role, for the other roles' calls to the signer service, and on every process while `METRICS_ENABLED` is on, for the metrics scraper (`GET /internal/metrics`), and serves mutual TLS only, except on a single process without the internal TLS files, where it serves plain HTTP on a loopback address only.",
   },
   {
     name: 'INTERNAL_PORT',
@@ -32,6 +32,6 @@ export const INTERNAL_LISTENER_KEYS = defineKeys([
     owner: 'server',
     default: null,
     since: '0.2.0',
-    docs: 'A JSON object from a subject alternative name of a peer\'s certificate, a URI such as a SPIFFE ID or a DNS name, to the service role the peer calls the internal listener as, such as `{"spiffe://example.org/qauth/web":"web"}`; the listener answers `403` to a peer whose certificate names no SAN here, and to one whose role a route\'s module does not admit; `signer` is refused, as the signer never calls as a peer, and with the internal TLS files the listener refuses to start without one.',
+    docs: 'A JSON object from a subject alternative name of a peer\'s certificate, a URI such as a SPIFFE ID or a DNS name, to the service role the peer calls the internal listener as, or to `metrics` for a metrics scraper, which may read `GET /internal/metrics` only, such as `{"spiffe://example.org/qauth/web":"web","spiffe://example.org/prometheus":"metrics"}`; the listener answers `403` to a peer whose certificate names no SAN here, and to one whose role a route\'s module does not admit; `signer` is refused, as the signer never calls as a peer, and with the internal TLS files the listener refuses to start without one.',
   },
 ]);

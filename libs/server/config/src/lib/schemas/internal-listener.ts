@@ -56,10 +56,34 @@ export function peerSanKey(san: PeerSan): string {
 }
 
 /**
+ * The peer role of a metrics scraper (#500): a certificate mapped to it reads
+ * the internal listener's metrics and nothing else. It is no service role: a
+ * scraper runs none of QAuth's code.
+ */
+export const METRICS_PEER_ROLE = 'metrics';
+
+/**
+ * What a peer calls the internal listener as: a service role, or
+ * {@link METRICS_PEER_ROLE} for a metrics scraper.
+ */
+export type InternalPeerRole = ServiceRole | typeof METRICS_PEER_ROLE;
+
+/** Every value `INTERNAL_PEER_ROLES` may map a SAN to, `signer` aside. */
+export const INTERNAL_PEER_ROLE_NAMES: readonly InternalPeerRole[] = Object.freeze([
+  ...SERVICE_ROLE_NAMES.filter((role) => role !== 'signer'),
+  METRICS_PEER_ROLE,
+]);
+
+/** Whether `value` names an {@link InternalPeerRole}. */
+export function isInternalPeerRole(value: string): value is InternalPeerRole {
+  return value === METRICS_PEER_ROLE || isServiceRole(value);
+}
+
+/**
  * The role each known peer SAN calls the internal listener as, keyed by
  * {@link peerSanKey}. Empty when `INTERNAL_PEER_ROLES` is unset.
  */
-export type InternalPeerRoles = ReadonlyMap<string, ServiceRole>;
+export type InternalPeerRoles = ReadonlyMap<string, InternalPeerRole>;
 
 /** One DNS label: letters, digits and inner hyphens, 1 to 63 characters. */
 const DNS_LABEL = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
@@ -113,11 +137,13 @@ export function parsePeerSan(
 const NO_PEERS: InternalPeerRoles = new Map();
 
 /** The example every refusal of `INTERNAL_PEER_ROLES` shows. */
-const PEER_ROLES_EXAMPLE = '{"spiffe://example.org/qauth/web":"web","api.qauth.internal":"api"}';
+const PEER_ROLES_EXAMPLE =
+  '{"spiffe://example.org/qauth/web":"web","api.qauth.internal":"api","spiffe://example.org/prometheus":"metrics"}';
 
 /**
  * Parse `INTERNAL_PEER_ROLES`: a JSON object from a peer SAN to the service
- * role it calls as. Unset or blank is no peer.
+ * role it calls as, or to `metrics` for a metrics scraper. Unset or blank is
+ * no peer.
  *
  * Refuses the boot, naming the entry, for a SAN {@link parsePeerSan} refuses,
  * a value that is not one role, `signer` (the role that serves the internal
@@ -157,7 +183,7 @@ function parseInternalPeerRoles(raw: string | undefined, ctx: z.RefinementCtx): 
     return z.NEVER;
   }
 
-  const roles = new Map<string, ServiceRole>();
+  const roles = new Map<string, InternalPeerRole>();
   let valid = true;
   for (const [text, role] of entries) {
     const parsed = parsePeerSan(text);
@@ -169,10 +195,10 @@ function parseInternalPeerRoles(raw: string | undefined, ctx: z.RefinementCtx): 
       valid = false;
       continue;
     }
-    if (typeof role !== 'string' || !isServiceRole(role)) {
+    if (typeof role !== 'string' || !isInternalPeerRole(role)) {
       ctx.addIssue({
         code: 'custom',
-        message: `INTERNAL_PEER_ROLES entry ${JSON.stringify(text)} must name one role: ${SERVICE_ROLE_NAMES.join(', ')}`,
+        message: `INTERNAL_PEER_ROLES entry ${JSON.stringify(text)} must name one role: ${INTERNAL_PEER_ROLE_NAMES.join(', ')}`,
       });
       valid = false;
       continue;
@@ -218,7 +244,7 @@ export const internalListenerEnvSchema = z.object({
   INTERNAL_PORT: blankAsUnset(
     z.coerce.number().int().min(1).max(65535).default(DEFAULT_INTERNAL_PORT)
   ),
-  /** Peer SAN → the role it calls the internal listener as, as a JSON object. */
+  /** Peer SAN → the role it calls the internal listener as (or `metrics`), as a JSON object. */
   INTERNAL_PEER_ROLES: z.string().optional().transform(parseInternalPeerRoles),
 });
 
