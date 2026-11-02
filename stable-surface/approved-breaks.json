@@ -65,6 +65,17 @@
       },
       "ref": "#627",
       "release": "v0.2.0"
+    },
+    {
+      "surface": "openapi",
+      "change": {
+        "rule": "api-path-removed-without-deprecation",
+        "operation": "GET /metrics",
+        "fingerprint": "43bcc841a4e3",
+        "text": "api path removed without deprecation"
+      },
+      "ref": "#500",
+      "release": "v0.2.0"
     }
   ]
 }
