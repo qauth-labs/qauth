@@ -7,6 +7,14 @@
  * `application/x-www-form-urlencoded` per RFC 6749 §3.2 and RFC 7662
  * §2.1. The server returned 415 Unsupported Media Type until this plugin
  * was registered.
+ *
+ * The parsing facts the token, revocation, introspection and authorization
+ * endpoints depend on are pinned here too, so a parser change surfaces on the
+ * plugin's next upgrade (#798): a repeated parameter becomes an array of every
+ * value in the order sent, which RFC 8707 §2 `resource` and RFC 8693 §2.1
+ * `audience` rely on, and which the token body schema refuses for a parameter
+ * RFC 6749 §3.2 says must not repeat (pinned on the assembled app in
+ * `error-handler-wiring.test.ts`).
  */
 import formbody from '@fastify/formbody';
 import Fastify from 'fastify';
@@ -31,6 +39,48 @@ describe('@fastify/formbody registration', () => {
       client_id: 'x',
       client_secret: 'y',
     });
+
+    await app.close();
+  });
+
+  it('parses a repeated parameter into an array of every value, in the order sent', async () => {
+    const app = Fastify();
+    await app.register(formbody);
+    app.post('/echo', async (req) => req.body);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/echo',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload:
+        'grant_type=client_credentials&grant_type=authorization_code' +
+        '&resource=https%3A%2F%2Fb.example&resource=https%3A%2F%2Fa.example&scope=read',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      grant_type: ['client_credentials', 'authorization_code'],
+      resource: ['https://b.example', 'https://a.example'],
+      scope: 'read',
+    });
+
+    await app.close();
+  });
+
+  it('parses a body sent with a charset parameter, decoding percent-escapes as UTF-8', async () => {
+    const app = Fastify();
+    await app.register(formbody);
+    app.post('/echo', async (req) => req.body);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/echo',
+      headers: { 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+      payload: 'client_id=%C3%A7lient+one&state=a%2Bb',
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ client_id: '\u00e7lient one', state: 'a+b' });
 
     await app.close();
   });

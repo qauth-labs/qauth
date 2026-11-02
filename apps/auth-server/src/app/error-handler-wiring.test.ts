@@ -635,6 +635,41 @@ describe('assembled app — problem details on the API families (#506)', () => {
 });
 
 /**
+ * RFC 6749 §3.2: a token request parameter "MUST NOT be included more than
+ * once". `@fastify/formbody` parses a repeated name into an array (pinned in
+ * `plugins/formbody.test.ts`); `rejectUnsupportedGrantType` in
+ * `routes/oauth/token.ts` passes over a `grant_type` that is not a string, and
+ * the body schema refuses the array. So the request is malformed —
+ * `invalid_request` — whatever the values, even where one `grant_type=password`
+ * answers `unsupported_grant_type` (test a2 above), and even with the client's
+ * credentials in the body.
+ *
+ * Pinned across the formbody 8 → 9 upgrade (#798), and here because only the
+ * assembled app runs the real parser, hook, schema and error handler in order.
+ * A change to this answer belongs in its own issue.
+ */
+describe('assembled app — a repeated grant_type (RFC 6749 §3.2)', () => {
+  const CLIENT = '&client_id=repeat-client&client_secret=repeat-secret';
+
+  it.each([
+    ['the same grant type twice', 'grant_type=client_credentials&grant_type=client_credentials'],
+    ['two grant types', 'grant_type=client_credentials&grant_type=authorization_code'],
+    ['an unsupported grant type twice', 'grant_type=password&grant_type=password'],
+    ['a served and an unsupported grant type', 'grant_type=password&grant_type=client_credentials'],
+  ])('POST /oauth/token answers %s with invalid_request', async (_label, grantTypes) => {
+    const res = await server.inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: FORM,
+      payload: `${grantTypes}${CLIENT}`,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(expectOAuthError(res)).toBe('invalid_request');
+  });
+});
+
+/**
  * The password bound on the wire, in the UTF-16 code units `PASSWORD_MAX_LENGTH`
  * is defined in.
  *
