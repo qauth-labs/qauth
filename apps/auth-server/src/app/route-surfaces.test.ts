@@ -299,7 +299,7 @@ describe('no CORS on the browser surface of the assembled app (#930)', () => {
 
 describe('the authorization endpoint answers no CORS (OAuth 2.1 draft-17 §3.1)', () => {
   it('answers no preflight for /oauth/authorize with CORS_ORIGIN set', async () => {
-    for (const method of ['GET', 'POST']) {
+    for (const method of ['GET', 'POST', 'PUT', 'DELETE']) {
       const response = await preflight('/oauth/authorize', method);
       expect(response.statusCode, method).toBe(404);
       expect(response.headers['access-control-allow-origin'], method).toBeUndefined();

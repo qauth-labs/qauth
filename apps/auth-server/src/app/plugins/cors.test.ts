@@ -138,12 +138,26 @@ describe('the CORS plugin with CORS_ORIGIN set', () => {
     expectRefusedPreflight(await preflight('/ui/resume/abc', 'GET'), 'GET /ui/resume/:handle');
   });
 
+  it('answers no preflight for a browser path whatever method it announces', async () => {
+    await buildApp(options);
+    for (const [url, method] of [
+      ['/oauth/authorize', 'PUT'],
+      ['/oauth/authorize', 'DELETE'],
+      ['/oauth/authorize', 'GET, GET'],
+      ['/ui/resume/abc', 'POST'],
+      // No route of another surface serves PUT beside the verification page.
+      ['/auth/verify', 'PUT'],
+    ] as const) {
+      expectRefusedPreflight(await preflight(url, method), `${method} ${url}`);
+    }
+  });
+
   it('answers no OPTIONS request for a browser route that announces no method', async () => {
     await buildApp(options);
     expectRefusedPreflight(await preflight('/oauth/authorize'), 'OPTIONS /oauth/authorize');
   });
 
-  it('answers no preflight for any spelling of the path the router serves', async () => {
+  it('answers no preflight for other spellings of the path the router serves', async () => {
     await buildApp(options);
     for (const url of [
       '/oauth/authorize/',

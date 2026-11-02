@@ -48,8 +48,10 @@ export function corsOriginOption(options: CorsPluginOptions): string[] | '*' | f
   return options.production ? false : '*';
 }
 
-/** A route left out of CORS, as the preflight check matches it. */
-interface NoCorsRoute {
+/** A route of the app, as the preflight check matches it. */
+interface KnownRoute {
+  /** Whether it is left out of CORS: a `browser` route. */
+  readonly noCors: boolean;
   /** Its methods, upper-case. */
   readonly methods: ReadonlySet<string>;
   /** Its URL pattern's path segments: `:name` is a parameter, `*` the rest. */
@@ -68,8 +70,10 @@ function pathSegments(path: string): string[] {
  * Decoding segment by segment keeps an encoded `/` (`%2F`) inside its
  * segment, as the router does. Dropping empty segments makes a trailing or
  * doubled slash match too, which the router (`ignoreTrailingSlash`) partly
- * does: the check may cover a path no route serves, never miss one a route
- * serves.
+ * does, so the check may cover a path no route serves. It reads an
+ * origin-form request-target, the form a browser sends: the absolute form
+ * (`OPTIONS http://host/path`), which the router also accepts, matches no
+ * pattern.
  */
 function requestSegments(url: string): string[] | undefined {
   const end = url.search(/[?#]/);
@@ -140,20 +144,25 @@ function announcedMethod(request: FastifyRequest): string | undefined {
  *   `@fastify/cors` adds its own, answers an `OPTIONS` request for a `browser`
  *   route as a path no route serves (`answerRouteNotFound`), the 404 a
  *   preflight gets where CORS is off. It matches the request path against the
- *   `browser` routes' patterns (with the announced method, so the JSON
- *   `POST /auth/verify` beside the verification page keeps its preflight). A
- *   preflight it fails to match is still harmless: the answer to the request
- *   itself carries no `Access-Control-Allow-Origin`, so the browser does not
- *   hand it to the calling page.
+ *   patterns of the app's routes: a path a `browser` route serves gets no
+ *   preflight answer, whatever method it announces, unless a route of another
+ *   surface serves that path and method, as the JSON `POST /auth/verify` does
+ *   beside the verification page. A preflight it fails to match is still
+ *   harmless: the answer to the request itself carries no
+ *   `Access-Control-Allow-Origin`, so the browser does not hand it to the
+ *   calling page.
  */
 export const corsPlugin = fp<CorsPluginOptions>(
   async (fastify: FastifyInstance, options: CorsPluginOptions) => {
-    const noCorsRoutes: NoCorsRoute[] = [];
+    const knownRoutes: KnownRoute[] = [];
 
     fastify.addHook('onRoute', (route) => {
-      if (route.config?.surface !== NO_CORS_SURFACE) return;
-      route.config = { ...route.config, cors: false };
-      noCorsRoutes.push({
+      // `@fastify/cors`'s own preflight route, which matches every path.
+      if (route.method === 'OPTIONS' && route.url === '*') return;
+      const noCors = route.config?.surface === NO_CORS_SURFACE;
+      if (noCors) route.config = { ...route.config, cors: false };
+      knownRoutes.push({
+        noCors,
         methods: new Set([route.method].flat().map((method) => method.toUpperCase())),
         segments: pathSegments(route.url),
       });
@@ -162,11 +171,11 @@ export const corsPlugin = fp<CorsPluginOptions>(
     const preflightsNoCorsRoute = (request: FastifyRequest): boolean => {
       const segments = requestSegments(request.url);
       if (segments === undefined) return false;
+      const onPath = knownRoutes.filter((route) => matchesPattern(route.segments, segments));
+      if (!onPath.some((route) => route.noCors)) return false;
       const method = announcedMethod(request);
-      return noCorsRoutes.some(
-        (route) =>
-          (method === undefined || route.methods.has(method)) &&
-          matchesPattern(route.segments, segments)
+      return (
+        method === undefined || !onPath.some((route) => !route.noCors && route.methods.has(method))
       );
     };
 
