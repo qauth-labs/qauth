@@ -540,6 +540,9 @@ export async function bootAuthServer(
     internalServer = createInternalServer({
       loggerInstance: server.log.child({ listener: 'internal' }),
       peerRoles: internalPlan.peerRoles,
+      ...(internalPlan.plainHttpPeerRole === undefined
+        ? {}
+        : { plainHttpPeerRole: internalPlan.plainHttpPeerRole }),
       ...(internalPlan.tls === undefined
         ? {}
         : {

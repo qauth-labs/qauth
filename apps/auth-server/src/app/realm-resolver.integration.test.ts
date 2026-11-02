@@ -47,7 +47,6 @@ const REALM_ROUTES: readonly (InjectOptions & { readonly url: string })[] = [
   { method: 'GET', url: '/consents' },
   { method: 'GET', url: '/api/clients' },
   { method: 'POST', url: '/auth/login', payload: { email: 'a@example.com', password: 'x' } },
-  { method: 'GET', url: '/metrics' },
 ];
 
 /** The OAuth protocol endpoints above, which answer the RFC 6749 error body (#513). */
@@ -266,17 +265,19 @@ describe('realm resolution by host on a real Postgres (#486)', () => {
     });
   });
 
-  describe('/health', () => {
-    it('answers 200 on an unknown host, with no realm data', async () => {
+  describe('/health and /ready (#500)', () => {
+    it('answer 200 on an unknown host, with no realm data', async () => {
       const app = await boot();
 
-      for (const host of ['unknown.example', '10.1.2.3:8080', '*.example.com']) {
-        const response = await app.inject({ method: 'GET', url: '/health', headers: { host } });
+      for (const url of ['/health', '/ready']) {
+        for (const host of ['unknown.example', '10.1.2.3:8080', '*.example.com']) {
+          const response = await app.inject({ method: 'GET', url, headers: { host } });
 
-        expect(response.statusCode).toBe(200);
-        expect(response.json()).toMatchObject({ status: 'ok' });
-        expect(response.body).not.toContain('master');
-        expect(response.body).not.toContain(REALM_HOST);
+          expect(response.statusCode, `${url} ${host}`).toBe(200);
+          expect(response.json()).toMatchObject({ status: 'ok' });
+          expect(response.body).not.toContain('master');
+          expect(response.body).not.toContain(REALM_HOST);
+        }
       }
     });
   });

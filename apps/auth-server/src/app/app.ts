@@ -85,13 +85,14 @@ import {
   verifierSigningMaterial,
 } from './helpers/verifier-identity';
 import { installInternalApi, type InternalApiOptions } from './internal/listener';
-import { publicInternalRouteProblem } from './internal/route-manifest';
+import { enabledInternalRouteModules, publicInternalRouteProblem } from './internal/route-manifest';
 import { corsPlugin } from './plugins/cors';
 import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
 import { metricsPlugin } from './plugins/metrics';
 import { rateLimitPlugin } from './plugins/rate-limit';
+import { readinessPlugin, registerRoleReadinessChecks } from './plugins/readiness';
 import { realmResolverPlugin } from './plugins/realm-resolver';
 import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
@@ -681,6 +682,11 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // Logged here, not in `main.ts`, so every boot, a harness's too, says it.
   logExperimentalFeatures(fastify.log, env, roles);
 
+  // The readiness checks (#500), which `GET /ready` runs: each role's check
+  // registers below once the plugin it reads is, and a later issue's plugin
+  // adds its own through `fastify.readiness`.
+  await fastify.register(readinessPlugin);
+
   // The OpenTelemetry log export of events (ADR-018 §3, #541), before the
   // database: the event store hands each event to it once the event's
   // transaction commits. Off by default, and then no exporter exists. It
@@ -981,7 +987,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // are simply never seen. Moving it after the routes would not throw, warn
   // or fail a boot check; it would silently drop every per-route limit,
   // including the brute-force ceiling on /auth/login and the
-  // `config: { rateLimit: false }` scrape exemption on /metrics.
+  // `config: { rateLimit: false }` exemption of /health and /ready, which
+  // count in the process's memory instead (#500).
   await fastify.register(rateLimitPlugin);
 
   // Security headers (issue #113): every response — including the
@@ -1002,10 +1009,14 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
 
   // Observability (T3): the metrics registry (#123/#126). Its position is not
   // load-bearing either (#365): it only `decorate()`s the instance — its sole
-  // consumer, GET /metrics, dereferences `fastify.metrics` inside the handler
-  // at request time, not while the route plugin is loading. Request-id
-  // propagation (#128) is registered above, ahead of the realm resolver.
+  // consumer, GET /internal/metrics on the internal listener (#500),
+  // dereferences `fastify.metrics` inside the handler at request time.
+  // Request-id propagation (#128) is registered above, ahead of the realm
+  // resolver.
   await fastify.register(metricsPlugin);
+  if (!env.METRICS_ENABLED) {
+    fastify.log.warn('Metrics are DISABLED via METRICS_ENABLED=false: no process serves them');
+  }
 
   // The Shared Signals Framework transmitter (ADR-018 §3, #410). Off by
   // default: `fastify.ssf` is null, no SSF route registers below, and the
@@ -1154,7 +1165,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // route manifest that replaced the folder autoload: each module is its own
   // encapsulated plugin, under the prefix the autoload gave it. A module the
   // manifest does not list is never registered, and every process registers
-  // `/health` and `/metrics`.
+  // `/health` and `/ready` (#500), whose checks register here, once every
+  // plugin they read is.
+  registerRoleReadinessChecks(fastify, roles);
   for (const { entry, plugin } of await routeModules) {
     await fastify.register(async (scope) => {
       scope.addHook('onRoute', (route) => {
@@ -1197,7 +1210,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // registers the internal routes of this process's roles, and closes before
   // the plugins it shares.
   if (internalListener !== undefined) {
-    if (!servesInternalListener(roles, internalListener.modules)) {
+    if (
+      !servesInternalListener(roles, internalListener.modules ?? enabledInternalRouteModules(env))
+    ) {
       throw new Error(
         `The internal listener runs only on a process that holds the signer while the roles are split, or whose roles serve an internal route (SERVICE_ROLES=${describeServiceRoles(roles)})`
       );

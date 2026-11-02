@@ -106,11 +106,20 @@ Start the stack (auth-server + PostgreSQL 18 + Redis 7 + migrations) and verify:
 
 ```bash
 docker compose up -d
-curl -s http://localhost:3000/health | jq
+curl -s http://localhost:3000/ready | jq
 ```
 
 ```json
-{ "status": "ok", "services": { "database": "connected", "redis": "connected" } }
+{
+  "status": "ok",
+  "roles": ["web", "api", "admin", "signer", "delivery"],
+  "checks": {
+    "database": { "status": "ok" },
+    "redis": { "status": "ok" },
+    "kek": { "status": "ok" },
+    "outbox": { "status": "ok" }
+  }
+}
 ```
 
 Confirm the discovery document advertises the endpoints an MCP client needs:

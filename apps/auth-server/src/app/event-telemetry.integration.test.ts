@@ -169,15 +169,17 @@ async function storedEvents(app: FastifyInstance): Promise<StoredRow[]> {
   return rows;
 }
 
-/** The value of one series of the drop counter on `/metrics`. */
+/**
+ * The value of one series of the drop counter in the process's metrics, as
+ * the internal listener's `GET /internal/metrics` serves them (#500).
+ */
 async function dropped(app: FastifyInstance, reason: string): Promise<number> {
-  const response = await app.inject({ method: 'GET', url: '/metrics' });
-  expect(response.statusCode).toBe(200);
+  const body = await app.metrics.registry.metrics();
   const match = new RegExp(
     `^qauth_events_telemetry_dropped_total\\{reason="${reason}"[^}]*\\} (\\d+)$`,
     'm'
-  ).exec(response.body);
-  if (match === null) throw new Error(`no ${reason} series on /metrics`);
+  ).exec(body);
+  if (match === null) throw new Error(`no ${reason} series in the metrics`);
   return Number(match[1]);
 }
 
@@ -398,8 +400,8 @@ describe('events as OpenTelemetry log records (real containers)', () => {
 
     expect(app.eventTelemetry).toBeUndefined();
     expect(Object.hasOwn(app.db, 'transaction')).toBe(false);
-    const metrics = await app.inject({ method: 'GET', url: '/metrics' });
-    expect(metrics.body).not.toContain('qauth_events_telemetry_dropped_total');
+    const metrics = await app.metrics.registry.metrics();
+    expect(metrics).not.toContain('qauth_events_telemetry_dropped_total');
     expect(REQUIRED_TEST_ENVIRONMENT['OTEL_EVENTS_ENABLED']).toBeUndefined();
   });
 });

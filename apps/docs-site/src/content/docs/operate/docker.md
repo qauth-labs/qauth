@@ -130,8 +130,8 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
 # Check all services are healthy
 docker-compose ps
 
-# Test the auth-server health endpoint
-curl http://localhost:3000/health
+# Test the auth-server readiness endpoint
+curl http://localhost:3000/ready
 ```
 
 Expected response:
@@ -139,13 +139,19 @@ Expected response:
 ```json
 {
   "status": "ok",
-  "timestamp": "2026-01-15T05:15:47.887Z",
-  "services": {
-    "database": "connected",
-    "redis": "connected"
+  "roles": ["web", "api", "admin", "signer", "delivery"],
+  "checks": {
+    "database": { "status": "ok" },
+    "redis": { "status": "ok" },
+    "kek": { "status": "ok" },
+    "outbox": { "status": "ok" }
   }
 }
 ```
+
+`/ready` answers `503` with the failing check while a dependency is down;
+`/health` answers `200` while the process runs, whatever its dependencies do.
+See [Health and readiness](/operate/observability/#health-and-readiness).
 
 The developer-portal has no dedicated health endpoint (see
 [Developer Portal](#developer-portal) below); confirm it's up by opening
@@ -290,7 +296,13 @@ authenticates nowhere.
 The main authentication API server.
 
 - **Port**: 3000 (mapped to host)
-- **Health Check**: `GET /health`
+- **Health Check**: `GET /ready` in `docker-compose.yml`: the container is
+  `healthy` once Postgres, Redis and the KEK answer. The image's own
+  `HEALTHCHECK` calls `GET /health`, liveness only, for a runtime that
+  restarts an unhealthy container.
+- **Metrics**: `GET /internal/metrics` on the internal listener,
+  `127.0.0.1`, port `3443`, inside the container, never on port 3000 (see
+  [Observability](/operate/observability/#who-can-read-the-metrics)).
 - **Production**: `Dockerfile` → a `pnpm deploy --prod` bundle, started by
   `docker-entrypoint.sh` via `exec tsx src/main.ts`
   (`apps/auth-server/docker-entrypoint.sh:5`).
@@ -1008,7 +1020,8 @@ This Docker setup is designed for **local development**. For production:
    The proxy must also pass the host the client asked for. The auth-server
    answers a request only on the realm host, the host of `JWT_ISSUER`, and on
    the names in `DEFAULT_REALM_ENDPOINT_HOSTS`; any other host gets
-   `421 Misdirected Request`, and only `/health` answers on every host. Keep
+   `421 Misdirected Request`, and only `/health` and `/ready` answer on every
+   host. Keep
    the client's `Host` header (nginx: `proxy_set_header Host $host;`), or send
    it as `X-Forwarded-Host` from an address listed in `TRUST_PROXY`; from any
    other address that header is ignored. A proxy listed in `TRUST_PROXY` must
@@ -1045,7 +1058,7 @@ This Docker setup is designed for **local development**. For production:
    waiting until its caller times out. Each refusal is logged at `warn` with
    the client and the queue length, and counted in
    `qauth_client_secret_checks_shed_total` (see
-   [Observability](/operate/observability/#metrics-get-metrics)). Sign-ins and
+   [Observability](/operate/observability/#metrics-get-internalmetrics)). Sign-ins and
    registrations are not refused: they wait their turn, and count toward the
    queue while they wait. Raise the limit if legitimate clients see these
    refusals while the host has CPU to spare; lower it to fail faster.

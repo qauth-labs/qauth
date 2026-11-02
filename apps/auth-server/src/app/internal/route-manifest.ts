@@ -1,4 +1,9 @@
-import type { ServiceRole } from '@qauth-labs/server-config';
+import {
+  type InternalPeerRole,
+  METRICS_PEER_ROLE,
+  SERVICE_ROLE_NAMES,
+  type ServiceRole,
+} from '@qauth-labs/server-config';
 import type { FastifyPluginAsync, RouteOptions } from 'fastify';
 
 /**
@@ -10,7 +15,9 @@ import type { FastifyPluginAsync, RouteOptions } from 'fastify';
  * under `/internal/`, a path the public listener refuses to register. So no
  * route answers on both listeners.
  *
- * The manifest is empty until the signer service (#497) adds its routes under
+ * The metrics module (#500) registers on every process while METRICS_ENABLED
+ * is on: `GET /internal/metrics`, for a scraper whose certificate maps to the
+ * `metrics` peer role. The signer service (#497) adds its routes under
  * `/internal/signer/v1-rc.0`, for the `signer` role. Each module names the
  * peer roles that may call it (`peerRoles`): the listener refuses a peer with
  * no role, and a peer whose role the module does not name, with 403 before
@@ -35,20 +42,66 @@ export interface InternalRouteModule {
    * their certificates: a peer of any other role gets 403 on every route of
    * the module. Never empty: the boot is refused otherwise.
    */
-  readonly peerRoles: readonly ServiceRole[];
+  readonly peerRoles: readonly InternalPeerRole[];
+  /**
+   * Whether the deployment's settings switch the module on; on when unset.
+   * A module that is off is not registered, and does not make a process run
+   * the internal listener.
+   */
+  readonly enabled?: (settings: InternalRouteSettings) => boolean;
+  /**
+   * Whether a single process, every role in one, serves it too. Only the
+   * metrics module does, for a scraper: a single process calls its own
+   * roles in-process, so no other module has a caller there.
+   */
+  readonly inSingleProcess?: boolean;
   /** The module, imported when a process registers it. */
   readonly load: () => Promise<{ readonly default: FastifyPluginAsync }>;
 }
 
-/** Every route module of the internal listener. */
-export const INTERNAL_ROUTE_MODULES: readonly InternalRouteModule[] = Object.freeze([]);
+/** The settings that switch an internal route module on or off. */
+export interface InternalRouteSettings {
+  /** Serve the metrics module; on when unset, as the setting's own default is. */
+  readonly METRICS_ENABLED?: boolean | undefined;
+}
 
-/** The modules a process with `roles` registers on its internal listener. */
+/** Every route module of the internal listener. */
+export const INTERNAL_ROUTE_MODULES: readonly InternalRouteModule[] = Object.freeze([
+  {
+    // Every process answers for its own metrics (#500), to a scraper alone:
+    // they are not on the public listener, which serves any host's caller.
+    module: 'metrics',
+    prefix: INTERNAL_PATH_PREFIX,
+    roles: SERVICE_ROLE_NAMES,
+    peerRoles: [METRICS_PEER_ROLE],
+    enabled: (settings) => settings.METRICS_ENABLED !== false,
+    inSingleProcess: true,
+    load: () => import('./routes/metrics'),
+  },
+]);
+
+/** The modules of `modules` that `settings` switch on. */
+export function enabledInternalRouteModules(
+  settings: InternalRouteSettings,
+  modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
+): readonly InternalRouteModule[] {
+  return modules.filter((entry) => entry.enabled?.(settings) ?? true);
+}
+
+/**
+ * The modules a process with `roles` registers on its internal listener: those
+ * of its roles, and in a single process only those marked `inSingleProcess`.
+ */
 export function internalRouteModulesFor(
   roles: readonly ServiceRole[],
   modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
 ): readonly InternalRouteModule[] {
-  return modules.filter((entry) => entry.roles.some((role) => roles.includes(role)));
+  const single = SERVICE_ROLE_NAMES.every((role) => roles.includes(role));
+  return modules.filter(
+    (entry) =>
+      entry.roles.some((role) => roles.includes(role)) &&
+      (!single || entry.inSingleProcess === true)
+  );
 }
 
 /**

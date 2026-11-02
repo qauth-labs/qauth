@@ -3,7 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_INTERNAL_HOST,
   DEFAULT_INTERNAL_PORT,
+  INTERNAL_PEER_ROLE_NAMES,
   internalListenerEnvSchema,
+  isInternalPeerRole,
+  METRICS_PEER_ROLE,
   parsePeerSan,
   peerSanKey,
 } from './internal-listener';
@@ -96,6 +99,17 @@ describe('internalListenerEnvSchema', () => {
       ['dns:api.qauth.internal', 'api'],
       ['dns:delivery.qauth.internal', 'delivery'],
     ]);
+  });
+
+  it('maps a metrics scraper to the metrics peer role, which is no service role (#500)', () => {
+    const { INTERNAL_PEER_ROLES: roles } = internalListenerEnvSchema.parse({
+      INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://example.org/prometheus': 'metrics' }),
+    });
+    expect([...roles]).toEqual([['uri:spiffe://example.org/prometheus', METRICS_PEER_ROLE]]);
+    expect(INTERNAL_PEER_ROLE_NAMES).toEqual(['web', 'api', 'admin', 'delivery', 'metrics']);
+    expect(isInternalPeerRole('metrics')).toBe(true);
+    expect(isInternalPeerRole('signer')).toBe(true);
+    expect(isInternalPeerRole('all')).toBe(false);
   });
 
   it('accepts two spellings of one DNS name that name the same role', () => {

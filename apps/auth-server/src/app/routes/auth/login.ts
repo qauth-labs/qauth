@@ -212,8 +212,9 @@ export default async function (fastify: FastifyInstance) {
 
           // Structured log of the failed login (#125): IP + email *hash* only,
           // never the password or the raw email. The metric label stays
-          // `invalid_credentials` for an unverified account too: `/metrics` is
-          // unauthenticated, so a label of its own would be the oracle again.
+          // `invalid_credentials` for an unverified account too: whoever reads the
+          // metrics is no account holder, so a label of its own would be the
+          // oracle again.
           fastify.metrics.loginAttempts.inc({ result: 'failure', reason: 'invalid_credentials' });
           logAuthEvent(request, 'user.login.failure', false, {
             emailHash,

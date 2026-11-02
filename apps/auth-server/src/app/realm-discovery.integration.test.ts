@@ -17,6 +17,7 @@ import {
   rotateRealmKeys,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { SIGNER_SERVICE } from '../testing/service-role-env';
 
 /**
  * DISCOVERY AND THE JWKS ARE SERVED PER REALM (ADR-019 Decisions 1, 8 and 9,
@@ -58,14 +59,6 @@ const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const CLIENT_ID = 'discovery-machine';
 const CLIENT_SECRET = 'discovery-machine-secret-of-sufficient-length';
 const JWT_BEARER_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
-
-/** The signer service settings of a process without the signer; never dialled here. */
-const SIGNER_SERVICE: Record<string, string> = {
-  SIGNER_URL: 'https://signer.internal:3443',
-  INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
-  INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
-  INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
-};
 
 /** Settings a test here sets that `bootAuthServer` does not clear between boots. */
 const UNCLEARED_SETTINGS = ['CIMD_ENABLED', 'ID_JAG_ENABLED', 'ID_JAG_TRUSTED_ISSUERS'] as const;

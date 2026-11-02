@@ -145,7 +145,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
   async function startServer(
     ctx: { skip: () => void },
     environment: Record<string, string> = {},
-    ports: { adminPort?: number; internalPort?: boolean } = {}
+    ports: { adminPort?: number } = {}
   ): Promise<StartedServer> {
     if (!dockerUp || !postgres || !redis || !jwt) {
       ctx.skip();
@@ -153,9 +153,10 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     }
     const port = await freePort();
     const adminPort = ports.adminPort ?? (await freePortOtherThan(port));
-    // INTERNAL_PORT must differ from both, or the boot is refused.
-    const internalPort =
-      ports.internalPort === true ? await freePortOtherThan(port, adminPort) : undefined;
+    // INTERNAL_PORT must differ from both, or the boot is refused. Every
+    // process runs the internal listener for its metrics (#500), so each
+    // server takes a free one rather than the default 3443.
+    const internalPort = await freePortOtherThan(port, adminPort);
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -175,7 +176,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,
         JWT_PUBLIC_KEY: jwt.publicKey,
-        ...(internalPort === undefined ? {} : { INTERNAL_PORT: String(internalPort) }),
+        INTERNAL_PORT: String(internalPort),
         ...environment,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -281,9 +282,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     ];
     try {
       for (const environment of environments) {
-        const server = await startServer(ctx, environment, {
-          internalPort: environment['SERVICE_ROLES'] !== undefined,
-        });
+        const server = await startServer(ctx, environment);
         await until(logged(server, 'Server listening on '), 'the server to listen', server);
 
         expect(logged(server, 'Admin API listening')()).toBe(false);

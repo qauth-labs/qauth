@@ -1,8 +1,8 @@
 import {
+  type InternalPeerRole,
   type InternalPeerRoles,
   type PeerSan,
   peerSanKey,
-  type ServiceRole,
 } from '@qauth-labs/server-config';
 
 /**
@@ -101,7 +101,9 @@ export type PeerRefusal =
   | 'ambiguous';
 
 /** The role a peer calls the internal listener as, or why it has none. */
-export type PeerRoleResolution = { readonly role: ServiceRole } | { readonly refused: PeerRefusal };
+export type PeerRoleResolution =
+  | { readonly role: InternalPeerRole }
+  | { readonly refused: PeerRefusal };
 
 /**
  * The role a certificate's SANs map to in `peerRoles`. Every SAN the map
@@ -113,7 +115,7 @@ export function resolvePeerRole(
   sans: readonly PeerSan[],
   peerRoles: InternalPeerRoles
 ): PeerRoleResolution {
-  const roles = new Set<ServiceRole>();
+  const roles = new Set<InternalPeerRole>();
   for (const san of sans) {
     const role = peerRoles.get(peerSanKey(san));
     if (role !== undefined) roles.add(role);

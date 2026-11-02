@@ -1,4 +1,5 @@
 export * from './lib/fastify-plugin-signer';
+export * from './lib/key-custody-check';
 export * from './lib/realm-keys';
 export * from './lib/repository-key-stores';
 export type * from './types';

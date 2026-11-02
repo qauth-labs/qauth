@@ -8,10 +8,11 @@ import { collectDefaultMetrics, Counter, Gauge, Registry } from 'prom-client';
  *
  * Decorated onto the Fastify instance as `fastify.metrics` so routes and helpers
  * can increment counters without importing a global singleton. The `registry`
- * is what the `GET /metrics` route serialises (#123).
+ * is what the internal listener's `GET /internal/metrics` route serialises
+ * (#123, #500).
  */
 export interface AppMetrics {
-  /** prom-client registry backing the `/metrics` endpoint. */
+  /** prom-client registry backing `GET /internal/metrics`. */
   registry: Registry;
   /**
    * Login outcomes (#123). Labelled by `result` = `success` | `failure`, and

@@ -16,8 +16,7 @@
  * - `api` — called by a client or a server with its own credentials: token,
  *   introspection, revocation, userinfo, registration, the OID4VP request and
  *   response endpoints a wallet calls, the management and legacy `/auth/*`
- *   routes, and `/metrics` until it moves to the internal listener. Answers on
- *   the realm's primary host and on its endpoint hosts. `/auth/logout` is one:
+ *   routes. Answers on the realm's primary host and on its endpoint hosts. `/auth/logout` is one:
  *   it is a bearer-token call, and the session cookie it clears when a request
  *   carries one never reaches an endpoint host, since a `__Host-` cookie stays
  *   on the host that set it.
@@ -25,7 +24,9 @@
  *   discovery, JWKS, the passkey association files and the root greeting.
  *   Answers on the primary host and the endpoint hosts, like `api`.
  * - `none` — not routed by host. Answers on any host, with no realm resolved,
- *   and must carry no realm data. Only `/health` is `none`.
+ *   and must carry no realm data. Only `/health` and `/ready` are `none`
+ *   (#500); the metrics are on the internal listener, which is not routed
+ *   by host.
  */
 export const ROUTE_SURFACES = ['browser', 'api', 'meta', 'none'] as const;
 

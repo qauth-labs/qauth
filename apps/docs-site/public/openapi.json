@@ -249,11 +249,54 @@
         "tags": [
           "System"
         ],
-        "description": "Health check endpoint. Returns database and Redis connectivity status. Used for liveness and readiness probes.",
+        "description": "Liveness: answers 200 while the process serves, with the service roles it runs. It checks no dependency; `GET /ready` does. Answers on any host and carries no realm data.",
         "x-qauth-stability": "stable",
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "The process answers. Its dependencies are what `GET /ready` checks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "Always `ok`: the process answers.",
+                      "enum": [
+                        "ok"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                      "description": "When the process answered."
+                    },
+                    "roles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "web",
+                          "api",
+                          "admin",
+                          "signer",
+                          "delivery"
+                        ]
+                      },
+                      "description": "The service roles this process runs (`SERVICE_ROLES`)."
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "timestamp",
+                    "roles"
+                  ],
+                  "additionalProperties": false,
+                  "description": "The process answers. Its dependencies are what `GET /ready` checks."
+                }
+              }
+            }
           },
           "429": {
             "description": "Too Many Requests",
@@ -312,19 +355,89 @@
         }
       }
     },
-    "/metrics": {
+    "/ready": {
       "get": {
         "tags": [
           "System"
         ],
-        "description": "Prometheus metrics endpoint. Returns process/runtime metrics plus auth counters in Prometheus text exposition format.",
+        "description": "Readiness: runs the checks this process needs for its service roles (the database, Redis, the KEK, the event outbox) and answers 200 when every one passes. When one fails it answers 503 with a `service_unavailable` problem document whose extension members `roles` and `checks` carry the roles and the result of each check, as the 200 answer does. Answers on any host and carries no realm data.",
         "x-qauth-stability": "stable",
         "responses": {
           "200": {
-            "description": "Default Response"
+            "description": "The readiness checks of this process and their results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "description": "Every check passed.",
+                      "enum": [
+                        "ok"
+                      ]
+                    },
+                    "roles": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "web",
+                          "api",
+                          "admin",
+                          "signer",
+                          "delivery"
+                        ]
+                      },
+                      "description": "The service roles this process runs (`SERVICE_ROLES`)."
+                    },
+                    "checks": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ok",
+                              "fail"
+                            ],
+                            "description": "Whether the check passed."
+                          },
+                          "reason": {
+                            "description": "Why a failed check failed: the dependency refused or errored, or did not answer in time.",
+                            "type": "string",
+                            "enum": [
+                              "error",
+                              "timeout"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "status"
+                        ],
+                        "additionalProperties": false,
+                        "description": "The result of one readiness check."
+                      },
+                      "description": "Each check the roles registered, by name: `database` on every process, `redis` on `web`, `api` and `admin`, `kek` on `signer`, `outbox` on `delivery`."
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "roles",
+                    "checks"
+                  ],
+                  "additionalProperties": false,
+                  "description": "The readiness checks of this process and their results."
+                }
+              }
+            }
           },
-          "421": {
-            "description": "Misdirected Request",
+          "429": {
+            "description": "Too Many Requests",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -333,8 +446,8 @@
               }
             }
           },
-          "500": {
-            "description": "Internal Server Error",
+          "503": {
+            "description": "Service Unavailable",
             "content": {
               "application/problem+json": {
                 "schema": {

@@ -1,28 +1,30 @@
 ---
 title: Observability Guide
-description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, Prometheus metrics, events as OpenTelemetry logs, and alerting.
+description: QAuth's observability surface — structured logging, request-id tracking, auth-event logging, failed-login lockout, health and readiness, Prometheus metrics, events as OpenTelemetry logs, and alerting.
 sidebar:
   order: 3
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-02'
 ---
 
 This guide covers QAuth's observability surface: structured logging, request-id
-tracking, auth-event logging, failed-login tracking/lockout, Prometheus metrics,
-events exported as OpenTelemetry logs, and recommended alerting.
+tracking, auth-event logging, failed-login tracking/lockout, health and
+readiness, Prometheus metrics, events exported as OpenTelemetry logs, and
+recommended alerting.
 
 ## Overview
 
-| Capability                | Mechanism                                                        |
-| ------------------------- | ---------------------------------------------------------------- |
-| **Structured logging**    | pino (built into Fastify) with secret redaction                  |
-| **Request-id tracking**   | `genReqId` + `REQUEST_ID_HEADER`, echoed on responses            |
-| **Auth-event logging**    | Structured `authEvent` log lines for login/register/logout/token |
-| **Failed-login tracking** | Redis-backed per-identifier counters with temporary lockout      |
-| **Metrics**               | `GET /metrics` in Prometheus text format via `prom-client`       |
-| **Event export**          | Every event as an OpenTelemetry log record, off by default       |
-| **Background jobs**       | Periodic jobs, one node at a time under a Postgres advisory lock |
-| **Event delivery**        | Each event to each delivery destination, at least once           |
-| **Alerting**              | Prometheus Alertmanager rules (see below)                        |
+| Capability                | Mechanism                                                         |
+| ------------------------- | ----------------------------------------------------------------- |
+| **Structured logging**    | pino (built into Fastify) with secret redaction                   |
+| **Request-id tracking**   | `genReqId` + `REQUEST_ID_HEADER`, echoed on responses             |
+| **Auth-event logging**    | Structured `authEvent` log lines for login/register/logout/token  |
+| **Failed-login tracking** | Redis-backed per-identifier counters with temporary lockout       |
+| **Health and readiness**  | `GET /health` (liveness) and `GET /ready` (per-role checks)       |
+| **Metrics**               | `GET /internal/metrics` on the internal listener, Prometheus text |
+| **Event export**          | Every event as an OpenTelemetry log record, off by default        |
+| **Background jobs**       | Periodic jobs, one node at a time under a Postgres advisory lock  |
+| **Event delivery**        | Each event to each delivery destination, at least once            |
+| **Alerting**              | Prometheus Alertmanager rules (see below)                         |
 
 ## Structured Logging
 
@@ -214,11 +216,88 @@ does not depend on the realm's `bruteForce` policy: a realm whose lock is off
   realm and the user. A mark found while the hard action is unarmed is
   ignored, and the next successful sign-in clears it and logs a warning.
 
-## Metrics (`GET /metrics`)
+## Health and Readiness
 
-QAuth exposes Prometheus metrics in text exposition format at `GET /metrics`
-(`apps/auth-server/src/app/routes/metrics.ts`). The endpoint includes default
-process/runtime metrics plus QAuth counters and gauges:
+Every process answers two probes on its public port, whatever its service
+roles. Both answer on any host and carry no realm data, and each is
+rate-limited per client address to `HEALTH_RATE_LIMIT_MAX` requests per
+`HEALTH_RATE_LIMIT_WINDOW` seconds (1000 per 60 by default) unless
+`RATE_LIMIT_ENABLED=false`. The counters are kept in the process's memory
+rather than in Redis, so the probes answer while Redis does not.
+
+- **`GET /health` is liveness.** It answers `200` while the process serves, with
+  the service roles it runs, and checks no dependency:
+
+  ```json
+  {
+    "status": "ok",
+    "timestamp": "2026-11-02T09:00:00.000Z",
+    "roles": ["web", "api", "admin", "signer", "delivery"]
+  }
+  ```
+
+  Point a liveness probe at it. A process whose database is down is still
+  alive, and restarting it would not bring the database back.
+
+- **`GET /ready` is readiness.** It runs the checks of the process's roles at
+  once, each within 2 seconds, and answers `200` when every one passes, with
+  `"status": "ok"`, the roles and each check's result. When one fails it
+  answers `503` with a problem document, as every route outside the OAuth
+  protocol endpoints answers an error, whose `roles` and `checks` members say
+  the same:
+
+  ```json
+  {
+    "type": "https://docs.qauth.dev/reference/problem-types/#service-unavailable",
+    "title": "Service unavailable",
+    "status": 503,
+    "detail": "A readiness check failed: redis.",
+    "instance": "/ready",
+    "code": "service_unavailable",
+    "trace_id": "req-1a2b3c",
+    "roles": ["api"],
+    "checks": {
+      "database": { "status": "ok" },
+      "redis": { "status": "fail", "reason": "timeout" }
+    }
+  }
+  ```
+
+  Point a readiness probe, a load balancer's health check or a Compose
+  `healthcheck` at it. The Compose file's `auth-server` service does.
+
+| Check      | Runs on               | Passes when                                                                                                                                                                             |
+| ---------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database` | every role            | Postgres answers `SELECT 1`.                                                                                                                                                            |
+| `redis`    | `web`, `api`, `admin` | Redis answers `PING`. It still holds the rate limits and the single-use stores those roles use.                                                                                         |
+| `kek`      | `signer`              | The KEK provider reports itself usable and unwraps one stored key for each KEK reference in use. A pass stands for 30 seconds and a failure for 5, as an unwrap may be a call to a KMS. |
+| `outbox`   | `delivery`            | The event delivery queue can be read.                                                                                                                                                   |
+
+A failed check gives a `reason`: `error` when the dependency refused or failed,
+`timeout` when it gave no answer within 2 seconds. The error itself goes to the
+log, never to the answer, which any caller can read: the warning
+`A readiness check fails: GET /ready answers 503 until it passes` once when a
+check starts failing, with the check's name and the error, and an info line
+when it passes again. Requests that arrive while a check runs share its run,
+and a request that stops waiting at the timeout leaves the run going: a check
+runs again only once its last run settled, so a stalled dependency holds one
+run of each check, whoever calls `/ready`.
+
+Later releases add checks of their own: the configuration digest on every
+role, and the signer service on a process that reaches a remote signer.
+
+> ℹ️ **Changed in 0.2.** `/health` used to check Postgres and Redis and answer
+> `503` when one was down. It is liveness now and always answers `200` while
+> the process serves: move a probe that should take a process out of rotation
+> to `/ready`.
+
+## Metrics (`GET /internal/metrics`)
+
+QAuth exposes Prometheus metrics in text exposition format at
+`GET /internal/metrics` on the internal listener
+(`apps/auth-server/src/app/internal/routes/metrics.ts`), never on the public
+port. The endpoint includes default process/runtime metrics plus QAuth counters
+and gauges:
 
 | Metric                                             | Type    | Labels               | Meaning                                                                  |
 | -------------------------------------------------- | ------- | -------------------- | ------------------------------------------------------------------------ |
@@ -245,9 +324,9 @@ each list as **open** — a new call site can add a value without a schema chang
 
 - `result` is `success` or `failure`. `reason` is set on failures only, e.g.
   `invalid_credentials`, `locked_out`, `error`. A login refused because the
-  account is not verified yet counts as `invalid_credentials`: this endpoint is
-  unauthenticated, and a label of its own would tell a caller who just
-  registered an address whether it was free. The `user.login.failure` log line
+  account is not verified yet counts as `invalid_credentials`: a label of its
+  own would tell whoever reads the metrics whether an address someone just
+  registered was free. The `user.login.failure` log line
   and the audit row keep the reason `email_not_verified`.
 - `type` is e.g. `access`, `refresh`, or `id_jag` (the ID-JAG assertion minted by
   the token-exchange grant). `grant_type` is e.g. `password`,
@@ -280,20 +359,57 @@ each list as **open** — a new call site can add a value without a schema chang
   is in place, but the hosted pages do not use it yet, so they stay at zero for
   now.
 
-The endpoint is **unauthenticated and rate-limit-exempt** (so a scraper can poll
-it frequently). Restrict access at the reverse proxy / network layer (e.g. to a
-metrics subnet), or disable it entirely with `METRICS_ENABLED=false`.
+### Who can read the metrics
+
+The public port does not serve them: `GET /metrics` there answers `404`, on
+every host. Each process serves its own metrics on its internal listener, which
+runs on every process while `METRICS_ENABLED` is on (the default), on
+`INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port `3443`, by default). The
+listener is not routed by host, so a scraper reaches each process by its
+address and needs no realm host.
+
+- **With the internal TLS files** (`INTERNAL_TLS_CERT_PATH`,
+  `INTERNAL_TLS_KEY_PATH`, `INTERNAL_TLS_CA_PATH`), the listener serves mutual
+  TLS only. Issue the scraper a client certificate from the internal CA and map
+  its SAN to `metrics` in `INTERNAL_PEER_ROLES`, for example
+  `{"spiffe://example.org/prometheus":"metrics"}`. A `metrics` peer may read
+  the metrics and nothing else, and a peer with another role gets `403` there.
+  A process whose service roles are split must have the files, and refuses to
+  boot without a peer to admit: map a scraper, or set `METRICS_ENABLED=false`
+  where no scraper reads that process.
+- **Without them**, a single process (every role, the default) serves plain
+  HTTP, and only on a loopback address. A request from a loopback address reads
+  the metrics, and any other request is refused. A scraper on the same host, or
+  in the same network namespace such as a sidecar, reads
+  `http://127.0.0.1:3443/internal/metrics`. With `INTERNAL_HOST` set to any
+  other address and no TLS files, the process refuses to boot. Loopback is the
+  only proof of who calls here: a proxy on the host or in the pod that forwards
+  outside traffic to a loopback address, as some service-mesh sidecars do, makes
+  every caller it forwards a local one. Behind such a proxy, give the listener
+  the TLS files and a `metrics` peer.
+
+The route has no rate limit. The listener refuses every caller without a role
+before any route, and a scraper polls at its own interval.
+`METRICS_ENABLED=false` removes the route, and on a process that has no other
+use for the internal listener, the listener too.
 
 > ℹ️ **Under Docker Compose these reach the container, but only because they are
 > listed.** The `auth-server` service in `docker-compose.yml` declares an
 > explicit `environment:` map and no `env_file:`, so that map is an
 > **allowlist**: only the variables named in it are forwarded. Every variable on
-> this page is on it — `METRICS_ENABLED`, `LOG_PRETTY`, `LOG_REDACT_PATHS`,
-> `REQUEST_ID_HEADER` and the four `FAILED_LOGIN_*` settings are forwarded as
-> bare `VAR:` entries, a null value that Compose resolves from `.env` (or the
-> shell) and omits entirely when unset, so an unset variable still falls through
-> to its schema default. `METRICS_ENABLED=false` in `.env` therefore does
-> unregister `GET /metrics`.
+> this page but the internal listener's is on it — `METRICS_ENABLED`,
+> `LOG_PRETTY`, `LOG_REDACT_PATHS`, `REQUEST_ID_HEADER` and the four
+> `FAILED_LOGIN_*` settings are forwarded as bare `VAR:` entries, a null value
+> that Compose resolves from `.env` (or the shell) and omits entirely when
+> unset, so an unset variable still falls through to its schema default.
+> `METRICS_ENABLED=false` in `.env` therefore does unregister
+> `GET /internal/metrics`.
+>
+> The internal listener's settings (`INTERNAL_HOST`, `INTERNAL_PORT`, the three
+> `INTERNAL_TLS_*` files and `INTERNAL_PEER_ROLES`) are not on it, so under
+> Compose the metrics answer on `http://127.0.0.1:3443/internal/metrics` inside
+> the container only. A scraper in another container needs an override file that
+> adds them to the map and mounts the TLS files.
 >
 > The allowlist itself is the thing to remember: a variable you add to `.env`
 > later is **not** reachable from Compose until you also add it to that map.
@@ -467,16 +583,24 @@ new head it prints.
 ```yaml
 scrape_configs:
   - job_name: qauth-auth-server
-    metrics_path: /metrics
+    scheme: https
+    metrics_path: /internal/metrics
+    tls_config:
+      ca_file: /etc/prometheus/qauth-internal-ca.crt
+      cert_file: /etc/prometheus/prometheus.crt
+      key_file: /etc/prometheus/prometheus.key
     static_configs:
-      - targets: ['auth-server:3000']
+      - targets: ['auth-server:3443']
 ```
 
-`/metrics` answers only on a realm's host or endpoint host, like every route
-but `/health`; any other host gets `421 Misdirected Request`. The target above
-works because the Compose file lists `auth-server` in
-`DEFAULT_REALM_ENDPOINT_HOSTS`. A scraper that reaches the server by another
-name, or by a pod address, needs that name or address in the list.
+The scraper presents `prometheus.crt`, whose SAN `INTERNAL_PEER_ROLES` maps to
+`metrics`, and checks the server's certificate against the internal CA. That
+certificate must name the host the scraper dials, `auth-server` above, or set
+`tls_config.server_name` to a name it does carry. For the scraper to reach
+another container, `INTERNAL_HOST` must be an address it can reach, such as
+`0.0.0.0`. A scraper beside a single process with no TLS files, in its network
+namespace, needs only `targets: ['127.0.0.1:3443']` with the default
+`scheme: http`.
 
 ## Events as OpenTelemetry Logs
 
@@ -633,7 +757,7 @@ in memory. The server sends the queue's records later, on its own:
 up. The server logs two other losses instead of counting them: the records
 left at shutdown (a warning), and an event that fails the event contract,
 which the event store's own check already keeps out (an error). The counter
-is on `/metrics` only while the export is on. A rule like this one tells you
+is in the metrics only while the export is on. A rule like this one tells you
 when records keep being dropped for 15 minutes, as they are when the collector
 falls behind or cannot be reached; a single burst, such as a collector
 restart, does not fire it:

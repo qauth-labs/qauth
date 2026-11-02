@@ -239,7 +239,13 @@ start_server() {
     if [ "$(docker inspect -f '{{.State.Running}}' "$container")" != "true" ]; then
       fail "The $role server ($image) stopped before it became healthy (exit code $(docker inspect -f '{{.State.ExitCode}}' "$container")). Its log is in the logs step."
     fi
-    body="$(curl -fsS --max-time 5 "$BASE_URL/health" 2>/dev/null || true)"
+    # Ready, not only alive: /ready answers 200 once Postgres, Redis and the
+    # KEK do. A release before it (#500) answers 404 there, and its /health
+    # still checked Postgres and Redis.
+    body="$(curl -fsS --max-time 5 "$BASE_URL/ready" 2>/dev/null || true)"
+    if [ -z "$body" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$BASE_URL/ready" 2>/dev/null)" = 404 ]; then
+      body="$(curl -fsS --max-time 5 "$BASE_URL/health" 2>/dev/null || true)"
+    fi
     case "$body" in
       *'"status":"ok"'*)
         say "The $role server ($image) is healthy at $BASE_URL."
