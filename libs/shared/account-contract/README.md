@@ -40,17 +40,17 @@ together (`ACCOUNT_API_RC` in `lib/identifiers.ts`, and the auth server's
 `api-conventions/families.ts`, which a test there keeps equal).
 
 A feature that registers one of the security log's planned event types marks its source
-`registered` in `lib/security-log.ts` in the same change; `security-log.test.ts` fails until it does.
+`registered` in `lib/security-log.ts` in the same change; the auth server's
+`api-conventions/account-contract.test.ts` fails until it does.
 
 ## The tests
 
 | Test                    | What it holds the contract to                                                                             |
 | ----------------------- | --------------------------------------------------------------------------------------------------------- |
-| `openapi-lint.test.ts`  | A valid OpenAPI 3.1 document; every schema compiles under strict mode; every reference resolves           |
+| `openapi-lint.test.ts`  | OpenAPI 3.1, deterministic; every schema compiles under strict mode; every reference resolves             |
 | `examples.test.ts`      | Every operation's example request and response, and every problem example, validates against its schema   |
 | `display-rules.test.ts` | No schema allows HTML or free text: every string is an enum, a constant or a bounded, patterned value     |
 | `operations.test.ts`    | Each operation's audience, fresh authentication and act-chain rule; paging, `If-Match`, the challenge     |
-| `security-log.test.ts`  | The kinds are a closed list, matched to the event registry both ways                                      |
 | `artifacts.test.ts`     | The committed files equal the generated ones; the registry; the rules appear in the document and the page |
 
 Shared libraries are leaves of the module graph, so this one imports no other workspace library. The

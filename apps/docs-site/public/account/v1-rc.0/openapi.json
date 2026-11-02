@@ -3,7 +3,7 @@
   "info": {
     "title": "QAuth Account API",
     "version": "v1-rc.0",
-    "description": "The account API is how a signed-in person manages their own account (ADR-019 Decision 7): the profile, the sign-in methods, the sessions, the security log, the addresses, the connected apps, the notices and deleting the account. The account console calls it from its backend, with the person’s access token.\n\n## Status\n\n- This document is the contract, published before the implementation. The auth server serves two of its operations today, `account.consents.list` and `account.consents.delete`; the others arrive with the account console’s backend. The two served operations still answer errors with the auth server’s general problem document, which may carry `detail` and `errors[].message`; the implementation of this contract narrows them to its problem document.\n- `GET /consents` and `DELETE /consents/{id}`, which the hosted UI calls with the session cookie and an `X-CSRF-Token` header, are deprecated aliases of `account.consents.list` and `account.consents.delete`. They are removed when the account console replaces the hosted UI’s consents page.\n- `GET /api/consents` and `DELETE /api/consents/{id}`, and their replacements `/developer/v1-rc.0/consents`, list and revoke a person’s consents with a developer-audience token. A person’s consents are managed in the account console, not the developer portal (ADR-020), so they are removed with the hosted UI’s routes, and `account.consents.*` is the only way left.\n\n## Tokens\n\n- The callers are backends, such as the account console’s, that hold a person’s access token whose only audience is `urn:qauth:aud:account:v1-rc.0`, sent as a Bearer token or, while the server’s DPoP support is on, a DPoP-bound one. No cookie authenticates a call, and the server sends no CORS headers. Each operation names the audience in `x-qauth-audience`.\n- The token’s subject is an enabled user of the request’s realm, and every operation acts on that user’s own account only. A resource of another account answers `not_found`, as one that does not exist.\n- Each operation names the permission it will need in `x-qauth-permission` and its class in `x-qauth-class`. No scope grants them yet: until the account family defines its scopes, the audience alone admits a token, and a token that lacks a scope an operation requires will get 403 `forbidden`.\n\n## Fresh authentication\n\n- An operation whose `x-qauth-fresh-authentication` is `strongest-factor` needs a sign-in at most 300 seconds old (the token’s `auth_time`) whose `amr` holds the account’s strongest bound factor: `pop` when a passkey is bound, else `otp` when an authenticator app is, else `pwd`.\n- `strongest-factor-or-recovery-code` also accepts a sign-in of the same age that used a recovery code in place of a lost second factor. Only the operations that bind a new second factor take it.\n- Otherwise the operation answers 401 `insufficient_user_authentication` (RFC 9470 §3) with the challenge `WWW-Authenticate: Bearer error=\"insufficient_user_authentication\", max_age=\"300\"` when the sign-in is too old, or `max_age=\"0\"` when it is recent but lacks the strongest factor. The problem document carries the same `max_age`. The caller sends the person to the authorization endpoint with that `max_age`, whose sign-in ends with the strongest factor, and repeats the call with the new token.\n\n## Act-chain tokens\n\n- An act-chain token (RFC 8693 `act`: an admin or an agent acting for the person) never counts as the person’s fresh authentication.\n- An operation whose `x-qauth-act-chain` is `refused` answers an act-chain token with 403 `delegated_token_refused`, before any fresh-authentication check, so a delegated caller never gets a challenge it cannot meet. Every operation that changes a credential, an identifier, the contact address or a linked account refuses one, and so do deleting the account and reporting a sign-in as not the person’s.\n\n## Rules\n\n- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end, and `x-qauth-display` says where it comes from.\n- A request takes no unbounded text: a value the person types, such as a profile value or a passkey’s name, is a bounded display value too. A password is the one exception: it takes any character, appears only in a request (`writeOnly`) and is never shown.\n- Every error is an RFC 9457 problem document (`application/problem+json`) with a stable `code` and a `trace_id`, and no prose: no `detail`, no `instance`, and field errors as reason codes. Each error response lists the codes it may carry in `x-qauth-problem-codes`, a closed list per operation.\n- A list pages by cursor: `limit` (1 to 200, default 50) and `cursor`, the opaque `nextCursor` of the previous page, which is `null` on the last page.\n- An update is a JSON Merge Patch (RFC 7396, `application/merge-patch+json`) sent with `If-Match`, the `ETag` of the resource’s last read. A stale value answers 412 `precondition_failed`, a missing one 428 `precondition_required`.\n- Every answer carries `Cache-Control: no-store`.\n- The security log keeps an entry for 90 days by default, a realm setting. Its `kind` is a closed list, built from QAuth’s events through an allow list.\n\n## Versioning\n\n- The path and the audience carry the major version. Until QAuth 1.0.0 it is a release candidate, `/account/v1-rc.<M>` and `urn:qauth:aud:account:v1-rc.<M>` (today `/account/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>` for both. The release that ships 1.0.0 serves `/account/v1`.\n- Within a major version, changes are additive only: new operations, new optional request members, new response members, and new values of an extensible set (problem codes, field error reasons, password rejection reasons, profile field types).\n- A client ignores response members it does not know, and treats a problem code it does not know by its HTTP status. A request with a member the operation does not declare is refused.\n- The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.\n- Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation, changing what an operation asks of the token (`x-qauth-fresh-authentication`, `x-qauth-act-chain`) and adding to a closed set, such as the security log’s kinds, need a new major version.\n- A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.",
+    "description": "The account API is how a signed-in person manages their own account (ADR-019 Decision 7): the profile, the sign-in methods, the sessions, the security log, the addresses, the connected apps, the notices and deleting the account. The account console calls it from its backend, with the person’s access token.\n\n## Status\n\n- This document is the contract, published before the implementation. The auth server serves two of its operations today, `account.consents.list` and `account.consents.delete`; the others arrive with the account console’s backend. The two served operations still answer errors with the auth server’s general problem document, which may carry `detail` and `errors[].message`; the implementation of this contract narrows them to its problem document. It also narrows what they send beyond that: `client_name` is the name the client registered, which no display rule has checked; the path accepts an id in capital letters; and the deletion’s answer and the errors carry no `Cache-Control: no-store`.\n- `GET /consents` and `DELETE /consents/{id}`, which the hosted UI calls with the session cookie and an `X-CSRF-Token` header, are deprecated aliases of `account.consents.list` and `account.consents.delete`. They are removed when the account console replaces the hosted UI’s consents page.\n- `GET /api/consents` and `DELETE /api/consents/{id}`, deprecated for `/developer/v1-rc.0/consents`, list and revoke a person’s consents with a developer-audience token. A person’s consents move from the developer portal to the account console (ADR-020 §3), so `account.consents.*` is what the console calls. Retiring the developer family’s consent operations is a change of that family’s own contract.\n\n## Tokens\n\n- The callers are backends, such as the account console’s, that hold a person’s access token whose only audience is `urn:qauth:aud:account:v1-rc.0`, sent as a Bearer token or, while the server’s DPoP support is on, a DPoP-bound one. No cookie authenticates a call, and the server sends no CORS headers. Each operation names the audience in `x-qauth-audience`.\n- The token’s subject is an enabled user of the request’s realm, and every operation acts on that user’s own account only. A resource of another account answers `not_found`, as one that does not exist.\n- Each operation names the permission it will need in `x-qauth-permission` and its class in `x-qauth-class`. No scope grants them yet: until the account family defines its scopes, the audience alone admits a token, and a token that lacks a scope an operation requires will get 403 `forbidden`.\n\n## Fresh authentication\n\n- An operation whose `x-qauth-fresh-authentication` is `strongest-factor` needs a sign-in at most 300 seconds old (the token’s `auth_time`) whose `amr` holds the account’s strongest bound factor: `pop` when a passkey is bound, else `otp` when an authenticator app is, else `pwd`.\n- `strongest-factor-or-recovery-code` also accepts a sign-in of the same age that used a recovery code in place of a lost second factor. Only the two halves of a rebind after a lost factor take it (ADR-017 Decision 8): removing a passkey or the authenticator app, and binding a new authenticator app.\n- Otherwise the operation answers 401 `insufficient_user_authentication` (RFC 9470 §3) with the challenge `WWW-Authenticate: Bearer error=\"insufficient_user_authentication\", max_age=\"300\"` when the sign-in is too old, or `max_age=\"0\"` when it is recent but lacks the strongest factor. The problem document carries the same `max_age`. The caller sends the person to the authorization endpoint with that `max_age`, and repeats the call with the new token. That sign-in ends with the account’s strongest bound factor, since a sign-in completes only once the transaction has proved it (ADR-017, the downgrade rule).\n\n## Act-chain tokens\n\n- An act-chain token (RFC 8693 `act`: an admin or an agent acting for the person) never counts as the person’s fresh authentication.\n- An operation whose `x-qauth-act-chain` is `refused` answers an act-chain token with 403 `delegated_token_refused`, before any fresh-authentication check, so a delegated caller never gets a challenge it cannot meet. Every operation that changes a credential, an identifier, the contact address or a linked account refuses one, and so do deleting the account and reporting a sign-in as not the person’s.\n\n## Rules\n\n- Typed data from the auth server’s own records, never HTML. Every string a response carries is an enum, a constant or a bounded value with a pattern. A display value has no markup bracket, no control, format, private-use or unassigned character, no line separator, and no space at either end, and `x-qauth-display` says where it comes from.\n- A request takes no unbounded text: a value the person types, such as a profile value or a passkey’s name, is a bounded display value too. A password is the one exception: it takes any character, appears only in a request (`writeOnly`) and is never shown.\n- Every error is an RFC 9457 problem document (`application/problem+json`) with a stable `code` and a `trace_id`, and no prose: no `detail`, no `instance`, and field errors as reason codes. Each error response lists the codes it may carry in `x-qauth-problem-codes`, a closed list per operation.\n- A list pages by cursor: `limit` (1 to 200, default 50) and `cursor`, the opaque `nextCursor` of the previous page, which is `null` on the last page.\n- An update is a JSON Merge Patch (RFC 7396, `application/merge-patch+json`) sent with `If-Match`, the `ETag` of the resource’s last read. A stale value answers 412 `precondition_failed`, a missing one 428 `precondition_required`.\n- Every answer carries `Cache-Control: no-store`.\n- The security log keeps an entry for 90 days by default, a realm setting. Its `kind` is a closed list, built from QAuth’s events through an allow list.\n\n## Versioning\n\n- The path and the audience carry the major version. Until QAuth 1.0.0 it is a release candidate, `/account/v1-rc.<M>` and `urn:qauth:aud:account:v1-rc.<M>` (today `/account/v1-rc.0`), and nothing about it is promised: a breaking change raises `<M>` for both. The release that ships 1.0.0 serves `/account/v1`.\n- Within a major version, changes are additive only: new operations, new optional request members, new response members, and new values of an extensible set (problem codes, field error reasons, password rejection reasons, profile field types, security notices).\n- A client ignores response members it does not know, and treats a problem code it does not know by its HTTP status. A request with a member the operation does not declare is refused.\n- The published schemas close response objects (`additionalProperties: false`) to describe this version exactly. A later version may add members, so a client must not validate responses strictly against an older schema, and ignores the members it does not know.\n- Removing or renaming a member, changing a type, tightening validation, changing a status code, removing an operation, changing what an operation asks of the token (`x-qauth-fresh-authentication`, `x-qauth-act-chain`) and adding to a closed set, such as the security log’s kinds, need a new major version.\n- A successor major version is served beside the previous one for at least 12 months, and the previous one stays until the next major release of QAuth.",
     "license": {
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
@@ -163,11 +163,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -191,6 +192,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -465,11 +469,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -493,6 +498,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -819,11 +827,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -847,6 +856,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -1053,11 +1065,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -1082,6 +1095,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -1421,11 +1437,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -1449,6 +1466,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -1672,11 +1692,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -1700,6 +1721,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -1854,7 +1878,7 @@
       "patch": {
         "operationId": "account.passkeys.update",
         "summary": "Rename a passkey",
-        "description": "Change the name the person gave a passkey.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor (at most 300 seconds old); an act-chain token is refused.",
+        "description": "Change the name the person gave a passkey. A name is no credential, so it needs no fresh authentication (ADR-020 §3); an act-chain token is still refused, as on every change to a credential’s record.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; no fresh authentication; an act-chain token is refused.",
         "tags": [
           "Sign-in methods"
         ],
@@ -1870,7 +1894,7 @@
         "x-qauth-class": "write",
         "x-qauth-permission": "passkeys.write",
         "x-qauth-audience": "urn:qauth:aud:account:v1-rc.0",
-        "x-qauth-fresh-authentication": "strongest-factor",
+        "x-qauth-fresh-authentication": "none",
         "x-qauth-act-chain": "refused",
         "parameters": [
           {
@@ -1970,12 +1994,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
-              "insufficient_user_authentication"
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -2000,8 +2024,8 @@
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
                   },
-                  "insufficient_user_authentication": {
-                    "$ref": "#/components/examples/insufficient_user_authentication"
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -2275,7 +2299,7 @@
       "delete": {
         "operationId": "account.passkeys.delete",
         "summary": "Remove a passkey",
-        "description": "Unbind a passkey. The last credential that can sign in, such as the only passkey of a passkey-only account, is refused with `last_credential`; the last second factor the realm requires, with `second_factor_required`. The \"passkey removed\" notice goes out.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor (at most 300 seconds old); an act-chain token is refused.",
+        "description": "Unbind a passkey. The last credential that can sign in, such as the only passkey of a passkey-only account, is refused with `last_credential`; the last second factor the realm requires, with `second_factor_required`. A sign-in that used a recovery code in place of a lost passkey may remove it, the first half of a rebind (ADR-017 Decision 8). The \"passkey removed\" notice goes out.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor or a recovery code (at most 300 seconds old); an act-chain token is refused.",
         "tags": [
           "Sign-in methods"
         ],
@@ -2291,7 +2315,7 @@
         "x-qauth-class": "write",
         "x-qauth-permission": "passkeys.write",
         "x-qauth-audience": "urn:qauth:aud:account:v1-rc.0",
-        "x-qauth-fresh-authentication": "strongest-factor",
+        "x-qauth-fresh-authentication": "strongest-factor-or-recovery-code",
         "x-qauth-act-chain": "refused",
         "parameters": [
           {
@@ -2347,11 +2371,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -2376,6 +2401,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -2633,11 +2661,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -2662,6 +2691,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -2922,11 +2954,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -2951,6 +2984,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -3160,7 +3196,7 @@
       "delete": {
         "operationId": "account.totp.delete",
         "summary": "Remove the authenticator app",
-        "description": "Unbind TOTP. The last second factor the realm’s policy requires for the account is refused with `second_factor_required`. The \"authenticator app removed\" notice goes out. An account without TOTP gets `not_found`.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor (at most 300 seconds old); an act-chain token is refused.",
+        "description": "Unbind TOTP. The last second factor the realm’s policy requires for the account is refused with `second_factor_required`. A sign-in that used a recovery code in place of a lost authenticator app may remove it, the first half of a rebind (ADR-017 Decision 8). The \"authenticator app removed\" notice goes out. An account without TOTP gets `not_found`.\n\nToken: audience `urn:qauth:aud:account:v1-rc.0`; fresh authentication with the account’s strongest factor or a recovery code (at most 300 seconds old); an act-chain token is refused.",
         "tags": [
           "Sign-in methods"
         ],
@@ -3176,7 +3212,7 @@
         "x-qauth-class": "write",
         "x-qauth-permission": "totp.write",
         "x-qauth-audience": "urn:qauth:aud:account:v1-rc.0",
-        "x-qauth-fresh-authentication": "strongest-factor",
+        "x-qauth-fresh-authentication": "strongest-factor-or-recovery-code",
         "x-qauth-act-chain": "refused",
         "responses": {
           "204": {
@@ -3211,11 +3247,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -3240,6 +3277,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -3488,11 +3528,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -3516,6 +3557,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -3722,11 +3766,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -3751,6 +3796,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -4035,11 +4083,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -4063,6 +4112,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -4268,11 +4320,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -4296,6 +4349,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -4520,11 +4576,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -4548,6 +4605,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -4863,11 +4923,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -4891,6 +4952,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -5096,11 +5160,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -5124,6 +5189,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -5370,11 +5438,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -5398,6 +5467,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -5611,11 +5683,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -5640,6 +5713,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -5914,11 +5990,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -5943,6 +6020,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -6265,11 +6345,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -6293,6 +6374,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -6498,11 +6582,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -6526,6 +6611,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -6748,11 +6836,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -6776,6 +6865,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -6975,11 +7067,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `insufficient_user_authentication`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof` or `insufficient_user_authentication`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication"
             ],
             "headers": {
@@ -7004,6 +7097,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   },
                   "insufficient_user_authentication": {
                     "$ref": "#/components/examples/insufficient_user_authentication"
@@ -7317,11 +7413,12 @@
             }
           },
           "401": {
-            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token`.",
+            "description": "Unauthorized: `unauthorized` or `access_token_expired` or `invalid_access_token` or `invalid_dpop_proof`.",
             "x-qauth-problem-codes": [
               "unauthorized",
               "access_token_expired",
-              "invalid_access_token"
+              "invalid_access_token",
+              "invalid_dpop_proof"
             ],
             "headers": {
               "Cache-Control": {
@@ -7345,6 +7442,9 @@
                   },
                   "invalid_access_token": {
                     "$ref": "#/components/examples/invalid_access_token"
+                  },
+                  "invalid_dpop_proof": {
+                    "$ref": "#/components/examples/invalid_dpop_proof"
                   }
                 }
               }
@@ -7514,7 +7614,8 @@
         }
       },
       "Challenge": {
-        "description": "The challenge (RFC 6750 §3): `Bearer realm=\"OAuth\"` without a token, with `error=\"invalid_token\"` for a refused one, and `Bearer error=\"insufficient_user_authentication\", max_age=\"300\"` (or `max_age=\"0\"`) when fresh authentication is needed (RFC 9470 §3). A DPoP-bound token gets the same under the `DPoP` scheme.",
+        "description": "The challenge (RFC 6750 §3): `Bearer realm=\"OAuth\"` without a token, with `error=\"invalid_token\"` for a refused one, and `Bearer error=\"insufficient_user_authentication\", max_age=\"300\"` (or `max_age=\"0\"`) when fresh authentication is needed (RFC 9470 §3). A DPoP-bound token gets the same under the `DPoP` scheme, and `error=\"invalid_dpop_proof\"` for a refused proof (RFC 9449 §7.1).",
+        "required": true,
         "schema": {
           "type": "string",
           "minLength": 1,
@@ -7574,6 +7675,7 @@
               "unauthorized",
               "access_token_expired",
               "invalid_access_token",
+              "invalid_dpop_proof",
               "insufficient_user_authentication",
               "forbidden",
               "delegated_token_refused",
@@ -8651,7 +8753,7 @@
             "maxLength": 2048,
             "pattern": "^[!#-;=?-\\[\\]-~]+$",
             "x-qauth-declared": true,
-            "description": "The app’s OAuth `client_id`."
+            "description": "The app’s OAuth `client_id`. A console makes it a link only when it is an `https` URL."
           },
           "client_name": {
             "type": "string",
@@ -8797,7 +8899,7 @@
             "maxLength": 2048,
             "pattern": "^[!#-;=?-\\[\\]-~]+$",
             "x-qauth-declared": true,
-            "description": "The app’s OAuth `client_id`, which may be a URL (a Client ID Metadata Document client)."
+            "description": "The app’s OAuth `client_id`, which may be a URL (a Client ID Metadata Document client). A console makes it a link only when it is an `https` URL."
           },
           "client_name": {
             "type": "string",
@@ -8945,12 +9047,12 @@
           },
           "notices": {
             "type": "array",
-            "description": "Every notice, in a fixed order.",
+            "description": "Every notice the server sends, in a fixed order.",
             "items": {
               "$ref": "#/components/schemas/NoticePreference"
             },
-            "minItems": 12,
-            "maxItems": 12
+            "minItems": 1,
+            "maxItems": 64
           }
         },
         "required": [
@@ -8965,7 +9067,9 @@
         "properties": {
           "notice": {
             "type": "string",
-            "enum": [
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]{0,63}$",
+            "x-extensible-enum": [
               "new_device",
               "password_changed",
               "credential_disabled",
@@ -8979,7 +9083,7 @@
               "identifier_changed",
               "account_deleted"
             ],
-            "description": "The notice."
+            "description": "The notice. A minor release may add notices, such as the new-agent-grant notice of ADR-020 §3; a console shows one it does not know by its `mandatory` and `enabled` alone."
           },
           "mandatory": {
             "type": "boolean",
@@ -9082,6 +9186,16 @@
           "title": "Invalid access token",
           "status": 401,
           "code": "invalid_access_token",
+          "trace_id": "0b9e2c4f-6a1d-4c3e-9f2a-7d5b8e1c3a60"
+        }
+      },
+      "invalid_dpop_proof": {
+        "summary": "Invalid DPoP proof",
+        "value": {
+          "type": "https://docs.qauth.dev/reference/problem-types/#invalid-dpop-proof",
+          "title": "Invalid DPoP proof",
+          "status": 401,
+          "code": "invalid_dpop_proof",
           "trace_id": "0b9e2c4f-6a1d-4c3e-9f2a-7d5b8e1c3a60"
         }
       },

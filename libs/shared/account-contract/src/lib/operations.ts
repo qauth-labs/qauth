@@ -327,10 +327,11 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     path: '/passkeys/{passkeyId}',
     tag: 'Sign-in methods',
     summary: 'Rename a passkey',
-    description: 'Change the name the person gave a passkey.',
+    description:
+      'Change the name the person gave a passkey. A name is no credential, so it needs no fresh authentication (ADR-020 §3); an act-chain token is still refused, as on every change to a credential’s record.',
     class: 'write',
     permission: 'passkeys.write',
-    freshAuthentication: 'strongest-factor',
+    freshAuthentication: 'none',
     actChain: 'refused',
     pathParameters: { passkeyId: 'The passkey’s id.' },
     conditional: true,
@@ -360,10 +361,10 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     tag: 'Sign-in methods',
     summary: 'Remove a passkey',
     description:
-      'Unbind a passkey. The last credential that can sign in, such as the only passkey of a passkey-only account, is refused with `last_credential`; the last second factor the realm requires, with `second_factor_required`. The "passkey removed" notice goes out.',
+      'Unbind a passkey. The last credential that can sign in, such as the only passkey of a passkey-only account, is refused with `last_credential`; the last second factor the realm requires, with `second_factor_required`. A sign-in that used a recovery code in place of a lost passkey may remove it, the first half of a rebind (ADR-017 Decision 8). The "passkey removed" notice goes out.',
     class: 'write',
     permission: 'passkeys.write',
-    freshAuthentication: 'strongest-factor',
+    freshAuthentication: 'strongest-factor-or-recovery-code',
     actChain: 'refused',
     pathParameters: { passkeyId: 'The passkey’s id.' },
     success: NO_CONTENT('The passkey was removed.'),
@@ -430,10 +431,10 @@ export const ACCOUNT_OPERATIONS: readonly AccountOperation[] = [
     tag: 'Sign-in methods',
     summary: 'Remove the authenticator app',
     description:
-      'Unbind TOTP. The last second factor the realm’s policy requires for the account is refused with `second_factor_required`. The "authenticator app removed" notice goes out. An account without TOTP gets `not_found`.',
+      'Unbind TOTP. The last second factor the realm’s policy requires for the account is refused with `second_factor_required`. A sign-in that used a recovery code in place of a lost authenticator app may remove it, the first half of a rebind (ADR-017 Decision 8). The "authenticator app removed" notice goes out. An account without TOTP gets `not_found`.',
     class: 'write',
     permission: 'totp.write',
-    freshAuthentication: 'strongest-factor',
+    freshAuthentication: 'strongest-factor-or-recovery-code',
     actChain: 'refused',
     success: NO_CONTENT('The authenticator app was removed.'),
     codes: ['not_found', 'second_factor_required'],
@@ -801,7 +802,8 @@ export function operationNamed(id: string): AccountOperation {
  * Every code an operation may answer, in the registry's order: the ones every
  * operation of its shape answers, and its own.
  *
- * - every operation: `bad_request`, the token guard's 401s and `forbidden`
+ * - every operation: `bad_request`, the token guard's 401s (`invalid_dpop_proof`
+ *   for a DPoP-bound token's proof) and `forbidden`
  *   (a scope, #933), `misdirected_request`, `too_many_requests`,
  *   `internal_error` and `service_unavailable`;
  * - with parameters or a body: `validation_error`; a list: `invalid_cursor`;
@@ -817,6 +819,7 @@ export function operationCodes(operation: AccountOperation): AccountProblemCodeN
     'unauthorized',
     'invalid_access_token',
     'access_token_expired',
+    'invalid_dpop_proof',
     'forbidden',
     'misdirected_request',
     'too_many_requests',

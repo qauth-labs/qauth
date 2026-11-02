@@ -24,14 +24,22 @@
  * The list is closed: the `kind` of an entry is an `enum`, and a console may
  * branch on every value. Adding a kind is a breaking change of the account
  * API (it raises the release candidate before 1.0.0), so the list covers
- * every kind 1.0 needs, including the notices an account with no contact
+ * every kind behind the notices #693 sends, which an account with no contact
  * address sees only here (ADR-020 §3, Emails).
  */
 
-/** Where a kind's entries come from: an event type, by its registry name. */
+/**
+ * Where a kind's entries come from: an event type, by its registry name, and,
+ * when only some of its events belong to the kind, which ones (`only`).
+ */
 export type SecurityLogSource =
-  | { readonly event: string; readonly status: 'registered' }
-  | { readonly event: string; readonly status: 'planned'; readonly issue: number };
+  | { readonly event: string; readonly status: 'registered'; readonly only?: string }
+  | {
+      readonly event: string;
+      readonly status: 'planned';
+      readonly issue: number;
+      readonly only?: string;
+    };
 
 export interface SecurityLogKind {
   /** What the entry tells the person, in one sentence. */
@@ -42,7 +50,11 @@ export interface SecurityLogKind {
   readonly reportable: boolean;
 }
 
-const registered = (event: string): SecurityLogSource => ({ event, status: 'registered' });
+const registered = (event: string, only?: string): SecurityLogSource => ({
+  event,
+  status: 'registered',
+  ...(only === undefined ? {} : { only }),
+});
 const planned = (event: string, issue: number): SecurityLogSource => ({
   event,
   status: 'planned',
@@ -65,7 +77,12 @@ export const SECURITY_LOG_KINDS = {
   second_factor_failed: {
     description:
       'A sign-in gave the right password and then a wrong second factor. Only these failed sign-ins are shown: a log of every failed sign-in would tell an attacker which guesses reached the account.',
-    sources: [registered('user.sign_in_failed')],
+    sources: [
+      registered(
+        'user.sign_in_failed',
+        'a refused second-factor step after an accepted password, whose `method` is the second factor’s (TOTP from F2c); never a refused identifier or password'
+      ),
+    ],
     reportable: false,
   },
   session_ended: {

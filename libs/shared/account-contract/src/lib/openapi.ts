@@ -373,7 +373,8 @@ export function buildAccountOpenApi(): OpenApiDocument {
           schema: { type: 'integer', minimum: 0 },
         },
         Challenge: {
-          description: `The challenge (RFC 6750 §3): \`Bearer realm="OAuth"\` without a token, with \`error="invalid_token"\` for a refused one, and \`Bearer error="insufficient_user_authentication", max_age="${FRESH_AUTHENTICATION_MAX_AGE_SECONDS}"\` (or \`max_age="0"\`) when fresh authentication is needed (RFC 9470 §3). A DPoP-bound token gets the same under the \`DPoP\` scheme.`,
+          description: `The challenge (RFC 6750 §3): \`Bearer realm="OAuth"\` without a token, with \`error="invalid_token"\` for a refused one, and \`Bearer error="insufficient_user_authentication", max_age="${FRESH_AUTHENTICATION_MAX_AGE_SECONDS}"\` (or \`max_age="0"\`) when fresh authentication is needed (RFC 9470 §3). A DPoP-bound token gets the same under the \`DPoP\` scheme, and \`error="invalid_dpop_proof"\` for a refused proof (RFC 9449 §7.1).`,
+          required: true,
           schema: { type: 'string', minLength: 1, maxLength: 1024, pattern: '^[!-~][ -~]*$' },
         },
         ScopeChallenge: {

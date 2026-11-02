@@ -121,7 +121,7 @@ export function clientId(description: string): JsonSchema {
     maxLength: 2048,
     pattern: TOKEN_CHARACTERS,
     'x-qauth-declared': true,
-    description,
+    description: `${description} A console makes it a link only when it is an \`https\` URL.`,
   };
 }
 
@@ -739,7 +739,12 @@ export const deletionRequestSchema = closedObject(
 
 export const noticePreferenceSchema = object(
   {
-    notice: closedEnum(NOTICE_NAMES, 'The notice.'),
+    notice: extensibleEnum(
+      NOTICE_NAMES,
+      '^[a-z][a-z0-9_]{0,63}$',
+      64,
+      'The notice. A minor release may add notices, such as the new-agent-grant notice of ADR-020 §3; a console shows one it does not know by its `mandatory` and `enabled` alone.'
+    ),
     mandatory: boolean('Whether it always goes out: no setting switches it off.'),
     enabled: boolean('Whether the account receives it now.'),
   },
@@ -755,9 +760,9 @@ export const notificationPreferencesSchema = object(
     ),
     notices: array(
       ref('NoticePreference'),
-      NOTICE_NAMES.length,
-      NOTICE_NAMES.length,
-      'Every notice, in a fixed order.'
+      1,
+      64,
+      'Every notice the server sends, in a fixed order.'
     ),
   },
   ['delivery', 'notices'],

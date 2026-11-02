@@ -87,6 +87,13 @@ export const ACCOUNT_PROBLEM_CODES = {
     description:
       'The access token is not valid, is not valid for this operation, or names no active user.',
   },
+  invalid_dpop_proof: {
+    status: 401,
+    type: 'invalid-dpop-proof',
+    title: 'Invalid DPoP proof',
+    description:
+      'A call under the `DPoP` scheme came with no proof, or with one that is not valid for this request (RFC 9449 §7.1).',
+  },
   insufficient_user_authentication: {
     status: 401,
     type: 'insufficient-user-authentication',

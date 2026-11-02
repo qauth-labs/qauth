@@ -52,9 +52,12 @@ const publishedNamed = (id: string) => {
  * account, and on deletion. The security log's "this wasn't me" refuses one
  * too: only the person may disown a sign-in, and the report forces a new
  * password at the next sign-in. ADR-017 Decision 8: the same changes need
- * fresh authentication with the strongest factor; binding a new second factor
- * after a lost one also takes a recovery-code sign-in. Ending sessions and
- * revoking a consent only take access away, so they need neither.
+ * fresh authentication with the strongest factor; the rebind after a lost
+ * second factor (removing it, binding a new authenticator app) also takes a
+ * recovery-code sign-in. Renaming a passkey changes no credential, so it
+ * needs no fresh authentication (ADR-020 §3), but its record is still the
+ * person's to change. Ending sessions and revoking a consent only take access
+ * away, so they need neither.
  */
 const EXPECTED: Record<string, readonly [string, string]> = {
   'account.profile.get': ['none', 'accepted'],
@@ -63,11 +66,11 @@ const EXPECTED: Record<string, readonly [string, string]> = {
   'account.password.change': ['strongest-factor', 'refused'],
   'account.passkeys.list': ['none', 'accepted'],
   'account.passkeys.get': ['none', 'accepted'],
-  'account.passkeys.update': ['strongest-factor', 'refused'],
-  'account.passkeys.delete': ['strongest-factor', 'refused'],
+  'account.passkeys.update': ['none', 'refused'],
+  'account.passkeys.delete': ['strongest-factor-or-recovery-code', 'refused'],
   'account.totp.enrollment.create': ['strongest-factor-or-recovery-code', 'refused'],
   'account.totp.enrollment.confirm': ['strongest-factor-or-recovery-code', 'refused'],
-  'account.totp.delete': ['strongest-factor', 'refused'],
+  'account.totp.delete': ['strongest-factor-or-recovery-code', 'refused'],
   'account.recoveryCodes.get': ['none', 'accepted'],
   'account.recoveryCodes.regenerate': ['strongest-factor', 'refused'],
   'account.sessions.list': ['none', 'accepted'],
@@ -150,12 +153,19 @@ describe('the operations', () => {
       expect(codes.includes('delegated_token_refused'), operation.id).toBe(
         operation.actChain === 'refused'
       );
+      // The document offers DPoP-bound tokens, so every operation may refuse a proof.
+      expect(codes, operation.id).toContain('invalid_dpop_proof');
       const unauthorized = publishedNamed(operation.id).responses['401'];
       expect(unauthorized?.headers?.['WWW-Authenticate'], operation.id).toEqual({
         $ref: '#/components/headers/Challenge',
       });
     }
     expect(FRESH_AUTHENTICATION_MAX_AGE_SECONDS).toBe(300);
+    // RFC 6750 §3: a 401 always carries its challenge.
+    const headers = (
+      ACCOUNT_OPENAPI as { components: { headers: Record<string, { required?: boolean }> } }
+    ).components.headers;
+    expect(headers['Challenge']?.required).toBe(true);
   });
 
   it('pages every list by cursor and conditions every update on If-Match', () => {

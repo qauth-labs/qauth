@@ -1,6 +1,8 @@
 /**
  * The security notices a person may receive (ADR-020 §3, Emails; #693), as the
- * account API's notification preferences list them: a closed list.
+ * account API's notification preferences list them. The set is extensible: the
+ * new-agent-grant notice of ADR-020 §3 arrives with the Authority Tree beta
+ * (#693 leaves it out), as a new value in a minor release.
  *
  * A notice goes to the account's contact address; an account with none sees
  * it only in its security log. Most notices cannot be switched off: those

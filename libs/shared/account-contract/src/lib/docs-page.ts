@@ -65,7 +65,9 @@ ${rows.join('\n')}`;
 }
 
 const source = (entry: SecurityLogSource) =>
-  entry.status === 'registered' ? code(entry.event) : `${code(entry.event)} (with #${entry.issue})`;
+  `${code(entry.event)}${entry.status === 'planned' ? ` (with #${entry.issue})` : ''}${
+    entry.only === undefined ? '' : `, only ${entry.only}`
+  }`;
 
 function securityLogRows(): string[] {
   return Object.entries(SECURITY_LOG_KINDS).map(
@@ -136,7 +138,7 @@ ${securityLogRows().join('\n')}
 A failed sign-in appears only as ${code('second_factor_failed')}, after a correct password: a log of every failed sign-in would tell an attacker which guesses reached the account. No entry carries the raw IP address; the location is approximate.`,
     `## Notices
 
-The security notices the account receives, a closed list. Notices go to the contact address; an account without one sees them only in its security log. The mandatory ones always go out; a realm may switch off the others.
+The security notices the account receives. A minor release may add one, such as the new-agent-grant notice of ADR-020 §3. Notices go to the contact address; an account without one sees them only in its security log. The mandatory ones always go out; a realm may switch off the others.
 
 | Notice | When | Mandatory |
 | ------ | ---- | --------- |
