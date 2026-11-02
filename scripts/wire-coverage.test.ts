@@ -424,11 +424,27 @@ describe('wire-coverage — the exempt list may only shrink (--base-ref)', () =>
     expect(result.stdout).toContain('does not exist at main');
   });
 
-  it('exits 2 when git cannot resolve the base ref — it never passes uncompared', () => {
+  it('exits 2 when git cannot resolve the base ref', () => {
     const paths = repository(document, [exemption('GET /a')]);
     const result = compare(paths, 'no-such-branch');
     expect(result.status).toBe(EXIT_INPUT);
     expect(result.stderr).toContain('cannot resolve the base ref "no-such-branch"');
+  });
+
+  it('exits 2 when git cannot read the base commit’s tree — a failed read never passes as "no list yet"', () => {
+    const paths = repository(document, [exemption('GET /a')]);
+    writeFileSync(
+      paths.exempt,
+      JSON.stringify(exemptList([exemption('GET /a'), exemption('GET /c')]), null, 2)
+    );
+    // The commit stays resolvable while its tree is gone, as in a partial
+    // clone whose on-demand fetch fails.
+    const tree = git(paths.dir, ['rev-parse', 'main^{tree}']);
+    rmSync(join(paths.dir, '.git', 'objects', tree.slice(0, 2), tree.slice(2)));
+    const result = compare(paths);
+    expect(result.status).toBe(EXIT_INPUT);
+    expect(result.stderr).toContain('cannot read the tree of the base ref "main"');
+    expect(result.stdout).not.toContain('does not exist at main');
   });
 
   it('exits 2 on a base ref that git would read as an option', () => {

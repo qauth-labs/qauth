@@ -335,9 +335,20 @@ function loadBaseOperations(ref, exemptPath) {
         `${repoPath(exemptPath)}. Fetch it, or give --base-ref a ref that exists.`
     );
   }
+  // Absent and unreadable are different answers. In a partial clone git
+  // fetches the base's trees on demand, and a failed fetch must not read as
+  // "the list does not exist there", which would pass the change uncompared.
+  // `ls-tree` exits 0 and prints nothing for an absent path, and exits
+  // non-zero when it cannot read the tree. Its path is relative to `cwd`.
+  const listed = git(['ls-tree', '--name-only', ref, '--', basename(exemptPath)], cwd);
+  if (listed.status !== 0) {
+    throw new InputError(
+      `cannot read the tree of the base ref "${ref}": ${listed.stderr.trim() || 'git ls-tree failed'}`
+    );
+  }
+  if (listed.stdout.trim() === '') return null;
   // `<rev>:./<name>` is relative to the working directory, the list's own.
   const object = `${ref}:./${basename(exemptPath)}`;
-  if (git(['cat-file', '-e', object], cwd).status !== 0) return null;
   const shown = git(['show', object], cwd);
   if (shown.status !== 0) {
     throw new InputError(`cannot read the exempt list at ${ref}: ${shown.stderr.trim()}`);
