@@ -11,8 +11,9 @@
  *   autoload registered before the manifest replaced it (pinned below), and
  *   the listing of every route with its roles fails for a route that has none.
  * - Each other role registers exactly its share: `web` the `browser` routes,
- *   `api` the `api` and `meta` routes, and every role `/health`, `/metrics`
- *   and @fastify/cors's `OPTIONS *`.
+ *   `api` the `api` and `meta` routes, and every role `/health`, `/ready`
+ *   and @fastify/cors's `OPTIONS *`. No role serves `/metrics` here: it is
+ *   on the internal listener (#500).
  * - A route under `/admin` refuses the boot, a plugin's as well as a route
  *   module's (#511): it registers only on the admin listener.
  */
@@ -118,15 +119,25 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'POST /developer/v1-rc.0/clients',
   'POST /developer/v1-rc.0/clients/:clientId/api-keys',
   'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',
+  // Readiness, beside the liveness of /health (#500).
+  'GET /ready',
 ];
 
-/** Every operation of both lists, with Fastify's `HEAD` routes. */
+/**
+ * The routes removed since: the metrics, which moved to the internal
+ * listener as `GET /internal/metrics` (#500).
+ */
+const ROUTES_REMOVED_SINCE: ReadonlySet<string> = new Set(['GET /metrics']);
+
+/** Every operation of both lists, less the removed ones, with Fastify's `HEAD` routes. */
 const PINNED_OPERATIONS: ReadonlySet<string> = new Set(
-  [...ROUTES_BEFORE_THE_MANIFEST, ...ROUTES_ADDED_SINCE].flatMap((operation) =>
-    operation.startsWith('GET ')
-      ? [operation, `HEAD ${operation.slice('GET '.length)}`]
-      : [operation]
-  )
+  [...ROUTES_BEFORE_THE_MANIFEST, ...ROUTES_ADDED_SINCE]
+    .filter((operation) => !ROUTES_REMOVED_SINCE.has(operation))
+    .flatMap((operation) =>
+      operation.startsWith('GET ')
+        ? [operation, `HEAD ${operation.slice('GET '.length)}`]
+        : [operation]
+    )
 );
 
 /** The keys a boot sets or clears, restored after the file. */
@@ -154,7 +165,10 @@ function maximalEnvironment(serviceRoles: string): Record<string, string> {
                 INTERNAL_TLS_CERT_PATH: '/run/secrets/signer.crt',
                 INTERNAL_TLS_KEY_PATH: '/run/secrets/signer.key',
                 INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
-                INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/web': 'web' }),
+                INTERNAL_PEER_ROLES: JSON.stringify({
+                  'spiffe://qauth.test/web': 'web',
+                  'spiffe://qauth.test/prometheus': 'metrics',
+                }),
               }),
         }
       : {
@@ -163,6 +177,8 @@ function maximalEnvironment(serviceRoles: string): Record<string, string> {
           INTERNAL_TLS_CERT_PATH: '/run/secrets/internal.crt',
           INTERNAL_TLS_KEY_PATH: '/run/secrets/internal.key',
           INTERNAL_TLS_CA_PATH: '/run/secrets/internal-ca.crt',
+          // The metrics are served to a scraper on the internal listener (#500).
+          INTERNAL_PEER_ROLES: JSON.stringify({ 'spiffe://qauth.test/prometheus': 'metrics' }),
         }),
     SESSION_COOKIE_SECRET: 'service-roles-session-secret-of-at-least-32-characters',
     EMAIL_PROVIDER: 'mock',
@@ -255,10 +271,10 @@ function operations(routes: readonly RouteOptions[]): Set<string> {
 
 /**
  * The roles a route of the pinned set belongs to, from its surface class:
- * `/metrics` and @fastify/cors's `OPTIONS *` belong to every role too.
+ * @fastify/cors's `OPTIONS *` belongs to every role too.
  */
 function expectedRoles(route: RouteOptions): readonly ServiceRole[] {
-  if (route.url === '/metrics' || route.url === '*') return SERVICE_ROLE_NAMES;
+  if (route.url === '*') return SERVICE_ROLE_NAMES;
   switch (route.config?.surface) {
     case 'browser':
       return ['web'];
@@ -349,10 +365,11 @@ describe.each(SERVICE_ROLE_NAMES.map((role) => [role] as const))(
       expect(operations(bootOf(role).routes)).toEqual(operations(expected));
     });
 
-    it('answers /health and /metrics, as every role does', () => {
+    it('answers /health and /ready, as every role does, and serves no /metrics here', () => {
       const registered = operations(bootOf(role).routes);
       expect(registered).toContain('GET /health');
-      expect(registered).toContain('GET /metrics');
+      expect(registered).toContain('GET /ready');
+      expect(registered).not.toContain('GET /metrics');
     });
 
     it('tags every route with its own role', () => {
@@ -429,7 +446,7 @@ describe('a split process holding the signer without mutual TLS (#496)', () => {
         routes
       )
     ).rejects.toThrow(
-      /INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so the signer routes are not registered without it/
+      /INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so no internal route is registered without it/
     );
     expect(routes).toEqual([]);
   });

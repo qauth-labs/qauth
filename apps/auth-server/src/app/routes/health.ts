@@ -1,72 +1,52 @@
 import type { FastifyInstance } from 'fastify';
+import type { ZodTypeProvider } from 'fastify-type-provider-zod';
+import { z } from 'zod';
 
 import { env } from '../../config/env';
-import { realmRateLimitKey } from '../helpers/realm-rate-limit';
+import { noStore, probeRateLimitHook, serviceRolesSchema } from '../helpers/probe-routes';
 
-interface HealthResponse {
-  status: 'ok' | 'unhealthy';
-  timestamp: string;
-  services: {
-    database: 'connected' | 'disconnected';
-    redis: 'connected' | 'disconnected';
-  };
-}
+/** What `GET /health` answers. */
+const healthResponseSchema = z
+  .object({
+    status: z.literal('ok').describe('Always `ok`: the process answers.'),
+    timestamp: z.iso.datetime().describe('When the process answered.'),
+    roles: serviceRolesSchema,
+  })
+  .describe('The process answers. Its dependencies are what `GET /ready` checks.');
 
+/**
+ * GET /health — liveness (#500).
+ *
+ * Answers 200 while the process serves, with the roles it runs. It checks no
+ * dependency: a process whose database or Redis is down is alive, and
+ * restarting it would not bring them back. Whether the process can serve
+ * what its roles need is `GET /ready` (`./ready.ts`).
+ *
+ * It answers on any host and carries no realm data (`surface: 'none'`,
+ * ADR-019 Decision 1), and is rate-limited per client address in the
+ * process's memory, not in Redis (`helpers/probe-routes.ts`).
+ */
 export default async function (fastify: FastifyInstance) {
-  fastify.get<{ Reply: HealthResponse }>(
+  const roles = [...env.SERVICE_ROLES];
+  fastify.withTypeProvider<ZodTypeProvider>().get(
     '/health',
     {
       schema: {
         description:
-          'Health check endpoint. Returns database and Redis connectivity status. Used for liveness and readiness probes.',
+          'Liveness: answers 200 while the process serves, with the service roles it runs. It checks no dependency; `GET /ready` does. Answers on any host and carries no realm data.',
         tags: ['System'],
         'x-qauth-stability': 'stable',
+        'x-qauth-errors': [429],
+        response: { 200: healthResponseSchema },
       },
-      config: {
-        surface: 'none',
-        rateLimit: {
-          max: env.HEALTH_RATE_LIMIT_MAX,
-          timeWindow: env.HEALTH_RATE_LIMIT_WINDOW * 1000,
-          keyGenerator: realmRateLimitKey,
-        },
-      },
+      config: { surface: 'none', rateLimit: false },
+      onRequest: probeRateLimitHook({
+        max: env.HEALTH_RATE_LIMIT_MAX,
+        windowSeconds: env.HEALTH_RATE_LIMIT_WINDOW,
+        enabled: env.RATE_LIMIT_ENABLED,
+      }),
     },
-    async (_request, reply) => {
-      try {
-        const dbHealthy = await fastify.dbPool
-          .query('SELECT 1')
-          .then(() => true)
-          .catch(() => false);
-
-        const redisHealthy = await fastify.redis
-          .ping()
-          .then(() => true)
-          .catch(() => false);
-
-        const status = dbHealthy && redisHealthy ? 'ok' : 'unhealthy';
-        const statusCode = status === 'ok' ? 200 : 503;
-
-        const response: HealthResponse = {
-          status,
-          timestamp: new Date().toISOString(),
-          services: {
-            database: dbHealthy ? 'connected' : 'disconnected',
-            redis: redisHealthy ? 'connected' : 'disconnected',
-          },
-        };
-
-        return reply.status(statusCode).send(response);
-      } catch (error) {
-        fastify.log.error(error, 'Health check failed');
-        return reply.status(503).send({
-          status: 'unhealthy',
-          timestamp: new Date().toISOString(),
-          services: {
-            database: 'disconnected',
-            redis: 'disconnected',
-          },
-        } satisfies HealthResponse);
-      }
-    }
+    async (_request, reply) =>
+      noStore(reply).send({ status: 'ok', timestamp: new Date().toISOString(), roles })
   );
 }

@@ -1,12 +1,16 @@
+import { isIP } from 'node:net';
+
 import { REPOSITORY_NAMES, type RepositoryName } from '@qauth-labs/fastify-plugin-db';
 import {
   DEFAULT_INTERNAL_HOST,
   DEFAULT_INTERNAL_PORT,
   describeServiceRoles,
+  type InternalPeerRole,
   type InternalPeerRoles,
   isKeyMaterialVariable,
   isServiceRole,
   keyMaterialProblems,
+  METRICS_PEER_ROLE,
   SERVICE_ROLE_NAMES,
   type ServiceRole,
   ServiceRoleBootError,
@@ -14,6 +18,7 @@ import {
 } from '@qauth-labs/server-config';
 
 import {
+  enabledInternalRouteModules,
   INTERNAL_ROUTE_MODULES,
   type InternalRouteModule,
   internalRouteModulesFor,
@@ -151,7 +156,7 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
   },
   delivery: {
     // The reader and the SSF delivery route; the event store's lag and age
-    // gauges on /metrics read `events` and `eventRetention`, and the
+    // gauges in the metrics read `events` and `eventRetention`, and the
     // delivery history reads the role's own queue through `eventDeliveries`.
     summary: 'the event delivery reader and event retention',
     plugins: ['eventDelivery', 'ssf'],
@@ -192,22 +197,38 @@ export function isSingleProcess(roles: readonly ServiceRole[]): boolean {
 }
 
 /**
- * Whether a process with `roles` runs the internal listener (#496): only
- * while the roles are split, one that holds `signer`, so that the processes
- * without the signer reach the signer service there (#497), and one whose
- * roles have a route module on the internal listener's manifest
- * (`internal/route-manifest.ts`). A single process runs none, whatever the
- * manifest holds: it is one trust domain, calls its own roles in-process, and
- * no other process calls it.
+ * Whether a process with `roles` runs the internal listener (#496): one that
+ * holds `signer` while the roles are split, so that the processes without the
+ * signer reach the signer service there (#497), and one whose roles have a
+ * route module on the internal listener's manifest that the settings switch
+ * on (`internal/route-manifest.ts`). A single process is one trust domain and
+ * calls its own roles in-process: it runs the listener only for a module
+ * marked `inSingleProcess`, the metrics a scraper reads while METRICS_ENABLED
+ * is on (#500), and never serves the signer there.
+ *
+ * @param modules - the internal listener's route modules that are on:
+ *   `enabledInternalRouteModules(settings)` unless a test names its own
  */
 export function servesInternalListener(
   roles: readonly ServiceRole[],
   modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
 ): boolean {
   return (
-    !isSingleProcess(roles) &&
-    (holdsSigner(roles) || internalRouteModulesFor(roles, modules).length > 0)
+    (holdsSigner(roles) && !isSingleProcess(roles)) ||
+    internalRouteModulesFor(roles, modules).length > 0
   );
+}
+
+/**
+ * Whether `host`, an INTERNAL_HOST value, names a loopback address only:
+ * `localhost`, an address of `127.0.0.0/8`, or `::1`.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const bare = host.replace(/^\[|\]$/g, '');
+  if (bare.toLowerCase() === 'localhost') return true;
+  if (isIP(bare) === 4) return bare.startsWith('127.');
+  // The URL parser writes an IPv6 address in its shortest form.
+  return isIP(bare) === 6 && new URL(`http://[${bare}]/`).hostname === '[::1]';
 }
 
 /**
@@ -287,6 +308,11 @@ export interface ServiceRoleSettings {
   readonly INTERNAL_PEER_ROLES?: InternalPeerRoles | undefined;
   /** The public listener's port, which the internal one must not take. */
   readonly PORT?: number | undefined;
+  /**
+   * Whether every process serves its metrics on the internal listener (#500);
+   * on when unset, as the setting's own default is.
+   */
+  readonly METRICS_ENABLED?: boolean | undefined;
   /** Whether the admin API's listener runs, on ADMIN_API_PORT (#511). */
   readonly ADMIN_API_ENABLED?: boolean | undefined;
   readonly ADMIN_API_PORT?: number | undefined;
@@ -314,50 +340,65 @@ export type InternalListenerPlan =
       readonly problems: readonly ServiceRoleProblem[];
       readonly host: string;
       readonly port: number;
-      /** The TLS files of mutual TLS; unset only when `problems` names them. */
+      /**
+       * The TLS files of mutual TLS; unset when `problems` names them, or on
+       * a single process that serves plain HTTP on a loopback address.
+       */
       readonly tls?: InternalTlsFiles;
       readonly peerRoles: InternalPeerRoles;
+      /**
+       * Without `tls`: the role a request from a loopback address calls as,
+       * `metrics` (#500). Unset with `tls`.
+       */
+      readonly plainHttpPeerRole?: InternalPeerRole;
     };
 
 /**
  * Whether a process runs the internal listener ({@link servesInternalListener}),
- * on which address, how, and why it cannot (#496).
+ * on which address, how, and why it cannot (#496, #500).
  *
  * - With the three internal TLS files, it serves mutual TLS, and needs
  *   INTERNAL_PEER_ROLES: without a known peer it would refuse every request.
- * - With some of them only, or none, it cannot start: the missing ones are
- *   named. The listener runs only while the roles are split, so it is never
- *   served without mutual TLS.
+ * - With some of them only, it cannot start: the missing ones are named.
+ * - With none, a process whose roles are split cannot start either: the
+ *   files are named, so the signer and the metrics are never served there
+ *   without mutual TLS. A single process serves plain HTTP instead, on a
+ *   loopback address only (INTERNAL_HOST), where a request from a loopback
+ *   address reads the metrics as the `metrics` peer role and nothing else.
  * - INTERNAL_PORT must differ from PORT, and from ADMIN_API_PORT where the
- *   admin listener runs.
+ *   admin API's listener runs.
  *
- * @param modules - the internal listener's route modules: the manifest's
- *   unless a test names its own
+ * @param modules - the internal listener's route modules that are on: the
+ *   manifest's that `settings` switch on, unless a test names its own
  */
 export function internalListenerPlan(
   settings: ServiceRoleSettings,
-  modules: readonly InternalRouteModule[] = INTERNAL_ROUTE_MODULES
+  modules: readonly InternalRouteModule[] = enabledInternalRouteModules(settings)
 ): InternalListenerPlan {
   const roles = settings.SERVICE_ROLES;
   if (!servesInternalListener(roles, modules)) return { serves: false };
   const named = `SERVICE_ROLES=${describeServiceRoles(roles)}`;
   const host = settings.INTERNAL_HOST ?? DEFAULT_INTERNAL_HOST;
   const port = settings.INTERNAL_PORT ?? DEFAULT_INTERNAL_PORT;
-  const peerRoles = settings.INTERNAL_PEER_ROLES ?? new Map<string, ServiceRole>();
+  const peerRoles = settings.INTERNAL_PEER_ROLES ?? new Map<string, InternalPeerRole>();
+  const single = isSingleProcess(roles);
   const problems: ServiceRoleProblem[] = [];
   const serving =
-    holdsSigner(roles) && !isSingleProcess(roles)
+    holdsSigner(roles) && !single
       ? `${named} serves the signer to the other roles on the internal listener`
-      : `${named} runs the internal listener`;
+      : `${named} serves its metrics on the internal listener`;
+  const peerRolesExample = single
+    ? '{"spiffe://example.org/prometheus":"metrics"}'
+    : '{"spiffe://example.org/qauth/web":"web","spiffe://example.org/prometheus":"metrics"}';
+  const peerRolesProblem = (): ServiceRoleProblem => ({
+    variable: 'INTERNAL_PEER_ROLES',
+    message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role; map each peer's SAN to its role, and a metrics scraper's to metrics, such as ${peerRolesExample}${single ? '' : ', or set METRICS_ENABLED=false where no scraper reads this process'}`,
+  });
 
   const missing = INTERNAL_TLS_SETTINGS.filter((variable) => settings[variable] === undefined);
+  let plainHttpPeerRole: InternalPeerRole | undefined;
   if (missing.length === 0) {
-    if (peerRoles.size === 0) {
-      problems.push({
-        variable: 'INTERNAL_PEER_ROLES',
-        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role; map each peer's SAN to its role, such as {"spiffe://example.org/qauth/web":"web"}`,
-      });
-    }
+    if (peerRoles.size === 0) problems.push(peerRolesProblem());
   } else if (missing.length < INTERNAL_TLS_SETTINGS.length) {
     for (const variable of missing) {
       problems.push({
@@ -365,25 +406,26 @@ export function internalListenerPlan(
         message: `${variable} is required: ${serving} over mutual TLS, which needs all three internal TLS files, and the others are set`,
       });
     }
-    if (peerRoles.size === 0) {
+    if (peerRoles.size === 0) problems.push(peerRolesProblem());
+  } else if (single) {
+    // One trust domain, and the listener serves the metrics alone: plain
+    // HTTP, to a scraper on the same host or in the same network namespace.
+    if (isLoopbackHost(host)) {
+      plainHttpPeerRole = METRICS_PEER_ROLE;
+    } else {
       problems.push({
-        variable: 'INTERNAL_PEER_ROLES',
-        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
+        variable: 'INTERNAL_HOST',
+        message: `INTERNAL_HOST must be a loopback address, such as 127.0.0.1, without the internal TLS files: ${serving} in plain HTTP on loopback only. To serve them on ${host}, set INTERNAL_TLS_CERT_PATH, INTERNAL_TLS_KEY_PATH and INTERNAL_TLS_CA_PATH, and map the scraper's certificate to metrics in INTERNAL_PEER_ROLES`,
       });
     }
   } else {
     for (const variable of missing) {
       problems.push({
         variable,
-        message: `${variable} is required: ${serving}, over mutual TLS only while the roles are split, so the signer routes are not registered without it`,
+        message: `${variable} is required: ${serving}, over mutual TLS only while the roles are split, so no internal route is registered without it`,
       });
     }
-    if (peerRoles.size === 0) {
-      problems.push({
-        variable: 'INTERNAL_PEER_ROLES',
-        message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role`,
-      });
-    }
+    if (peerRoles.size === 0) problems.push(peerRolesProblem());
   }
 
   if (settings.PORT !== undefined && port === settings.PORT) {
@@ -408,6 +450,7 @@ export function internalListenerPlan(
     host,
     port,
     peerRoles,
+    ...(plainHttpPeerRole === undefined ? {} : { plainHttpPeerRole }),
     ...(missing.length === 0
       ? {
           tls: {
@@ -477,8 +520,10 @@ export function checkServiceRoles(
       message: `SIGNER_URL is required: ${named} does not hold the signer role, so it reaches the signer service at SIGNER_URL over mutual TLS`,
     });
   }
+  // A file the internal listener's plan already named is not named twice.
+  const planned = new Set(problems.map((problem) => problem.variable));
   for (const variable of INTERNAL_TLS_SETTINGS) {
-    if (settings[variable] === undefined) {
+    if (settings[variable] === undefined && !planned.has(variable)) {
       problems.push({
         variable,
         message: `${variable} is required: ${named} reaches the signer service over mutual TLS`,

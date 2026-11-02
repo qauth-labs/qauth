@@ -1,6 +1,8 @@
+import { SERVICE_ROLE_NAMES } from '@qauth-labs/server-config';
 import { describe, expect, it } from 'vitest';
 
 import {
+  enabledInternalRouteModules,
   INTERNAL_ROUTE_MODULES,
   internalModuleProblem,
   type InternalRouteModule,
@@ -51,9 +53,25 @@ describe('publicInternalRouteProblem', () => {
 });
 
 describe('the internal route manifest', () => {
-  it('holds no module until the signer service lands (#497)', () => {
-    expect(INTERNAL_ROUTE_MODULES).toEqual([]);
+  it('holds the metrics module alone until the signer service lands (#497)', () => {
+    expect(INTERNAL_ROUTE_MODULES.map((entry) => entry.module)).toEqual(['metrics']);
     expect(Object.isFrozen(INTERNAL_ROUTE_MODULES)).toBe(true);
+  });
+
+  it('serves the metrics on every process, to the metrics peer only, while METRICS_ENABLED is on (#500)', () => {
+    const [metrics] = INTERNAL_ROUTE_MODULES;
+    expect(metrics).toMatchObject({
+      prefix: '/internal',
+      roles: SERVICE_ROLE_NAMES,
+      peerRoles: ['metrics'],
+      inSingleProcess: true,
+    });
+    for (const roles of [SERVICE_ROLE_NAMES, ['web'], ['signer'], ['delivery']] as const) {
+      expect(internalRouteModulesFor(roles), roles.join()).toEqual([metrics]);
+    }
+    expect(enabledInternalRouteModules({})).toEqual([metrics]);
+    expect(enabledInternalRouteModules({ METRICS_ENABLED: true })).toEqual([metrics]);
+    expect(enabledInternalRouteModules({ METRICS_ENABLED: false })).toEqual([]);
   });
 
   it('names the peer roles of every module', () => {
@@ -102,5 +120,10 @@ describe('the internal route manifest', () => {
       internalRouteModulesFor(['api', 'signer'], modules).map((entry) => entry.module)
     ).toEqual(['signer', 'web']);
     expect(internalRouteModulesFor(['delivery'], modules)).toEqual([]);
+    // A single process calls its own roles in-process: only a module marked
+    // for it registers there.
+    expect(internalRouteModulesFor(SERVICE_ROLE_NAMES, modules)).toEqual([]);
+    const shared = { ...modules[1], inSingleProcess: true };
+    expect(internalRouteModulesFor(SERVICE_ROLE_NAMES, [modules[0], shared])).toEqual([shared]);
   });
 });
