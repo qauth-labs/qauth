@@ -335,6 +335,17 @@ export const authEnvSchema = z.object({
     .default(30 * 60),
 
   /**
+   * Whether `/oauth/authorize` starts an interaction of the Interaction API
+   * where a person must act (#628, ADR-019 Decision 6): it redirects to the
+   * ceremony page with the interaction id only, and issues the code once the
+   * interaction finishes. Off (the default), it keeps the server-rendered
+   * `/ui/login` and `/ui/consent` pages and the pending-authorization stash.
+   * Temporary: the cut-over to the ceremony app (CER-12) removes the switch
+   * along with the old pages. Parsed by {@link strictBoolean}.
+   */
+  INTERACTION_UI_ENABLED: strictBoolean(false),
+
+  /**
    * How long, in days, a browser session row is kept once it has ended or
    * expired (ADR-019 Decision 3, issue #550). The session purge job deletes
    * a row whose revocation or absolute end is older than this; until then
