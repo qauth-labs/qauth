@@ -431,14 +431,16 @@ export function oauthErrorBody(error: FastifyError | Error, status: number): OAu
  * that reads `insufficient_scope` goes back for a wider token, and a refusal no
  * scope can lift, such as the developer client limit, must not send it there.
  * The `scope` names every scope the refusal lists, space-separated.
- * A request that used the `DPoP` scheme while DPoP is on is answered in that
- * scheme, with the proof algorithms in `algs`.
+ * A request that used the `DPoP` scheme while DPoP is on, and every request
+ * to a server that takes DPoP-bound tokens only (`inDpopScheme`), is
+ * answered in that scheme, with the proof algorithms in `algs`.
  */
 function bearerChallenge(
   request: FastifyRequest,
   error: FastifyError | Error,
   status: number,
-  dpopAlgs?: string
+  dpopAlgs: string | undefined,
+  inDpopScheme: boolean
 ): string {
   const parameters: string[] = [];
   if (status === 403) {
@@ -451,17 +453,36 @@ function bearerChallenge(
   } else if (presentedCredentials(request) && !(error instanceof MissingAccessTokenError)) {
     parameters.push('error="invalid_token"');
   }
-  if (dpopAlgs !== undefined && usedDpopScheme(request)) {
+  if (dpopAlgs !== undefined && inDpopScheme) {
     return `DPoP ${[...parameters, `algs="${dpopAlgs}"`].join(', ')}`;
   }
   return ['Bearer realm="OAuth"', ...parameters].join(', ');
+}
+
+/** Options for the error handler plugin. */
+export interface ErrorHandlerOptions {
+  /**
+   * The server takes DPoP-bound access tokens only (the admin listener,
+   * #520): every access-token challenge is a `DPoP` one, whatever scheme the
+   * request used, so a Bearer token is answered `DPoP error="invalid_token"`.
+   * Needs `fastify.dpop`; without it the challenges stay as they are.
+   */
+  readonly dpopOnly?: boolean;
 }
 
 /**
  * Global error handler plugin: turns every error a route throws into the
  * answer its error format defines.
  */
-export default fp(async function (fastify: FastifyInstance) {
+export default fp(async function (fastify: FastifyInstance, options: ErrorHandlerOptions = {}) {
+  /**
+   * Whether the challenge for `request` uses the `DPoP` scheme: on a server
+   * that verifies proofs, for a request under that scheme, or for every
+   * request where the server takes DPoP-bound tokens only.
+   */
+  const dpopChallenge = (request: FastifyRequest, dpopAlgs: string | undefined): boolean =>
+    dpopAlgs !== undefined && (options.dpopOnly === true || usedDpopScheme(request));
+
   fastify.setErrorHandler(
     (error: FastifyError | Error, request: FastifyRequest, reply: FastifyReply) => {
       const statusCode = intendedStatusCode(error);
@@ -556,15 +577,13 @@ export default fp(async function (fastify: FastifyInstance) {
       ) {
         reply.header(
           'WWW-Authenticate',
-          dpopAlgs !== undefined && usedDpopScheme(request)
-            ? `DPoP algs="${dpopAlgs}"`
-            : 'Bearer realm="OAuth"'
+          dpopChallenge(request, dpopAlgs) ? `DPoP algs="${dpopAlgs}"` : 'Bearer realm="OAuth"'
         );
       } else if (tokenRefused) {
         const description = sanitizeDescription(error.message, MAX_CHALLENGE_DESCRIPTION);
         reply.header(
           'WWW-Authenticate',
-          dpopAlgs !== undefined && usedDpopScheme(request)
+          dpopChallenge(request, dpopAlgs)
             ? `DPoP error="invalid_token", error_description="${description}", algs="${dpopAlgs}"`
             : `Bearer realm="OAuth", error="invalid_token", error_description="${description}"`
         );
@@ -605,7 +624,10 @@ export default fp(async function (fastify: FastifyInstance) {
         !reply.hasHeader('WWW-Authenticate') &&
         isBearerProtected(request)
       ) {
-        reply.header('WWW-Authenticate', bearerChallenge(request, error, status, dpopAlgs));
+        reply.header(
+          'WWW-Authenticate',
+          bearerChallenge(request, error, status, dpopAlgs, dpopChallenge(request, dpopAlgs))
+        );
       }
       return reply
         .code(status)

@@ -65,6 +65,17 @@ export interface FamilyTokenOptions {
    * scopes yet, so their routes pass none.
    */
   readonly requiredScopes?: readonly string[];
+  /**
+   * The route takes DPoP-bound tokens only and checks their proofs itself
+   * (#520): see `AccessTokenCheckPolicy.requireDpop`. The admin listener
+   * passes its check, whose proofs name ADMIN_API_BASE_URL; a token under
+   * the `Bearer` scheme, or bound to no key, is refused.
+   */
+  readonly requireDpop?: (
+    request: FastifyRequest,
+    token: string,
+    claims: JWTPayload
+  ) => Promise<void>;
 }
 
 /**
@@ -189,7 +200,9 @@ async function assertSubjectOfRealm(
  * while `DPOP_ENABLED` is on), the signature and expiry, revocation and the
  * DPoP binding — with two differences: the issuer rule is
  * `options.issuerResolver`, and the RFC 9068 `typ: at+jwt` header is required
- * whatever `requireAccessTokenTyp` says. Then the family's own rules (see
+ * whatever `requireAccessTokenTyp` says. With `options.requireDpop` the route
+ * takes a DPoP-bound token under the `DPoP` scheme only, and that checks its
+ * proof (#520). Then the family's own rules (see
  * {@link assertFamilyClaims}), the subject in the request's realm (see
  * {@link assertSubjectOfRealm}) and `options.requiredScopes`. On success the
  * claims are on `request.jwtPayload`.
@@ -221,11 +234,13 @@ export function requireFamilyToken(
     throw new Error('requireFamilyToken: a family route admits at least one kind of subject');
   }
   const requiredScopes = [...(options.requiredScopes ?? [])];
+  const { requireDpop } = options;
 
   return async function requireFamilyTokenHandler(request) {
     const claims = await request.server.verifyRequestAccessToken(request, {
       acceptIssuer: issuerResolver,
       requireTyp: true,
+      ...(requireDpop === undefined ? {} : { requireDpop }),
     });
     assertFamilyClaims(family, claims);
     await assertSubjectOfRealm(request, claims as JWTPayload & { sub: string }, subjects);

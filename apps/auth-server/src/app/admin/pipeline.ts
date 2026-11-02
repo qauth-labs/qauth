@@ -1,7 +1,14 @@
 import rateLimit from '@fastify/rate-limit';
 import type { AdminApproval } from '@qauth-labs/fastify-plugin-db';
 import {
+  createDpopService,
+  type DpopRedisClient,
+  type DpopService,
+} from '@qauth-labs/fastify-plugin-dpop';
+import type { JWTPayload } from '@qauth-labs/fastify-plugin-jwt';
+import {
   ForbiddenError,
+  InvalidDpopProofError,
   JWTExpiredError,
   JWTInvalidError,
   MissingAccessTokenError,
@@ -30,6 +37,7 @@ import {
 import type { PermissionRegistry } from '../helpers/admin-permissions';
 import { ADMIN_SCOPES, tokenScopeSet } from '../helpers/admin-scopes';
 import { ApprovalRequiredError } from '../helpers/approval-required';
+import { verifyResourceRequestProof } from '../helpers/dpop';
 import { requireFamilyToken } from '../helpers/family-token';
 import {
   adminOperationsPlugin,
@@ -64,8 +72,12 @@ import { adminRealmRouteProblem } from './route-placement';
  *    valid admin token stops here, before any realm is looked up, so an
  *    unauthenticated caller learns nothing about realms. The listener's
  *    address grants nothing: a call from loopback needs a token too.
- * 3. DPoP check: an empty stage that #520 fills. Until then the token guard
- *    takes only the Bearer scheme.
+ * 3. DPoP check (#520), inside the guard of stage 2: the token comes under
+ *    the `DPoP` scheme only, bound to a key (`cnf.jkt`), with a proof made
+ *    with that key for this request (see {@link verifyAdminProof}). A Bearer
+ *    token is refused. Checked before the ceiling per subject, so a token
+ *    taken without its key counts against the caller's address, never
+ *    against the subject it names.
  * 4. Realm lookup from the path, `/admin/v1-rc.0/realms/{realmId}/...`. The
  *    listener never routes by host (ADR-019 Decision 1).
  * 5. Authority from grants and scopes (#510, `resolveAdminAuthority`). A
@@ -106,6 +118,13 @@ import { adminRealmRouteProblem } from './route-placement';
  * transaction and with no diff. A `denied` or `failed` row that cannot be
  * written is logged, not retried, and the call has no row.
  */
+
+/**
+ * The OpenAPI security scheme of every admin operation (#520), which the
+ * admin document defines: a DPoP-bound access token under the `DPoP`
+ * authorization scheme, with a proof in the `DPoP` header (RFC 9449 §7.1).
+ */
+export const ADMIN_SECURITY_SCHEME = 'dpopAuth';
 
 /** The admin audit log, as the database plugin builds it. */
 type AdminAuditLog = FastifyInstance['repositories']['adminAuditLog'];
@@ -378,8 +397,76 @@ function uniformTokenRefusal(error: unknown): unknown {
   return error;
 }
 
-/** The admin family's guard: an admin acts as itself, so its token names a user. */
-const adminFamilyGuard = requireFamilyToken('admin', { subjects: ['user'] });
+/**
+ * How far an admin call's DPoP proof `iat` may be from the server's clock, in
+ * seconds, either way (#520). The replay store keeps a used proof for longer
+ * than twice this window, so it cannot pass again while its `iat` would.
+ */
+export const ADMIN_DPOP_IAT_WINDOW_SECONDS = 60;
+
+/**
+ * The admin listener's own DPoP service (#520): the shared verifier over the
+ * server's Redis, as `source.dpop` is, whose proofs must name
+ * ADMIN_API_BASE_URL followed by the request's path in `htu`, never the
+ * realm's issuer and never a URL built from the request, within
+ * {@link ADMIN_DPOP_IAT_WINDOW_SECONDS}. Used proofs go to the store the
+ * public listener's go to, so a proof is used once wherever it is shown.
+ *
+ * @throws Error when DPOP_ENABLED is off on this process (`source.dpop` is
+ *   null) or ADMIN_API_BASE_URL is unset: the listener refuses to start, as
+ *   the environment schema does.
+ */
+export function adminDpopService(
+  source: FastifyInstance,
+  baseUrl: string | undefined
+): DpopService {
+  if (source.dpop === null || source.dpop === undefined) {
+    throw new Error(
+      'The admin listener needs DPOP_ENABLED=true: every admin call carries a DPoP-bound admin token (#520)'
+    );
+  }
+  if (baseUrl === undefined) {
+    throw new Error(
+      "The admin listener needs ADMIN_API_BASE_URL, the URL every admin call's DPoP proof names (#520)"
+    );
+  }
+  return createDpopService(source.redis as unknown as DpopRedisClient, {
+    baseUrl,
+    algorithms: source.dpop.algorithms,
+    iatWindowSeconds: ADMIN_DPOP_IAT_WINDOW_SECONDS,
+  });
+}
+
+/**
+ * Stage 3, the DPoP check (#520): the family guard's `requireDpop`, after the
+ * token verified and before its family's and subject's rules.
+ *
+ * `request.server.dpop` is the admin listener's own DPoP service (see
+ * `installAdminApi`), whose base URL is ADMIN_API_BASE_URL. So the proof must
+ * be for this request's method (`htm`) and for that base URL followed by the
+ * request's path (`htu`), never a URL built from the request; its `iat`
+ * within 60 seconds of the server's clock; its `ath` the hash of the token;
+ * its key the one `cnf.jkt` names; and its `jti` unused, recorded in Redis
+ * for longer than twice that window. A proof under another key refuses the
+ * token (`invalid_token`); any other refusal is `invalid_dpop_proof`, both
+ * 401 with a `DPoP` challenge.
+ */
+async function verifyAdminProof(
+  request: FastifyRequest,
+  token: string,
+  claims: JWTPayload
+): Promise<void> {
+  await verifyResourceRequestProof(request.server, request, token, claims);
+}
+
+/**
+ * The admin family's guard: an admin acts as itself, so its token names a
+ * user, and it is DPoP-bound (#520).
+ */
+const adminFamilyGuard = requireFamilyToken('admin', {
+  subjects: ['user'],
+  requireDpop: verifyAdminProof,
+});
 
 /**
  * Stage 2, the token guard. The listener has no host to pick a realm by, and
@@ -390,11 +477,14 @@ const adminFamilyGuard = requireFamilyToken('admin', { subjects: ['user'] });
  * its keys, its issuer, its expiry and revocation, `typ`, the admin audience
  * alone, no `act`, and an enabled account of that realm as the subject.
  *
+ * The token comes under the `DPoP` scheme only, with its proof (stage 3,
+ * {@link verifyAdminProof}). A token under the `Bearer` scheme is refused
+ * before it is read, as an invalid token (#520): 401 with a `DPoP` challenge
+ * whose error is `invalid_token`.
+ *
  * A call with no token, or a token that fails any of these, gets 401 here,
  * whatever its network position, and before any realm of the path is read,
- * with one description ({@link ADMIN_TOKEN_REFUSAL}). The `DPoP` scheme is
- * not taken until #520 checks its proof against the listener's own URL: it is
- * answered as a request with no credential, as with DPOP_ENABLED off.
+ * with one description ({@link ADMIN_TOKEN_REFUSAL}).
  */
 async function adminTokenStage(request: FastifyRequest, reply: FastifyReply): Promise<void> {
   request.adminPipeline = { handlerStarted: false, committed: false };
@@ -402,8 +492,11 @@ async function adminTokenStage(request: FastifyRequest, reply: FastifyReply): Pr
     const credential = request.server.jwtUtils.extractCredentialFromHeader(
       request.headers.authorization
     );
-    if (credential === null || credential.scheme !== 'Bearer') {
+    if (credential === null) {
       throw new MissingAccessTokenError('Missing or malformed Authorization header');
+    }
+    if (credential.scheme !== 'DPoP') {
+      throw new JWTInvalidError('The admin API takes a DPoP-bound access token only');
     }
     const issuer = unverifiedIssuer(request, credential.token);
     const issuerRealm = await deploymentRealmIssuerDirectory(request.server).realmForIssuer(issuer);
@@ -417,37 +510,31 @@ async function adminTokenStage(request: FastifyRequest, reply: FastifyReply): Pr
   }
 }
 
-/** Whether `error` is a refusal of the token guard: no credential, or a token refused. */
+/**
+ * Whether `error` is a refusal of the token guard: no credential, a token
+ * refused, or its DPoP proof refused.
+ */
 function isTokenRefusal(error: unknown): boolean {
   return (
     error instanceof MissingAccessTokenError ||
     error instanceof JWTInvalidError ||
-    error instanceof JWTExpiredError
+    error instanceof JWTExpiredError ||
+    error instanceof InvalidDpopProofError
   );
 }
 
-/** Whether `request` presents a token under the one scheme the token guard takes. */
-function presentsBearerToken(request: FastifyRequest): boolean {
+/** Whether `request` presents a token under the one scheme the token guard takes, `DPoP`. */
+function presentsDpopToken(request: FastifyRequest): boolean {
   const credential = request.server.jwtUtils.extractCredentialFromHeader(
     request.headers.authorization
   );
-  return credential?.scheme === 'Bearer';
+  return credential?.scheme === 'DPoP';
 }
 
 /** Answer 429, with `Retry-After`, for a ceiling's count. */
 function tooManyRequests(reply: FastifyReply, count: { ttlInSeconds: number }): never {
   reply.header('retry-after', String(count.ttlInSeconds));
   throw new TooManyRequestsError();
-}
-
-/**
- * Stage 3, the DPoP check. Empty: requiring a DPoP-bound admin token, and
- * checking its proof against the listener's own URL, is #520's. Until then
- * the token guard takes only the Bearer scheme, and refuses a DPoP-bound
- * token sent under it.
- */
-async function adminDpopStage(): Promise<void> {
-  // Filled by #520.
 }
 
 /** Stage 4: the realm the request acts on, from its path. */
@@ -1166,16 +1253,16 @@ export async function adminPipeline(
   const { refusalsByAddress, callsBySubject } = options;
   // The ceiling per address, before stage 2. It counts only the calls the
   // token guard refuses: an address past its count has a call that presents
-  // no token refused here. A call with a token goes on to the guard, so a
-  // caller with a valid token is never held back by the refusals of others
-  // at its address.
+  // no DPoP token refused here, a Bearer token included. A call with one
+  // goes on to the guard, so a caller with a valid token is never held back
+  // by the refusals of others at its address.
   fastify.addHook('onRequest', async (request, reply) => {
-    if (presentsBearerToken(request)) return;
+    if (presentsDpopToken(request)) return;
     const count = await refusalsByAddress(request, { increment: false });
     if (!count.isAllowed && count.remaining === 0) tooManyRequests(reply, count);
   });
-  // Stage 2. Each refusal counts against the address, and past its count
-  // the answer is 429.
+  // Stages 2 and 3. Each refusal counts against the address, and past its
+  // count the answer is 429.
   fastify.addHook('onRequest', async (request, reply) => {
     try {
       await adminTokenStage(request, reply);
@@ -1192,8 +1279,6 @@ export async function adminPipeline(
     const count = await callsBySubject(request);
     if (!count.isAllowed && count.isExceeded) tooManyRequests(reply, count);
   });
-  // Stage 3.
-  fastify.addHook('onRequest', adminDpopStage);
   // Stages 4 and 5. Before the body is read, so a caller with no grant on the
   // realm never has its body parsed.
   fastify.addHook('onRequest', adminAuthorityStage);
