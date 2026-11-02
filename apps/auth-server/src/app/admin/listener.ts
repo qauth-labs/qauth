@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import rateLimit from '@fastify/rate-limit';
-import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger';
+import swagger from '@fastify/swagger';
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
@@ -26,18 +26,13 @@ import {
   answerUnknownRouteBeforeBody,
   requestDeadlineOptions,
 } from '../helpers/request-bounds';
-import { openapiOptions } from '../openapi-options';
 import { DEFAULT_ADMIN_RATE_LIMIT } from '../plugins/admin-operations';
 import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
 import { approvalRoutes } from './approvals/routes';
-import {
-  ADMIN_SECURITY_SCHEME,
-  AdminCallsInFlight,
-  adminDpopService,
-  adminPipeline,
-} from './pipeline';
+import { adminOpenapiOptions } from './openapi-options';
+import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
 import { pluginRoutes } from './plugins/routes';
 
 /**
@@ -76,43 +71,6 @@ export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze(
   approvalRoutes,
   pluginRoutes,
 ]);
-
-/** The `components` of an OpenAPI document, as `@fastify/swagger` takes them. */
-type OpenapiComponents = NonNullable<
-  NonNullable<FastifyDynamicSwaggerOptions['openapi']>['components']
->;
-
-/**
- * The OpenAPI options of the admin listener: the server's own (#347), so the
- * admin document carries the same `Problem` schema, error responses and
- * extensions, under the admin API's title, with the `DPoP` security scheme
- * its operations require ({@link ADMIN_SECURITY_SCHEME}).
- */
-export const adminOpenapiOptions: FastifyDynamicSwaggerOptions = {
-  ...openapiOptions,
-  openapi: {
-    ...openapiOptions.openapi,
-    info: {
-      title: 'QAuth Admin API',
-      description:
-        "The admin API of QAuth (ADR-019 Decision 7), served on the internal admin listener only. Every operation needs a DPoP-bound admin token, sent as `Authorization: DPoP <token>` with a proof made with its key for this listener's base URL and the request's path, whose account holds a grant on the realm in the path; a security operation also needs an approval bound to it.",
-      version: '1.0.0',
-    },
-    components: {
-      ...(openapiOptions.openapi?.components as OpenapiComponents),
-      securitySchemes: {
-        ...openapiOptions.openapi?.components?.securitySchemes,
-        [ADMIN_SECURITY_SCHEME]: {
-          type: 'http',
-          scheme: 'DPoP',
-          bearerFormat: 'JWT',
-          description:
-            "A DPoP-bound admin access token (RFC 9449 §7.1): `Authorization: DPoP <token>`, and a `DPoP` header holding a proof signed with the key the token names in `cnf.jkt`, for the request's method, ADMIN_API_BASE_URL followed by the request's path, an `iat` within 60 seconds, the token's hash as `ath` and a `jti` never used before. A Bearer token is refused.",
-        },
-      },
-    } as OpenapiComponents,
-  },
-};
 
 /**
  * The id of an admin request: always one the server makes, never the

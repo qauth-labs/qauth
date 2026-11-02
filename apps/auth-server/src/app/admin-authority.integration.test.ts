@@ -2,7 +2,7 @@ import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { type DpopTestKey, dpopProof, dpopTestKey } from '../testing/admin-dpop';
+import { dpopProof, type DpopTestKey, dpopTestKey } from '../testing/admin-dpop';
 import {
   baseEnvironment,
   bootAuthServer,
