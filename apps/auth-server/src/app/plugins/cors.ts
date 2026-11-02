@@ -117,9 +117,10 @@ function announcedMethod(request: FastifyRequest): string | undefined {
  * it sends the user agent there. The other browser routes, the `/ui/*`
  * sign-in, consent and wallet pages, `/consents`, `/auth/link/wallet` and the
  * verification page `GET /auth/verify`, are reached the same way or called
- * from those pages, on the realm's own origin. They read the session cookie,
- * and the CORS answers never allowed credentials, so no cross-origin caller
- * could use them before either.
+ * from those pages, on the realm's own origin. No cross-origin caller needs
+ * them: a page is navigated to, and a call the session cookie authorizes
+ * could not be made cross-origin before either, since the CORS answers never
+ * allowed credentials.
  *
  * Every other route keeps CORS. The token endpoint needs it: OAuth 2.1 §3.2
  * and §9.3.4 require an authorization server that supports browser-based
