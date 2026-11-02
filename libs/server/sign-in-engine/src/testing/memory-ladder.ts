@@ -23,6 +23,13 @@ export interface MemoryLadderRun {
   readonly waitUntil: number;
   /** The run's id: a success ends the run, and a later failure starts another. */
   readonly run: number;
+  /**
+   * When the run expires with no further counted failure, in epoch ms: its
+   * last counted failure plus `freeRetentionMs` while it has fewer than
+   * `freeFailures`, plus `retentionMs` from then on, as the Redis script's
+   * `PEXPIRE` sets it.
+   */
+  readonly expiresAt: number;
 }
 
 export interface MemoryLadder extends LadderHook {
@@ -40,7 +47,7 @@ export function createMemoryLadder(
   policy: LadderPolicy = PASSWORD_LADDER_POLICY
 ): MemoryLadder {
   checkLadderPolicy(policy);
-  const counters = new Map<string, MemoryLadderRun & { readonly lastAt: number }>();
+  const counters = new Map<string, MemoryLadderRun>();
   const known = new Map<string, Map<string, number>>();
   const reservations: MemoryLadder['reservations'] = [];
   let runs = 0;
@@ -49,7 +56,7 @@ export function createMemoryLadder(
   const knownKey = (realmId: string, hmac: string) => `${realmId}\u0000${hmac}`;
   const live = (key: string) => {
     const state = counters.get(key);
-    if (state !== undefined && now() - state.lastAt >= policy.retentionMs) {
+    if (state !== undefined && now() >= state.expiresAt) {
       counters.delete(key);
       return undefined;
     }
@@ -62,7 +69,12 @@ export function createMemoryLadder(
       const state = live(counterKey(realmId, hmac, factor));
       return state === undefined
         ? undefined
-        : { failures: state.failures, waitUntil: state.waitUntil, run: state.run };
+        : {
+            failures: state.failures,
+            waitUntil: state.waitUntil,
+            run: state.run,
+            expiresAt: state.expiresAt,
+          };
     },
     knownIps: (realmId, hmac) => new Map(known.get(knownKey(realmId, hmac)) ?? []),
     async reserve({ realmId, identifierHmac, factor, endUserIp }): Promise<LadderVerdict> {
@@ -82,7 +94,10 @@ export function createMemoryLadder(
       const run = state?.run ?? (runs += 1);
       // An exempt attempt never shortens a wait already set.
       const waitUntil = Math.max(at + ladderWaitMs(failures, policy), state?.waitUntil ?? 0);
-      counters.set(key, { failures, waitUntil, run, lastAt: at });
+      // The retention follows the count alone, as the Redis script's PEXPIRE.
+      const retention =
+        failures >= policy.freeFailures ? policy.retentionMs : policy.freeRetentionMs;
+      counters.set(key, { failures, waitUntil, run, expiresAt: at + retention });
       reservations.push({ factor, outcome: 'reserved' });
       let settled = false;
       const reservation: LadderReservation = {

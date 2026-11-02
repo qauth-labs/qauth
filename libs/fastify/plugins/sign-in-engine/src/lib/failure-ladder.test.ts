@@ -24,11 +24,14 @@ const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
 const IDENTIFIER = 'alice@example.com';
 const IP = '203.0.113.7';
 const OTHER_IP = '198.51.100.9';
+const DAY = 86_400_000;
 
 /** A keyed HMAC as the digests make it: base64url, never the input. */
 const hmacOf = (label: string, value: string) =>
   createHmac('sha256', `key:${label}`).update(`${REALM}\u0000${value}`).digest('base64url');
 const IDENTIFIER_HMAC = hmacOf('identifier', IDENTIFIER);
+const COUNTER = ladderCounterKey(REALM, IDENTIFIER_HMAC, 'password');
+const KNOWN_IPS = ladderKnownIpsKey(REALM, IDENTIFIER_HMAC);
 const ipDigest = vi.fn(async ({ identifier }: { realmId: string; identifier: string }) =>
   hmacOf('ip', identifier)
 );
@@ -101,8 +104,10 @@ class FakeRedis implements LadderRedis {
   }
 
   private reserve([counter, known]: string[], argv: string[]): unknown {
-    const [now, free, first, longest, retention, knownMs] = argv.slice(0, 6).map(Number);
-    const ip = argv[6];
+    const [now, free, first, longest, retention, freeRetention, knownMs] = argv
+      .slice(0, 7)
+      .map(Number);
+    const ip = argv[7];
     let exempt = false;
     if (knownMs > 0 && ip !== '') {
       const seen = this.sets.get(known)?.get(ip);
@@ -111,7 +116,7 @@ class FakeRedis implements LadderRedis {
     const state = this.hashes.get(counter);
     let n = Number(state?.get('n') ?? 0);
     const waitUntil = Number(state?.get('until') ?? 0);
-    const run = state?.get('run') ?? argv[7];
+    const run = state?.get('run') ?? argv[8];
     if (!exempt && waitUntil > now) return [0, Math.trunc(waitUntil - now)];
     n += 1;
     let wait = 0;
@@ -128,7 +133,7 @@ class FakeRedis implements LadderRedis {
         ['run', run],
       ])
     );
-    this.expiries.set(counter, now + retention);
+    this.expiries.set(counter, now + (n >= free ? retention : freeRetention));
     return [1, n, run];
   }
 
@@ -335,6 +340,76 @@ describe('the Redis failure ladder', () => {
     advance(30 * 86_400_000);
     expect(counter()).toBeUndefined();
     expect(await attempt()).toMatchObject({ kind: 'reserved' });
+  });
+
+  it('ends a run that never reached a wait 1 day after its last counted failure (#969)', async () => {
+    const { redis, attempt, fail, advance, counter, now } = setup();
+    await fail(3);
+    advance(DAY - 1);
+    await fail(1);
+    const run = counter()?.get('run');
+    expect(redis.expiries.get(COUNTER)).toBe(now() + DAY);
+    advance(DAY - 1);
+    expect(counter()?.get('n')).toBe('4');
+    advance(1);
+    expect(counter()).toBeUndefined();
+    // The next failure starts another run, from the first free failure.
+    expect(await attempt()).toMatchObject({ kind: 'reserved' });
+    expect(counter()?.get('n')).toBe('1');
+    expect(counter()?.get('run')).not.toBe(run);
+  });
+
+  it('keeps a run 30 days from the failure that sets its first wait, in the same run (#969)', async () => {
+    const { redis, attempt, fail, advance, counter, now } = setup();
+    await fail(4);
+    const run = counter()?.get('run');
+    advance(DAY - 1);
+    await fail(1);
+    expect(counter()).toEqual(
+      new Map([
+        ['n', '5'],
+        ['until', String(now() + 1_000)],
+        ['run', run],
+      ])
+    );
+    expect(redis.expiries.get(COUNTER)).toBe(now() + 30 * DAY);
+    advance(30 * DAY - 1);
+    expect(counter()?.get('n')).toBe('5');
+    // A later failure keeps it 30 days more; an attempt refused inside the wait leaves it.
+    await fail(1);
+    expect(await attempt()).toMatchObject({ kind: 'wait' });
+    expect(redis.expiries.get(COUNTER)).toBe(now() + 30 * DAY);
+    advance(30 * DAY);
+    expect(counter()).toBeUndefined();
+  });
+
+  it('keeps a known IP 30 days from its last successful sign-in, whatever the counter’s retention', async () => {
+    const { redis, reserved, fail, now } = setup();
+    await fail(2, IP);
+    await (await reserved(IP)).settle('success');
+    expect(redis.expiries.get(KNOWN_IPS)).toBe(now() + 30 * DAY);
+    await fail(1, IP);
+    expect(redis.expiries.get(COUNTER)).toBe(now() + DAY);
+    expect(redis.expiries.get(KNOWN_IPS)).toBe(now() + 30 * DAY);
+  });
+
+  it('sends both retentions to the script, in its argument order', async () => {
+    const { redis, attempt, now } = setup();
+    await attempt();
+    const sent = redis.sent.slice(-11);
+    expect(sent).toEqual([
+      COUNTER,
+      KNOWN_IPS,
+      String(now()),
+      '5',
+      '1000',
+      String(15 * 60_000),
+      String(30 * DAY),
+      String(DAY),
+      String(30 * DAY),
+      hmacOf('ip', IP),
+      expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
+    ]);
   });
 
   it('keeps no address in a key or an argument, nor its unkeyed SHA-256', async () => {
