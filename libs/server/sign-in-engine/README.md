@@ -120,9 +120,9 @@ authentication, run before the call). The first unmet rule produces the answer.
 5 consecutive failures the next attempt waits 2^(n−5) seconds, capped at 15 minutes; an end-user IP
 with a successful sign-in to the account in the last 30 days skips the wait and still counts; 100
 consecutive counted failures fire the hard action; a run is kept after its last counted failure
-1 day while it has fewer than 5 (`freeRetentionMs`) and 30 days from the failure that sets its
-first wait (`retentionMs`), by the count alone, so the same for an identifier no account holds
-(#969). A correct password clears its own counter and no other (`onSuccess: 'clear'`); a counter
+2 days while it has fewer than 5 (`freeRetentionMs`) and 30 days once it has reached a wait
+(`retentionMs`), by the count alone, so the same for an identifier no account holds (#969). A
+correct password clears its own counter and no other (`onSuccess: 'clear'`); a counter
 of failures alone only takes the attempt back (`withdraw`). The store applies the policy (the auth
 server's is a Redis script in `@qauth-labs/fastify-plugin-sign-in-engine`); `ladderWaitMs` and
 `checkLadderPolicy` are the one source every store and test reads.
