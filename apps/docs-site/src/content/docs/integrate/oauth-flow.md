@@ -142,6 +142,7 @@ http://localhost:3000/oauth/authorize
 | `state`                 | recommended | Opaque CSRF value; echoed back verbatim.                                  |
 | `nonce`                 | OIDC        | Bound into the ID token when issued.                                      |
 | `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple, up to 10. |
+| `login_hint`            | no          | The identifier to pre-fill at sign-in; at most 254 bytes in UTF-8.        |
 
 `redirect_uri` and each `resource` are absolute URIs of at most 2048
 characters, written in ASCII as RFC 3986 requires: an internationalised host in
