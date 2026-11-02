@@ -56,7 +56,7 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current 
 
 | Step                                  | Transports      | Answer fields            | Errors                                | `amr`        | Personal data                              |
 | ------------------------------------- | --------------- | ------------------------ | ------------------------------------- | ------------ | ------------------------------------------ |
-| [`identifier`](#identifier)           | Both            | `login_hint`             | —                                     | —            | —                                          |
+| [`identifier`](#identifier)           | Both            | `login_hint`             | —                                     | —            | `login_hint`                               |
 | [`password`](#password)               | Both            | `password`, `login_hint` | `invalid_credentials`                 | `pwd`        | `identifier`                               |
 | [`email_code`](#email_code)           | Both            | `otp`                    | `invalid_credentials`, `code_expired` | —            | `identifier`                               |
 | [`new_password`](#new_password)       | Both            | `new_password`           | `password_rejected`                   | —            | `identifier`                               |

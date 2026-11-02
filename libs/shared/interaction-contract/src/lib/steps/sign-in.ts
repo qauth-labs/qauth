@@ -1,4 +1,4 @@
-import { base64url, closedObject, EMPTY_OBJECT, host, object } from '../schema-kit';
+import { base64url, closedObject, displayText, EMPTY_OBJECT, host, object } from '../schema-kit';
 import { defineStep } from '../step-definition';
 import {
   accountIdentifier,
@@ -19,6 +19,19 @@ import {
 export const EXAMPLE_REDIRECT =
   'https://app.example.com/callback?code=uY29tL2F1dGhlbnRpY2F0aW9u&state=af0ifjsldkj&iss=https%3A%2F%2Fauth.example.com';
 
+/** The identifier step's personal data: the request's `login_hint` as a prefill (#628). */
+const identifierPrefill = object(
+  {
+    login_hint: displayText(
+      'declared',
+      254,
+      "The authorization request's `login_hint` (OpenID Connect Core 1.0 §3.1.2.1), for the screen to pre-fill the identifier field with (#628). The client chose it, so it is only a suggestion: the person answers the step with it or with another identifier, and the server checks that answer as it checks any other. Absent when the request carried none or one that is no display value, and after an account switch."
+    ),
+  },
+  [],
+  'What the screen pre-fills the identifier field with.'
+);
+
 /** A stand-in for a 32-byte random value, base64url. */
 export const EXAMPLE_CHALLENGE = 'Qm9vbGVhbi1ub3QtYS1yZWFsLWNoYWxsZW5nZS0zMmI';
 
@@ -29,13 +42,14 @@ export const identifier = defineStep({
   description:
     'Identifier-first sign-in (ADR-020 §3). Every identifier, known or unknown, gets the same next step, so the screen reveals nothing about which accounts exist (ADR-017 Decision 4). Offered as an alternative of a later step, it is the account switch ("Not you?", "Use another account"): answering it ends the interaction and starts a new one for the same authorization request, and the result is a redirect to the ceremony app’s page of the new interaction. Nothing proved for the first account carries over (#592). After the person signed in during the interaction, the switch also ends the browser session that sign-in started and, when the server can check the browser’s session cookie, the session it names if that belongs to the same account (a sign-in again in another tab), and clears the cookie when it names one of them (#896). A cookie session of another account stays. A switch before anyone signed in ends no session, so a browser already signed in when the interaction started stays signed in (#964).',
   params: EMPTY_OBJECT,
-  personal: EMPTY_OBJECT,
+  personal: identifierPrefill,
   answer: closedObject({ login_hint: loginHint }, ['login_hint']),
   errors: [],
   amr: [],
   example: {
     params: {},
     answer: { login_hint: 'alice@example.com' },
+    personal: { login_hint: 'alice@example.com' },
     alternatives: ['webauthn_get'],
     next: { step: 'password' },
   },

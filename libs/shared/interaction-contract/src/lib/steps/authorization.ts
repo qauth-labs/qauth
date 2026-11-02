@@ -39,8 +39,9 @@ export const consent = defineStep({
     {
       scopes: {
         type: 'array',
-        description: 'The scopes asked for, in the order the screen lists them.',
-        minItems: 1,
+        description:
+          'The scopes asked for, in the order the screen lists them. Empty when the request asks for none, as a client of a CIMD document often does: the screen then names the client and where the code goes, and says that no scope was asked for.',
+        minItems: 0,
         maxItems: 64,
         items: object(
           {

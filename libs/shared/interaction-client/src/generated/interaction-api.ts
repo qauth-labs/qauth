@@ -310,7 +310,11 @@ export interface IdentifierAnswer {
   login_hint: string;
 }
 
-export type IdentifierPersonalData = Record<string, never>;
+/** What the screen pre-fills the identifier field with. */
+export interface IdentifierPersonalData {
+  /** The authorization request's `login_hint` (OpenID Connect Core 1.0 §3.1.2.1), for the screen to pre-fill the identifier field with (#628). The client chose it, so it is only a suggestion: the person answers the step with it or with another identifier, and the server checks that answer as it checks any other. Absent when the request carried none or one that is no display value, and after an account switch. */
+  login_hint?: string;
+}
 
 export type PasswordParams = Record<string, never>;
 
@@ -595,7 +599,7 @@ export interface TotpSetupPersonalData {
 }
 
 export interface ConsentParams {
-  /** The scopes asked for, in the order the screen lists them. */
+  /** The scopes asked for, in the order the screen lists them. Empty when the request asks for none, as a client of a CIMD document often does: the screen then names the client and where the code goes, and says that no scope was asked for. */
   scopes: Array<{
     /** The scope value (RFC 6749 §3.3), from its alphabet without `<` and `>`. A requested scope outside it never reaches this step: the request is refused first. */
     scope: string;

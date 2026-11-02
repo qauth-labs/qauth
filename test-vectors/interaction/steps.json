@@ -13,7 +13,9 @@
           "answer": {
             "login_hint": "alice@example.com"
           },
-          "personal": {},
+          "personal": {
+            "login_hint": "alice@example.com"
+          },
           "amr": []
         },
         "alternatives": [
