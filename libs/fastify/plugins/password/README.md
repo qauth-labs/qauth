@@ -80,6 +80,8 @@ Once registered, both password hasher and validator are available on the Fastify
 ```typescript
 import { randomBytes } from 'node:crypto';
 
+import { passwordForVerification } from '@qauth-labs/shared-validation';
+
 // A decoy Argon2id hash of a random secret nobody holds, made by the
 // configured hasher so it costs what a stored hash costs (as QAuth's
 // apps/auth-server/src/app/helpers/decoy-hash.ts does). Made before the server
@@ -118,11 +120,16 @@ fastify.post('/register', async (request, reply) => {
     });
   }
 
-  // Hash the password in the form the check returns (NFC)
+  // Hash the password in the form the check returns (NFC), and store the
+  // normalisation marker with it, so login presents the password the same way
   const passwordHash = await fastify.passwordHasher.hashPassword(checked.password);
 
   // Create user with hashed password
-  const user = await createUser({ email, passwordHash });
+  const user = await createUser({
+    email,
+    passwordHash,
+    passwordNormalization: checked.normalization,
+  });
 
   // Remove passwordHash from response
   const { passwordHash: _, ...safeUser } = user;
@@ -140,8 +147,12 @@ fastify.post('/login', async (request, reply) => {
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  // Verify password
-  const isValid = await fastify.passwordHasher.verifyPassword(user.passwordHash, password);
+  // Verify the password in the form it was hashed: NFC when the stored marker
+  // says so, as typed for a hash stored without one
+  const isValid = await fastify.passwordHasher.verifyPassword(
+    user.passwordHash,
+    passwordForVerification(password, user.passwordNormalization)
+  );
 
   if (!isValid) {
     return reply.code(401).send({ error: 'Invalid credentials' });
@@ -407,6 +418,7 @@ import { passwordPlugin } from '@qauth-labs/fastify-plugin-password';
 import {
   buildPasswordCredentialData,
   passwordCredentialDataSchema,
+  presentedPasswordFor,
 } from '@qauth-labs/server-federation';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 
@@ -544,7 +556,12 @@ fastify.post('/auth/login', async (request, reply) => {
     return reply.code(401).send({ error: 'Invalid credentials' });
   }
 
-  const isValid = await fastify.passwordHasher.verifyPassword(parsed.data.password_hash, password);
+  // The credential's marker says how its hash was made: in NFC for a password
+  // set under the password policy, as typed for one set before it
+  const isValid = await fastify.passwordHasher.verifyPassword(
+    parsed.data.password_hash,
+    presentedPasswordFor(parsed.data, password)
+  );
 
   if (!isValid) {
     return reply.code(401).send({ error: 'Invalid credentials' });
