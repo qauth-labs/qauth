@@ -39,7 +39,7 @@ pnpm exec vitest run --coverage --reporter=default \
 pnpm exec nx run wire-suite:run -- --reporter=default \
   --reporter=json --outputFile.json="$PWD/dist/wire-report.json"
 
-pnpm spec-matrix    # node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --vitest-report dist/wire-report.json --out-dir dist/conformance
+pnpm spec-matrix    # node scripts/spec-matrix.mjs --vitest-report dist/vitest-report.json --vitest-report dist/wire-report.json --out-dir dist/conformance, then pnpm wire-coverage
 ```
 
 `--vitest-report` may be given any number of times. A test in any of the reports
@@ -51,6 +51,24 @@ shape-changed report is an **input error**, never a clean matrix — certificati
 evidence that fails open is worse than no evidence at all. Each report is checked
 on its own: a broken wire report exits `2` even when the unit report is fine, so
 the matrix can never pass on one suite while the other silently dropped out.
+
+## Operations: the wire coverage gate
+
+A test earns its way into the matrix by citing the spec; an operation of the API
+earns its wire test the same way. `scripts/wire-coverage.mjs` (#535) reads the
+committed OpenAPI document, `apps/docs-site/public/openapi.json`, and the wire
+suite's report, and fails when a stable operation has no passing wire test whose
+`describe` or `it` title carries it as `[METHOD /path]` — `[POST /oauth/token]`,
+`[GET /a/{id}]`. An `experimental` operation is exempt, and so is a stable one
+that `apps/wire-suite/exempt-operations.json` lists with a reason and an issue.
+That list may only shrink.
+
+`pnpm spec-matrix` runs it after the joiner, so CI's `conformance-matrix` job
+checks both; `pnpm wire-coverage` runs it alone. Its exit codes match the
+joiner's, and a missing, empty or shape-changed wire report is an input error
+here too. The rules for contributors are in the "How the wire suite grows"
+section of [CONTRIBUTING.md](../../CONTRIBUTING.md#how-the-wire-suite-grows) and
+in the [wire suite's README](../../apps/wire-suite/README.md).
 
 ## The alias registry
 
@@ -139,6 +157,11 @@ A bare `§X.Y` is attributed to the nearest spec name to its left in the same
 keeps the section on OID4VCI. Unregistered spec names still act as anchors
 precisely so they can block that mis-attribution; their citations are then
 dropped, because only registered specs participate.
+
+A wire test's operation tag (`[POST /oauth/userinfo]`, above) is blanked out
+before any of this. Its path holds words such as `oauth` and `openid` that are
+anchors, and a tag between a spec name and a bare `§` would otherwise take the
+section away from the spec the title cites.
 
 The same mechanism is why the two wallet specs are registered under
 **version-qualified aliases only** — `OID4VP 1.0`, `HAIP 1.0` and their long

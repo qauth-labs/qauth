@@ -93,6 +93,44 @@ A husky `pre-commit` hook runs lint-staged (`oxlint --fix`, then Oxfmt) on stage
   one sentence (see [`libs/server/config`](./libs/server/config/README.md#configuration-key-registry)).
 - All code, comments, docs, commits, and PRs are in **English**; only user-facing
   content may be localized.
+- The pull request template lists three checks. Tick each one that applies: a stable route
+  added or changed, with its wire test (below); an event type added, and registered
+  ([`libs/shared/events`](./libs/shared/events/README.md#adding-an-event-type)); a migration
+  added, and non-destructive (it drops or renames no table or column, narrows no column type
+  and deletes no rows, [ADR-018 §5](./docs/adr/018-1-0-scope-and-stability.md)).
+
+## How the wire suite grows
+
+QAuth's 1.0 promise is what a client sees over HTTP
+([ADR-018 §5](./docs/adr/018-1-0-scope-and-stability.md)). The wire suite,
+[`apps/wire-suite`](./apps/wire-suite/README.md), guards it: black-box tests that talk to a running
+server and nothing else. CI builds the server image from each pull request and runs the suite
+against it.
+
+**For issue writers:** "conformance suite" means this suite. A conformance test is a test in
+`apps/wire-suite`. Name the OpenID Foundation's certification suite in full when you mean that one.
+
+The rules:
+
+- **A new or changed stable route needs a wire test in the same pull request.** A stable route is
+  an operation of the OpenAPI document (`apps/docs-site/public/openapi.json`) whose
+  `x-qauth-stability` is `stable`. Mark the test with the operation in a `describe` or `it` title,
+  written exactly as the document lists it: `[POST /oauth/token]`,
+  `[GET /developer/v1-rc.0/clients/{clientId}]`. A tag on a `describe` covers every test inside
+  it, and a title may carry several tags. Tag a test only for the operation it checks, not for one
+  it passes through on the way.
+- **Wire tests cite the spec.** A title names the spec and the section it checks, in the form the
+  [conformance matrix](./docs/conformance/README.md) reads: `RFC 7009 §2.2`, `OIDC Core 1.0 §5.3`.
+- **The suite imports no server code.** It uses `fetch`, `jose` and its own helpers. `nx lint`
+  refuses an import of any workspace project into the suite.
+
+CI holds the first rule. `scripts/wire-coverage.mjs` reads the OpenAPI document and the wire
+suite's report, and fails when a stable operation has no passing test that tags it. An
+experimental operation is exempt: a default deployment does not serve it. The stable operations
+that have no wire test yet are listed in `apps/wire-suite/exempt-operations.json`, each with a
+reason and an issue. **That list may only shrink.** CI fails a pull request that adds an entry,
+and the pull request that gives an operation its wire test removes the operation's entry. After a
+local run of the suite, `pnpm wire-coverage` runs the same check.
 
 ## Releases
 
