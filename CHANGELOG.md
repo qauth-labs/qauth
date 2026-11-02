@@ -762,7 +762,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails when a stable operation has no passing test that tags it; `pnpm
   spec-matrix` runs it after the joiner, so CI's `conformance-matrix` job checks
   it, and `pnpm wire-coverage` runs it alone. Experimental operations are
-  exempt. The 38 stable operations with no wire test today are listed in
+  exempt. The 37 stable operations with no wire test today are listed in
   `apps/wire-suite/exempt-operations.json`, each with a reason and an issue, and
   the list may only shrink: `wire-suite:exempt-operations`, which `lint` depends
   on, fails when it names an operation the base branch's list does not. The

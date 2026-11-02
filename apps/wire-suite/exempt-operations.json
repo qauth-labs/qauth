@@ -33,17 +33,12 @@
     },
     {
       "operation": "POST /auth/login",
-      "reason": "ADR-017 removes it, in #711.",
+      "reason": "ADR-017 removes it, in #711. The error-format suite checks only that it answers a body the schema refuses with a problem document (errors/no-legacy-shape); no test checks a sign-in through it.",
       "issue": "#711"
     },
     {
       "operation": "POST /auth/logout",
       "reason": "ADR-017 removes it, in #711.",
-      "issue": "#711"
-    },
-    {
-      "operation": "POST /auth/register",
-      "reason": "ADR-017 removes it, in #711. The suite calls it only to create the accounts it signs in with (src/fixtures/users.ts); no test checks the route itself.",
       "issue": "#711"
     },
     {
@@ -63,7 +58,7 @@
     },
     {
       "operation": "GET /api/clients/",
-      "reason": "Deprecated alias of GET /developer/v1-rc.0/clients since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "reason": "Deprecated alias of GET /developer/v1-rc.0/clients since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933. The error-format suite checks only its 401 without an access token (errors/no-legacy-shape).",
       "issue": "#933"
     },
     {
@@ -108,7 +103,7 @@
     },
     {
       "operation": "GET /consents/",
-      "reason": "Deprecated since #524. #691 removes it once the account API serves the same data.",
+      "reason": "Deprecated since #524. #691 removes it once the account API serves the same data. The error-format suite checks only its 401 without a browser session (errors/no-legacy-shape).",
       "issue": "#691"
     },
     {

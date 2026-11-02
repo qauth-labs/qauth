@@ -36,7 +36,7 @@ function header(response: Response, name: string): number {
  * budget of the address the suite connects from, and anything that registered
  * a user after it would be refused for the rest of the window.
  */
-describe('the registration rate limit, with the limits raised for the run (RFC 6585 §4)', () => {
+describe('[POST /auth/register] the registration rate limit, with the limits raised for the run (RFC 6585 §4)', () => {
   it('still answers 429 with Retry-After and a too_many_requests problem once the budget is spent', async () => {
     // A real registration first: the users fixture works and is counted.
     await createUser();
