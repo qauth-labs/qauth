@@ -36,6 +36,7 @@ import errorHandler from '../plugins/error-handler';
 import {
   answerInteraction,
   cancelInteraction,
+  continueInteraction,
   type InteractionDecision,
   type InteractionState,
   readInteractionPersonalData,
@@ -223,6 +224,22 @@ async function buildHarness(): Promise<Harness> {
       csrf: (request.body as { csrf?: unknown } | undefined)?.csrf,
     })
   );
+  // As the authorization request goes on after a finish (#628): the next
+  // interaction of the request, from what the finish left.
+  app.post(`${INTERACTION_API_PREFIX}/:id/finish-and-continue`, async (request, reply) => {
+    const result = await answerInteraction(
+      request,
+      reply,
+      { id: (request.params as { id: string }).id, revision: 0 },
+      decideBy({ kind: 'finished' })
+    );
+    if (result.kind !== 'finished') return result;
+    const next = await continueInteraction(request, reply, result.continuation, {
+      request: result.request,
+      step: { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
+    });
+    return { finished: result, next };
+  });
   app.post(`${INTERACTION_API_PREFIX}/:id/fail`, async () => {
     throw new InvalidRequestError('the answer names a field twice');
   });
@@ -939,11 +956,52 @@ describe('answers (#592)', () => {
       kind: 'finished',
       request: AUTHORIZE_REQUEST,
       transaction: { amr: [] },
+      continuation: { secrets: [], expiresAt: expect.any(Number) },
     });
     expect(owner.cookies.has(FLOW_COOKIE)).toBe(false);
     expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
     expect((await owner.answer(id, 0, { kind: 'finished' })).statusCode).toBe(410);
     expect(harness.redis.sortedSets.size).toBe(0);
+  });
+
+  it('continues the request in a new interaction: the same expiry, and the browser keeps its other secrets (#628)', async () => {
+    const owner = new Browser();
+    const other = await owner.start();
+    const id = await owner.start();
+    const before = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    vi.useFakeTimers({ toFake: ['Date'], now: Date.now() + 60_000 });
+    try {
+      const response = await owner.request(
+        'POST',
+        `${INTERACTION_API_PREFIX}/${id}/finish-and-continue`
+      );
+      expect(response.statusCode, response.body).toBe(200);
+      const { finished, next } = response.json() as {
+        finished: { continuation: { secrets: string[]; expiresAt: number } };
+        next: { id: string; expiresAt: number };
+      };
+      // The finished interaction's secret left; the other's stayed; the new one joined.
+      expect(finished.continuation.secrets).toHaveLength(1);
+      expect(owner.cookies.get(FLOW_COOKIE)?.split('.')).toHaveLength(2);
+      expect(owner.cookies.get(FLOW_COOKIE)).toContain(finished.continuation.secrets[0]);
+      // One authorization request, one lifetime: continuing never extends it.
+      expect(next.expiresAt).toBe(before?.expiresAt);
+      expect(next.id).not.toBe(id);
+      expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+      expect(
+        (await owner.request('GET', `${INTERACTION_API_PREFIX}/${next.id}/personal`)).statusCode
+      ).toBe(200);
+      expect(
+        (await owner.request('GET', `${INTERACTION_API_PREFIX}/${other}/personal`)).statusCode
+      ).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1803,6 +1861,7 @@ describe('expiry of an unanswered interaction (#592)', () => {
       kind: 'finished',
       request: AUTHORIZE_REQUEST,
       transaction: { amr: [] },
+      continuation: { secrets: [], expiresAt: expect.any(Number) },
     });
     expect(vi.mocked(emitUserEvent).mock.calls.map(([, type]) => type)).toEqual([
       'urn:qauth:event:interaction.created:v1-rc.0',

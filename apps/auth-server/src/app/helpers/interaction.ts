@@ -217,7 +217,22 @@ export type InteractionAnswerResult =
       readonly kind: 'finished';
       readonly request: InteractionRequest;
       readonly transaction: InteractionTransaction;
+      /** What the next interaction of the same request starts from (#628). */
+      readonly continuation: InteractionContinuation;
     };
+
+/**
+ * What a finished interaction leaves for the next one of the same
+ * authorization request (#628): when finishing the request needs the person
+ * again (a consent after a sign-in), {@link continueInteraction} starts it
+ * from here.
+ */
+export interface InteractionContinuation {
+  /** The flow secrets the browser keeps once the finished interaction's left its cookie. */
+  readonly secrets: readonly string[];
+  /** The finished interaction's absolute expiry: one authorization request, one lifetime. */
+  readonly expiresAt: number;
+}
 
 /** What {@link cancelInteraction} did. */
 export type InteractionCancelResult =
@@ -374,6 +389,14 @@ export interface StartInteractionInput {
   /** The first step the engine asks for. */
   readonly step: InteractionStep;
   readonly personal?: InteractionPersonalData;
+  /**
+   * Who the interaction is for when the browser is already signed in (#628):
+   * the browser session's user, `sid` and authentication time, for a step that
+   * needs no sign-in, such as consent. Absent, the transaction starts empty
+   * and the person signs in. A finish needs this session to be live, as it
+   * needs the one a sign-in in the interaction started (#963).
+   */
+  readonly transaction?: InteractionTransaction;
 }
 
 /** What {@link startInteraction} returns. */
@@ -409,7 +432,7 @@ async function createInteraction(
     request: input.request,
     step,
     personal: input.personal ?? {},
-    transaction: { amr: [] },
+    transaction: input.transaction ?? { amr: [] },
     flowBinding: flowBindingOf(secret),
     csrfKey: mintCsrfKey(),
     signInTransaction: null,
@@ -459,6 +482,30 @@ export async function startInteraction(
   input: StartInteractionInput
 ): Promise<StartedInteraction> {
   return createInteraction(request, reply, { ...input, secrets: readFlowSecrets(request) });
+}
+
+/**
+ * Start the next interaction of an authorization request whose interaction
+ * just finished (#628), on the same reply: when finishing the request needs
+ * the person again, such as a consent after the sign-in. As
+ * {@link startInteraction}, except that the flow cookie is built from the
+ * secrets the finish left (its own secret is gone), and the new interaction
+ * keeps the finished one's absolute expiry: one authorization request has one
+ * lifetime, and continuing never extends it.
+ *
+ * @throws {InvalidRequestError} as {@link startInteraction}
+ */
+export async function continueInteraction(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  after: InteractionContinuation,
+  input: StartInteractionInput
+): Promise<StartedInteraction> {
+  return createInteraction(request, reply, {
+    ...input,
+    secrets: after.secrets,
+    expiresAt: after.expiresAt,
+  });
 }
 
 /**
@@ -526,7 +573,8 @@ export type InteractionAnswerTarget =
  *   again with the old cookie.
  * - `finished`: the interaction ends; its secret leaves the cookie, and the
  *   request and the transaction go back to the caller, which completes or
- *   denies the authorization request (#628). Only while the browser session
+ *   denies the authorization request (#628), or continues it in a next
+ *   interaction ({@link continueInteraction}). Only while the browser session
  *   the sign-in started is live (#963): a finish after it ended gets the
  *   answer an ended interaction gets, and the interaction stays at its step.
  *
@@ -700,13 +748,15 @@ async function settleAnswer(
     settled.done = true;
     // The sweep claimed it first and reports it expired: it does not finish.
     if (!owned) refuse(request, 'expired');
-    setFlowCookie(
-      reply,
-      nextFlowSecrets(bound.secrets, { remove: bound.secret }),
-      env.INTERACTION_TTL
-    );
+    const secrets = nextFlowSecrets(bound.secrets, { remove: bound.secret });
+    setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', taken);
-    return { kind: 'finished', request: taken.request, transaction: taken.transaction };
+    return {
+      kind: 'finished',
+      request: taken.request,
+      transaction: taken.transaction,
+      continuation: { secrets, expiresAt: taken.expiresAt },
+    };
   }
 
   if (decision.kind === 'step') {
@@ -768,14 +818,16 @@ async function settleAnswer(
     if (!owned) refuse(request, 'expired');
     settled.session = undefined;
     reply.header('Set-Cookie', sessionCookie);
-    setFlowCookie(
-      reply,
-      nextFlowSecrets(bound.secrets, { remove: bound.secret }),
-      env.INTERACTION_TTL
-    );
+    const secrets = nextFlowSecrets(bound.secrets, { remove: bound.secret });
+    setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', { ...taken, transaction: proved });
     await endReplacedSession(request, taken, session.sid);
-    return { kind: 'finished', request: taken.request, transaction: proved };
+    return {
+      kind: 'finished',
+      request: taken.request,
+      transaction: proved,
+      continuation: { secrets, expiresAt: taken.expiresAt },
+    };
   }
   const secret = mintFlowSecret();
   const next: InteractionRecord = {

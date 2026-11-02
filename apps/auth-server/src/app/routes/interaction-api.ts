@@ -26,6 +26,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
 import { accountPoliciesOf } from '../helpers/account-policies';
 import { UnsupportedMediaTypeError } from '../helpers/api-request-errors';
+import { CONSENT_STEP, finishAuthorization } from '../helpers/authorization-interaction';
 import {
   answerInteraction,
   cancelInteraction,
@@ -38,10 +39,7 @@ import {
 } from '../helpers/interaction';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
-import {
-  interactionCancelRedirect,
-  interactionFinishRedirect,
-} from '../helpers/interaction-redirect';
+import { interactionCancelRedirect } from '../helpers/interaction-redirect';
 import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
@@ -384,6 +382,12 @@ async function decideAnswer(
   },
   state: InteractionState
 ): Promise<InteractionDecision> {
+  if (state.step.name === CONSENT_STEP) {
+    // The consent step is shown, and cancelled, but not answered yet: the
+    // consent answer and the stored decision it makes are #629. The person
+    // can cancel, which sends the client `access_denied`.
+    throw new InvalidAnswerError('This step cannot be answered yet.');
+  }
   try {
     readInteractionAnswer(state.step, answer.fields, answer.encoding);
   } catch (error) {
@@ -638,8 +642,11 @@ export default async function (fastify: FastifyInstance) {
               { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
           }
+          // The authorization request goes on (#628): the code, minted only
+          // now that the interaction has ended, or the request's next
+          // interaction (a consent after the sign-in).
           return respond(request, reply, parsed.encoding, {
-            location: interactionFinishRedirect(realm, result.request),
+            location: await finishAuthorization(fastify, request, reply, result),
           });
         }
       }

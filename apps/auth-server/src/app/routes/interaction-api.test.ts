@@ -58,10 +58,39 @@ vi.mock('../helpers/account-policies', () => ({
   accountPoliciesOf: vi.fn(() => ({ requireVerifiedAccount: true })),
 }));
 
+/**
+ * Where a finished interaction's authorization request goes on (#628): the
+ * code redirect, which `authorization-interaction.test.ts` and the container
+ * suite cover; here a stand-in that answers one, from the record's request.
+ */
+const finishAuthorization = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _fastify: unknown,
+      _request: unknown,
+      _reply: unknown,
+      finished: { readonly request: { readonly redirect_uri: string; readonly state?: string } }
+    ) => {
+      const url = new URL(finished.request.redirect_uri);
+      url.searchParams.set('code', 'c0de');
+      if (finished.request.state !== undefined)
+        url.searchParams.set('state', finished.request.state);
+      url.searchParams.set('iss', 'https://auth.example.com');
+      return url.href;
+    }
+  )
+);
+
+vi.mock('../helpers/authorization-interaction', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../helpers/authorization-interaction')>();
+  return { ...actual, finishAuthorization };
+});
+
 import { createBrowserSessionFixture } from '../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
-import { IDENTIFIER_STEP } from '../helpers/interaction-record';
+import { CONSENT_STEP } from '../helpers/authorization-interaction';
+import { IDENTIFIER_STEP, type InteractionStep } from '../helpers/interaction-record';
 import { answerRouteNotFound } from '../helpers/request-bounds';
 import { SESSION_COOKIE_NAME } from '../helpers/session-cookie';
 import { emitUserEvent } from '../helpers/user-events';
@@ -140,7 +169,11 @@ let updateLastLogin: ReturnType<typeof vi.fn>;
  * routes, as `app.ts` does; `clientId` is the client of every interaction.
  */
 async function buildApp(
-  options: { readonly rateLimit?: boolean; readonly clientId?: string } = {}
+  options: {
+    readonly rateLimit?: boolean;
+    readonly clientId?: string;
+    readonly step?: InteractionStep;
+  } = {}
 ): Promise<FastifyInstance> {
   const instance = Fastify({ logger: false });
   if (options.rateLimit === true) await instance.register(rateLimit, { global: false });
@@ -175,7 +208,7 @@ async function buildApp(
           ...AUTHORIZE_REQUEST,
           client_id: options.clientId ?? AUTHORIZE_REQUEST.client_id,
         },
-        step: { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
+        step: options.step ?? { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
       });
     });
     await scope.register(interactionApi);
@@ -250,6 +283,7 @@ function eventTypes(): string[] {
 beforeEach(async () => {
   vi.mocked(emitUserEvent).mockClear();
   engine.advance.mockReset();
+  finishAuthorization.mockClear();
   app = await buildApp();
 });
 
@@ -488,7 +522,7 @@ describe('the answer, through the engine (#616)', () => {
     expect(engine.advance.mock.calls[1]?.[1]).toMatchObject({ encoding: 'form' });
   });
 
-  it('signs in on a completed round: the session cookie, then 303 to the redirect the record holds', async () => {
+  it('signs in on a completed round: the session cookie, then 303 to where the request goes on (#628)', async () => {
     engine.advance.mockResolvedValueOnce(PASSWORD_ROUND).mockResolvedValueOnce(COMPLETE_ROUND);
     const browser = new Browser();
     const id = await browser.start();
@@ -508,11 +542,47 @@ describe('the answer, through the engine (#616)', () => {
     expect(`${location.origin}${location.pathname}`).toBe(AUTHORIZE_REQUEST.redirect_uri);
     expect(location.searchParams.get('state')).toBe(AUTHORIZE_REQUEST.state);
     expect(location.searchParams.get('iss')).toBe(ORIGIN);
-    expect(location.searchParams.get('code')).toBeNull();
+    expect(location.searchParams.get('code')).toBe('c0de');
+    // The request the record holds, for the user the sign-in proved, once the
+    // interaction has ended: its secret has left the flow cookie.
+    expect(finishAuthorization).toHaveBeenCalledOnce();
+    expect(finishAuthorization.mock.calls[0]?.[3]).toMatchObject({
+      request: { client_id: AUTHORIZE_REQUEST.client_id, state: AUTHORIZE_REQUEST.state },
+      transaction: { userId: USER_ID, amr: ['pwd'] },
+      continuation: { secrets: [], expiresAt: expect.any(Number) },
+    });
     expect(browser.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
     expect(browser.cookies.has(FLOW_COOKIE)).toBe(false);
     expect(updateLastLogin).toHaveBeenCalledWith(REALM.id, USER_ID);
     expect(eventTypes()).toContain('urn:qauth:event:user.signed_in:v1-rc.0');
+  });
+
+  it('refuses an answer to the consent step, and keeps the step and its CSRF value (#628)', async () => {
+    await app.close();
+    app = await buildApp({
+      step: {
+        name: CONSENT_STEP,
+        params: {
+          scopes: [{ scope: 'openid', sensitive: false, dangerous: false }],
+          resources: [],
+          remember_default: true,
+        },
+        alternatives: [],
+      },
+    });
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const response = await browser.send(id, 'answer', {
+      type: CONSENT_STEP,
+      csrf,
+      decision: 'allow',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: 'invalid_answer' });
+    expect(engine.advance).not.toHaveBeenCalled();
+    expect(finishAuthorization).not.toHaveBeenCalled();
+    expect((await browser.read(id)).csrf).toBe(csrf);
   });
 
   it('throttles with 429 and Retry-After, and keeps the step and its CSRF value', async () => {
@@ -734,7 +804,8 @@ describe('the personal read (#616)', () => {
       });
       expect(response.statusCode).toBe(200);
       expect(response.headers['cache-control']).toBe('no-store');
-      expect(response.json()).toEqual({ step: IDENTIFIER, data: {} });
+      // The identifier step's personal data: its prefill, none here (#628).
+      expect(response.json()).toEqual({ step: IDENTIFIER, data: { [IDENTIFIER]: {} } });
     }
     for (const headers of [{ 'sec-fetch-site': 'cross-site' }, { origin: SPA_ORIGIN }]) {
       const response = await app.inject({
