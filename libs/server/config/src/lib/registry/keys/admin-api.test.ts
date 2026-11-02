@@ -3,14 +3,17 @@ import { describe, expect, it } from 'vitest';
 import { adminApiEnvSchema } from '../../schemas/admin-api';
 import { CONFIG_KEY_REGISTRY, SERVER_CONFIG_KEYS } from '.';
 
-/** The admin API's listener keys (issue #511) in the configuration registry (ADR-018 §5). */
+/** The admin API's listener keys (issues #511, #520) in the configuration registry (ADR-018 §5). */
 
 describe('the admin listener keys', () => {
-  const entries = ['ADMIN_API_ENABLED', 'ADMIN_API_HOST', 'ADMIN_API_PORT'].map((name) =>
-    CONFIG_KEY_REGISTRY.find((key) => key.name === name)
-  );
+  const entries = [
+    'ADMIN_API_BASE_URL',
+    'ADMIN_API_ENABLED',
+    'ADMIN_API_HOST',
+    'ADMIN_API_PORT',
+  ].map((name) => CONFIG_KEY_REGISTRY.find((key) => key.name === name));
 
-  it('registers all three as stable deployment keys of the server, read since 0.2.0', () => {
+  it('registers all four as stable deployment keys of the server, read since 0.2.0', () => {
     for (const entry of entries) {
       expect(entry).toMatchObject({
         tier: 'stable',
@@ -25,13 +28,15 @@ describe('the admin listener keys', () => {
     );
   });
 
-  it('gives each the default its schema falls back to: off, loopback, 3002', () => {
+  it('gives each the default its schema falls back to: none, off, loopback, 3002', () => {
     const parsed = adminApiEnvSchema.parse({});
+    expect(parsed.ADMIN_API_BASE_URL).toBeUndefined();
     expect(entries.map((entry) => entry?.default)).toEqual([
+      null,
       String(parsed.ADMIN_API_ENABLED),
       parsed.ADMIN_API_HOST,
       String(parsed.ADMIN_API_PORT),
     ]);
-    expect(entries.map((entry) => entry?.default)).toEqual(['false', '127.0.0.1', '3002']);
+    expect(entries.map((entry) => entry?.default)).toEqual([null, 'false', '127.0.0.1', '3002']);
   });
 });

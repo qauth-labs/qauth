@@ -102,10 +102,12 @@ describe('the admin listener port', () => {
 });
 
 /**
- * Until admin tokens are DPoP-bound (#520), a production process runs the
- * admin listener on loopback only (#511).
+ * Admin tokens are DPoP-bound (#520): a process that runs the admin listener
+ * needs DPoP and the base URL the proofs name, and listens wherever the
+ * operator binds it, in production too (the loopback-only rule of #511 held
+ * until then).
  */
-describe('the admin listener address', () => {
+describe('the admin listener address, base URL and DPoP', () => {
   const parse = (extra: Record<string, string>) =>
     envSchema.safeParse({
       DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
@@ -114,43 +116,62 @@ describe('the admin listener address', () => {
       EMAIL_BASE_URL: 'https://auth.example.com',
       ...extra,
     });
-  /** The issue on ADMIN_API_HOST, if any. */
-  const hostIssue = (extra: Record<string, string>) => {
+  /** The issue on `variable`, if any. */
+  const issueOn = (variable: string, extra: Record<string, string>) => {
     const result = parse(extra);
     return result.success
       ? undefined
-      : result.error.issues.find((issue) => issue.path.join('.') === 'ADMIN_API_HOST');
+      : result.error.issues.find((issue) => issue.path.join('.') === variable);
   };
-  const production = { NODE_ENV: 'production', ADMIN_API_ENABLED: 'true' };
+  const listener = {
+    ADMIN_API_ENABLED: 'true',
+    ADMIN_API_BASE_URL: 'https://admin.auth.example.com',
+    DPOP_ENABLED: 'true',
+  };
 
-  it.each(['0.0.0.0', '10.0.4.12', '::', 'fd00::12', 'admin.internal', '::ffff:10.0.0.1'])(
-    'refuses %s in production while the listener is on, naming the variable and #520',
+  it.each(['0.0.0.0', '10.0.4.12', '::', 'admin.internal', '127.0.0.1'])(
+    'accepts the address %s in production',
     (host) => {
-      const issue = hostIssue({ ...production, ADMIN_API_HOST: host });
-      expect(issue?.message).toContain('ADMIN_API_HOST must be a loopback address');
-      expect(issue?.message).toContain('#520');
+      expect(
+        issueOn('ADMIN_API_HOST', { ...listener, NODE_ENV: 'production', ADMIN_API_HOST: host })
+      ).toBeUndefined();
     }
   );
 
-  it.each(['127.0.0.1', '127.8.9.10', '::1', '0:0:0:0:0:0:0:1', 'localhost', 'LocalHost'])(
-    'accepts the loopback address %s in production',
-    (host) => {
-      expect(hostIssue({ ...production, ADMIN_API_HOST: host })).toBeUndefined();
-    }
-  );
-
-  it('accepts the default address in production', () => {
-    expect(hostIssue(production)).toBeUndefined();
+  it('accepts a process that runs the listener with DPoP on and a base URL', () => {
+    expect(issueOn('ADMIN_API_BASE_URL', listener)).toBeUndefined();
+    expect(issueOn('DPOP_ENABLED', listener)).toBeUndefined();
   });
 
-  it('accepts any address outside production, with the listener off, or without the admin role', () => {
-    const host = { ADMIN_API_HOST: '10.0.4.12' };
+  it('refuses a process that runs the listener without a base URL, naming the variable and #520', () => {
+    const issue = issueOn('ADMIN_API_BASE_URL', { ...listener, ADMIN_API_BASE_URL: '' });
+    expect(issue?.message).toContain('ADMIN_API_BASE_URL is required where the admin API runs');
+    expect(issue?.message).toContain('#520');
+  });
+
+  it('refuses a process that runs the listener with DPoP off, naming the variable and #520', () => {
+    for (const dpop of [{ DPOP_ENABLED: 'false' }, { DPOP_ENABLED: '' }]) {
+      const issue = issueOn('DPOP_ENABLED', { ...listener, ...dpop });
+      expect(issue?.message).toContain('DPOP_ENABLED must be true where the admin API runs');
+      expect(issue?.message).toContain('#520');
+    }
+  });
+
+  it('asks for neither with the listener off, as by default, or without the admin role', () => {
+    for (const extra of [
+      {},
+      { ADMIN_API_ENABLED: 'false' },
+      { ADMIN_API_ENABLED: 'true', SERVICE_ROLES: 'web,api,signer,delivery' },
+    ] as Record<string, string>[]) {
+      expect(issueOn('ADMIN_API_BASE_URL', extra)).toBeUndefined();
+      expect(issueOn('DPOP_ENABLED', extra)).toBeUndefined();
+    }
+  });
+
+  it('refuses a base URL that is not an absolute http or https URL', () => {
     expect(
-      hostIssue({ ...host, ADMIN_API_ENABLED: 'true', NODE_ENV: 'development' })
-    ).toBeUndefined();
-    expect(hostIssue({ ...host, NODE_ENV: 'production' })).toBeUndefined();
-    expect(
-      hostIssue({ ...host, ...production, SERVICE_ROLES: 'web,api,signer,delivery' })
-    ).toBeUndefined();
+      issueOn('ADMIN_API_BASE_URL', { ...listener, ADMIN_API_BASE_URL: 'admin.example.com' })
+        ?.message
+    ).toContain('an absolute http or https URL');
   });
 });
