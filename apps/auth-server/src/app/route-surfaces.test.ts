@@ -12,15 +12,43 @@
  * The app boots with every switch that registers a route turned on, the
  * maximal surface of `openapi-export.ts`, so the wallet routes and the passkey
  * association files are checked too. No database or Redis: the routes are read
- * as they register, and no request is sent.
+ * as they register. The CORS checks (#930) send requests, which the app
+ * answers before anything reaches either: a preflight from an `onRequest`
+ * hook, and a call to the authorization or token endpoint from its schema
+ * validation.
  */
 import { generateKeyPairSync } from 'node:crypto';
 
-import Fastify, { type FastifyInstance, type RouteOptions } from 'fastify';
+import Fastify, {
+  type FastifyInstance,
+  type LightMyRequestResponse,
+  type RouteOptions,
+} from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import type { RealmHostLookup, RealmHostMatch } from './helpers/realm-host-cache';
 import { routeSurfaceProblem } from './helpers/route-surface';
+
+/** The origin `CORS_ORIGIN` lists: a browser-based application's (#930). */
+const SPA_ORIGIN = 'https://spa.example.com';
+
+/**
+ * The realm the resolver (#486) finds for `localhost`, the host `inject()`
+ * sends. The database is unreachable, so hosts are looked up here instead.
+ */
+const realmLookup: RealmHostLookup = async (host) =>
+  host === 'localhost'
+    ? ({
+        realm: {
+          id: '0190e3c4-0000-7000-8000-000000000001',
+          name: 'master',
+          enabled: true,
+          issuer: 'https://auth.example.com',
+        },
+        host: { host: 'localhost', kind: 'primary' },
+      } as RealmHostMatch)
+    : undefined;
 
 /** The environment of a deployment with every route-registering switch on. */
 function maximalEnvironment(): Record<string, string> {
@@ -42,6 +70,8 @@ function maximalEnvironment(): Record<string, string> {
     REDIS_URL: 'redis://127.0.0.1:1',
     RATE_LIMIT_ENABLED: 'false',
     METRICS_ENABLED: 'true',
+    // A browser-based application's origin, as an operator lists it (#930).
+    CORS_ORIGIN: SPA_ORIGIN,
     // The SSF transmitter's routes (#410): problem routes, though they speak an
     // OpenID protocol, because SSF 1.0 §8.1 defines no error body (#513).
     SSF_TRANSMITTER_ENABLED: 'true',
@@ -109,7 +139,7 @@ const savedEnv = new Map<string, string | undefined>();
 
 beforeAll(async () => {
   for (const key of Object.keys(process.env)) {
-    if (/^(OID4VP_|WALLET_|ACR_|WEBAUTHN_)/.test(key)) {
+    if (/^(OID4VP_|WALLET_|ACR_|WEBAUTHN_|CORS_)/.test(key)) {
       savedEnv.set(key, process.env[key]);
       delete process.env[key];
     }
@@ -128,7 +158,7 @@ beforeAll(async () => {
     scope.addHook('onRoute', (route) => {
       routes.push(route);
     });
-    await app(scope, { defaultRealmBoot: false, realmLookup: async () => undefined });
+    await app(scope, { defaultRealmBoot: false, realmLookup });
   });
   await instance.ready();
   server = instance;
@@ -206,5 +236,116 @@ describe('error formats of the assembled app (#513)', () => {
         expect(route.config?.errorFormat, operation).toBeUndefined();
       }
     }
+  });
+});
+
+/** The assembled app, booted in `beforeAll`. */
+function booted(): FastifyInstance {
+  if (server === undefined) throw new Error('the app did not boot');
+  return server;
+}
+
+/** The `Access-Control-*` header fields of an answer. */
+function corsHeaders(response: LightMyRequestResponse): string[] {
+  return Object.keys(response.headers).filter((name) => name.startsWith('access-control-'));
+}
+
+/** A path a route's URL pattern serves: each parameter, and a wildcard, becomes `x`. */
+function concretePath(url: string): string {
+  return url
+    .split('/')
+    .map((segment) => (segment === '*' || segment.includes(':') ? 'x' : segment))
+    .join('/');
+}
+
+/** A CORS preflight from {@link SPA_ORIGIN}, announcing `method`. */
+function preflight(url: string, method: string): Promise<LightMyRequestResponse> {
+  return booted().inject({
+    method: 'OPTIONS',
+    url,
+    headers: { origin: SPA_ORIGIN, 'access-control-request-method': method },
+  });
+}
+
+describe('no CORS on the browser surface of the assembled app (#930)', () => {
+  it('leaves every browser route, and only those, out of CORS', () => {
+    for (const route of routes) {
+      const label = `${String(route.method)} ${route.url}`;
+      expect(route.config?.cors, label).toBe(
+        route.config?.surface === 'browser' ? false : undefined
+      );
+    }
+  });
+
+  it('answers no preflight for a browser route, and a preflight for every other route', async () => {
+    for (const route of routes) {
+      // @fastify/cors's own `OPTIONS *`, which answers the preflights.
+      if (route.url === '*') continue;
+      for (const method of [route.method].flat()) {
+        const label = `${method} ${route.url}`;
+        const response = await preflight(concretePath(route.url), method);
+        if (route.config?.surface === 'browser') {
+          expect(response.statusCode, label).toBe(404);
+          expect(response.json(), label).toMatchObject({ code: 'not_found' });
+          expect(corsHeaders(response), label).toEqual([]);
+        } else {
+          expect(response.statusCode, label).toBe(204);
+          expect(response.headers['access-control-allow-origin'], label).toBe(SPA_ORIGIN);
+        }
+      }
+    }
+  });
+});
+
+describe('the authorization endpoint answers no CORS (OAuth 2.1 draft-17 §3.1)', () => {
+  it('answers no preflight for /oauth/authorize with CORS_ORIGIN set', async () => {
+    for (const method of ['GET', 'POST', 'PUT', 'DELETE']) {
+      const response = await preflight('/oauth/authorize', method);
+      expect(response.statusCode, method).toBe(404);
+      expect(response.headers['access-control-allow-origin'], method).toBeUndefined();
+      expect(corsHeaders(response), method).toEqual([]);
+    }
+  });
+
+  it('sends no Access-Control-Allow-Origin from GET or POST /oauth/authorize', async () => {
+    const get = await booted().inject({
+      method: 'GET',
+      url: '/oauth/authorize',
+      headers: { origin: SPA_ORIGIN },
+    });
+    const post = await booted().inject({
+      method: 'POST',
+      url: '/oauth/authorize',
+      headers: { origin: SPA_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: '',
+    });
+    for (const [label, response] of [
+      ['GET', get],
+      ['POST', post],
+    ] as const) {
+      // The endpoint itself answered: its schema refused the empty request.
+      expect(response.statusCode, label).toBe(400);
+      expect(response.json(), label).toMatchObject({ error: 'invalid_request' });
+      expect(response.headers['access-control-allow-origin'], label).toBeUndefined();
+      expect(corsHeaders(response), label).toEqual([]);
+    }
+  });
+});
+
+describe('the token endpoint keeps CORS for a browser-based application (#930)', () => {
+  it('answers the preflight and the call from an origin CORS_ORIGIN lists', async () => {
+    const response = await preflight('/oauth/token', 'POST');
+    expect(response.statusCode).toBe(204);
+    expect(response.headers['access-control-allow-origin']).toBe(SPA_ORIGIN);
+
+    const token = await booted().inject({
+      method: 'POST',
+      url: '/oauth/token',
+      headers: { origin: SPA_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: '',
+    });
+    expect(token.statusCode).toBe(400);
+    expect(token.json()).toMatchObject({ error: 'invalid_request' });
+    expect(token.headers['access-control-allow-origin']).toBe(SPA_ORIGIN);
   });
 });

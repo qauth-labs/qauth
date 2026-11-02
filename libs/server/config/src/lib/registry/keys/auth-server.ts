@@ -14,7 +14,7 @@ export const AUTH_SERVER_KEYS = defineKeys([
       computed: 'none in `production`, so cross-origin requests are refused; `*` otherwise',
     },
     since: '0.1.0',
-    docs: 'The origins, comma-separated, allowed to call the server cross-origin.',
+    docs: "The origins, comma-separated, allowed to call the server cross-origin, such as a browser-based client's origin for its calls to the token endpoint; the authorization endpoint and the other sign-in and consent pages answer no CORS, whatever it holds.",
   },
   {
     name: 'ENABLE_SWAGGER',

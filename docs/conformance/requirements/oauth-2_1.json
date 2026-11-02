@@ -1,7 +1,16 @@
 {
   "specId": "oauth-2_1",
-  "note": "Hand-authored, the authorization-code replay rows only (#627, ADR-017 Decision 10). `quote` is verbatim from draft-ietf-oauth-v2-1-17 (2026-10-31, the revision docs/spec-pin-log.md pins; the three passages read the same in -16) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The same obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
+  "note": "Hand-authored: the authorization-code replay rows (#627, ADR-017 Decision 10) and the authorization endpoint's no-CORS row (#930). `quote` is verbatim from draft-ietf-oauth-v2-1-17 (2026-10-31, the revision docs/spec-pin-log.md pins; the three replay passages read the same in -16; the §3.1 sentence has stood since -09, and -17 only reworded it) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The replay obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
   "requirements": [
+    {
+      "id": "oauth-2_1-3_1-no-cors-at-authorization-endpoint",
+      "section": "3.1",
+      "level": "MUST NOT",
+      "quote": "Cross-Origin Resource Sharing [WHATWG.CORS] MUST NOT be supported at the authorization endpoint, as the client does not access this endpoint directly; instead, the client redirects the user agent to it.",
+      "applies": "GET and POST /oauth/authorize, with every other `browser` route (the `/ui/*` pages, `/consents`, `/auth/link/wallet`, `GET /auth/verify`), in every environment and whatever `CORS_ORIGIN` holds. The CORS plugin (`apps/auth-server/src/app/plugins/cors.ts`) sets `@fastify/cors`'s `config.cors = false` on each, so no answer carries an `Access-Control-*` header, and answers an `OPTIONS` request for one with the 404 of a path no route serves. The token endpoint keeps CORS (§3.2).",
+      "status": "covered",
+      "evidenceMatch": "authorization endpoint answers no CORS"
+    },
     {
       "id": "oauth-2_1-4_1_3-code-once",
       "section": "4.1.3",

@@ -37,9 +37,9 @@ import { emitUserEvent } from '../../helpers/user-events';
  * trick could still reach it. Defense-in-depth: the GET mints (or reuses) a
  * per-session `apiCsrfToken`, returns it in the response body, and the DELETE
  * MUST echo it back via the `X-CSRF-Token` request header. The custom header
- * forces a CORS preflight (which fails for cross-origin callers without an
- * explicit CORS allowlist), and the timing-safe token comparison closes the
- * gap even for same-origin XSS-driven calls that cannot read the response.
+ * forces a CORS preflight, which the server never answers for a `browser`
+ * route such as this one (#930), and the timing-safe token comparison closes
+ * the gap even for same-origin XSS-driven calls that cannot read the response.
  *
  *   GET    /consents           — list active consents + return the CSRF token
  *   DELETE /consents/:id       — revoke one by id (ownership + CSRF-checked)
