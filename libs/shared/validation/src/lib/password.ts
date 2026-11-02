@@ -290,12 +290,15 @@ export const DEFAULT_PASSWORD_MIN_LENGTH = PASSWORD_SINGLE_FACTOR_MIN_LENGTH;
  * §3.1.1.2 asks the verifier to say why.
  *
  * - `too_long`: more than {@link PASSWORD_MAX_LENGTH} UTF-16 code units, as
- *   typed. Checked first, alone: nothing else runs on such a password.
+ *   typed (checked first, alone: nothing else runs on such a password) or
+ *   after NFC normalisation, which every login schema would then refuse.
  * - `too_short`: fewer code points than the minimum, after NFC normalisation.
- * - `blocklisted`: the whole password, ignoring case, is a word of zxcvbn's
- *   dictionaries or one of the context words. A password that only contains
- *   one is not blocklisted.
- * - `too_weak`: zxcvbn scores it below the lowest score.
+ * - `blocklisted`: the whole password, ignoring case and the spaces around
+ *   it, is a word of zxcvbn's dictionaries or one of the context words. A
+ *   password that only contains one is not blocklisted.
+ * - `too_weak`: zxcvbn scores it below the lowest score, or it holds an
+ *   unpaired surrogate: not text, and hashed as U+FFFD, so what is stored
+ *   would be weaker than what was scored.
  */
 export const PASSWORD_REJECTION_REASONS = [
   'too_short',
@@ -384,8 +387,9 @@ export interface PasswordContext {
 
 /**
  * The context words of `context`, in lower case and NFC, each once: the
- * address, its local part and its domain; the service, realm and client
- * names. Empty ones are left out.
+ * address, its local part (and the part before a `+` tag) and its domain (and
+ * each of its labels but the last); the service, realm and client names.
+ * Empty ones are left out.
  */
 export function passwordContextWords(context: PasswordContext): string[] {
   const words = new Set<string>();
@@ -397,8 +401,14 @@ export function passwordContextWords(context: PasswordContext): string[] {
     add(context.email);
     const at = context.email.lastIndexOf('@');
     if (at >= 0) {
-      add(context.email.slice(0, at));
-      add(context.email.slice(at + 1));
+      const local = context.email.slice(0, at);
+      const domain = context.email.slice(at + 1);
+      add(local);
+      const tag = local.indexOf('+');
+      if (tag > 0) add(local.slice(0, tag));
+      add(domain);
+      const labels = domain.split('.');
+      for (const label of labels.slice(0, -1)) add(label);
     }
   }
   add(context.serviceName);
@@ -411,16 +421,30 @@ export function passwordContextWords(context: PasswordContext): string[] {
 let dictionaryWords: ReadonlySet<string> | undefined;
 
 /**
- * Whether the whole of `password` (already NFC), ignoring case, is a word of
- * zxcvbn's dictionaries or one of `contextWords`. Never a substring match:
+ * Whether the whole of `password` (already NFC), ignoring case and the spaces
+ * around it, is a word of zxcvbn's dictionaries or one of `contextWords`.
+ * Never a substring match:
  * NIST SP 800-63B-4 §3.1.1.2 says "The entire password SHALL be subject to
  * comparison, not substrings or words that might be contained therein".
  */
 function isBlocklisted(password: string, contextWords: readonly string[]): boolean {
   dictionaryWords ??= new Set(Object.values(frequencyLists).flat());
-  const candidate = password.toLowerCase();
-  return dictionaryWords.has(candidate) || contextWords.includes(candidate);
+  const lowered = password.toLowerCase();
+  const words = dictionaryWords;
+  return [lowered, lowered.trim()].some(
+    (candidate) => words.has(candidate) || contextWords.includes(candidate)
+  );
 }
+
+/**
+ * An unpaired UTF-16 surrogate: not a character. NFC leaves it as it is, and
+ * the hasher encodes the password as UTF-8, where it becomes U+FFFD, so every
+ * unpaired surrogate would verify as any other.
+ */
+const UNPAIRED_SURROGATE = /\p{Cs}/u;
+
+/** The feedback beside `too_weak` for a password with an unpaired surrogate. */
+const UNPAIRED_SURROGATE_MESSAGE = 'Password contains characters that are not text';
 
 /** The number of Unicode code points of `value`: what a minimum length counts. */
 function codePointLength(value: string): number {
@@ -470,12 +494,13 @@ export interface PasswordPolicyValidator {
    * 1. its length as typed: more than {@link PASSWORD_MAX_LENGTH} UTF-16 code
    *    units is `too_long`, and nothing else runs, neither normalisation nor
    *    scoring nor hashing;
-   * 2. NFC normalisation ({@link normalizePassword});
+   * 2. NFC normalisation ({@link normalizePassword}); a password it lengthens
+   *    past {@link PASSWORD_MAX_LENGTH} is `too_long` too, alone;
    * 3. fewer code points than `minLength` is `too_short`;
-   * 4. the whole password, ignoring case, equal to a word of zxcvbn's
-   *    dictionaries or a context word is `blocklisted`;
+   * 4. the whole password, ignoring case and the spaces around it, equal to a
+   *    word of zxcvbn's dictionaries or a context word is `blocklisted`;
    * 5. a zxcvbn score, with the context words as its user inputs, below
-   *    `minScore` is `too_weak`.
+   *    `minScore`, or an unpaired surrogate anywhere, is `too_weak`.
    *
    * Every reason found is returned. An accepted password comes back in NFC,
    * which is what the caller hashes, with the marker to store beside it.
@@ -510,25 +535,35 @@ export function createPasswordPolicyValidator(
         };
       }
       const normalized = normalizePassword(password);
+      // A password NFC lengthened past the bound (see normalizePassword):
+      // every login schema bounds the password at PASSWORD_MAX_LENGTH, so its
+      // NFC spelling, which the marker says is the same password, could never
+      // sign in.
+      if (normalized.length > PASSWORD_MAX_LENGTH) {
+        return {
+          valid: false,
+          reasons: ['too_long'],
+          feedback: [reasonMessage('too_long', checked)],
+        };
+      }
       const contextWords = passwordContextWords(context);
       const reasons: PasswordRejectionReason[] = [];
       if (codePointLength(normalized) < checked.minLength) reasons.push('too_short');
       if (isBlocklisted(normalized, contextWords)) reasons.push('blocklisted');
       // zxcvbn scores a bounded prefix anyway (ZXCVBN_MAX_INPUT_LENGTH).
-      // Cutting it here keeps a password that NFC lengthened past
-      // PASSWORD_MAX_LENGTH (see normalizePassword) from reading as too long
-      // to the strength check, after the length as typed was accepted.
       const scored = strength.validatePasswordStrength(
         normalized.slice(0, ZXCVBN_MAX_INPUT_LENGTH),
         contextWords
       );
-      if (!scored.valid) reasons.push('too_weak');
+      const unpaired = UNPAIRED_SURROGATE.test(normalized);
+      if (!scored.valid || unpaired) reasons.push('too_weak');
       if (reasons.length > 0) {
         return {
           valid: false,
           reasons,
           feedback: [
             ...reasons.map((reason) => reasonMessage(reason, checked)),
+            ...(unpaired ? [UNPAIRED_SURROGATE_MESSAGE] : []),
             ...(scored.valid ? [] : (scored.feedback ?? [])),
           ],
         };

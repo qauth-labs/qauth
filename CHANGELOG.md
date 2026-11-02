@@ -1610,12 +1610,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   length as typed (at most 256 UTF-16 code units, `too_long`, before anything
   else runs; on this route the request schema refuses a longer password
   first, with the `400` `validation_error` it answered before); Unicode NFC
-  normalisation; a minimum length counted in code
-  points, 15 by default (`too_short`); a whole-password blocklist of zxcvbn's
-  dictionaries and the context words (the address, its local part and domain,
-  the realm's mail sender name and the realm's name), compared ignoring case
-  and never as a substring (`blocklisted`); and the zxcvbn score floor
-  `password.minScore`, 2 by default (`too_weak`). There are no composition
+  normalisation, after which a password lengthened past 256 is `too_long` too;
+  a minimum length counted in code points, 15 by default (`too_short`); a
+  whole-password blocklist of zxcvbn's dictionaries and the context words (the
+  address, its local part and the part before a `+` tag, its domain and the
+  domain's labels, the realm's mail sender name and the realm's name),
+  compared ignoring case and the spaces around the password, and never as a
+  substring (`blocklisted`); and the zxcvbn score floor `password.minScore`, 2
+  by default (`too_weak`, also the answer for an unpaired UTF-16 surrogate,
+  which is not text and would be hashed as U+FFFD). There are no composition
   rules and no periodic change. The `422` `weak_password` problem document
   gains a `reasons` member listing every reason found, and `errors` carries a
   message for each under `/password`, then zxcvbn's feedback. The new realm

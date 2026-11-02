@@ -133,11 +133,11 @@ const checked = validators
 
 The one password policy every new password meets (#634, ADR-017 Decision 8). `check(password, context?)` runs, in order:
 
-1. A password longer than 256 characters is refused as `too_long`, and nothing else runs.
-2. The password is normalised to Unicode NFC.
+1. A password longer than 256 UTF-16 code units is refused as `too_long`, and nothing else runs.
+2. The password is normalised to Unicode NFC. One that NFC lengthens past 256 code units is `too_long` too.
 3. Fewer code points than `minLength` (default 15, the NIST SP 800-63B-4 minimum for a password used alone) is `too_short`.
-4. The whole password, lowercased, being a common password or word (zxcvbn's frequency lists) or one of the context words (the address, its local part and domain, the service, realm and client names) is `blocklisted`. A password that only contains one of them is not.
-5. A zxcvbn score below `minScore`, with the context words as user inputs, is `too_weak`.
+4. The whole password, lowercased and with or without the spaces around it, being a common password or word (zxcvbn's frequency lists) or one of the context words (the address, its local part and the part before a `+` tag, its domain and each of its labels but the last, the service, realm and client names) is `blocklisted`. A password that only contains one of them is not.
+5. A zxcvbn score below `minScore`, with the context words as user inputs, is `too_weak`, and so is an unpaired UTF-16 surrogate, which is not text and would be hashed as U+FFFD.
 
 A refusal returns `{ valid: false, reasons, feedback }`, every reason found in that order. An accepted password returns `{ valid: true, password, normalization: 'nfc', score }`: hash `password` (the NFC form) and record `normalization` on the credential, so a verifier can present the password the same way (`passwordForVerification`).
 

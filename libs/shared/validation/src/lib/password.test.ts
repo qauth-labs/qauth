@@ -313,6 +313,34 @@ describe('createPasswordPolicyValidator (#634)', () => {
     expect(policy.check(password)).toMatchObject({ reasons: ['too_long'] });
   });
 
+  it('refuses a password that NFC lengthens past the bound, which no login could take', () => {
+    // U+0958 decomposes and does not recompose: one code unit as typed, two in NFC.
+    const lengthened = '\u0958'.repeat(129);
+    expect(lengthened).toHaveLength(129);
+    expect(lengthened.normalize('NFC')).toHaveLength(258);
+
+    expect(policy.check(lengthened)).toEqual({
+      valid: false,
+      reasons: ['too_long'],
+      feedback: [`Password must be at most ${PASSWORD_MAX_LENGTH} characters`],
+    });
+    expect(policy.check('\u0958'.repeat(128))).not.toMatchObject({ reasons: ['too_long'] });
+  });
+
+  it('refuses an unpaired surrogate as too_weak, and accepts a paired one', () => {
+    // Hashed as UTF-8, an unpaired surrogate becomes U+FFFD: any one would
+    // verify as any other.
+    const unpaired = `${STRONG_14}4\uD83D`;
+
+    expect(policy.check(unpaired)).toEqual({
+      valid: false,
+      reasons: ['too_weak'],
+      feedback: ['Password is too easy to guess', 'Password contains characters that are not text'],
+    });
+    expect(policy.check(`${STRONG_14}4\uDE00`)).toMatchObject({ reasons: ['too_weak'] });
+    expect(policy.check(`${STRONG_14}4\u{1F600}`).valid).toBe(true);
+  });
+
   it('counts the minimum in code points, not code units', () => {
     // 14 code points in 15 code units: still too short.
     expect(policy.check('Kx9#mQ2$vL7!p\u{1F512}')).toMatchObject({ reasons: ['too_short'] });
@@ -334,7 +362,12 @@ describe('createPasswordPolicyValidator (#634)', () => {
 
     // An English word of zxcvbn's dictionaries, and a password of its
     // common-passwords list, both at least 15 characters.
-    for (const entry of ['telecommunications', 'Telecommunications', '1qaz2wsx3edc4rfv']) {
+    for (const entry of [
+      'telecommunications',
+      'Telecommunications',
+      ' telecommunications ',
+      '1qaz2wsx3edc4rfv',
+    ]) {
       expect(blocklistOnly.check(entry)).toMatchObject({ valid: false, reasons: ['blocklisted'] });
     }
     expect(blocklistOnly.check('telecommunications-tower-near-the-harbour').valid).toBe(true);
@@ -354,6 +387,7 @@ describe('createPasswordPolicyValidator (#634)', () => {
       'margaret.hamilton@example.org',
       'Margaret.Hamilton',
       'example.org',
+      ' Margaret.Hamilton ',
       'NORTHWIND IDENTITY',
       'northwind-staff',
       'northwind mobile app',
@@ -377,6 +411,7 @@ describe('createPasswordPolicyValidator (#634)', () => {
       'margaret@example.org',
       'margaret',
       'example.org',
+      'example',
     ]);
   });
 
@@ -428,7 +463,7 @@ describe('createPasswordPolicyValidator (#634)', () => {
 });
 
 describe('passwordContextWords', () => {
-  it('names the address, its local part and domain, and the service, realm and client names, once each', () => {
+  it('names the address, its local part, its domain and its label, and the service, realm and client names, once each', () => {
     expect(
       passwordContextWords({
         email: 'Ada@Example.org',
@@ -436,8 +471,19 @@ describe('passwordContextWords', () => {
         realmName: 'qauth',
         clientNames: ['Portal', ''],
       })
-    ).toEqual(['ada@example.org', 'ada', 'example.org', 'qauth', 'portal']);
+    ).toEqual(['ada@example.org', 'ada', 'example.org', 'example', 'qauth', 'portal']);
     expect(passwordContextWords({})).toEqual([]);
+  });
+
+  it('names the local part before a + tag, and every label of the domain but the last', () => {
+    expect(passwordContextWords({ email: 'grace+billing@mail.navy.example' })).toEqual([
+      'grace+billing@mail.navy.example',
+      'grace+billing',
+      'grace',
+      'mail.navy.example',
+      'mail',
+      'navy',
+    ]);
   });
 });
 
