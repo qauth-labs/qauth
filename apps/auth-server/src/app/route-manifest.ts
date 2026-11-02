@@ -18,8 +18,9 @@ import type { FastifyPluginAsync } from 'fastify';
  *   revocation, userinfo, registration, discovery, JWKS, the OID4VP endpoints
  *   a wallet calls, the account and developer APIs, the SSF transmitter and
  *   the legacy `/auth/*` routes (the `api` and `meta` surfaces).
- * - Every role registers `/health` and `/metrics`: each process answers for
- *   itself, whatever else it serves.
+ * - Every role registers `/health` and `/ready` (#500): each process answers
+ *   for itself, whatever else it serves. Its metrics are on the internal
+ *   listener (`internal/route-manifest.ts`).
  * - `admin`, `signer` and `delivery` have no route here. The admin API runs
  *   on its own listener (#511, `admin/listener.ts`), the signer service
  *   (#497) on the internal listener, whose routes have a manifest of their
@@ -35,7 +36,7 @@ import type { FastifyPluginAsync } from 'fastify';
 
 /**
  * A plugin a process registers only when a role it holds needs it. The others
- * (database, Redis, metrics, rate limits, realm resolution, error handling)
+ * (database, Redis, metrics, readiness, rate limits, realm resolution, error handling)
  * every process registers.
  *
  * - `dpop`: `fastify.dpop`; `jwt` needs it too.
@@ -91,7 +92,7 @@ export interface RouteModule {
   readonly load: () => Promise<{ readonly default: FastifyPluginAsync }>;
 }
 
-/** `/health` and `/metrics`: every process answers for itself. */
+/** `/health` and `/ready`: every process answers for itself. */
 const EVERY_ROLE: readonly ServiceRole[] = SERVICE_ROLE_NAMES;
 
 /** The signed-in user's wallet linking and wallet sign-in. */
@@ -132,11 +133,11 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/interaction-document'),
   },
   {
-    module: 'metrics',
+    module: 'ready',
     roles: EVERY_ROLE,
     plugins: [],
     repositories: [],
-    load: () => import('./routes/metrics'),
+    load: () => import('./routes/ready'),
   },
   {
     module: 'root',

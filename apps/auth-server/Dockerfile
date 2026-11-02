@@ -93,6 +93,10 @@ ENV QAUTH_VERSION=${QAUTH_VERSION}
 
 EXPOSE 3000
 
+# Liveness: `/health` answers 200 while the process serves, whatever its
+# dependencies do, so a runtime that restarts an unhealthy container does not
+# restart it for a database outage. Readiness is `/ready`, which the Compose
+# file's healthcheck and an orchestrator's readiness probe call (#500).
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/health', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"
 

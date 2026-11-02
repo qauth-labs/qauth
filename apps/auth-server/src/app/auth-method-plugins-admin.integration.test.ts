@@ -2,6 +2,11 @@ import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, FastifyRequest, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import {
+  ADMIN_LISTENER_ENVIRONMENT,
+  adminCallHeaders,
+  signBoundAccessToken,
+} from '../testing/admin-dpop';
 import type { TestApprovalFactor } from '../testing/approval-factor';
 import { fixturePluginImporter, fixturePluginMethod } from '../testing/auth-method-plugins';
 import {
@@ -72,7 +77,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     booted = await bootAuthServer(
       {
         ...baseEnvironment(infra, jwt),
-        ADMIN_API_ENABLED: 'true',
+        ...ADMIN_LISTENER_ENVIRONMENT,
         AUTH_METHOD_PLUGINS: PLUGIN_PACKAGE,
         PLUGIN_API_ENABLED: 'true',
       },
@@ -148,7 +153,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
       targetRealmId: realmId,
       createdBy: null,
     });
-    const token = await app().jwtUtils.signAccessToken(operator, {
+    const token = await signBoundAccessToken(app(), operator, {
       sub: userId,
       clientId: 'admin-console',
       aud: ADMIN,
@@ -160,7 +165,8 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
   const pluginPath = (realmId: string, suffix = '') =>
     `/admin/v1-rc.0/realms/${realmId}/plugins${suffix}`;
 
-  function send(
+  /** A call with `token` under the `DPoP` scheme and a fresh proof of its key (#520). */
+  async function send(
     method: 'GET' | 'POST',
     url: string,
     token: string,
@@ -170,7 +176,7 @@ describe('the plugin operations of the admin API (#600, real containers)', () =>
     return admin().inject({
       method,
       url,
-      headers: { authorization: `Bearer ${token}`, ...headers },
+      headers: { ...(await adminCallHeaders(token, method, url)), ...headers },
       ...(payload === undefined ? {} : { payload: payload as Record<string, unknown> }),
     });
   }

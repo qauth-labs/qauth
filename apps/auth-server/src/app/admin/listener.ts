@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import rateLimit from '@fastify/rate-limit';
-import swagger, { type FastifyDynamicSwaggerOptions } from '@fastify/swagger';
+import swagger from '@fastify/swagger';
 import Fastify, {
   type FastifyBaseLogger,
   type FastifyInstance,
@@ -26,13 +26,13 @@ import {
   answerUnknownRouteBeforeBody,
   requestDeadlineOptions,
 } from '../helpers/request-bounds';
-import { openapiOptions } from '../openapi-options';
 import { DEFAULT_ADMIN_RATE_LIMIT } from '../plugins/admin-operations';
 import errorHandler from '../plugins/error-handler';
 import { requestIdPlugin } from '../plugins/request-id';
 import { securityHeadersPlugin } from '../plugins/security-headers';
 import { approvalRoutes } from './approvals/routes';
-import { AdminCallsInFlight, adminPipeline } from './pipeline';
+import { adminOpenapiOptions } from './openapi-options';
+import { AdminCallsInFlight, adminDpopService, adminPipeline } from './pipeline';
 import { pluginRoutes } from './plugins/routes';
 
 /**
@@ -52,8 +52,9 @@ import { pluginRoutes } from './plugins/routes';
  *
  * The listener grants nothing for a caller's network position: every route
  * sits behind the admin pipeline (`./pipeline.ts`), whose first stage refuses
- * a call without an admin token. The one exception is its OpenAPI document,
- * which describes the routes and holds no realm data.
+ * a call without a DPoP-bound admin token and a proof made with its key for
+ * ADMIN_API_BASE_URL and the request's path (#520). The one exception is its
+ * OpenAPI document, which describes the routes and holds no realm data.
  */
 
 /** The admin API's OpenAPI document, served on the admin listener only. */
@@ -70,24 +71,6 @@ export const ADMIN_ROUTE_MODULES: readonly FastifyPluginAsync[] = Object.freeze(
   approvalRoutes,
   pluginRoutes,
 ]);
-
-/**
- * The OpenAPI options of the admin listener: the server's own (#347), so the
- * admin document carries the same `Problem` schema, error responses and
- * extensions, under the admin API's title.
- */
-export const adminOpenapiOptions: FastifyDynamicSwaggerOptions = {
-  ...openapiOptions,
-  openapi: {
-    ...openapiOptions.openapi,
-    info: {
-      title: 'QAuth Admin API',
-      description:
-        'The admin API of QAuth (ADR-019 Decision 7), served on the internal admin listener only. Every operation needs an admin token whose account holds a grant on the realm in the path; a security operation also needs an approval bound to it.',
-      version: '1.0.0',
-    },
-  },
-};
 
 /**
  * The id of an admin request: always one the server makes, never the
@@ -266,7 +249,8 @@ async function registerCeilings(admin: FastifyInstance, source: FastifyInstance)
  * Install the admin API on `admin`, the instance {@link createAdminServer}
  * built, from `source`, the app scope that registered the database, cache,
  * signer, DPoP and JWT plugins: the listener shares their decorators, so one
- * pool, one Redis client and one signer serve both listeners.
+ * pool, one Redis client and one signer serve both listeners. Its DPoP
+ * service is its own ({@link adminDpopService}).
  *
  * In order: the shared decorators; the error handler of the app, so every
  * error is a problem document; the request id; the OpenAPI collector; the
@@ -289,7 +273,10 @@ export async function installAdminApi(
   admin.decorate('repositories', source.repositories);
   admin.decorate('redis', source.redis);
   admin.decorate('signer', source.signer);
-  admin.decorate('dpop', source.dpop);
+  // Its own DPoP service, whose proofs name ADMIN_API_BASE_URL (#520): the
+  // token guard checks every call's proof with it, and its error handler
+  // names its algorithms in each challenge.
+  admin.decorate('dpop', adminDpopService(source, env.ADMIN_API_BASE_URL));
   admin.decorate('jwtUtils', source.jwtUtils);
   admin.decorate('verifyRequestAccessToken', source.verifyRequestAccessToken);
   // The AuthMethod plugins the process loaded (#600), which the plugin
@@ -300,7 +287,8 @@ export async function installAdminApi(
   admin.decorateRequest('realm', null);
   admin.decorateRequest('realmHost', null);
 
-  await admin.register(errorHandler);
+  // Every challenge in the `DPoP` scheme: the listener takes no Bearer token.
+  await admin.register(errorHandler, { dpopOnly: true });
   await admin.register(requestIdPlugin);
   await admin.register(swagger, adminOpenapiOptions);
   await admin.register(securityHeadersPlugin);

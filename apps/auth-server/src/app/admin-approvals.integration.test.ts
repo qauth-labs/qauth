@@ -3,6 +3,11 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import {
+  ADMIN_LISTENER_ENVIRONMENT,
+  adminCallHeaders,
+  signBoundAccessToken,
+} from '../testing/admin-dpop';
 import type { TestApprovalFactor } from '../testing/approval-factor';
 import {
   baseEnvironment,
@@ -105,7 +110,7 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
             ...operations.operationSchemaExtensions(rotate),
             'x-qauth-stability': 'experimental',
             'x-qauth-errors': [400, 401, 403, 404],
-            security: [{ bearerAuth: [] }],
+            security: [{ dpopAuth: [] }],
             params: z.object({ realmId: z.uuid(), keyId: z.string().min(1).max(64) }),
             querystring: z.strictObject({ dryRun: z.enum(['true', 'false']).optional() }),
             body: z.strictObject({ retireAfterDays: z.int().min(1).max(30) }),
@@ -156,7 +161,7 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
             ...operations.operationSchemaExtensions(retire),
             'x-qauth-stability': 'experimental',
             'x-qauth-errors': [400, 401, 403, 404],
-            security: [{ bearerAuth: [] }],
+            security: [{ dpopAuth: [] }],
             params: z.object({ realmId: z.uuid(), keyId: z.string().min(1).max(64) }),
             // A POST carries a body: a security operation's route parses it,
             // here as none at all. Fastify hands an empty body over as `null`,
@@ -204,7 +209,7 @@ function bootWithAdminListener(
 ): Promise<BootedAuthServer> {
   if (!infra || !jwt) throw new Error('no infrastructure');
   return bootAuthServer(
-    { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true' },
+    { ...baseEnvironment(infra, jwt), ...ADMIN_LISTENER_ENVIRONMENT },
     { adminListener }
   );
 }
@@ -277,7 +282,7 @@ describe('approvals for security operations (#512, real containers)', () => {
       targetRealmId: realmId,
       createdBy: null,
     });
-    const token = await app().jwtUtils.signAccessToken(operator, {
+    const token = await signBoundAccessToken(app(), operator, {
       sub: userId,
       clientId: 'admin-console',
       aud: ADMIN,
@@ -286,7 +291,8 @@ describe('approvals for security operations (#512, real containers)', () => {
     return { userId, token, approver: { realmId: operator.id, accountId: userId } };
   }
 
-  function post(
+  /** A call with `token` under the `DPoP` scheme and a fresh proof of its key (#520). */
+  async function post(
     url: string,
     token: string,
     payload?: unknown,
@@ -295,13 +301,17 @@ describe('approvals for security operations (#512, real containers)', () => {
     return admin().inject({
       method: 'POST',
       url,
-      headers: { authorization: `Bearer ${token}`, ...headers },
+      headers: { ...(await adminCallHeaders(token, 'POST', url)), ...headers },
       ...(payload === undefined ? {} : { payload: payload as Record<string, unknown> }),
     });
   }
 
-  function get(url: string, token: string): Promise<LightMyRequestResponse> {
-    return admin().inject({ method: 'GET', url, headers: { authorization: `Bearer ${token}` } });
+  async function get(url: string, token: string): Promise<LightMyRequestResponse> {
+    return admin().inject({
+      method: 'GET',
+      url,
+      headers: await adminCallHeaders(token, 'GET', url),
+    });
   }
 
   const approvals = (realmId: string, suffix = '') =>
@@ -496,7 +506,11 @@ describe('approvals for security operations (#512, real containers)', () => {
     const response = await admin().inject({
       method: 'HEAD',
       url: `/admin/v1-rc.0/realms/${realmId}/fixture-approvals`,
-      headers: { authorization: `Bearer ${requester.token}` },
+      headers: await adminCallHeaders(
+        requester.token,
+        'HEAD',
+        `/admin/v1-rc.0/realms/${realmId}/fixture-approvals`
+      ),
     });
     expect(response.statusCode).toBe(403);
     expect(runs).toEqual([]);

@@ -133,7 +133,7 @@ function parseFlagSurface(argv: readonly string[]): FlagSurface {
  * UNDER it, not pinned to it: the threshold exists to catch "most routes
  * silently failed to register" (a dropped env flag, a plugin registration
  * that threw and was swallowed) — a catastrophic drop to a handful of paths
- * (`/health`, `/metrics`, the `.well-known` routes) — not to fail the build
+ * (`/health`, `/ready`, the `.well-known` routes) — not to fail the build
  * on every future single-route addition or rename.
  */
 const MIN_EXPECTED_PATHS = 20;
@@ -206,8 +206,9 @@ function setEphemeralEnv(surface: FlagSurface): void {
 
     RATE_LIMIT_ENABLED: 'false',
 
-    // On by default; pinned so that a caller's `METRICS_ENABLED=false` cannot
-    // drop `GET /metrics` from either export.
+    // On by default, and pinned so the export boots as a default deployment
+    // does. The metrics themselves are in neither export: they are served on
+    // the internal listener only, as `GET /internal/metrics` (#500).
     METRICS_ENABLED: 'true',
 
     // Every role (#495), the default; pinned so that a caller's

@@ -27,7 +27,7 @@ export type RealmRow = NonNullable<
  * reach a handler: the resolver answers them with `421`.
  *
  * @throws Error when the request carries no realm. Only a `none` route, such
- * as `/health`, has none, and such a route must not read one; reaching this
+ * as `/health` or `/ready`, has none, and such a route must not read one; reaching this
  * from one is a bug, so it fails the request rather than guess a realm.
  */
 export function requestRealm(request: FastifyRequest): RealmRow {

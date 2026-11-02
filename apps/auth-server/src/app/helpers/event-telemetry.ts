@@ -83,7 +83,7 @@ export interface EventTelemetry extends EventTelemetrySink {
    * `qauth_events_telemetry_dropped_total`, by `reason`: `queue_full` (the
    * queue was full and the record was its oldest) or `export_failed` (the
    * collector refused the batch or could not be reached). Registered on no
-   * registry; the metrics plugin adds it to `/metrics`.
+   * registry; the metrics plugin adds it to the process's metrics.
    */
   readonly droppedRecords: Counter<'reason'>;
   /** How many records wait to be exported, the batch being sent excluded. */

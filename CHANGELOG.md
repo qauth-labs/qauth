@@ -1282,17 +1282,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Decisions 7 and 8). A process that holds the `admin` role runs a second HTTP
   server for the admin API, on `ADMIN_API_HOST` and `ADMIN_API_PORT`
   (`127.0.0.1`, port `3002`, by default) once `ADMIN_API_ENABLED=true` turns it
-  on: it is off by default until the first admin operations ([#517]) and
-  DPoP-bound admin tokens ([#520]) ship, and until [#520] a production process
-  refuses an `ADMIN_API_HOST` that is not loopback. It
+  on: it is off by default until the first admin operations ([#517]) ship. It
   binds before the public port and closes with the server. The public listener
   answers 404 for every admin path, but for a CORS preflight, which it answers
   as on any other path, and refuses to boot an admin route. The
   listener grants nothing for a caller's network position: every admin route
   runs behind the same stages, in order: the request id, the admin family's
-  token guard (with the keys of the realm the token's issuer names, the
-  `Bearer` scheme only, and one answer for every refusal), a DPoP stage left
-  empty for [#520], the realm from the path
+  token guard (with the keys of the realm the token's issuer names, and one
+  answer for every refusal), the DPoP proof check ([#520]), the realm from the path
   (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
   the caller's grants and scopes, the classification and permission check, an
   approval gate, the handler inside one database transaction, and the audit
@@ -1317,6 +1314,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+- **Admin tokens are DPoP-bound and short-lived** ([#520], ADR-019 Decision 7,
+  ADR-014 §3). The admin listener takes an access token only under the `DPoP`
+  scheme, bound to a key (`cnf.jkt`), with a proof (RFC 9449 §7.1) made with
+  that key for the call's method and for the new `ADMIN_API_BASE_URL` followed
+  by the call's path, never a URL built from the request; its `iat` within 60
+  seconds of the server's clock, its `ath` the token's hash, and its `jti`
+  used once (kept in Redis for 181 s, the proofs of the public listener's
+  store). A token under the `Bearer` scheme, a token bound to no key, or a
+  proof under another key is refused with 401 and a `DPoP`
+  `error="invalid_token"` challenge, any other refused proof with
+  `invalid_dpop_proof`; every challenge of the listener is a `DPoP` one. The
+  proof is checked inside the token guard, before the per-subject ceiling, so
+  a stolen token without its key counts against the caller's address, not the
+  admin's. The token endpoint issues the admin audience, or an admin scope,
+  only with a DPoP proof: without one an admin scope the account's grants
+  would give is withheld (RFC 6749 §3.3), and a request for the admin
+  audience, or for nothing but such scopes, is refused with
+  `invalid_dpop_proof` (`invalid_target` or `invalid_scope` on a process with
+  DPoP off, where no proof could help). The answers to an account without a
+  grant are unchanged. The refresh token issued beside an admin token is
+  bound to the proof's key whatever the client, so a confidential client
+  refreshes it only with that key. A token for the admin API never lives
+  longer than 900 s, whatever `tokens.adminAccessTokenLifespanSeconds` says. Where the admin listener runs (`ADMIN_API_ENABLED=true` on a process
+  with the `admin` role), the boot now requires `ADMIN_API_BASE_URL` (the
+  absolute http(s) URL clients address the admin API at) and
+  `DPOP_ENABLED=true`, and the production rule that `ADMIN_API_HOST` be
+  loopback is lifted: the listener may sit behind a load balancer that
+  terminates TLS. In production `ADMIN_API_BASE_URL` must be `https`, unless
+  both it and `ADMIN_API_HOST` name loopback. A refresh token issued bound to
+  no DPoP key never refreshes into an admin token: the admin audience is
+  refused with `invalid_grant` (sign in again) and the admin scopes are
+  withheld and dropped from the rotated refresh token, so a later refresh
+  of that family never issues them either, even once a public client's
+  rotation binds it to a key. The token endpoint's processes need
+  `DPOP_ENABLED=true` too, to
+  issue admin tokens.
+  The admin OpenAPI document names the `dpopAuth` security scheme.
 - **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
   process that holds the `signer` role while the roles are split runs one more
   HTTP server, on `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port
@@ -1568,6 +1602,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   target yet; [#568] will.
 
 ### Changed
+
+- **`/health` is liveness, `/ready` is new, and the metrics move to the
+  internal listener** ([#500], ADR-019 Decisions 1 and 8). `GET /health`
+  answers `200` while the process serves, with the service roles it runs
+  (`roles`), and checks no dependency: the `services` field and the `503
+  unhealthy` answer are gone. `GET /ready` runs the readiness checks of the
+  process's roles at once, each within 2 seconds: `database` on every role,
+  `redis` on `web`, `api` and `admin`, `kek` on `signer` (the KEK unwraps one
+  stored key per KEK reference in use) and `outbox` on `delivery`. It answers
+  `200` when every one passes, and otherwise `503` with a
+  `service_unavailable` problem document whose `checks` member holds each
+  check's result, a failure naming its reason (`error` or `timeout`) and never
+  the error, which is logged. A role's plugin adds its own check through `fastify.readiness`.
+  Both answer on any host, carry no realm data and keep
+  `HEALTH_RATE_LIMIT_MAX` per `HEALTH_RATE_LIMIT_WINDOW`, now counted per
+  client address in the process's memory, so they answer while Redis does not.
+  `GET /metrics` leaves the public port: every process serves its metrics as
+  `GET /internal/metrics` on the internal listener while `METRICS_ENABLED` is
+  on, to a peer whose certificate `INTERNAL_PEER_ROLES` maps to the new
+  `metrics` role, and in a single process without the internal TLS files, in
+  plain HTTP to loopback callers only. The Compose healthcheck calls `/ready`;
+  the image's `HEALTHCHECK` stays on `/health`.
+
+  **Action for operators**: point a probe that should take a process out of
+  rotation at `/ready`, since `/health` no longer fails for a database or Redis
+  outage. Move the Prometheus scrape to `INTERNAL_HOST:INTERNAL_PORT`
+  (`/internal/metrics`): issue the scraper a client certificate from the
+  internal CA and map its SAN to `metrics`, or scrape `127.0.0.1:3443` from
+  beside a single process. A process whose roles are split now runs the
+  internal listener for its metrics too, and refuses to boot without the
+  internal TLS files and `INTERNAL_PEER_ROLES`: map a scraper there, or set
+  `METRICS_ENABLED=false` on a process no scraper reads.
 
 - **The OID4VP verifier key moves into the key store** ([#546], ADR-019
   Decision 9). `OID4VP_VERIFIER_SIGNING_KEY` (or its `_PATH` form) is imported
@@ -2601,6 +2667,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#495]: https://github.com/qauth-labs/qauth/issues/495
 [#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
+[#500]: https://github.com/qauth-labs/qauth/issues/500
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509

@@ -5,8 +5,12 @@ import fp from 'fastify-plugin';
 
 import packageJson from '../../package.json';
 import type { SignerPluginOptions } from '../types';
+import { checkKeyCustody } from './key-custody-check';
 import { bootRealmKeysByName } from './realm-keys';
-import { createRepositorySignerKeyStore } from './repository-key-stores';
+import {
+  createRepositoryKekCanaryStore,
+  createRepositorySignerKeyStore,
+} from './repository-key-stores';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -16,6 +20,12 @@ declare module 'fastify' {
      * Name the caller's role on each call, `'local'` in a single deployment.
      */
     signer: Signer;
+    /**
+     * The signer's readiness check (#500): resolves when the KEK provider is
+     * usable and unwraps a stored key under each KEK reference in use;
+     * rejects otherwise. Each call unwraps afresh and zeroes what it opened.
+     */
+    checkKeyCustody: () => Promise<void>;
   }
 }
 
@@ -80,6 +90,9 @@ export const signerPlugin = fp<SignerPluginOptions>(
         );
       });
     }
+
+    const canaries = createRepositoryKekCanaryStore(options.db);
+    fastify.decorate('checkKeyCustody', () => checkKeyCustody(kekProvider, canaries));
 
     fastify.decorate(
       'signer',

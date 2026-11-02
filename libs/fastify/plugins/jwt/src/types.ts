@@ -160,6 +160,16 @@ export interface AccessTokenCheckPolicy {
    * `false` or absent leaves the operator's setting in force.
    */
   requireTyp?: boolean;
+  /**
+   * The route takes a DPoP-bound token only (RFC 9449 §7.1), and checks its
+   * proof itself (#520): the credential must use the `DPoP` scheme, the token
+   * must carry `cnf`, and this checks the request's proof in place of
+   * {@link JwtPluginOptions.verifyDpopProof}, for a route whose requests are
+   * made to another URL than the realm's issuer, such as the admin listener's.
+   * A token under the `Bearer` scheme is refused (`JWTInvalidError`), and the
+   * `DPoP` scheme is read whether or not the plugin verifies DPoP proofs.
+   */
+  requireDpop?: (request: FastifyRequest, token: string, claims: JWTPayload) => Promise<void>;
 }
 
 /**

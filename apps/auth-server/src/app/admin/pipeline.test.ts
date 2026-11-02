@@ -1,7 +1,10 @@
+import { createHash, randomUUID } from 'node:crypto';
+
 import rateLimit from '@fastify/rate-limit';
 import { JWTExpiredError, JWTInvalidError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
+import { calculateJwkThumbprint, CompactSign, exportJWK, generateKeyPair, type JWK } from 'jose';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -15,7 +18,9 @@ import {
 } from '../helpers/admin-operations';
 import { ADMIN_SCOPE_LIST } from '../helpers/admin-scopes';
 import {
+  ADMIN_DPOP_IAT_WINDOW_SECONDS,
   AdminCallsInFlight,
+  adminDpopService,
   adminPipeline,
   type AdminRateLimitCheck,
   adminTransaction,
@@ -441,7 +446,7 @@ describe('the token guard', () => {
           extractCredentialFromHeader: () =>
             presented.scheme === 'none'
               ? null
-              : { scheme: presented.scheme ?? 'Bearer', token: 'token' },
+              : { scheme: presented.scheme ?? 'DPoP', token: 'token' },
           decodeTokenUnsafe,
         } as never);
         app.decorate('repositories', { realms: { findByIssuer } } as never);
@@ -460,7 +465,7 @@ describe('the token guard', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/admin/v1-rc.0/realms/${REALM.id}`,
-      headers: { authorization: 'Bearer token' },
+      headers: { authorization: `${presented.scheme ?? 'DPoP'} token` },
     });
     await app.close();
     instance = undefined;
@@ -515,15 +520,35 @@ describe('the token guard', () => {
     });
   });
 
-  it('answers the DPoP scheme as no credential until #520, before it reads the token', async () => {
+  it('refuses a Bearer token as an invalid token, before it reads the token (#520)', async () => {
+    const verify = vi.fn(async () => {
+      throw new Error('no verification expected');
+    });
     const { response, decodeTokenUnsafe, findByIssuer } = await present({
-      scheme: 'DPoP',
+      scheme: 'Bearer',
       iss: ISSUER,
+      verify,
     });
     expect(response.statusCode).toBe(401);
-    expect(response.json()).toMatchObject({ code: 'UNAUTHORIZED', message: REFUSAL });
+    expect(response.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN', message: REFUSAL });
     expect(decodeTokenUnsafe).not.toHaveBeenCalled();
     expect(findByIssuer).not.toHaveBeenCalled();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it('counts a Bearer token against the address, and refuses it before the guard past its count', async () => {
+    const under = refusalCount('under', 'under');
+    const counted = await present({ scheme: 'Bearer', iss: ISSUER, refusals: under });
+    expect(counted.response.statusCode).toBe(401);
+    expect(under.mock.calls.map(([, callOptions]) => callOptions)).toEqual([
+      { increment: false },
+      undefined,
+    ]);
+
+    const over = refusalCount('over', 'over');
+    const held = await present({ scheme: 'Bearer', iss: ISSUER, refusals: over });
+    expect(held.response.statusCode).toBe(429);
+    expect(held.decodeTokenUnsafe).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -677,7 +702,7 @@ describe('a call the pipeline admits', () => {
     rows = [];
     await boot(routes, async (app) => {
       app.decorate('jwtUtils', {
-        extractCredentialFromHeader: () => ({ scheme: 'Bearer', token: 'token' }),
+        extractCredentialFromHeader: () => ({ scheme: 'DPoP', token: 'token' }),
         decodeTokenUnsafe: () => ({ iss: ISSUER }),
       } as never);
       app.decorate('verifyRequestAccessToken', (async () => ({
@@ -728,7 +753,7 @@ describe('a call the pipeline admits', () => {
     const response = await app.inject({
       method: 'GET',
       url: `/admin/v1-rc.0/realms/${TARGET.id}${path}`,
-      headers: { authorization: 'Bearer token' },
+      headers: { authorization: 'DPoP token' },
     });
     return { statusCode: response.statusCode, body: response.body };
   }
@@ -833,5 +858,299 @@ describe('a call the pipeline admits', () => {
     });
     expect(response.statusCode).toBe(500);
     expect(rows.map((row) => row.outcome)).toEqual(['failed']);
+  });
+});
+
+/**
+ * Stage 3, the DPoP check (#520), with the shared verifier the listener uses
+ * (`adminDpopService`) over an in-memory Redis. The stub of
+ * `verifyRequestAccessToken` stands for the JWT plugin: it takes the token
+ * under the `DPoP` scheme only, as a verified token bound to `cnf.jkt`, and
+ * hands the proof to the guard's `requireDpop`, as the plugin does.
+ */
+describe('the DPoP check (#520)', () => {
+  const BASE_URL = 'https://admin.qauth.example';
+  const ISSUER = 'https://operator.example.com';
+  const OPERATOR = {
+    id: '018f2d6e-0000-7000-8000-000000000011',
+    issuer: ISSUER,
+    enabled: true,
+    isOperator: true,
+  };
+  const USER = '018f2d6e-0000-7000-8000-000000000013';
+  const TOKEN = 'admin.access.token';
+  const PATH = `/admin/v1-rc.0/realms/${OPERATOR.id}`;
+
+  interface ProofKey {
+    readonly privateKey: CryptoKey;
+    readonly jwk: JWK;
+    readonly thumbprint: string;
+  }
+
+  async function proofKey(): Promise<ProofKey> {
+    const { privateKey, publicKey } = await generateKeyPair('ES256', { extractable: true });
+    const jwk = await exportJWK(publicKey);
+    return { privateKey, jwk, thumbprint: await calculateJwkThumbprint(jwk, 'sha256') };
+  }
+
+  /** A proof for GET {@link BASE_URL}{@link PATH} with the token's `ath`, now, overridden by `claims`. */
+  async function proof(key: ProofKey, claims: Record<string, unknown> = {}): Promise<string> {
+    const payload = Object.fromEntries(
+      Object.entries({
+        jti: randomUUID(),
+        htm: 'GET',
+        htu: `${BASE_URL}${PATH}`,
+        iat: Math.floor(Date.now() / 1000),
+        ath: createHash('sha256').update(TOKEN).digest('base64url'),
+        ...claims,
+      }).filter(([, value]) => value !== undefined)
+    );
+    return new CompactSign(new TextEncoder().encode(JSON.stringify(payload)))
+      .setProtectedHeader({ typ: 'dpop+jwt', alg: 'ES256', jwk: key.jwk })
+      .sign(key.privateKey);
+  }
+
+  /** An in-memory `SET key value PX ms NX`. */
+  function fakeRedis() {
+    const keys = new Map<string, number>();
+    return {
+      keys,
+      async set(key: string, _value: string, _mode: 'PX', ttl: number) {
+        if (keys.has(key)) return null;
+        keys.set(key, ttl);
+        return 'OK' as const;
+      },
+    };
+  }
+
+  /** What one listener saw: why each proof was refused, and how many calls the route ran. */
+  interface Listener {
+    readonly reasons: string[];
+    readonly handled: { count: number };
+    readonly redis: ReturnType<typeof fakeRedis>;
+  }
+
+  /** Boot a listener whose token is bound to `boundKey`, and return what it records. */
+  async function listener(boundKey: ProofKey): Promise<Listener> {
+    const reasons: string[] = [];
+    const handled = { count: 0 };
+    const redis = fakeRedis();
+    await boot(
+      (scope) => {
+        scope.get('/admin/v1-rc.0/realms/:realmId', options, async () => {
+          handled.count += 1;
+          return {};
+        });
+      },
+      async (app) => {
+        app.decorate('redis', redis as never);
+        const service = adminDpopService(
+          { dpop: { algorithms: ['ES256', 'EdDSA'] }, redis } as never,
+          BASE_URL
+        );
+        app.decorate('dpop', {
+          algorithms: service.algorithms,
+          async verifyRequest(
+            request: FastifyRequest,
+            check?: Parameters<typeof service.verifyRequest>[1]
+          ) {
+            try {
+              return await service.verifyRequest(request, check);
+            } catch (error) {
+              reasons.push((error as { reason?: string }).reason ?? String(error));
+              throw error;
+            }
+          },
+        } as never);
+        app.decorate('jwtUtils', {
+          extractCredentialFromHeader: (header: string | undefined) => {
+            const [scheme, token] = (header ?? '').split(' ');
+            return scheme === 'DPoP' || scheme === 'Bearer' ? { scheme, token } : null;
+          },
+          decodeTokenUnsafe: () => ({ iss: ISSUER }),
+        } as never);
+        app.decorate('verifyRequestAccessToken', (async (
+          request: FastifyRequest,
+          policy: {
+            requireDpop?: (
+              r: FastifyRequest,
+              t: string,
+              c: Record<string, unknown>
+            ) => Promise<void>;
+          }
+        ) => {
+          const claims = {
+            iss: ISSUER,
+            sub: USER,
+            exp: Math.floor(Date.now() / 1000) + 300,
+            jti: 'jti-1',
+            aud: API_FAMILY_AUDIENCES.admin,
+            scope: ADMIN_SCOPE_LIST.join(' '),
+            clientId: 'admin-console',
+            cnf: { jkt: boundKey.thumbprint },
+          };
+          if (policy.requireDpop === undefined) throw new Error('the admin guard must check DPoP');
+          await policy.requireDpop(request, TOKEN, claims);
+          return claims;
+        }) as never);
+        app.decorate('repositories', {
+          realms: {
+            findByIssuer: async (issuer: string) => (issuer === ISSUER ? OPERATOR : undefined),
+            findById: async (id: string) => (id === OPERATOR.id ? OPERATOR : undefined),
+          },
+          users: {
+            findById: async (realmId: string, id: string) =>
+              realmId === OPERATOR.id && id === USER
+                ? { id: USER, enabled: true, realmId: OPERATOR.id }
+                : undefined,
+          },
+          adminGrants: {
+            listLive: async () => [
+              {
+                grant: {
+                  id: 'grant-1',
+                  builtInRole: 'viewer',
+                  roleId: null,
+                  targetRealmId: OPERATOR.id,
+                },
+                role: null,
+              },
+            ],
+          },
+          adminAuditLog: { appendAdminAudit: async () => undefined },
+        } as never);
+        app.decorate('db', {
+          transaction: async (work: (transaction: unknown) => Promise<unknown>) => work({}),
+        } as never);
+      }
+    );
+    return { reasons, handled, redis };
+  }
+
+  function call(dpop: string | undefined, init: { scheme?: string; host?: string } = {}) {
+    const app = instance;
+    if (app === undefined) throw new Error('not booted');
+    return app.inject({
+      method: 'GET',
+      url: PATH,
+      headers: {
+        authorization: `${init.scheme ?? 'DPoP'} ${TOKEN}`,
+        ...(dpop === undefined ? {} : { dpop }),
+        ...(init.host === undefined ? {} : { host: init.host }),
+      },
+    });
+  }
+
+  it('admits a call with a proof made with the bound key for the listener’s base URL', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const response = await call(await proof(key));
+    expect(response.statusCode).toBe(200);
+    expect(seen.handled.count).toBe(1);
+    expect(seen.reasons).toEqual([]);
+    // The used proof is kept for longer than twice the 60-second window.
+    expect([...seen.redis.keys.values()]).toEqual([expect.any(Number) as unknown as number]);
+    expect([...seen.redis.keys.values()][0]).toBeGreaterThanOrEqual(
+      2 * ADMIN_DPOP_IAT_WINDOW_SECONDS * 1000
+    );
+    expect(ADMIN_DPOP_IAT_WINDOW_SECONDS).toBe(60);
+  });
+
+  it('refuses a proof for another method (htm)', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const response = await call(await proof(key, { htm: 'POST' }));
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'INVALID_DPOP_PROOF' });
+    expect(seen.reasons).toEqual(['htm']);
+    expect(seen.handled.count).toBe(0);
+  });
+
+  it('refuses a proof for another URL than the base URL and the path (htu)', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    // The realm's issuer, as the public listener's proofs name it.
+    const issuer = await call(await proof(key, { htu: `${ISSUER}${PATH}` }));
+    // The URL the request's own Host header would build.
+    const host = await call(await proof(key, { htu: `https://attacker.example${PATH}` }), {
+      host: 'attacker.example',
+    });
+    for (const response of [issuer, host]) {
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ code: 'INVALID_DPOP_PROOF' });
+    }
+    expect(seen.reasons).toEqual(['htu', 'htu']);
+    expect(seen.handled.count).toBe(0);
+  });
+
+  it('refuses a proof whose iat is more than 60 seconds old (iat)', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const response = await call(await proof(key, { iat: Math.floor(Date.now() / 1000) - 61 }));
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'INVALID_DPOP_PROOF' });
+    expect(seen.reasons).toEqual(['iat']);
+  });
+
+  it('refuses a proof without the hash of the token (ath)', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const missing = await call(await proof(key, { ath: undefined }));
+    const other = await call(
+      await proof(key, { ath: createHash('sha256').update('another.token').digest('base64url') })
+    );
+    for (const response of [missing, other]) {
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ code: 'INVALID_DPOP_PROOF' });
+    }
+    expect(seen.reasons).toEqual(['ath', 'ath']);
+  });
+
+  it('refuses a replayed proof (jti)', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const dpop = await proof(key);
+    expect((await call(dpop)).statusCode).toBe(200);
+    const replay = await call(dpop);
+    expect(replay.statusCode).toBe(401);
+    expect(replay.json()).toMatchObject({ code: 'INVALID_DPOP_PROOF' });
+    expect(seen.reasons).toEqual(['replayed']);
+    expect(seen.handled.count).toBe(1);
+  });
+
+  it('refuses the token with a proof signed by another key', async () => {
+    const bound = await proofKey();
+    const seen = await listener(bound);
+    const response = await call(await proof(await proofKey()));
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN' });
+    expect(seen.reasons).toEqual(['key-mismatch']);
+  });
+
+  it('refuses a call without a proof', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const response = await call(undefined);
+    expect(response.statusCode).toBe(401);
+    expect(seen.reasons).toEqual(['missing-proof']);
+  });
+
+  it('refuses a Bearer token without looking at a proof', async () => {
+    const key = await proofKey();
+    const seen = await listener(key);
+    const response = await call(await proof(key), { scheme: 'Bearer' });
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({ code: 'INVALID_ACCESS_TOKEN' });
+    expect(seen.reasons).toEqual([]);
+    expect(seen.redis.keys.size).toBe(0);
+  });
+
+  it('refuses to build the service without DPoP on, or without a base URL', () => {
+    expect(() => adminDpopService({ dpop: null, redis: fakeRedis() } as never, BASE_URL)).toThrow(
+      'DPOP_ENABLED'
+    );
+    expect(() =>
+      adminDpopService({ dpop: { algorithms: ['ES256'] }, redis: fakeRedis() } as never, undefined)
+    ).toThrow('ADMIN_API_BASE_URL');
   });
 });

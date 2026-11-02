@@ -86,7 +86,8 @@ the open work.
 - Realms: separate tenants, each with its own issuer and hosts.
 - A developer portal for OAuth clients and API keys.
 - Security headers, CSRF protection and `__Host-` cookies.
-- Structured logs and Prometheus `/metrics`. Events can also go out as
+- Structured logs, liveness and readiness probes (`/health`, `/ready`), and
+  Prometheus metrics on an internal listener. Events can also go out as
   OpenTelemetry logs, once `OTEL_EVENTS_ENABLED` is set.
 - Signing keys stored encrypted under a key-encryption key (KEK).
 
@@ -121,7 +122,7 @@ Then start the stack and check it:
 
 ```bash
 docker compose up -d
-curl http://localhost:3000/health
+curl http://localhost:3000/ready
 ```
 
 Compose builds the images from source and runs the database migrations. It

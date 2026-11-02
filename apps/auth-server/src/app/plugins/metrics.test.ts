@@ -10,7 +10,7 @@ vi.mock('../../config/env', () => ({
   },
 }));
 
-import metricsRoute from '../routes/metrics';
+import metricsRoute from '../internal/routes/metrics';
 import metricsPlugin from './metrics';
 import requestIdPlugin from './request-id';
 

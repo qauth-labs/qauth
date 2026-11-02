@@ -46,7 +46,8 @@ import { readWalletRequestObject } from '../../helpers/wallet-login-flow';
  * The Zod serializer compiler is installed globally (`main.ts`), so a declared
  * `response` schema would JSON-serialize the body and emit a QUOTED string
  * instead of the compact JWS a wallet parses. The two other non-JSON endpoints
- * in this app — `GET /.well-known/jwks.json` and `GET /metrics` — declare none
+ * in this app — `GET /.well-known/jwks.json` and the internal listener's
+ * `GET /internal/metrics` — declare none
  * for the same reason, and set their media type on the reply instead.
  */
 

@@ -30,11 +30,12 @@ import {
 
 const SIGNED_IN = 'urn:qauth:event:user.signed_in:v1-rc.0';
 
-/** One series' value on `/metrics`, or NaN when it is not there. */
+/**
+ * One series' value in the process's metrics, as the internal listener's
+ * `GET /internal/metrics` serves them (#500), or NaN when it is not there.
+ */
 async function series(app: FastifyInstance, line: RegExp): Promise<number> {
-  const response = await app.inject({ method: 'GET', url: '/metrics' });
-  expect(response.statusCode).toBe(200);
-  const match = line.exec(response.body);
+  const match = line.exec(await app.metrics.registry.metrics());
   return match ? Number(match[1]) : Number.NaN;
 }
 

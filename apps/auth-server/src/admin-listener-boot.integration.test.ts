@@ -12,8 +12,8 @@
  *   stops both and the process exits 0.
  * - With the admin port taken, the process exits 1 and never listens on the
  *   public port.
- * - With ADMIN_API_ENABLED unset (off by default until #517 and #520) or
- *   false, or without the admin role, nothing listens on the admin port.
+ * - With ADMIN_API_ENABLED unset (off by default until #517) or false, or
+ *   without the admin role, nothing listens on the admin port.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -145,7 +145,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
   async function startServer(
     ctx: { skip: () => void },
     environment: Record<string, string> = {},
-    ports: { adminPort?: number; internalPort?: boolean } = {}
+    ports: { adminPort?: number } = {}
   ): Promise<StartedServer> {
     if (!dockerUp || !postgres || !redis || !jwt) {
       ctx.skip();
@@ -153,9 +153,10 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     }
     const port = await freePort();
     const adminPort = ports.adminPort ?? (await freePortOtherThan(port));
-    // INTERNAL_PORT must differ from both, or the boot is refused.
-    const internalPort =
-      ports.internalPort === true ? await freePortOtherThan(port, adminPort) : undefined;
+    // INTERNAL_PORT must differ from both, or the boot is refused. Every
+    // process runs the internal listener for its metrics (#500), so each
+    // server takes a free one rather than the default 3443.
+    const internalPort = await freePortOtherThan(port, adminPort);
     const child = spawn(process.execPath, [TSX_CLI, 'src/main.ts'], {
       cwd: APP_ROOT,
       env: {
@@ -164,15 +165,18 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
         PORT: String(port),
-        // Off by default until #517 and #520: every case but the last turns
-        // the listener on.
+        // Off by default until #517: every case but the last turns the
+        // listener on, with the DPoP proofs its calls carry and the base URL
+        // they name (#520).
         ADMIN_API_ENABLED: 'true',
         ADMIN_API_PORT: String(adminPort),
+        ADMIN_API_BASE_URL: `http://127.0.0.1:${adminPort}`,
+        DPOP_ENABLED: 'true',
         DATABASE_URL: postgres.connectionString,
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,
         JWT_PUBLIC_KEY: jwt.publicKey,
-        ...(internalPort === undefined ? {} : { INTERNAL_PORT: String(internalPort) }),
+        INTERNAL_PORT: String(internalPort),
         ...environment,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -278,9 +282,7 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
     ];
     try {
       for (const environment of environments) {
-        const server = await startServer(ctx, environment, {
-          internalPort: environment['SERVICE_ROLES'] !== undefined,
-        });
+        const server = await startServer(ctx, environment);
         await until(logged(server, 'Server listening on '), 'the server to listen', server);
 
         expect(logged(server, 'Admin API listening')()).toBe(false);

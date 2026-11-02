@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { ConnectionOptions } from 'node:tls';
 
-import { internalListenerEnvSchema } from '@qauth-labs/server-config';
+import { internalListenerEnvSchema, SERVICE_ROLE_NAMES } from '@qauth-labs/server-config';
 import Fastify, { type FastifyInstance, type FastifyPluginAsync } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +30,7 @@ import {
   createInternalServer,
   installInternalApi,
   INTERNAL_MAX_CONNECTIONS,
+  isLoopbackAddress,
   requestPeerRole,
 } from './listener';
 import type { InternalRouteModule } from './route-manifest';
@@ -803,6 +804,65 @@ describe('installInternalApi and peer roles', () => {
 });
 
 describe('plain HTTP', () => {
+  it('gives a loopback request the plain-HTTP peer role of a single process, and that role only (#500)', async () => {
+    const server = createInternalServer({ peerRoles: new Map(), plainHttpPeerRole: 'metrics' });
+    const scope = sourceScope();
+    try {
+      await installInternalApi(server, scope, {
+        roles: ['signer'],
+        modules: [
+          {
+            ...FIXTURE_MODULE,
+            module: 'metrics-only',
+            prefix: '/internal/metrics-only/v1-rc.0',
+            peerRoles: ['metrics'],
+          },
+          FIXTURE_MODULE,
+        ],
+      });
+      await server.listen({ host: '127.0.0.1', port: 0 });
+      const plainPort = (server.server.address() as AddressInfo).port;
+
+      const admitted = await fetch(
+        `http://127.0.0.1:${plainPort}/internal/metrics-only/v1-rc.0/peer`
+      );
+      expect(admitted.status).toBe(200);
+      await expect(admitted.json()).resolves.toEqual({ peerRole: 'metrics' });
+      // A module that does not name the role refuses it.
+      const refused = await fetch(`http://127.0.0.1:${plainPort}${FIXTURE_PREFIX}/peer`);
+      expect(refused.status).toBe(403);
+    } finally {
+      await scope.close();
+      await server.close();
+    }
+  });
+
+  it("serves the manifest's metrics module to the metrics peer, never stored (#500)", async () => {
+    const server = createInternalServer({ peerRoles: new Map(), plainHttpPeerRole: 'metrics' });
+    const scope = sourceScope();
+    scope.decorate('metrics', {
+      registry: {
+        contentType: 'text/plain; version=0.0.4; charset=utf-8',
+        metrics: async () => 'qauth_fixture_total 1\n',
+      },
+    } as never);
+    try {
+      // The manifest's modules that the settings switch on: the metrics module.
+      await installInternalApi(server, scope, { roles: SERVICE_ROLE_NAMES });
+      await server.listen({ host: '127.0.0.1', port: 0 });
+      const plainPort = (server.server.address() as AddressInfo).port;
+
+      const res = await fetch(`http://127.0.0.1:${plainPort}/internal/metrics`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('text/plain; version=0.0.4; charset=utf-8');
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      await expect(res.text()).resolves.toBe('qauth_fixture_total 1\n');
+    } finally {
+      await scope.close();
+      await server.close();
+    }
+  });
+
   it('gives no request a peer role, so it refuses every one', async () => {
     const server = createInternalServer({ peerRoles: PEER_ROLES });
     const scope = sourceScope();
@@ -815,6 +875,25 @@ describe('plain HTTP', () => {
     } finally {
       await scope.close();
       await server.close();
+    }
+  });
+});
+
+describe('isLoopbackAddress', () => {
+  it('admits 127.0.0.0/8, ::1 and an IPv4 loopback address mapped into IPv6, and nothing else', () => {
+    for (const address of ['127.0.0.1', '127.9.9.9', '::1', '::ffff:127.0.0.1']) {
+      expect(isLoopbackAddress(address), address).toBe(true);
+    }
+    for (const address of [
+      undefined,
+      '',
+      '0.0.0.0',
+      '10.0.0.1',
+      '::',
+      '::ffff:10.0.0.1',
+      'fe80::1',
+    ]) {
+      expect(isLoopbackAddress(address), String(address)).toBe(false);
     }
   });
 });

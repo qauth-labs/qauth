@@ -17,6 +17,7 @@ import {
 import { ApprovalStateError } from '../../helpers/approval-required';
 import { requestClassification } from '../../plugins/admin-operations';
 import {
+  ADMIN_SECURITY_SCHEME,
   type AdminCaller,
   type AdminChange,
   adminTransaction,
@@ -270,7 +271,8 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
   const operations = engineOperations(fastify);
   const common = {
     'x-qauth-stability': 'experimental' as const,
-    security: [{ bearerAuth: [] }],
+    // A DPoP-bound admin token (#520).
+    security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
   };
 
   typed.post(

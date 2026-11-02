@@ -164,7 +164,8 @@ Nothing in `app.ts` flags this one, so it is the easiest to break by tidying.
 `onRoute` is the one Fastify hook that is not retroactive: it fires as routes are added, so a
 route registered before the hook exists is never seen. Routes across the app set per-route limits
 this way — `apps/auth-server/src/app/routes/auth/login.ts:44` is the one that matters most — and
-`apps/auth-server/src/app/routes/metrics.ts:31` opts out with `config: { rateLimit: false }`.
+`/health` and `/ready` (`apps/auth-server/src/app/routes/health.ts`, `routes/ready.ts`) opt out
+with `config: { rateLimit: false }`, counting in the process's memory instead.
 
 Move step 9 below the route sweep and rate limiting stops applying to any of them. There is no
 error, no warning, and no failing test: the endpoints simply answer every request. Treat this line

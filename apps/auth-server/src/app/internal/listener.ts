@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { isIPv4 } from 'node:net';
 import type { Server as TlsServer, TLSSocket } from 'node:tls';
 
-import type { InternalPeerRoles, ServiceRole } from '@qauth-labs/server-config';
+import type { InternalPeerRole, InternalPeerRoles, ServiceRole } from '@qauth-labs/server-config';
 import { ForbiddenError } from '@qauth-labs/shared-errors';
 import Fastify, {
   type FastifyBaseLogger,
@@ -37,6 +38,7 @@ import {
   resolvePeerRole,
 } from './peer-certificate';
 import {
+  enabledInternalRouteModules,
   internalModuleProblem,
   type InternalRouteModule,
   internalRouteModulesFor,
@@ -55,7 +57,9 @@ import {
  *
  * The roles of a distributed deployment call one another on a second HTTP
  * server of the process, bound to INTERNAL_HOST and INTERNAL_PORT, apart from
- * the public listener: the signer service first (#497). `main.ts` builds it
+ * the public listener: the signer service first (#497). A metrics scraper
+ * reads each process's metrics there too (#500), so every process runs it
+ * while METRICS_ENABLED is on. `main.ts` builds it
  * with {@link createInternalServer} on a process whose roles need it
  * (`servesInternalListener`), the app installs its routes and shares its
  * decorators with {@link installInternalApi}, and `main.ts` listens on it
@@ -78,10 +82,12 @@ import {
  * closes its connection, so the peer connects again under the files served
  * then.
  *
- * Without the TLS files it serves plain HTTP, which no boot reaches: the
- * listener runs only while the roles are split, and then the boot refuses a
- * process without the files (`service-roles.ts`). No request there has a
- * peer role, so every one is refused.
+ * Without the TLS files it serves plain HTTP, which only a single process
+ * reaches, on a loopback address (`service-roles.ts`): while the roles are
+ * split, the boot refuses a process without the files. There a request from
+ * a loopback address calls as `plainHttpPeerRole`, `metrics` in `main.ts`,
+ * so a local scraper reads the process's metrics and nothing else (#500);
+ * any other request has no peer role and is refused.
  *
  * The listener is not routed by host (ADR-019 Decision 1): a route takes the
  * realm from the request body or from what the caller's role may do, never
@@ -101,7 +107,7 @@ declare module 'fastify' {
      * (#496), and never on the public or the admin listener. Read it with
      * {@link requestPeerRole}.
      */
-    peerRole?: ServiceRole;
+    peerRole?: InternalPeerRole;
   }
 }
 
@@ -112,7 +118,7 @@ declare module 'fastify' {
  * @throws Error on a request of another listener: a route that reads it
  *   belongs on the internal listener only
  */
-export function requestPeerRole(request: FastifyRequest): ServiceRole {
+export function requestPeerRole(request: FastifyRequest): InternalPeerRole {
   const role = request.peerRole;
   if (role === undefined) {
     throw new Error('requestPeerRole: the request did not come through the internal listener');
@@ -137,10 +143,29 @@ export interface InternalServerOptions {
   readonly tls?: InternalServerTls;
   /** The role each known peer SAN calls as: INTERNAL_PEER_ROLES. */
   readonly peerRoles: InternalPeerRoles;
+  /**
+   * Without `tls`, the role a request from a loopback address calls as: the
+   * plain-HTTP listener of a single process (#500), which `main.ts` gives
+   * `metrics`. Ignored with `tls`, where only a certificate gives a role.
+   * Unset, a plain-HTTP request has no role and is refused.
+   */
+  readonly plainHttpPeerRole?: InternalPeerRole;
 }
 
 /** The parts of a connection the peer check reads: a TLS socket's, when it is one. */
-type PeerSocket = Partial<Pick<TLSSocket, 'authorized' | 'getPeerX509Certificate'>>;
+type PeerSocket = Partial<
+  Pick<TLSSocket, 'authorized' | 'getPeerX509Certificate' | 'remoteAddress'>
+>;
+
+/**
+ * Whether `address`, a socket's remote address, is a loopback address:
+ * `127.0.0.0/8`, `::1`, or an IPv4 loopback address mapped into IPv6.
+ */
+export function isLoopbackAddress(address: string | undefined): boolean {
+  if (address === undefined) return false;
+  const v4 = address.startsWith('::ffff:') ? address.slice('::ffff:'.length) : address;
+  return address === '::1' || (isIPv4(v4) && v4.startsWith('127.'));
+}
 
 /** What the listener knows of a connection's peer, resolved at its first request. */
 type SocketPeer = PeerRoleResolution & {
@@ -150,18 +175,28 @@ type SocketPeer = PeerRoleResolution & {
 };
 
 /**
- * The role of the peer on `socket`: none on a plain-HTTP connection or one
- * whose certificate did not verify, and otherwise the role its SANs map to.
+ * The role of the peer on `socket`: on a plain-HTTP connection,
+ * `plainHttpPeerRole` when the peer's address is a loopback address and none
+ * otherwise; none on a TLS connection whose certificate did not verify; and
+ * otherwise the role its certificate's SANs map to.
  */
-function resolveSocketPeer(socket: PeerSocket, peerRoles: InternalPeerRoles): SocketPeer {
+function resolveSocketPeer(
+  socket: PeerSocket,
+  peerRoles: InternalPeerRoles,
+  plainHttpPeerRole: InternalPeerRole | undefined
+): SocketPeer {
   const none: SocketPeer = {
     refused: 'no-certificate',
     sans: [],
     notAfterMs: Number.POSITIVE_INFINITY,
   };
-  if (typeof socket.getPeerX509Certificate !== 'function' || socket.authorized !== true) {
-    return none;
+  if (typeof socket.getPeerX509Certificate !== 'function') {
+    // A plain-HTTP connection: no TLS socket, so no certificate at all.
+    return plainHttpPeerRole !== undefined && isLoopbackAddress(socket.remoteAddress)
+      ? { role: plainHttpPeerRole, sans: [], notAfterMs: Number.POSITIVE_INFINITY }
+      : none;
   }
+  if (socket.authorized !== true) return none;
   const certificate = socket.getPeerX509Certificate();
   if (certificate === undefined) return none;
   const sans = certificateSans(certificate.subjectAltName);
@@ -227,9 +262,10 @@ function refuseInternalRequest(reply: FastifyReply, message: string): never {
  */
 const peerRolePlugin = fp<{
   readonly peerRoles: InternalPeerRoles;
+  readonly plainHttpPeerRole: InternalPeerRole | undefined;
   readonly generations: TlsGenerations;
 }>(
-  async (fastify, { peerRoles, generations }) => {
+  async (fastify, { peerRoles, plainHttpPeerRole, generations }) => {
     const resolved = new WeakMap<object, SocketPeer & { readonly generation: number }>();
     fastify.decorateRequest('peerRole', undefined);
     fastify.addHook('onRequest', async (request, reply) => {
@@ -237,7 +273,7 @@ const peerRolePlugin = fp<{
       let peer = resolved.get(socket);
       if (peer === undefined) {
         peer = {
-          ...resolveSocketPeer(socket as PeerSocket, peerRoles),
+          ...resolveSocketPeer(socket as PeerSocket, peerRoles, plainHttpPeerRole),
           generation: generations.of(socket),
         };
         resolved.set(socket, peer);
@@ -409,7 +445,12 @@ export function createInternalServer(options: InternalServerOptions): FastifyIns
   const generations = new TlsGenerations();
   void server.register(errorHandler);
   void server.register(requestIdPlugin);
-  void server.register(peerRolePlugin, { peerRoles: options.peerRoles, generations });
+  void server.register(peerRolePlugin, {
+    peerRoles: options.peerRoles,
+    // Only a listener without TLS has plain-HTTP connections.
+    plainHttpPeerRole: tls === undefined ? options.plainHttpPeerRole : undefined,
+    generations,
+  });
   void server.register(unknownRoutePlugin);
 
   if (tls !== undefined) {
@@ -490,8 +531,8 @@ export interface InternalApiOptions {
   readonly roles: readonly ServiceRole[];
   /**
    * TEST SUPPORT — the route modules to register in place of the manifest's
-   * (`INTERNAL_ROUTE_MODULES`), such as a fixture route. `main.ts` never
-   * sets it.
+   * that the settings switch on (`enabledInternalRouteModules`), such as a
+   * fixture route. `main.ts` never sets it.
    */
   readonly modules?: readonly InternalRouteModule[];
 }
@@ -551,6 +592,8 @@ export async function installInternalApi(
   internal.decorate('repositories', source.repositories);
   internal.decorate('redis', source.redis);
   internal.decorate('signer', source.signer);
+  // The process's metrics registry, which the metrics module serves (#500).
+  internal.decorate('metrics', source.metrics);
   // Never routed by host: no request of the listener has a realm until a
   // route takes it from the request body or from the caller's role.
   internal.decorateRequest('realm', null);
@@ -561,7 +604,10 @@ export async function installInternalApi(
     registered.push(route);
   });
 
-  const modules = internalRouteModulesFor(options.roles, options.modules);
+  const modules = internalRouteModulesFor(
+    options.roles,
+    options.modules ?? enabledInternalRouteModules(env)
+  );
   const unguarded = modules
     .map((entry) => internalModuleProblem(entry))
     .filter((problem) => problem !== undefined);

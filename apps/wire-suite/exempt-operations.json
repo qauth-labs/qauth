@@ -2,19 +2,9 @@
   "$comment": "The stable operations of apps/docs-site/public/openapi.json that have no wire test yet, each with why and the issue that ends the exemption (#535, ADR-018 §5). This list may only shrink: CI fails a pull request that adds an entry, and an entry whose operation gains a passing wire test, leaves the document or turns experimental must be removed. Experimental operations never appear here; their stability exempts them. See apps/wire-suite/README.md and the \"How the wire suite grows\" section of CONTRIBUTING.md.",
   "exemptions": [
     {
-      "operation": "GET /health",
-      "reason": "#500 changes what it answers: a liveness check, with GET /ready beside it. Its wire test comes with that change.",
-      "issue": "#500"
-    },
-    {
       "operation": "GET /interaction/v1-rc.0/openapi.json",
       "reason": "The Interaction API document. The Interaction API epic brings the API's wire tests; none reads the document yet.",
       "issue": "#582"
-    },
-    {
-      "operation": "GET /metrics",
-      "reason": "#500 moves it to the internal listener, which the wire suite does not reach.",
-      "issue": "#500"
     },
     {
       "operation": "GET /",

@@ -575,10 +575,10 @@ describe('assembled app — realm resolution by host (#486)', () => {
       headers: { host: 'unknown.example' },
     });
 
-    // The database and Redis are unreachable here, so the answer is 503; what
-    // matters is that the host did not decide it.
-    expect(res.statusCode).not.toBe(421);
-    expect(res.json()).toMatchObject({ status: 'unhealthy' });
+    // Liveness checks no dependency (#500): the database and Redis being
+    // unreachable here does not change it, nor does the host.
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'ok' });
   });
 });
 
@@ -772,7 +772,7 @@ describe('assembled app — an over-long email is refused before any handler sto
  *    an `onRoute` hook, and `onRoute` is NOT retroactive — Fastify fires it as
  *    each route is added, so routes already registered when the plugin loads
  *    are never seen. Moving it down would silently drop the brute-force ceiling
- *    on /auth/login and the `rateLimit: false` scrape exemption on /metrics.
+ *    on /auth/login and the `rateLimit: false` exemptions of /health and /ready.
  *    Unobservable in this suite by construction: the limiter is backed by
  *    `fastify.redis` and this suite runs with an unreachable Redis, so it is
  *    disabled here.

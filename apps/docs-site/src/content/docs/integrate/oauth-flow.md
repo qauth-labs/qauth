@@ -718,7 +718,8 @@ access-token lifetime is what bounds this window: the realm's
 production client, its `tokens.developmentAccessTokenLifespanSeconds` (8 hours
 by default) for a development client, each at most a day, and at most its
 `tokens.adminAccessTokenLifespanSeconds` (600 s by default, at most 900 s) for a
-token whose audience is the admin API. A delegated token from token
+token whose audience is the admin API, which is also bound to a DPoP key
+([API conventions](/reference/api-conventions/#the-dpop-check-of-the-admin-listener)). A delegated token from token
 exchange, and an ID-JAG minted from one, never outlive the subject token they
 were derived from.
 

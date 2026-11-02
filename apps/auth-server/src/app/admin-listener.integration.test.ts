@@ -14,6 +14,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { z } from 'zod';
 
 import {
+  ADMIN_LISTENER_ENVIRONMENT,
+  adminCallHeaders,
+  dpopTestKey,
+  rememberTokenKey,
+  signBoundAccessToken,
+  TEST_ADMIN_API_BASE_URL,
+} from '../testing/admin-dpop';
+import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
@@ -139,7 +147,7 @@ async function fixtureAdminApi() {
     ...operations.operationSchemaExtensions(operation),
     'x-qauth-stability': 'experimental' as const,
     'x-qauth-errors': [401, 403, 404],
-    security: [{ bearerAuth: [] }],
+    security: [{ dpopAuth: [] }],
     params,
   });
 
@@ -325,8 +333,9 @@ function bootWithAdminListener(
 ): Promise<BootedAuthServer> {
   if (!infra || !jwt) throw new Error('no infrastructure');
   return bootAuthServer(
-    // The listener is off by default until #517 and #520 ship.
-    { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true', ...environment },
+    // The listener is off by default until #517 ships; where it runs, DPoP is
+    // on and ADMIN_API_BASE_URL names it (#520).
+    { ...baseEnvironment(infra, jwt), ...ADMIN_LISTENER_ENVIRONMENT, ...environment },
     {
       ...(logLines === undefined
         ? {}
@@ -403,7 +412,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       targetRealmId: realmId,
       createdBy: null,
     });
-    const token = await app().jwtUtils.signAccessToken(operator, {
+    const token = await signBoundAccessToken(app(), operator, {
       sub: userId,
       clientId: 'admin-console',
       aud: ADMIN,
@@ -412,7 +421,8 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     return { userId, token };
   }
 
-  function call(
+  /** A call with `token` under the `DPoP` scheme and a fresh proof of its key. */
+  async function call(
     method: 'GET' | 'POST',
     url: string,
     token?: string,
@@ -421,7 +431,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     return admin().inject({
       method,
       url,
-      ...(token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } }),
+      ...(token === undefined ? {} : { headers: await adminCallHeaders(token, method, url) }),
       ...extra,
     });
   }
@@ -554,7 +564,10 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         const response = await admin().inject({
           method: 'GET',
           url: realmPath(realmId),
-          headers: { authorization: `Bearer ${token}`, 'x-request-id': sent },
+          headers: {
+            ...(await adminCallHeaders(token, 'GET', realmPath(realmId))),
+            'x-request-id': sent,
+          },
         });
         expect(response.statusCode).toBe(200);
         const id = response.headers['x-request-id'];
@@ -598,7 +611,8 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(realmReads).not.toHaveBeenCalled();
       expect(grantReads).not.toHaveBeenCalled();
       expect(existing.json()).toMatchObject({ code: 'unauthorized' });
-      expect(existing.headers['www-authenticate']).toBe('Bearer realm="OAuth"');
+      // The listener takes DPoP-bound tokens only: its challenge is a DPoP one.
+      expect(existing.headers['www-authenticate']).toMatch(/^DPoP algs="[A-Za-z0-9 ]+"$/);
       expect(comparable(existing)).toEqual(comparable(await call('GET', realmPath(missing))));
       expect(JSON.stringify(existing.json())).not.toContain('alpha');
       expect(runs).toEqual([]);
@@ -629,7 +643,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       const operator = await defaultRealm();
       const { userId } = await adminWith(realmId, 'security-admin');
       const sign = (claims: Record<string, unknown>) =>
-        app().jwtUtils.signAccessToken(operator, {
+        signBoundAccessToken(app(), operator, {
           sub: userId,
           clientId: 'admin-console',
           aud: ADMIN,
@@ -658,6 +672,131 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     });
   });
 
+  describe('a DPoP-bound token and its proof (#520)', () => {
+    /** The 401 of a refused token: `invalid_token` in a `DPoP` challenge. */
+    function expectTokenRefusal(response: LightMyRequestResponse): void {
+      expect(response.statusCode).toBe(401);
+      expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
+      expect(response.headers['www-authenticate']).toMatch(
+        /^DPoP error="invalid_token", error_description="[^"]*", algs="[A-Za-z0-9 ]+"$/
+      );
+    }
+
+    it('refuses a valid admin token under the Bearer scheme, with or without its proof, before it reads the realm', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'viewer');
+      const url = realmPath(realmId);
+      const realmReads = vi.spyOn(app().repositories.realms, 'findById');
+
+      const { dpop } = await adminCallHeaders(token, 'GET', url);
+      for (const headers of [
+        { authorization: `Bearer ${token}` },
+        { authorization: `Bearer ${token}`, dpop },
+      ]) {
+        expectTokenRefusal(await admin().inject({ method: 'GET', url, headers }));
+      }
+      expect(realmReads).not.toHaveBeenCalled();
+      expect(runs).toEqual([]);
+      expect(await auditRows(realmId)).toEqual([]);
+
+      // The same token under the DPoP scheme, with a proof of its key, passes.
+      expect((await call('GET', url, token)).statusCode).toBe(200);
+      expect(runs).toEqual(['realms.get']);
+    });
+
+    it('refuses a valid token with a proof signed by another key, or with no proof', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'editor');
+      const url = realmPath(realmId, '/fixture-accounts');
+
+      const otherKey = await admin().inject({
+        method: 'POST',
+        url,
+        headers: await adminCallHeaders(token, 'POST', url, { key: await dpopTestKey() }),
+      });
+      expectTokenRefusal(otherKey);
+
+      const noProof = await admin().inject({
+        method: 'POST',
+        url,
+        headers: { authorization: `DPoP ${token}` },
+      });
+      expect(noProof.statusCode).toBe(401);
+      expect(noProof.json()).toMatchObject({ code: 'invalid_dpop_proof' });
+      expect(noProof.headers['www-authenticate']).toMatch(
+        /^DPoP error="invalid_dpop_proof", algs="[A-Za-z0-9 ]+"$/
+      );
+      expect(runs).toEqual([]);
+      expect(await accountsIn(realmId)).toBe(0);
+      expect(await auditRows(realmId)).toEqual([]);
+    });
+
+    it('refuses a token bound to no key, even under the DPoP scheme with a proof', async () => {
+      const realmId = await tenant('alpha');
+      const operator = await defaultRealm();
+      const { userId } = await adminWith(realmId, 'viewer');
+      const unbound = await app().jwtUtils.signAccessToken(operator, {
+        sub: userId,
+        clientId: 'admin-console',
+        aud: ADMIN,
+        scope: ALL_ADMIN_SCOPES,
+      });
+      const url = realmPath(realmId);
+
+      for (const headers of [
+        { authorization: `Bearer ${unbound}` },
+        await adminCallHeaders(unbound, 'GET', url, { key: await dpopTestKey() }),
+      ]) {
+        expectTokenRefusal(await admin().inject({ method: 'GET', url, headers }));
+      }
+      expect(runs).toEqual([]);
+    });
+
+    it('refuses a replayed proof, whose first use passed', async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'viewer');
+      const url = realmPath(realmId);
+      const headers = await adminCallHeaders(token, 'GET', url);
+
+      expect((await admin().inject({ method: 'GET', url, headers })).statusCode).toBe(200);
+      const replayed = await admin().inject({ method: 'GET', url, headers });
+      expect(replayed.statusCode).toBe(401);
+      expect(replayed.json()).toMatchObject({ code: 'invalid_dpop_proof' });
+      expect(replayed.headers['www-authenticate']).toMatch(/^DPoP error="invalid_dpop_proof"/);
+      expect(runs).toEqual(['realms.get']);
+      expect(await auditRows(realmId)).toHaveLength(1);
+    });
+
+    it("refuses a proof for the realm's issuer, or for the URL the request was sent to, rather than ADMIN_API_BASE_URL", async () => {
+      const realmId = await tenant('alpha');
+      const { token } = await adminWith(realmId, 'viewer');
+      const url = realmPath(realmId);
+      const operator = await defaultRealm();
+      expect(TEST_ADMIN_API_BASE_URL).not.toBe(operator.issuer);
+
+      for (const baseUrl of [operator.issuer, 'http://localhost:80', 'http://localhost']) {
+        const response = await admin().inject({
+          method: 'GET',
+          url,
+          headers: await adminCallHeaders(token, 'GET', url, { baseUrl }),
+        });
+        expect(response.statusCode).toBe(401);
+        expect(response.json()).toMatchObject({ code: 'invalid_dpop_proof' });
+      }
+      // A proof for another method, or one issued too long ago.
+      for (const claims of [{ htm: 'POST' }, { iat: Math.floor(Date.now() / 1000) - 120 }]) {
+        const response = await admin().inject({
+          method: 'GET',
+          url,
+          headers: await adminCallHeaders(token, 'GET', url, { claims }),
+        });
+        expect(response.statusCode).toBe(401);
+      }
+      expect(runs).toEqual([]);
+      expect((await call('GET', url, token)).statusCode).toBe(200);
+    });
+  });
+
   describe('tokens of other realms', () => {
     /** A realm with its own issuer and keys, and an enabled account in it. */
     async function signingTenant(name: string): Promise<{ id: string; issuer: string }> {
@@ -669,8 +808,8 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
     /**
      * An admin access token for `sub` naming `issuer`, signed with the
      * operator realm's Ed25519 key, the one the key boot step imported from
-     * the suite's JWT_PRIVATE_KEY, under that key's `kid`. The signer itself
-     * refuses claims that set `iss`.
+     * the suite's JWT_PRIVATE_KEY, under that key's `kid`, and bound to a
+     * DPoP key of its own. The signer itself refuses claims that set `iss`.
      */
     async function signedWithOperatorKey(issuer: string, sub: string): Promise<string> {
       if (!jwt) throw new Error('no key pair');
@@ -682,7 +821,12 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       const kid = keys.find((key) => key.x === publicJwk.x)?.kid;
       if (kid === undefined) throw new Error('the imported key is not in the realm JWKS');
       const now = Math.floor(Date.now() / 1000);
-      return new SignJWT({ client_id: 'admin-console', scope: ALL_ADMIN_SCOPES })
+      const key = await dpopTestKey();
+      const token = await new SignJWT({
+        client_id: 'admin-console',
+        scope: ALL_ADMIN_SCOPES,
+        cnf: { jkt: key.thumbprint },
+      })
         .setProtectedHeader({ alg: 'EdDSA', typ: 'at+jwt', kid })
         .setIssuer(issuer)
         .setSubject(sub)
@@ -691,6 +835,8 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         .setIssuedAt(now)
         .setExpirationTime(now + 300)
         .sign(await importPKCS8(jwt.privateKey, 'EdDSA'));
+      rememberTokenKey(token, key);
+      return token;
     }
 
     it("serves a realm-local admin on its own realm, with its own realm's token, and nowhere else", async () => {
@@ -703,7 +849,8 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
         targetRealmId: alpha.id,
         createdBy: null,
       });
-      const token = await app().jwtUtils.signAccessToken(
+      const token = await signBoundAccessToken(
+        app(),
         { id: alpha.id },
         { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
       );
@@ -790,7 +937,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       const response = await admin().inject({
         method: 'GET',
         url: realmPath(realmId),
-        headers: { authorization: `Bearer ${token}` },
+        headers: await adminCallHeaders(token, 'GET', realmPath(realmId)),
       });
       expect(response.statusCode).toBe(200);
 
@@ -1035,7 +1182,10 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       const response = await admin().inject({
         method: 'POST',
         url: realmPath(realmId, '/fixture-accounts'),
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        headers: {
+          ...(await adminCallHeaders(token, 'POST', realmPath(realmId, '/fixture-accounts'))),
+          'content-type': 'application/json',
+        },
         payload: '{',
       });
       expect(response.statusCode).toBe(400);
@@ -1070,7 +1220,8 @@ async function viewerOn(
     targetRealmId: realm.id,
     createdBy: null,
   });
-  const token = await app.jwtUtils.signAccessToken(
+  const token = await signBoundAccessToken(
+    app,
     { id: operator.id },
     { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
   );
@@ -1080,19 +1231,22 @@ async function viewerOn(
 /** A realm id no realm has: a token-less call to it is refused at the token guard. */
 const NO_REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
 
-/** `count` calls to `url` on `admin`, and their statuses. */
+/** What one of {@link statusesOf}'s calls sends. */
+interface CeilingCall {
+  url: string;
+  remoteAddress: string;
+  headers?: Record<string, string>;
+}
+
+/** `count` GET calls on `admin`, each as `request` makes it, and their statuses. */
 async function statusesOf(
   admin: FastifyInstance,
   count: number,
-  request: (attempt: number) => {
-    url: string;
-    remoteAddress: string;
-    headers?: Record<string, string>;
-  }
+  request: (attempt: number) => CeilingCall | Promise<CeilingCall>
 ): Promise<number[]> {
   const statuses: number[] = [];
   for (let attempt = 0; attempt < count; attempt += 1) {
-    statuses.push((await admin.inject({ method: 'GET', ...request(attempt) })).statusCode);
+    statuses.push((await admin.inject({ method: 'GET', ...(await request(attempt)) })).statusCode);
   }
   return statuses;
 }
@@ -1175,9 +1329,13 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
         headers,
       });
     expect((await call()).statusCode).toBe(429);
-    expect((await call({ authorization: `Bearer ${token}` })).statusCode).toBe(200);
+    expect((await call(await adminCallHeaders(token, 'GET', realmPath(realmId)))).statusCode).toBe(
+      200
+    );
     // A token the guard refuses goes on to the guard, and is answered 429.
-    expect((await call({ authorization: 'Bearer not-a-token' })).statusCode).toBe(429);
+    expect((await call({ authorization: 'DPoP not-a-token' })).statusCode).toBe(429);
+    // A token under the Bearer scheme is no DPoP token: refused before the guard.
+    expect((await call({ authorization: `Bearer ${token}` })).statusCode).toBe(429);
     expect(runs).toEqual(['realms.get']);
   });
 
@@ -1199,10 +1357,10 @@ describe('the request ceilings of the admin listener (#511, real containers)', (
     const { realmId, token } = await viewerOn(app, 'alpha');
 
     // A new address for every call, so only the subject's count can refuse.
-    const statuses = await statusesOf(admin, limit + 1, (attempt) => ({
+    const statuses = await statusesOf(admin, limit + 1, async (attempt) => ({
       url: realmPath(realmId),
       remoteAddress: addressOf(attempt),
-      headers: { authorization: `Bearer ${token}` },
+      headers: await adminCallHeaders(token, 'GET', realmPath(realmId)),
     }));
     expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
     expect(statuses[limit]).toBe(429);
@@ -1268,10 +1426,10 @@ describe('the request ceilings with RATE_LIMIT_ENABLED=false (#511, real contain
     const { realmId, token } = await viewerOn(booted.app, 'gamma');
 
     // A new address for every call, so only the subject's count can refuse.
-    const statuses = await statusesOf(booted.admin, limit + 1, (attempt) => ({
+    const statuses = await statusesOf(booted.admin, limit + 1, async (attempt) => ({
       url: realmPath(realmId),
       remoteAddress: addressOf(attempt),
-      headers: { authorization: `Bearer ${token}` },
+      headers: await adminCallHeaders(token, 'GET', realmPath(realmId)),
     }));
     expect(statuses.slice(0, limit).every((status) => status === 200)).toBe(true);
     expect(statuses[limit]).toBe(429);
@@ -1285,7 +1443,7 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       return;
     }
     const booted = await bootAuthServer(
-      { ...baseEnvironment(infra, jwt), ADMIN_API_ENABLED: 'true' },
+      { ...baseEnvironment(infra, jwt), ...ADMIN_LISTENER_ENVIRONMENT },
       { adminListener: () => ({}) }
     );
     const admin = booted.admin;
@@ -1338,7 +1496,8 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       targetRealmId: realm.id,
       createdBy: null,
     });
-    const token = await app.jwtUtils.signAccessToken(
+    const token = await signBoundAccessToken(
+      app,
       { id: operator.id },
       { sub: userId, clientId: 'admin-console', aud: ADMIN, scope: ALL_ADMIN_SCOPES }
     );
@@ -1354,7 +1513,7 @@ describe('the admin listener closes with the server (#511, real containers)', ()
       const address = await admin.listen({ host: '127.0.0.1', port: 0 });
       const call = fetch(`${address}${realmPath(realm.id, '/fixture-holds')}`, {
         method: 'POST',
-        headers: { authorization: `Bearer ${token}` },
+        headers: await adminCallHeaders(token, 'POST', realmPath(realm.id, '/fixture-holds')),
       });
       await entered;
       const before = await committed(realm.id);

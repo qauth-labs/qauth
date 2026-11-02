@@ -103,27 +103,44 @@ Root endpoint. Returns a fixed greeting to verify the server is running.
 
 ### `GET /health`
 
-Liveness/readiness probe. Checks database and Redis connectivity.
+Liveness probe. Answers on any host, checks no dependency, and names the
+service roles the process runs.
 
-**`200 OK`** (both dependencies reachable):
+**`200 OK`**:
 
 ```json
 {
   "status": "ok",
   "timestamp": "2026-07-27T00:00:00.000Z",
-  "services": { "database": "connected", "redis": "connected" }
+  "roles": ["web", "api", "admin", "signer", "delivery"]
 }
 ```
 
-**`503 Service Unavailable`** — same shape with `status: "unhealthy"` and the
-unreachable dependency reported `"disconnected"`.
+### `GET /ready`
 
-### `GET /metrics`
+Readiness probe. Answers on any host and runs the checks the process's roles
+need: `database` on every role, `redis` on `web`, `api` and `admin`, `kek` on
+`signer` and `outbox` on `delivery`.
 
-Prometheus text-exposition metrics: default Node.js/process metrics plus
-application counters (login attempts by outcome, tokens issued by type and
-grant). No authentication — put it behind network-level access control in
-production.
+**`200 OK`** (every check passed):
+
+```json
+{
+  "status": "ok",
+  "roles": ["api"],
+  "checks": { "database": { "status": "ok" }, "redis": { "status": "ok" } }
+}
+```
+
+**`503 Service Unavailable`**: a problem document with the code
+`service_unavailable`, whose `detail` names the failed checks and whose
+extension members `roles` and `checks` carry what the `200` answer carries,
+each failed check as `{ "status": "fail", "reason": "error" }` or
+`"reason": "timeout"`.
+
+Both are rate-limited per client address. The Prometheus metrics are not on
+this port: they are served on the internal listener (see
+[Observability](/operate/observability/#who-can-read-the-metrics)).
 
 ---
 
