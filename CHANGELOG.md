@@ -1466,7 +1466,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   doubled, and the requester's reason apart, as quoted text. A consumed,
   cancelled, denied or expired approval has its nonce overwritten with random
   bytes, so neither its `op_hash` nor the audit log's copy of it can be tested
-  against a guessed body; the `approval-expiry` job, every minute on the
+  against a guessed body (a dump, replica or WAL archive taken while it was
+  open still holds both, so a secret that can be guessed is safe in a body
+  only as long as those copies are); the `approval-expiry` job, every minute on the
   `admin` role, stores `expired` on one that expired unused. No job removes
   approvals.
   Filing, approving, declining, withdrawing and consuming each write the admin

@@ -280,7 +280,10 @@ password the operation sets, and no hash of the request without the nonce, which
 with a copy of the table test a guessed body against it. Once the approval is consumed, cancelled,
 denied or expired, its nonce is overwritten with random bytes, so neither its `op_hash` nor the
 audit log's copy of it can be tested against a guess any more. The overwrite is a new row version:
-a backup or WAL archive taken while the approval was open still holds the old nonce.
+a dump, replica or WAL archive taken while the approval was open still holds the old nonce beside
+`op_hash`, and with both a guessed body can still be tested. A secret that can be guessed, such as a
+short password, is therefore safe in a security operation's body only as long as those copies are;
+the plugin operations take theirs sealed (`plugins.secrets.seal`), which no guess reaches.
 
 **What a security operation's route and handler must do.** The admin listener refuses to boot a
 security operation's route that cannot be bound this way: it needs a renderer, one method, a Zod
