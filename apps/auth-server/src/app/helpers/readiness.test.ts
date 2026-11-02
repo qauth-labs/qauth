@@ -106,7 +106,78 @@ describe('createReadinessRegistry', () => {
     expect(run).toHaveBeenCalledTimes(2);
   });
 
-  it('reuses a success for reuseSuccessMs, and never a failure', async () => {
+  it('starts no run while one goes on past its timeout, and counts that run when it settles', async () => {
+    const log = recordingLog();
+    const registry = createReadinessRegistry({ log });
+    let release: (() => void) | undefined;
+    const run = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    registry.register({ name: 'database', run, timeoutMs: 20 });
+
+    // Each request stops waiting at the timeout; the run it joined goes on.
+    for (let request = 0; request < 3; request += 1) {
+      await expect(registry.run()).resolves.toEqual({
+        ready: false,
+        checks: { database: { status: 'fail', reason: 'timeout' } },
+      });
+    }
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ check: 'database', reason: 'timeout' }),
+      expect.any(String)
+    );
+
+    // A request that comes while the run goes on gets its result when it settles.
+    const waiting = registry.run();
+    release?.();
+    await expect(waiting).resolves.toEqual({ ready: true, checks: { database: { status: 'ok' } } });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledTimes(1);
+
+    // Once it settled, the next request starts a new run.
+    const next = registry.run();
+    release?.();
+    await next;
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses a failure for reuseFailureMs, and only when set', async () => {
+    let clock = 1_000;
+    const registry = createReadinessRegistry({ now: () => clock });
+    let healthy = false;
+    const kek = vi.fn(async () => {
+      if (!healthy) throw new Error('AccessDeniedException');
+    });
+    const database = vi.fn(async () => {
+      if (!healthy) throw new Error('down');
+    });
+    registry.register({ name: 'kek', run: kek, reuseFailureMs: 5_000 });
+    registry.register({ name: 'database', run: database });
+
+    await registry.run();
+    clock += 4_999;
+    await expect(registry.run()).resolves.toEqual({
+      ready: false,
+      checks: {
+        kek: { status: 'fail', reason: 'error' },
+        database: { status: 'fail', reason: 'error' },
+      },
+    });
+    expect(kek).toHaveBeenCalledTimes(1);
+    expect(database).toHaveBeenCalledTimes(2);
+
+    clock += 1;
+    healthy = true;
+    await expect(registry.run()).resolves.toMatchObject({ ready: true });
+    expect(kek).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses a success for reuseSuccessMs, and a failure only when reuseFailureMs is set', async () => {
     let clock = 1_000;
     const registry = createReadinessRegistry({ now: () => clock });
     let healthy = true;

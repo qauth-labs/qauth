@@ -18,6 +18,11 @@
  * set, `error` or `timeout`: the answer is served on any host, to any caller,
  * so it names the check and never the error. The error goes to the log, once
  * when a check starts failing, with its name and message.
+ *
+ * Any caller can ask, so a check runs at most once at a time: requests join
+ * the run in flight, and one that stops waiting at its timeout leaves the run
+ * going. A new run starts only once that one settled, so a dependency that
+ * stalls holds one run of each check, never one per request.
  */
 
 /** A check's name: lower case, as `/ready` reports it. */
@@ -48,10 +53,15 @@ export interface ReadinessCheck {
   readonly timeoutMs?: number;
   /**
    * How long a success stands before the check runs again, for a check that
-   * costs a call to a paid or rate-limited service, such as a KMS. A failure
-   * is never reused.
+   * costs a call to a paid or rate-limited service, such as a KMS.
    */
   readonly reuseSuccessMs?: number;
+  /**
+   * How long a failure stands before the check runs again, for the same
+   * kind of check: a dependency that refuses at once would otherwise take a
+   * call per request. Unset, a failure is not reused.
+   */
+  readonly reuseFailureMs?: number;
 }
 
 /** What `/ready` reports: whether every check passed, and each one's result. */
@@ -92,13 +102,20 @@ export interface ReadinessRegistryOptions {
 /** What the registry keeps of one check between runs. */
 interface CheckState {
   readonly check: ReadinessCheck;
-  /** The run in flight, which a concurrent request joins rather than starting another. */
-  inFlight: Promise<ReadinessCheckResult> | undefined;
-  /** When the last success may no longer be reused. */
-  reuseUntil: number;
-  /** The last result, to log a change of state once. */
+  /**
+   * The run in flight until it settles, whoever stopped waiting for it: a
+   * request joins it rather than starting another. It never rejects.
+   */
+  running: Promise<ReadinessCheckResult> | undefined;
+  /** The last run's result while it may be reused, and until when. */
+  reused: { readonly result: ReadinessCheckResult; readonly until: number } | undefined;
+  /** The last result reported, to log a change of state once. */
   last: ReadinessCheckResult['status'] | undefined;
 }
+
+const OK: ReadinessCheckResult = Object.freeze({ status: 'ok' });
+const FAILED: ReadinessCheckResult = Object.freeze({ status: 'fail', reason: 'error' });
+const TIMED_OUT: ReadinessCheckResult = Object.freeze({ status: 'fail', reason: 'timeout' });
 
 class ReadinessTimeout extends Error {
   constructor(timeoutMs: number) {
@@ -134,39 +151,53 @@ export function createReadinessRegistry(options: ReadinessRegistryOptions = {}):
   const now = options.now ?? Date.now;
   const states = new Map<string, CheckState>();
 
-  async function runOnce(state: CheckState): Promise<ReadinessCheckResult> {
-    const { check } = state;
-    const timeoutMs = check.timeoutMs ?? DEFAULT_READINESS_CHECK_TIMEOUT_MS;
-    let result: ReadinessCheckResult;
-    try {
-      // A check that throws before it returns a promise fails like one that rejects.
-      await withTimeout(Promise.resolve().then(check.run), timeoutMs);
-      result = { status: 'ok' };
-      state.reuseUntil = now() + (check.reuseSuccessMs ?? 0);
+  /** Log a change of state once: the first failure, with its error, and the recovery. */
+  function report(state: CheckState, result: ReadinessCheckResult, error?: unknown): void {
+    const { name } = state.check;
+    if (result.status === 'ok') {
       if (state.last === 'fail') {
-        options.log?.info({ check: check.name }, 'A readiness check passes again');
+        options.log?.info({ check: name }, 'A readiness check passes again');
       }
-    } catch (error) {
-      const reason: ReadinessFailure = error instanceof ReadinessTimeout ? 'timeout' : 'error';
-      result = { status: 'fail', reason };
-      state.reuseUntil = 0;
-      if (state.last !== 'fail') {
-        options.log?.warn(
-          { check: check.name, reason, err: describeError(error) },
-          'A readiness check fails: GET /ready answers 503 until it passes'
-        );
-      }
+    } else if (state.last !== 'fail') {
+      options.log?.warn(
+        { check: name, reason: result.reason, err: describeError(error) },
+        'A readiness check fails: GET /ready answers 503 until it passes'
+      );
     }
     state.last = result.status;
-    return result;
   }
 
-  function result(state: CheckState): Promise<ReadinessCheckResult> {
-    if (state.last === 'ok' && now() < state.reuseUntil) return Promise.resolve({ status: 'ok' });
-    state.inFlight ??= runOnce(state).finally(() => {
-      state.inFlight = undefined;
-    });
-    return state.inFlight;
+  /** Start a run of the check; it settles with the check, however long that takes. */
+  function start(state: CheckState): Promise<ReadinessCheckResult> {
+    const { check } = state;
+    // A check that throws before it returns a promise fails like one that rejects.
+    return Promise.resolve()
+      .then(check.run)
+      .then(
+        () => ({ result: OK, error: undefined }),
+        (error: unknown) => ({ result: FAILED, error })
+      )
+      .then(({ result, error }) => {
+        state.running = undefined;
+        const reuseMs = result.status === 'ok' ? check.reuseSuccessMs : check.reuseFailureMs;
+        state.reused =
+          reuseMs !== undefined && reuseMs > 0 ? { result, until: now() + reuseMs } : undefined;
+        report(state, result, error);
+        return result;
+      });
+  }
+
+  async function result(state: CheckState): Promise<ReadinessCheckResult> {
+    if (state.reused !== undefined && now() < state.reused.until) return state.reused.result;
+    const run = (state.running ??= start(state));
+    const timeoutMs = state.check.timeoutMs ?? DEFAULT_READINESS_CHECK_TIMEOUT_MS;
+    try {
+      return await withTimeout(run, timeoutMs);
+    } catch (error) {
+      // Only the timeout rejects: the run goes on, and the next request joins it.
+      report(state, TIMED_OUT, error);
+      return TIMED_OUT;
+    }
   }
 
   return Object.freeze({
@@ -179,7 +210,7 @@ export function createReadinessRegistry(options: ReadinessRegistryOptions = {}):
       if (states.has(check.name)) {
         throw new Error(`The readiness check ${check.name} is already registered`);
       }
-      states.set(check.name, { check, inFlight: undefined, reuseUntil: 0, last: undefined });
+      states.set(check.name, { check, running: undefined, reused: undefined, last: undefined });
     },
 
     names(): readonly string[] {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { createReadinessRegistry } from '../helpers/readiness';
 import {
+  KEK_CHECK_FAILURE_REUSE_MS,
   KEK_CHECK_REUSE_MS,
   registerRoleReadinessChecks,
   type RoleReadinessSource,
@@ -90,6 +91,25 @@ describe('registerRoleReadinessChecks', () => {
     await built.readiness.run();
     expect(checkKeyCustody).toHaveBeenCalledTimes(1);
     clock = KEK_CHECK_REUSE_MS;
+    await built.readiness.run();
+    expect(checkKeyCustody).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses a failing KEK check for a shorter while, so a refusing KMS is not called per request', async () => {
+    let clock = 0;
+    const { built, checkKeyCustody } = source({
+      readiness: createReadinessRegistry({ now: () => clock }),
+    });
+    checkKeyCustody.mockRejectedValue(new Error('KMS key disabled'));
+    registerRoleReadinessChecks(built, ['signer']);
+
+    await expect(built.readiness.run()).resolves.toMatchObject({
+      checks: { kek: { status: 'fail', reason: 'error' } },
+    });
+    clock = KEK_CHECK_FAILURE_REUSE_MS - 1;
+    await built.readiness.run();
+    expect(checkKeyCustody).toHaveBeenCalledTimes(1);
+    clock = KEK_CHECK_FAILURE_REUSE_MS;
     await built.readiness.run();
     expect(checkKeyCustody).toHaveBeenCalledTimes(2);
   });

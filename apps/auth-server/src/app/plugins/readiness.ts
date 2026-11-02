@@ -39,6 +39,13 @@ export const REDIS_READINESS_ROLES: readonly ServiceRole[] = ['web', 'api', 'adm
  */
 export const KEK_CHECK_REUSE_MS = 30_000;
 
+/**
+ * How long a KEK check's failure stands: a KMS that refuses at once, a
+ * disabled key or a throttled account, would otherwise take a call for every
+ * request to `/ready`, from any caller.
+ */
+export const KEK_CHECK_FAILURE_REUSE_MS = 5_000;
+
 /** The parts of the app the role checks read. */
 export type RoleReadinessSource = Pick<FastifyInstance, 'readiness' | 'dbPool' | 'redis'> & {
   readonly checkKeyCustody?: () => Promise<void>;
@@ -75,7 +82,12 @@ export function registerRoleReadinessChecks(
     if (check === undefined) {
       throw new Error('The kek readiness check needs the signer plugin registered first');
     }
-    fastify.readiness.register({ name: 'kek', run: check, reuseSuccessMs: KEK_CHECK_REUSE_MS });
+    fastify.readiness.register({
+      name: 'kek',
+      run: check,
+      reuseSuccessMs: KEK_CHECK_REUSE_MS,
+      reuseFailureMs: KEK_CHECK_FAILURE_REUSE_MS,
+    });
   }
   if (roles.includes('delivery')) {
     const outbox = fastify.repositories.eventDeliveries;
