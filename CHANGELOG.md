@@ -1224,6 +1224,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gauges `qauth_events_delivery_signer_held` and
   `qauth_events_delivery_signer_held_oldest_seconds` show such holds.
 
+- **The Interaction API's operations** ([#616], ADR-019 Decision 6, ADR-017
+  Decisions 6 and 7). The auth server now serves the four operations of
+  `/interaction/v1-rc.0`: the step read, the personal read, the answer and the
+  cancel. Every answer and cancel needs the realm origin (`Sec-Fetch-Site`,
+  `Origin`), the flow cookie and the CSRF value of the step read, checked in
+  that order, and the sign-in engine runs only once all three pass; another
+  origin or a wrong value gets one generic `403`, audited as
+  `request.csrf_rejected` with the new `form: interaction`. The CSRF value is
+  derived from a per-interaction key, the revision and the step, so it answers
+  its step view once and never another step; it travels in the body, never in
+  a URL. An answer is JSON or a plain HTML form post: a form post gets `303` to
+  the ceremony page, `/ui/interaction/{id}`, or to the final redirect, so the
+  password step needs no JavaScript. Bodies are bounded (16 KiB, 64 KiB for
+  `webauthn_create`, a repeated form field refused), every answer is
+  `Cache-Control: no-store` with no CORS header, and a throttled sign-in is
+  `429` with `Retry-After`. The engine shares the legacy sign-in forms'
+  per-account failure ladder. The redirect comes from the interaction record
+  and the realm, never the request; until the authorization endpoint starts
+  interactions and mints their codes ([#628]), a finished sign-in redirects to
+  the client with `error=server_error`. The interaction record is now version
+  2 (an interaction of the previous release reads as expired).
+
 - **Security operations, defined by effect, as an enforced classification**
   ([#508], ADR-019 Decision 7). The eleven effect tags (`credential-path`,
   `token-content`, `issue-for-other`, `administration`, `import`,

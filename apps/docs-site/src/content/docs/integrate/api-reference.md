@@ -661,13 +661,36 @@ for a user the receiver may not add, an unknown user id included; `404` is `not_
 for any path no route serves, for a realm that does not run the transmitter;
 `409` is `conflict`; and `429` is `too_many_requests` with `Retry-After`.
 
-### Interaction API contract
+### Interaction API
 
 `GET /interaction/v1-rc.0/openapi.json` returns the OpenAPI 3.1 document of the Interaction API,
 the API sign-in pages use to reach the engine, with `Cache-Control: public, max-age=3600`. It is
 the same document the docs site publishes; the [Interaction API](/reference/interaction-api/) page
-describes its operations, steps and versioning rules. The operations it describes are not served
-yet: the document is published ahead of them.
+describes its operations, steps and versioning rules.
+
+| Endpoint                                        | Method | Purpose                                                                                          |
+| ----------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
+| `/interaction/v1-rc.0/{interactionId}`          | GET    | Read the current step and its CSRF value. The interaction id alone is enough; no personal data.  |
+| `/interaction/v1-rc.0/{interactionId}/personal` | GET    | Read the current step's personal data. Needs the flow cookie; refused from another origin.       |
+| `/interaction/v1-rc.0/{interactionId}/answer`   | POST   | Answer the current step, as JSON or as a plain HTML form post. A form post gets `303 See Other`. |
+| `/interaction/v1-rc.0/{interactionId}/cancel`   | POST   | Cancel the interaction: the client gets `access_denied`.                                         |
+
+An answer and a cancel need the realm origin (`Sec-Fetch-Site: same-origin`, or an `Origin` of the
+realm), the flow cookie and the CSRF value of the step read, checked in that order; the sign-in
+engine runs only once all three pass. A request from another origin and a wrong CSRF value get one
+generic `403` `forbidden`, audited as `request.csrf_rejected` with `form: interaction`. A CSRF value
+answers its step view once: a processed answer, a refused one included, gives the step a new value,
+while an answer refused before it is processed (a `400`, a `429`, a `503`) leaves it as it was. A
+body is JSON or `application/x-www-form-urlencoded` (else `415`), at most 16 KiB, or 64 KiB for an
+answer to `webauthn_create` (else `413`); a form field may not be repeated (`400` `invalid_answer`).
+A form post gets `303` to the ceremony app's page of the interaction (under the realm's
+sign-in pages), or to the final redirect; a JSON answer gets the next step or the redirect as JSON. The redirect is
+taken from the interaction and the realm, never from the request. Until the authorization endpoint
+starts interactions and issues their codes (#628), a finished sign-in redirects to the client with
+`error=server_error`. Every answer is `Cache-Control: no-store`, sends no CORS header, and every
+error is a problem document without `detail` or `instance`; a throttled sign-in is `429` with
+`Retry-After`. The answer and the cancel share the sign-in form's rate limit (`LOGIN_RATE_LIMIT`
+per `LOGIN_RATE_WINDOW`), the reads the authorization endpoint's.
 
 ---
 
