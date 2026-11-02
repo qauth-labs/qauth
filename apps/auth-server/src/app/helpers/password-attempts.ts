@@ -6,8 +6,11 @@ import {
   createPasswordHardAction,
   createRedisFailureLadder,
   END_USER_IP_HMAC_LABEL,
+  type HardActionArming,
   type HardActionArmingSources,
   type PasswordAttempts,
+  type PasswordHardAction,
+  type RedisFailureLadder,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance } from 'fastify';
 
@@ -67,9 +70,21 @@ function cookieRingSecrets(fastify: FastifyInstance): DigestSecretSource {
   };
 }
 
+/** The parts of the per-account failure ladder (#615) every password route of a process shares. */
+export interface ServerLadderParts {
+  /** The identifier's HMAC under the realm's cookie key, the ladder's account key. */
+  readonly identifierDigest: ReturnType<typeof createCookieSecretIdentifierDigest>;
+  readonly ladder: RedisFailureLadder;
+  readonly hardAction: PasswordHardAction;
+  readonly hardActionArmed: HardActionArming;
+}
+
 /**
- * The failure ladder of this process, over its Redis, its cookie keys and its
- * `user_credentials` repository.
+ * The failure ladder's parts over the process's Redis, its cookie keys and its
+ * `user_credentials` repository: the legacy login routes reach them through
+ * {@link createServerPasswordAttempts}, the sign-in engine of the Interaction
+ * API directly (#616). Both key an account by the same HMAC of the same
+ * cookie key, so one run of failures counts across them.
  *
  * The hard action is never armed yet: it needs the owner's hosted password
  * reset (#642), the only way back from the disable, and the notice that tells
@@ -80,7 +95,7 @@ function cookieRingSecrets(fastify: FastifyInstance): DigestSecretSource {
  * A rotation of the realm's cookie key changes every digest: every account's
  * run of failures and known IPs start afresh within a minute of it.
  */
-export function createServerPasswordAttempts(fastify: FastifyInstance): PasswordAttempts {
+export function createServerLadderParts(fastify: FastifyInstance): ServerLadderParts {
   const secrets = cookieRingSecrets(fastify);
   // One source for the arming and for the notice the hard action sends.
   const arming: HardActionArmingSources = {
@@ -89,8 +104,7 @@ export function createServerPasswordAttempts(fastify: FastifyInstance): Password
     // No notice template (#637) yet: the deployment cannot tell the owner.
     notices: undefined,
   };
-  const hardActionArmed = createHardActionArming(arming);
-  return createPasswordAttempts({
+  return {
     identifierDigest: createCookieSecretIdentifierDigest(secrets, 'local'),
     ladder: createRedisFailureLadder(fastify.redis, {
       ipDigest: createCookieSecretIdentifierDigest(secrets, 'local', END_USER_IP_HMAC_LABEL),
@@ -100,7 +114,14 @@ export function createServerPasswordAttempts(fastify: FastifyInstance): Password
       arming,
       log: fastify.log,
     }),
-    hardActionArmed,
-    log: fastify.log,
-  });
+    hardActionArmed: createHardActionArming(arming),
+  };
+}
+
+/**
+ * The failure ladder of this process as the legacy login routes use it
+ * (`fastify.passwordAttempts`), over {@link createServerLadderParts}.
+ */
+export function createServerPasswordAttempts(fastify: FastifyInstance): PasswordAttempts {
+  return createPasswordAttempts({ ...createServerLadderParts(fastify), log: fastify.log });
 }

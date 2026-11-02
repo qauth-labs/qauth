@@ -91,10 +91,11 @@ function maximalEnvironment(): Record<string, string> {
 }
 
 /**
- * The routes that read or set a browser cookie: the session cookie, or the
- * login-CSRF cookie of a form that posts to a `/ui/*` route. The page the
- * verification mail links to, `GET /auth/verify`, is one; `POST /auth/verify`
- * beside it is the JSON API.
+ * The routes that read or set a browser cookie: the session cookie, the
+ * login-CSRF cookie of a form that posts to a `/ui/*` route, or the flow
+ * cookie of an interaction (the Interaction API, #616; its contract document
+ * is a `meta` route). The page the verification mail links to,
+ * `GET /auth/verify`, is one; `POST /auth/verify` beside it is the JSON API.
  */
 function isBrowserSessionRoute(route: RouteOptions): boolean {
   const { url } = route;
@@ -103,6 +104,7 @@ function isBrowserSessionRoute(route: RouteOptions): boolean {
   }
   return (
     url.startsWith('/ui/') ||
+    url.startsWith('/interaction/v1-rc.0/:interactionId') ||
     url === '/oauth/authorize' ||
     url === '/consents' ||
     url.startsWith('/consents/') ||

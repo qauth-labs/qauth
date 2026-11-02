@@ -41,6 +41,7 @@ import {
   UnsupportedMediaTypeError,
 } from '../helpers/api-request-errors';
 import { ApprovalRequiredError, ApprovalStateError } from '../helpers/approval-required';
+import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import { SsfNotFoundError, SsfStreamExistsError } from '../helpers/ssf-errors';
@@ -236,6 +237,14 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
   {
     errorClass: InteractionExpiredError,
     code: 'interaction_expired',
+    oauthError: 'invalid_request',
+  },
+  // The Interaction API's refusals of an answer's body (#616): one that does
+  // not match its step, and one over its size bound (ADR-017 Decision 7).
+  { errorClass: InvalidAnswerError, code: 'invalid_answer', oauthError: 'invalid_request' },
+  {
+    errorClass: ContentTooLargeError,
+    code: 'content_too_large',
     oauthError: 'invalid_request',
   },
   // The list and update conventions of the account and developer APIs

@@ -126,6 +126,13 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/health'),
   },
   {
+    module: 'interaction-api',
+    roles: ['web'],
+    plugins: ['password', 'sessions'],
+    repositories: ['adminGrants', 'events', 'userCredentials', 'users'],
+    load: () => import('./routes/interaction-api'),
+  },
+  {
     module: 'interaction-document',
     roles: ['api'],
     plugins: [],
