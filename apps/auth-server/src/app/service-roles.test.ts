@@ -587,7 +587,7 @@ describe('the signer of a process without the signer role', () => {
   it('refuses every operation with a 503', async () => {
     const signer = createUnavailableSigner('https://signer.internal');
     const operations = Object.entries(signer) as [string, () => Promise<unknown>][];
-    expect(operations).toHaveLength(10);
+    expect(operations).toHaveLength(11);
     for (const [name, operation] of operations) {
       await expect(operation(), name).rejects.toMatchObject({
         statusCode: 503,

@@ -11,7 +11,11 @@ import {
   generateJwtPem,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
-import { createMockVerifierPki, verifierIdentityEnvironment } from '../testing/mock-verifier-pki';
+import {
+  createMockVerifierPki,
+  verifierIdentityEnvironment,
+  verifierKeyVariable,
+} from '../testing/mock-verifier-pki';
 
 /**
  * THE TWO KEY SETS MUST NOT BE INTERCHANGEABLE (#298's risk note, #377 Phase A).
@@ -22,7 +26,7 @@ import { createMockVerifierPki, verifierIdentityEnvironment } from '../testing/m
  * | key | proves | published at |
  * | --- | --- | --- |
  * | the realm's `token_signing` keys (EdDSA, + RS256) | "QAuth issued this token" | `GET /.well-known/jwks.json` |
- * | `OID4VP_VERIFIER_SIGNING_KEY` | "QAuth is the Verifier in this request" | nowhere |
+ * | the realm's `oid4vp_request_signing` key (ES256, #546) | "QAuth is the Verifier in this request" | the request object's `x5c` leaf, never the JWKS |
  *
  * A leak in either direction is a real vulnerability rather than an untidiness.
  * The verifier key appearing in the JWKS would invite a relying party to accept
@@ -36,8 +40,10 @@ import { createMockVerifierPki, verifierIdentityEnvironment } from '../testing/m
  *
  * The vacuity trap, stated plainly: a test that only inspects the DEFAULT JWKS
  * passes today for the wrong reason — a deployment with no P-256 key has none to
- * leak. So every deployment booted here HAS one, and the assertions are about
- * what the running server does with it.
+ * leak. So every deployment booted here HAS one — imported from
+ * `OID4VP_VERIFIER_SIGNING_KEY` into the default realm's key store, under its
+ * own purpose (#546) — and the assertions are about what the running server
+ * does with it.
  *
  * ## Containers
  *
@@ -87,6 +93,7 @@ async function verifierDeploymentEnvironment(): Promise<Record<string, string>> 
     OID4VP_SUBJECT_RESOLUTION: 'asserted-lookup',
     OID4VP_SUBJECT_BINDING_CLAIMS: 'family_name,given_name,birth_date',
     ...verifierIdentityEnvironment(pki),
+    ...verifierKeyVariable(pki),
   };
 }
 
@@ -117,6 +124,32 @@ async function bootWithVerifierIdentity(
  * the REAL bootstrap puts in the set, which is the question here.
  */
 describe('the verifier key never reaches the published JWKS (#377)', () => {
+  it('holds the verifier key in the store, under its own purpose (#546)', async () => {
+    // The non-vacuity control for the assertions below: the key is there, as
+    // the request key, and only as the request key.
+    const server = await bootWithVerifierIdentity();
+
+    try {
+      const leaf = pki.leaf.publicKey.export({ format: 'jwk' });
+      const requestKeys = await server.app.signer.getVerificationKeys(
+        'local',
+        server.realm.id,
+        'oid4vp_request_signing'
+      );
+      expect(
+        requestKeys.map((key) => [key.status, key.algorithm, key.publicJwk.x, key.publicJwk.y])
+      ).toEqual([['active', 'ES256', leaf.x, leaf.y]]);
+      const tokenKeys = await server.app.signer.getVerificationKeys(
+        'local',
+        server.realm.id,
+        'token_signing'
+      );
+      expect(tokenKeys.map((key) => key.publicJwk.x)).not.toContain(leaf.x);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('publishes no EC key at all, on a deployment that HAS one', async () => {
     const server = await bootWithVerifierIdentity();
 

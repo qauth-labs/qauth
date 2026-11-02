@@ -4,7 +4,10 @@ import type {
   EnvironmentKeySettings,
   EnvironmentKeySource,
 } from '@qauth-labs/fastify-plugin-signer';
-import { isPublishedSessionCookieSecret } from '@qauth-labs/server-config';
+import {
+  isPublishedSessionCookieSecret,
+  resolveVerifierSigningKeyPem,
+} from '@qauth-labs/server-config';
 import { calculateJwkThumbprint, type JWK } from 'jose';
 
 /**
@@ -29,6 +32,8 @@ export interface KeyVariableConfig {
   readonly JWT_MLDSA_KID?: string;
   readonly HYBRID_SIGNING_ENABLED: boolean;
   readonly SESSION_COOKIE_SECRET?: string;
+  readonly OID4VP_VERIFIER_SIGNING_KEY?: string | undefined;
+  readonly OID4VP_VERIFIER_SIGNING_KEY_PATH?: string | undefined;
 }
 
 /**
@@ -41,6 +46,10 @@ export interface KeyVariableConfig {
  *   the development value `.env.example` ships): a development stack
  *   generates its cookie key instead. A set value the store lacks replaces
  *   the stored cookie key (#493).
+ * - `OID4VP_VERIFIER_SIGNING_KEY` (or its `_PATH` form, which wins) becomes
+ *   the ES256 `oid4vp_request_signing` key (#546). This is the one read of the
+ *   verifier key in the auth server: it is handed to the signer's key boot
+ *   step, and only a process with the signer role calls this.
  *
  * @param config - the parsed configuration (`env`)
  * @param raw - the environment it was parsed from (`process.env`)
@@ -79,6 +88,14 @@ export function keyVariableSettings(
     isPublishedSessionCookieSecret(config.SESSION_COOKIE_SECRET)
       ? undefined
       : source(config.SESSION_COOKIE_SECRET, 'SESSION_COOKIE_SECRET');
+  const verifierKey = source(
+    resolveVerifierSigningKeyPem({
+      OID4VP_VERIFIER_SIGNING_KEY: config.OID4VP_VERIFIER_SIGNING_KEY,
+      OID4VP_VERIFIER_SIGNING_KEY_PATH: config.OID4VP_VERIFIER_SIGNING_KEY_PATH,
+    }),
+    'OID4VP_VERIFIER_SIGNING_KEY',
+    'OID4VP_VERIFIER_SIGNING_KEY_PATH'
+  );
 
   return {
     ...(ed25519 === undefined
@@ -103,6 +120,7 @@ export function keyVariableSettings(
       : { mlDsa: { seed: mlDsa, ...(mlDsaKid === undefined ? {} : { kid: mlDsaKid }) } }),
     // Only a secret the operator set in the environment, as for every key.
     ...(cookieSecret === undefined || cookieSecret.variables.length === 0 ? {} : { cookieSecret }),
+    ...(verifierKey === undefined ? {} : { oid4vpRequestSigning: { privateKey: verifierKey } }),
   };
 }
 

@@ -1547,6 +1547,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The OID4VP verifier key moves into the key store** ([#546], ADR-019
+  Decision 9). `OID4VP_VERIFIER_SIGNING_KEY` (or its `_PATH` form) is imported
+  once, like the JWT keys, as the default realm's ES256
+  `oid4vp_request_signing` key; a later boot that still sets it warns, and a
+  different key in it replaces the stored one. The signer signs every request
+  object with the request realm's key (`signRequestObject`, `typ`
+  `oauth-authz-req+jwt`, `x5c` from the configured chain), as the `web` role,
+  and refuses a chain whose leaf names another key. The certificate chain and
+  its anchors stay public configuration. At boot the chain is compared with the
+  stored key's published half, so the boot stops when it names no stored key,
+  on processes without the key too, and the capability descriptor claims
+  `ES256` only for a stored key the chain names. Each per-request response
+  encryption key is now sealed by the signer with the realm's `data_at_rest`
+  key, bound to its row's `kid` (`web` seals, `api` opens), and the row records
+  the sealing key's `kid` in the new `response_encryption_sealing_kid` column
+  (migration 0053) in place of the scheme marker. A row the previous release
+  wrote keeps opening, with its marker and `OID4VP_RESPONSE_KEY_SECRET`, until
+  it expires (at most 15 minutes). During a rolling upgrade a node of the
+  previous release cannot redeem a row a new node sealed: the wallet's
+  response there answers 500 and leaves the row live, so the wallet can retry,
+  and a retry that reaches a new node completes the sign-in. Keys are kept per
+  realm and the import lands in the default realm only, so under a profile
+  that signs its requests (`haip-1.0`) a realm whose own store holds no
+  request key the chain names offers no wallet login on its sign-in and
+  account-linking pages; the unsigned `oid4vp-1.0-base` profile is offered in
+  every realm as before.
 - **CIMD comes from the realm row** ([#534], ADR-019 Decisions 1 and 10,
   ADR-007). Whether a realm accepts an HTTPS URL as a `client_id`, its trust
   policy and its trusted domains are the realm's `registration.cimd` policy, so
@@ -1573,7 +1599,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   scope outside it ([#516]); a new integration suite proves both against real
   containers, and a test refuses any read of a migrated seed key outside the
   boot steps.
-
 - **The verified-account gate, the password score and the failed-login lockout
   come from the realm row** ([#528], ADR-019 Decision 10). Each realm's
   `accounts.requireVerifiedAccount`, `password.minScore` and `bruteForce`
@@ -2577,6 +2602,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#541]: https://github.com/qauth-labs/qauth/issues/541
 [#542]: https://github.com/qauth-labs/qauth/issues/542
 [#545]: https://github.com/qauth-labs/qauth/issues/545
+[#546]: https://github.com/qauth-labs/qauth/issues/546
 [#549]: https://github.com/qauth-labs/qauth/issues/549
 [#550]: https://github.com/qauth-labs/qauth/issues/550
 [#552]: https://github.com/qauth-labs/qauth/issues/552
@@ -2618,6 +2644,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Deprecated
 
+- **`OID4VP_RESPONSE_KEY_SECRET`** ([#546]). It is read only to open the
+  response keys a release before this one stored with it, and a set value warns
+  at boot. Remove it once every node runs this release and 15 minutes have
+  passed; a later release removes it.
 - **`/api/clients`, `/api/consents` and the cookie-authenticated `/consents`**
   ([#524]). Each operation is `deprecated: true` in the OpenAPI document, and
   every answer, errors included, carries the RFC 9745 `Deprecation` header and

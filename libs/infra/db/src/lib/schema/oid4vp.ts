@@ -55,19 +55,26 @@ import { EPOCH_MS_NOW } from './sql-helpers';
  * `kid` names, because the response arrives on a different HTTP request than
  * the one that minted it.
  *
- * Three columns, and either all three are set or none is (the
- * `..._response_encryption_complete` CHECK). A row built for plain
- * `direct_post` carries nothing here; a row built for `direct_post.jwt` carries
- * a `kid` the wallet will echo, the private JWK that opens the response, and a
- * marker saying how that JWK was written — `plain` by default, `aes-256-gcm`
- * when the deployment opted into `OID4VP_RESPONSE_KEY_SECRET`. The marker is
- * per ROW rather than per deployment so switching the option on never orphans
- * a request already in flight. It sits beside `nonce`, which this table already
- * stores in the clear for its own stated reason; see
- * `@qauth-labs/server-federation`'s `response-encryption` module for why plain
- * is the default and what the envelope protects against.
+ * Either none is set, or the `kid`, the private key and exactly one of two
+ * columns that say how the key was written (the
+ * `..._response_encryption_complete` and `..._response_encryption_sealed_once`
+ * CHECKs). A row built for plain `direct_post` carries nothing here; a row
+ * built for `direct_post.jwt` carries a `kid` the wallet will echo and the
+ * private JWK that opens the response, and:
  *
- * All three are cleared by the redemption `UPDATE` itself — a consumed row
+ * - since #546, `response_encryption_sealing_kid`: the private JWK is a
+ *   ciphertext of the realm's `data_at_rest` key, made by the signer, and this
+ *   is that key's `kid`. Only a role the signer lets decrypt it can open the
+ *   key, and a database dump alone opens nothing;
+ * - before #546, `response_encryption_key_protection`: a marker saying how the
+ *   JWK was written — `plain`, or `aes-256-gcm` under
+ *   `OID4VP_RESPONSE_KEY_SECRET`. Such a row still opens until it expires, at
+ *   most 15 minutes after it was written; nothing writes one any more.
+ *
+ * Both are per ROW rather than per deployment, so an upgrade never orphans a
+ * request already in flight.
+ *
+ * All of them are cleared by the redemption `UPDATE` itself — a consumed row
  * carries no key, whichever correlator consumed it. See
  * `responseEncryptionPrivateJwk` below for why, and the repository for how the
  * private half still reaches the one caller that has to decrypt with it.
@@ -185,8 +192,10 @@ export const oid4vpRequestStates = pgTable(
      */
     responseEncryptionKid: varchar('response_encryption_kid', { length: 64 }),
     /**
-     * The PRIVATE half of the ephemeral ECDH-ES pair, serialized — as the JWK
-     * document itself under `plain`, or as a versioned AES-256-GCM envelope
+     * The PRIVATE half of the ephemeral ECDH-ES pair, serialized — as a
+     * `data_at_rest` ciphertext of the signer (`v1.<kid>.…`, see
+     * `responseEncryptionSealingKid`), or, on a row written before #546, as the
+     * JWK document itself under `plain` or a versioned AES-256-GCM envelope
      * under `aes-256-gcm` (see `responseEncryptionKeyProtection`).
      *
      * `text` for the reason `nonce` is: the storage layer must never be the
@@ -222,6 +231,16 @@ export const oid4vpRequestStates = pgTable(
      * the database should say so too.
      */
     responseEncryptionKeyProtection: text('response_encryption_key_protection'),
+    /**
+     * The `kid` of the realm's `data_at_rest` key that sealed
+     * `response_encryption_private_jwk` (#546): the signer encrypted the JWK
+     * under the context `oid4vp-response-key:<response_encryption_kid>`, so
+     * the ciphertext opens only for this row's `kid` and realm. Set on every
+     * row written since #546, in place of `response_encryption_key_protection`,
+     * which a row never carries with it. The reader checks it equals the
+     * `kid` the ciphertext names.
+     */
+    responseEncryptionSealingKid: varchar('response_encryption_sealing_kid', { length: 255 }),
     /**
      * Whether the flow that minted this request expects the wallet to bring
      * the user agent BACK (#405, HAIP 1.0 §5.1 "same-device"), or was started
@@ -324,13 +343,20 @@ export const oid4vpRequestStates = pgTable(
     // guards: a jsonb column that must hold an object should say so in the DB,
     // not only in the type parameter.
     check('oid4vp_request_states_dcql_query_object', sql`jsonb_typeof(${t.dcqlQuery}) = 'object'`),
-    // All-or-nothing across the three encrypted-response columns: a row with a
-    // kid but no key would be redeemable and then undecryptable — a live
+    // All-or-nothing across the encrypted-response columns: a row with a kid
+    // but no key would be redeemable and then undecryptable — a live
     // correlator for an exchange that can never complete — and a key with no
-    // kid could never be found. Half-provisioned is not a state a row may be in.
+    // kid could never be found, nor a key whose writing is not recorded be
+    // read. Half-provisioned is not a state a row may be in.
     check(
       'oid4vp_request_states_response_encryption_complete',
-      sql`(${t.responseEncryptionKid} is null and ${t.responseEncryptionPrivateJwk} is null and ${t.responseEncryptionKeyProtection} is null) or (${t.responseEncryptionKid} is not null and ${t.responseEncryptionPrivateJwk} is not null and ${t.responseEncryptionKeyProtection} is not null)`
+      sql`(${t.responseEncryptionKid} is null and ${t.responseEncryptionPrivateJwk} is null and ${t.responseEncryptionKeyProtection} is null and ${t.responseEncryptionSealingKid} is null) or (${t.responseEncryptionKid} is not null and ${t.responseEncryptionPrivateJwk} is not null and (${t.responseEncryptionKeyProtection} is not null or ${t.responseEncryptionSealingKid} is not null))`
+    ),
+    // A key is written one way (#546): sealed by the signer, or under a
+    // pre-#546 marker, never both, so no reader has to choose.
+    check(
+      'oid4vp_request_states_response_encryption_sealed_once',
+      sql`${t.responseEncryptionKeyProtection} is null or ${t.responseEncryptionSealingKid} is null`
     ),
     // The marker vocabulary, pinned in the DB as well as in
     // `Oid4vpEphemeralKeyProtection`. Widening it is a migration on purpose: a

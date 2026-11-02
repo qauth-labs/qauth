@@ -63,11 +63,17 @@ holds the signer ignores `SIGNER_URL` and warns.
 
 The check is by variable name. It cannot see the credentials a KEK provider
 adapter takes from its cloud SDK's own settings or from the machine's identity:
-grant the KMS permission to the signer nodes only. One secret is not a key of
-the signer yet and stays in the environment of the processes that use it:
-`OID4VP_RESPONSE_KEY_SECRET`, which wraps the wallet response keys on `web` and
-`api` nodes. `SESSION_COOKIE_SECRET` is no longer one of them: the browser
-cookies are signed with the realm's cookie key from the signer (below).
+grant the KMS permission to the signer nodes only. The wallet sign-in holds no
+key either: the signer signs its request objects with the realm's OID4VP
+request key, which the key boot step imports from
+`OID4VP_VERIFIER_SIGNING_KEY` once, and seals each per-request response key
+with the realm's `data_at_rest` key (`web` seals, `api` opens). The certificate
+chain and its anchors stay public configuration on `web` and `api`.
+`OID4VP_RESPONSE_KEY_SECRET` is read only to open the response keys a release
+before 0.2 stored with it, which expire within 15 minutes of the upgrade;
+remove it once every node runs this release. `SESSION_COOKIE_SECRET` is no
+longer a secret of those processes either: the browser cookies are signed with
+the realm's cookie key from the signer (below).
 
 ## The internal listener
 

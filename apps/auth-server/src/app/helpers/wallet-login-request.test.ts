@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import {
   decryptJwe,
   importEncryptionPrivateJwk,
@@ -10,9 +12,10 @@ import {
   VERIFIER_PROFILES,
   type VerifierProfile,
 } from '@qauth-labs/fastify-plugin-federation';
+import { createTestSigner } from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import type { FastifyInstance } from 'fastify';
 import { CompactEncrypt, importJWK, type JWK } from 'jose';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { envMock } = vi.hoisted(() => ({
   envMock: {
@@ -24,24 +27,23 @@ const { envMock } = vi.hoisted(() => ({
     // The verifier identity (#377). Kept UNSET here: these tests drive the
     // signed path through an explicit capability rather than through the cached
     // env-backed resolver, so the gate's "nothing provisioned" branch is what
-    // this env describes.
-    OID4VP_VERIFIER_SIGNING_KEY: undefined as string | undefined,
-    OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined as string | undefined,
+    // this env describes. The key is not an env variable of this module at all
+    // (#546): the realm's key store holds it.
     OID4VP_VERIFIER_CERTIFICATE_CHAIN: [] as readonly string[],
     OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [] as readonly string[],
     OID4VP_VERIFIER_TRUST_ANCHORS: [] as readonly string[],
     OID4VP_VERIFIER_TRUST_ANCHORS_PATH: [] as readonly string[],
-    // The at-rest secret for the per-request decryption key (#377 Phase C).
-    // Unset is the default posture — the private half is stored in the clear —
-    // and it is what the encrypted-path tests below assert on.
+    // The at-rest secret of rows written before #546, read only to open them.
+    // A key minted now is sealed by the signer whatever this holds.
     OID4VP_RESPONSE_KEY_SECRET: undefined as string | undefined,
   },
 }));
 
 vi.mock('../../config/env', () => ({ env: envMock }));
 
-import { createMockVerifierPki } from '../../testing/mock-verifier-pki';
+import { createMockVerifierPki, type MockVerifierPki } from '../../testing/mock-verifier-pki';
 import { parseOid4vpRequestReference, verifyOid4vpRequestObject } from '../../testing/mock-wallet';
+import { dataAtRestKidOf, openOid4vpResponseKey } from './oid4vp-response-key';
 import {
   buildWalletLoginInvocation,
   buildWalletLoginReturnUri,
@@ -50,13 +52,54 @@ import {
   resolveWalletLoginCapability,
   WALLET_LOGIN_RETURN_PATH,
   type WalletLoginCapability,
+  walletLoginCapabilityInRealm,
+  type WalletLoginInvocation,
   walletLoginResponseUri,
 } from './wallet-login-request';
 
 /** The realm the browser's request was resolved to (#486). */
-const REALM = { issuer: 'https://auth.example.com' };
+const REALM = { issuer: 'https://auth.example.com', id: randomUUID() };
 /** Another realm of the same deployment, on its own issuer. */
-const REALM_B = { issuer: 'https://b.example.com' };
+const REALM_B = { issuer: 'https://b.example.com', id: randomUUID() };
+/** A realm whose key store holds no OID4VP request key (#546). */
+const REALM_KEYLESS = { issuer: 'https://c.example.com', id: randomUUID() };
+
+/**
+ * Each realm's verifier PKI: the store imported the leaf key of each as the
+ * realm's `oid4vp_request_signing` key (#546). Two realms never share a key.
+ */
+const PKI = createMockVerifierPki();
+const PKI_B = createMockVerifierPki({ name: 'b-verifier.example' });
+
+/** The signer every fake instance signs and seals through. */
+const TEST_SIGNER = createTestSigner();
+
+beforeAll(async () => {
+  await TEST_SIGNER.addRealm({ ...REALM, oid4vpRequestSigningKey: PKI.signingKeyPem });
+  await TEST_SIGNER.addRealm({ ...REALM_B, oid4vpRequestSigningKey: PKI_B.signingKeyPem });
+  await TEST_SIGNER.addRealm(REALM_KEYLESS);
+});
+
+type Signer = FastifyInstance['signer'];
+
+/** The response-key columns an invocation hands back for its row. */
+function storedOf(invocation: WalletLoginInvocation) {
+  const stored = invocation.responseEncryption;
+  if (stored === undefined) throw new Error('the invocation stored no response key');
+  return stored;
+}
+
+/** Open the response key an invocation stored, as the response endpoint does. */
+function openStored(invocation: WalletLoginInvocation, realm: { readonly id: string } = REALM) {
+  const stored = storedOf(invocation);
+  return openOid4vpResponseKey(TEST_SIGNER.signer, {
+    realmId: realm.id,
+    kid: stored.kid,
+    value: stored.privateJwk,
+    protection: null,
+    sealingKid: stored.sealingKid,
+  });
+}
 
 /**
  * The availability gate (#296 LOCKED: no permissive fallback) and the request it
@@ -78,6 +121,19 @@ function fakeFastify() {
 
   return {
     log: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    // Only the operations this module calls, each a spy over the real
+    // in-process signer (#546).
+    signer: {
+      signRequestObject: vi.fn<Signer['signRequestObject']>((caller, input) =>
+        TEST_SIGNER.signer.signRequestObject(caller, input)
+      ),
+      encrypt: vi.fn<Signer['encrypt']>((caller, input) =>
+        TEST_SIGNER.signer.encrypt(caller, input)
+      ),
+      getVerificationKeys: vi.fn<Signer['getVerificationKeys']>((caller, realmId, purpose) =>
+        TEST_SIGNER.signer.getVerificationKeys(caller, realmId, purpose)
+      ),
+    },
     sessionUtils: {
       setSession: vi.fn(async (key: string, value: unknown) => {
         store.set(key, value);
@@ -164,6 +220,18 @@ describe('resolveWalletLoginCapability', () => {
   });
 });
 
+describe('walletLoginCapabilityInRealm — an unsigned profile (#546)', () => {
+  it('passes the capability through without reading any key, in every realm', async () => {
+    const fastify = fakeFastify();
+    const capability = resolveWalletLoginCapability(fastify);
+
+    expect(capability?.profile.id).toBe('oid4vp-1.0-base');
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM_KEYLESS)).toBe(capability);
+    expect(await walletLoginCapabilityInRealm(fastify, undefined, REALM)).toBeUndefined();
+    expect(fastify.signer.getVerificationKeys).not.toHaveBeenCalled();
+  });
+});
+
 describe('buildWalletLoginInvocation — the unsigned base path', () => {
   it('builds a direct_post request and encodes it as an opaque invocation URI', async () => {
     const fastify = fakeFastify();
@@ -233,7 +301,6 @@ describe('buildWalletLoginInvocation — the unsigned base path', () => {
     const capability: WalletLoginCapability = {
       ...resolveWalletLoginCapability(fastify)!,
       signingMaterial: createVerifierSigningMaterial({
-        privateKeyPem: pki.signingKeyPem,
         certificateChainPems: blocks(pki.certificateChainPem),
         trustAnchorPems: blocks(pki.trustAnchorPem),
       }),
@@ -295,9 +362,10 @@ describe("buildWalletLoginInvocation — the request realm's issuer (ADR-019 Dec
 });
 
 describe('buildWalletLoginInvocation — the signed request_uri path (#377)', () => {
-  const pki = createMockVerifierPki();
+  const pki = PKI;
 
-  function signingCapability(): WalletLoginCapability {
+  /** The capability of a deployment whose chain is `of`'s. */
+  function signingCapability(of: MockVerifierPki = PKI): WalletLoginCapability {
     return {
       profile: HAIP_SIGNING_POSTURE,
       walletInvocationEndpoint: 'openid4vp://',
@@ -305,16 +373,15 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
         { id: 'qauth_wallet_login', format: 'dc+sd-jwt', typeValues: ['urn:example:pid'] },
       ],
       signingMaterial: createVerifierSigningMaterial({
-        privateKeyPem: pki.signingKeyPem,
-        certificateChainPems: blocks(pki.certificateChainPem),
-        trustAnchorPems: blocks(pki.trustAnchorPem),
+        certificateChainPems: blocks(of.certificateChainPem),
+        trustAnchorPems: blocks(of.trustAnchorPem),
       }),
     };
   }
 
   it("parks the request object under the request realm's issuer (#490)", async () => {
     const fastify = fakeFastify();
-    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(), REALM_B);
+    const invocation = await buildWalletLoginInvocation(fastify, signingCapability(PKI_B), REALM_B);
     const reference = parseOid4vpRequestReference(invocation.invocationUri);
 
     expect(reference.requestUri).toBe(
@@ -407,6 +474,90 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
       })
     ).rejects.toThrow(/does not terminate at the trust anchor/);
   });
+
+  it("signs through the signer, as web, with the request realm's key (#546)", async () => {
+    const fastify = fakeFastify();
+    await buildWalletLoginInvocation(fastify, signingCapability(), REALM);
+
+    const sign = vi.mocked(fastify.signer.signRequestObject);
+    expect(sign).toHaveBeenCalledTimes(1);
+    const [caller, input] = sign.mock.calls[0] as Parameters<Signer['signRequestObject']>;
+    expect(caller).toBe('web');
+    expect(input.realmId).toBe(REALM.id);
+    expect(input.certificateChain).toEqual([pki.leaf.x5c, pki.intermediate.x5c]);
+    // The signer sets `iss` from the claims' `client_id`; the caller cannot.
+    expect(input.claims).not.toHaveProperty('iss');
+  });
+
+  it('fails, and parks nothing, in a realm whose key store holds no request key', async () => {
+    const fastify = fakeFastify();
+
+    await expect(
+      buildWalletLoginInvocation(fastify, signingCapability(), REALM_KEYLESS)
+    ).rejects.toMatchObject({ code: 'SIGNER_KEY_NOT_FOUND' });
+    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+  });
+
+  it('offers a wallet login only in a realm whose store holds the key the chain names (#546)', async () => {
+    // The key boot step imports the verifier key into the default realm only,
+    // and two realms never share a key: another realm under a signing profile
+    // renders no wallet entry rather than one that always fails.
+    const fastify = fakeFastify();
+    const capability = signingCapability();
+
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM)).toBe(capability);
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM_KEYLESS)).toBeUndefined();
+    // REALM_B holds a key, but not the one this chain's leaf names.
+    expect(await walletLoginCapabilityInRealm(fastify, capability, REALM_B)).toBeUndefined();
+    expect(fastify.signer.getVerificationKeys).toHaveBeenCalledWith(
+      'web',
+      REALM_KEYLESS.id,
+      'oid4vp_request_signing'
+    );
+  });
+
+  it('does not count a retired request key', async () => {
+    // A signer of its own, which re-reads its store at every call, so the
+    // retirement below is what the gate sees.
+    const signer = createTestSigner({ refreshIntervalMs: 0 });
+    const realm = { issuer: 'https://retired.example.com', id: randomUUID() };
+    await signer.addRealm({ ...realm, oid4vpRequestSigningKey: PKI.signingKeyPem });
+    const fastify = fakeFastify();
+    vi.mocked(fastify.signer.getVerificationKeys).mockImplementation((caller, realmId, purpose) =>
+      signer.signer.getVerificationKeys(caller, realmId, purpose)
+    );
+    expect(await walletLoginCapabilityInRealm(fastify, signingCapability(), realm)).toBeDefined();
+
+    const [key] = await signer.signer.getVerificationKeys(
+      'web',
+      realm.id,
+      'oid4vp_request_signing'
+    );
+    if (key === undefined) throw new Error('the realm holds no request key');
+    signer.setKeyStatus(realm.id, key.kid, 'retired');
+
+    expect(await walletLoginCapabilityInRealm(fastify, signingCapability(), realm)).toBeUndefined();
+  });
+
+  it('answers undefined, logged, when the key list cannot be read', async () => {
+    const fastify = fakeFastify();
+    vi.mocked(fastify.signer.getVerificationKeys).mockRejectedValueOnce(new Error('unreachable'));
+
+    expect(await walletLoginCapabilityInRealm(fastify, signingCapability(), REALM)).toBeUndefined();
+    expect(fastify.log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ realmId: REALM.id }),
+      expect.stringContaining('could not be read')
+    );
+  });
+
+  it("fails, and parks nothing, when the chain's leaf names another key than the realm's", async () => {
+    const fastify = fakeFastify();
+
+    await expect(
+      buildWalletLoginInvocation(fastify, signingCapability(PKI_B), REALM)
+    ).rejects.toMatchObject({ reason: 'CERTIFICATE_KEY_MISMATCH' });
+    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -420,7 +571,7 @@ describe('buildWalletLoginInvocation — the signed request_uri path (#377)', ()
  * that can never complete.
  */
 describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#377 Phase C)', () => {
-  const pki = createMockVerifierPki();
+  const pki = PKI;
 
   function haipCapability(): WalletLoginCapability {
     return {
@@ -430,7 +581,6 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
         { id: 'qauth_wallet_login', format: 'dc+sd-jwt', typeValues: ['urn:example:pid'] },
       ],
       signingMaterial: createVerifierSigningMaterial({
-        privateKeyPem: pki.signingKeyPem,
         certificateChainPems: blocks(pki.certificateChainPem),
         trustAnchorPems: blocks(pki.trustAnchorPem),
       }),
@@ -459,21 +609,47 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
     // the wallet will echo in the JWE header and the intake will look up by.
     expect(invocation.responseEncryption).toBeDefined();
     expect(invocation.responseEncryption?.kid).toBe(keys[0]?.kid);
-    expect(invocation.responseEncryption?.protection).toBe('plain');
+    expect(invocation.responseEncryption?.sealingKid).toBe(
+      dataAtRestKidOf(invocation.responseEncryption?.privateJwk as string)
+    );
     expect(invocation.request.client_metadata.encrypted_response_enc_values_supported).toContain(
       'A128GCM'
     );
   });
 
-  it('stores the private half in the clear by default, as a JWK document', async () => {
-    // The default posture: no `OID4VP_RESPONSE_KEY_SECRET` in this env, so the
-    // column holds the JWK itself, `d` included, under the `plain` marker.
-    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
-    const stored = JSON.parse(invocation.responseEncryption?.privateJwk as string) as JWK;
+  it("stores the private half sealed by the signer with the realm's key, never in the clear (#546)", async () => {
+    const fastify = fakeFastify();
+    const invocation = await buildWalletLoginInvocation(fastify, haipCapability(), REALM);
+    const stored = storedOf(invocation);
 
-    expect(stored.kty).toBe('EC');
-    expect(typeof stored.d).toBe('string');
-    expect(stored.kid).toBe(invocation.responseEncryption?.kid);
+    expect(stored.privateJwk.startsWith(`v1.${stored.sealingKid}.`)).toBe(true);
+    expect(stored.privateJwk).not.toContain('"d"');
+    expect(() => JSON.parse(stored.privateJwk) as unknown).toThrow();
+    expect(fastify.signer.encrypt).toHaveBeenCalledWith(
+      'web',
+      expect.objectContaining({ realmId: REALM.id, context: `oid4vp-response-key:${stored.kid}` })
+    );
+
+    const opened = await openStored(invocation);
+    expect(opened.kty).toBe('EC');
+    expect(typeof opened.d).toBe('string');
+    expect(opened.kid).toBe(stored.kid);
+  });
+
+  it("does not open in another realm, nor as another row's key (#546)", async () => {
+    const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
+    const stored = storedOf(invocation);
+
+    await expect(openStored(invocation, REALM_B)).rejects.toThrow();
+    await expect(
+      openOid4vpResponseKey(TEST_SIGNER.signer, {
+        realmId: REALM.id,
+        kid: 'another-row',
+        value: stored.privateJwk,
+        protection: null,
+        sealingKid: stored.sealingKid,
+      })
+    ).rejects.toMatchObject({ code: 'DATA_DECRYPTION_FAILED' });
   });
 
   it('hands back a private half that opens a JWE encrypted to the published public half', async () => {
@@ -482,7 +658,7 @@ describe('buildWalletLoginInvocation — the encrypted direct_post.jwt path (#37
     // crypto layer's own pinned decrypt.
     const invocation = await buildWalletLoginInvocation(fakeFastify(), haipCapability(), REALM);
     const published = invocation.request.client_metadata.jwks?.keys[0] as JWK;
-    const stored = JSON.parse(invocation.responseEncryption?.privateJwk as string) as JWK;
+    const stored = await openStored(invocation);
 
     const jwe = await new CompactEncrypt(
       new TextEncoder().encode(JSON.stringify({ state: invocation.request.state, vp_token: {} }))

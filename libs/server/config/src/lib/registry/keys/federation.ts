@@ -179,7 +179,7 @@ export const FEDERATION_KEYS = defineKeys([
     default: null,
     since: '0.1.0',
     secret: true,
-    docs: "The verifier's ES256 private key, PKCS#8 PEM, that signs authorization requests for a profile that requires signed requests.",
+    docs: "The verifier's ES256 private key, PEM, imported into the default realm's key store as its OID4VP request key when the store lacks it, where it replaces the active one; request objects are signed with the stored key, which the certificate chain must name; only a process that holds the `signer` role may have it.",
   },
   {
     name: 'OID4VP_VERIFIER_SIGNING_KEY_PATH',
@@ -188,7 +188,7 @@ export const FEDERATION_KEYS = defineKeys([
     owner: 'key-custody',
     default: null,
     since: '0.1.0',
-    docs: 'A file holding the verifier signing key; it takes precedence over `OID4VP_VERIFIER_SIGNING_KEY`.',
+    docs: 'A file holding the verifier signing key, imported as `OID4VP_VERIFIER_SIGNING_KEY` is; it takes precedence over it.',
   },
   {
     name: 'OID4VP_VERIFIER_CERTIFICATE_CHAIN',
@@ -234,6 +234,6 @@ export const FEDERATION_KEYS = defineKeys([
     default: null,
     since: '0.1.0',
     secret: true,
-    docs: 'A 32-byte key, base64 or base64url, that encrypts the stored per-request response decryption keys at rest; unset, they are stored in the clear.',
+    docs: "A 32-byte key, base64 or base64url, read only to open the per-request response decryption keys a release before 0.2 stored with it, at most 15 minutes old; new keys are sealed with the realm's `data_at_rest` key; remove it once every node runs this release.",
   },
 ]);

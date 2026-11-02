@@ -6,6 +6,7 @@ import {
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
+  OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
   REALM_MAIL_SECRET_CONTEXT_PREFIX,
   SIGNER_CALLERS,
   SIGNER_POLICY,
@@ -40,6 +41,7 @@ describe('SIGNER_POLICY', () => {
         'signHybrid',
         'signWebhook',
         'signClientAssertion',
+        'signRequestObject',
         'getCookieSecrets',
         'encrypt',
         'decrypt',
@@ -47,7 +49,13 @@ describe('SIGNER_POLICY', () => {
         'getJwks',
         'getUpstreamJwks',
       ],
-      web: ['getCookieSecrets', 'getVerificationKeys', 'getJwks', 'getUpstreamJwks'],
+      web: [
+        'signRequestObject',
+        'getCookieSecrets',
+        'getVerificationKeys',
+        'getJwks',
+        'getUpstreamJwks',
+      ],
       api: [
         'signJws:token_signing',
         'signHybrid',
@@ -84,8 +92,44 @@ describe('SIGNER_POLICY', () => {
     );
   });
 
-  it('never lets web sign', () => {
-    expect(grantsOf('web').filter((grant) => grant.startsWith('sign'))).toEqual([]);
+  it('lets web sign request objects and nothing else (#546)', () => {
+    expect(grantsOf('web').filter((grant) => grant.startsWith('sign'))).toEqual([
+      'signRequestObject',
+    ]);
+    expect(
+      SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'signRequestObject'))
+    ).toEqual(['local', 'web']);
+  });
+
+  it('lets web encrypt only an OID4VP response key, and api decrypt it (#546)', () => {
+    // Pinned as a string: the auth server builds its contexts from it, and the
+    // rows it seals name it.
+    expect(OID4VP_RESPONSE_KEY_CONTEXT_PREFIX).toBe('oid4vp-response-key:');
+    expect(SIGNER_POLICY.web.encrypt).toEqual([OID4VP_RESPONSE_KEY_CONTEXT_PREFIX]);
+    expect(SIGNER_POLICY.web.decrypt).toBe(false);
+    const context = 'oid4vp-response-key:ephemeral-kid';
+    expect(isSignerCallAllowed('web', 'encrypt', context)).toBe(true);
+    expect(isSignerCallAllowed('api', 'decrypt', context)).toBe(true);
+    expect(isSignerCallAllowed('web', 'decrypt', context)).toBe(false);
+    for (const other of [
+      undefined,
+      '',
+      'oid4vp-response-keyx',
+      'Oid4vp-response-key:x',
+      'realm_secrets:mail.smtp.password',
+      'delivery:ssf_streams.x:1',
+      'upstream-oidc:client-secret:realm-1:oidc_corp',
+      'auth-method-plugin:corp:clientSecret',
+    ]) {
+      expect(isSignerCallAllowed('web', 'encrypt', other), String(other)).toBe(false);
+    }
+    for (const caller of ['delivery', 'admin'] as const) {
+      expect(isSignerCallAllowed(caller, 'decrypt', context), caller).toBe(false);
+      expect(isSignerCallAllowed(caller, 'encrypt', context), caller).toBe(false);
+    }
+    // A grant of `true` takes any context, or none.
+    expect(isSignerCallAllowed('api', 'encrypt')).toBe(true);
+    expect(isSignerCallAllowed('api', 'encrypt', context)).toBe(true);
   });
 
   it('lets delivery decrypt only a delivery destination secret, and never encrypt', () => {
@@ -103,13 +147,14 @@ describe('SIGNER_POLICY', () => {
     // A grant of `true` takes any context, or none.
     expect(isSignerCallAllowed('local', 'decrypt')).toBe(true);
     expect(isSignerCallAllowed('local', 'decrypt', 'anything')).toBe(true);
+    // Without a context, only a grant of `true` encrypts; web's is a list.
     expect(SIGNER_CALLERS.filter((caller) => isSignerCallAllowed(caller, 'encrypt'))).toEqual([
       'local',
       'api',
     ]);
   });
 
-  it("lets api decrypt only a realm's mail secret, an upstream client secret and a plugin secret (#529, #601, #600)", () => {
+  it("lets api decrypt only a realm's mail secret, an upstream client secret, a plugin secret and an OID4VP response key (#529, #601, #600, #546)", () => {
     // Pinned as strings: server-realm-policy makes the mail contexts without
     // importing this library, and a changed prefix must fail here.
     expect(REALM_MAIL_SECRET_CONTEXT_PREFIX).toBe('realm_secrets:mail.');
@@ -119,6 +164,7 @@ describe('SIGNER_POLICY', () => {
       REALM_MAIL_SECRET_CONTEXT_PREFIX,
       UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
       AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+      OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
     ]);
     // The contexts `realmSecretContext` of server-realm-policy,
     // `upstreamClientSecretContext` of server-upstream-oidc and
@@ -187,6 +233,7 @@ describe('SIGNER_POLICY', () => {
     for (const grant of Object.values(SIGNER_POLICY)) {
       expect(Object.isFrozen(grant)).toBe(true);
       expect(Object.isFrozen(grant.signJws)).toBe(true);
+      if (Array.isArray(grant.encrypt)) expect(Object.isFrozen(grant.encrypt)).toBe(true);
       if (Array.isArray(grant.decrypt)) expect(Object.isFrozen(grant.decrypt)).toBe(true);
     }
   });

@@ -7,7 +7,7 @@ import type { RealmJwks, Signer, VerificationKey } from './signer';
 import { SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
 import type { PublicKeyRecord, SignerKeyStore } from './signer-key-store';
 import { isSignerCallAllowed, isSignerCaller } from './signer-policy';
-import { isJwsSigningPurpose, REALM_JWKS_PURPOSES } from './signer-typ';
+import { isVerificationKeyPurpose, REALM_JWKS_PURPOSES } from './signer-typ';
 
 /**
  * A realm's published keys (`realm_public_keys`), read without a KEK
@@ -232,7 +232,7 @@ export function createPublishedKeyReader(
 
   return Object.freeze({
     async getVerificationKeys(caller, realmIdInput, purpose) {
-      if (!isJwsSigningPurpose(purpose)) {
+      if (!isVerificationKeyPurpose(purpose)) {
         throw new SignerRequestRefusedError(
           'PURPOSE_NOT_ALLOWED',
           `${describePurpose(purpose)} has no verification keys`

@@ -36,8 +36,14 @@ export interface SignerGrant {
   readonly signHybrid: boolean;
   readonly signWebhook: boolean;
   readonly signClientAssertion: boolean;
+  readonly signRequestObject: boolean;
   readonly getCookieSecrets: boolean;
-  readonly encrypt: boolean;
+  /**
+   * `true`: with any `context`. A list: only with a `context` that starts with
+   * one of these prefixes, so a role that stores one kind of secret cannot
+   * make ciphertexts for the others.
+   */
+  readonly encrypt: boolean | readonly string[];
   /**
    * `true`: any `data_at_rest` ciphertext. A list: only ciphertexts whose
    * `context` starts with one of these prefixes, so a role that needs one kind
@@ -90,11 +96,24 @@ export const UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX = 'upstream-oidc:client-secre
  */
 export const AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX = 'auth-method-plugin:';
 
+/**
+ * The `context` prefix of an OID4VP request state's ephemeral response key
+ * (`oid4vp-response-key:<kid>`, #546): the private half of the per-request
+ * ECDH-ES pair a wallet encrypts its response to (HAIP 1.0 §5), sealed with
+ * the realm's `data_at_rest` key in `oid4vp_request_states`. The `web` role,
+ * which serves the wallet sign-in pages and mints the pair, may encrypt only
+ * with this prefix; the `api` role, which serves `/oid4vp/response` and opens
+ * the key, may decrypt it. The auth server builds its contexts from this
+ * constant.
+ */
+export const OID4VP_RESPONSE_KEY_CONTEXT_PREFIX = 'oid4vp-response-key:';
+
 const NOTHING_ELSE = {
   signJws: [],
   signHybrid: false,
   signWebhook: false,
   signClientAssertion: false,
+  signRequestObject: false,
   getCookieSecrets: false,
   encrypt: false,
   decrypt: false,
@@ -104,18 +123,25 @@ const NOTHING_ELSE = {
  * The policy table: what each role may call.
  *
  * - `web` gets the cookie HMAC secrets, the one secret ADR-019 Decision 9 hands
- *   to a role outside the signer. It never signs a token.
+ *   to a role outside the signer. It never signs a token. It serves the wallet
+ *   sign-in pages, so it signs OID4VP request objects with the
+ *   `oid4vp_request_signing` key and seals each request's ephemeral response
+ *   key with the `data_at_rest` key (#546): it may encrypt only with an
+ *   {@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX} context, and decrypts nothing.
  * - `api` signs access and ID tokens (`token_signing`, hybrid included), signs
  *   client assertions toward upstream providers (#547), and encrypts with the
- *   `data_at_rest` key. It decrypts only three kinds of stored secret: a
+ *   `data_at_rest` key. It decrypts only four kinds of stored secret: a
  *   realm's mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}),
  *   which its mail sender sends with (#529); an upstream provider's client
  *   secret ({@link UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX}), which the code
  *   exchange with that provider sends (#601); and an AuthMethod plugin's
  *   secret member ({@link AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX}), which
- *   the plugin's context is built with (#600). Nothing else of the role
- *   decrypts. No granted prefix is the start of another role's, so no grant
- *   reaches another role's secrets.
+ *   the plugin's context is built with (#600); and an OID4VP request state's
+ *   ephemeral response key ({@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX}), which
+ *   `/oid4vp/response` decrypts the wallet's response with (#546). Nothing
+ *   else of the role decrypts, and it signs no request object: the request is
+ *   signed when the `web` role builds it. No granted prefix is the start of
+ *   another role's, so no grant reaches another role's secrets.
  * - `delivery` signs Security Event Tokens and logout tokens
  *   (`event_signing`) and webhook messages (#547). It holds no secret: it
  *   sends the message to the signer and gets the signature header back. It
@@ -135,12 +161,19 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
     signHybrid: true,
     signWebhook: true,
     signClientAssertion: true,
+    signRequestObject: true,
     getCookieSecrets: true,
     encrypt: true,
     decrypt: true,
     ...PUBLIC_READS,
   },
-  web: { ...NOTHING_ELSE, getCookieSecrets: true, ...PUBLIC_READS },
+  web: {
+    ...NOTHING_ELSE,
+    signRequestObject: true,
+    getCookieSecrets: true,
+    encrypt: [OID4VP_RESPONSE_KEY_CONTEXT_PREFIX],
+    ...PUBLIC_READS,
+  },
   api: {
     ...NOTHING_ELSE,
     signJws: ['token_signing'],
@@ -151,6 +184,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
       REALM_MAIL_SECRET_CONTEXT_PREFIX,
       UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
       AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
+      OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
     ],
     ...PUBLIC_READS,
   },
@@ -169,6 +203,7 @@ function freezePolicy(
 ): Readonly<Record<SignerCaller, SignerGrant>> {
   for (const grant of Object.values(policy)) {
     Object.freeze(grant.signJws);
+    if (Array.isArray(grant.encrypt)) Object.freeze(grant.encrypt);
     if (Array.isArray(grant.decrypt)) Object.freeze(grant.decrypt);
     Object.freeze(grant);
   }
@@ -183,10 +218,10 @@ export function isSignerCaller(value: unknown): value is SignerCaller {
 /**
  * Whether `caller` may call `operation`. For `signJws`, `detail` names the
  * purpose to sign with, and the call is allowed only when the role's grant
- * lists it. For `decrypt`, `detail` is the ciphertext's `context`: a role
- * whose grant is a list of prefixes may decrypt only a context that starts
- * with one of them, and is refused when none is given. An unknown role,
- * operation or purpose is never allowed.
+ * lists it. For `encrypt` and `decrypt`, `detail` is the ciphertext's
+ * `context`: a role whose grant is a list of prefixes may encrypt or decrypt
+ * only with a context that starts with one of them, and is refused when none
+ * is given. An unknown role, operation or purpose is never allowed.
  */
 export function isSignerCallAllowed(
   caller: unknown,
@@ -199,11 +234,13 @@ export function isSignerCallAllowed(
   if (operation === 'signJws') {
     return detail !== undefined && (grant.signJws as readonly string[]).includes(detail);
   }
-  if (operation === 'decrypt' && Array.isArray(grant.decrypt)) {
+  if (operation === 'encrypt' || operation === 'decrypt') {
+    const allowed = grant[operation];
+    if (!Array.isArray(allowed)) return allowed === true;
     const context = detail;
     return (
       context !== undefined &&
-      (grant.decrypt as readonly string[]).some((prefix) => context.startsWith(prefix))
+      (allowed as readonly string[]).some((prefix) => context.startsWith(prefix))
     );
   }
   return grant[operation] === true;

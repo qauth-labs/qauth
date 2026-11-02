@@ -183,9 +183,17 @@ button that fails:
   is never a fallback to the more capable profile (#296, LOCKED).
 - The profile mandates SIGNED requests and the deployment provisioned no verifier
   signing material. Signing itself is built (#377): a deployment that configures
-  `OID4VP_VERIFIER_SIGNING_KEY` and its chain signs an `x509_hash`-identified
-  request and delivers it by `request_uri`. What is refused is the profile
-  mandating it with nothing to sign with.
+  the verifier's certificate chain, and holds the ES256 key the chain names in
+  its key store, signs an `x509_hash`-identified request through the signer and
+  delivers it by `request_uri`. Set `OID4VP_VERIFIER_SIGNING_KEY` for one boot
+  of a process with the signer role and it is imported into the default
+  realm's store (#546); the boot stops when the chain names no stored key.
+  What is refused is the profile mandating signing with nothing to sign with.
+- The profile signs its requests and the request's realm holds no active
+  `oid4vp_request_signing` key the chain names. Keys are kept per realm, and
+  the import lands in the default realm only, so under `haip-1.0` another
+  realm's sign-in page offers no wallet login (#546). The unsigned
+  `oid4vp-1.0-base` profile reads no key and is offered in every realm.
 - The profile's response posture contradicts its permitted modes — a table
   entry requiring encryption while listing only plain `direct_post`, say. An
   encrypted response itself is never a reason: `direct_post.jwt` is built (#377
@@ -193,9 +201,10 @@ button that fails:
   request, published in `client_metadata.jwks`, and the private half rides the
   request-state row until the wallet's JWE arrives — and no longer: the same
   statement that consumes the row erases the key, so a consumed row can never
-  decrypt its response again. `OID4VP_RESPONSE_KEY_SECRET` optionally wraps
-  that stored key in AES-256-GCM while the row is live; unset, it is stored in
-  the clear beside the `nonce` that already is.
+  decrypt its response again. While the row is live the stored key is sealed
+  by the signer with the realm's `data_at_rest` key, bound to the row's `kid`
+  (#546), so it opens only through the signer. `OID4VP_RESPONSE_KEY_SECRET`
+  is read only to open rows a release before 0.2 wrote with it.
 - The profile does not permit `dc+sd-jwt`, the one credential format QAuth ships
   an adapter for.
 - `OID4VP_REQUESTED_VCT` is unset. A DCQL query with no type constraint asks a
@@ -210,10 +219,10 @@ button that fails:
 | `OID4VP_VERIFIER_PROFILE`           | _(none)_       | `oid4vp-1.0-base`, or `haip-1.0` once fully provisioned (#377)    |
 | `OID4VP_REQUESTED_VCT`              | _(none)_       | Comma-separated `vct` values; **no wallet flow without it**       |
 | `OID4VP_WALLET_INVOCATION_ENDPOINT` | `openid4vp://` | The wallet Authorization Endpoint the QR and deep link target     |
-| `OID4VP_VERIFIER_SIGNING_KEY`       | _(none)_       | ES256 key the Verifier signs a request object with (#377)         |
+| `OID4VP_VERIFIER_SIGNING_KEY`       | _(none)_       | ES256 request key, imported once into the key store (#546)        |
 | `OID4VP_VERIFIER_CERTIFICATE_CHAIN` | _(none)_       | `x5c` chain, leaf first, **anchor excluded** (#377)               |
 | `OID4VP_VERIFIER_TRUST_ANCHORS`     | _(none)_       | Anchors QAuth's OWN chain must terminate at (#377)                |
-| `OID4VP_RESPONSE_KEY_SECRET`        | _(none)_       | Opt-in AES-256-GCM wrap of the per-request decryption key (#377)  |
+| `OID4VP_RESPONSE_KEY_SECRET`        | _(none)_       | Opens response keys stored before 0.2 only; remove after (#546)   |
 | `OID4VP_TRUSTED_ISSUERS`            | _(empty)_      | Per-realm issuer allowlist (#236) — the opposite trust direction  |
 | `OID4VP_ISSUER_JWKS`                | _(empty)_      | Issuer public JWKs (#234) — **nothing verifies without it**       |
 | `OID4VP_SUBJECT_RESOLUTION`         | _(profile)_    | Account-resolution strategy (#300); defaults to `asserted-lookup` |

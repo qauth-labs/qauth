@@ -1,37 +1,51 @@
 import {
   createVerifierSigningMaterial,
   type ProvisionedVerifierMaterial,
+  verifierKeyMatchesLeaf,
   verifierMaterialProvisionedBy,
   type VerifierSigningMaterial,
 } from '@qauth-labs/fastify-plugin-federation';
 import {
   resolveVerifierCertificateChainPems,
-  resolveVerifierSigningKeyPem,
   resolveVerifierTrustAnchorPems,
   type VerifierSigningEnvLike,
 } from '@qauth-labs/server-config';
 import { InvalidConfigurationError } from '@qauth-labs/shared-errors';
+import type { FastifyInstance } from 'fastify';
 
 import { env } from '../../config/env';
 
+/** One published key, as the signer's `getVerificationKeys` lists it. */
+type VerificationKey = Awaited<
+  ReturnType<FastifyInstance['signer']['getVerificationKeys']>
+>[number];
+
 /**
  * The deployment's OID4VP VERIFIER identity, resolved from configuration
- * (issue #377, Phase A).
+ * (issue #377, Phase A; #546).
  *
- * Three variables and one answer. `OID4VP_VERIFIER_SIGNING_KEY`, its certificate
- * chain and its trust anchors are separate settings an operator can get
- * independently wrong, and this is the one place they are reconciled into
- * either "a validated identity" or "none" — with every partial state in
- * between refused rather than silently treated as one of the two.
+ * Two variables and one answer. The certificate chain and its trust anchors
+ * are public configuration an operator can get independently wrong, and this
+ * is the one place they are reconciled into either "a validated identity" or
+ * "none" — with every partial state in between refused rather than silently
+ * treated as one of the two.
+ *
+ * The ES256 key the chain names is not read here (#546). The key boot step
+ * imports `OID4VP_VERIFIER_SIGNING_KEY` into the default realm's key store as
+ * its `oid4vp_request_signing` key, and only the signer signs with it. At
+ * boot, {@link assertStoredVerifierKeyMatchesChain} checks the stored key
+ * against the chain's leaf from the published key alone, so a process that
+ * holds no private key checks it too.
  *
  * ## Why partial configuration is a REFUSAL, not "no identity"
  *
- * A key with no chain, or a chain with no anchor, is an operator who INTENDED to
- * provision a verifier identity and did not finish. Reading that as "nothing is
- * configured" would take the deployment down the unsigned path — which under a
- * profile that permits it would work, quietly, with a weaker verifier identity
- * than the operator believed they had configured. That is the half-configured
- * verifier #299 forbids, so it fails the boot instead.
+ * A chain with no anchor, or anchors with no chain, is an operator who
+ * INTENDED to provision a verifier identity and did not finish. Reading that as
+ * "nothing is configured" would take the deployment down the unsigned path —
+ * which under a profile that permits it would work, quietly, with a weaker
+ * verifier identity than the operator believed they had configured. That is the
+ * half-configured verifier #299 forbids, so it fails the boot instead. So does
+ * a chain no stored key matches.
  *
  * Unset EVERYTHING, on the other hand, is a real and common answer: it is the
  * default posture of every deployment that runs `oid4vp-1.0-base` or no wallet
@@ -50,6 +64,12 @@ import { env } from '../../config/env';
 /** Nothing resolved yet. Distinguished from "resolved to `undefined`". */
 let resolved: { readonly material: VerifierSigningMaterial | undefined } | undefined;
 
+/** The public verifier variables: the chain and its anchors, never the key. */
+export type VerifierCertificateEnvLike = Omit<
+  VerifierSigningEnvLike,
+  'OID4VP_VERIFIER_SIGNING_KEY' | 'OID4VP_VERIFIER_SIGNING_KEY_PATH'
+>;
+
 /**
  * Resolve the verifier signing material from parsed federation configuration.
  *
@@ -57,42 +77,62 @@ let resolved: { readonly material: VerifierSigningMaterial | undefined } | undef
  * rules are provable in a unit test that does not need a whole environment —
  * the same property `deriveCryptoCapabilities` is built around.
  *
- * @param federationEnv - the parsed `OID4VP_VERIFIER_*` variables.
+ * @param federationEnv - the parsed chain and anchor variables. The key
+ * variable is not among them: only the signer's key boot step reads it (#546).
  * @returns the validated material, or `undefined` when the deployment
  * provisioned no verifier identity at all.
  * @throws InvalidConfigurationError when the configuration is PARTIAL, or when
  * the chain does not validate against the configured anchors.
  */
 export function resolveConfiguredVerifierSigningMaterial(
-  federationEnv: VerifierSigningEnvLike
+  federationEnv: VerifierCertificateEnvLike
 ): VerifierSigningMaterial | undefined {
-  const privateKeyPem = resolveVerifierSigningKeyPem(federationEnv);
   const certificateChainPems = resolveVerifierCertificateChainPems(federationEnv);
   const trustAnchorPems = resolveVerifierTrustAnchorPems(federationEnv);
 
-  const configuredNothing =
-    privateKeyPem === undefined &&
-    certificateChainPems.length === 0 &&
-    trustAnchorPems.length === 0;
+  if (certificateChainPems.length === 0 && trustAnchorPems.length === 0) return undefined;
 
-  if (configuredNothing) return undefined;
+  // Every remaining rule — chain present, anchors present, chain anchored —
+  // belongs to `createVerifierSigningMaterial`, which is where the X.509
+  // questions are already answered for the two OTHER trust directions.
+  // Restating any of them here would be a second rule set on a drift course
+  // with the first.
+  return createVerifierSigningMaterial({ certificateChainPems, trustAnchorPems });
+}
 
-  if (privateKeyPem === undefined) {
+/**
+ * Refuse the boot when the configured chain names no active request key the
+ * default realm's key store holds (#546).
+ *
+ * The signer refuses, at every signature, a chain whose leaf does not hold its
+ * key; this makes the same mistake a boot refusal, where an operator can act on
+ * it, instead of every wallet sign-in failing with the uniform refusal.
+ *
+ * @param material - the validated chain, or `undefined` when none is configured
+ * @param keys - the default realm's `oid4vp_request_signing` verification keys
+ * @returns the algorithms of the active request keys, for the capability
+ * descriptor; empty when the chain is not configured
+ * @throws InvalidConfigurationError when a chain is configured and no active
+ * stored key is the one its leaf names
+ */
+export function assertStoredVerifierKeyMatchesChain(
+  material: VerifierSigningMaterial | undefined,
+  keys: readonly VerificationKey[]
+): readonly string[] {
+  if (material === undefined) return [];
+  const active = keys.filter((key) => key.status === 'active');
+  const matching = active.filter((key) =>
+    verifierKeyMatchesLeaf(material, key.publicJwk as Readonly<Record<string, unknown>>)
+  );
+  if (matching.length === 0) {
     throw new InvalidConfigurationError(
-      'OID4VP verifier certificate material is configured but OID4VP_VERIFIER_SIGNING_KEY (or its _PATH form) is not (#377). A chain identifies a key; without the key there is nothing to sign an Authorization Request with. Configure the key, or unset the certificate variables to run the unsigned path deliberately.'
+      active.length === 0
+        ? "An OID4VP verifier certificate chain is configured, but the default realm's key store holds no OID4VP request key (#546). Set OID4VP_VERIFIER_SIGNING_KEY (or its _PATH form) to the leaf's ES256 private key for one boot of a process with the signer role, which imports it, or unset the certificate variables to run the unsigned path deliberately."
+        : "The OID4VP verifier certificate chain's leaf does not name the default realm's active OID4VP request key (#546). Every request object would carry an x5c its signature does not verify under. Set OID4VP_VERIFIER_SIGNING_KEY (or its _PATH form) to the leaf's private key for one boot of a process with the signer role, which replaces the stored key, or configure the chain of the stored key.",
+      { activeKids: active.map((key) => key.kid) }
     );
   }
-
-  // Every remaining rule — chain present, anchors present, chain anchored, key
-  // belongs to the leaf — belongs to `createVerifierSigningMaterial`, which is
-  // where the X.509 questions are already answered for the two OTHER trust
-  // directions. Restating any of them here would be a second rule set on a drift
-  // course with the first.
-  return createVerifierSigningMaterial({
-    privateKeyPem,
-    certificateChainPems,
-    trustAnchorPems,
-  });
+  return [...new Set(matching.map((key) => key.algorithm))];
 }
 
 /**

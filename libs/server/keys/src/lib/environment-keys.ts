@@ -32,6 +32,11 @@ import { jwkThumbprintKid, RANDOM_KID_BYTES } from './key-generation';
  * - `SESSION_COOKIE_SECRET` becomes a `cookie_hmac` key. Its bytes are the
  *   secret's UTF-8 bytes, so an HMAC under the stored key equals one under the
  *   variable.
+ * - `OID4VP_VERIFIER_SIGNING_KEY` becomes the ES256 `oid4vp_request_signing`
+ *   key, the OID4VP verifier's request-object key (#546). It must be an EC
+ *   P-256 key, as PKCS#8 or SEC1 PEM (`openssl ecparam -genkey` writes SEC1);
+ *   either is stored as PKCS#8. Its certificate chain stays public
+ *   configuration and is not imported.
  *
  * The `kid` of a signing key is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set,
  * and otherwise the RFC 7638 thumbprint of its public key, as for a generated
@@ -79,12 +84,16 @@ export interface EnvironmentKeySettings {
   };
   /** `SESSION_COOKIE_SECRET`, when the operator set it. */
   readonly cookieSecret?: EnvironmentKeySource;
+  /** `OID4VP_VERIFIER_SIGNING_KEY`, the OID4VP verifier's ES256 key. PEM. */
+  readonly oid4vpRequestSigning?: {
+    readonly privateKey: EnvironmentKeySource;
+  };
 }
 
 /** A configured key, ready to be sealed and stored. */
 export interface EnvironmentKey {
-  readonly purpose: 'token_signing' | 'cookie_hmac';
-  readonly algorithm: 'EdDSA' | 'RS256' | 'ML-DSA-65' | 'HS256';
+  readonly purpose: 'token_signing' | 'cookie_hmac' | 'oid4vp_request_signing';
+  readonly algorithm: 'EdDSA' | 'RS256' | 'ML-DSA-65' | 'HS256' | 'ES256';
   /** The configured `kid`, the thumbprint, or a random id for the cookie secret. */
   readonly kid: string;
   /** The RFC 7638 thumbprint of the public key; `null` for the cookie secret. */
@@ -113,7 +122,8 @@ export interface PrepareEnvironmentKeysOptions {
  * caller; when this function throws, it has zeroed what it had read.
  *
  * @throws InvalidConfigurationError when a value is not a key of its kind, an
- *   RSA key is shorter than {@link MIN_RSA_MODULUS_BITS}, a configured public
+ *   RSA key is shorter than {@link MIN_RSA_MODULUS_BITS}, the OID4VP verifier
+ *   key is not an EC P-256 key, a configured public
  *   key is not the private key's public half, or a configured `kid` is empty
  *   or longer than 255 characters. The message names the variables, never a
  *   value.
@@ -135,6 +145,9 @@ export async function prepareEnvironmentKeys(
     }
     if (settings.cookieSecret !== undefined) {
       keys.push(prepareCookieSecret(settings.cookieSecret));
+    }
+    if (settings.oid4vpRequestSigning !== undefined) {
+      keys.push(await prepareVerifierKey(settings.oid4vpRequestSigning.privateKey));
     }
     return keys;
   } catch (error) {
@@ -209,6 +222,49 @@ async function preparePemKey(
     publicJwk: { ...jwk, alg: algorithm, use: 'sig', kid },
     material: Buffer.from(privateKey.export({ type: 'pkcs8', format: 'der' })),
     variables: variablesOf(source.privateKey, source.publicKey, source.kid),
+  });
+}
+
+/** The curve HAIP 1.0 §7 requires of the verifier's ES256 key, as `node:crypto` names it. */
+const VERIFIER_KEY_CURVE = 'prime256v1';
+
+/**
+ * The OID4VP verifier's ES256 key (#546). SEC1 and PKCS#8 PEM both parse here
+ * and are stored as PKCS#8 DER, the form the signer imports. Its `kid` is the
+ * thumbprint: a request object names its key through `x5c`, not `kid`.
+ */
+async function prepareVerifierKey(source: EnvironmentKeySource): Promise<EnvironmentKey> {
+  const name = describeSource(source, 'the OID4VP verifier signing key');
+  const details = { variables: source.variables };
+  let privateKey: KeyObject;
+  try {
+    privateKey = createPrivateKey(source.value);
+  } catch {
+    // The parser's message is dropped: it may quote the value.
+    throw new InvalidConfigurationError(
+      `${name} does not hold a private key in PEM form. It must hold an EC P-256 private key as PKCS#8 ("-----BEGIN PRIVATE KEY-----") or SEC1 ("-----BEGIN EC PRIVATE KEY-----") PEM.`,
+      details
+    );
+  }
+  if (
+    privateKey.asymmetricKeyType !== 'ec' ||
+    privateKey.asymmetricKeyDetails?.namedCurve !== VERIFIER_KEY_CURVE
+  ) {
+    throw new InvalidConfigurationError(
+      `${name} must hold an EC P-256 (prime256v1) private key: ES256 is the algorithm HAIP 1.0 §7 requires of an OID4VP request object.`,
+      { ...details, keyType: privateKey.asymmetricKeyType }
+    );
+  }
+  const jwk = createPublicKey(privateKey).export({ format: 'jwk' }) as JWK;
+  const thumbprint = await jwkThumbprintKid(jwk);
+  return Object.freeze({
+    purpose: 'oid4vp_request_signing',
+    algorithm: 'ES256',
+    kid: thumbprint,
+    thumbprint,
+    publicJwk: { ...jwk, alg: 'ES256', use: 'sig', kid: thumbprint },
+    material: Buffer.from(privateKey.export({ type: 'pkcs8', format: 'der' })),
+    variables: [...source.variables],
   });
 }
 

@@ -10,11 +10,13 @@ import {
   hashOid4vpState,
   OID4VP_REJECTION_DESCRIPTION,
 } from '@qauth-labs/fastify-plugin-federation';
+import { OID4VP_RESPONSE_KEY_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
+import { createTestSigner } from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
 import { CompactEncrypt, importJWK, type JWK } from 'jose';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMockVerifierPki } from '../../../testing/mock-verifier-pki';
 import { supplyRequestRealm, testRealm } from '../../../testing/request-realm';
@@ -64,8 +66,24 @@ const STATE = 'state-value';
 /** The issuer of the realm the wallet posted to, the origin of every URL it is handed (#490). */
 const ISSUER = 'https://auth.example.com';
 
+/** The id of the realm the wallet's request was resolved to: a UUID, as the signer takes it. */
+const REALM_ID = '01900000-0000-7000-8000-000000000001';
+
 /** The realm the wallet's request was resolved to. */
-const REALM = testRealm({ id: 'realm-1', issuer: ISSUER });
+const REALM = testRealm({ id: REALM_ID, issuer: ISSUER });
+
+/**
+ * The signer the endpoint opens a sealed response key through (#546): the
+ * real in-process signer over keys in memory, holding this realm's keys and
+ * another realm's.
+ */
+const TEST_SIGNER = createTestSigner();
+const OTHER_REALM_ID = '01900000-0000-7000-8000-000000000002';
+
+beforeAll(async () => {
+  await TEST_SIGNER.addRealm({ issuer: ISSUER, id: REALM.id });
+  await TEST_SIGNER.addRealm({ issuer: 'https://other.example.com', id: OTHER_REALM_ID });
+});
 
 /**
  * The exact wire shape of a Response Code: 32 bytes base64url, no padding —
@@ -140,6 +158,7 @@ function createFastifyStub() {
       }),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    signer: TEST_SIGNER.signer,
   };
 
   return { fastify: fastify as FastifyInstance, ctx, store };
@@ -178,7 +197,7 @@ function makeRequest(body: Record<string, unknown>, realm = REALM) {
 function pendingState(overrides: Record<string, unknown> = {}) {
   return {
     id: 'req-state-1',
-    realmId: 'realm-1',
+    realmId: REALM_ID,
     nonce: 'nonce-value',
     verifierProfile: 'oid4vp-1.0-base',
     responseMode: 'direct_post',
@@ -191,6 +210,7 @@ function pendingState(overrides: Record<string, unknown> = {}) {
     responseEncryptionKid: null,
     responseEncryptionPrivateJwk: null,
     responseEncryptionKeyProtection: null,
+    responseEncryptionSealingKid: null,
     // The device choice (#405), as written with the row at flow start. The
     // default is the cross-device (QR) path every test written before #405
     // exercised: no return leg, `{}` on the wire.
@@ -248,8 +268,6 @@ async function loadRoute(env: Record<string, unknown>) {
  * omission here is a TypeError on every test in this file, not a narrower one.
  */
 const VERIFIER_IDENTITY_UNSET = {
-  OID4VP_VERIFIER_SIGNING_KEY: undefined,
-  OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined,
   OID4VP_VERIFIER_CERTIFICATE_CHAIN: [] as readonly string[],
   OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [] as readonly string[],
   OID4VP_VERIFIER_TRUST_ANCHORS: [] as readonly string[],
@@ -264,8 +282,8 @@ const ENABLED_ENV = {
   // Not the origin of the same-device `redirect_uri` (#490): that is the
   // request realm's issuer. Set to another host so a test would see it leak.
   JWT_ISSUER: 'https://jwt-issuer.example.net/',
-  // The at-rest secret for the per-request decryption key (#377 Phase C):
-  // unset, the default, so a stored key is the JWK document itself.
+  // The at-rest secret of rows written before #546 (#377 Phase C): unset, so
+  // such a row under the `plain` marker is the JWK document itself.
   OID4VP_RESPONSE_KEY_SECRET: undefined,
   ...VERIFIER_IDENTITY_UNSET,
 };
@@ -288,8 +306,6 @@ const VERIFIER_PKI = createMockVerifierPki();
 const HAIP_ENV = {
   ...ENABLED_ENV,
   OID4VP_VERIFIER_PROFILE: 'haip-1.0',
-  OID4VP_VERIFIER_SIGNING_KEY: VERIFIER_PKI.signingKeyPem,
-  OID4VP_VERIFIER_SIGNING_KEY_PATH: undefined,
   OID4VP_VERIFIER_CERTIFICATE_CHAIN: pemBlocks(VERIFIER_PKI.certificateChainPem),
   OID4VP_VERIFIER_CERTIFICATE_CHAIN_PATH: [],
   OID4VP_VERIFIER_TRUST_ANCHORS: pemBlocks(VERIFIER_PKI.trustAnchorPem),
@@ -427,7 +443,7 @@ describe('POST /oid4vp/response — accepted submission', () => {
       request,
       PRESENTATION_RECEIVED,
       { verifierProfile: 'oid4vp-1.0-base', presentationCount: 1 },
-      { realmId: 'realm-1' }
+      { realmId: REALM_ID }
     );
   });
 
@@ -666,7 +682,7 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
       expect.objectContaining({
         err: expect.any(Error),
         requestStateId: 'req-state-1',
-        realmId: 'realm-1',
+        realmId: REALM_ID,
       }),
       expect.stringContaining('dcql_query')
     );
@@ -774,11 +790,11 @@ describe('POST /oid4vp/response — refusals are indistinguishable', () => {
  * and the same-device block, which must prove the return leg on BOTH modes.
  */
 
-/** A per-request pair, as the request helper mints and stores it. */
+/** A per-request pair, as the request helper mints it. */
 interface MintedPair {
   readonly kid: string;
   readonly publicJwk: JWK;
-  /** The `response_encryption_private_jwk` column under `plain`. */
+  /** The `response_encryption_private_jwk` column of a row written before #546 under `plain`. */
   readonly storedPrivateJwk: string;
 }
 
@@ -791,7 +807,10 @@ async function mintPair(): Promise<MintedPair> {
   };
 }
 
-/** A `direct_post.jwt` row, carrying the pair's private half in the clear. */
+/**
+ * A `direct_post.jwt` row written before #546: the pair's private half in the
+ * clear, under the `plain` marker. Such a row opens until it expires.
+ */
 function encryptedState(pair: MintedPair, overrides: Record<string, unknown> = {}) {
   return pendingState({
     verifierProfile: 'haip-1.0',
@@ -799,6 +818,38 @@ function encryptedState(pair: MintedPair, overrides: Record<string, unknown> = {
     responseEncryptionKid: pair.kid,
     responseEncryptionPrivateJwk: pair.storedPrivateJwk,
     responseEncryptionKeyProtection: 'plain',
+    ...overrides,
+  });
+}
+
+/** How {@link sealedState} seals; each field defaults to the row's own. */
+interface SealAs {
+  readonly realmId?: string;
+  /** The row `kid` the ciphertext is bound to. */
+  readonly kid?: string;
+  readonly signer?: FastifyInstance['signer'];
+}
+
+/**
+ * A `direct_post.jwt` row written since #546: the pair's private half sealed
+ * by the signer with the realm's `data_at_rest` key, bound to the row's `kid`,
+ * and the sealing key's `kid` in its own column. Sealed against the signer
+ * directly, with no import of the code under test.
+ */
+async function sealedState(
+  pair: MintedPair,
+  overrides: Record<string, unknown> = {},
+  sealAs: SealAs = {}
+) {
+  const ciphertext = await (sealAs.signer ?? TEST_SIGNER.signer).encrypt('web', {
+    realmId: sealAs.realmId ?? REALM.id,
+    plaintext: Buffer.from(pair.storedPrivateJwk, 'utf8'),
+    context: `${OID4VP_RESPONSE_KEY_CONTEXT_PREFIX}${sealAs.kid ?? pair.kid}`,
+  });
+  return encryptedState(pair, {
+    responseEncryptionPrivateJwk: ciphertext,
+    responseEncryptionKeyProtection: null,
+    responseEncryptionSealingKid: ciphertext.split('.')[1],
     ...overrides,
   });
 }
@@ -853,6 +904,26 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
     expect(sent).toEqual([{}]);
   });
 
+  it("opens a key the signer sealed, with the realm's data_at_rest key (#546)", async () => {
+    const pair = await mintPair();
+    const { fastify, store, handler } = await registerHaip();
+    fastify.repositories.oid4vpRequestStates.redeemByEncryptionKid.mockResolvedValue(
+      await sealedState(pair)
+    );
+    const { reply, sent } = makeReply();
+
+    await handler(
+      makeRequest({ response: await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD) }),
+      reply
+    );
+
+    expect(reply.statusCode).toBe(200);
+    expect(sent).toEqual([{}]);
+    expect(store.get(`wallet-presentation:${hashOid4vpState(STATE)}`)).toMatchObject({
+      presentations: [expect.objectContaining({ format: 'dc+sd-jwt' })],
+    });
+  });
+
   it("parks the decrypted presentation and the signal under the ROW's state hash", async () => {
     // No cleartext state was posted; the digest the browser polls on has to
     // come from the row, and the row's digest has to match the `state` inside
@@ -895,7 +966,7 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       expect.anything(),
       PRESENTATION_RECEIVED,
       { verifierProfile: 'haip-1.0', presentationCount: 1 },
-      { realmId: 'realm-1' }
+      { realmId: REALM_ID }
     );
   });
 
@@ -1232,6 +1303,54 @@ describe('POST /oid4vp/response — the encrypted direct_post.jwt intake (#377 P
       const { error } = await encryptedRefusalOf(
         { response: jwe },
         encryptedState(pair, { responseEncryptionKeyProtection: 'rot13' })
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+    });
+
+    it("refuses a sealed key the signer will not open: another row's, another realm's, another signer's (#546)", async () => {
+      // A ciphertext opens only in the realm, under the key and for the row it
+      // was sealed for. A signer holding other keys — a database copied away
+      // from the KEK — opens nothing.
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+      const elsewhere = createTestSigner();
+      await elsewhere.addRealm({ issuer: ISSUER, id: REALM.id });
+
+      for (const row of [
+        await sealedState(pair, {}, { kid: 'another-row' }),
+        await sealedState(pair, {}, { realmId: OTHER_REALM_ID }),
+        await sealedState(pair, {}, { signer: elsewhere.signer }),
+      ]) {
+        const { error, fastify } = await encryptedRefusalOf({ response: jwe }, row);
+
+        expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+        expect(fastify.log.error).toHaveBeenCalledWith(
+          expect.objectContaining({ requestStateId: 'req-state-1' }),
+          expect.stringContaining('ephemeral encryption key')
+        );
+      }
+    });
+
+    it('refuses a sealed row whose sealing kid is not the one its ciphertext names (#546)', async () => {
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+
+      const { error } = await encryptedRefusalOf(
+        { response: jwe },
+        await sealedState(pair, { responseEncryptionSealingKid: 'another-key' })
+      );
+
+      expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
+    });
+
+    it('refuses a row that records both a sealing kid and a marker (#546)', async () => {
+      const pair = await mintPair();
+      const jwe = await encryptResponse(pair.publicJwk, SUCCESS_PAYLOAD);
+
+      const { error } = await encryptedRefusalOf(
+        { response: jwe },
+        await sealedState(pair, { responseEncryptionKeyProtection: 'plain' })
       );
 
       expect(error.errorDescription).toBe(OID4VP_REJECTION_DESCRIPTION);
@@ -1702,7 +1821,7 @@ describe('POST /oid4vp/response — the same-device return leg (#405)', () => {
       STATE,
       hashOid4vpState(STATE),
       'req-state-1',
-      'realm-1',
+      REALM_ID,
       'nonce-value',
       '203.0.113.9',
       'test-wallet',

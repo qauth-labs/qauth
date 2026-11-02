@@ -60,6 +60,13 @@ export interface TestRealmKeys {
    * a test that signs a token the way a release before the key store did.
    */
   readonly ed25519PrivateKey?: string;
+  /**
+   * An EC P-256 private key, PEM, to import as the realm's ES256
+   * `oid4vp_request_signing` key, as the key boot step imports
+   * `OID4VP_VERIFIER_SIGNING_KEY` (#546): for a test that signs OID4VP request
+   * objects.
+   */
+  readonly oid4vpRequestSigningKey?: string;
 }
 
 /** What {@link createTestSigner} returns. */
@@ -304,6 +311,24 @@ export function createTestSigner(options: TestSignerOptions = {}): TestSigner {
       }
       if (realm.rs256 === true) {
         await factory.createKey({ realmId: id, purpose: 'token_signing', algorithm: 'RS256' });
+      }
+      if (realm.oid4vpRequestSigningKey !== undefined) {
+        // The realm has its token keys by now, so the step imports this key alone.
+        await bootRealmKeys({
+          store: keyStore,
+          kekProvider,
+          enabledSignatureAlgorithms,
+          hybridSigning,
+          realmId: id,
+          environmentKeys: {
+            oid4vpRequestSigning: {
+              privateKey: {
+                value: realm.oid4vpRequestSigningKey,
+                variables: ['OID4VP_VERIFIER_SIGNING_KEY'],
+              },
+            },
+          },
+        });
       }
       return id;
     },

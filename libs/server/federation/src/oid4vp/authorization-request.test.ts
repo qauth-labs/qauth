@@ -317,7 +317,6 @@ function buildSigningMaterial(): {
     anchorX5c: anchor.x5c,
     intermediateX5c: intermediate.x5c,
     material: createVerifierSigningMaterial({
-      privateKeyPem: leaf.keys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
       certificateChainPems: [leaf.pem, intermediate.pem],
       trustAnchorPems: [anchor.pem],
     }),

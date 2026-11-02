@@ -111,6 +111,7 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
         responseEncryptionKid: oid4vpRequestStates.responseEncryptionKid,
         responseEncryptionPrivateJwk: oid4vpRequestStates.responseEncryptionPrivateJwk,
         responseEncryptionKeyProtection: oid4vpRequestStates.responseEncryptionKeyProtection,
+        responseEncryptionSealingKid: oid4vpRequestStates.responseEncryptionSealingKid,
         sameDevice: oid4vpRequestStates.sameDevice,
         responseCodeHash: oid4vpRequestStates.responseCodeHash,
         responseCodeExpiresAt: oid4vpRequestStates.responseCodeExpiresAt,
@@ -453,6 +454,73 @@ describe('oid4vp_request_states integration (real Postgres)', () => {
           responseEncryptionKid: 'kid-half',
           // No private JWK and no protection marker: a kid the wallet would
           // echo, naming a key that does not exist.
+        })
+      ).rejects.toThrow();
+    });
+
+    it('keeps a sealed key with its sealing kid and no marker, and erases both on redemption (#546)', async () => {
+      const realmId = await seedRealm();
+      const created = await requestStates.create({
+        realmId,
+        stateHash: 'hash-sealed',
+        nonce: 'n',
+        verifierProfile: 'haip-1.0',
+        responseMode: 'direct_post.jwt',
+        dcqlQuery: { credentials: [] },
+        expiresAt: Date.now() + 60_000,
+        responseEncryptionKid: 'kid-sealed',
+        responseEncryptionPrivateJwk: 'v1.data-key-1.nonce.ciphertext',
+        responseEncryptionSealingKid: 'data-key-1',
+      });
+      expect(created.responseEncryptionKeyProtection).toBeNull();
+      expect(created.responseEncryptionSealingKid).toBe('data-key-1');
+
+      const redeemed = await requestStates.redeemByEncryptionKid(
+        realmId,
+        'kid-sealed',
+        mintedCode()
+      );
+
+      expect(redeemed?.responseEncryptionSealingKid).toBe('data-key-1');
+      expect(redeemed?.responseEncryptionPrivateJwk).toBe('v1.data-key-1.nonce.ciphertext');
+      const stored = await storedRow(created.id);
+      expect(stored?.responseEncryptionSealingKid).toBeNull();
+      expect(stored?.responseEncryptionPrivateJwk).toBeNull();
+    });
+
+    it('rejects a key written both ways, or neither way (#546)', async () => {
+      const realmId = await seedRealm();
+      const row = (stateHash: string, written: Record<string, string>) =>
+        requestStates.create({
+          realmId,
+          stateHash,
+          nonce: 'n',
+          verifierProfile: 'haip-1.0',
+          responseMode: 'direct_post.jwt',
+          dcqlQuery: { credentials: [] },
+          expiresAt: Date.now() + 60_000,
+          responseEncryptionKid: `kid-${stateHash}`,
+          responseEncryptionPrivateJwk: '{}',
+          ...written,
+        });
+
+      await expect(
+        row('hash-both', {
+          responseEncryptionKeyProtection: 'plain',
+          responseEncryptionSealingKid: 'data-key-1',
+        })
+      ).rejects.toThrow();
+      await expect(row('hash-neither', {})).rejects.toThrow();
+      await expect(
+        requestStates.create({
+          realmId,
+          stateHash: 'hash-sealing-only',
+          nonce: 'n',
+          verifierProfile: 'haip-1.0',
+          responseMode: 'direct_post',
+          dcqlQuery: { credentials: [] },
+          expiresAt: Date.now() + 60_000,
+          responseEncryptionSealingKid: 'data-key-1',
         })
       ).rejects.toThrow();
     });

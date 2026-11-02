@@ -23,8 +23,10 @@
  *
  * A purpose that is not listed is not signed through `signJws` at all. The
  * scoped purposes have their own operations (`signWebhook`,
- * `signClientAssertion`, #547); the OID4VP request key (#546) gets its own
- * operation or an entry here.
+ * `signClientAssertion`, #547), and so does the OID4VP request key
+ * (`signRequestObject`, #546): a request object names its client in `iss` and
+ * carries its certificate chain in `x5c`, neither of which `signJws` lets a
+ * caller set.
  */
 export const JWS_TYP_BY_PURPOSE = Object.freeze({
   /**
@@ -85,3 +87,36 @@ export const REALM_JWKS_PURPOSES: readonly JwsSigningPurpose[] = Object.freeze([
  * accepts, so an assertion is never usable as a QAuth token.
  */
 export const CLIENT_ASSERTION_TYP = 'client-authentication+jwt';
+
+/**
+ * The `typ` of an OID4VP request object: a JWT-Secured Authorization Request
+ * (RFC 9101 §10.8), which `signRequestObject` stamps (#546). No realm verifier
+ * accepts it, so a request object is never usable as a QAuth token, and no
+ * other operation signs it. `@qauth-labs/server-federation` names the same
+ * string (`OID4VP_REQUEST_OBJECT_TYP`); this library may not import it, so a
+ * test of the auth server pins the two equal.
+ */
+export const OID4VP_REQUEST_OBJECT_TYP = 'oauth-authz-req+jwt';
+
+/**
+ * The purposes whose published keys `getVerificationKeys` lists: the
+ * `signJws` purposes and the OID4VP request key (#546). Nothing in QAuth
+ * verifies a request object; the auth server reads the request key's public
+ * half to check, at boot, that the configured certificate chain names it, on
+ * a process that holds no key.
+ */
+export const VERIFICATION_KEY_PURPOSES = Object.freeze([
+  ...JWS_SIGNING_PURPOSES,
+  'oid4vp_request_signing',
+] as const);
+
+/** A purpose whose verification keys the signer lists. See {@link VERIFICATION_KEY_PURPOSES}. */
+export type VerificationKeyPurpose = JwsSigningPurpose | 'oid4vp_request_signing';
+
+/** Whether `purpose` is one whose verification keys the signer lists. */
+export function isVerificationKeyPurpose(purpose: unknown): purpose is VerificationKeyPurpose {
+  return (
+    typeof purpose === 'string' &&
+    (VERIFICATION_KEY_PURPOSES as readonly string[]).includes(purpose)
+  );
+}

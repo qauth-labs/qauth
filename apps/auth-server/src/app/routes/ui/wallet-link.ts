@@ -32,7 +32,7 @@ import {
   WALLET_LINK_UNAVAILABLE,
 } from '../../helpers/wallet-link-flow';
 import { isWalletLoginHandle } from '../../helpers/wallet-login-flow';
-import { resolveWalletLoginCapability } from '../../helpers/wallet-login-request';
+import { resolveWalletLoginCapabilityIn } from '../../helpers/wallet-login-request';
 import {
   WALLET_LINK_CONFLICT_TITLE,
   WALLET_LINK_EXPIRED_TITLE,
@@ -314,7 +314,7 @@ export default async function (fastify: FastifyInstance) {
         return reply.redirect(`/ui/login?return_to=${encodeURIComponent('/ui/wallet-link')}`, 302);
       }
 
-      if (resolveWalletLoginCapability(fastify) === undefined) {
+      if ((await resolveWalletLoginCapabilityIn(fastify, requestRealm(request))) === undefined) {
         return sendHtml(
           reply,
           linkTerminalPage({

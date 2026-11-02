@@ -159,8 +159,8 @@ export interface ConfiguredProvidersOptions {
    * This mirrors `assertPrefixProvisioned`'s own defaulted parameter: a caller
    * that forgets to thread it through fails closed rather than sails past.
    *
-   * #377 gave that configuration a surface (`OID4VP_VERIFIER_SIGNING_KEY` and
-   * its chain/anchor siblings), so `apps/auth-server` now passes real material
+   * #377 gave that configuration a surface (the chain and anchor variables,
+   * and since #546 the request key in the key store), so `apps/auth-server` now passes real material
    * here — built with `verifierMaterialProvisionedBy` from the material that
    * VALIDATED at boot, never assembled by hand, so the marker set cannot claim
    * a capability the chain did not earn.
@@ -248,7 +248,7 @@ function assertProfileWithinCryptoCapabilities(
 
   if (usable.length === 0) {
     throw new Error(
-      `Verifier profile '${profile.id}' accepts ${quoteList(profile.signingAlgs)} for request signing, but this deployment's crypto layer produces ${quoteList(capabilities.signingAlgs)}. Refusing to start rather than advertising the profile to wallets and then failing every presentation with a signature they will not accept (#299). ES256 signing exists in the crypto layer (#298) and a key for it is provisionable with OID4VP_VERIFIER_SIGNING_KEY plus OID4VP_VERIFIER_CERTIFICATE_CHAIN and OID4VP_VERIFIER_TRUST_ANCHORS (#377).`
+      `Verifier profile '${profile.id}' accepts ${quoteList(profile.signingAlgs)} for request signing, but this deployment's crypto layer produces ${quoteList(capabilities.signingAlgs)}. Refusing to start rather than advertising the profile to wallets and then failing every presentation with a signature they will not accept (#299). ES256 signing exists in the crypto layer (#298) and a key for it is provisionable with OID4VP_VERIFIER_CERTIFICATE_CHAIN and OID4VP_VERIFIER_TRUST_ANCHORS, plus the ES256 key the chain names in the realm's key store, imported once from OID4VP_VERIFIER_SIGNING_KEY (#377, #546).`
     );
   }
 

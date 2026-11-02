@@ -32,7 +32,7 @@ import {
 } from '../../helpers/session-cookie';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
 import { emitUserEvent } from '../../helpers/user-events';
-import { resolveWalletLoginCapability } from '../../helpers/wallet-login-request';
+import { walletLoginOfferedIn } from '../../helpers/wallet-login-request';
 import { type LoginForm, loginFormSchema } from '../../schemas/auth';
 
 /**
@@ -267,7 +267,7 @@ export default async function (fastify: FastifyInstance) {
           returnTo,
           cspNonce: reply.cspNonce.style,
           csrfToken,
-          walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
+          walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
         })
       );
     }
@@ -327,7 +327,7 @@ export default async function (fastify: FastifyInstance) {
             csrfToken: freshCsrf,
             error: 'Your session expired. Please try again.',
             email: body.email,
-            walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
+            walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
           })
         );
       }
@@ -345,7 +345,7 @@ export default async function (fastify: FastifyInstance) {
       // the resolver's row: no query.
       const policies = accountPoliciesOf(fastify, realm);
 
-      const renderRefusal = (statusCode: number, error: string) => {
+      const renderRefusal = async (statusCode: number, error: string) => {
         reply.header('Content-Type', 'text/html; charset=utf-8');
         reply.header('Cache-Control', 'no-store');
         reply.code(statusCode);
@@ -358,7 +358,7 @@ export default async function (fastify: FastifyInstance) {
             csrfToken: cookieCsrf,
             error,
             email: body.email,
-            walletLoginOffered: resolveWalletLoginCapability(fastify) !== undefined,
+            walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
           })
         );
       };

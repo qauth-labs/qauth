@@ -372,6 +372,13 @@
       "when": 1793550017808,
       "tag": "0052_user_credentials_disabled_at",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1793569813933,
+      "tag": "0053_oid4vp_response_key_sealing_kid",
+      "breakpoints": true
     }
   ]
 }

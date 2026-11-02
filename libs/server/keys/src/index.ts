@@ -82,6 +82,7 @@ export {
   DELIVERY_SECRET_CONTEXT_PREFIX,
   isSignerCallAllowed,
   isSignerCaller,
+  OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
   REALM_MAIL_SECRET_CONTEXT_PREFIX,
   SIGNER_CALLERS,
   SIGNER_POLICY,
@@ -93,11 +94,15 @@ export {
   CLIENT_ASSERTION_TYP,
   isJwsSigningPurpose,
   isTypAllowed,
+  isVerificationKeyPurpose,
   JWS_SIGNING_PURPOSES,
   JWS_TYP_BY_PURPOSE,
   type JwsSigningPurpose,
   type JwsTyp,
+  OID4VP_REQUEST_OBJECT_TYP,
   REALM_JWKS_PURPOSES,
+  VERIFICATION_KEY_PURPOSES,
+  type VerificationKeyPurpose,
 } from './lib/signer-typ';
 export {
   MAX_WEBHOOK_ID_LENGTH,

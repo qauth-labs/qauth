@@ -27,7 +27,7 @@ import {
   type WalletLoginFlow,
   writeWalletFlowDoneMarker,
 } from './wallet-login-flow';
-import { buildWalletLoginInvocation, resolveWalletLoginCapability } from './wallet-login-request';
+import { buildWalletLoginInvocation, resolveWalletLoginCapabilityIn } from './wallet-login-request';
 import { linkWalletPresentation } from './wallet-presentation';
 
 /**
@@ -167,7 +167,8 @@ export async function startWalletLinkFlow(
   userId: string,
   options: StartWalletLinkFlowOptions = {}
 ): Promise<StartedWalletLinkFlow | undefined> {
-  const capability = resolveWalletLoginCapability(fastify);
+  const realm = requestRealm(request);
+  const capability = await resolveWalletLoginCapabilityIn(fastify, realm);
   if (capability === undefined) return undefined;
 
   // The user's device choice (#405). Compared against the one value that
@@ -175,7 +176,6 @@ export async function startWalletLinkFlow(
   // reached this helper without validation is still cross-device.
   const sameDevice = options.device === 'this';
 
-  const realm = requestRealm(request);
   const invocation = await buildWalletLoginInvocation(fastify, capability, realm);
 
   await fastify.repositories.oid4vpRequestStates.create({
@@ -199,7 +199,7 @@ export async function startWalletLinkFlow(
       : {
           responseEncryptionKid: invocation.responseEncryption.kid,
           responseEncryptionPrivateJwk: invocation.responseEncryption.privateJwk,
-          responseEncryptionKeyProtection: invocation.responseEncryption.protection,
+          responseEncryptionSealingKid: invocation.responseEncryption.sealingKid,
         }),
   });
 

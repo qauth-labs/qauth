@@ -64,7 +64,7 @@ import {
 } from '../../helpers/wallet-login-flow';
 import {
   buildWalletLoginInvocation,
-  resolveWalletLoginCapability,
+  resolveWalletLoginCapabilityIn,
   WALLET_LOGIN_RETURN_PATH,
 } from '../../helpers/wallet-login-request';
 import { resolveWalletPresentation } from '../../helpers/wallet-presentation';
@@ -903,7 +903,7 @@ export default async function (fastify: FastifyInstance) {
       const q = request.query as { return_to?: string };
       const returnTo = resolveReturnTo(q.return_to);
 
-      if (resolveWalletLoginCapability(fastify) === undefined) {
+      if ((await resolveWalletLoginCapabilityIn(fastify, requestRealm(request))) === undefined) {
         return sendHtml(
           reply,
           terminalPage({
@@ -962,7 +962,7 @@ export default async function (fastify: FastifyInstance) {
       const body = request.body as WalletLoginForm;
       const returnTo = resolveReturnTo(body.return_to);
 
-      const capability = resolveWalletLoginCapability(fastify);
+      const capability = await resolveWalletLoginCapabilityIn(fastify, requestRealm(request));
       if (capability === undefined) {
         return sendHtml(
           reply,
@@ -1052,7 +1052,7 @@ export default async function (fastify: FastifyInstance) {
             : {
                 responseEncryptionKid: invocation.responseEncryption.kid,
                 responseEncryptionPrivateJwk: invocation.responseEncryption.privateJwk,
-                responseEncryptionKeyProtection: invocation.responseEncryption.protection,
+                responseEncryptionSealingKid: invocation.responseEncryption.sealingKid,
               }),
         });
 

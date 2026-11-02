@@ -32,6 +32,7 @@ async function setup() {
     now: () => NOW,
   });
   for (const realmId of [REALM_A, REALM_B]) await factory.provisionRealmKeys(realmId);
+  await factory.createKey({ realmId: REALM_A, purpose: 'oid4vp_request_signing' });
   const store = createMemorySignerStore(keys, {
     [REALM_A]: 'https://a.example.test',
     [REALM_B]: 'https://b.example.test',
@@ -68,6 +69,26 @@ describe('createPublishedKeyReader (#491, #495)', () => {
         expect(jwk).not.toHaveProperty(member);
       }
     }
+  });
+
+  it("lists the OID4VP request key as the signer does, and refuses the response key's purpose (#546)", async () => {
+    const { store, signer } = await setup();
+    const reader = createPublishedKeyReader(store, { now: () => NOW });
+
+    const keys = await reader.getVerificationKeys('web', REALM_A, 'oid4vp_request_signing');
+    expect(keys).toEqual(
+      await signer.getVerificationKeys('web', REALM_A, 'oid4vp_request_signing')
+    );
+    expect(keys).toHaveLength(1);
+    expect(keys[0].publicJwk).toMatchObject({ kty: 'EC', crv: 'P-256', alg: 'ES256' });
+    expect(keys[0].publicJwk).not.toHaveProperty('d');
+    expect(await reader.getVerificationKeys('web', REALM_B, 'oid4vp_request_signing')).toEqual([]);
+    expect((await reader.getJwks('web', REALM_A)).keys.map((key) => key.kid)).not.toContain(
+      keys[0].kid
+    );
+    await expect(
+      reader.getVerificationKeys('web', REALM_A, 'oid4vp_response_encryption' as never)
+    ).rejects.toMatchObject({ reason: 'PURPOSE_NOT_ALLOWED' });
   });
 
   it('keeps one realm apart from another', async () => {

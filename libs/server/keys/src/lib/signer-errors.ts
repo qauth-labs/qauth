@@ -80,7 +80,11 @@ export type SignerRefusalReason =
    * client assertion `iss`, `sub` and `aud`.
    */
   | 'RESERVED_CLAIM'
-  /** A client assertion's claims lack `exp` or `jti`, or carry one of the wrong type. */
+  /**
+   * A client assertion's claims lack `exp` or `jti`, or carry one of the wrong
+   * type; or a request object's lack `client_id`, or carry one that is not a
+   * non-empty string.
+   */
   | 'MISSING_CLAIM'
   /** A client assertion's audience is not one non-empty string. */
   | 'INVALID_AUDIENCE'
@@ -101,7 +105,14 @@ export type SignerRefusalReason =
   /** The context is not a well-formed string of at most `MAX_DATA_CONTEXT_LENGTH` characters. */
   | 'INVALID_CONTEXT'
   /** The cookie key id `getCookieSecrets` was asked for is not a string. */
-  | 'INVALID_KID';
+  | 'INVALID_KID'
+  /**
+   * A request object's certificate chain is not 1 to 10 standard-base64
+   * certificates, or its leaf does not parse.
+   */
+  | 'INVALID_CERTIFICATE_CHAIN'
+  /** A request object's leaf certificate holds another key than the realm's active one. */
+  | 'CERTIFICATE_KEY_MISMATCH';
 
 /** A request the signer does not run. Nothing was signed, encrypted or read. */
 export class SignerRequestRefusedError extends SignerError {

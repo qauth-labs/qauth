@@ -359,6 +359,15 @@ export interface BootAuthServerOptions {
    * refuses it outside NODE_ENV=test.
    */
   readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
+  /**
+   * The OID4VP request key the default realm's key store holds from an
+   * earlier boot (#546), as a PEM: the leaf key of the configured chain. The
+   * harness boots once with `OID4VP_VERIFIER_SIGNING_KEY` set to it, which
+   * imports it, closes that server, and boots this one without the variable,
+   * as an operator removes it once it is imported. A reset imports it again
+   * with the realm's other keys. The environment must not set the variable.
+   */
+  readonly oid4vpRequestSigningKey?: string;
 }
 
 /** What a suite gives the internal listener (#496). */
@@ -396,6 +405,26 @@ export async function bootAuthServer(
   options: BootAuthServerOptions = {}
 ): Promise<BootedAuthServer> {
   const vitest = await import('vitest');
+
+  const storedRequestKey = options.oid4vpRequestSigningKey;
+  if (storedRequestKey !== undefined) {
+    if (
+      environment['OID4VP_VERIFIER_SIGNING_KEY'] !== undefined ||
+      environment['OID4VP_VERIFIER_SIGNING_KEY_PATH'] !== undefined ||
+      options.defaultRealmBoot === false
+    ) {
+      throw new Error(
+        'bootAuthServer: oid4vpRequestSigningKey boots with the key in the store, so the environment sets no OID4VP_VERIFIER_SIGNING_KEY and the default realm boot runs'
+      );
+    }
+    // The earlier boot that imported the key (#546): the key boot step stores
+    // the variable's key, and the next boot finds it there.
+    const importer = await bootAuthServer({
+      ...environment,
+      OID4VP_VERIFIER_SIGNING_KEY: storedRequestKey,
+    });
+    await importer.close();
+  }
 
   for (const key of Object.keys(process.env)) {
     if (
@@ -581,7 +610,23 @@ export async function bootAuthServer(
         },
         {
           realmName,
-          environmentKeys: withVariables ? keyVariableSettings(env, bootEnvironment) : {},
+          environmentKeys: withVariables
+            ? {
+                ...keyVariableSettings(env, bootEnvironment),
+                // The key an earlier boot imported, put back after a reset
+                // the way that boot put it there (#546).
+                ...(storedRequestKey === undefined
+                  ? {}
+                  : {
+                      oid4vpRequestSigning: {
+                        privateKey: {
+                          value: storedRequestKey,
+                          variables: ['OID4VP_VERIFIER_SIGNING_KEY'],
+                        },
+                      },
+                    }),
+              }
+            : {},
         }
       );
     // Read now: a later boot of another server rewrites `process.env`.
