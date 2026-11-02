@@ -58,10 +58,19 @@ const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 const SAME_ORIGIN = { origin: ORIGIN, 'sec-fetch-site': 'same-origin' };
 const CREATED = 'urn:qauth:event:interaction.created:v1-rc.0';
 const STEP_UP = 'urn:qauth:event:step_up.required:v1-rc.0';
-/** The ceremony path of an interaction, relative or on the realm origin. */
-const CEREMONY_PATH = new RegExp(
-  `^(?:${ORIGIN.replace(/\./g, '\\.')})?${CEREMONY_PAGE_PREFIX}([A-Za-z0-9_-]{43})$`
-);
+/** An interaction id: 43 base64url characters. */
+const INTERACTION_ID = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * The interaction id of a ceremony page location, relative or on the realm
+ * origin; `undefined` for any other location.
+ */
+function ceremonyIdOf(location: string): string | undefined {
+  const path = location.startsWith(`${ORIGIN}/`) ? location.slice(ORIGIN.length) : location;
+  if (!path.startsWith(CEREMONY_PAGE_PREFIX)) return undefined;
+  const id = path.slice(CEREMONY_PAGE_PREFIX.length);
+  return INTERACTION_ID.test(id) ? id : undefined;
+}
 
 describe('/oauth/authorize starts an interaction (#628, real containers)', () => {
   let infra: E2eInfrastructure | undefined;
@@ -156,7 +165,7 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
   function interactionIdOf(response: LightMyRequestResponse): string {
     expect([302, 303], response.body).toContain(response.statusCode);
     const location = String(response.headers['location']);
-    const id = CEREMONY_PATH.exec(location)?.[1];
+    const id = ceremonyIdOf(location);
     if (id === undefined) throw new Error(`not a ceremony page: ${location}`);
     return id;
   }
@@ -236,7 +245,8 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
 
     expect(started.statusCode).toBe(302);
     const location = String(started.headers['location']);
-    expect(location).toMatch(new RegExp(`^${CEREMONY_PAGE_PREFIX}[A-Za-z0-9_-]{43}$`));
+    expect(location.startsWith(CEREMONY_PAGE_PREFIX), location).toBe(true);
+    expect(location.slice(CEREMONY_PAGE_PREFIX.length)).toMatch(INTERACTION_ID);
     expect(location.length).toBeLessThan(80);
     const id = interactionIdOf(started);
     expect((await read(id)).step).toBe(IDENTIFIER);
