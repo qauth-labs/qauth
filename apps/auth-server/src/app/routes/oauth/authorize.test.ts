@@ -21,7 +21,12 @@ beforeEach(() => {
   emitUserEventMock.mockClear();
 });
 
-const { egressGet } = vi.hoisted(() => ({ egressGet: vi.fn() }));
+const { egressGet, startInteraction } = vi.hoisted(() => ({
+  egressGet: vi.fn(),
+  // With INTERACTION_UI_ENABLED on, the interaction the endpoint starts
+  // (#628); its record and flow cookie are `helpers/interaction.test.ts`'s.
+  startInteraction: vi.fn(),
+}));
 
 vi.mock('../../../config/env', () => ({
   env: {
@@ -42,18 +47,125 @@ vi.mock('../../../config/env', () => ({
     CIMD_MAX_DOCUMENT_BYTES: 65536,
     CIMD_FETCH_TIMEOUT_MS: 5000,
     REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
+    // Set per suite by `describeModes`.
+    INTERACTION_UI_ENABLED: false,
   },
 }));
 
+vi.mock('../../helpers/interaction', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../helpers/interaction')>();
+  return { ...actual, startInteraction };
+});
+
 // Mock only the network layer so CIMD resolution runs against a fixture doc.
 vi.mock('../../helpers/egress-get', () => ({ egressGet }));
+
+import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contract';
 
 import { env } from '../../../config/env';
 import { createBrowserSessionFixture } from '../../../testing/browser-sessions';
 import { OAUTH_OPAQUE_PARAM_MAX_LENGTH, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
 import { buildAuthorizationServerMetadata } from '../../helpers/discovery';
+import type { StartInteractionInput } from '../../helpers/interaction';
 import { authorizeQuerySchema } from '../../schemas/oauth';
 import authorizeRoute from './authorize';
+
+/** The id the stand-in `startInteraction` gives every interaction. */
+const INTERACTION_ID = 'i'.repeat(43);
+
+beforeEach(() => {
+  startInteraction.mockReset();
+  startInteraction.mockImplementation(async () => ({
+    id: INTERACTION_ID,
+    expiresAt: Date.now() + 1_800_000,
+  }));
+});
+
+/** The env the route reads, writable for `describeModes`. */
+const mutableEnv = env as { INTERACTION_UI_ENABLED: boolean };
+
+/**
+ * Every suite of this file runs twice (#628): with the server-rendered pages
+ * (INTERACTION_UI_ENABLED off, the default) and with interactions. The checks
+ * and the decision are the same code in both modes, so every request that
+ * fails, fails the same way in both; only how the person is sent to sign in
+ * or to consent differs, which {@link expectSignIn} and {@link expectConsent}
+ * check for the mode.
+ */
+function describeModes(name: string, suite: () => void): void {
+  for (const ui of [false, true]) {
+    describe(`${name} — INTERACTION_UI_ENABLED=${ui}`, () => {
+      beforeEach(() => {
+        mutableEnv.INTERACTION_UI_ENABLED = ui;
+      });
+      afterEach(() => {
+        mutableEnv.INTERACTION_UI_ENABLED = false;
+      });
+      suite();
+    });
+  }
+}
+
+/** The input of the interaction {@link expectSignIn} or {@link expectConsent} last saw. */
+let lastStarted: StartInteractionInput | undefined;
+
+beforeEach(() => {
+  lastStarted = undefined;
+});
+
+/** The one interaction the request started: taken, so a loop's next request starts afresh. */
+function takeStartedInteraction(): StartInteractionInput {
+  expect(startInteraction).toHaveBeenCalledOnce();
+  lastStarted = startInteraction.mock.calls[0]?.[2] as StartInteractionInput;
+  startInteraction.mockClear();
+  return lastStarted;
+}
+
+/** The input of the interaction the last request started. */
+function startedInteraction(): StartInteractionInput {
+  expect(lastStarted).toBeDefined();
+  return lastStarted as StartInteractionInput;
+}
+
+/**
+ * The person was sent to sign in: to `/ui/login`, the authorize URL parked
+ * behind `return_to`, or, with interactions, to the ceremony page of an
+ * interaction at the identifier step, the id the only parameter.
+ */
+function expectSignIn(state: { readonly redirected?: string }): void {
+  if (!env.INTERACTION_UI_ENABLED) {
+    expect(state.redirected).toContain('/ui/login?return_to=');
+    expect(startInteraction).not.toHaveBeenCalled();
+    return;
+  }
+  expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
+  const input = takeStartedInteraction();
+  expect(input.step.name).toBe(stepUrn('identifier'));
+  expect(input.transaction).toBeUndefined();
+}
+
+/**
+ * The person was sent to consent: to `/ui/consent` with the authorize
+ * parameters, or, with interactions, to the ceremony page of an interaction
+ * at the consent step, bound to the browser session.
+ */
+function expectConsent(state: { readonly redirected?: string }): void {
+  if (!env.INTERACTION_UI_ENABLED) {
+    expect(state.redirected).toContain('/ui/consent?');
+    expect(startInteraction).not.toHaveBeenCalled();
+    return;
+  }
+  expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
+  const input = takeStartedInteraction();
+  expect(input.step.name).toBe(stepUrn('consent'));
+  expect(input.transaction).toMatchObject({ userId: expect.any(String), sid: expect.any(String) });
+}
+
+/** {@link expectSignIn} or {@link expectConsent}, by name, for a table of cases. */
+function expectHop(state: { readonly redirected?: string }, hop: 'sign_in' | 'consent'): void {
+  if (hop === 'sign_in') expectSignIn(state);
+  else expectConsent(state);
+}
 
 interface TestContext {
   handler?: (request: any, reply: any) => Promise<unknown>;
@@ -224,7 +336,7 @@ const BASE_QUERY = {
   scope: 'email',
 };
 
-describe('GET /oauth/authorize — session-cookie integration', () => {
+describeModes('GET /oauth/authorize — session-cookie integration', () => {
   it('redirects unauthenticated requests to /ui/login with return_to', async () => {
     const { fastify, ctx } = makeFastify();
     await authorizeRoute(fastify);
@@ -243,7 +355,14 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     );
 
     expect(state.redirected).toBeDefined();
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
+    if (env.INTERACTION_UI_ENABLED) {
+      // #628: the interaction holds the validated request; no URL carries it,
+      // and nothing is parked for a `/ui/resume` round trip.
+      expect(startedInteraction().request).toMatchObject(BASE_QUERY);
+      expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+      return;
+    }
     // #316 follow-up: `return_to` carries a short single-use handle, NOT the
     // nested authorize query string (which inflated the Location header past a
     // reverse proxy's buffer once `state` was allowed up to 2048 chars). The
@@ -276,7 +395,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       reply
     );
 
-    expect(state.redirected).toContain('/ui/consent?');
+    expectConsent(state);
     // The code must NOT have been issued yet.
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
@@ -400,7 +519,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     await call();
 
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(state.redirected).not.toContain('code=');
     expect(emitUserEventMock).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
@@ -509,7 +628,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     // The cookie's MAC names its realm (#493): it does not verify here, so no
     // session is even looked up.
     expect(sessions.service.get).not.toHaveBeenCalled();
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(fastify.repositories.users.findById).not.toHaveBeenCalled();
     // The cookie is cleared as one that does not verify; the session itself
@@ -523,7 +642,7 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
   // must not leave a code issued on a consent that no longer exists: the
   // request is answered as one arriving after the revocation would be.
   it.each([
-    ['shows the consent screen', { prompt: undefined }, '/ui/consent?'],
+    ['shows the consent screen', { prompt: undefined }, 'consent'],
     ['answers consent_required to prompt=none', { prompt: 'none' }, 'error=consent_required'],
   ])(
     'issues no code and %s when the consent is revoked between the read and the code insert',
@@ -561,7 +680,8 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
 
       expect(fastify.repositories.oauthConsents.findActiveForShare).toHaveBeenCalledOnce();
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-      expect(state.redirected).toContain(expectedRedirect);
+      if (expectedRedirect === 'consent') expectConsent(state);
+      else expect(state.redirected).toContain(expectedRedirect);
       expect(state.redirected).not.toContain('code=');
     }
   );
@@ -783,9 +903,10 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
     ],
   ])('does not issue a code silently for %s', async (_label, resourceScopes) => {
     for (const [prompt, expectedRedirect] of [
-      [undefined, '/ui/consent?'],
+      [undefined, 'consent'],
       ['none', 'error=consent_required'],
     ] as const) {
+      startInteraction.mockClear();
       const { fastify, ctx, sessions } = makeFastify();
       await authorizeRoute(fastify);
       (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
@@ -814,12 +935,13 @@ describe('GET /oauth/authorize — session-cookie integration', () => {
       );
 
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-      expect(state.redirected).toContain(expectedRedirect);
+      if (expectedRedirect === 'consent') expectConsent(state);
+      else expect(state.redirected).toContain(expectedRedirect);
     }
   });
 });
 
-describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
+describeModes('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
   it('issues a code from a form-encoded POST body, identically to GET', async () => {
     const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
@@ -937,7 +1059,17 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
       reply
     );
 
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
+    if (env.INTERACTION_UI_ENABLED) {
+      // #628: the interaction holds the validated body as the request.
+      expect(startedInteraction().request).toMatchObject({
+        client_id: 'app-123',
+        code_challenge: BASE_QUERY.code_challenge,
+        scope: 'email',
+        state: BASE_QUERY.state,
+      });
+      return;
+    }
     // The POST params are reconstructed into an authorize URL so the GET
     // round-trip reproduces the request (PKCE challenge, scope, state,
     // client_id survive). #316 follow-up: that URL is parked server-side under
@@ -988,7 +1120,7 @@ describe('POST /oauth/authorize (OIDC Core §3.1.2.1)', () => {
   });
 });
 
-describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
+describeModes('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
   const CIMD_ID = 'https://app.example.com/client-metadata.json';
 
   function cimdDoc(redirectUris: string[]) {
@@ -1225,7 +1357,7 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
     // The redirect_uri matched the document → resolution + materialisation
     // succeeded, and with no session the flow proceeds to login.
     expect(fastify.repositories.oauthClients.upsertCimdClient).toHaveBeenCalledOnce();
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
   });
 
   it('prompt=none with no session: shows login_required on the issuer instead of redirecting (RFC 9700 §4.11.2)', async () => {
@@ -1274,7 +1406,7 @@ describe('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', () => {
 // operator-seeded one) can hold `javascript:` or `data:`. Authorize must not
 // follow it, whatever the request does next (here: prompt=none, no session,
 // an operator-provisioned client that would otherwise get the 302).
-describe('GET /oauth/authorize — redirect URI scheme gate', () => {
+describeModes('GET /oauth/authorize — redirect URI scheme gate', () => {
   it.each(['javascript:alert(document.domain)//', 'data:text/html,hi', 'myapp:/callback'])(
     'refuses a registered %s before any redirect, in every environment',
     async (uri) => {
@@ -1330,7 +1462,7 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
       },
       reply
     );
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
   });
 
   describe('REDIRECT_URI_CUSTOM_SCHEMES (#774)', () => {
@@ -1380,7 +1512,7 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
       for (const environment of ['development', 'staging', 'production']) {
         const { run, state } = await authorizeWith(cursorCallback, environment);
         await run();
-        expect(state.redirected).toContain('/ui/login?return_to=');
+        expectSignIn(state);
       }
     });
 
@@ -1399,7 +1531,7 @@ describe('GET /oauth/authorize — redirect URI scheme gate', () => {
   });
 });
 
-describe('GET /oauth/authorize — plain-http redirect gate', () => {
+describeModes('GET /oauth/authorize — plain-http redirect gate', () => {
   it('refuses a registered non-loopback http redirect_uri in every environment', async () => {
     for (const environment of ['development', 'staging', 'production']) {
       const { fastify, ctx } = makeFastify();
@@ -1433,7 +1565,7 @@ describe('GET /oauth/authorize — plain-http redirect gate', () => {
   });
 });
 
-describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', () => {
+describeModes('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', () => {
   // An agent capped at `readonly` whose ALLOWLIST nevertheless contains
   // `agent:exec` — the exact escalation the cap must block even though the
   // ordinary allowlist would permit the scope.
@@ -1487,8 +1619,15 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
 
   it('lets an in-cap scope through to the consent screen', async () => {
     const { fastify, state } = await runAuthorize(READONLY_AGENT, 'agent:readonly', 'sid-ro-2');
-    expect(state.redirected).toMatch(/^\/ui\/consent\?/);
-    expect(state.redirected).toContain('scope=agent%3Areadonly');
+    expectConsent(state);
+    if (env.INTERACTION_UI_ENABLED) {
+      // #628: the consent step lists the scope; the URL carries none.
+      expect(startedInteraction().step.params).toMatchObject({
+        scopes: [{ scope: 'agent:readonly', sensitive: false, dangerous: false }],
+      });
+    } else {
+      expect(state.redirected).toContain('scope=agent%3Areadonly');
+    }
     expect(state.redirected).not.toContain('error=');
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
@@ -1509,7 +1648,7 @@ describe('GET /oauth/authorize — agent scope-mode cap (ADR-007 §2, #184)', ()
   });
 });
 
-describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', () => {
+describeModes('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', () => {
   // Client whose allowlist includes a dangerous (write:*) scope.
   const DANGEROUS_CLIENT = {
     ...CLIENT,
@@ -1580,7 +1719,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       authTime: Date.now() - 10 * MINUTE,
       sid: 'sid-su-1',
     });
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     expect(emitUserEventMock).toHaveBeenCalledWith(
       expect.anything(),
@@ -1605,7 +1744,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       sid: 'sid-su-2',
     });
     // read:foo is a NEW (elevated) scope → must re-consent, not skip.
-    expect(state.redirected).toContain('/ui/consent?');
+    expectConsent(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1631,7 +1770,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     });
     // Fresh auth satisfies the login requirement; the elevation still needs
     // consent (no prior grant), so we land on the consent screen — not login.
-    expect(state.redirected).toContain('/ui/consent?');
+    expectConsent(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1644,7 +1783,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       prompt: 'login',
       sid: 'sid-su-5',
     });
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1657,7 +1796,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       maxAge: '0',
       sid: 'sid-su-6',
     });
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1676,6 +1815,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       sid: 'sid-su-6b',
     });
     expect(state.redirected).not.toContain('/ui/login');
+    expect(startInteraction).not.toHaveBeenCalled();
     expect(state.redirected).toContain('code=');
     expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
   });
@@ -1690,7 +1830,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
       authTime: Date.now() - 10 * MINUTE,
       sid: 'sid-su-7',
     });
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1708,6 +1848,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     expect(state.redirected).toContain('error=login_required');
     expect(state.redirected).not.toContain('/ui/login');
     expect(state.redirected).not.toContain('/ui/consent');
+    expect(startInteraction).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1722,6 +1863,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     });
     expect(state.redirected).toContain('error=consent_required');
     expect(state.redirected).not.toContain('/ui/consent');
+    expect(startInteraction).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1755,6 +1897,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
     expect(state.redirected).toContain('https://example.com/cb');
     expect(state.redirected).toContain('error=consent_required');
     expect(state.redirected).not.toContain('/ui/consent');
+    expect(startInteraction).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 
@@ -1812,7 +1955,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         authTime: Date.now() - 1000,
         sid: 'sid-agent-1',
       });
-      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expectConsent(state);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     });
 
@@ -1955,7 +2098,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
           authTime: Date.now() - 1000,
           sid: `sid-fp-danger-${priorConsent === null ? 'none' : 'covering'}`,
         });
-        expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+        expectConsent(state);
         expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
         expect(administrativeEvents()).toEqual([]);
         emitUserEventMock.mockClear();
@@ -1971,7 +2114,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         prompt: 'consent',
         sid: 'sid-fp-consent',
       });
-      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expectConsent(state);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
       expect(administrativeEvents()).toEqual([]);
     });
@@ -2013,7 +2156,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         authTime: Date.now() - 1000,
         sid: 'sid-fp-refused',
       });
-      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expectConsent(state);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
     });
 
@@ -2025,7 +2168,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         authTime: Date.now() - 10 * MINUTE,
         sid: 'sid-native-1',
       });
-      expect(state.redirected).toContain('/ui/login?return_to=');
+      expectSignIn(state);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
       expect(emitUserEventMock).toHaveBeenCalledWith(
         expect.anything(),
@@ -2045,7 +2188,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
           prompt,
           sid: `sid-native-${prompt}`,
         });
-        expect(state.redirected).toContain('/ui/login?return_to=');
+        expectSignIn(state);
       }
     });
 
@@ -2088,7 +2231,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
         prompt: 'consent',
         sid: 'sid-native-consent-fresh',
       });
-      expect(state.redirected).toMatch(/^\/ui\/consent\?/);
+      expectConsent(state);
       expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
       expect(administrativeEvents()).toEqual([]);
     });
@@ -2115,7 +2258,7 @@ describe('GET /oauth/authorize — step-up authentication (ADR-007 §2, #185)', 
   });
 });
 
-describe('GET /oauth/authorize — the retired Bearer path (#524)', () => {
+describeModes('GET /oauth/authorize — the retired Bearer path (#524)', () => {
   // The legacy Bearer path authenticated the user from the developer portal's
   // token, with no sign-in and no consent screen. It is gone: a request that
   // carries only an `Authorization` header is a request without a session.
@@ -2149,7 +2292,7 @@ describe('GET /oauth/authorize — the retired Bearer path (#524)', () => {
   it('sends a request with only a Bearer token to sign in, and reads no token', async () => {
     const { fastify, state } = await runWithOnlyABearerToken();
 
-    expect(state.redirected).toMatch(/^\/ui\/login\?/);
+    expectSignIn(state);
     expect(fastify.jwtUtils.verifyAccessToken).not.toHaveBeenCalled();
     expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
@@ -2164,7 +2307,7 @@ describe('GET /oauth/authorize — the retired Bearer path (#524)', () => {
   });
 });
 
-describe('GET /oauth/authorize — disabled user', () => {
+describeModes('GET /oauth/authorize — disabled user', () => {
   // A session established before the account was disabled must not yield a
   // code: the session is ended and the login page shown.
   it('sends a session whose user has been disabled back to /ui/login', async () => {
@@ -2195,7 +2338,7 @@ describe('GET /oauth/authorize — disabled user', () => {
       reply
     );
 
-    expect(state.redirected).toContain('/ui/login?return_to=');
+    expectSignIn(state);
     expect(sessions.service.revoke).toHaveBeenCalledWith({
       realmId: REALM.id,
       sid: 'sid-1',
@@ -2209,87 +2352,90 @@ describe('GET /oauth/authorize — disabled user', () => {
   });
 });
 
-describe('GET /oauth/authorize — environment localhost redirect gate (ADR-008 §5, #197)', () => {
-  // A client that has registered an http://localhost redirect (exact-matched).
-  const LOCALHOST_CLIENT = {
-    ...CLIENT,
-    redirectUris: ['http://localhost:3000/cb'],
-  };
-  const LOCALHOST_QUERY = {
-    ...BASE_QUERY,
-    redirect_uri: 'http://localhost:3000/cb',
-  };
-
-  async function run(realmEnv: string, clientEnv: string) {
-    const { fastify, ctx } = makeFastify();
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
-      ...LOCALHOST_CLIENT,
-      environment: clientEnv,
-    });
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-
-    const { reply, state } = createReply();
-    return {
-      fastify,
-      state,
-      call: () =>
-        ctx.handler!(
-          {
-            query: LOCALHOST_QUERY,
-            url: '/oauth/authorize?response_type=code&client_id=app-123',
-            headers: {},
-            ip: '127.0.0.1',
-            realm: testRealm({
-              id: 'realm-1',
-              maxEnvironmentLaxity: realmEnv as RealmRow['maxEnvironmentLaxity'],
-            }),
-          },
-          reply
-        ),
+describeModes(
+  'GET /oauth/authorize — environment localhost redirect gate (ADR-008 §5, #197)',
+  () => {
+    // A client that has registered an http://localhost redirect (exact-matched).
+    const LOCALHOST_CLIENT = {
+      ...CLIENT,
+      redirectUris: ['http://localhost:3000/cb'],
     };
+    const LOCALHOST_QUERY = {
+      ...BASE_QUERY,
+      redirect_uri: 'http://localhost:3000/cb',
+    };
+
+    async function run(realmEnv: string, clientEnv: string) {
+      const { fastify, ctx } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...LOCALHOST_CLIENT,
+        environment: clientEnv,
+      });
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+
+      const { reply, state } = createReply();
+      return {
+        fastify,
+        state,
+        call: () =>
+          ctx.handler!(
+            {
+              query: LOCALHOST_QUERY,
+              url: '/oauth/authorize?response_type=code&client_id=app-123',
+              headers: {},
+              ip: '127.0.0.1',
+              realm: testRealm({
+                id: 'realm-1',
+                maxEnvironmentLaxity: realmEnv as RealmRow['maxEnvironmentLaxity'],
+              }),
+            },
+            reply
+          ),
+      };
+    }
+
+    // ADR-008 (revised): http://localhost (loopback) redirects are the RFC 8252
+    // standard for native / CLI clients (incl. MCP clients). They pass the gate
+    // whenever PKCE is enforced — true for staging/production — so loopback +
+    // PKCE works against a production AS. "Passing the gate" means the request
+    // is not rejected and flows on to the unauthenticated login redirect (these
+    // requests carry no session).
+    it('production realm/client PERMITS http://localhost (PKCE enforced — RFC 8252)', async () => {
+      const { state, call } = await run('production', 'production');
+      await call();
+      expectSignIn(state);
+    });
+
+    it('staging client PERMITS http://localhost (PKCE enforced)', async () => {
+      const { state, call } = await run('staging', 'staging');
+      await call();
+      expectSignIn(state);
+    });
+
+    it('an UNSET environment fails safe to production, which PERMITS http://localhost (PKCE enforced)', async () => {
+      const { state, call } = await run('bogus', 'also-bogus');
+      await call();
+      expectSignIn(state);
+    });
+
+    it('development realm/client PERMITS http://localhost (passes the gate, proceeds to login)', async () => {
+      const { state, call } = await run('development', 'development');
+      // Not rejected by the gate — flows on to the unauthenticated login redirect
+      // (the request carries no session), proving the localhost URI was allowed.
+      await call();
+      expectSignIn(state);
+    });
+
+    it('a production realm caps a development client but still PERMITS http://localhost (PKCE enforced)', async () => {
+      const { state, call } = await run('production', 'development');
+      await call();
+      expectSignIn(state);
+    });
   }
+);
 
-  // ADR-008 (revised): http://localhost (loopback) redirects are the RFC 8252
-  // standard for native / CLI clients (incl. MCP clients). They pass the gate
-  // whenever PKCE is enforced — true for staging/production — so loopback +
-  // PKCE works against a production AS. "Passing the gate" means the request
-  // is not rejected and flows on to the unauthenticated login redirect (these
-  // requests carry no session).
-  it('production realm/client PERMITS http://localhost (PKCE enforced — RFC 8252)', async () => {
-    const { state, call } = await run('production', 'production');
-    await call();
-    expect(state.redirected).toContain('/ui/login?return_to=');
-  });
-
-  it('staging client PERMITS http://localhost (PKCE enforced)', async () => {
-    const { state, call } = await run('staging', 'staging');
-    await call();
-    expect(state.redirected).toContain('/ui/login?return_to=');
-  });
-
-  it('an UNSET environment fails safe to production, which PERMITS http://localhost (PKCE enforced)', async () => {
-    const { state, call } = await run('bogus', 'also-bogus');
-    await call();
-    expect(state.redirected).toContain('/ui/login?return_to=');
-  });
-
-  it('development realm/client PERMITS http://localhost (passes the gate, proceeds to login)', async () => {
-    const { state, call } = await run('development', 'development');
-    // Not rejected by the gate — flows on to the unauthenticated login redirect
-    // (the request carries no session), proving the localhost URI was allowed.
-    await call();
-    expect(state.redirected).toContain('/ui/login?return_to=');
-  });
-
-  it('a production realm caps a development client but still PERMITS http://localhost (PKCE enforced)', async () => {
-    const { state, call } = await run('production', 'development');
-    await call();
-    expect(state.redirected).toContain('/ui/login?return_to=');
-  });
-});
-
-describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3, #414)', () => {
+describeModes('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3, #414)', () => {
   // A logged-in user with standing consent, so a matching request issues a
   // code straight away: the test sees both the stored redirect_uri and the
   // Location header.
@@ -2383,170 +2529,176 @@ describe('GET /oauth/authorize — loopback redirect on any port (RFC 8252 §7.3
   });
 });
 
-describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)', () => {
-  // The issuer of the realm this suite's requests are resolved to (REALM),
-  // the `iss` of the tokens the realm signs (#491).
-  const RAW_ISSUER = 'https://auth.example.com';
+describeModes(
+  'GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization response (#282)',
+  () => {
+    // The issuer of the realm this suite's requests are resolved to (REALM),
+    // the `iss` of the tokens the realm signs (#491).
+    const RAW_ISSUER = 'https://auth.example.com';
 
-  /**
-   * The value discovery publishes as `issuer`. Every assertion below compares
-   * the redirect's `iss` against THIS rather than a hard-coded literal: the
-   * acceptance criterion is byte-equality between the two documents, so the
-   * test must break if either side starts shaping the issuer differently.
-   */
-  function discoveryIssuer(raw: string): string {
-    return buildAuthorizationServerMetadata({ issuer: raw })['issuer'] as string;
-  }
-
-  /** The `iss` a redirect actually carried, percent-decoded as a client reads it. */
-  function issOf(redirected: string | undefined): string | null {
-    expect(redirected).toBeDefined();
-    return new URL(redirected as string).searchParams.get('iss');
-  }
-
-  interface RunOptions {
-    client?: Record<string, unknown>;
-    query?: Record<string, unknown>;
-    /** Browser session (default: fresh, valid). `null` drops the cookie entirely. */
-    session?: { authTime?: number } | null;
-    /** Prior consent used to reach the consent-skip / code-issuance path. */
-    consent?: Record<string, unknown> | null;
     /**
-     * The issuer of the request's realm, to prove `iss` tracks the realm row
-     * verbatim (#490).
+     * The value discovery publishes as `issuer`. Every assertion below compares
+     * the redirect's `iss` against THIS rather than a hard-coded literal: the
+     * acceptance criterion is byte-equality between the two documents, so the
+     * test must break if either side starts shaping the issuer differently.
      */
-    realmIssuer?: string;
-  }
-
-  async function run(opts: RunOptions = {}) {
-    const { fastify, ctx, sessions } = makeFastify();
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
-      opts.client ?? CLIENT
-    );
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
-      opts.consent === undefined ? { scopes: ['email', 'read:foo'], revokedAt: null } : opts.consent
-    );
-
-    const headers: Record<string, string> = {};
-    if (opts.session !== null) {
-      const { cookie } = await sessions.signIn({
-        realmId: REALM.id,
-        userId: 'user-1',
-        ...opts.session,
-      });
-      headers['cookie'] = cookie;
+    function discoveryIssuer(raw: string): string {
+      return buildAuthorizationServerMetadata({ issuer: raw })['issuer'] as string;
     }
 
-    const query = { ...BASE_QUERY, ...opts.query };
-    const { reply, state } = createReply();
-    await ctx.handler!(
-      {
-        query,
-        url: `/oauth/authorize?response_type=code&client_id=${query.client_id}&scope=${encodeURIComponent(String(query.scope))}`,
-        headers,
-        ip: '127.0.0.1',
-        ...(opts.realmIssuer === undefined
-          ? {}
-          : { realm: testRealm({ id: REALM.id, issuer: opts.realmIssuer }) }),
-      },
-      reply
-    );
-    return { fastify, state };
-  }
-
-  it('success response carries `iss` alongside the code (RFC 9207 §2)', async () => {
-    const { fastify, state } = await run();
-    expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
-    expect(state.redirected).toContain('code=');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
-
-  // RFC 9700 §4.11.2: these three run before any user interaction and no
-  // working flow depends on the redirect, so a client that may not use this
-  // endpoint is answered with a 400 and never redirected — for every client,
-  // since DCR alone can register one that fails them, with any redirect URI.
-  it.each([
-    ['client disabled', { enabled: false }],
-    // ANT-2026-DR5XI3LV: an operator's suspension, whatever `enabled` says.
-    ['client suspended by the operator', { enabled: true, suspended: true }],
-    ['grant type not allowed', { grantTypes: ['client_credentials'] }],
-    ['response type not allowed', { responseTypes: [] }],
-  ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {
-    for (const client of [
-      { ...CLIENT, ...override },
-      {
-        ...CLIENT,
-        ...override,
-        provisionedByOperator: false,
-        dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
-      },
-    ]) {
-      await expect(run({ client })).rejects.toMatchObject({
-        message: 'unauthorized_client',
-        statusCode: 400,
-      });
+    /** The `iss` a redirect actually carried, percent-decoded as a client reads it. */
+    function issOf(redirected: string | undefined): string | null {
+      expect(redirected).toBeDefined();
+      return new URL(redirected as string).searchParams.get('iss');
     }
-  });
 
-  it('invalid_scope (agent scope-mode cap exceeded) carries `iss`', async () => {
-    const { state } = await run({
-      client: {
-        ...CLIENT,
-        clientId: 'agent-ro',
-        scopes: ['agent:readonly', 'agent:exec', 'email'],
-        isAgent: true,
-        maxAgentMode: 'readonly',
-      },
-      query: { client_id: 'agent-ro', scope: 'agent:exec' },
-      consent: { scopes: ['agent:readonly', 'agent:exec', 'email'], revokedAt: null },
+    interface RunOptions {
+      client?: Record<string, unknown>;
+      query?: Record<string, unknown>;
+      /** Browser session (default: fresh, valid). `null` drops the cookie entirely. */
+      session?: { authTime?: number } | null;
+      /** Prior consent used to reach the consent-skip / code-issuance path. */
+      consent?: Record<string, unknown> | null;
+      /**
+       * The issuer of the request's realm, to prove `iss` tracks the realm row
+       * verbatim (#490).
+       */
+      realmIssuer?: string;
+    }
+
+    async function run(opts: RunOptions = {}) {
+      const { fastify, ctx, sessions } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        opts.client ?? CLIENT
+      );
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+        opts.consent === undefined
+          ? { scopes: ['email', 'read:foo'], revokedAt: null }
+          : opts.consent
+      );
+
+      const headers: Record<string, string> = {};
+      if (opts.session !== null) {
+        const { cookie } = await sessions.signIn({
+          realmId: REALM.id,
+          userId: 'user-1',
+          ...opts.session,
+        });
+        headers['cookie'] = cookie;
+      }
+
+      const query = { ...BASE_QUERY, ...opts.query };
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query,
+          url: `/oauth/authorize?response_type=code&client_id=${query.client_id}&scope=${encodeURIComponent(String(query.scope))}`,
+          headers,
+          ip: '127.0.0.1',
+          ...(opts.realmIssuer === undefined
+            ? {}
+            : { realm: testRealm({ id: REALM.id, issuer: opts.realmIssuer }) }),
+        },
+        reply
+      );
+      return { fastify, state };
+    }
+
+    it('success response carries `iss` alongside the code (RFC 9207 §2)', async () => {
+      const { fastify, state } = await run();
+      expect(fastify.repositories.authorizationCodes.create).toHaveBeenCalledOnce();
+      expect(state.redirected).toContain('code=');
+      expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
     });
-    expect(state.redirected).toContain('error=invalid_scope');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
 
-  it('prompt=none interaction_required-class errors carry `iss` (OIDC Core §3.1.2.1 path)', async () => {
-    // A dangerous scope on a stale session would normally bounce to /ui/login;
-    // prompt=none converts that into a bare error redirect, which is still an
-    // authorization response and so still needs the mix-up defence.
-    const { state } = await run({
-      client: { ...CLIENT, clientId: 'app-danger', scopes: ['read:foo', 'write:foo', 'email'] },
-      query: { client_id: 'app-danger', scope: 'write:foo', prompt: 'none' },
-      session: { authTime: Date.now() - STEP_UP_FRESH_AUTH_WINDOW_MS * 10 },
-      consent: { scopes: ['read:foo', 'write:foo', 'email'], revokedAt: null },
+    // RFC 9700 §4.11.2: these three run before any user interaction and no
+    // working flow depends on the redirect, so a client that may not use this
+    // endpoint is answered with a 400 and never redirected — for every client,
+    // since DCR alone can register one that fails them, with any redirect URI.
+    it.each([
+      ['client disabled', { enabled: false }],
+      // ANT-2026-DR5XI3LV: an operator's suspension, whatever `enabled` says.
+      ['client suspended by the operator', { enabled: true, suspended: true }],
+      ['grant type not allowed', { grantTypes: ['client_credentials'] }],
+      ['response type not allowed', { responseTypes: [] }],
+    ])('unauthorized_client (%s) is a 400, never a redirect', async (_label, override) => {
+      for (const client of [
+        { ...CLIENT, ...override },
+        {
+          ...CLIENT,
+          ...override,
+          provisionedByOperator: false,
+          dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+        },
+      ]) {
+        await expect(run({ client })).rejects.toMatchObject({
+          message: 'unauthorized_client',
+          statusCode: 400,
+        });
+      }
     });
-    expect(state.redirected).toContain('error=login_required');
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
-  });
 
-  it('emits `iss` VERBATIM — a mixed-case issuer with a port and a path matches discovery byte for byte', async () => {
-    // Guards the acceptance criterion directly: whatever shaping discovery
-    // applies (trailing-slash strip and nothing else), the redirect applies the
-    // same. `new URL(...)` would have lower-cased the host and dropped :443.
-    // The realm row holds the issuer without a trailing slash (a CHECK refuses
-    // one), the form discovery publishes.
-    const RAW = 'https://Auth.EXAMPLE.com:8443/idp';
-    const { state } = await run({ realmIssuer: RAW });
-    expect(state.redirected).toContain('code=');
-    expect(discoveryIssuer(RAW)).toBe(RAW);
-    expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW));
-  });
+    it('invalid_scope (agent scope-mode cap exceeded) carries `iss`', async () => {
+      const { state } = await run({
+        client: {
+          ...CLIENT,
+          clientId: 'agent-ro',
+          scopes: ['agent:readonly', 'agent:exec', 'email'],
+          isAgent: true,
+          maxAgentMode: 'readonly',
+        },
+        query: { client_id: 'agent-ro', scope: 'agent:exec' },
+        consent: { scopes: ['agent:readonly', 'agent:exec', 'email'], revokedAt: null },
+      });
+      expect(state.redirected).toContain('error=invalid_scope');
+      expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+    });
 
-  it("emits the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
-    const { state } = await run({ realmIssuer: 'https://b.example.com' });
-    expect(state.redirected).toContain('code=');
-    expect(issOf(state.redirected)).toBe('https://b.example.com');
-  });
+    it('prompt=none interaction_required-class errors carry `iss` (OIDC Core §3.1.2.1 path)', async () => {
+      // A dangerous scope on a stale session would normally bounce to /ui/login;
+      // prompt=none converts that into a bare error redirect, which is still an
+      // authorization response and so still needs the mix-up defence.
+      const { state } = await run({
+        client: { ...CLIENT, clientId: 'app-danger', scopes: ['read:foo', 'write:foo', 'email'] },
+        query: { client_id: 'app-danger', scope: 'write:foo', prompt: 'none' },
+        session: { authTime: Date.now() - STEP_UP_FRESH_AUTH_WINDOW_MS * 10 },
+        consent: { scopes: ['read:foo', 'write:foo', 'email'], revokedAt: null },
+      });
+      expect(state.redirected).toContain('error=login_required');
+      expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW_ISSUER));
+    });
 
-  it('does NOT attach `iss` to internal /ui redirects (they are not authorization responses)', async () => {
-    // /ui/login and /ui/consent are same-origin UI hops, not RFC 6749 §4.1.2
-    // responses to the client. Emitting `iss` there would be meaningless noise
-    // and would leak into the return_to round-trip.
-    const { state } = await run({ session: null });
-    expect(state.redirected).toContain('/ui/login?return_to=');
-    expect(state.redirected).not.toContain('iss=');
-  });
-});
+    it('emits `iss` VERBATIM — a mixed-case issuer with a port and a path matches discovery byte for byte', async () => {
+      // Guards the acceptance criterion directly: whatever shaping discovery
+      // applies (trailing-slash strip and nothing else), the redirect applies the
+      // same. `new URL(...)` would have lower-cased the host and dropped :443.
+      // The realm row holds the issuer without a trailing slash (a CHECK refuses
+      // one), the form discovery publishes.
+      const RAW = 'https://Auth.EXAMPLE.com:8443/idp';
+      const { state } = await run({ realmIssuer: RAW });
+      expect(state.redirected).toContain('code=');
+      expect(discoveryIssuer(RAW)).toBe(RAW);
+      expect(issOf(state.redirected)).toBe(discoveryIssuer(RAW));
+    });
+
+    it("emits the request realm's issuer, not JWT_ISSUER (ADR-019 Decision 1, #490)", async () => {
+      const { state } = await run({ realmIssuer: 'https://b.example.com' });
+      expect(state.redirected).toContain('code=');
+      expect(issOf(state.redirected)).toBe('https://b.example.com');
+    });
+
+    it('does NOT attach `iss` to internal /ui redirects (they are not authorization responses)', async () => {
+      // /ui/login and /ui/consent, and the ceremony page (#628), are
+      // same-origin UI hops, not RFC 6749 §4.1.2 responses to the client.
+      // Emitting `iss` there would be meaningless noise and would leak into the
+      // return_to round-trip.
+      const { state } = await run({ session: null });
+      expectSignIn(state);
+      expect(state.redirected).not.toContain('iss=');
+    });
+  }
+);
 
 /**
  * RFC 9700 §4.11.2 ("Authorization Server as Open Redirector"): the AS may
@@ -2561,134 +2713,139 @@ describe('GET /oauth/authorize — RFC 9207 §2 `iss` on every authorization res
  * for such a client — at any age. Operator-provisioned clients keep the
  * automatic redirect OpenID Connect requires.
  */
-describe('GET /oauth/authorize — error responses for clients no operator provisioned (RFC 9700 §4.11.2)', () => {
-  const ATTACKER_CB = 'https://login-qauth.attacker.example/sign-in';
-  const DCR_CLIENT = {
-    ...CLIENT,
-    clientId: 'dcr-client',
-    redirectUris: [ATTACKER_CB],
-    provisionedByOperator: false,
-    // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
-    dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
-    metadata: { registrationType: 'dynamic' },
-  };
-  // What `POST /api/clients` writes for an account anyone can open: no DCR or
-  // CIMD marker at all, which the earlier rule read as trusted.
-  const DEVELOPER_CLIENT = {
-    ...CLIENT,
-    clientId: '0190a000-0000-7000-8000-0000000000d1',
-    redirectUris: [ATTACKER_CB],
-    provisionedByOperator: false,
-    developerId: '0190a000-0000-7000-8000-00000000000a',
-    dynamicRegisteredAt: null,
-    metadata: null,
-  };
-  // A CIMD client is covered in the CIMD suite above, which resolves a real
-  // document through the (mocked) network layer.
-
-  async function run(
-    client: Record<string, unknown>,
-    opts: { prompt?: string; session?: boolean; scope?: string; consent?: unknown } = {}
-  ) {
-    const { fastify, ctx, sessions } = makeFastify();
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(client);
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
-      opts.consent
-    );
-    const headers: Record<string, string> = {};
-    if (opts.session) {
-      const { cookie } = await sessions.signIn({
-        sid: 'sid-untrusted',
-        realmId: REALM.id,
-        userId: 'user-1',
-      });
-      headers['cookie'] = cookie;
-    }
-    const query = {
-      ...BASE_QUERY,
-      client_id: client.clientId,
-      redirect_uri: (client.redirectUris as string[])[0],
-      scope: opts.scope ?? 'email',
-      ...(opts.prompt ? { prompt: opts.prompt } : {}),
+describeModes(
+  'GET /oauth/authorize — error responses for clients no operator provisioned (RFC 9700 §4.11.2)',
+  () => {
+    const ATTACKER_CB = 'https://login-qauth.attacker.example/sign-in';
+    const DCR_CLIENT = {
+      ...CLIENT,
+      clientId: 'dcr-client',
+      redirectUris: [ATTACKER_CB],
+      provisionedByOperator: false,
+      // Long past DYNAMIC_CLIENT_BADGE_DAYS: who registered it has not changed.
+      dynamicRegisteredAt: Date.now() - 400 * 24 * 60 * 60 * 1000,
+      metadata: { registrationType: 'dynamic' },
     };
-    const { reply, state } = createReply();
-    await ctx.handler!(
-      { query, url: '/oauth/authorize?response_type=code', headers, ip: '127.0.0.1' },
-      reply
-    );
-    return { fastify, state };
+    // What `POST /api/clients` writes for an account anyone can open: no DCR or
+    // CIMD marker at all, which the earlier rule read as trusted.
+    const DEVELOPER_CLIENT = {
+      ...CLIENT,
+      clientId: '0190a000-0000-7000-8000-0000000000d1',
+      redirectUris: [ATTACKER_CB],
+      provisionedByOperator: false,
+      developerId: '0190a000-0000-7000-8000-00000000000a',
+      dynamicRegisteredAt: null,
+      metadata: null,
+    };
+    // A CIMD client is covered in the CIMD suite above, which resolves a real
+    // document through the (mocked) network layer.
+
+    async function run(
+      client: Record<string, unknown>,
+      opts: { prompt?: string; session?: boolean; scope?: string; consent?: unknown } = {}
+    ) {
+      const { fastify, ctx, sessions } = makeFastify();
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        client
+      );
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(
+        opts.consent
+      );
+      const headers: Record<string, string> = {};
+      if (opts.session) {
+        const { cookie } = await sessions.signIn({
+          sid: 'sid-untrusted',
+          realmId: REALM.id,
+          userId: 'user-1',
+        });
+        headers['cookie'] = cookie;
+      }
+      const query = {
+        ...BASE_QUERY,
+        client_id: client.clientId,
+        redirect_uri: (client.redirectUris as string[])[0],
+        scope: opts.scope ?? 'email',
+        ...(opts.prompt ? { prompt: opts.prompt } : {}),
+      };
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        { query, url: '/oauth/authorize?response_type=code', headers, ip: '127.0.0.1' },
+        reply
+      );
+      return { fastify, state };
+    }
+
+    function expectShownNotRedirected(
+      state: { statusCode?: number; redirected?: string; body?: unknown },
+      error: string
+    ) {
+      expect(state.redirected).toBeUndefined();
+      expect(state.statusCode).toBe(400);
+      const body = state.body as string;
+      expect(body).toContain(`<code>${error}</code>`);
+      expect(body).toContain('login-qauth.attacker.example');
+    }
+
+    it('prompt=none with no session: a dynamically registered client gets login_required on the issuer, not a 302', async () => {
+      const { state } = await run(DCR_CLIENT, { prompt: 'none' });
+      expectShownNotRedirected(state, 'login_required');
+    });
+
+    it('prompt=none with no session: a client a developer created through POST /api/clients gets login_required on the issuer, not a 302', async () => {
+      const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none' });
+      expectShownNotRedirected(state, 'login_required');
+    });
+
+    it('prompt=none with a session but no consent: a developer-created client gets consent_required on the issuer', async () => {
+      const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none', session: true });
+      expectShownNotRedirected(state, 'consent_required');
+    });
+
+    it('a client with no provisioning marker at all is not trusted (fail closed)', async () => {
+      const { provisionedByOperator: _omitted, ...unmarked } = CLIENT;
+      const { state } = await run(
+        { ...unmarked, redirectUris: [ATTACKER_CB] } as Record<string, unknown>,
+        { prompt: 'none' }
+      );
+      expectShownNotRedirected(state, 'login_required');
+    });
+
+    it('prompt=none with no session: an operator-provisioned client keeps the OIDC redirect', async () => {
+      const { state } = await run(CLIENT, { prompt: 'none' });
+      expect(state.statusCode).toBe(302);
+      expect(state.redirected).toContain('https://example.com/cb');
+      expect(state.redirected).toContain('error=login_required');
+      // No user is signed in: the requesting client is the actor.
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:step_up.required:v1-rc.0',
+        { reason: 'prompt_none_no_session', error: 'login_required' },
+        { realmId: 'realm-1', clientId: CLIENT.clientId, actor: 'client' }
+      );
+    });
+
+    it('prompt=none with a session but no consent: consent_required is shown, not redirected', async () => {
+      const { state } = await run(DCR_CLIENT, { prompt: 'none', session: true });
+      expectShownNotRedirected(state, 'consent_required');
+    });
+
+    it('agent scope-mode refusal with a session: invalid_scope is shown, not redirected', async () => {
+      const { fastify, state } = await run(
+        { ...DCR_CLIENT, scopes: ['agent:exec', 'email'] },
+        { session: true, scope: 'agent:exec' }
+      );
+      expectShownNotRedirected(state, 'invalid_scope');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    });
+
+    it('the interactive path is unchanged: no session goes to the login page', async () => {
+      const { state } = await run(DCR_CLIENT);
+      expectSignIn(state);
+    });
   }
-
-  function expectShownNotRedirected(
-    state: { statusCode?: number; redirected?: string; body?: unknown },
-    error: string
-  ) {
-    expect(state.redirected).toBeUndefined();
-    expect(state.statusCode).toBe(400);
-    const body = state.body as string;
-    expect(body).toContain(`<code>${error}</code>`);
-    expect(body).toContain('login-qauth.attacker.example');
-  }
-
-  it('prompt=none with no session: a dynamically registered client gets login_required on the issuer, not a 302', async () => {
-    const { state } = await run(DCR_CLIENT, { prompt: 'none' });
-    expectShownNotRedirected(state, 'login_required');
-  });
-
-  it('prompt=none with no session: a client a developer created through POST /api/clients gets login_required on the issuer, not a 302', async () => {
-    const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none' });
-    expectShownNotRedirected(state, 'login_required');
-  });
-
-  it('prompt=none with a session but no consent: a developer-created client gets consent_required on the issuer', async () => {
-    const { state } = await run(DEVELOPER_CLIENT, { prompt: 'none', session: true });
-    expectShownNotRedirected(state, 'consent_required');
-  });
-
-  it('a client with no provisioning marker at all is not trusted (fail closed)', async () => {
-    const { provisionedByOperator: _omitted, ...unmarked } = CLIENT;
-    const { state } = await run(
-      { ...unmarked, redirectUris: [ATTACKER_CB] } as Record<string, unknown>,
-      { prompt: 'none' }
-    );
-    expectShownNotRedirected(state, 'login_required');
-  });
-
-  it('prompt=none with no session: an operator-provisioned client keeps the OIDC redirect', async () => {
-    const { state } = await run(CLIENT, { prompt: 'none' });
-    expect(state.statusCode).toBe(302);
-    expect(state.redirected).toContain('https://example.com/cb');
-    expect(state.redirected).toContain('error=login_required');
-    // No user is signed in: the requesting client is the actor.
-    expect(emitUserEventMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'urn:qauth:event:step_up.required:v1-rc.0',
-      { reason: 'prompt_none_no_session', error: 'login_required' },
-      { realmId: 'realm-1', clientId: CLIENT.clientId, actor: 'client' }
-    );
-  });
-
-  it('prompt=none with a session but no consent: consent_required is shown, not redirected', async () => {
-    const { state } = await run(DCR_CLIENT, { prompt: 'none', session: true });
-    expectShownNotRedirected(state, 'consent_required');
-  });
-
-  it('agent scope-mode refusal with a session: invalid_scope is shown, not redirected', async () => {
-    const { fastify, state } = await run(
-      { ...DCR_CLIENT, scopes: ['agent:exec', 'email'] },
-      { session: true, scope: 'agent:exec' }
-    );
-    expectShownNotRedirected(state, 'invalid_scope');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-  });
-
-  it('the interactive path is unchanged: no session goes to the login page', async () => {
-    const { state } = await run(DCR_CLIENT);
-    expect(state.redirected).toContain('/ui/login?return_to=');
-  });
-});
+);
 
 /**
  * Regression suite for qauth-labs/qauth#316 — long opaque `state` / `nonce`.
@@ -2708,7 +2865,7 @@ describe('GET /oauth/authorize — error responses for clients no operator provi
  * context into `state`, which lands ~275 chars with a workspace open but under
  * 255 with an empty window. LONG_STATE below reproduces the over-cap shape.
  */
-describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
+describeModes('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
   /**
    * A realistic Cursor-shaped `state`: base64url of a JSON blob carrying
    * workspace + attempt context. 282 chars — comfortably over the old 255 cap
@@ -2808,7 +2965,7 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
     expect(redirected.searchParams.get('code')).toBeTruthy();
   });
 
-  it('carries the full state through the /ui/consent hop when consent is required', async () => {
+  it('carries the full state through the consent hop when consent is required', async () => {
     // The consent round-trip is where the flow used to die one step later: the
     // authorize query schema accepted the value, then the form mirror rejected
     // it. The return query must carry the state whole for that hop to work.
@@ -2836,78 +2993,219 @@ describe('GET /oauth/authorize — long opaque state/nonce (#316)', () => {
       reply
     );
 
-    expect(state.redirected).toContain('/ui/consent?');
+    expectConsent(state);
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+    if (env.INTERACTION_UI_ENABLED) {
+      // #628: the interaction holds them whole; the ceremony path carries none.
+      expect(startedInteraction().request).toMatchObject({ state: LONG_STATE, nonce: LONG_NONCE });
+      return;
+    }
     const consentUrl = new URL(state.redirected as string, 'https://auth.example.com');
     expect(consentUrl.searchParams.get('state')).toBe(LONG_STATE);
     expect(consentUrl.searchParams.get('nonce')).toBe(LONG_NONCE);
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
   });
 });
 
-describe('GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 9449 §10, #480)', () => {
-  const JKT = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
+describeModes(
+  'GET /oauth/authorize — dpop_jkt binds the code to a DPoP key (RFC 9449 §10, #480)',
+  () => {
+    const JKT = '0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I';
 
-  /** A signed-in user whose stored consent covers the request, so a code is minted. */
-  async function issueCode(dpopOn: boolean, dpopJkt: unknown) {
-    const { fastify, ctx, sessions } = makeFastify();
-    (fastify as unknown as { dpop: unknown }).dpop = dpopOn
-      ? { algorithms: ['ES256'], verifyRequest: vi.fn() }
-      : null;
-    await authorizeRoute(fastify);
-    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
-    (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
-    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
-      scopes: ['email', 'read:foo'],
-      revokedAt: null,
-    });
-    const { cookie } = await sessions.signIn({
-      sid: 'sid-dpop',
-      realmId: REALM.id,
-      userId: 'user-1',
-    });
-    const { reply, state } = createReply();
-    await ctx.handler!(
-      {
-        query: { ...BASE_QUERY, dpop_jkt: dpopJkt },
-        url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
-        headers: { cookie },
-        ip: '127.0.0.1',
-      },
-      reply
-    );
-    return { fastify, state };
-  }
+    /** A signed-in user whose stored consent covers the request, so a code is minted. */
+    async function issueCode(dpopOn: boolean, dpopJkt: unknown) {
+      const { fastify, ctx, sessions } = makeFastify();
+      (fastify as unknown as { dpop: unknown }).dpop = dpopOn
+        ? { algorithms: ['ES256'], verifyRequest: vi.fn() }
+        : null;
+      await authorizeRoute(fastify);
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+        CLIENT
+      );
+      (fastify.jwtUtils.extractFromHeader as unknown as Mock).mockReturnValue(null);
+      (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+        scopes: ['email', 'read:foo'],
+        revokedAt: null,
+      });
+      const { cookie } = await sessions.signIn({
+        sid: 'sid-dpop',
+        realmId: REALM.id,
+        userId: 'user-1',
+      });
+      const { reply, state } = createReply();
+      await ctx.handler!(
+        {
+          query: { ...BASE_QUERY, dpop_jkt: dpopJkt },
+          url: '/oauth/authorize?response_type=code&client_id=app-123&scope=email',
+          headers: { cookie },
+          ip: '127.0.0.1',
+        },
+        reply
+      );
+      return { fastify, state };
+    }
 
-  it('stores the thumbprint on the code while DPoP is on', async () => {
-    const { fastify, state } = await issueCode(true, JKT);
-    const [created] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
-      .calls[0];
-    expect(created.dpopJkt).toBe(JKT);
-    expect(state.redirected).toContain('code=');
-  });
-
-  it('refuses a dpop_jkt that is not a SHA-256 thumbprint, before any code is minted', async () => {
-    const { fastify, state } = await issueCode(true, 'not-a-thumbprint');
-    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
-    expect(state.redirected).toContain('error=invalid_request');
-    expect(state.redirected).toContain('state=xyz');
-    expect(emitUserEventMock).toHaveBeenCalledWith(
-      expect.anything(),
-      'urn:qauth:event:authorization.failed:v1-rc.0',
-      { error: 'invalid_request', reason: 'dpop_jkt_malformed' },
-      expect.objectContaining({ clientId: CLIENT.clientId })
-    );
-  });
-
-  it('reads no dpop_jkt while DPoP is off: the code is unbound, whatever the value', async () => {
-    // Before DPoP the schema stripped the parameter, so a repeated one or one
-    // of any length went through; with DPoP off it still does.
-    for (const value of [JKT, 'not-a-thumbprint', [JKT, JKT], 'x'.repeat(5000)]) {
-      const { fastify, state } = await issueCode(false, value);
+    it('stores the thumbprint on the code while DPoP is on', async () => {
+      const { fastify, state } = await issueCode(true, JKT);
       const [created] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
         .calls[0];
-      expect(created.dpopJkt).toBeNull();
+      expect(created.dpopJkt).toBe(JKT);
       expect(state.redirected).toContain('code=');
+    });
+
+    it('refuses a dpop_jkt that is not a SHA-256 thumbprint, before any code is minted', async () => {
+      const { fastify, state } = await issueCode(true, 'not-a-thumbprint');
+      expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+      expect(state.redirected).toContain('error=invalid_request');
+      expect(state.redirected).toContain('state=xyz');
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: 'invalid_request', reason: 'dpop_jkt_malformed' },
+        expect.objectContaining({ clientId: CLIENT.clientId })
+      );
+    });
+
+    it('reads no dpop_jkt while DPoP is off: the code is unbound, whatever the value', async () => {
+      // Before DPoP the schema stripped the parameter, so a repeated one or one
+      // of any length went through; with DPoP off it still does.
+      for (const value of [JKT, 'not-a-thumbprint', [JKT, JKT], 'x'.repeat(5000)]) {
+        const { fastify, state } = await issueCode(false, value);
+        const [created] = (fastify.repositories.authorizationCodes.create as unknown as Mock).mock
+          .calls[0];
+        expect(created.dpopJkt).toBeNull();
+        expect(state.redirected).toContain('code=');
+      }
+    });
+  }
+);
+
+describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
+  beforeEach(() => {
+    mutableEnv.INTERACTION_UI_ENABLED = true;
+  });
+  afterEach(() => {
+    mutableEnv.INTERACTION_UI_ENABLED = false;
+  });
+
+  /** The endpoint, for `query`, with a client allowing `scopes`, and `cookie` when signed in. */
+  async function authorize(
+    query: Record<string, unknown>,
+    options: { readonly scopes?: string[]; readonly signedIn?: boolean } = {}
+  ) {
+    const { fastify, ctx, sessions } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+      ...CLIENT,
+      scopes: options.scopes ?? CLIENT.scopes,
+    });
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
+    const headers: Record<string, string> = {};
+    let authTime: number | undefined;
+    if (options.signedIn === true) {
+      const signedIn = await sessions.signIn({
+        sid: 'sid-628',
+        realmId: REALM.id,
+        userId: 'user-1',
+      });
+      headers.cookie = signedIn.cookie;
+      authTime = (await sessions.service.get({ realmId: REALM.id, sid: 'sid-628' }))?.authTime;
+    }
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      { query: { ...BASE_QUERY, ...query }, url: '/oauth/authorize', headers, ip: '127.0.0.1' },
+      reply
+    );
+    return { fastify, state, authTime };
+  }
+
+  it('redirects to the ceremony path with the id only, whatever the request carries', async () => {
+    const state2048 = 's'.repeat(OAUTH_OPAQUE_PARAM_MAX_LENGTH);
+    const { state, fastify } = await authorize({ state: state2048, nonce: 'n'.repeat(300) });
+
+    expectSignIn(state);
+    expect(state.redirected).toBe(`/ui/interaction/${INTERACTION_ID}`);
+    expect(startedInteraction().request).toMatchObject({ state: state2048 });
+    expect(fastify.sessionUtils.setSession).not.toHaveBeenCalled();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('pre-fills the identifier with login_hint, in the personal data and never in the params', async () => {
+    const { state } = await authorize({ login_hint: 'alice@example.com' });
+
+    expectSignIn(state);
+    const input = startedInteraction();
+    expect(input.step).toEqual({ name: stepUrn('identifier'), params: {}, alternatives: [] });
+    expect(input.personal).toEqual({ login_hint: 'alice@example.com' });
+  });
+
+  it('starts the sign-in with no prefill when there is no login_hint', async () => {
+    const { state } = await authorize({});
+
+    expectSignIn(state);
+    expect(startedInteraction().personal).toEqual({});
+  });
+
+  it('starts the consent for the signed-in user, with the requested scopes and resources', async () => {
+    const { state, authTime } = await authorize(
+      { scope: 'email write:foo', resource: ['https://api.example.com/v1'] },
+      { scopes: ['email', 'write:foo'], signedIn: true }
+    );
+
+    expectConsent(state);
+    const input = startedInteraction();
+    expect(input.step).toEqual({
+      name: stepUrn('consent'),
+      params: {
+        scopes: [
+          { scope: 'email', sensitive: false, dangerous: false },
+          { scope: 'write:foo', sensitive: false, dangerous: true },
+        ],
+        resources: ['https://api.example.com/v1'],
+        remember_default: true,
+      },
+      alternatives: [],
+    });
+    expect(input.transaction).toEqual({ userId: 'user-1', sid: 'sid-628', authTime, amr: [] });
+  });
+
+  it('refuses a scope the consent step cannot show with invalid_scope, and starts nothing', async () => {
+    const { state, fastify } = await authorize(
+      { scope: 'odd<scope' },
+      { scopes: ['odd<scope'], signedIn: true }
+    );
+
+    expect(startInteraction).not.toHaveBeenCalled();
+    const location = new URL(state.redirected as string);
+    expect(`${location.origin}${location.pathname}`).toBe(BASE_QUERY.redirect_uri);
+    expect(location.searchParams.get('error')).toBe('invalid_scope');
+    expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
+    expect(location.searchParams.get('iss')).toBeTruthy();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('starts no interaction for prompt=none, signed in or not', async () => {
+    for (const signedIn of [false, true]) {
+      const { state } = await authorize({ prompt: 'none' }, { signedIn });
+
+      expect(startInteraction).not.toHaveBeenCalled();
+      expect(state.redirected).toMatch(/error=(login|consent)_required/);
+    }
+  });
+});
+
+describe('authorizeQuerySchema — login_hint (#628)', () => {
+  it('takes a login_hint of up to 254 bytes in UTF-8, and refuses a longer one', () => {
+    // 127 two-byte characters: 254 bytes.
+    for (const hint of ['alice@example.com', 'a'.repeat(254), 'é'.repeat(127)]) {
+      expect(authorizeQuerySchema.safeParse({ ...BASE_QUERY, login_hint: hint }).success).toBe(
+        true
+      );
+    }
+    // 255 characters, or 128 characters that are 256 bytes.
+    for (const hint of ['a'.repeat(255), 'é'.repeat(128)]) {
+      expect(authorizeQuerySchema.safeParse({ ...BASE_QUERY, login_hint: hint }).success).toBe(
+        false
+      );
     }
   });
 });

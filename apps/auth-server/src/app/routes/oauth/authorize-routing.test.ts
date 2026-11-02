@@ -24,6 +24,7 @@ import { emitUserEvent } from '../../helpers/user-events';
 
 vi.mock('../../../config/env', () => ({
   env: {
+    NODE_ENV: 'test',
     AUTHORIZE_RATE_LIMIT: 60,
     AUTHORIZE_RATE_LIMIT_LENIENT: 600,
     AUTHORIZE_RATE_WINDOW: 60,
@@ -55,6 +56,7 @@ beforeEach(() => {
   emitUserEventMock.mockClear();
 });
 
+import errorHandler from '../../plugins/error-handler';
 import authorizeRoute from './authorize';
 
 const REALM = testRealm({ id: 'realm-1' });
@@ -90,12 +92,16 @@ const QUERY = new URLSearchParams({
 let server: FastifyInstance | undefined;
 let sessions: ReturnType<typeof createBrowserSessionFixture>;
 
-async function buildServer(): Promise<FastifyInstance> {
+async function buildServer(
+  options: { readonly errorHandler?: boolean } = {}
+): Promise<FastifyInstance> {
   sessions = createBrowserSessionFixture();
   // Same router configuration as apps/auth-server/src/main.ts.
   const fastify = Fastify({ logger: false, routerOptions: { ignoreTrailingSlash: true } });
   fastify.setValidatorCompiler(validatorCompiler);
   fastify.setSerializerCompiler(serializerCompiler);
+  // The server's error handler, for the error body a refused request gets.
+  if (options.errorHandler === true) await fastify.register(errorHandler);
 
   const findActive = vi.fn();
   fastify.decorate('repositories', {
@@ -381,5 +387,31 @@ describe('POST /oauth/authorize routing', () => {
 
     expect(response.statusCode).toBe(302);
     expect(response.headers.location).toMatch(/^\/ui\/login\?return_to=/);
+  });
+});
+
+describe('GET /oauth/authorize — login_hint (#628)', () => {
+  it('refuses a login_hint over 254 bytes with invalid_request', async () => {
+    server = await buildServer({ errorHandler: true });
+    // 255 characters, and 128 characters that are 256 bytes in UTF-8.
+    for (const hint of ['a'.repeat(255), 'é'.repeat(128)]) {
+      const response = await server.inject({
+        method: 'GET',
+        url: `/oauth/authorize?${QUERY}&login_hint=${encodeURIComponent(hint)}`,
+      });
+
+      expect(response.statusCode, hint).toBe(400);
+      expect(response.json()).toMatchObject({ error: 'invalid_request' });
+    }
+  });
+
+  it('takes a login_hint of 254 bytes', async () => {
+    server = await buildServer({ errorHandler: true });
+    const response = await server.inject({
+      method: 'GET',
+      url: `/oauth/authorize?${QUERY}&login_hint=${encodeURIComponent('é'.repeat(127))}`,
+    });
+
+    expect(response.statusCode).toBe(302);
   });
 });
