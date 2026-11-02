@@ -127,6 +127,12 @@ export const SECURITY_LOG_KINDS = {
     sources: [planned('user.recovery_codes_failed', 649)],
     reportable: false,
   },
+  send_ceiling_reached: {
+    description:
+      'Codes were requested for the account’s address past the per-address send ceiling, and a notice with a reset pass went to it (ADR-017 Decision 7).',
+    sources: [planned('user.send_ceiling_reached', 637)],
+    reportable: false,
+  },
   identifier_changed: {
     description: 'The address the account signs in with, or its contact address, changed.',
     sources: [planned('user.identifier_changed', 690)],

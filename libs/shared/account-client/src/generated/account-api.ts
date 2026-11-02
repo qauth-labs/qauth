@@ -312,6 +312,7 @@ export type SecurityLogKind =
   | 'recovery_code_used'
   | 'recovery_codes_regenerated'
   | 'recovery_codes_failed'
+  | 'send_ceiling_reached'
   | 'identifier_changed'
   | 'account_linked'
   | 'account_unlinked'
