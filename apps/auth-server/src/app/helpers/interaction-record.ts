@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import { takeValue } from '@qauth-labs/fastify-plugin-cache';
+import { signInTransactionSchema } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { stepByUrn, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -25,7 +26,11 @@ import { authorizeQuerySchema } from '../schemas/oauth';
  *   engine transaction (who has been proved, how and when), the current step
  *   and its personal data, the flow-cookie binding (a hash, `flow-cookie.ts`),
  *   the creation time and an absolute expiry. A revision counts the written
- *   states, so an answer is bound to the step view it answers.
+ *   states, so an answer is bound to the step view it answers. Beside them,
+ *   the sign-in engine's own transaction (#616), which the engine hands back
+ *   each round and trusts once it is well formed, so it stays server-side,
+ *   and the key the step's CSRF value is derived from
+ *   (`interaction-csrf.ts`), which never leaves the server.
  * - **Expiry.** Absolute, `INTERACTION_TTL` after creation; an answer never
  *   extends it. An interaction nobody has answered ends sooner, at
  *   {@link INTERACTION_UNANSWERED_TTL_MS} after creation, and the first answer
@@ -56,8 +61,12 @@ const INTERACTION_ID_BYTES = 32;
 /** Exactly what `randomBytes(32).toString('base64url')` produces. */
 const INTERACTION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
-/** The record format. A record of another version reads as absent. */
-export const INTERACTION_RECORD_VERSION = 1;
+/**
+ * The record format. A record of another version reads as absent. Version 2
+ * (#616) added the CSRF key, the sign-in engine's transaction and the params
+ * of the alternatives.
+ */
+export const INTERACTION_RECORD_VERSION = 2;
 
 /** The identifier step: where an interaction starts again after a user switch. */
 export const IDENTIFIER_STEP = stepUrn('identifier');
@@ -93,14 +102,16 @@ const stepDataSchema = z.record(z.string().max(64), z.unknown());
 /**
  * The current step as the engine asks for it: its name, its params (what any
  * reader of the interaction id may see, never personal data), the steps
- * offered beside it, and the error of a refused answer, from the step's
- * closed error set.
+ * offered beside it with the params of each that has any, and the error of a
+ * refused answer, from the step's closed error set.
  */
 export const interactionStepSchema = z
   .strictObject({
     name: stepNameSchema,
     params: stepDataSchema,
     alternatives: z.array(stepNameSchema).max(15),
+    /** The params of the alternatives that have any, by step name (#616). */
+    alternativeParams: z.record(z.string().max(96), stepDataSchema).optional(),
     error: z
       .string()
       .regex(/^[a-z][a-z0-9_]{0,63}$/)
@@ -112,6 +123,11 @@ export const interactionStepSchema = z
     }
     if (new Set(step.alternatives).size !== step.alternatives.length) {
       context.addIssue({ code: 'custom', message: 'an alternative is listed twice' });
+    }
+    for (const name of Object.keys(step.alternativeParams ?? {})) {
+      if (!step.alternatives.includes(name)) {
+        context.addIssue({ code: 'custom', message: 'params of a step that is no alternative' });
+      }
     }
     const errors = stepByUrn(step.name)?.errors ?? [];
     if (step.error !== undefined && !errors.includes(step.error)) {
@@ -163,6 +179,17 @@ export const interactionRecordSchema = z.strictObject({
   transaction: interactionTransactionSchema,
   /** The SHA-256 (base64url) of the flow secret the record is bound to. */
   flowBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  /**
+   * The key each step's CSRF value is derived from (`interaction-csrf.ts`,
+   * #616): 32 random bytes, base64url, made with the record and never sent.
+   */
+  csrfKey: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+  /**
+   * The sign-in engine's transaction (#614, #616): what its rounds proved so
+   * far, `null` before its first round and once it completed. The engine
+   * trusts it once it is well formed, so only the server writes it.
+   */
+  signInTransaction: signInTransactionSchema.nullable(),
   revision: z.int().min(0).max(1_000_000),
   createdAt: z.int().positive(),
   expiresAt: z.int().positive(),

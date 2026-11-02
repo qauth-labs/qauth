@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
-import { InvalidRequestError } from '@qauth-labs/shared-errors';
+import type { SignInTransaction } from '@qauth-labs/fastify-plugin-sign-in-engine';
+import { ForbiddenError, InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -15,6 +16,7 @@ import {
   readFlowSecrets,
   setFlowCookie,
 } from './flow-cookie';
+import { interactionCsrf, matchesInteractionCsrf, mintCsrfKey } from './interaction-csrf';
 import { InteractionExpiredError } from './interaction-expired';
 import {
   deleteInteraction,
@@ -63,12 +65,15 @@ import { emitUserEvent } from './user-events';
  * | ---------------------------------- | -------------------------------------- |
  * | {@link readInteractionStep}        | the id: display data, no personal data |
  * | {@link readInteractionPersonalData}| the id and the flow cookie             |
- * | {@link answerInteraction}          | the id, the flow cookie, the revision  |
- * | {@link cancelInteraction}          | the id and the flow cookie             |
+ * | {@link answerInteraction}          | the id, the flow cookie, the CSRF value|
+ * | {@link cancelInteraction}          | the id, the flow cookie, the CSRF value|
  * | {@link switchInteractionUser}      | the id and the flow cookie             |
  *
- * (The answer and cancel routes add the step's CSRF value and the same-origin
- * check, #616.) A malformed id, an unknown one, an expired interaction, a
+ * (The answer and cancel routes check the same origin first, #616.) The CSRF
+ * value (`interaction-csrf.ts`) is checked after the flow cookie: a value
+ * that is not the current step view's is refused with a generic `403`
+ * (`ForbiddenError`) and audited (`request.csrf_rejected`), and nothing else
+ * happens. A malformed id, an unknown one, an expired interaction, a
  * finished one and a cookie that does not bind it are one case: each throws
  * {@link InteractionExpiredError}, whose answer is the same bytes whatever the
  * cause. The cause is logged, never the id or the cookie; events name the
@@ -122,16 +127,28 @@ export interface InteractionView {
    */
   readonly expiresAt: number;
   /**
+   * When the server refuses the interaction: the absolute expiry, or sooner
+   * while nobody has answered it (`interactionDeadline`).
+   */
+  readonly deadline: number;
+  /**
    * Which state of the interaction this is. An answer names it, so it applies
    * to the step view it was given for and to no later one.
    */
   readonly revision: number;
+  /**
+   * The CSRF value of this step view (#616): what an answer or a cancel of
+   * the browser holding the flow cookie must carry. It names the revision.
+   */
+  readonly csrf: string;
 }
 
 /** The current step's personal data, for the browser holding the flow cookie. */
 export interface InteractionPersonalView {
   readonly step: string;
   readonly data: InteractionPersonalData;
+  /** The current step whose personal data this is, as the record keeps it. */
+  readonly current: InteractionStep;
 }
 
 /** What the engine sees when it decides an answer. */
@@ -140,6 +157,8 @@ export interface InteractionState {
   readonly step: InteractionStep;
   readonly personal: InteractionPersonalData;
   readonly transaction: InteractionTransaction;
+  /** The sign-in engine's transaction, `null` before its first round (#616). */
+  readonly signInTransaction: SignInTransaction | null;
   readonly revision: number;
 }
 
@@ -164,15 +183,20 @@ export type InteractionDecision =
       readonly personal?: InteractionPersonalData;
       /** The `amr` values the answer proved, when it proved a factor. */
       readonly amr?: readonly string[];
+      /** The sign-in engine's transaction to keep; absent keeps the stored one. */
+      readonly signInTransaction?: SignInTransaction | null;
     }
   /**
    * The answer proved who the user is: a new browser session (a new `sid`)
-   * and a new flow binding, then the next step.
+   * and a new flow binding, then the next step. With no next step, the
+   * interaction finishes with it, as `finished` does: the session is created,
+   * the interaction ends and the caller completes the request (#616). The
+   * engine's transaction ends either way: the sign-in is complete.
    */
   | {
       readonly kind: 'authenticated';
       readonly signIn: InteractionSignIn;
-      readonly step: InteractionStep;
+      readonly step?: InteractionStep;
       readonly personal?: InteractionPersonalData;
     }
   /** The interaction is done: the caller completes or denies the request. */
@@ -209,6 +233,39 @@ export type InteractionSwitchResult =
 /** Why a request was refused: logged, never answered. */
 type RefusalReason = 'malformed' | 'unknown' | 'expired' | 'binding' | 'session_ended';
 
+/** Why a request at an interaction was forbidden (#616): logged, never answered. */
+export type ForbiddenReason = 'origin' | 'csrf';
+
+/**
+ * Refuse an answer or a cancel that does not come from the realm origin, or
+ * whose CSRF value is not the current step view's (#616, ADR-019 Decision 6):
+ * a generic `403` that names neither, audited as `request.csrf_rejected`.
+ * Nothing else happens: the interaction is not read further, and the engine is
+ * not called. `record` is the interaction when the flow cookie already bound
+ * it, so the event names its client and user.
+ */
+export async function refuseForbidden(
+  request: FastifyRequest,
+  reason: ForbiddenReason,
+  record?: InteractionRecord
+): Promise<never> {
+  request.log.info({ interactionRefused: reason }, 'interaction request forbidden');
+  await emitUserEvent(
+    request,
+    'urn:qauth:event:request.csrf_rejected:v1-rc.0',
+    { form: 'interaction' },
+    record === undefined
+      ? { actor: 'user' }
+      : {
+          realmId: record.realmId,
+          clientId: eventClientIdOf(record),
+          userId: record.transaction.userId ?? null,
+          actor: 'user',
+        }
+  );
+  throw new ForbiddenError('The request is not allowed.');
+}
+
 function refuse(request: FastifyRequest, reason: RefusalReason): never {
   request.log.info({ interactionRefused: reason }, 'interaction request refused');
   throw new InteractionExpiredError();
@@ -225,7 +282,9 @@ function viewOf(record: InteractionRecord): InteractionView {
     step: record.step,
     clientId: record.request.client_id,
     expiresAt: record.expiresAt,
+    deadline: interactionDeadline(record),
     revision: record.revision,
+    csrf: interactionCsrf(record),
   };
 }
 
@@ -352,6 +411,8 @@ async function createInteraction(
     personal: input.personal ?? {},
     transaction: { amr: [] },
     flowBinding: flowBindingOf(secret),
+    csrfKey: mintCsrfKey(),
+    signInTransaction: null,
     revision: 0,
     createdAt: now,
     expiresAt: input.expiresAt ?? now + lifetimeMs(),
@@ -427,7 +488,7 @@ export async function readInteractionPersonalData(
   id: unknown
 ): Promise<InteractionPersonalView> {
   const { record } = await locateBound(request, id);
-  return { step: record.step.name, data: record.personal };
+  return { step: record.step.name, data: record.personal, current: record.step };
 }
 
 /** The `amr` list with `added` appended, each value once. */
@@ -436,9 +497,20 @@ function withAmr(amr: readonly string[], added: readonly string[] = []): string[
 }
 
 /**
+ * What an answer names: the interaction id, and the step view it answers, by
+ * the CSRF value of that view (the Interaction API, #616) or by its revision
+ * (a caller that checked the view itself, such as this module's tests).
+ */
+export type InteractionAnswerTarget =
+  | { readonly id: unknown; readonly csrf: unknown }
+  | { readonly id: unknown; readonly revision: number };
+
+/**
  * Answer the current step: take the state, let the engine `decide`, and write
  * what it decided. Only the browser holding the flow cookie may answer, and
- * only the step view of `revision`.
+ * only the step view the answer names. A CSRF value that is not the current
+ * view's is refused (`refuseForbidden`) after the cookie is checked and before
+ * the turn is taken.
  *
  * - `step`: the next state is written (the revision moves on) and its view
  *   returned.
@@ -466,12 +538,21 @@ function withAmr(amr: readonly string[], added: readonly string[] = []): string[
 export async function answerInteraction(
   request: FastifyRequest,
   reply: FastifyReply,
-  answer: { readonly id: unknown; readonly revision: number },
+  answer: InteractionAnswerTarget,
   decide: (state: InteractionState) => Promise<InteractionDecision>
 ): Promise<InteractionAnswerResult> {
   const bound = await locateBound(request, answer.id);
-  if (bound.record.revision !== answer.revision) return { kind: 'stale' };
-  const taken = await takeBound(request, bound, answer.revision);
+  let revision: number;
+  if ('csrf' in answer) {
+    if (!matchesInteractionCsrf(bound.record, answer.csrf)) {
+      await refuseForbidden(request, 'csrf', bound.record);
+    }
+    revision = bound.record.revision;
+  } else {
+    if (bound.record.revision !== answer.revision) return { kind: 'stale' };
+    revision = answer.revision;
+  }
+  const taken = await takeBound(request, bound, revision);
   if (taken === null) return { kind: 'stale' };
 
   // From here the turn is taken. Until the next state is written (or the
@@ -593,6 +674,7 @@ async function settleAnswer(
       step: taken.step,
       personal: taken.personal,
       transaction: taken.transaction,
+      signInTransaction: taken.signInTransaction,
       revision: taken.revision,
     })
   );
@@ -633,6 +715,13 @@ async function settleAnswer(
       step: interactionStepSchema.parse(decision.step),
       personal: decision.personal ?? {},
       transaction: { ...taken.transaction, amr: withAmr(taken.transaction.amr, decision.amr) },
+      ...(decision.signInTransaction === undefined
+        ? {}
+        : {
+            // The engine's own type, read-only; the record's schema checks it
+            // again when the state is written.
+            signInTransaction: decision.signInTransaction as InteractionRecord['signInTransaction'],
+          }),
       revision: taken.revision + 1,
     };
     const written = await writeInteractionState(redis, bound.idHash, next);
@@ -644,7 +733,7 @@ async function settleAnswer(
   }
 
   const { signIn } = decision;
-  const step = interactionStepSchema.parse(decision.step);
+  const step = decision.step === undefined ? undefined : interactionStepSchema.parse(decision.step);
   if (taken.transaction.userId !== undefined && taken.transaction.userId !== signIn.userId) {
     // An engine bug, never a user's doing: the user switch starts a new
     // interaction. Thrown before anything is written: the turn is given back
@@ -663,17 +752,39 @@ async function settleAnswer(
   // that cannot answer fails the answer here, before the record is bound to a
   // new secret, and the session just created ends with the turn given back.
   const sessionCookie = await sessionCookieHeader(request.server, session);
+  const proved: InteractionTransaction = {
+    userId: signIn.userId,
+    sid: session.sid,
+    authTime: session.authTime,
+    amr: withAmr(taken.transaction.amr, signIn.amr),
+  };
+  if (step === undefined) {
+    // The sign-in finishes the interaction (#616): it ends as a finish does,
+    // under the session just created, whose cookie goes with the answer.
+    const owned = await deleteInteraction(redis, taken, bound.idHash);
+    settled.done = true;
+    // The sweep claimed it first and reports it expired: the session ends
+    // with the refusal, and nothing finishes.
+    if (!owned) refuse(request, 'expired');
+    settled.session = undefined;
+    reply.header('Set-Cookie', sessionCookie);
+    setFlowCookie(
+      reply,
+      nextFlowSecrets(bound.secrets, { remove: bound.secret }),
+      env.INTERACTION_TTL
+    );
+    await answered('finished', { ...taken, transaction: proved });
+    await endReplacedSession(request, taken, session.sid);
+    return { kind: 'finished', request: taken.request, transaction: proved };
+  }
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
     ...taken,
     step,
     personal: decision.personal ?? {},
-    transaction: {
-      userId: signIn.userId,
-      sid: session.sid,
-      authTime: session.authTime,
-      amr: withAmr(taken.transaction.amr, signIn.amr),
-    },
+    transaction: proved,
+    // The sign-in is complete: a later one in this interaction starts afresh.
+    signInTransaction: null,
     flowBinding: flowBindingOf(secret),
     revision: taken.revision + 1,
   };
@@ -690,15 +801,25 @@ async function settleAnswer(
     env.INTERACTION_TTL
   );
   await answered('authenticated', next);
-  // A second authentication in one interaction (step-up) replaces the session
-  // the first created: the browser's cookie no longer names it, so it ends.
+  await endReplacedSession(request, taken, session.sid);
+  return { kind: 'step', view: viewOf(next) };
+}
+
+/**
+ * A second authentication in one interaction (step-up) replaces the session
+ * the first created: the browser's cookie no longer names it, so it ends.
+ */
+async function endReplacedSession(
+  request: FastifyRequest,
+  taken: InteractionRecord,
+  sid: string
+): Promise<void> {
   const replaced = taken.transaction.sid;
-  if (replaced !== undefined && replaced !== session.sid) {
+  if (replaced !== undefined && replaced !== sid) {
     await bestEffort(request, 'end the session a later authentication replaced', () =>
       endUnusedSession(request, { realmId: taken.realmId, sid: replaced })
     );
   }
-  return { kind: 'step', view: viewOf(next) };
 }
 
 /**
@@ -724,14 +845,22 @@ async function deleteTaken(
  * record is taken, its secret leaves the flow cookie, and the cancel is
  * audited. The caller sends the client `access_denied` (#616, #628).
  *
+ * @param proof - the CSRF value of the current step view, which the
+ *   Interaction API's cancel carries (#616); a value that is not it is
+ *   refused as {@link answerInteraction} refuses one. Absent for a caller that
+ *   checked the request itself, such as this module's tests.
  * @throws {InteractionExpiredError} as {@link answerInteraction}
  */
 export async function cancelInteraction(
   request: FastifyRequest,
   reply: FastifyReply,
-  id: unknown
+  id: unknown,
+  proof?: { readonly csrf: unknown }
 ): Promise<InteractionCancelResult> {
   const bound = await locateBound(request, id);
+  if (proof !== undefined && !matchesInteractionCsrf(bound.record, proof.csrf)) {
+    await refuseForbidden(request, 'csrf', bound.record);
+  }
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
   // The sweep claimed it first and reports it expired: it is not cancelled.

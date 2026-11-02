@@ -55,6 +55,8 @@ import { answerRouteNotFound } from './request-bounds';
 import { SESSION_COOKIE_NAME, verifySessionCookie } from './session-cookie';
 import { emitUserEvent } from './user-events';
 
+type SignInTransaction = NonNullable<InteractionState['signInTransaction']>;
+
 /**
  * THE INTERACTION RECORD AND THE FLOW COOKIE (#592, ADR-019 Decision 6), as
  * unit tests on an in-memory Redis: who may read and answer an interaction,
@@ -97,12 +99,19 @@ const CONSENT_STEP: InteractionStep = { name: stepUrn('consent'), params: {}, al
 
 /** A decision as a test sends it in a request body. */
 type DecisionSpec =
-  | { kind: 'step'; step: InteractionStep; amr?: string[] }
+  | {
+      kind: 'step';
+      step: InteractionStep;
+      amr?: string[];
+      /** The sign-in engine's transaction to keep (#616). */
+      signInTransaction?: SignInTransaction | null;
+    }
   | {
       kind: 'authenticated';
       userId: string;
       amr: string[];
-      step: InteractionStep;
+      /** Absent: the sign-in finishes the interaction (#616). */
+      step?: InteractionStep;
       personal?: Record<string, unknown>;
     }
   | { kind: 'finished' };
@@ -170,6 +179,23 @@ async function buildHarness(): Promise<Harness> {
   app.get(`${INTERACTION_API_PREFIX}/:id/personal`, async (request) =>
     readInteractionPersonalData(request, (request.params as { id: string }).id)
   );
+  const decideBy =
+    (decision: DecisionSpec) =>
+    async (state: InteractionState): Promise<InteractionDecision> => {
+      decided.push(state);
+      const action = duringDecide.action;
+      duringDecide.action = undefined;
+      if (action !== undefined) await action();
+      if (decision.kind === 'authenticated') {
+        return {
+          kind: 'authenticated',
+          signIn: { userId: decision.userId, amr: decision.amr, identifier: 'alice@example.com' },
+          ...(decision.step === undefined ? {} : { step: decision.step }),
+          ...(decision.personal === undefined ? {} : { personal: decision.personal }),
+        };
+      }
+      return decision;
+    };
   app.post(`${INTERACTION_API_PREFIX}/:id/answer`, async (request, reply) => {
     const { revision, decision } = request.body as {
       revision: number;
@@ -179,23 +205,24 @@ async function buildHarness(): Promise<Harness> {
       request,
       reply,
       { id: (request.params as { id: string }).id, revision },
-      async (state): Promise<InteractionDecision> => {
-        decided.push(state);
-        const action = duringDecide.action;
-        duringDecide.action = undefined;
-        if (action !== undefined) await action();
-        if (decision.kind === 'authenticated') {
-          return {
-            kind: 'authenticated',
-            signIn: { userId: decision.userId, amr: decision.amr, identifier: 'alice@example.com' },
-            step: decision.step,
-            ...(decision.personal === undefined ? {} : { personal: decision.personal }),
-          };
-        }
-        return decision;
-      }
+      decideBy(decision)
     );
   });
+  // As the Interaction API's routes call them (#616): by the step's CSRF value.
+  app.post(`${INTERACTION_API_PREFIX}/:id/csrf-answer`, async (request, reply) => {
+    const { csrf, decision } = request.body as { csrf?: unknown; decision: DecisionSpec };
+    return answerInteraction(
+      request,
+      reply,
+      { id: (request.params as { id: string }).id, csrf },
+      decideBy(decision)
+    );
+  });
+  app.post(`${INTERACTION_API_PREFIX}/:id/csrf-cancel`, async (request, reply) =>
+    cancelInteraction(request, reply, (request.params as { id: string }).id, {
+      csrf: (request.body as { csrf?: unknown } | undefined)?.csrf,
+    })
+  );
   app.post(`${INTERACTION_API_PREFIX}/:id/fail`, async () => {
     throw new InvalidRequestError('the answer names a field twice');
   });
@@ -259,6 +286,27 @@ class Browser {
   answer(id: string, revision: number, decision: DecisionSpec) {
     return this.request('POST', `${INTERACTION_API_PREFIX}/${id}/answer`, { revision, decision });
   }
+
+  /** The CSRF value of the current step view, from the step read. */
+  async csrf(id: string): Promise<string> {
+    const read = await this.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(read.statusCode, read.body).toBe(200);
+    return (read.json() as { csrf: string }).csrf;
+  }
+
+  answerWithCsrf(id: string, csrf: unknown, decision: DecisionSpec) {
+    return this.request('POST', `${INTERACTION_API_PREFIX}/${id}/csrf-answer`, {
+      ...(csrf === undefined ? {} : { csrf }),
+      decision,
+    });
+  }
+}
+
+/** The `request.csrf_rejected` events emitted so far. */
+function csrfRejections() {
+  return vi
+    .mocked(emitUserEvent)
+    .mock.calls.filter(([, type]) => type === 'urn:qauth:event:request.csrf_rejected:v1-rc.0');
 }
 
 /** The response with its per-request values blanked, for a byte-for-byte comparison. */
@@ -316,6 +364,7 @@ describe('who may read and answer an interaction (#592)', () => {
     expect(personal.json()).toEqual({
       step: SELECT_ACCOUNT_STEP.name,
       data: { accounts: ['a@x'] },
+      current: SELECT_ACCOUNT_STEP,
     });
     expect((await owner.answer(id, 0, { kind: 'step', step: PASSWORD_STEP })).statusCode).toBe(200);
   });
@@ -375,6 +424,211 @@ describe('who may read and answer an interaction (#592)', () => {
       expect(key).not.toContain(id);
       expect(value).not.toContain(id);
     }
+  });
+});
+
+describe("the step's CSRF value (#616)", () => {
+  it('gives each step view one CSRF value, the same on every read, and another to each interaction', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const first = await owner.csrf(id);
+    expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await owner.csrf(id)).toBe(first);
+    // The id alone reads it: the ceremony app's server has no cookie.
+    expect(await new Browser().csrf(id)).toBe(first);
+    const other = new Browser();
+    expect(await other.csrf(await other.start())).not.toBe(first);
+  });
+
+  it('processes an answer with the CSRF value of its step view, and refuses that value the second time', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const csrf = await owner.csrf(id);
+
+    const first = await owner.answerWithCsrf(id, csrf, { kind: 'step', step: SELECT_ACCOUNT_STEP });
+    expect(first.statusCode, first.body).toBe(200);
+    expect(harness.decided).toHaveLength(1);
+    const next = (first.json() as { view: { csrf: string } }).view.csrf;
+    expect(next).not.toBe(csrf);
+
+    const replay = await owner.answerWithCsrf(id, csrf, { kind: 'step', step: CONSENT_STEP });
+    expect(replay.statusCode).toBe(403);
+    expect(replay.json()).toMatchObject({ code: 'forbidden' });
+    expect(harness.decided).toHaveLength(1);
+    expect(await owner.csrf(id)).toBe(next);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['wrong', 'A'.repeat(43)],
+    ['malformed', 'not-a-csrf-value'],
+    ['not a string', 42],
+  ])(
+    'refuses a %s CSRF value with a generic 403, audited, before the engine runs',
+    async (_label, csrf) => {
+      const owner = new Browser();
+      const id = await owner.start();
+      const before = csrfRejections().length;
+
+      const response = await owner.answerWithCsrf(id, csrf, { kind: 'finished' });
+
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({
+        type: expect.any(String),
+        title: expect.any(String),
+        status: 403,
+        code: 'forbidden',
+        trace_id: expect.any(String),
+      });
+      expect(harness.decided).toHaveLength(0);
+      const rejected = csrfRejections().slice(before);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.[2]).toEqual({ form: 'interaction' });
+      expect(rejected[0]?.[3]).toMatchObject({ realmId: REALM.id, clientId: 'notes-app' });
+      // Nothing was taken: the right value still answers.
+      const right = await owner.answerWithCsrf(id, await owner.csrf(id), { kind: 'finished' });
+      expect(right.statusCode).toBe(200);
+    }
+  );
+
+  it('refuses the CSRF value of one step view on the next step', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const stepA = await owner.csrf(id);
+    await owner.answerWithCsrf(id, stepA, { kind: 'step', step: SELECT_ACCOUNT_STEP });
+    const stepB = await owner.csrf(id);
+    await owner.answerWithCsrf(id, stepB, { kind: 'step', step: CONSENT_STEP });
+
+    // Step C is current: the values of A and B answer nothing.
+    for (const stale of [stepA, stepB]) {
+      expect((await owner.answerWithCsrf(id, stale, { kind: 'finished' })).statusCode).toBe(403);
+    }
+    expect(harness.decided).toHaveLength(2);
+  });
+
+  it('refuses the CSRF value of another interaction the same browser holds', async () => {
+    const owner = new Browser();
+    const idA = await owner.start();
+    const idB = await owner.start();
+    const response = await owner.answerWithCsrf(idB, await owner.csrf(idA), { kind: 'finished' });
+    expect(response.statusCode).toBe(403);
+    expect(harness.decided).toHaveLength(0);
+  });
+
+  it('checks the flow cookie first: without it any CSRF value gets the generic expired answer', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const stranger = new Browser();
+    const response = await stranger.answerWithCsrf(id, await owner.csrf(id), { kind: 'finished' });
+    expect(response.statusCode).toBe(410);
+    expect(csrfRejections()).toHaveLength(0);
+  });
+
+  it('keeps the CSRF value of an answer that failed, so the page can send it again', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const csrf = await owner.csrf(id);
+    harness.duringDecide.action = async () => {
+      throw new TemporarilyUnavailableError(5);
+    };
+    expect((await owner.answerWithCsrf(id, csrf, { kind: 'finished' })).statusCode).toBe(503);
+    expect(await owner.csrf(id)).toBe(csrf);
+    expect((await owner.answerWithCsrf(id, csrf, { kind: 'finished' })).statusCode).toBe(200);
+  });
+
+  it('gives a refused answer, the same step again with its error, a new CSRF value', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const csrf = await owner.csrf(id);
+    const refused = await owner.answerWithCsrf(id, csrf, {
+      kind: 'step',
+      step: { ...PASSWORD_STEP, error: 'invalid_credentials' },
+    });
+    expect(refused.statusCode).toBe(200);
+    const again = await owner.csrf(id);
+    expect(again).not.toBe(csrf);
+    expect((await owner.answerWithCsrf(id, csrf, { kind: 'finished' })).statusCode).toBe(403);
+    expect((await owner.answerWithCsrf(id, again, { kind: 'finished' })).statusCode).toBe(200);
+  });
+
+  it('cancels only with the CSRF value of the current step view', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const wrong = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/csrf-cancel`, {
+      csrf: 'A'.repeat(43),
+    });
+    expect(wrong.statusCode).toBe(403);
+    expect(csrfRejections()).toHaveLength(1);
+    const cancelled = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/csrf-cancel`, {
+      csrf: await owner.csrf(id),
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toMatchObject({ kind: 'cancelled' });
+  });
+});
+
+describe('a sign-in that finishes the interaction (#616)', () => {
+  it('creates the session, ends the interaction and drops its flow secret in one answer', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+
+    const answered = await owner.answerWithCsrf(id, await owner.csrf(id), {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+    });
+
+    expect(answered.statusCode, answered.body).toBe(200);
+    const result = answered.json() as {
+      kind: string;
+      transaction: { userId: string; sid: string; amr: string[] };
+    };
+    expect(result.kind).toBe('finished');
+    const sid = await verifySessionCookie(
+      harness.app,
+      REALM.id,
+      owner.cookies.get(SESSION_COOKIE_NAME)
+    );
+    expect(sid).not.toBeNull();
+    expect(result.transaction).toMatchObject({ userId: USER_A, sid, amr: ['pwd'] });
+    expect(owner.cookies.has(FLOW_COOKIE)).toBe(false);
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+    const outcomes = vi
+      .mocked(emitUserEvent)
+      .mock.calls.filter(([, type]) => type === 'urn:qauth:event:interaction.answered:v1-rc.0')
+      .map(([, , data]) => (data as { outcome: string }).outcome);
+    expect(outcomes).toEqual(['finished']);
+  });
+
+  it('keeps the sign-in engine transaction of a step and drops it once a sign-in completes', async () => {
+    const owner = new Browser();
+    const id = await owner.start();
+    const transaction: SignInTransaction = {
+      v: 1,
+      realmId: REALM.id,
+      clientId: 'notes-app',
+      createdAt: Date.now(),
+      identifier: 'alice@example.com',
+      verified: [],
+    };
+    await owner.answerWithCsrf(id, await owner.csrf(id), {
+      kind: 'step',
+      step: PASSWORD_STEP,
+      signInTransaction: transaction,
+    });
+    await owner.answerWithCsrf(id, await owner.csrf(id), {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+    await owner.answerWithCsrf(id, await owner.csrf(id), { kind: 'finished' });
+
+    expect(harness.decided.map((state) => state.signInTransaction)).toEqual([
+      null,
+      transaction,
+      null,
+    ]);
   });
 });
 
