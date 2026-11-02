@@ -4,7 +4,7 @@ import {
   UniqueConstraintError,
   WeakPasswordError,
 } from '@qauth-labs/shared-errors';
-import { createPasswordValidators } from '@qauth-labs/shared-validation';
+import { createPasswordValidators, type PasswordPolicy } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
@@ -25,7 +25,7 @@ vi.mock('../../../config/env', () => ({
   },
 }));
 
-import { testPolicyStore } from '../../../testing/realm-policies';
+import { type TestPolicyOverrides, testPolicyStore } from '../../../testing/realm-policies';
 import { testRealm } from '../../../testing/request-realm';
 import { REDIS_KEYS, SUCCESS_MESSAGES } from '../../constants';
 import { hashEmail } from '../../helpers/auth-events';
@@ -152,15 +152,14 @@ function createFastifyStub() {
         invalidateCredentialTokens: vi.fn().mockResolvedValue(undefined),
       },
     },
-    // One validator for every score; a test steers its answer, or swaps in
-    // the real validators.
-    passwordValidators: {
-      forMinScore: vi.fn().mockReturnValue({
-        validatePasswordStrength: vi.fn().mockReturnValue({ valid: true, feedback: [] }),
-      }),
-    },
-    // The realm's lowest password score (#528), read from the request's
-    // realm row: the seeded default, 2.
+    // The real validators of the one password policy (#634), pure, behind a
+    // spy that records which policy a request asked for.
+    passwordValidators: (() => {
+      const validators = createPasswordValidators();
+      return { forPolicy: vi.fn((policy: PasswordPolicy) => validators.forPolicy(policy)) };
+    })(),
+    // The realm's password policy (#528, #634), read from the request's realm
+    // row: the seeded defaults, 15 characters and score 2.
     policyStore: testPolicyStore(),
     passwordHasher: {
       hashPassword: vi.fn().mockResolvedValue('$argon2id$hashed'),
@@ -243,10 +242,15 @@ describe('POST /auth/register', () => {
         realmId: 'realm-1',
         providerType: 'password',
         externalSub: ADDRESS,
-        credentialData: { password_hash: '$argon2id$hashed', email_verified: false },
+        credentialData: {
+          password_hash: '$argon2id$hashed',
+          email_verified: false,
+          password_normalization: 'nfc',
+        },
       },
       TX
     );
+    expect(fastify.passwordHasher.hashPassword).toHaveBeenCalledExactlyOnceWith('Str0ng-Passw0rd!');
 
     // Attribute row from extractAttributes(): unverified self-reported email.
     expect(fastify.repositories.userAttributes.upsertMany).toHaveBeenCalledWith(
@@ -596,45 +600,141 @@ describe('POST /auth/register', () => {
     );
   });
 
-  it('rejects weak passwords before touching the database', async () => {
+  /** Register `password` as `email`, in a realm of `groups`' password and mail policies. */
+  async function registerWith(
+    password: string,
+    options: { groups?: TestPolicyOverrides; email?: string; realmId?: string } = {}
+  ) {
     const { fastify, ctx } = createFastifyStub();
+    fastify.policyStore = testPolicyStore(
+      {},
+      options.groups ?? {}
+    ) as unknown as FastifyInstance['policyStore'];
     await registerRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
+    const request = {
+      ...requestFixture(),
+      body: {
+        email: options.email ?? 'new@example.com',
+        password,
+        ...(options.realmId === undefined ? {} : { realmId: options.realmId }),
+      },
+    };
+    const error = await ctx.handler(request, createReply()).then(
+      () => undefined,
+      (caught: Error) => caught
+    );
+    return { fastify, error, outcome: error === undefined ? 'accepted' : error.name };
+  }
 
-    (
-      fastify.passwordValidators.forMinScore(2).validatePasswordStrength as unknown as Mock
-    ).mockReturnValue({
-      valid: false,
-      feedback: ['too short'],
-    });
+  it('rejects weak passwords before touching the database or hashing', async () => {
+    const { fastify, error } = await registerWith('abcabcabc');
 
-    await expect(ctx.handler(requestFixture(), createReply())).rejects.toThrow(WeakPasswordError);
+    expect(error).toBeInstanceOf(WeakPasswordError);
+    expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
     expect(fastify.db.transaction).not.toHaveBeenCalled();
   });
 
+  describe('the one password policy (#634, ADR-017 Decision 8)', () => {
+    it('refuses a 14-character password with too_short at the default', async () => {
+      const { error } = await registerWith('Kx9#mQ2$vL7!pR');
+
+      expect(error).toBeInstanceOf(WeakPasswordError);
+      expect((error as WeakPasswordError).reasons).toEqual(['too_short']);
+      expect((error as WeakPasswordError).feedback).toEqual([
+        'Password must be at least 15 characters',
+      ]);
+    });
+
+    it('refuses 257 UTF-16 code units with too_long, before any hashing', async () => {
+      const { fastify, error } = await registerWith('K'.repeat(257));
+
+      expect((error as WeakPasswordError).reasons).toEqual(['too_long']);
+      expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+    });
+
+    it('returns every reason found, in the order checked', async () => {
+      const { error } = await registerWith('password');
+
+      expect((error as WeakPasswordError).reasons).toEqual([
+        'too_short',
+        'blocklisted',
+        'too_weak',
+      ]);
+    });
+
+    it('refuses the address, the service name or the realm name as the whole password, not one that contains them', async () => {
+      // Score floor 0 and the lowest minimum, so only the blocklist refuses.
+      const groups: TestPolicyOverrides = {
+        password: { minLength: 8, minScore: 0 },
+        mail: { fromName: 'Northwind Identity' },
+      };
+      const email = 'Margaret.Hamilton@Example.org';
+
+      for (const password of [
+        'margaret.hamilton@example.org',
+        'Margaret.Hamilton',
+        'example.org',
+        'northwind identity',
+      ]) {
+        const { error } = await registerWith(password, { groups, email });
+        expect((error as WeakPasswordError).reasons).toEqual(['blocklisted']);
+      }
+      // The realm's name (testRealm's 'master', six characters, so also too short).
+      const realmName = await registerWith('MASTER', { groups, email });
+      expect((realmName.error as WeakPasswordError).reasons).toEqual(['too_short', 'blocklisted']);
+      for (const password of [
+        'margaret.hamilton and the river boats',
+        'northwind identity at the river 1987',
+      ]) {
+        expect((await registerWith(password, { groups, email })).outcome).toBe('accepted');
+      }
+    });
+
+    it("applies the realm's minimum length, read from its row", async () => {
+      const longer = { password: { minLength: 20 } };
+      const shorter = { password: { minLength: 8 } };
+
+      expect((await registerWith('Kx9#mQ2$vL7!pR4&Zt', { groups: longer })).outcome).toBe(
+        'WeakPasswordError'
+      );
+      expect((await registerWith('Kx9#mQ2$vL7!pR4&Zt9w', { groups: longer })).outcome).toBe(
+        'accepted'
+      );
+      expect((await registerWith('Kx9#mQ2$', { groups: shorter })).outcome).toBe('accepted');
+    });
+
+    it('hashes the NFC form and records the marker, so both spellings verify later', async () => {
+      const decomposed = 'cafe\u0301-terrace-at-night';
+      const composed = 'caf\u00e9-terrace-at-night';
+      const { fastify, outcome } = await registerWith(decomposed);
+
+      expect(outcome).toBe('accepted');
+      expect(fastify.passwordHasher.hashPassword).toHaveBeenCalledExactlyOnceWith(composed);
+      expect(fastify.repositories.userCredentials.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          credentialData: {
+            password_hash: '$argon2id$hashed',
+            email_verified: false,
+            password_normalization: 'nfc',
+          },
+        }),
+        TX
+      );
+    });
+  });
+
   describe("the realm's password score (#528)", () => {
-    // zxcvbn scores 'monkey12345' 1.
+    // zxcvbn scores 'monkey12345' 1; it is 11 characters long, so these
+    // realms set the lowest minimum length, 8, for it to reach the score.
     const SCORE_ONE = 'monkey12345';
 
     /** Register `password` in a realm whose lowest score is `minScore`, with the real validators. */
     async function registerIn(minScore: number, password: string, realmId?: string) {
-      const { fastify, ctx } = createFastifyStub();
-      fastify.policyStore = testPolicyStore(
-        {},
-        { password: { minScore } }
-      ) as unknown as FastifyInstance['policyStore'];
-      fastify.passwordValidators = createPasswordValidators();
-      await registerRoute(fastify);
-      if (!ctx.handler) throw new Error('Handler missing');
-      const request = {
-        ...requestFixture(),
-        body: { email: 'new@example.com', password, ...(realmId === undefined ? {} : { realmId }) },
-      };
-      const outcome = await ctx.handler(request, createReply()).then(
-        () => 'accepted',
-        (error: Error) => error.name
-      );
-      return { fastify, outcome };
+      return registerWith(password, {
+        groups: { password: { minScore, minLength: 8 } },
+        ...(realmId === undefined ? {} : { realmId }),
+      });
     }
 
     it('accepts a weak password in a realm with minScore 1 and refuses it in a realm with minScore 3', async () => {
@@ -643,6 +743,7 @@ describe('POST /auth/register', () => {
 
       expect(lenient.outcome).toBe('accepted');
       expect(strict.outcome).toBe('WeakPasswordError');
+      expect((strict.error as WeakPasswordError).reasons).toEqual(['too_weak']);
       expect(strict.fastify.db.transaction).not.toHaveBeenCalled();
     });
 
@@ -650,7 +751,7 @@ describe('POST /auth/register', () => {
       expect((await registerIn(2, SCORE_ONE)).outcome).toBe('WeakPasswordError');
     });
 
-    it("asks for the validator of the request's realm's score, read from its row", async () => {
+    it("asks for the validator of the request's realm's policy, read from its row", async () => {
       const { fastify, ctx } = createFastifyStub();
       fastify.policyStore = testPolicyStore(
         {},
@@ -662,7 +763,10 @@ describe('POST /auth/register', () => {
       await ctx.handler(requestFixture(), createReply());
 
       expect(fastify.policyStore.ofRealm).toHaveBeenCalledWith(REALM);
-      expect(fastify.passwordValidators.forMinScore).toHaveBeenCalledExactlyOnceWith(4);
+      expect(fastify.passwordValidators.forPolicy).toHaveBeenCalledExactlyOnceWith({
+        minLength: 15,
+        minScore: 4,
+      });
     });
 
     it('checks the password before a realmId in the body, as before: a weak one is refused first', async () => {

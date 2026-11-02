@@ -4,9 +4,9 @@ import type { FastifyPluginOptions } from 'fastify';
 /**
  * Password plugin configuration options
  *
- * No password strength setting: the lowest score is each realm's
- * (`password.minScore`, #528), passed to `passwordValidators.forMinScore`
- * where a password is chosen.
+ * No password policy setting: the minimum length and lowest score are each
+ * realm's (`password.minLength`, `password.minScore`, #528, #634), passed to
+ * `passwordValidators.forPolicy` where a password is chosen.
  */
 export interface PasswordPluginOptions extends FastifyPluginOptions {
   /** Configuration for password hashing (Argon2) - optional, missing values will use defaults */

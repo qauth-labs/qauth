@@ -86,18 +86,6 @@ export interface PasswordValidators {
    *   accepts; nothing is cached then.
    */
   forPolicy(policy: PasswordPolicy): PasswordPolicyValidator;
-
-  /**
-   * The validator that accepts a password scoring at least `minScore`. Built
-   * on first use and cached by score.
-   *
-   * @deprecated Use {@link PasswordValidators.forPolicy}, which also checks
-   *   the length and the blocklist.
-   * @param minScore - The lowest zxcvbn score a password may have, 0 to 4.
-   * @throws {z.ZodError} If `minScore` is not a whole number from 0 to 4;
-   *   nothing is cached then.
-   */
-  forMinScore(minScore: number): PasswordValidator;
 }
 
 /**
@@ -575,15 +563,7 @@ export function createPasswordPolicyValidator(
  */
 export function createPasswordValidators(): PasswordValidators {
   const byPolicy = new Map<string, PasswordPolicyValidator>();
-  const byScore = new Map<number, PasswordValidator>();
   return Object.freeze({
-    forMinScore(minScore: number): PasswordValidator {
-      const cached = byScore.get(minScore);
-      if (cached !== undefined) return cached;
-      const validator = createPasswordValidator({ minScore });
-      byScore.set(minScore, validator);
-      return validator;
-    },
     forPolicy(policy: PasswordPolicy): PasswordPolicyValidator {
       const key = `${policy.minLength}:${policy.minScore}`;
       const cached = byPolicy.get(key);

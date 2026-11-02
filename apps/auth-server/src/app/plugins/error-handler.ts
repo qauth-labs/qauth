@@ -319,7 +319,8 @@ function instanceOf(request: FastifyRequest): string {
  * `FST_ERR_VALIDATION` never reaches the wire. `trace_id` is the request id the
  * request logger carries as `reqId`, so an operator finds the log line by it.
  * A validation failure lists each field in `errors`, a weak password lists
- * its feedback under `/password`, and a merge patch whose result fails the
+ * its feedback under `/password` and why it was refused in `reasons` (#634),
+ * and a merge patch whose result fails the
  * resource's schema lists each failing field (#524).
  */
 export function problemDocument(
@@ -353,6 +354,9 @@ export function problemDocument(
         ? error.fields.map(({ pointer, message }) => ({ pointer, message }))
         : [];
   if (errors.length > 0) document.errors = errors;
+  if (error instanceof WeakPasswordError && error.reasons !== undefined) {
+    document.reasons = [...error.reasons];
+  }
 
   return document;
 }

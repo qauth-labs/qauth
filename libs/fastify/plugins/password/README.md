@@ -7,7 +7,7 @@ Fastify plugin for password hashing and validation in QAuth. This plugin provide
 The `@qauth-labs/fastify-plugin-password` plugin integrates password hashing and validation into your Fastify application by:
 
 - Decorating the Fastify instance with `passwordHasher` and `passwordValidators` properties
-- Building a password strength validator per minimum score, cached by score, so each realm can set its own lowest score (`password.minScore` of its policies)
+- Building the one password policy's validator (#634) per realm policy, cached by its minimum length and lowest score, so each realm can set its own (`password.minLength` and `password.minScore` of its policies)
 - Using factory pattern for configuration (no direct `process.env` access)
 - Providing type-safe password operations
 - Enabling different password configurations per Fastify instance
@@ -105,18 +105,21 @@ async function verifyAgainstDecoyHash(password: string): Promise<void> {
 fastify.post('/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
-  // Validate password strength against the lowest score your realm sets
-  // (QAuth reads its realm's `password.minScore`).
-  const strength = fastify.passwordValidators.forMinScore(2).validatePasswordStrength(password);
-  if (!strength.valid) {
+  // Check the password against your realm's password policy
+  // (QAuth reads its realm's `password.minLength` and `password.minScore`).
+  const checked = fastify.passwordValidators
+    .forPolicy({ minLength: 15, minScore: 2 })
+    .check(password, { email });
+  if (!checked.valid) {
     return reply.code(422).send({
       error: 'Weak password',
-      feedback: strength.feedback,
+      reasons: checked.reasons,
+      feedback: checked.feedback,
     });
   }
 
-  // Hash password
-  const passwordHash = await fastify.passwordHasher.hashPassword(password);
+  // Hash the password in the form the check returns (NFC)
+  const passwordHash = await fastify.passwordHasher.hashPassword(checked.password);
 
   // Create user with hashed password
   const user = await createUser({ email, passwordHash });
@@ -177,7 +180,7 @@ interface PasswordPluginOptions {
 
 **Note**: `hashConfig` is optional. If not provided, defaults will be used. Individual fields are also optional.
 
-No password strength score is set at registration: each realm sets its own lowest score (`password.minScore` of its policies, #528), which the caller passes to `passwordValidators.forMinScore` where a password is chosen.
+No password policy is set at registration: each realm sets its own minimum length and lowest score (`password.minLength` and `password.minScore` of its policies, #528, #634), which the caller passes to `passwordValidators.forPolicy` where a password is chosen.
 
 ### Fastify Instance Decorators
 
@@ -206,26 +209,27 @@ const isValid = await fastify.passwordHasher.verifyPassword(hashed, 'mySecurePas
 
 Type: `PasswordValidators` (from `@qauth-labs/shared-validation`)
 
-The password validators, one per minimum score:
+The password policy validators, one per realm policy:
 
-- `forMinScore(minScore: number): PasswordValidator` - The validator that accepts a password scoring at least `minScore` (0-4). Built on first use and cached by score, so every realm with one score shares one validator. Throws a `ZodError` for a score outside 0-4.
+- `forPolicy(policy: { minLength: number; minScore: number }): PasswordPolicyValidator` - The validator of the one password policy (#634) with that minimum length (8-64 characters) and lowest score (0-4). Built on first use and cached by the pair, so every realm with one policy shares one validator. Throws a `ZodError` for a policy out of those bounds.
 
-A `PasswordValidator` has one method:
+A `PasswordPolicyValidator` has one method:
 
-- `validatePasswordStrength(password: string): PasswordStrengthResult` - Validate password strength using zxcvbn
+- `check(password: string, context?: PasswordContext): PasswordPolicyCheck` - Check a new password: its length (at most 256 characters, at least `minLength` code points after NFC normalisation), a blocklist of common passwords and of the context words (the address, the service, realm and client names), and a zxcvbn score of at least `minScore`. A refusal carries every reason found (`too_long`, `too_short`, `blocklisted`, `too_weak`) and feedback; an accepted password carries its NFC form to hash and the normalisation marker to record on the credential.
 
 **Example**:
 
 ```typescript
-// Validate password strength against the realm's lowest score
-const result = fastify.passwordValidators
-  .forMinScore(realmMinScore)
-  .validatePasswordStrength('mySecurePassword123');
+// Check a new password against the realm's policy
+const checked = fastify.passwordValidators
+  .forPolicy({ minLength: realmMinLength, minScore: realmMinScore })
+  .check(password, { email, serviceName, realmName });
 
-if (!result.valid) {
-  console.log('Password is too weak:', result.feedback);
-  console.log('Score:', result.score); // 0-4
-  console.log('Crack time:', result.crackTimeSeconds, 'seconds');
+if (!checked.valid) {
+  console.log('Password refused:', checked.reasons, checked.feedback);
+} else {
+  const hash = await fastify.passwordHasher.hashPassword(checked.password);
+  // record checked.normalization ('nfc') beside the hash
 }
 ```
 
@@ -239,7 +243,9 @@ import { FastifyInstance } from 'fastify';
 async function myRoute(fastify: FastifyInstance) {
   // TypeScript knows about fastify.passwordHasher and fastify.passwordValidators
   const hashed = await fastify.passwordHasher.hashPassword('password');
-  const strength = fastify.passwordValidators.forMinScore(2).validatePasswordStrength('password');
+  const checked = fastify.passwordValidators
+    .forPolicy({ minLength: 15, minScore: 2 })
+    .check('password');
 }
 ```
 
@@ -272,8 +278,9 @@ PASSWORD_TIME_COST=3        # Time cost / iterations (default: 3)
 PASSWORD_PARALLELISM=4      # Parallelism / threads (default: 4)
 PASSWORD_HASH_QUEUE_LIMIT=32 # Waiting Argon2id jobs before a client-secret check is refused with 503 (default: 32; 0 = whenever every thread is busy)
 
-# Password validation: seeds the lowest score of a new realm (password.minScore);
-# the plugin does not read it
+# Password policy: seeds a new realm's password.minLength and password.minScore;
+# the plugin reads neither
+PASSWORD_MIN_LENGTH=15      # Minimum length 8-64 (default: 15; below 15 logs a warning at boot)
 PASSWORD_MIN_SCORE=2        # Minimum strength score 0-4 (default: 2 = Fair)
 ```
 
@@ -305,9 +312,9 @@ await testApp.register(passwordPlugin, {
   hashConfig: { memoryCost: 32768, timeCost: 2, parallelism: 2 }, // Faster for tests
 });
 
-// The strength score is per call, so one instance serves realms with different scores
-productionApp.passwordValidators.forMinScore(3); // a strict realm
-productionApp.passwordValidators.forMinScore(1); // a lenient one
+// The policy is per call, so one instance serves realms with different policies
+productionApp.passwordValidators.forPolicy({ minLength: 20, minScore: 3 }); // a strict realm
+productionApp.passwordValidators.forPolicy({ minLength: 8, minScore: 1 }); // a lenient one
 ```
 
 ## Integration with Other Plugins
@@ -382,7 +389,7 @@ fastify.post('/register', async (request, reply) => {
 
 4. **Never Return Password Hashes**: Always remove `passwordHash` from API responses. Use a helper function like `sanitizeUser()` to exclude sensitive fields.
 
-5. **Password Strength**: Pass the `minScore` of the realm the password is chosen in to `passwordValidators.forMinScore` (2 = Fair is a good default).
+5. **Password Policy**: Pass the `minLength` and `minScore` of the realm the password is chosen in to `passwordValidators.forPolicy` (15 characters and 2 = Fair are the defaults), and hash the password the check returns.
 
 6. **Argon2 Configuration**: Adjust `memoryCost`, `timeCost`, and `parallelism` based on your server capabilities and security requirements.
 
@@ -480,18 +487,21 @@ async function verifyAgainstDecoyHash(password: string): Promise<void> {
 fastify.post('/auth/register', async (request, reply) => {
   const { email, password } = request.body as { email: string; password: string };
 
-  // Validate password strength against the realm's lowest score
-  // (QAuth reads `password.minScore` from the realm's policies)
-  const strength = fastify.passwordValidators.forMinScore(2).validatePasswordStrength(password);
-  if (!strength.valid) {
+  // Check the password against the realm's password policy
+  // (QAuth reads `password.minLength` and `password.minScore` from the realm's policies)
+  const checked = fastify.passwordValidators
+    .forPolicy({ minLength: 15, minScore: 2 })
+    .check(password, { email });
+  if (!checked.valid) {
     return reply.code(422).send({
-      error: 'Password does not meet strength requirements',
-      feedback: strength.feedback,
+      error: 'Password does not meet the password policy',
+      reasons: checked.reasons,
+      feedback: checked.feedback,
     });
   }
 
-  // Hash password
-  const passwordHash = await fastify.passwordHasher.hashPassword(password);
+  // Hash the NFC form the check returns
+  const passwordHash = await fastify.passwordHasher.hashPassword(checked.password);
 
   // Create the identity anchor, then the credential. Since ADR-002 (#230)
   // `users` carries no email or password_hash; the unique index on
@@ -503,7 +513,7 @@ fastify.post('/auth/register', async (request, reply) => {
     realmId,
     providerType: 'password',
     externalSub: normalizeEmail(email),
-    credentialData: buildPasswordCredentialData(passwordHash, false),
+    credentialData: buildPasswordCredentialData(passwordHash, false, checked.normalization),
   });
 
   // Remove passwordHash from response

@@ -3,7 +3,7 @@ title: Upgrades
 description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-02'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -669,6 +669,35 @@ Rolling back to an earlier release without restoring the backup lifts every
 list, because its token endpoint ignores the column. The column and its values
 are kept, and the lists apply again once the nodes run this release again;
 restoring the backup from before the upgrade removes them with the column.
+
+### New passwords meet one password policy
+
+From this release `POST /auth/register` checks a new password against the
+realm's password policy
+([#634](https://github.com/qauth-labs/qauth/issues/634), ADR-017 Decision 8):
+at least `password.minLength` characters after NFC normalisation, 15 by
+default; not a common word or password, nor the address or the service's or
+realm's name, as a whole; and a zxcvbn score of at least `password.minScore`.
+A refused password answers `422` `weak_password` with its `reasons`. Existing
+passwords keep working and are not checked again.
+
+`password.minLength` is a new field of the realm policies. The first node of
+this release to boot gives every realm that lacks it the seed
+`PASSWORD_MIN_LENGTH` (15 when unset), as for any field a release adds. A
+value below 8 refuses the boot; a value below 15 boots with a warning naming
+`PASSWORD_MIN_LENGTH`, since NIST SP 800-63B-4 allows a shorter minimum only
+for a password used within multi-factor authentication.
+
+A password set from this release is hashed in Unicode NFC, and its credential
+records `password_normalization: "nfc"` in `credential_data`. During a rolling
+upgrade a node of the previous release ignores that member: it verifies the
+password as typed. For a password typed already in NFC, which is what keyboards
+and input methods produce for nearly all text, that is the same password. A
+user whose new password contains a character typed in a decomposed form (an
+`e` followed by a combining accent, for example) may be refused by a node of
+the previous release until every node runs this release, and after a rollback.
+A node of the previous release also still registers passwords under the old
+rule (the score floor only) while it runs.
 
 ## Upgrading within 1.x
 
