@@ -153,7 +153,8 @@
             "wallet_sign_in",
             "wallet_link",
             "consent",
-            "consent_revocation"
+            "consent_revocation",
+            "interaction"
           ]
         }
       },

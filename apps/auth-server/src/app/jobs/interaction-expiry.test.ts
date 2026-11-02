@@ -46,7 +46,7 @@ const NOW = Date.now();
  */
 function record(overrides: Partial<InteractionRecord> = {}): InteractionRecord {
   return {
-    v: 1,
+    v: 2,
     ref: randomUUID(),
     realmId: REALM_ID,
     purpose: 'authorization',
@@ -62,6 +62,8 @@ function record(overrides: Partial<InteractionRecord> = {}): InteractionRecord {
     personal: {},
     transaction: { amr: [] },
     flowBinding: 'A'.repeat(43),
+    csrfKey: 'B'.repeat(43),
+    signInTransaction: null,
     revision: 1,
     createdAt: NOW - 1_800_000,
     expiresAt: NOW,

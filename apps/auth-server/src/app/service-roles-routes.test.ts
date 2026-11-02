@@ -121,6 +121,11 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   'POST /developer/v1-rc.0/clients/:clientId/regenerate-secret',
   // Readiness, beside the liveness of /health (#500).
   'GET /ready',
+  // The Interaction API's step read, personal read, answer and cancel (#616).
+  'GET /interaction/v1-rc.0/:interactionId',
+  'GET /interaction/v1-rc.0/:interactionId/personal',
+  'POST /interaction/v1-rc.0/:interactionId/answer',
+  'POST /interaction/v1-rc.0/:interactionId/cancel',
 ];
 
 /**

@@ -34,6 +34,29 @@ export const WALLET_RETURN_PREFIX = `${INTERACTION_API_PREFIX}/wallet/`;
 /** The fixed path the auth server serves this document at. */
 export const INTERACTION_OPENAPI_PATH = `${INTERACTION_API_PREFIX}/openapi.json`;
 
+/**
+ * Where the ceremony app shows an interaction (#616, ADR-019 Decision 6): one
+ * page per interaction under the realm origin's `/ui/`, which reads the
+ * opaque id from its own path and nothing else, and reads the current step
+ * from the Interaction API. The authorization endpoint redirects there (#628),
+ * and a form post's answer `303`s there for the next step.
+ */
+export const CEREMONY_PAGE_PREFIX = '/ui/interaction/';
+
+/**
+ * The path of the ceremony page of `interactionId`, without the realm origin.
+ * The id is an interaction id (43 base64url characters), so it needs no
+ * encoding; anything else is refused.
+ *
+ * @throws Error when `interactionId` is not an interaction id
+ */
+export function ceremonyPagePath(interactionId: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(interactionId)) {
+    throw new Error('a ceremony page path names an interaction id');
+  }
+  return `${CEREMONY_PAGE_PREFIX}${interactionId}`;
+}
+
 /** The flow cookie that binds an interaction to the browser that started it (#592). */
 export const FLOW_COOKIE_NAME = '__Host-qauth_flow';
 

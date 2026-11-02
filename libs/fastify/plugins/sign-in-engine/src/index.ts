@@ -3,6 +3,7 @@ export * from './lib/audit-events';
 export * from './lib/failure-ladder';
 export * from './lib/fastify-plugin-sign-in-engine';
 export * from './lib/identifier-digest';
+export * from './lib/interaction-transport';
 export * from './lib/password-attempts';
 export * from './lib/password-hard-action';
 export * from './lib/password-verifier';
@@ -28,3 +29,12 @@ export {
   type SignInTransaction,
   signInTransactionSchema,
 } from '@qauth-labs/server-sign-in-engine';
+// The step grammar's part the Interaction API's routes read (#616).
+export {
+  type AnswerEncoding,
+  type InteractionPersonalView as InteractionPersonalDataView,
+  type InteractionStepView,
+  StepAnswerError,
+  StepMappingError,
+  type StepOffer,
+} from '@qauth-labs/server-step-grammar';

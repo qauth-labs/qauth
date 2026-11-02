@@ -119,9 +119,18 @@ describe('rate-limit key functions in the app', () => {
   // derives the address part from clientAddressKey. The admin listener (#511,
   // `admin/`) has no host realm: its ceilings key by address alone and by the
   // token's subject, each with a key function of its own, which reads admin
-  // claims a public route's request does not carry.
+  // claims a public route's request does not carry. The Interaction API
+  // (#616, ADR-019 Decision 6) keys its step read by realm and interaction,
+  // because the ceremony app's server makes that read for every browser, and
+  // its answers by realm and address with a bucket suffix; each has a named
+  // key function in that route file.
   const PUBLIC_KEY_FUNCTIONS = new Set(['realmRateLimitKey']);
   const ADMIN_KEY_FUNCTIONS = new Set(['adminAddressRateLimitKey', 'adminSubjectRateLimitKey']);
+  const INTERACTION_KEY_FUNCTIONS = new Set([
+    'realmRateLimitKey',
+    'interactionReadRateLimitKey',
+    'interactionAnswerRateLimitKey',
+  ]);
 
   it('derive every key from realmRateLimitKey, or on the admin listener from its own key functions', () => {
     const appDir = resolveAppDir();
@@ -132,7 +141,11 @@ describe('rate-limit key functions in the app', () => {
     let keyGenerators = 0;
     for (const file of files) {
       const source = readFileSync(join(appDir, file), 'utf8');
-      const allowed = file.startsWith(`admin${sep}`) ? ADMIN_KEY_FUNCTIONS : PUBLIC_KEY_FUNCTIONS;
+      const allowed = file.startsWith(`admin${sep}`)
+        ? ADMIN_KEY_FUNCTIONS
+        : file === join('routes', 'interaction-api.ts')
+          ? INTERACTION_KEY_FUNCTIONS
+          : PUBLIC_KEY_FUNCTIONS;
       for (const match of source.matchAll(/keyGenerator\s*:\s*([^,\n}]+)/g)) {
         keyGenerators += 1;
         if (!allowed.has(match[1].trim())) offenders.push(`${file}: ${match[0]}`);
