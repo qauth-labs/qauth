@@ -239,6 +239,12 @@ describe('error formats of the assembled app (#513)', () => {
   });
 });
 
+/** The assembled app, booted in `beforeAll`. */
+function booted(): FastifyInstance {
+  if (server === undefined) throw new Error('the app did not boot');
+  return server;
+}
+
 /** The `Access-Control-*` header fields of an answer. */
 function corsHeaders(response: LightMyRequestResponse): string[] {
   return Object.keys(response.headers).filter((name) => name.startsWith('access-control-'));
@@ -254,7 +260,7 @@ function concretePath(url: string): string {
 
 /** A CORS preflight from {@link SPA_ORIGIN}, announcing `method`. */
 function preflight(url: string, method: string): Promise<LightMyRequestResponse> {
-  return server!.inject({
+  return booted().inject({
     method: 'OPTIONS',
     url,
     headers: { origin: SPA_ORIGIN, 'access-control-request-method': method },
@@ -302,12 +308,12 @@ describe('the authorization endpoint answers no CORS (OAuth 2.1 draft-17 §3.1)'
   });
 
   it('sends no Access-Control-Allow-Origin from GET or POST /oauth/authorize', async () => {
-    const get = await server!.inject({
+    const get = await booted().inject({
       method: 'GET',
       url: '/oauth/authorize',
       headers: { origin: SPA_ORIGIN },
     });
-    const post = await server!.inject({
+    const post = await booted().inject({
       method: 'POST',
       url: '/oauth/authorize',
       headers: { origin: SPA_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
@@ -332,7 +338,7 @@ describe('the token endpoint keeps CORS for a browser-based application (#930)',
     expect(response.statusCode).toBe(204);
     expect(response.headers['access-control-allow-origin']).toBe(SPA_ORIGIN);
 
-    const token = await server!.inject({
+    const token = await booted().inject({
       method: 'POST',
       url: '/oauth/token',
       headers: { origin: SPA_ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },

@@ -10,7 +10,7 @@ import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fast
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { RouteSurface } from '../helpers/route-surface';
-import { type CorsPluginOptions, corsOriginOption, corsPlugin } from './cors';
+import { corsOriginOption, corsPlugin, type CorsPluginOptions } from './cors';
 
 const SPA_ORIGIN = 'https://spa.example.com';
 
@@ -20,6 +20,12 @@ afterEach(async () => {
   await app?.close();
   app = undefined;
 });
+
+/** The app the running test built. */
+function booted(): FastifyInstance {
+  if (app === undefined) throw new Error('build the app first');
+  return app;
+}
 
 /** The routes of the stub app, and the surface each names. */
 const ROUTES: readonly { method: 'GET' | 'POST'; url: string; surface: RouteSurface }[] = [
@@ -53,7 +59,7 @@ async function buildApp(options: CorsPluginOptions): Promise<FastifyInstance> {
 }
 
 function preflight(url: string, method?: string): Promise<LightMyRequestResponse> {
-  return app!.inject({
+  return booted().inject({
     method: 'OPTIONS',
     url,
     headers: {
@@ -64,7 +70,7 @@ function preflight(url: string, method?: string): Promise<LightMyRequestResponse
 }
 
 function call(method: 'GET' | 'POST', url: string): Promise<LightMyRequestResponse> {
-  return app!.inject({ method, url, headers: { origin: SPA_ORIGIN } });
+  return booted().inject({ method, url, headers: { origin: SPA_ORIGIN } });
 }
 
 /** The `Access-Control-*` header fields of an answer. */
@@ -189,7 +195,7 @@ describe('the CORS plugin with CORS_ORIGIN set', () => {
 
   it('allows no origin CORS_ORIGIN does not list', async () => {
     await buildApp(options);
-    const token = await app!.inject({
+    const token = await booted().inject({
       method: 'POST',
       url: '/oauth/token',
       headers: { origin: 'https://elsewhere.example.com' },
