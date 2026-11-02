@@ -253,7 +253,7 @@ describe('the internal listener (#496)', () => {
           { internalListener: () => ({ modules: [FIXTURE_MODULE] }) }
         )
       ).rejects.toThrow(
-        /INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so the signer routes are not registered without it/
+        /INTERNAL_TLS_CERT_PATH is required: SERVICE_ROLES=api,signer serves the signer to the other roles on the internal listener, over mutual TLS only while the roles are split, so no internal route is registered without it/
       );
     });
   });

@@ -383,16 +383,17 @@ export function internalListenerPlan(
   const peerRoles = settings.INTERNAL_PEER_ROLES ?? new Map<string, InternalPeerRole>();
   const single = isSingleProcess(roles);
   const problems: ServiceRoleProblem[] = [];
-  const serving =
-    holdsSigner(roles) && !single
-      ? `${named} serves the signer to the other roles on the internal listener`
-      : `${named} serves its metrics on the internal listener`;
+  // A split process with the signer serves it there; any other serves only its metrics.
+  const servesSigner = holdsSigner(roles) && !single;
+  const serving = servesSigner
+    ? `${named} serves the signer to the other roles on the internal listener`
+    : `${named} serves its metrics on the internal listener`;
   const peerRolesExample = single
     ? '{"spiffe://example.org/prometheus":"metrics"}'
     : '{"spiffe://example.org/qauth/web":"web","spiffe://example.org/prometheus":"metrics"}';
   const peerRolesProblem = (): ServiceRoleProblem => ({
     variable: 'INTERNAL_PEER_ROLES',
-    message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role; map each peer's SAN to its role, and a metrics scraper's to metrics, such as ${peerRolesExample}${single ? '' : ', or set METRICS_ENABLED=false where no scraper reads this process'}`,
+    message: `INTERNAL_PEER_ROLES is required: ${serving} over mutual TLS, and refuses every peer whose certificate it does not map to a role; map each peer's SAN to its role, and a metrics scraper's to metrics, such as ${peerRolesExample}${servesSigner ? '' : ', or set METRICS_ENABLED=false where no scraper reads this process'}`,
   });
 
   const missing = INTERNAL_TLS_SETTINGS.filter((variable) => settings[variable] === undefined);
