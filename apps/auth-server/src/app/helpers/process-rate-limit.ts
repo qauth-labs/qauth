@@ -48,14 +48,14 @@ export function createProcessRateLimit(options: ProcessRateLimitOptions): Proces
   const maxKeys = options.maxKeys ?? DEFAULT_PROCESS_RATE_LIMIT_KEYS;
   const buckets = new Map<string, { count: number; resetAt: number }>();
 
+  // A Map iterates in insertion order, and a bucket is inserted again when its
+  // window restarts: the buckets run from the soonest to end to the latest.
   function makeRoom(at: number): void {
     if (buckets.size < maxKeys) return;
+    // The expired ones, which come first; then the oldest. Each step stops at
+    // the first bucket it keeps, so a full map costs what it frees.
     for (const [key, bucket] of buckets) {
-      if (bucket.resetAt <= at) buckets.delete(key);
-    }
-    // A Map iterates in insertion order: the first keys are the oldest.
-    for (const key of buckets.keys()) {
-      if (buckets.size < maxKeys) break;
+      if (bucket.resetAt > at && buckets.size < maxKeys) break;
       buckets.delete(key);
     }
   }
