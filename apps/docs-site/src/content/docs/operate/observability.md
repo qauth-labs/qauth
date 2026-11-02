@@ -178,10 +178,18 @@ does not depend on the realm's `bruteForce` policy: a realm whose lock is off
   `…:known-ips`: the identifier and each known IP are kept as keyed HMACs,
   derived from the realm's cookie HMAC secret. A rotation of that secret
   starts every account's count afresh within a minute. A run of failures is
-  kept 30 days after its last counted failure.
+  kept 1 day after its last counted failure while it has fewer than 5, and
+  30 days from the failure that sets its first wait; a correct password ends
+  it sooner. Both follow the count alone, the same whether or not an account
+  holds the identifier.
 - **Redis memory.** Every address tried, held by an account or not, keeps a
-  small hash for 30 days, so a spray of made-up addresses grows Redis for a
-  month (the per-IP rate limits bound how fast). Size Redis for it. When Redis
+  small hash: a day while it has fewer than 5 failures, 30 days once it has
+  reached a wait. At a sustained `R` failed attempts a second at made-up
+  addresses, Redis so holds about `R × 86,400` counters when each address is
+  tried fewer than 5 times, and at most `R × 518,400` (30 days of a fifth of
+  them) when each is tried 5 times so that its counter reaches a wait; the
+  per-IP rate limits bound each client address's share of `R`. Size Redis
+  for the larger figure. When Redis
   is full, `noeviction` refuses new counts, and so every password sign-in
   (fail closed); a `volatile-*` or `allkeys-*` policy may evict a count
   instead, which gives that account its free tries again.

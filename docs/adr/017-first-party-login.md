@@ -143,6 +143,15 @@
 > `urn:qauth:event:consent.administrative:v1-rc.0`, in the transaction that mints the code.
 > `oauth.consent.administrative` predates the event contract of ADR-018 §3 and is not a type.
 > Decision 9 is edited in place. No rule changed.
+>
+> **Amended 2026-11-02** with #969, the maintainer's decision of 2026-11-01 on the security review
+> of the failure ladder (#615). A counter of the ladder is kept for one of two lengths after its
+> last counted failure, chosen by its count alone: 1 day while it has fewer than the free
+> failures, 30 days from the failure that sets its first wait. A single retention of 30 days let
+> the first wrong guess at any well-formed identifier, held by an account or not, keep a key for a
+> month. A spray of made-up addresses could then fill the store, and a full store either refuses
+> every sign-in (fail closed) or evicts real accounts' counters, which resets their ladders.
+> Decision 7 is edited in place.
 
 ## Context
 
@@ -918,6 +927,19 @@ values):
   transaction, meet the same ladder and disable ceiling as attempts sent one at a time. The client,
   end-user IP and send-cap counters reserve the same way. A hard action fires only when a reserved
   attempt settles as a failure.
+- Retention. A counter is kept after its last counted failure for 1 day while it has fewer than
+  the free failures, and for 30 days from the failure that sets its first wait; a correct answer
+  or the owner's reset ends it sooner. Both lengths follow the count alone, never whether an
+  account holds the identifier, so the decay tells nothing about who exists. A spray that tries
+  each made-up identifier a few times so leaves its keys for a day, while an account under attack
+  keeps its whole run. A spray that tries each identifier 5 times still keeps its keys 30 days, at
+  5 failed rounds a key: the store then holds at most about 6 days of those failures, where a
+  single 30-day retention held 30. The short retention is at least the free failures less one
+  times the longest wait (1 hour at the defaults), so a guesser who stays below the ladder gets no
+  more tries than one who climbs it: 4 a day per account below it at the defaults, against up to
+  96 a day on it. While the hard action is armed, a guesser who never reaches a wait gets 4 tries
+  a day per account and never meets the disable ceiling, against about 3.2 a day (99 tries, then
+  30 days' pause) when every run was kept 30 days (amended 2026-11-02, #969).
 - The disabled mark is a typed, authenticator-generic column, `user_credentials.disabled_at`. While
   the hard action is armed, the repository's credential lookup returns a disabled credential as
   unusable, so no verifier can miss it. Every surface then refuses it with its ordinary
