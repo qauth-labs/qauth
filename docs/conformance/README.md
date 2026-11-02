@@ -269,3 +269,16 @@ inside it that prove §7.5.3 cite it in their own titles. The container-backed s
 (`apps/auth-server/src/app/code-replay.integration.test.ts`) proves the same
 behaviour end to end, but integration suites are not in the reports the gate
 reads.
+
+## The authorization endpoint's no-CORS row (#930)
+
+One OAuth 2.1 row joined increment 4's: §3.1, new in `-17`, says CORS MUST NOT
+be supported at the authorization endpoint. QAuth leaves every `browser` route
+out of CORS, so the row's `applies` names them all. The assembled app's
+route-surface suite (`apps/auth-server/src/app/route-surfaces.test.ts`) proves
+it: with `CORS_ORIGIN` set, a preflight for `/oauth/authorize` gets no answer
+and neither `GET` nor `POST` sends `Access-Control-Allow-Origin`, under a
+`describe` title that cites `OAuth 2.1 draft-17 §3.1`. The token endpoint's
+CORS (§3.2, §9.3.4) binds "authorization servers that support browser-based
+applications", which an operator chooses by listing their origins in
+`CORS_ORIGIN`, so it has no row.
