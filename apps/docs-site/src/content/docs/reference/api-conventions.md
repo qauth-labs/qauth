@@ -266,13 +266,21 @@ Decision 7). The approval engine lives in `apps/auth-server/src/app/admin/approv
    admin pipeline checks the approval and consumes it in the transaction of the operation, so the
    operation runs once with it, under the requester's own authorization at that moment.
 
-**What an approval binds.** The server keeps the canonical request: the operation id, the method,
-every path parameter, the query and the body, each as the operation's route parses it, the realm
-and the requester, serialized with the JSON Canonicalization Scheme (RFC 8785). `request_hash` is
-its SHA-256 without the server's nonce; the gate recomputes it from the retried call and refuses
-the call when it differs, so a changed body, path parameter, query, realm or requester finds no
-approval. `op_hash` is its SHA-256 with the nonce, and the challenge an approver's factor signs is
-derived from it, so an approval given for one filing approves nothing else.
+**What an approval binds.** The canonical request is the operation id, the method, every path
+parameter, the query and the body, each as the operation's route parses it, the realm and the
+requester, serialized with the JSON Canonicalization Scheme (RFC 8785). `op_hash` is its SHA-256
+with a nonce the server draws when the approval is filed. The gate computes the `op_hash` of the
+retried call with the approval's nonce and refuses the call when it differs, so a changed body,
+path parameter, query, realm or requester finds no approval; and the challenge an approver's
+factor signs is derived from it, so an approval given for one filing approves nothing else.
+
+**What an approval keeps.** The operation's method, path parameters and query, what its approver
+is shown (below), `op_hash` and the nonce, never the body, which may hold a secret such as a
+password the operation sets, and no hash of the request without the nonce, which would let anyone
+with a copy of the table test a guessed body against it. Once the approval is consumed, cancelled,
+denied or expired, its nonce is overwritten with random bytes, so neither its `op_hash` nor the
+audit log's copy of it can be tested against a guess any more. The overwrite is a new row version:
+a backup or WAL archive taken while the approval was open still holds the old nonce.
 
 **What a security operation's route and handler must do.** The admin listener refuses to boot a
 security operation's route that cannot be bound this way: it needs a renderer, one method, a Zod
@@ -306,19 +314,23 @@ until then. The requester withdraws it with
 `POST /admin/v1-rc.0/realms/{realmId}/approvals/{approvalId}/cancel`, whose `If-Match` names the
 version the approval's `ETag` gave (428 without one, 412 for another version, 409 for an approval
 that is no longer open). An approver may decline it instead (`denied`). A consumed, expired,
-cancelled or denied approval approves nothing. A consumed, cancelled or denied approval no longer
-keeps the operation's body, which may hold a secret: its two hashes are what the audit log binds
-to. No job removes approvals: one that expires unused keeps its body until the next approval is filed in its realm, which drops it.
+cancelled or denied approval approves nothing. One that expires unused is shown `expired` from
+then on; the `approval-expiry` job, every minute on the `admin` role, stores `expired` on it and
+overwrites its nonce, which changes its version (so a withdrawal naming the old one answers 412).
+No job removes approvals.
 
-**What the approver is shown.** The operation, rendered from the stored request, never from text
-the requester wrote: every security operation registers a renderer, which returns typed display
-data, never HTML, and the admin listener refuses to boot a security operation without one. The
+**What the approver is shown.** The operation, rendered from the request when the approval is
+filed, never from text the requester wrote: every security operation registers a renderer, which
+returns typed display data, never HTML, and the admin listener refuses to boot a security
+operation without one. The approval stores what it rendered, and that is what every reader is
+shown, the approval page included; an operation whose renderer fails on a request files nothing. The
 requester's reason is shown apart, as quoted text. Every string is length-capped, and a control,
 bidirectional, format or other default-ignorable character in it is shown escaped (`\u{202E}`), as
 is a private-use or unassigned code point and every space but U+0020, a
 backslash doubled and a combining mark past the third on one character escaped, so the text can
 neither hide nor reorder what the page shows, nor pass for an escape. Every reader of an approval
-gets its display data, so a renderer must never show a secret value of the request: nothing checks it.
+gets its display data, and the approval stores it, so a renderer must never show a secret value of
+the request: nothing checks it.
 
 **Audit rows.** Every state change writes the admin audit log of the approval's realm: filing and
 withdrawing write the rows of `approvals.create` and `approvals.cancel`; approving and declining
