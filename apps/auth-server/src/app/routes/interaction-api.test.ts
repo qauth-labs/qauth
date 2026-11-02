@@ -649,8 +649,15 @@ describe('the cancel (#616)', () => {
 describe('the events of a client whose id is longer than an event holds (#616)', () => {
   it('signs in, and the event names no client', async () => {
     await app.close();
-    app = await buildApp({ clientId: `https://notes.example.com/${'c'.repeat(300)}` });
-    engine.advance.mockResolvedValueOnce(PASSWORD_ROUND).mockResolvedValueOnce(COMPLETE_ROUND);
+    const clientId = `https://notes.example.com/${'c'.repeat(300)}`;
+    app = await buildApp({ clientId });
+    // The round carries the long id, as the engine writes it, so the stored
+    // record holds it too.
+    const longRound = {
+      ...PASSWORD_ROUND,
+      transaction: { ...PASSWORD_ROUND.transaction, clientId },
+    };
+    engine.advance.mockResolvedValueOnce(longRound).mockResolvedValueOnce(COMPLETE_ROUND);
     const browser = new Browser();
     const id = await browser.start();
     await browser.send(id, 'answer', {

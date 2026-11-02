@@ -1558,6 +1558,24 @@ describe('answers and transactions', () => {
     expect(result).toMatchObject({ kind: 'step', offer: { current: { step: 'identifier' } } });
   });
 
+  it('keeps a transaction for a client whose id is a long URL, as a metadata document client has', async () => {
+    const built = build();
+    const client = { id: `https://notes.example.com/${'c'.repeat(2048 - 26)}` };
+    expect(client.id).toHaveLength(2048);
+    const first = await built.engine.advance(
+      null,
+      null,
+      context({ client, loginHint: IDENTIFIER })
+    );
+    expect(first).toMatchObject({ kind: 'step', offer: { current: { step: 'password' } } });
+    const second = await built.engine.advance(
+      first.transaction as SignInTransaction,
+      passwordAnswer(PASSWORD),
+      context({ client })
+    );
+    expect(second.kind).toBe('complete');
+  });
+
   it.each([
     ['another version', { ...tx(), v: 2 }],
     ['a subject without an identifier', { ...tx(), subject: USER }],

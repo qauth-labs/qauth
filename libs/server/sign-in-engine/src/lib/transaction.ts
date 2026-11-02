@@ -98,6 +98,14 @@ const verifiedStepSchema = z
   .transform((value) => value as OfferedStep);
 
 /**
+ * The longest `client_id` a transaction holds: the authorization request's
+ * bound, which leaves room for a Client ID Metadata Document URL. A shorter
+ * bound would end every sign-in of a client whose URL id is longer, at its
+ * second round.
+ */
+const SIGN_IN_CLIENT_ID_MAX_LENGTH = 2048;
+
+/**
  * The stored form of a transaction, for the transport to check what it
  * reads back. The engine parses every transaction it is given with it, and a
  * transaction it refuses ends.
@@ -105,7 +113,7 @@ const verifiedStepSchema = z
 export const signInTransactionSchema = z.strictObject({
   v: z.literal(SIGN_IN_TRANSACTION_VERSION),
   realmId: z.string().min(1).max(255),
-  clientId: z.string().min(1).max(255),
+  clientId: z.string().min(1).max(SIGN_IN_CLIENT_ID_MAX_LENGTH),
   createdAt: z.int().nonnegative(),
   identifier: z.string().min(3).max(254).optional(),
   subject: z.string().min(1).max(64).optional(),
