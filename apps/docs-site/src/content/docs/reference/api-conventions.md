@@ -355,7 +355,8 @@ of `approvals.approve`.
   `invalid_scope`. The refresh token issued beside an admin token is bound to the same key,
   whatever the client, so it refreshes only with a proof of that key. A refresh token bound to no
   key, issued before admin tokens needed a proof, never refreshes into one: the admin audience is
-  refused with `invalid_grant`, so the user signs in again, and the admin scopes are withheld. A
+  refused with `invalid_grant`, so the user signs in again, and the admin scopes are withheld and
+  dropped from the rotated refresh token, so no later refresh of that family issues them. A
   token for the admin API lives at most 900 seconds, whatever
   `tokens.adminAccessTokenLifespanSeconds` says.
 - Neither the admin audience nor an admin scope ever reaches a `client_credentials` token, which

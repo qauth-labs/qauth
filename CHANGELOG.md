@@ -1345,7 +1345,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both it and `ADMIN_API_HOST` name loopback. A refresh token issued bound to
   no DPoP key never refreshes into an admin token: the admin audience is
   refused with `invalid_grant` (sign in again) and the admin scopes are
-  withheld. The token endpoint's processes need `DPOP_ENABLED=true` too, to
+  withheld and dropped from the rotated refresh token, so a later refresh
+  of that family never issues them either, even once a public client's
+  rotation binds it to a key. The token endpoint's processes need
+  `DPOP_ENABLED=true` too, to
   issue admin tokens.
   The admin OpenAPI document names the `dpopAuth` security scheme.
 - **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
