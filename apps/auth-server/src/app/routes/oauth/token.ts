@@ -863,13 +863,18 @@ async function issuableScopes(
   ctx: HandlerContext<{ grant_type: string }>,
   issuance: { userId: string | null; scopes: readonly string[]; aud: string | readonly string[] },
   /** The user a refusal's event names; the grant's user even when it is decided for none. */
-  eventUserId: string | null = issuance.userId
+  eventUserId: string | null = issuance.userId,
+  /**
+   * Whether the token issued is bound to a DPoP key (#520); by default,
+   * whether the request carried a proof.
+   */
+  dpopBound: boolean = ctx.dpopThumbprint !== undefined
 ): Promise<string[]> {
   const decision = await adminIssuance(ctx.fastify, {
     client: ctx.client,
     realmId: ctx.realmId,
     ...issuance,
-    dpopBound: ctx.dpopThumbprint !== undefined,
+    dpopBound,
   });
   if (decision.audienceRefused) {
     await emitRequestFailed(ctx, 'invalid_target', 'admin_audience_without_grant', eventUserId);
@@ -879,15 +884,28 @@ async function issuableScopes(
   }
   // An admin token is bound to a DPoP key (#520): without a proof, the admin
   // audience is refused, and so is a request left with nothing but the admin
-  // scopes it may not have; otherwise those scopes are only withheld.
-  if (
-    decision.proofMissing &&
-    ([issuance.aud].flat().includes(API_FAMILY_AUDIENCES.admin) || decision.scopes.length === 0)
-  ) {
-    await emitRequestFailed(ctx, 'invalid_dpop_proof', 'admin_token_without_dpop', eventUserId);
-    throw new InvalidDpopProofError(
-      'a token for the admin API, or with an admin scope, is issued only with a DPoP proof'
+  // scopes it may not have; otherwise those scopes are only withheld. The
+  // refusal is `invalid_dpop_proof` where a proof would lift it: on a server
+  // that reads proofs, for a request that carried none. Where none could,
+  // with DPoP off or for a refresh family bound to no key, it names the
+  // audience or the scope.
+  const namesAdmin = [issuance.aud].flat().includes(API_FAMILY_AUDIENCES.admin);
+  if (decision.proofMissing && (namesAdmin || decision.scopes.length === 0)) {
+    if (ctx.fastify.dpop && ctx.dpopThumbprint === undefined) {
+      await emitRequestFailed(ctx, 'invalid_dpop_proof', 'admin_token_without_dpop', eventUserId);
+      throw new InvalidDpopProofError(
+        'a token for the admin API, or with an admin scope, is issued only with a DPoP proof'
+      );
+    }
+    await emitRequestFailed(
+      ctx,
+      namesAdmin ? 'invalid_target' : 'invalid_scope',
+      'admin_token_without_dpop',
+      eventUserId
     );
+    throw namesAdmin
+      ? new InvalidTargetError('the admin API audience is issued only in a DPoP-bound token')
+      : new InvalidScopeError('admin scopes are issued only in a DPoP-bound token');
   }
   if (decision.scopes.length === 0 && decision.withheld.length > 0) {
     await emitRequestFailed(ctx, 'invalid_scope', 'admin_scope_without_grant', eventUserId);
@@ -1709,10 +1727,27 @@ async function handleRefreshToken(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  // An admin token comes only from a family bound to a DPoP key since its
+  // start (#520): a family issued unbound, before admin tokens needed a
+  // proof, never turns into one under whatever key the request proves now.
+  // The admin audience is refused, as a key change is (a new sign-in), and
+  // the admin scopes are withheld. A bound family passed its key check above.
+  const familyBound = storedToken.cnfJkt !== null && storedToken.cnfJkt !== undefined;
+  if (!familyBound && [aud].flat().includes(API_FAMILY_AUDIENCES.admin)) {
+    await emitRequestFailed(ctx, 'invalid_grant', 'admin_refresh_token_unbound', user.id);
+    throw new InvalidGrantError(
+      'a refresh token bound to no DPoP key refreshes no admin token: sign in again'
+    );
+  }
   // Without the admin scopes the account holds no live grant for now (#510).
   // The rotated refresh token keeps `grantedScopes`, so a grant given again
   // reaches the next refresh.
-  const issuedScopes = await issuableScopes(ctx, { userId: user.id, scopes: grantedScopes, aud });
+  const issuedScopes = await issuableScopes(
+    ctx,
+    { userId: user.id, scopes: grantedScopes, aud },
+    user.id,
+    familyBound
+  );
 
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
