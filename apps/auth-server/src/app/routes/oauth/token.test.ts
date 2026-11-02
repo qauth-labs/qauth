@@ -6,6 +6,7 @@ import {
 } from '@qauth-labs/fastify-plugin-signer/src/testing/memory-signer';
 import {
   InvalidClientError,
+  InvalidDpopProofError,
   InvalidGrantError,
   InvalidRequestError,
   InvalidScopeError,
@@ -1701,48 +1702,187 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     };
   }
 
-  // ADR-019 Decision 7: a token for the admin API lives at most the realm's
-  // admin lifetime, whatever the client's tier gives; the ID token keeps the
-  // realm's access lifetime.
-  it.each([
-    ['caps a token for the admin API at the admin lifetime', ADMIN_API_AUDIENCE, 120],
-    ['leaves a token for any other audience at the tier lifetime', 'https://api.example.com', 300],
-  ])('%s', async (_label, resource, expected) => {
-    const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+  /** The thumbprint the stub DPoP verifier gives every proof (#480, #520). */
+  const PROOF_JKT = 'j'.repeat(43);
+
+  /** Turn DPoP on in the stub, with a verifier that accepts every proof under {@link PROOF_JKT}. */
+  function withDpop(fastify: FastifyInstance) {
+    const verifyRequest = vi.fn(async () => ({ thumbprint: PROOF_JKT }));
+    Object.assign(fastify, { dpop: { algorithms: ['ES256'], verifyRequest } });
+    return verifyRequest;
+  }
+
+  /** {@link baseRequest} with a `DPoP` header, in the realm that has policies. */
+  function requestWithProof(overrides: Partial<Record<string, unknown>> = {}) {
+    const request = baseRequest(overrides);
+    return {
+      ...request,
+      headers: { ...request.headers, dpop: 'proof.header.signature' },
+      realm: REALM_WITH_POLICIES,
+    };
+  }
+
+  /**
+   * The stub for a code of `scopes` for `resource`, redeemed by a client that
+   * lists the admin API, for an account with a viewer grant, in a realm whose
+   * policies hold `tokens`.
+   */
+  function adminCodeStub(
+    scopes: string[],
+    resource: string,
+    tokens: Record<string, number> = { adminAccessTokenLifespanSeconds: 120 }
+  ) {
+    const stub = setupAuthCodeStub();
+    const { fastify, client, authCode } = stub;
     client.audience = ['https://api.example.com', ADMIN_API_AUDIENCE];
+    client.grantTypes = ['authorization_code', 'refresh_token'];
     (fastify as unknown as { policyStore: unknown }).policyStore = testPolicyStore({
       ...REALM_LIFETIMES,
-      adminAccessTokenLifespanSeconds: 120,
+      ...tokens,
     });
     (fastify.repositories.adminGrants.listLive as unknown as Mock).mockResolvedValue([
       liveBuiltInGrant('viewer'),
     ]);
     (
       fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
-    ).mockResolvedValue({ ...authCode, scopes: ['openid', 'read:foo'], resource: [resource] });
+    ).mockResolvedValue({ ...authCode, scopes, resource: [resource] });
     (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
       id: 'consent-uuid-1',
-      scopes: ['openid', 'read:foo'],
-      resourceScopes: { [resource]: ['openid', 'read:foo'] },
+      scopes,
+      resourceScopes: { [resource]: scopes },
       revokedAt: null,
     });
+    return stub;
+  }
+
+  // ADR-019 Decision 7: a token for the admin API lives at most the realm's
+  // admin lifetime, whatever the client's tier gives; the ID token keeps the
+  // realm's access lifetime. An admin token is DPoP-bound (#520).
+  it.each([
+    ['caps a token for the admin API at the admin lifetime', ADMIN_API_AUDIENCE, 120],
+    ['leaves a token for any other audience at the tier lifetime', 'https://api.example.com', 300],
+  ])('%s', async (_label, resource, expected) => {
+    const { fastify, ctx } = adminCodeStub(['openid', 'read:foo'], resource);
+    withDpop(fastify);
     await tokenRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
 
-    const result = await ctx.handler(
-      { ...baseRequest(), realm: REALM_WITH_POLICIES },
-      createReply()
-    );
+    const result = await ctx.handler(requestWithProof(), createReply());
 
-    expect(result).toMatchObject({ expires_in: expected });
+    expect(result).toMatchObject({ expires_in: expected, token_type: 'DPoP' });
     expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
       IN_REQUEST_REALM,
-      expect.objectContaining({ aud: resource, expiresInOverride: expected })
+      expect.objectContaining({
+        aud: resource,
+        expiresInOverride: expected,
+        cnf: { jkt: PROOF_JKT },
+      })
     );
     expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
       IN_REQUEST_REALM,
       expect.objectContaining({ expiresInOverride: 300 })
     );
+  });
+
+  describe('an admin token is DPoP-bound and short-lived (#520)', () => {
+    it('never lets an admin token live longer than 900 seconds, even when the policy asks for more', async () => {
+      const { fastify, ctx } = adminCodeStub(['openid', 'qauth:admin:read'], ADMIN_API_AUDIENCE, {
+        accessTokenLifespanSeconds: 3_600,
+        adminAccessTokenLifespanSeconds: 3_600,
+      });
+      withDpop(fastify);
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(requestWithProof(), createReply());
+
+      expect(result).toMatchObject({ expires_in: 900, scope: 'openid qauth:admin:read' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ aud: ADMIN_API_AUDIENCE, expiresInOverride: 900 })
+      );
+    });
+
+    it('refuses the admin audience to a request without a DPoP proof, and leaves the code unspent', async () => {
+      for (const dpopOn of [true, false]) {
+        emitUserEventMock.mockClear();
+        const { fastify, ctx } = adminCodeStub(['openid', 'qauth:admin:read'], ADMIN_API_AUDIENCE);
+        if (dpopOn) withDpop(fastify);
+        await tokenRoute(fastify);
+        if (!ctx.handler) throw new Error('Handler missing');
+
+        await expect(
+          ctx.handler({ ...baseRequest(), realm: REALM_WITH_POLICIES }, createReply())
+        ).rejects.toBeInstanceOf(InvalidDpopProofError);
+        expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+        expect(fastify.repositories.authorizationCodes.markUsed).not.toHaveBeenCalled();
+        expect(emittedData(TOKEN_REQUEST_FAILED)).toEqual([
+          expect.objectContaining({
+            error: 'invalid_dpop_proof',
+            reason: 'admin_token_without_dpop',
+          }),
+        ]);
+      }
+    });
+
+    it('withholds the admin scopes from a request without a DPoP proof, and issues the rest', async () => {
+      const { fastify, ctx } = adminCodeStub(
+        ['read:foo', 'qauth:admin:read'],
+        'https://api.example.com'
+      );
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(
+        { ...baseRequest(), realm: REALM_WITH_POLICIES },
+        createReply()
+      );
+
+      expect(result).toMatchObject({ scope: 'read:foo', token_type: 'Bearer' });
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ scope: 'read:foo' })
+      );
+    });
+
+    it('refuses a request without a DPoP proof that asked for admin scopes only', async () => {
+      const { fastify, ctx } = adminCodeStub(['qauth:admin:read'], 'https://api.example.com');
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await expect(
+        ctx.handler({ ...baseRequest(), realm: REALM_WITH_POLICIES }, createReply())
+      ).rejects.toBeInstanceOf(InvalidDpopProofError);
+      expect(fastify.jwtUtils.signAccessToken).not.toHaveBeenCalled();
+    });
+
+    it("binds a confidential client's refresh token to the proof key when it comes with an admin token", async () => {
+      const { fastify, ctx } = adminCodeStub(['openid', 'qauth:admin:read'], ADMIN_API_AUDIENCE);
+      withDpop(fastify);
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(requestWithProof(), createReply());
+
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cnfJkt: PROOF_JKT }),
+        expect.anything()
+      );
+    });
+
+    it("leaves a confidential client's refresh token unbound beside any other token", async () => {
+      const { fastify, ctx } = adminCodeStub(['openid', 'read:foo'], 'https://api.example.com');
+      withDpop(fastify);
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(requestWithProof(), createReply());
+
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cnfJkt: null }),
+        expect.anything()
+      );
+    });
   });
 
   it("signs the access, ID and refresh tokens with the realm's lifetimes, from the row it already has (#527)", async () => {
