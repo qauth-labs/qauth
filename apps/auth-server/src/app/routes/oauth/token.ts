@@ -1740,14 +1740,21 @@ async function handleRefreshToken(
     );
   }
   // Without the admin scopes the account holds no live grant for now (#510).
-  // The rotated refresh token keeps `grantedScopes`, so a grant given again
-  // reaches the next refresh.
+  // A bound family's rotated refresh token keeps `grantedScopes`, so a grant
+  // given again reaches the next refresh.
   const issuedScopes = await issuableScopes(
     ctx,
     { userId: user.id, scopes: grantedScopes, aud },
     user.id,
     familyBound
   );
+  // An unbound family carries no admin scope forward: it never refreshes an
+  // admin token, and a public client's rotated token is bound below to the
+  // key this request proves, so a kept admin scope would be issued from the
+  // next rotation on, against the rule above.
+  const familyScopes = familyBound
+    ? grantedScopes
+    : grantedScopes.filter((scope) => !isReservedQauthScope(scope));
 
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
@@ -1774,14 +1781,15 @@ async function handleRefreshToken(
         familySessionExpiresAt: storedToken.familySessionExpiresAt ?? null,
         previousTokenHash: presentedHash,
         expiresAt: newRefreshTokenExpiresAt,
-        scopes: grantedScopes,
+        scopes: familyScopes,
         // RFC 8707: the rotated refresh token carries the (possibly
         // narrowed) resource binding — NOT the request's — so we never
         // widen the binding across a rotation.
         resource: effectiveResource,
         // RFC 9449 §5 (#480): every rotation keeps the family's DPoP key; a
         // public client's unbound token is bound to the key it proves now,
-        // and so is one that now comes with an admin token (#520).
+        // and so is one that now comes with an admin token (#520). Bound
+        // here, it holds no admin scope (`familyScopes`).
         cnfJkt: storedToken.cnfJkt ?? refreshTokenBinding(ctx, { scopes: issuedScopes, aud }),
       },
       tx

@@ -4999,7 +4999,7 @@ describe('POST /oauth/token route — refresh_token grant', () => {
       ]);
     });
 
-    it('withholds the admin scopes from a family bound to no key, and leaves the new token unbound', async () => {
+    it('withholds the admin scopes from a family bound to no key, and drops them from the new unbound token', async () => {
       const { fastify, ctx } = adminRefreshStub(
         null,
         ['read:foo', 'qauth:admin:read'],
@@ -5012,7 +5012,47 @@ describe('POST /oauth/token route — refresh_token grant', () => {
 
       expect(result).toMatchObject({ scope: 'read:foo' });
       expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
-        expect.objectContaining({ cnfJkt: null, scopes: ['read:foo', 'qauth:admin:read'] }),
+        expect.objectContaining({ cnfJkt: null, scopes: ['read:foo'] }),
+        expect.anything()
+      );
+    });
+
+    it("binds a public client's unbound family to the proof key only without its admin scopes", async () => {
+      const { fastify, ctx, publicClient, storedToken } = adminRefreshStub(
+        null,
+        ['read:foo', 'qauth:admin:read'],
+        []
+      );
+      (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue({
+        ...publicClient,
+        scopes: [...publicClient.scopes, 'qauth:admin:read'],
+        audience: [ADMIN_API_AUDIENCE],
+      });
+      (
+        fastify.repositories.refreshTokens.findByTokenHashIncludingRevoked as unknown as Mock
+      ).mockResolvedValue({
+        ...storedToken,
+        oauthClientId: publicClient.id,
+        scopes: ['read:foo', 'qauth:admin:read'],
+        resource: [],
+        cnfJkt: null,
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      const result = await ctx.handler(
+        refreshRequest(
+          { client_id: publicClient.clientId, client_secret: undefined },
+          { dpop: 'proof.header.signature' }
+        ),
+        createReply()
+      );
+
+      // The new token is bound to the key, so it must not keep the admin
+      // scope: its next refresh, a bound family's, would issue it.
+      expect(result).toMatchObject({ scope: 'read:foo' });
+      expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ cnfJkt: KEY, scopes: ['read:foo'] }),
         expect.anything()
       );
     });
