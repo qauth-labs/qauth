@@ -121,6 +121,18 @@ A cookie-authenticated request that changes state carries no CSRF token, or not 
 
 An Interaction API answer does not match the schema of the step it names, names a step the interaction does not offer, or repeats a field.
 
+## `invalid-current-password`
+
+**Code** `invalid_current_password` · **Status** 400 · **Title** Invalid current password
+
+The current password a password change names is wrong. It counts on the account’s failure ladder, as a failed sign-in does.
+
+## `invalid-code`
+
+**Code** `invalid_code` · **Status** 400 · **Title** Invalid code
+
+A one-time code in the request is wrong, expired or used, such as the first TOTP code of an enrolment or a code mailed to an address. It counts on the account’s failure ladder for that code.
+
 ## `unauthorized`
 
 **Code** `unauthorized` · **Status** 401 · **Title** Unauthorized
@@ -157,6 +169,12 @@ Client authentication failed (RFC 6749 §5.2).
 
 The DPoP proof is missing or not valid for this request (RFC 9449 §7.1).
 
+## `insufficient-user-authentication`
+
+**Code** `insufficient_user_authentication` · **Status** 401 · **Title** Insufficient user authentication
+
+The operation needs fresh authentication and the sign-in behind the token is too old or lacks the account’s strongest bound factor (RFC 9470 §3). `max_age` and the `WWW-Authenticate` challenge say how fresh the next sign-in must be.
+
 ## `forbidden`
 
 **Code** `forbidden` · **Status** 403 · **Title** Forbidden
@@ -174,6 +192,18 @@ The account must verify its email address first.
 **Code** `approval_required` · **Status** 403 · **Title** Approval required
 
 The admin operation is a security operation and runs only with a fresh approval bound to it. The request did not run.
+
+## `delegated-token-refused`
+
+**Code** `delegated_token_refused` · **Status** 403 · **Title** Delegated token refused
+
+The token is an act-chain token (RFC 8693 `act`), and the operation changes a credential, an identifier, the contact address or a linked account, or deletes the account: only the person may do that (ADR-019 Decision 7).
+
+## `disabled-by-realm`
+
+**Code** `disabled_by_realm` · **Status** 403 · **Title** Disabled by realm
+
+The realm’s policy does not let a person do this themselves, such as deleting the account or changing the sign-in address. An admin can.
 
 ## `not-found`
 
@@ -210,6 +240,18 @@ The email address is already verified.
 **Code** `verification_token_used` · **Status** 409 · **Title** Verification token used
 
 The email verification token has already been used.
+
+## `last-credential`
+
+**Code** `last_credential` · **Status** 409 · **Title** Last credential
+
+The change would leave the account with no way to sign in, such as removing the only passkey of a passkey-only account.
+
+## `second-factor-required`
+
+**Code** `second_factor_required` · **Status** 409 · **Title** Second factor required
+
+The change would remove the last second factor while the realm’s policy requires one for the account.
 
 ## `verification-token-expired`
 

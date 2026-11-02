@@ -416,6 +416,9 @@ space-separated `scope` string is not. The account and developer families share 
 document, so their operation ids begin with the family: `developer.clients.list`,
 `account.consents.delete`.
 
+The account family's whole contract, with the operations the account console's backend will call,
+is published ahead of their handlers on [Account API](/reference/account-api/).
+
 ## Names
 
 - JSON members are `camelCase`: `createdAt`, `nextCursor`, `ownerId`.

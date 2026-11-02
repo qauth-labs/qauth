@@ -561,6 +561,9 @@ importers:
         specifier: 'catalog:'
         version: 4.6.7
     devDependencies:
+      '@qauth-labs/shared-account-contract':
+        specifier: workspace:*
+        version: link:../../libs/shared/account-contract
       '@qauth-labs/shared-test-vectors':
         specifier: workspace:*
         version: link:../../libs/shared/test-vectors
@@ -1750,6 +1753,32 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 5.0.5(@opentelemetry/api@1.9.1)(@types/node@26.6.5)(@vitest/coverage-v8@5.0.5)(@vitest/ui@5.0.5)(jsdom@30.1.3(@noble/hashes@2.4.0))(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.0))
+
+  libs/shared/account-client:
+    dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+    devDependencies:
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
+
+  libs/shared/account-contract:
+    dependencies:
+      tslib:
+        specifier: 'catalog:'
+        version: 2.8.1
+    devDependencies:
+      ajv:
+        specifier: 'catalog:'
+        version: 8.20.0
+      ajv-formats:
+        specifier: 'catalog:'
+        version: 3.0.1
+      tsx:
+        specifier: 'catalog:'
+        version: 4.23.15
 
   libs/shared/errors:
     dependencies:
