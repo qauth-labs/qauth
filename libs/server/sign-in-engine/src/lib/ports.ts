@@ -1,4 +1,5 @@
 import type { StepName } from '@qauth-labs/server-step-grammar';
+import type { PasswordNormalization } from '@qauth-labs/shared-validation';
 
 /**
  * THE ENGINE'S PORTS: everything the sign-in engine reads or calls, as
@@ -51,10 +52,15 @@ export interface SignInCandidate {
    * `disabled` is the ladder's disabled mark while the hard action is armed
    * (#615); while it is unarmed the lookup ignores a mark, reports it as
    * `ignoredMark`, and a successful sign-in clears it.
+   *
+   * `normalization` is the credential's normalisation marker (#634): `'nfc'`
+   * when the password was hashed in NFC, so the presented one is verified in
+   * NFC too; absent when it was hashed as typed.
    */
   readonly password: {
     readonly disabled: boolean;
     readonly hash: string | null;
+    readonly normalization?: PasswordNormalization;
     readonly ignoredMark?: boolean;
   } | null;
 }

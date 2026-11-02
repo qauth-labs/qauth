@@ -1,6 +1,7 @@
 import {
   EMAIL_ATTR_KEY,
   passwordCredentialDataSchema,
+  presentedPasswordFor,
   SELF_REPORTED_SOURCE,
 } from '@qauth-labs/fastify-plugin-federation';
 import {
@@ -220,9 +221,11 @@ export async function verifyEmailAddress(
     throw new InvalidCredentialsError('Incorrect password for this account');
   }
 
+  // In NFC when the credential records the marker of the one password
+  // policy, as typed when it records none (#634), as the login routes verify.
   const passwordValid = await fastify.passwordHasher.verifyPassword(
     parsed.data.password_hash,
-    password
+    presentedPasswordFor(parsed.data, password)
   );
   if (!passwordValid) {
     // Counted on the ladder; at its hard ceiling the hard action may disable

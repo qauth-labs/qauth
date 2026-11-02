@@ -72,7 +72,7 @@ describe('the sign-in engine over the server adapters (real Postgres)', () => {
         realmId,
         providerType: 'password',
         externalSub: identifier,
-        credentialData: buildPasswordCredentialData(hash, true),
+        credentialData: buildPasswordCredentialData(hash, true, null),
       });
       return user.id;
     };

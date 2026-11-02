@@ -286,7 +286,7 @@ export default async function (fastify: FastifyInstance) {
                 realmId: realm.id,
                 providerType: PASSWORD_PROVIDER_TYPE,
                 externalSub: identity.externalSub,
-                credentialData: buildPasswordCredentialData(passwordHash, false),
+                credentialData: buildPasswordCredentialData(passwordHash, false, null),
               },
               tx
             )

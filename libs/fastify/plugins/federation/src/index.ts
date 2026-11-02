@@ -206,6 +206,7 @@ export {
   EMAIL_ATTR_KEY,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  presentedPasswordFor,
   rankAttributeSource,
   readWalletBinding,
   selectTrustedAttribute,

@@ -1,3 +1,5 @@
+import { passwordForVerification } from '@qauth-labs/shared-validation';
+
 import {
   type LadderHook,
   type LadderReservation,
@@ -128,7 +130,10 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
       if (hash === null) {
         await fromStore('passwords', () => deps.passwords.verifyDecoy(presented));
       } else {
-        valid = await fromStore('passwords', () => deps.passwords.verify(hash, presented));
+        // In NFC when the credential records the marker of the one password
+        // policy, as typed when it records none (#634).
+        const asHashed = passwordForVerification(presented, password?.normalization);
+        valid = await fromStore('passwords', () => deps.passwords.verify(hash, asHashed));
       }
 
       const target = (userId: string) => ({ realmId: round.realmId, userId, identifier });
