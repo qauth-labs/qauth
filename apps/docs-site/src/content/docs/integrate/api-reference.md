@@ -170,11 +170,11 @@ always sent.
 
 **Request** (`application/json`)
 
-| Field      | Type           | Required | Notes                                         |
-| ---------- | -------------- | -------- | --------------------------------------------- |
-| `email`    | string (email) | yes      | At most 254 characters (RFC 5321).            |
-| `password` | string         | yes      | Strength enforced server-side (zxcvbn score). |
-| `realmId`  | string (uuid)  | no       | Must be the realm of the request's host.      |
+| Field      | Type           | Required | Notes                                        |
+| ---------- | -------------- | -------- | -------------------------------------------- |
+| `email`    | string (email) | yes      | At most 254 characters (RFC 5321).           |
+| `password` | string         | yes      | The realm's password policy applies (below). |
+| `realmId`  | string (uuid)  | no       | Must be the realm of the request's host.     |
 
 **`202 Accepted`** (`Cache-Control: no-store`)
 

@@ -215,7 +215,7 @@ The password policy validators, one per realm policy:
 
 A `PasswordPolicyValidator` has one method:
 
-- `check(password: string, context?: PasswordContext): PasswordPolicyCheck` - Check a new password: its length (at most 256 characters, at least `minLength` code points after NFC normalisation), a blocklist of common passwords and of the context words (the address, the service, realm and client names), and a zxcvbn score of at least `minScore`. A refusal carries every reason found (`too_long`, `too_short`, `blocklisted`, `too_weak`) and feedback; an accepted password carries its NFC form to hash and the normalisation marker to record on the credential.
+- `check(password: string, context?: PasswordContext): PasswordPolicyCheck` - Check a new password: its length (at most 256 UTF-16 code units, as typed and after NFC normalisation, and at least `minLength` code points after it), a blocklist of common passwords and of the context words (the address, the service, realm and client names), and a zxcvbn score of at least `minScore`. A refusal carries every reason found (`too_long`, `too_short`, `blocklisted`, `too_weak`) and feedback; an accepted password carries its NFC form to hash and the normalisation marker to record on the credential.
 
 **Example**:
 
