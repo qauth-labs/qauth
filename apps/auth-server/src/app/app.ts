@@ -1,4 +1,3 @@
-import cors from '@fastify/cors';
 import formbody from '@fastify/formbody';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin, hasRepository } from '@qauth-labs/fastify-plugin-db';
@@ -87,6 +86,7 @@ import {
 } from './helpers/verifier-identity';
 import { installInternalApi, type InternalApiOptions } from './internal/listener';
 import { publicInternalRouteProblem } from './internal/route-manifest';
+import { corsPlugin } from './plugins/cors';
 import { defaultRealmPlugin } from './plugins/default-realm';
 import errorHandler from './plugins/error-handler';
 import { jobsPlugin } from './plugins/jobs';
@@ -1134,17 +1134,13 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // who needs cross-origin access sets CORS_ORIGIN explicitly. In
   // non-production the wildcard fallback is kept for local dev convenience.
   //
-  // CORS_ORIGIN accepts a single origin or a comma-separated list (as the env
-  // examples document). Split + trim it into an array so @fastify/cors matches
-  // each origin; passing the raw comma string would be treated as one literal
-  // origin and never match. Empty entries (e.g. a trailing comma) are dropped.
-  const corsOrigins = env.CORS_ORIGIN
-    ? env.CORS_ORIGIN.split(',')
-        .map((origin) => origin.trim())
-        .filter(Boolean)
-    : [];
-  await fastify.register(cors, {
-    origin: corsOrigins.length > 0 ? corsOrigins : env.NODE_ENV === 'production' ? false : '*',
+  // The `browser` routes, the authorization endpoint first among them, get no
+  // CORS whatever CORS_ORIGIN holds (OAuth 2.1 -17 §3.1, #930). The plugin
+  // marks them from an `onRoute` hook, which is not retroactive, so this
+  // position before the routes is load-bearing too (`plugins/cors.ts`).
+  await fastify.register(corsPlugin, {
+    corsOrigin: env.CORS_ORIGIN,
+    production: env.NODE_ENV === 'production',
   });
 
   // RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection)

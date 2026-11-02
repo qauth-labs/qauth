@@ -762,6 +762,11 @@ describe('assembled app — an over-long email is refused before any handler sto
  *    from an `onRequest` hook registered earlier still, so a rate-limited
  *    OPTIONS request lands in the route context and renders the wrong shape.
  *
+ *  - **`corsPlugin` before the routes (#930).** It leaves the `browser` routes
+ *    out of CORS from an `onRoute` hook, so behind the routes the authorization
+ *    endpoint would answer CORS again. `route-surfaces.test.ts` is the runtime
+ *    guard.
+ *
  * A source-order assertion is a blunt instrument and is used deliberately: for
  * an invariant whose violation is silent, a guard that reads the declaration is
  * better than no guard. It fails loudly the moment someone moves a line, which
@@ -775,7 +780,7 @@ describe('app.ts registration order — the invariants with no runtime signal (#
     'fastify.register(realmResolverPlugin,',
     'fastify.register(rateLimitPlugin)',
     'fastify.register(errorHandler)',
-    'fastify.register(cors,',
+    'fastify.register(corsPlugin,',
     // The route manifest's loop (#495), which replaced both AutoLoad calls.
     'for (const { entry, plugin } of await routeModules)',
   ] as const;
