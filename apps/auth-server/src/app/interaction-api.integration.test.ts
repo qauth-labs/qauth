@@ -15,6 +15,7 @@ import {
   bootAuthServer,
   type BootedAuthServer,
   E2E_PASSWORD,
+  E2E_REALM_NAME,
   type E2eInfrastructure,
   generateJwtPem,
   type PemKeyPair,
@@ -28,7 +29,9 @@ import {
  *
  * Each test boots the real auth server, with the real sign-in engine, the
  * failure ladder and the event store, and starts an interaction through a
- * test route, as the authorization endpoint will (#628). It proves the
+ * test route, as the authorization endpoint does (#628), for a client the
+ * user has consented to: a finished sign-in ends in the client's code. It
+ * proves the
  * issue's integration criteria: a missing or wrong CSRF value is refused with
  * 403 before the engine runs (spied on the repository and the hasher the
  * engine uses); a used value and the value of another step are refused; a
@@ -58,7 +61,34 @@ const AUTHORIZE_REQUEST = {
   resource: undefined,
 };
 
-/** Start an interaction at the identifier step, as the authorization endpoint will (#628). */
+/**
+ * The client of the interactions, with the user's stored consent to their
+ * scopes: the finish decides the request as the endpoint does (#628) and
+ * mints the code.
+ */
+async function provisionClient(app: FastifyInstance, userId: string): Promise<void> {
+  const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
+  if (!realm) throw new Error('default realm missing');
+  const client = await app.repositories.oauthClients.create({
+    realmId: realm.id,
+    clientId: AUTHORIZE_REQUEST.client_id,
+    clientSecretHash: 'unused-public-client',
+    tokenEndpointAuthMethod: 'none',
+    name: 'Interaction API client',
+    redirectUris: [AUTHORIZE_REQUEST.redirect_uri],
+    scopes: ['openid', 'email'],
+    grantTypes: ['authorization_code'],
+    enabled: true,
+    requirePkce: true,
+    provisionedByOperator: true,
+  });
+  await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, [
+    'openid',
+    'email',
+  ]);
+}
+
+/** Start an interaction at the identifier step, as the authorization endpoint does (#628). */
 async function startRoute(app: FastifyInstance): Promise<void> {
   app.post('/test/interactions', { config: { surface: 'browser' } }, async (request, reply) => {
     // Imported here, after the boot reset the module registry, so this is the
@@ -192,7 +222,7 @@ describe('the Interaction API (#616, real containers)', () => {
     if (!infra || !jwt) throw new Error('infrastructure not started');
     server = await bootAuthServer(baseEnvironment(infra, jwt), { routes: startRoute });
     await resetE2eState(server.app);
-    await registerPasswordAccount(server.app, EMAIL);
+    await provisionClient(server.app, await registerPasswordAccount(server.app, EMAIL));
     await server.app.listen({ port: 0, host: '127.0.0.1' });
     port = (server.app.server.address() as AddressInfo).port;
   }, 120_000);
@@ -265,6 +295,7 @@ describe('the Interaction API (#616, real containers)', () => {
     expect(`${location.origin}${location.pathname}`).toBe(AUTHORIZE_REQUEST.redirect_uri);
     expect(location.searchParams.get('state')).toBe(AUTHORIZE_REQUEST.state);
     expect(location.searchParams.get('iss')).toBe(ORIGIN);
+    expect(location.searchParams.get('code')).toMatch(/.+/);
     expect(browser.cookies.get(SESSION_COOKIE)).toBeTruthy();
     expect(browser.cookies.has(FLOW_COOKIE)).toBe(false);
     // The interaction is over.
