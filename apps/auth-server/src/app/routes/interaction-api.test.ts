@@ -323,7 +323,8 @@ describe('the answer, before the engine runs (#616)', () => {
     ['Sec-Fetch-Site: same-site', { 'sec-fetch-site': 'same-site' }],
     ['an Origin of another site', { origin: 'https://evil.example' }],
     ['Origin: null', { origin: 'null' }],
-    ['same-origin with another Origin', { 'sec-fetch-site': 'same-origin', origin: SPA_ORIGIN }],
+    ['an Origin of another site and no Sec-Fetch-Site', { origin: SPA_ORIGIN }],
+    ['Sec-Fetch-Site: none', { 'sec-fetch-site': 'none', origin: ORIGIN }],
     ['neither header', {}],
   ])('refuses %s with a generic 403, audited', async (_label, headers) => {
     const browser = new Browser();
@@ -339,6 +340,20 @@ describe('the answer, before the engine runs (#616)', () => {
     expect(response.json()).toMatchObject({ code: 'forbidden' });
     expect(eventTypes()).toContain('urn:qauth:event:request.csrf_rejected:v1-rc.0');
     expect(engine.advance).not.toHaveBeenCalled();
+  });
+
+  it('lets a form post through with Sec-Fetch-Site: same-origin and Origin: null, as a no-referrer page sends it', async () => {
+    engine.advance.mockResolvedValueOnce(PASSWORD_ROUND);
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const response = await browser.send(
+      id,
+      'answer',
+      `type=${encodeURIComponent(IDENTIFIER)}&csrf=${csrf}&login_hint=alice%40example.com`,
+      { 'sec-fetch-site': 'same-origin', origin: 'null' }
+    );
+    expect(response.statusCode, response.body).toBe(303);
   });
 
   it('lets a request through with only an Origin of the realm, as from a browser without Sec-Fetch-Site', async () => {
@@ -685,5 +700,17 @@ describe('the parts (#616)', () => {
     ).toBe(false);
     expect(comesFromRealmOrigin({}, realm, 'required')).toBe(false);
     expect(comesFromRealmOrigin({}, realm, 'unless_absent')).toBe(true);
+    // Sec-Fetch-Site decides an answer when the browser sent it.
+    const sameOriginNull = { 'sec-fetch-site': 'same-origin', origin: 'null' };
+    expect(comesFromRealmOrigin(sameOriginNull, realm, 'required')).toBe(true);
+    expect(
+      comesFromRealmOrigin({ 'sec-fetch-site': 'same-site', origin: ORIGIN }, realm, 'required')
+    ).toBe(false);
+    expect(comesFromRealmOrigin({ origin: 'null' }, realm, 'required')).toBe(false);
+    // The read refuses any header that names another origin.
+    expect(comesFromRealmOrigin(sameOriginNull, realm, 'unless_absent')).toBe(false);
+    expect(comesFromRealmOrigin({ 'sec-fetch-site': 'cross-site' }, realm, 'unless_absent')).toBe(
+      false
+    );
   });
 });

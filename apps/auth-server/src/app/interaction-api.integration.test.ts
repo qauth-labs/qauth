@@ -272,6 +272,17 @@ describe('the Interaction API (#616, real containers)', () => {
     expect(after.status).toBe(410);
   });
 
+  it('signs in a form post from a no-referrer page: Sec-Fetch-Site same-origin with Origin: null', async () => {
+    const { browser, id } = await atPasswordStep();
+    const response = await browser.post(
+      id,
+      { type: PASSWORD, csrf: (await browser.read(id)).csrf, password: E2E_PASSWORD },
+      { origin: 'null', 'sec-fetch-site': 'same-origin' }
+    );
+    expect(response.status, response.body).toBe(303);
+    expect(browser.cookies.get(SESSION_COOKIE)).toBeTruthy();
+  });
+
   it('gives a wrong password the same step back with its error and a new CSRF value', async () => {
     const { browser, id } = await atPasswordStep();
     const before = await browser.read(id);

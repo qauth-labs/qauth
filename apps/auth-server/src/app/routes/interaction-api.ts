@@ -60,10 +60,11 @@ import { emitUserEvent } from '../helpers/user-events';
  * | `POST …/{id}/cancel`         | the realm origin, the flow cookie, the CSRF value |
  *
  * An answer is checked in this order, and nothing of the sign-in engine runs
- * before all of it passes: the body's media type, size and form (no repeated
- * field), the same origin (`Sec-Fetch-Site`, `Origin`), the flow cookie, the
- * step's CSRF value (`helpers/interaction.ts`), then the answer against the
- * step grammar. A request from another origin and a wrong CSRF value get one
+ * before all of it passes: the body's media type, its 64 KiB cap and its form
+ * (no repeated field), the same origin (`Sec-Fetch-Site`, else `Origin`), the
+ * body's bound for the step it names (16 KiB, 64 KiB for `webauthn_create`),
+ * the flow cookie, the step's CSRF value (`helpers/interaction.ts`), then the
+ * answer against the step grammar. A request from another origin and a wrong CSRF value get one
  * generic `403`, audited as `request.csrf_rejected`. Then the engine runs one
  * round (`@qauth-labs/fastify-plugin-sign-in-engine`) and its result becomes
  * the next state.
@@ -152,17 +153,33 @@ export function checkAnswerBodySize(body: unknown, bytes: number): void {
 
 /** How strictly a request must show that it comes from the realm origin. */
 type OriginRule =
-  /** An answer or a cancel: `Sec-Fetch-Site: same-origin`, or else an `Origin` of the realm. */
+  /**
+   * An answer or a cancel: `Sec-Fetch-Site: same-origin`; from a browser that
+   * sends no `Sec-Fetch-Site`, an `Origin` of the realm. Neither: refused.
+   */
   | 'required'
-  /** The personal-data read: refused only when a header names another origin. */
+  /**
+   * The personal-data read: refused when a header names another origin. A
+   * request with neither header passes (the contract's rule for the read).
+   */
   | 'unless_absent';
 
 /**
  * Whether the request comes from the realm origin (ADR-019 Decision 6), by
- * the headers a browser sets and a page cannot: `Sec-Fetch-Site` and
- * `Origin`. Each that is present must say the same origin. Under `required`,
- * a request with neither is refused: a browser that sends no
- * `Sec-Fetch-Site` sends `Origin` on every POST.
+ * the headers a browser sets and a page cannot.
+ *
+ * An answer or a cancel (`required`) follows the contract's rule: when the
+ * browser sent `Sec-Fetch-Site`, it decides, and must be `same-origin`; only
+ * when it did not, `Origin` must be the realm origin (`null` and any other
+ * origin refused), and a request with neither is refused. `Sec-Fetch-Site`
+ * decides alone because a form post from a page whose referrer policy is
+ * `no-referrer`, as the ceremony pages' is, sends `Origin: null` (Fetch,
+ * "append a request Origin header") with `Sec-Fetch-Site: same-origin`; and
+ * an opaque-origin document, such as a sandboxed frame, sends
+ * `Sec-Fetch-Site: cross-site`.
+ *
+ * The personal-data read (`unless_absent`) refuses a request either header
+ * names another origin by, and lets one with neither through.
  */
 export function comesFromRealmOrigin(
   headers: FastifyRequest['headers'],
@@ -171,9 +188,13 @@ export function comesFromRealmOrigin(
 ): boolean {
   const site = headers['sec-fetch-site'];
   const origin = headers.origin;
+  const realmOrigin = new URL(realmIssuer(realm)).origin;
+  if (rule === 'required') {
+    if (site !== undefined) return site === 'same-origin';
+    return origin === realmOrigin;
+  }
   if (site !== undefined && site !== 'same-origin') return false;
-  if (origin !== undefined && origin !== new URL(realmIssuer(realm)).origin) return false;
-  return rule === 'unless_absent' || site !== undefined || origin !== undefined;
+  return origin === undefined || origin === realmOrigin;
 }
 
 /** Refuse the request with the generic `403` unless it comes from the realm origin. */
