@@ -45,7 +45,7 @@ import {
   requestClassification,
 } from '../plugins/admin-operations';
 import { intendedStatusCode } from '../plugins/error-handler';
-import { type CanonicalRequest, canonicalRequest } from './approvals/canonical-request';
+import { type CanonicalRequest, canonicalRequest, opHashOf } from './approvals/canonical-request';
 import { auditApproval } from './approvals/engine';
 import {
   APPROVAL_HEADER,
@@ -144,7 +144,11 @@ export type AdminCaller = Extract<AdminAuthority, { allowed: true }>;
 /** The approval stage 7 found for a call, which its transaction consumes. */
 interface GatedApproval {
   readonly id: string;
-  /** Its `op_hash`, which the call's canonical request matched with its nonce. */
+  /**
+   * The `op_hash` of the call's canonical request, computed with the
+   * approval's nonce: the gate found it equal to the stored one, and the
+   * transaction consumes the approval only while its row still holds it.
+   */
   readonly opHash: Buffer;
 }
 
@@ -706,7 +710,10 @@ function approvalGate(registry: OperationRegistry) {
     if (approval === undefined || refusal !== null) {
       throw refusedApproval(request, operationId, approvalId, refusal ?? 'not-found');
     }
-    pipelineState(request).approval = { id: approvalId, opHash: approval.opHash };
+    pipelineState(request).approval = {
+      id: approvalId,
+      opHash: opHashOf(canonical, approval.nonce),
+    };
   };
 }
 

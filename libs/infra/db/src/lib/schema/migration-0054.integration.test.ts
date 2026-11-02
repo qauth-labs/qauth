@@ -79,7 +79,9 @@ describe('migration 0054 — admin_approvals keep no request body (seed-then-mig
   async function fileAsBefore(status: 'pending' | 'approved' | 'consumed' | 'denied') {
     const {
       rows: [realm],
-    } = await db().query<{ id: string }>(`INSERT INTO realms (name) VALUES ('r') RETURNING id`);
+    } = await db().query<{ id: string }>(`INSERT INTO realms (name) VALUES ($1) RETURNING id`, [
+      `migration-0054-${randomBytes(4).toString('hex')}`,
+    ]);
     const {
       rows: [user],
     } = await db().query<{ id: string }>(`INSERT INTO users (realm_id) VALUES ($1) RETURNING id`, [

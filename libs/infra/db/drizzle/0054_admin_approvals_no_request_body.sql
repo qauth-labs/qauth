@@ -18,10 +18,13 @@ ALTER TABLE "admin_approvals" ADD COLUMN "display" jsonb;--> statement-breakpoin
 -- Each approval filed before this migration: its method, path parameters and
 -- query move to their columns, and in the same row version its stored request
 -- is emptied and its `request_hash` and nonce are overwritten with random
--- bytes, so the row the dropped columns stay in (DROP COLUMN only hides them)
--- holds neither the body nor a hash of it. It has no display, which only the
--- operation's renderer can make, so one still open is retired as `expired`
--- and its requester files it again: no approver could see what it asks.
+-- bytes, so the live row version the dropped columns stay in (DROP COLUMN only
+-- hides them) holds neither the body nor a hash of it. The row versions this
+-- UPDATE replaces stay on disk until VACUUM reclaims them, and in the WAL, a
+-- replica or a backup taken before it, for as long as those are kept; this
+-- migration cannot reach them. It has no display, which only the operation's
+-- renderer can make, so one still open is retired as `expired` and its
+-- requester files it again: no approver could see what it asks.
 UPDATE "admin_approvals" SET
 	"method" = "canonical_request" ->> 'method',
 	"params" = coalesce("canonical_request" -> 'params', '{}'::jsonb),
