@@ -54,6 +54,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { blankOperationTags } from './operation-tag.mjs';
+
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 /** Repo-relative when the path is inside the repo, absolute when it is not. */
@@ -350,11 +352,17 @@ function buildAnchorMatcher(specs) {
  * `describe`-level spec name carries down to bare `§X.Y` references in its
  * leaves, and `draft-14 §5/§6` yields two citations. A section whose nearest
  * anchor is unregistered (or which has no anchor at all) is dropped.
+ *
+ * A wire test's operation tag (`[POST /oauth/token]`, #535) is blanked out
+ * first: its path holds words such as `oauth` and `openid` that are anchors
+ * here, and a tag between a spec name and its `§` would otherwise take the
+ * section away from the spec the title cites.
  */
 function extractCitations(fullName, matcher) {
+  const text = blankOperationTags(fullName);
   const anchors = [];
   matcher.regex.lastIndex = 0;
-  for (const match of fullName.matchAll(matcher.regex)) {
+  for (const match of text.matchAll(matcher.regex)) {
     anchors.push({
       index: match.index,
       specId: matcher.aliasToSpec.get(match[0].toLowerCase()) ?? null,
@@ -362,7 +370,7 @@ function extractCitations(fullName, matcher) {
   }
   const citations = [];
   SECTION_TOKEN.lastIndex = 0;
-  for (const match of fullName.matchAll(SECTION_TOKEN)) {
+  for (const match of text.matchAll(SECTION_TOKEN)) {
     let anchor = null;
     for (const candidate of anchors) {
       if (candidate.index < match.index) anchor = candidate;
