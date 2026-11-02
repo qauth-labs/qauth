@@ -465,6 +465,14 @@
       "stability": "stable"
     },
     {
+      "name": "account-api-v1",
+      "description": "The account API v1-rc.0 contract: the OpenAPI 3.1 document of /account/v1-rc.0, the API a signed-in person manages their own account with (ADR-019 Decision 7, ADR-018 §5, #588). The typed client in libs/shared/account-client is generated from it.",
+      "format": "openapi",
+      "generator": "pnpm exec nx run shared-account-contract:contract-export --skip-nx-cache",
+      "path": "apps/docs-site/public/account/v1-rc.0/openapi.json",
+      "stability": "stable"
+    },
+    {
       "name": "interaction-api-v1",
       "description": "The Interaction API v1-rc.0 contract: the OpenAPI 3.1 document of /interaction/v1-rc.0, with every step's schema (ADR-019 Decision 6, ADR-018 §5, #590). The auth server serves the same document at /interaction/v1-rc.0/openapi.json.",
       "format": "openapi",
