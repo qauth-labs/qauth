@@ -178,13 +178,28 @@ does not depend on the realm's `bruteForce` policy: a realm whose lock is off
   `…:known-ips`: the identifier and each known IP are kept as keyed HMACs,
   derived from the realm's cookie HMAC secret. A rotation of that secret
   starts every account's count afresh within a minute. A run of failures is
-  kept 30 days after its last counted failure.
+  kept 2 days after its last counted failure while it has fewer than 5, and
+  30 days after its last counted failure once it has reached a wait; a
+  correct password ends it sooner. Both follow the count alone, the same
+  whether or not an account holds the identifier.
 - **Redis memory.** Every address tried, held by an account or not, keeps a
-  small hash for 30 days, so a spray of made-up addresses grows Redis for a
-  month (the per-IP rate limits bound how fast). Size Redis for it. When Redis
-  is full, `noeviction` refuses new counts, and so every password sign-in
-  (fail closed); a `volatile-*` or `allkeys-*` policy may evict a count
-  instead, which gives that account its free tries again.
+  small hash: 2 days after its last failure while it has fewer than 5, 30
+  days after its last failure once it has reached a wait. Let `R` be a
+  sustained rate of failed attempts a second at made-up addresses. If each
+  address is tried fewer than 5 times, Redis holds about `R × 172,800`
+  counters. If each is tried 5 times, so that its counter reaches a wait, it
+  holds about `R × 518,400`: 30 days of a fifth of them. A campaign that also
+  comes back to each such address before its 30 days run out keeps those
+  counters alive. Over months it nears `R × 2,592,000`, the 30 days of
+  attempts that a single 30-day retention held. The per-IP rate limits bound
+  each client address's share of `R`. Size Redis for the campaign you expect,
+  and alert on its memory use.
+- **Run Redis with `maxmemory-policy noeviction`.** When Redis is full it
+  then refuses new counts, and so every password sign-in (fail closed). An
+  evicting policy (`volatile-*`, `allkeys-*`) would drop counts instead,
+  which gives those accounts their free tries again. It would also drop the
+  access-token revocation list and the client-assertion replay markers, which
+  live in the same Redis.
 - **Fail closed.** Unlike the lock above, a Redis error, or a call slower than
   2 s, refuses the attempt with `503` and `Retry-After: 5` before any
   credential is checked, and logs `sign-in failure ladder unavailable` at

@@ -36,12 +36,31 @@ export interface LadderPolicy {
    */
   readonly knownIpMs: number;
   /**
-   * How long a run of failures is kept after its last counted failure. A run
-   * ends at a success, at the owner's reset, or after this long with no
-   * counted failure. The same for every identifier, held by an account or
-   * not, so the decay tells nothing about who exists.
+   * How long a run that has reached a wait (`freeFailures` counted failures
+   * or more) is kept after its last counted failure; each counted failure
+   * starts it again. A run ends at a success, at the owner's reset, or after
+   * its retention with no counted failure. ADR-017 Decision 7: 30 days.
    */
   readonly retentionMs: number;
+  /**
+   * How long a run still within its free failures (fewer than `freeFailures`,
+   * so no wait yet) is kept after its last counted failure: short, so a spray
+   * of made-up identifiers, each tried a few times, leaves no key for long
+   * (#969). From the failure that sets its first wait the run is kept
+   * `retentionMs`. Both retentions depend on the count alone, the same for
+   * every identifier, held by an account or not, so the decay tells nothing
+   * about who exists.
+   *
+   * A guesser who stays below the ladder gets `freeFailures − 1` tries per
+   * `freeRetentionMs`, and never meets a wait or the hard ceiling. So it is
+   * at least `freeFailures − 1` longest waits (no faster than the ladder's
+   * steady pace) and, with a hard ceiling, long enough that those tries are
+   * no more than the `hardCeiling − 1` a run can spend per `retentionMs`
+   * without firing it; at most `retentionMs`. A counter only a holder of the
+   * first factor reaches (a second factor) gains nothing from a short one and
+   * sets it to `retentionMs`. ADR-017 Decision 7: 2 days.
+   */
+  readonly freeRetentionMs: number;
   /**
    * What a success does to the counter that reserved it: `clear` ends the
    * run (a correct answer of the authenticator the counter is for); `withdraw`
@@ -59,8 +78,10 @@ const DAY_MS = 86_400_000;
  * The password ladder (ADR-017 Decision 7): from 5 consecutive failures the
  * next attempt waits 2^(n−5) seconds, capped at 15 minutes; 100 consecutive
  * counted failures fire the hard action; an IP with a successful sign-in to
- * the account in the last 30 days skips the wait. `development` may relax
- * these (ADR-008 §5); `staging` and `production` keep them.
+ * the account in the last 30 days skips the wait; a run is kept after its
+ * last counted failure 2 days while it has fewer than 5, and 30 days once it
+ * has reached a wait. `development` may relax these (ADR-008 §5); `staging`
+ * and `production` keep them.
  */
 export const PASSWORD_LADDER_POLICY: LadderPolicy = Object.freeze({
   freeFailures: 5,
@@ -69,6 +90,7 @@ export const PASSWORD_LADDER_POLICY: LadderPolicy = Object.freeze({
   hardCeiling: 100,
   knownIpMs: 30 * DAY_MS,
   retentionMs: 30 * DAY_MS,
+  freeRetentionMs: 2 * DAY_MS,
   onSuccess: 'clear',
 });
 
@@ -103,6 +125,24 @@ export function checkLadderPolicy(policy: LadderPolicy): LadderPolicy {
   if (!whole(policy.knownIpMs, 0)) throw new Error('ladder policy: knownIpMs is not a time');
   if (!whole(policy.retentionMs, policy.maxWaitMs)) {
     throw new Error('ladder policy: retentionMs shorter than the longest wait');
+  }
+  // Staying below the ladder must not pay: its `freeFailures − 1` tries per
+  // `freeRetentionMs` are no faster than one try per longest wait on it...
+  const freeFloor = Math.max(policy.maxWaitMs, (policy.freeFailures - 1) * policy.maxWaitMs);
+  if (!whole(policy.freeRetentionMs, freeFloor)) {
+    throw new Error('ladder policy: freeRetentionMs shorter than the free failures’ longest waits');
+  }
+  // ...and, with a hard ceiling, no more than the `hardCeiling − 1` tries a
+  // run may spend per `retentionMs` without firing it.
+  if (
+    policy.hardCeiling !== null &&
+    (policy.freeFailures - 1) * policy.retentionMs >
+      (policy.hardCeiling - 1) * policy.freeRetentionMs
+  ) {
+    throw new Error('ladder policy: freeRetentionMs gives more tries below the hard ceiling');
+  }
+  if (policy.freeRetentionMs > policy.retentionMs) {
+    throw new Error('ladder policy: freeRetentionMs longer than retentionMs');
   }
   if (policy.onSuccess !== 'clear' && policy.onSuccess !== 'withdraw') {
     throw new Error('ladder policy: onSuccess is neither clear nor withdraw');

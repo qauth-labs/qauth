@@ -1896,6 +1896,64 @@ describe('the failure ladder (#615)', () => {
       expect(await answerOnce(built, known)).toMatchObject({ reason: 'throttled' });
     });
 
+    it('keeps the same counters, for the same time, whether or not an account holds the identifier (#969)', async () => {
+      let now = T0;
+      const ladder = createMemoryLadder(() => now);
+      // Only IDENTIFIER has an account.
+      const built = build(undefined, { hooks: { ladder } });
+      const NOBODY = 'nobody@example.com';
+      const hmacs = {
+        held: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+        unheld: await fakeIdentifierDigest({ realmId: REALM, identifier: NOBODY }),
+      };
+      const wrongAt = async (identifier: string) =>
+        built.engine.advance(null, passwordAnswer(WRONG, identifier), context());
+      /** What the ladder keeps for an identifier, the run's id aside (each counter has its own). */
+      const kept = (hmac: string) => {
+        const password = ladder.counter(REALM, hmac, 'password');
+        return {
+          password: password === undefined ? undefined : { ...password, run: 0 },
+          totp: ladder.counter(REALM, hmac, 'totp'),
+          knownIps: [...ladder.knownIps(REALM, hmac)],
+        };
+      };
+      const failBoth = async () => {
+        for (const identifier of [IDENTIFIER, NOBODY]) {
+          expect(await wrongAt(identifier)).toMatchObject({
+            kind: 'step',
+            offer: { current: { error: 'invalid_credentials' } },
+          });
+        }
+      };
+
+      // Below the free failures: kept 2 days after the last one.
+      for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures - 1; i += 1) await failBoth();
+      expect(kept(hmacs.held)).toEqual(kept(hmacs.unheld));
+      expect(kept(hmacs.held).password).toEqual({
+        failures: 4,
+        waitUntil: T0,
+        run: 0,
+        expiresAt: T0 + PASSWORD_LADDER_POLICY.freeRetentionMs,
+      });
+      now += PASSWORD_LADDER_POLICY.freeRetentionMs;
+      expect(kept(hmacs.held)).toEqual({ password: undefined, totp: undefined, knownIps: [] });
+      expect(kept(hmacs.unheld)).toEqual(kept(hmacs.held));
+
+      // From the first wait on: kept 30 days after the last one.
+      for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures; i += 1) await failBoth();
+      expect(kept(hmacs.held)).toEqual(kept(hmacs.unheld));
+      expect(kept(hmacs.held).password).toMatchObject({
+        failures: 5,
+        expiresAt: now + PASSWORD_LADDER_POLICY.retentionMs,
+      });
+      now += PASSWORD_LADDER_POLICY.retentionMs - 1;
+      expect(kept(hmacs.held)).toEqual(kept(hmacs.unheld));
+      expect(kept(hmacs.held).password).toMatchObject({ failures: 5 });
+      now += 1;
+      expect(kept(hmacs.held)).toEqual({ password: undefined, totp: undefined, knownIps: [] });
+      expect(kept(hmacs.unheld)).toEqual(kept(hmacs.held));
+    });
+
     it('fires the hard action once the run reaches 100 counted failures, and not before', async () => {
       let now = T0;
       const ladder = createMemoryLadder(() => now);

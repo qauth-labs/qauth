@@ -1133,8 +1133,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verified and is not counted. A correct password clears the password's
   counter and no other. An end-user IP with a successful sign-in to the
   account in the last 30 days skips the wait (up to 16 per account) and still
-  counts toward the hard action. A run of failures is kept 30 days after its
-  last counted failure. The counter is keyed on a keyed HMAC of the realm and
+  counts toward the hard action. A run of failures is kept 2 days after its
+  last counted failure while it has fewer than 5, and 30 days after its last
+  counted failure once it has reached a wait ([#969]). Both follow the count
+  alone, the same whether or not an account holds the identifier. A spray
+  that tries each made-up address a few times so ages out of Redis within 2
+  days, while an account under attack keeps its run. The observability page
+  sizes Redis for the sprays that last longer, and asks for
+  `maxmemory-policy noeviction`. The counter is keyed on a keyed HMAC of the realm and
   the normalised identifier, whether or not an account holds it, and known IPs
   are kept as keyed HMACs too, so no Redis key or value holds an address; both
   keys are derived with HKDF from the realm's cookie HMAC secret under labels
@@ -2641,6 +2647,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
+[#969]: https://github.com/qauth-labs/qauth/issues/969
 
 ### Deprecated
 
