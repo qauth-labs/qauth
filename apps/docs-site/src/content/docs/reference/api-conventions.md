@@ -141,8 +141,9 @@ The admin API runs on its own internal listener, never on the public one
 8). A process that holds the `admin` service role serves it on `ADMIN_API_HOST` and
 `ADMIN_API_PORT`, `127.0.0.1`, port `3002`, by default, while `ADMIN_API_ENABLED` is on
 ([Configuration](/operate/configuration/)). It is off by default until the first admin operations
-(#517) and DPoP-bound admin tokens (#520) ship, and until #520 a production process refuses an
-`ADMIN_API_HOST` that is not loopback (`127.0.0.0/8`, `::1` or `localhost`). The public listener
+(#517) ship. Where it runs, `ADMIN_API_BASE_URL`, the URL clients address the admin API at, and
+`DPOP_ENABLED=true` are required: every admin call carries a DPoP-bound admin token
+([The DPoP check](#the-dpop-check-of-the-admin-listener)). The public listener
 answers 404 `not_found` for every admin path, except a CORS preflight (`OPTIONS`), which it
 answers as on any other path, naming nothing of the admin API. The admin OpenAPI document is
 served on the admin listener only, at `/admin/v1-rc.0/openapi.json`, without a token: it
@@ -160,8 +161,8 @@ Every admin route runs behind the same stages, in this order
 2. The token guard ([Family tokens](#family-tokens)). The realm whose keys verify the token is
    the one its `iss` names. A call without a valid admin token gets 401 here, before any realm
    is read, and every such refusal reads the same, so the answer says nothing about realms.
-3. The DPoP check, which requiring DPoP-bound admin tokens will fill (#520). Until then the
-   listener takes only the `Bearer` scheme, and answers the `DPoP` scheme as no credential.
+3. The DPoP check (#520), inside the token guard, before the per-subject ceiling
+   ([below](#the-dpop-check-of-the-admin-listener)).
 4. The realm, from the path.
 5. The authority from grants and scopes ([Admin authority](#admin-authority)). A realm outside
    the caller's grants answers 404 `not_found`.
@@ -193,14 +194,39 @@ Redis, or in memory while it is off.
 
 - Per client address, the calls the token guard refuses. Past that count, a call from the address
   that presents no token is refused before the token guard, and one whose token the guard refuses
-  answers 429. A call that presents a `Bearer` token always reaches the token guard, so a valid
-  token is never held back by the refusals of others from the same address.
+  answers 429. A call that presents a token under the `DPoP` scheme always reaches the token guard,
+  so a valid token is never held back by the refusals of others from the same address; a token
+  under the `Bearer` scheme is no admin credential, and is refused before the guard there.
 - Per token subject, every call, right after the token guard.
 - Per client address, every call to the OpenAPI document, which needs no token, in a count of its
   own.
 
 The address is the TCP peer: the listener trusts no proxy, whatever `TRUST_PROXY` names for the
-public listener. When the server shuts down, the listener takes no new call, lets each call in
+public listener.
+
+#### The DPoP check of the admin listener
+
+An admin token is bound to a DPoP key ([RFC 9449](https://www.rfc-editor.org/rfc/rfc9449)): the
+listener takes it only as `Authorization: DPoP <token>`, with a `DPoP` header holding a proof made
+with the key its `cnf.jkt` names (ADR-019 Decision 7, ADR-014 §3). The proof must be for the
+call's method (`htm`) and for `ADMIN_API_BASE_URL` followed by the call's path (`htu`), without
+query or fragment, never a URL built from the request's `Host`; its `iat` within 60 seconds of the
+server's clock; its `ath` the hash of the token; and its `jti` unused. A used proof is kept in
+Redis for 181 seconds, in the store of the public listener's proofs, so a proof passes once
+wherever it is shown. With Redis unavailable every proof is refused.
+
+A token under the `Bearer` scheme, a token bound to no key, or a proof under another key is
+refused as a token: 401 `invalid_access_token`, `WWW-Authenticate: DPoP error="invalid_token"`.
+Any other refused proof, a missing one included, answers 401 `invalid_dpop_proof`,
+`WWW-Authenticate: DPoP error="invalid_dpop_proof"`. Every challenge of the listener uses the
+`DPoP` scheme and names the proof algorithms in `algs`. The proof is checked before the
+per-subject ceiling, so a stolen token shown without its key counts against the caller's address,
+never against the admin's own ceiling.
+
+The token endpoint issues the admin audience, or a `qauth:admin:*` scope, only with a DPoP proof
+([OAuth flow](/integrate/oauth-flow/)). An admin token lives at most the realm's
+`tokens.adminAccessTokenLifespanSeconds` (600 seconds by default), and never more than 900 seconds.
+The admin OpenAPI document names its scheme `dpopAuth`. When the server shuts down, the listener takes no new call, lets each call in
 flight finish for up to 8 seconds, closes the connections still open, waits up to 1.5 seconds
 more for the audit rows of their calls, and closes before the database.
 
@@ -322,6 +348,12 @@ of `approvals.approve`.
   refused with `invalid_scope`. No other scope of the reserved `qauth:` namespace is ever issued.
   Grants are read at every issuance, so the next refresh after a revocation no longer carries what
   the grant gave.
+- Both are issued only with a DPoP proof (RFC 9449 §5, #520), and the token is bound to its key.
+  Without one an admin scope is withheld, as above, and a request for the admin audience, or for
+  nothing but admin scopes the grants would give, is refused with `invalid_dpop_proof`, the code
+  left unspent. The refresh token issued beside an admin token is bound to the same key, whatever
+  the client, so it refreshes only with a proof of that key. An admin token lives at most 900
+  seconds, whatever `tokens.adminAccessTokenLifespanSeconds` says.
 - Neither the admin audience nor an admin scope ever reaches a `client_credentials` token, which
   names no account, an ID-JAG that QAuth mints for another authorization server, or a token of the
   jwt-bearer grant, whose authority comes from another identity provider, or a delegated token of
