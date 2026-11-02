@@ -7,7 +7,7 @@ import { call } from '../../helpers/operations';
 const { baseUrl } = wireConfig();
 const documentUrl = serverPath(baseUrl, '/.well-known/openid-configuration');
 
-describe('OIDC Discovery 1.0 §4 — the provider configuration document, over HTTP', () => {
+describe('[GET /.well-known/openid-configuration] OIDC Discovery 1.0 §4 — the provider configuration document, over HTTP', () => {
   it('answers a GET at the issuer plus the well-known path with 200 and an application/json object (§4.1, §4.2)', async () => {
     const response = await call('GET /.well-known/openid-configuration');
     const text = await response.text();
@@ -26,7 +26,7 @@ describe('OIDC Discovery 1.0 §4 — the provider configuration document, over H
   });
 });
 
-describe('OIDC Discovery 1.0 §3 — the provider metadata', () => {
+describe('[GET /.well-known/openid-configuration] OIDC Discovery 1.0 §3 — the provider metadata', () => {
   it('is a document superset of the AS metadata, with its issuer and public subject identifiers (§3)', async () => {
     const { body: configuration } = await getJsonObject(documentUrl);
     const { body: metadata } = await getJsonObject(

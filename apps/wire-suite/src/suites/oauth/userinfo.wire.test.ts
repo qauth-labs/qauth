@@ -48,7 +48,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     subject = decodeJwt(tokens.id_token as string).sub as string;
   });
 
-  it('answers GET with a Bearer access token, and `sub` is unconditional: the ID token’s subject (§5.3.1, §5.3.2)', async () => {
+  it('[GET /oauth/userinfo] answers GET with a Bearer access token, and `sub` is unconditional: the ID token’s subject (§5.3.1, §5.3.2)', async () => {
     const claims = await claimsOf(
       await call('GET /oauth/userinfo', {
         headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -58,7 +58,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     expect(claims['sub']).toBe(subject);
   });
 
-  it('answers POST with the Bearer header with the same claims as GET (§5.3.1; RFC 6750 §2.1)', async () => {
+  it('[GET /oauth/userinfo] [POST /oauth/userinfo] answers POST with the Bearer header with the same claims as GET (§5.3.1; RFC 6750 §2.1)', async () => {
     const viaGet = await claimsOf(
       await call('GET /oauth/userinfo', {
         headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -73,7 +73,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     expect(viaPost).toEqual(viaGet);
   });
 
-  it('answers POST with the token as a form-encoded access_token parameter (§5.3.1; RFC 6750 §2.2)', async () => {
+  it('[POST /oauth/userinfo] answers POST with the token as a form-encoded access_token parameter (§5.3.1; RFC 6750 §2.2)', async () => {
     const claims = await claimsOf(
       await call('POST /oauth/userinfo', { form: { access_token: tokens.access_token } })
     );
@@ -81,7 +81,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     expect(claims['sub']).toBe(subject);
   });
 
-  it('releases the address only once verified, and never a claim as null (§5.3.2, §5.4)', async () => {
+  it('[GET /oauth/userinfo] releases the address only once verified, and never a claim as null (§5.3.2, §5.4)', async () => {
     const claims = await claimsOf(
       await call('GET /oauth/userinfo', {
         headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -102,7 +102,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     }
   });
 
-  it('refuses a client_credentials token, whose subject is no user, with 401 invalid_token (§5.3.3; RFC 6750 §3.1)', async () => {
+  it('[GET /oauth/userinfo] refuses a client_credentials token, whose subject is no user, with 401 invalid_token (§5.3.3; RFC 6750 §3.1)', async () => {
     const machine = await readTokenResponse(
       await tokenRequest({ grant_type: 'client_credentials', scope: SEEDED_CLIENT_SCOPE })
     );
@@ -114,7 +114,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     );
   });
 
-  it('refuses an access token once it is revoked, on GET and on POST (§5.3.3; RFC 7009 §2.1)', async () => {
+  it('[GET /oauth/userinfo] [POST /oauth/userinfo] refuses an access token once it is revoked, on GET and on POST (§5.3.3; RFC 7009 §2.1)', async () => {
     const own = await readTokenResponse(await exchangeCode(await issueCode(session)));
     const revoked = await call('POST /oauth/revoke', {
       headers: { authorization: basicAuthorization(confidentialClient()) },

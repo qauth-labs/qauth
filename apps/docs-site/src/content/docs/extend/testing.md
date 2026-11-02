@@ -3,7 +3,7 @@ title: Testing
 description: The five tiers — unit, testcontainers integration, the repo-wide coverage gate, the documentation invariants, and the black-box wire suite — what each can and cannot catch, how to run them, and the two caching lessons this repo learned the hard way.
 sidebar:
   order: 4
-lastVerified: '2026-10-24'
+lastVerified: '2026-11-02'
 ---
 
 QAuth has three test tiers, a fourth that guards this documentation site, and a fifth that tests
@@ -298,10 +298,14 @@ Four rules keep it honest:
 - **Its `*.wire.test.ts` files never run in the fast tier.** The root config excludes them; only
   `apps/wire-suite/vitest.wire.config.mts` includes them. The suite's own unit tests — the
   configuration guard and the helpers — run with Tier 1.
-- **Every OAuth and discovery operation has a wire test.** A wire test names the operation it
-  calls, as in `call('POST /oauth/token', …)`, and a unit test,
+- **Every stable operation has a wire test.** A wire test's `describe` or `it` title carries the
+  operation it checks, as the published OpenAPI document lists it: `[POST /oauth/token]`. After
+  the run, `scripts/wire-coverage.mjs` fails when a stable operation has no passing test that tags
+  it. An experimental operation is exempt, and so is a stable one that
+  `apps/wire-suite/exempt-operations.json` lists with a reason and an issue; that list may only
+  shrink, and CI fails a pull request that adds to it. Before any server runs, a unit test,
   `apps/wire-suite/src/operation-coverage.test.ts`, fails when an `/oauth/*` or `/.well-known/*`
-  operation of the published OpenAPI document has no such call.
+  operation has no `call('METHOD /path', …)` in any wire test.
 
 What it cannot catch: anything a client cannot observe. It sees responses, not the database or
 the logs, so a write that should not have happened, or a secret in a log line, is outside it.
@@ -334,6 +338,7 @@ pnpm stable-surface                             # drift, tags and breaks since t
 pnpm exec nx run infra-db:test-integration      # if you touched schema, migrations, or repositories
 pnpm exec nx run auth-server:test-integration   # if you touched wallet federation or credential status
 pnpm nx run wire-suite:run                      # against a running server (apps/wire-suite/README.md)
+pnpm wire-coverage                              # after a full wire run with the JSON reporter
 ```
 
 If you changed anything under `apps/docs-site`, add:

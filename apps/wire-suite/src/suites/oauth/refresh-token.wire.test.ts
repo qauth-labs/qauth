@@ -30,7 +30,7 @@ function refresh(
   );
 }
 
-describe('RFC 6749 §6 — refreshing an access token, with rotation', () => {
+describe('[POST /oauth/token] RFC 6749 §6 — refreshing an access token, with rotation', () => {
   let session: SignedInBrowser;
 
   /** Tokens from a fresh code: a family of its own for each test. */

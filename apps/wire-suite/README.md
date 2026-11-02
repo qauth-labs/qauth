@@ -26,11 +26,28 @@ test that cites a registered spec section counts as evidence for that row.
   command before the suite starts. The one exception is `suites/registration/`, which tests
   dynamic registration itself: it registers clients, and uses one only to show that the secret it
   was issued authenticates. No other suite uses a client the server's routes created.
-- **Every OAuth and discovery operation has a wire test.** A wire test sends a request to an
-  operation with `call('METHOD /path', …)` (or builds its URL with `operationUrl`), naming it
-  exactly as `apps/docs-site/public/openapi.json` lists it. `src/operation-coverage.test.ts`, a
-  unit test, fails when an `/oauth/*` or `/.well-known/*` operation of that document has no such
-  call in any `*.wire.test.ts`, unless it is experimental and `suites/experimental/` checks it.
+- **Every stable operation has a wire test, and the test's title says which (#535).** A
+  `describe` or `it` title carries each operation the test checks, written exactly as
+  `apps/docs-site/public/openapi.json` lists it: `[POST /oauth/token]`, `[GET /a/{id}]`. A tag on a
+  `describe` covers every test inside it, and a title may carry several. Tag only what the test
+  checks: a fixture that registers an account does not test registration, and the error-format
+  suite tags nothing, so each operation has its own home. `scripts/wire-coverage.mjs` reads the
+  document and this suite's JSON report, and fails when a stable operation has no passing test
+  that tags it, or a tag names no operation. CI runs it after the suite, in the
+  `conformance-matrix` job (`pnpm spec-matrix` runs it last); after a local run with the JSON
+  reporter (below), `pnpm wire-coverage` does the same. An `experimental` operation is exempt: a
+  default deployment does not serve it, which `suites/experimental/` checks.
+- **`exempt-operations.json` may only shrink.** It lists the stable operations that have no wire
+  test yet, each with the `operation`, a `reason` and the `issue` that ends the exemption.
+  `nx run wire-suite:exempt-operations` compares it with the base branch (`NX_BASE`, or `main`)
+  and fails on an added entry; `lint` depends on it, so CI's affected lint leg runs it whenever the
+  list changes. An entry whose operation has a passing wire test, has left the document or is
+  experimental fails the coverage check, so the pull request that adds the test removes the entry.
+- **A wire test calls an operation through `call('METHOD /path', …)`** (or builds its URL with
+  `operationUrl`), naming it exactly as the document lists it. `src/operation-coverage.test.ts`, a
+  unit test that needs no server, fails when an `/oauth/*` or `/.well-known/*` operation of the
+  document has no such call in any `*.wire.test.ts`, unless it is experimental and
+  `suites/experimental/` checks it: the early warning before the run.
 - **A browser is a cookie jar and the redirects it follows.** `helpers/browser.ts` signs in on
   `/ui/login` and answers `/ui/consent` from the HTML forms the server renders, and stops at the
   client's redirect URI, which it never requests. `fixtures/authorization.ts` builds the seeded
@@ -47,6 +64,8 @@ test that cites a registered spec section counts as evidence for that row.
   `§` belongs to the nearest spec name to its left, and the joiner treats words such as `OAuth`,
   `OpenID` and `OIDC` as spec names too — so keep them, and paths like
   `/.well-known/openid-configuration`, out of a title between the spec name and its sections.
+  An operation tag is the exception: the joiner blanks `[METHOD /path]` out before it reads
+  citations. Put the tag first, `describe('[POST /oauth/revoke] RFC 7009 §2 — …')`.
 - **`src/suites/rate-limit/**` runs last**, in its own Vitest project (`wire-budget`,
   `sequence.groupOrder` in `vitest.wire.config.mts`). It spends the registration budget of the
   address the suite connects from, which would refuse every registration after it.
@@ -140,6 +159,13 @@ You need Docker and a workspace install (`pnpm install`).
    ```bash
    pnpm nx run wire-suite:run -- --reporter=default \
      --reporter=json --outputFile.json="$PWD/dist/wire-report.json"
+   ```
+
+   Then check that every stable operation has a wire test, as CI does. It reads
+   `dist/wire-report.json`, so it needs a run of the whole suite, not one area:
+
+   ```bash
+   pnpm wire-coverage
    ```
 
 **Running it again.** The rate-limit suite spends the registration budget, so a second run inside

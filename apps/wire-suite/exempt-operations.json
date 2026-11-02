@@ -1,0 +1,190 @@
+{
+  "$comment": "The stable operations of apps/docs-site/public/openapi.json that have no wire test yet, each with why and the issue that ends the exemption (#535, ADR-018 §5). This list may only shrink: CI fails a pull request that adds an entry, and an entry whose operation gains a passing wire test, leaves the document or turns experimental must be removed. Experimental operations never appear here; their stability exempts them. See apps/wire-suite/README.md and the \"How the wire suite grows\" section of CONTRIBUTING.md.",
+  "exemptions": [
+    {
+      "operation": "GET /health",
+      "reason": "#500 changes what it answers: a liveness check, with GET /ready beside it. Its wire test comes with that change.",
+      "issue": "#500"
+    },
+    {
+      "operation": "GET /interaction/v1-rc.0/openapi.json",
+      "reason": "The Interaction API document. The Interaction API epic brings the API's wire tests; none reads the document yet.",
+      "issue": "#582"
+    },
+    {
+      "operation": "GET /metrics",
+      "reason": "#500 moves it to the internal listener, which the wire suite does not reach.",
+      "issue": "#500"
+    },
+    {
+      "operation": "GET /",
+      "reason": "A greeting that carries no contract a client relies on. No area issue owns its wire test, so it stays with the wire conformance epic.",
+      "issue": "#440"
+    },
+    {
+      "operation": "GET /account/v1-rc.0/consents",
+      "reason": "Needs an access token with the account API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the account and developer API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "DELETE /account/v1-rc.0/consents/{consentId}",
+      "reason": "Needs an access token with the account API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the account and developer API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /auth/login",
+      "reason": "ADR-017 removes it, in #711. The error-format suite checks only that it answers a body the schema refuses with a problem document (errors/no-legacy-shape); no test checks a sign-in through it.",
+      "issue": "#711"
+    },
+    {
+      "operation": "POST /auth/logout",
+      "reason": "ADR-017 removes it, in #711.",
+      "issue": "#711"
+    },
+    {
+      "operation": "POST /auth/resend-verification",
+      "reason": "ADR-017 removes it, in #711.",
+      "issue": "#711"
+    },
+    {
+      "operation": "GET /auth/verify",
+      "reason": "The page of the emailed verification link; its form posts to POST /ui/verify. The email-code step of #638 replaces link verification.",
+      "issue": "#638"
+    },
+    {
+      "operation": "POST /auth/verify",
+      "reason": "ADR-017 removes it, in #711. The suite calls it only to verify accounts through the mail sink (src/fixtures/users.ts); no test checks the route itself.",
+      "issue": "#711"
+    },
+    {
+      "operation": "GET /api/clients/",
+      "reason": "Deprecated alias of GET /developer/v1-rc.0/clients since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933. The error-format suite checks only its 401 without an access token (errors/no-legacy-shape).",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /api/clients/",
+      "reason": "Deprecated alias of POST /developer/v1-rc.0/clients since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /api/clients/{id}",
+      "reason": "Deprecated alias of GET /developer/v1-rc.0/clients/{clientId} since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "DELETE /api/clients/{id}",
+      "reason": "Deprecated alias of DELETE /developer/v1-rc.0/clients/{clientId} since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "PATCH /api/clients/{id}",
+      "reason": "Deprecated alias of PATCH /developer/v1-rc.0/clients/{clientId} since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /api/clients/{id}/regenerate-secret",
+      "reason": "Deprecated alias of POST /developer/v1-rc.0/clients/{clientId}/regenerate-secret since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /api/clients/{clientId}/api-keys",
+      "reason": "Deprecated alias of GET /developer/v1-rc.0/clients/{clientId}/api-keys since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /api/clients/{clientId}/api-keys",
+      "reason": "Deprecated alias of POST /developer/v1-rc.0/clients/{clientId}/api-keys since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "DELETE /api/clients/{clientId}/api-keys/{keyId}",
+      "reason": "Deprecated alias of DELETE /developer/v1-rc.0/clients/{clientId}/api-keys/{keyId} since #524, kept while the developer portal calls it. It shares that operation's handler, whose wire tests belong with #933.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /consents/",
+      "reason": "Deprecated since #524. #691 removes it once the account API serves the same data. The error-format suite checks only its 401 without a browser session (errors/no-legacy-shape).",
+      "issue": "#691"
+    },
+    {
+      "operation": "DELETE /consents/{id}",
+      "reason": "Deprecated since #524. #691 removes it once the account API serves the same data.",
+      "issue": "#691"
+    },
+    {
+      "operation": "GET /api/consents/",
+      "reason": "Deprecated since #524. #691 removes it once the account API serves the same data.",
+      "issue": "#691"
+    },
+    {
+      "operation": "DELETE /api/consents/{id}",
+      "reason": "Deprecated since #524. #691 removes it once the account API serves the same data.",
+      "issue": "#691"
+    },
+    {
+      "operation": "GET /developer/v1-rc.0/clients",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /developer/v1-rc.0/clients",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /developer/v1-rc.0/clients/{clientId}",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "DELETE /developer/v1-rc.0/clients/{clientId}",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "PATCH /developer/v1-rc.0/clients/{clientId}",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /developer/v1-rc.0/clients/{clientId}/regenerate-secret",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /developer/v1-rc.0/clients/{clientId}/api-keys",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "POST /developer/v1-rc.0/clients/{clientId}/api-keys",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "DELETE /developer/v1-rc.0/clients/{clientId}/api-keys/{keyId}",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /developer/v1-rc.0/consents",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "DELETE /developer/v1-rc.0/consents/{consentId}",
+      "reason": "Needs an access token with the developer API audience. Only an operator can give a client that audience, and the wire suite's seed provisions no such client. Its wire tests belong with #933, which enforces the developer and account API permissions.",
+      "issue": "#933"
+    },
+    {
+      "operation": "GET /ui/resume/{handle}",
+      "reason": "The code flow tests pass through it after the sign-in, but no test checks it on its own. #709 deletes it with the other server-rendered pages.",
+      "issue": "#709"
+    },
+    {
+      "operation": "POST /ui/verify",
+      "reason": "The form of the emailed verification link's page (GET /auth/verify). The email-code step of #638 replaces link verification.",
+      "issue": "#638"
+    }
+  ]
+}

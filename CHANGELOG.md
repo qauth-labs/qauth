@@ -755,6 +755,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/upgrade-test/upgrade-test.sh all` runs it locally. See
   `apps/upgrade-test/README.md`, and the new "Upgrading within 1.x" section of
   the upgrade guide.
+- **A wire test for every stable operation** ([#535], ADR-018 §5). A wire test
+  now names the operation it checks in its `describe` or `it` title, as the
+  OpenAPI document lists it: `[POST /oauth/token]`. The new
+  `scripts/wire-coverage.mjs` reads the document and the wire suite's report and
+  fails when a stable operation has no passing test that tags it; `pnpm
+  spec-matrix` runs it after the joiner, so CI's `conformance-matrix` job checks
+  it, and `pnpm wire-coverage` runs it alone. Experimental operations are
+  exempt. The 37 stable operations with no wire test today are listed in
+  `apps/wire-suite/exempt-operations.json`, each with a reason and an issue, and
+  the list may only shrink: `wire-suite:exempt-operations`, which `lint` depends
+  on, fails when it names an operation the base branch's list does not. The
+  conformance matrix blanks a tag out before it reads citations, so a path in a
+  title takes no section from its spec. `CONTRIBUTING.md` has a new "How the
+  wire suite grows" section, and the repository has a pull request template
+  with three checks: a changed stable route and its wire test, an added event
+  type and its registration, an added migration that is non-destructive.
 - **Reference reverse-proxy configuration** ([#482], ADR-019 Decisions 1, 5 and
   8). `deploy/reference/proxy/` holds an nginx configuration that sends every
   realm host to the auth server and `/ui/*` on the same host to the ceremony
@@ -2603,6 +2619,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#528]: https://github.com/qauth-labs/qauth/issues/528
 [#529]: https://github.com/qauth-labs/qauth/issues/529
 [#534]: https://github.com/qauth-labs/qauth/issues/534
+[#535]: https://github.com/qauth-labs/qauth/issues/535
 [#536]: https://github.com/qauth-labs/qauth/issues/536
 [#540]: https://github.com/qauth-labs/qauth/issues/540
 [#541]: https://github.com/qauth-labs/qauth/issues/541

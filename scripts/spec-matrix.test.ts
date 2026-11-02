@@ -379,6 +379,16 @@ describe('spec-matrix — the gate on `covered` rows', () => {
     expect(deeper.status).toBe(EXIT_OK);
     expect(shallower.status).toBe(EXIT_GATE);
   });
+
+  it('reads past a wire test’s operation tag, whose path would otherwise anchor the section (#535)', () => {
+    // `/oauth/userinfo` holds `oauth`, a foreign anchor: unblanked, it would
+    // take the bare §2 away from RFC 9999 and drop it.
+    const tagged = 'RFC 9999 §1 — the endpoint [POST /oauth/userinfo] answers POST (§2)';
+    const result = run({ reportBody: report([{ fullName: tagged }]) });
+
+    expect(result.status).toBe(EXIT_OK);
+    expect(readFileSync(join(result.outDir, 'matrix.md'), 'utf8')).toContain(tagged);
+  });
 });
 
 describe('spec-matrix — evidenceMatch narrows what counts as proof', () => {

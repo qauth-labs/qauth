@@ -17,7 +17,7 @@ const ENDPOINTS: readonly (readonly [member: string, path: string])[] = [
   ['jwks_uri', '/.well-known/jwks.json'],
 ];
 
-describe('RFC 8414 §3 — authorization server metadata, over HTTP', () => {
+describe('[GET /.well-known/oauth-authorization-server] RFC 8414 §3 — authorization server metadata, over HTTP', () => {
   it('answers a GET at the well-known URL with 200 and an application/json object (§3.1, §3.2)', async () => {
     const response = await call('GET /.well-known/oauth-authorization-server');
     const text = await response.text();
@@ -36,7 +36,7 @@ describe('RFC 8414 §3 — authorization server metadata, over HTTP', () => {
   });
 });
 
-describe('RFC 8414 §2 — the metadata members', () => {
+describe('[GET /.well-known/oauth-authorization-server] RFC 8414 §2 — the metadata members', () => {
   it('publishes the required fields anchored on the issuer, with no query or fragment (§2)', async () => {
     const { body } = await getJsonObject(documentUrl);
 
@@ -79,7 +79,7 @@ describe('RFC 8414 §2 — the metadata members', () => {
   });
 });
 
-describe('RFC 9207 §3 — the issuer identification metadata parameter', () => {
+describe('[GET /.well-known/oauth-authorization-server] RFC 9207 §3 — the issuer identification metadata parameter', () => {
   it('advertises authorization_response_iss_parameter_supported as true (§3, §2.3)', async () => {
     const { body } = await getJsonObject(documentUrl);
 

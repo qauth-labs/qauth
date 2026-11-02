@@ -29,6 +29,19 @@
         "description": "The suite's own unit tests: the configuration guard, the helpers, and the check that every /oauth/* and /.well-known/* operation of the published OpenAPI document has a wire test. Needs no server. The OpenAPI document is an input because the coverage check reads it."
       }
     },
+    "lint": {
+      "dependsOn": ["exempt-operations"]
+    },
+    "exempt-operations": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node scripts/wire-coverage.mjs --base-ref \"${NX_BASE:-main}\""
+      },
+      "metadata": {
+        "description": "Check exempt-operations.json against the published OpenAPI document, and fail when it names an operation the list at the base ref does not: the list may only shrink (#535). The base is NX_BASE, which CI sets to the pull request's base, or main. Never cached: its input is the base ref's copy of the file. lint depends on it, so the affected lint leg runs it whenever the list changes."
+      }
+    },
     "run": {
       "executor": "nx:run-commands",
       "cache": false,

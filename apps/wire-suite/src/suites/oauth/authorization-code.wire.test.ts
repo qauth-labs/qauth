@@ -65,7 +65,7 @@ function refresh(refreshToken: string): Promise<Response> {
  * redeem is `invalid_grant`, with or without the parameter. Nothing is
  * created: the code is refused before anything is spent or issued.
  */
-describe('RFC 6749 §4.1.3 — a code exchange answers by the code, not by the request’s shape', () => {
+describe('[POST /oauth/token] RFC 6749 §4.1.3 — a code exchange answers by the code, not by the request’s shape', () => {
   it('answers an exchange without redirect_uri with 400 invalid_grant, not invalid_request (§4.1.3, §5.2)', async () => {
     const error = await expectOAuthError(await exchangeUnknownCode({}), {
       status: 400,
@@ -103,13 +103,13 @@ describe('OIDC Core 1.0 §3.1 — the authorization code flow end to end, with P
     metadata = await discovery();
   });
 
-  it('shows the sign-in page and the consent screen, then sends the code to the redirect URI (§3.1.2.5; RFC 6749 §4.1.2)', () => {
+  it('[GET /ui/login] [POST /ui/login] [GET /ui/consent] [POST /ui/consent] shows the sign-in page and the consent screen, then sends the code to the redirect URI (§3.1.2.5; RFC 6749 §4.1.2)', () => {
     expect(issued.response.pages).toEqual(['sign-in', 'consent']);
     expect(issued.response.params.get('state')).toBe(issued.request.state);
     expect(issued.response.params.get('iss')).toBe(baseUrl);
   });
 
-  it('answers the token request with an id_token beside a Bearer access token, never cached (§3.1.3.3; RFC 6749 §5.1)', () => {
+  it('[POST /oauth/token] answers the token request with an id_token beside a Bearer access token, never cached (§3.1.3.3; RFC 6749 §5.1)', () => {
     expect(tokenHeaders.get('content-type') ?? '').toMatch(/^application\/json\b/i);
     expect(tokenHeaders.get('cache-control') ?? '').toMatch(/no-store/i);
     expect(tokens.token_type.toLowerCase()).toBe('bearer');
@@ -187,7 +187,7 @@ function expectSignedWithAdvertisedKey(
   expect(header.kid).toBeTypeOf('string');
 }
 
-describe('RFC 7636 §4.6 — the token endpoint checks the verifier against the code’s challenge', () => {
+describe('[POST /oauth/token] RFC 7636 §4.6 — the token endpoint checks the verifier against the code’s challenge', () => {
   let session: SignedInBrowser;
 
   beforeAll(async () => {
@@ -228,7 +228,7 @@ describe('RFC 7636 §4.6 — the token endpoint checks the verifier against the 
   });
 });
 
-describe('OAuth 2.1 draft-16 §4.1.3 — a code returns tokens once', () => {
+describe('[POST /oauth/token] OAuth 2.1 draft-16 §4.1.3 — a code returns tokens once', () => {
   let session: SignedInBrowser;
 
   beforeAll(async () => {
