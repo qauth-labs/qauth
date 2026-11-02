@@ -351,9 +351,13 @@ of `approvals.approve`.
 - Both are issued only with a DPoP proof (RFC 9449 §5, #520), and the token is bound to its key.
   Without one an admin scope is withheld, as above, and a request for the admin audience, or for
   nothing but admin scopes the grants would give, is refused with `invalid_dpop_proof`, the code
-  left unspent. The refresh token issued beside an admin token is bound to the same key, whatever
-  the client, so it refreshes only with a proof of that key. An admin token lives at most 900
-  seconds, whatever `tokens.adminAccessTokenLifespanSeconds` says.
+  left unspent; on a process with DPoP off, where no proof could help, with `invalid_target` or
+  `invalid_scope`. The refresh token issued beside an admin token is bound to the same key,
+  whatever the client, so it refreshes only with a proof of that key. A refresh token bound to no
+  key, issued before admin tokens needed a proof, never refreshes into one: the admin audience is
+  refused with `invalid_grant`, so the user signs in again, and the admin scopes are withheld. A
+  token for the admin API lives at most 900 seconds, whatever
+  `tokens.adminAccessTokenLifespanSeconds` says.
 - Neither the admin audience nor an admin scope ever reaches a `client_credentials` token, which
   names no account, an ID-JAG that QAuth mints for another authorization server, or a token of the
   jwt-bearer grant, whose authority comes from another identity provider, or a delegated token of

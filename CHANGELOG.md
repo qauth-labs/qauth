@@ -1328,18 +1328,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   proof is checked inside the token guard, before the per-subject ceiling, so
   a stolen token without its key counts against the caller's address, not the
   admin's. The token endpoint issues the admin audience, or an admin scope,
-  only with a DPoP proof: without one an admin scope is withheld (RFC 6749
-  §3.3), and a request for the admin audience, or for nothing but admin
-  scopes, is refused with `invalid_dpop_proof`. The refresh token issued
-  beside an admin token is bound to the proof's key whatever the client, so
-  a confidential client refreshes it only with that key. An admin token never
-  lives longer than 900 s, whatever `tokens.adminAccessTokenLifespanSeconds`
-  says. Where the admin listener runs (`ADMIN_API_ENABLED=true` on a process
+  only with a DPoP proof: without one an admin scope the account's grants
+  would give is withheld (RFC 6749 §3.3), and a request for the admin
+  audience, or for nothing but such scopes, is refused with
+  `invalid_dpop_proof` (`invalid_target` or `invalid_scope` on a process with
+  DPoP off, where no proof could help). The answers to an account without a
+  grant are unchanged. The refresh token issued beside an admin token is
+  bound to the proof's key whatever the client, so a confidential client
+  refreshes it only with that key. A token for the admin API never lives
+  longer than 900 s, whatever `tokens.adminAccessTokenLifespanSeconds` says. Where the admin listener runs (`ADMIN_API_ENABLED=true` on a process
   with the `admin` role), the boot now requires `ADMIN_API_BASE_URL` (the
   absolute http(s) URL clients address the admin API at) and
   `DPOP_ENABLED=true`, and the production rule that `ADMIN_API_HOST` be
-  loopback is lifted: the listener may sit behind a load balancer. The token
-  endpoint's processes need `DPOP_ENABLED=true` too, to issue admin tokens.
+  loopback is lifted: the listener may sit behind a load balancer that
+  terminates TLS. In production `ADMIN_API_BASE_URL` must be `https`, unless
+  both it and `ADMIN_API_HOST` name loopback. A refresh token issued bound to
+  no DPoP key never refreshes into an admin token: the admin audience is
+  refused with `invalid_grant` (sign in again) and the admin scopes are
+  withheld. The token endpoint's processes need `DPOP_ENABLED=true` too, to
+  issue admin tokens.
   The admin OpenAPI document names the `dpopAuth` security scheme.
 - **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
   process that holds the `signer` role while the roles are split runs one more

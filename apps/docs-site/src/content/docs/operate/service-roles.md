@@ -213,8 +213,11 @@ Every admin call carries a DPoP-bound admin token and a proof for
 runs, the boot requires `ADMIN_API_BASE_URL`, the URL clients address the admin
 API at, and `DPOP_ENABLED=true`; a process that runs the token endpoint needs
 `DPOP_ENABLED=true` too, to issue admin tokens. The listener may then sit on
-any address, behind a load balancer that forwards to `ADMIN_API_HOST` and
-`ADMIN_API_PORT`. It grants nothing for a caller's network position: every
+any address, behind a load balancer that terminates TLS and forwards to
+`ADMIN_API_HOST` and `ADMIN_API_PORT`: a proof binds an admin call to its
+method and URL, not to its body, so in production `ADMIN_API_BASE_URL` must be
+`https`, unless both it and `ADMIN_API_HOST` name loopback, for a listener
+reached from the machine alone. It grants nothing for a caller's network position: every
 admin call needs a DPoP-bound admin token, except
 `GET /admin/v1-rc.0/openapi.json`
 ([API conventions](/reference/api-conventions/#the-admin-listener)). The public
