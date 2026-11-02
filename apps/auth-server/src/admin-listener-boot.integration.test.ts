@@ -12,8 +12,8 @@
  *   stops both and the process exits 0.
  * - With the admin port taken, the process exits 1 and never listens on the
  *   public port.
- * - With ADMIN_API_ENABLED unset (off by default until #517 and #520) or
- *   false, or without the admin role, nothing listens on the admin port.
+ * - With ADMIN_API_ENABLED unset (off by default until #517) or false, or
+ *   without the admin role, nothing listens on the admin port.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -164,10 +164,13 @@ describe('the admin listener of src/main.ts (#511, testcontainers)', () => {
         LOG_LEVEL: 'info',
         HOST: '127.0.0.1',
         PORT: String(port),
-        // Off by default until #517 and #520: every case but the last turns
-        // the listener on.
+        // Off by default until #517: every case but the last turns the
+        // listener on, with the DPoP proofs its calls carry and the base URL
+        // they name (#520).
         ADMIN_API_ENABLED: 'true',
         ADMIN_API_PORT: String(adminPort),
+        ADMIN_API_BASE_URL: `http://127.0.0.1:${adminPort}`,
+        DPOP_ENABLED: 'true',
         DATABASE_URL: postgres.connectionString,
         REDIS_URL: redis.connectionUrl,
         JWT_PRIVATE_KEY: jwt.privateKey,

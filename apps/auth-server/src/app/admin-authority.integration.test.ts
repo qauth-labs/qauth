@@ -2,6 +2,7 @@ import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { type DpopTestKey, dpopProof, dpopTestKey } from '../testing/admin-dpop';
 import {
   baseEnvironment,
   bootAuthServer,
@@ -47,6 +48,8 @@ import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
  * - The token endpoint withholds an admin scope the account's grants do not
  *   reach, refuses the admin audience to an account with no grant, and reads
  *   the grants again on every refresh.
+ * - It issues an admin token only with a DPoP proof, and binds the refresh
+ *   token issued beside it to the proof's key, whatever the client (#520).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -80,7 +83,9 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
     jwt = await generateJwtPem();
-    booted = await bootAuthServer(baseEnvironment(infra, jwt), {
+    // DPoP on: the token endpoint issues an admin token only with a proof (#520).
+    const environment = { ...baseEnvironment(infra, jwt), DPOP_ENABLED: 'true' };
+    booted = await bootAuthServer(environment, {
       // Imported from the module registry the booted app loaded (the harness
       // resets it per boot), so the errors are the classes its handler knows.
       routes: async (scope) => {
@@ -173,11 +178,30 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
     });
   }
 
-  function probe(realmId: string, token: string): Promise<LightMyRequestResponse> {
+  /**
+   * The probe with `token`: a Bearer token, or, with `key`, a token bound to
+   * it, under the `DPoP` scheme with a proof for the probe's URL.
+   */
+  async function probe(
+    realmId: string,
+    token: string,
+    key?: DpopTestKey
+  ): Promise<LightMyRequestResponse> {
+    const url = probePath(realmId);
     return app().inject({
       method: 'GET',
-      url: probePath(realmId),
-      headers: { authorization: `Bearer ${token}` },
+      url,
+      headers:
+        key === undefined
+          ? { authorization: `Bearer ${token}` }
+          : {
+              authorization: `DPoP ${token}`,
+              dpop: await dpopProof(key, {
+                method: 'GET',
+                url: `${(await defaultTokenRealm()).issuer}${url}`,
+                accessToken: token,
+              }),
+            },
     });
   }
 
@@ -512,23 +536,40 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       return { code, verifier };
     }
 
-    function tokenRequest(form: Record<string, string>): Promise<LightMyRequestResponse> {
+    /** A token request, with a DPoP proof of `key` for the token endpoint when given. */
+    async function tokenRequest(
+      form: Record<string, string>,
+      key?: DpopTestKey
+    ): Promise<LightMyRequestResponse> {
+      const proof =
+        key === undefined
+          ? undefined
+          : await dpopProof(key, {
+              method: 'POST',
+              url: `${(await defaultTokenRealm()).issuer}/oauth/token`,
+            });
       return app().inject({
         method: 'POST',
         url: '/oauth/token',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          ...(proof === undefined ? {} : { dpop: proof }),
+        },
         payload: new URLSearchParams(form).toString(),
       });
     }
 
-    function redeem(code: { code: string; verifier: string }) {
-      return tokenRequest({
-        grant_type: 'authorization_code',
-        code: code.code,
-        redirect_uri: REDIRECT_URI,
-        client_id: 'admin-console',
-        code_verifier: code.verifier,
-      });
+    function redeem(code: { code: string; verifier: string }, key?: DpopTestKey) {
+      return tokenRequest(
+        {
+          grant_type: 'authorization_code',
+          code: code.code,
+          redirect_uri: REDIRECT_URI,
+          client_id: 'admin-console',
+          code_verifier: code.verifier,
+        },
+        key
+      );
     }
 
     async function failureReasons(): Promise<unknown[]> {
@@ -544,16 +585,18 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       const cookie = (await signInWithPassword(app(), email)).header() as string;
       await adminConsole(userId);
       const viewer = await grant(userId, null, 'viewer');
+      const key = await dpopTestKey();
 
-      const issued = await redeem(await codeFor(cookie, `openid ${ALL_ADMIN_SCOPES}`, ADMIN));
+      const issued = await redeem(await codeFor(cookie, `openid ${ALL_ADMIN_SCOPES}`, ADMIN), key);
       expect(issued.statusCode).toBe(200);
       const body = issued.json<{ access_token: string; refresh_token: string; scope: string }>();
       expect(body.scope).toBe('openid qauth:admin:read');
       expect(decodeJwtClaims(body.access_token)).toMatchObject({
         aud: ADMIN,
         scope: 'openid qauth:admin:read',
+        cnf: { jkt: key.thumbprint },
       });
-      expect((await probe(await defaultRealmId(), body.access_token)).json()).toMatchObject({
+      expect((await probe(await defaultRealmId(), body.access_token, key)).json()).toMatchObject({
         permissions: idsOfClasses('read'),
       });
 
@@ -561,11 +604,14 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       // left as it was.
       await app().repositories.adminGrants.revoke(await defaultRealmId(), viewer.id);
       const refresh = () =>
-        tokenRequest({
-          grant_type: 'refresh_token',
-          refresh_token: body.refresh_token,
-          client_id: 'admin-console',
-        });
+        tokenRequest(
+          {
+            grant_type: 'refresh_token',
+            refresh_token: body.refresh_token,
+            client_id: 'admin-console',
+          },
+          key
+        );
       const refused = await refresh();
       expect(refused.statusCode).toBe(400);
       expect(refused.json()).toMatchObject({ error: 'invalid_target' });
@@ -602,16 +648,123 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
       });
 
       // A code that asked only for admin scopes is refused, never answered
-      // with no scope, and is not spent: once a grant exists it redeems.
+      // with no scope, and is not spent: once a grant exists it redeems,
+      // with a DPoP proof (#520).
       const onlyAdmin = await codeFor(cookie, ALL_ADMIN_SCOPES, undefined);
       const nothingLeft = await redeem(onlyAdmin);
       expect(nothingLeft.statusCode).toBe(400);
       expect(nothingLeft.json()).toMatchObject({ error: 'invalid_scope' });
       expect((await failureReasons()).at(-1)).toBe('admin_scope_without_grant');
       await grant(userId, null, 'viewer');
-      const redeemed = await redeem(onlyAdmin);
+      const redeemed = await redeem(onlyAdmin, await dpopTestKey());
       expect(redeemed.statusCode).toBe(200);
       expect(redeemed.json()).toMatchObject({ scope: 'qauth:admin:read' });
+    });
+
+    it('issues an admin token only with a DPoP proof, and withholds admin scopes asked without one (#520)', async () => {
+      const email = 'proofless-admin@example.com';
+      const userId = await registerPasswordAccount(app(), email);
+      const cookie = (await signInWithPassword(app(), email)).header() as string;
+      await adminConsole(userId);
+      await grant(userId, null, 'viewer');
+
+      // The admin audience without a proof: refused, and the code not spent.
+      const toAdmin = await codeFor(cookie, `openid ${ALL_ADMIN_SCOPES}`, ADMIN);
+      const refused = await redeem(toAdmin);
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+      expect(await failureReasons()).toEqual(['admin_token_without_dpop']);
+      const key = await dpopTestKey();
+      const bound = await redeem(toAdmin, key);
+      expect(bound.statusCode).toBe(200);
+      expect(decodeJwtClaims(bound.json<{ access_token: string }>().access_token)).toMatchObject({
+        aud: ADMIN,
+        cnf: { jkt: key.thumbprint },
+      });
+
+      // Another audience: the admin scopes are withheld, the rest issued.
+      const plain = await redeem(await codeFor(cookie, `openid ${ALL_ADMIN_SCOPES}`, undefined));
+      expect(plain.statusCode).toBe(200);
+      expect(plain.json()).toMatchObject({ scope: 'openid' });
+
+      // Nothing but admin scopes: refused, never answered with no scope.
+      const nothingLeft = await redeem(await codeFor(cookie, ALL_ADMIN_SCOPES, undefined));
+      expect(nothingLeft.statusCode).toBe(400);
+      expect(nothingLeft.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+      expect(await failureReasons()).toEqual([
+        'admin_token_without_dpop',
+        'admin_token_without_dpop',
+      ]);
+    });
+
+    it("binds a confidential client's admin refresh token to the proof's key, and refuses another key (#520)", async () => {
+      const email = 'confidential-admin@example.com';
+      const userId = await registerPasswordAccount(app(), email);
+      const cookie = (await signInWithPassword(app(), email)).header() as string;
+      const realm = await defaultRealmId();
+      const client = await app().repositories.oauthClients.create({
+        realmId: realm,
+        clientId: 'admin-console',
+        clientSecretHash: await app().passwordHasher.hashPassword(CLIENT_SECRET),
+        tokenEndpointAuthMethod: 'client_secret_post',
+        name: 'Admin console',
+        redirectUris: [REDIRECT_URI],
+        scopes: ['openid', ...ADMIN_SCOPE_LIST],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        audience: [ADMIN],
+        enabled: true,
+        requirePkce: true,
+        provisionedByOperator: true,
+      });
+      await app().repositories.oauthConsents.upsertGrant(
+        realm,
+        userId,
+        client.id,
+        ['openid', ...ADMIN_SCOPE_LIST],
+        [ADMIN]
+      );
+      await grant(userId, null, 'viewer');
+      const key = await dpopTestKey();
+      const code = await codeFor(cookie, `openid ${ALL_ADMIN_SCOPES}`, ADMIN);
+      const issued = await tokenRequest(
+        {
+          grant_type: 'authorization_code',
+          code: code.code,
+          redirect_uri: REDIRECT_URI,
+          client_id: 'admin-console',
+          client_secret: CLIENT_SECRET,
+          code_verifier: code.verifier,
+        },
+        key
+      );
+      expect(issued.statusCode).toBe(200);
+      const { refresh_token: refreshToken } = issued.json<{ refresh_token: string }>();
+      const refresh = (proofKey?: DpopTestKey) =>
+        tokenRequest(
+          {
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+            client_id: 'admin-console',
+            client_secret: CLIENT_SECRET,
+          },
+          proofKey
+        );
+
+      // Another key, or no proof: refused, the refresh token left as it was.
+      const otherKey = await refresh(await dpopTestKey());
+      expect(otherKey.statusCode).toBe(400);
+      expect(otherKey.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+      const noProof = await refresh();
+      expect(noProof.statusCode).toBe(400);
+      expect(noProof.json()).toMatchObject({ error: 'invalid_dpop_proof' });
+      expect(await failureReasons()).toEqual(['dpop_key_mismatch', 'dpop_missing_proof']);
+
+      // The key of the admin token refreshes it.
+      const refreshed = await refresh(key);
+      expect(refreshed.statusCode).toBe(200);
+      expect(
+        decodeJwtClaims(refreshed.json<{ access_token: string }>().access_token)
+      ).toMatchObject({ aud: ADMIN, cnf: { jkt: key.thumbprint } });
     });
 
     it('gives a client_credentials token neither the admin audience nor an admin scope', async () => {
