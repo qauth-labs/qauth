@@ -689,8 +689,12 @@ taken from the interaction and the realm, never from the request. Until the auth
 starts interactions and issues their codes (#628), a finished sign-in redirects to the client with
 `error=server_error`. Every answer is `Cache-Control: no-store`, sends no CORS header, and every
 error is a problem document without `detail` or `instance`; a throttled sign-in is `429` with
-`Retry-After`. The answer and the cancel share the sign-in form's rate limit (`LOGIN_RATE_LIMIT`
-per `LOGIN_RATE_WINDOW`), the reads the authorization endpoint's.
+`Retry-After`. Rate limits count per address and route, except the step read's: an answer that
+carries a credential (a password, a one-time or recovery code, a passkey response, a device's user
+code) counts against the sign-in form's limit (`LOGIN_RATE_LIMIT` per `LOGIN_RATE_WINDOW`), as one
+sign-in form post does; any other answer and the cancel count against the authorization endpoint's
+(`AUTHORIZE_RATE_LIMIT` per `AUTHORIZE_RATE_WINDOW`), as does the personal read. The step read counts
+per interaction, since the ceremony app's server reads it for every browser.
 
 ---
 

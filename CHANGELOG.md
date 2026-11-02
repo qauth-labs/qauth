@@ -1239,7 +1239,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   password step needs no JavaScript. Bodies are bounded (16 KiB, 64 KiB for
   `webauthn_create`, a repeated form field refused), every answer is
   `Cache-Control: no-store` with no CORS header, and a throttled sign-in is
-  `429` with `Retry-After`. The engine shares the legacy sign-in forms'
+  `429` with `Retry-After`. An answer that carries a credential spends the
+  sign-in form's rate limit (`LOGIN_RATE_LIMIT`), as one form post to
+  `/ui/login` does; any other answer and the cancel spend the authorization
+  endpoint's; the step read, which the ceremony app's server makes for every
+  browser, counts per interaction. The engine shares the legacy sign-in forms'
   per-account failure ladder. The redirect comes from the interaction record
   and the realm, never the request; until the authorization endpoint starts
   interactions and mints their codes ([#628]), a finished sign-in redirects to

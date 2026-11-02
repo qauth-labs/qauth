@@ -1,3 +1,4 @@
+import rateLimit from '@fastify/rate-limit';
 import {
   CEREMONY_PAGE_PREFIX,
   INTERACTION_API_PREFIX,
@@ -68,6 +69,7 @@ import { corsPlugin } from '../plugins/cors';
 import errorHandler from '../plugins/error-handler';
 import interactionApi, {
   ANSWER_BODY_LIMIT,
+  carriesCredential,
   checkAnswerBodySize,
   comesFromRealmOrigin,
   parseAnswerForm,
@@ -133,8 +135,15 @@ const COMPLETE_ROUND = {
 let app: FastifyInstance;
 let updateLastLogin: ReturnType<typeof vi.fn>;
 
-async function buildApp(): Promise<FastifyInstance> {
+/**
+ * The app under test. `rateLimit` registers `@fastify/rate-limit` before the
+ * routes, as `app.ts` does; `clientId` is the client of every interaction.
+ */
+async function buildApp(
+  options: { readonly rateLimit?: boolean; readonly clientId?: string } = {}
+): Promise<FastifyInstance> {
   const instance = Fastify({ logger: false });
+  if (options.rateLimit === true) await instance.register(rateLimit, { global: false });
   instance.setValidatorCompiler(validatorCompiler);
   instance.setSerializerCompiler(serializerCompiler);
   await instance.register(errorHandler);
@@ -162,7 +171,10 @@ async function buildApp(): Promise<FastifyInstance> {
     scope.post('/start', { config: { surface: 'browser' } }, async (request, reply) => {
       const { startInteraction } = await import('../helpers/interaction');
       return startInteraction(request, reply, {
-        request: AUTHORIZE_REQUEST,
+        request: {
+          ...AUTHORIZE_REQUEST,
+          client_id: options.clientId ?? AUTHORIZE_REQUEST.client_id,
+        },
         step: { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
       });
     });
@@ -317,6 +329,21 @@ describe('the answer, before the engine runs (#616)', () => {
       expect(engine.advance).not.toHaveBeenCalled();
     }
   );
+
+  it('refuses a POST with no Content-Type and no body with 415', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    for (const operation of ['answer', 'cancel']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: `${INTERACTION_API_PREFIX}/${id}/${operation}`,
+        headers: { ...browser.cookie, 'sec-fetch-site': 'same-origin' },
+      });
+      expect(response.statusCode, operation).toBe(415);
+      expect(response.json()).toMatchObject({ code: 'unsupported_media_type' });
+    }
+    expect(engine.advance).not.toHaveBeenCalled();
+  });
 
   it.each([
     ['Sec-Fetch-Site: cross-site', { 'sec-fetch-site': 'cross-site' }],
@@ -570,6 +597,35 @@ describe('the cancel (#616)', () => {
     });
   });
 
+  it('sends a cancel another answer beat back to the ceremony page, as JSON and as a form', async () => {
+    let release: (value: unknown) => void = () => undefined;
+    engine.advance.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(PASSWORD_ROUND);
+        })
+    );
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const answering = browser.send(id, 'answer', {
+      type: IDENTIFIER,
+      csrf,
+      login_hint: 'alice@example.com',
+    });
+    await vi.waitFor(() => expect(engine.advance).toHaveBeenCalled());
+    const page = `${ORIGIN}${CEREMONY_PAGE_PREFIX}${id}`;
+    const json = await browser.send(id, 'cancel', { csrf });
+    expect(json.statusCode).toBe(200);
+    expect(json.json()).toEqual({ result: 'redirect', location: page });
+    const form = await browser.send(id, 'cancel', `csrf=${csrf}`);
+    expect(form.statusCode).toBe(303);
+    expect(form.headers.location).toBe(page);
+    release(PASSWORD_ROUND);
+    expect((await answering).statusCode).toBe(200);
+    expect((await browser.read(id)).step).toBe(PASSWORD);
+  });
+
   it('refuses a member beside the CSRF value, and a request from another site', async () => {
     const browser = new Browser();
     const id = await browser.start();
@@ -587,6 +643,74 @@ describe('the cancel (#616)', () => {
     );
     expect(crossSite.statusCode).toBe(403);
     expect((await browser.read(id)).csrf).toBe(csrf);
+  });
+});
+
+describe('the events of a client whose id is longer than an event holds (#616)', () => {
+  it('signs in, and the event names no client', async () => {
+    await app.close();
+    app = await buildApp({ clientId: `https://notes.example.com/${'c'.repeat(300)}` });
+    engine.advance.mockResolvedValueOnce(PASSWORD_ROUND).mockResolvedValueOnce(COMPLETE_ROUND);
+    const browser = new Browser();
+    const id = await browser.start();
+    await browser.send(id, 'answer', {
+      type: IDENTIFIER,
+      csrf: (await browser.read(id)).csrf,
+      login_hint: 'alice@example.com',
+    });
+    const response = await browser.send(id, 'answer', {
+      type: PASSWORD,
+      csrf: (await browser.read(id)).csrf,
+      password: 'correct horse',
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    const signedIn = vi
+      .mocked(emitUserEvent)
+      .mock.calls.find(([, type]) => type === 'urn:qauth:event:user.signed_in:v1-rc.0');
+    expect(signedIn?.[3]).toMatchObject({ userId: USER_ID, clientId: null });
+  });
+});
+
+describe('the rate limits (#616)', () => {
+  beforeEach(async () => {
+    await app.close();
+    app = await buildApp({ rateLimit: true });
+  });
+
+  it('counts an answer with a credential against the sign-in form budget, and any other apart', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    // A wrong CSRF value is refused after the limit has counted the answer.
+    const identifier = { type: IDENTIFIER, csrf: 'x', login_hint: 'alice@example.com' };
+    for (let n = 0; n < 6; n += 1) {
+      expect((await browser.send(id, 'answer', identifier)).statusCode).toBe(403);
+    }
+    for (let n = 0; n < 5; n += 1) {
+      const guess = await browser.send(id, 'answer', {
+        type: PASSWORD,
+        csrf: 'x',
+        password: 'guess',
+      });
+      expect(guess.statusCode).toBe(403);
+    }
+    const sixth = await browser.send(
+      id,
+      'answer',
+      `type=${encodeURIComponent(PASSWORD)}&csrf=x&password=guess`
+    );
+    expect(sixth.statusCode).toBe(429);
+    expect((await browser.send(id, 'answer', identifier)).statusCode).toBe(403);
+    expect(engine.advance).not.toHaveBeenCalled();
+  });
+
+  it('counts the step read per interaction, not per caller address', async () => {
+    const first = await new Browser().start();
+    const second = await new Browser().start();
+    const read = (id: string) =>
+      app.inject({ method: 'GET', url: `${INTERACTION_API_PREFIX}/${id}` });
+    for (let n = 0; n < 60; n += 1) expect((await read(first)).statusCode).toBe(200);
+    expect((await read(first)).statusCode).toBe(429);
+    expect((await read(second)).statusCode).toBe(200);
   });
 });
 
@@ -661,6 +785,21 @@ describe('no CORS (#616)', () => {
 });
 
 describe('the parts (#616)', () => {
+  it('tells an answer that carries a credential, as JSON or as a form post', () => {
+    for (const name of ['password', 'otp', 'recovery_code', 'webauthn_response', 'user_code']) {
+      expect(carriesCredential({ type: 'x', csrf: 'y', [name]: 'z' }), name).toBe(true);
+      expect(carriesCredential(parseAnswerForm(`type=x&${name}=z`)), name).toBe(true);
+    }
+    expect(carriesCredential({ type: 'x', csrf: 'y', login_hint: 'alice@example.com' })).toBe(
+      false
+    );
+    expect(carriesCredential(parseAnswerForm('type=x&decision=allow'))).toBe(false);
+    for (const body of [undefined, null, 'password', 42])
+      expect(carriesCredential(body)).toBe(false);
+    // An inherited member is no member of the body.
+    expect(carriesCredential(Object.create({ password: 'z' }))).toBe(false);
+  });
+
   it('reads a form post as a null-prototype object of strings', () => {
     const fields = parseAnswerForm('a=1&b=two+words&c=%C3%A9');
     expect(Object.getPrototypeOf(fields)).toBeNull();

@@ -37,6 +37,7 @@ import {
   refuseForbidden,
 } from '../helpers/interaction';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
+import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
 import {
   interactionCancelRedirect,
   interactionFinishRedirect,
@@ -214,14 +215,46 @@ function stepRead(view: InteractionView) {
   };
 }
 
-/** The body as the module's parsers left it, with how it came; `{}` when none came. */
+/**
+ * The body as the module's parsers left it, with how it came.
+ *
+ * @throws {UnsupportedMediaTypeError} when no parser ran: Fastify runs the
+ *   handler without one only for a request with no `Content-Type` and no body
+ */
 function answerBodyOf(request: FastifyRequest): {
   readonly fields: unknown;
   readonly parsed: ParsedBody;
 } {
-  const parsed = parsedBodies.get(request) ?? { encoding: 'json', bytes: 0 };
+  const parsed = parsedBodies.get(request);
+  if (parsed === undefined)
+    throw new UnsupportedMediaTypeError('An answer is JSON or a form post.');
   return { fields: request.body ?? {}, parsed };
 }
+
+/**
+ * The answer members that carry a credential: a password, a one-time code of
+ * any step, a recovery code, a passkey response (ADR-017 Decision 7's
+ * credential rounds), and a device's user code, which can be guessed as well.
+ */
+const CREDENTIAL_MEMBERS: readonly string[] = [
+  'password',
+  'otp',
+  'recovery_code',
+  'webauthn_response',
+  'user_code',
+];
+
+/**
+ * Whether a parsed answer body carries a credential: a member of
+ * {@link CREDENTIAL_MEMBERS} at its top level, whatever step it names.
+ */
+export function carriesCredential(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  return CREDENTIAL_MEMBERS.some((name) => Object.hasOwn(body, name));
+}
+
+/** The suffix of an answer's rate-limit key when it carries a credential. */
+const CREDENTIAL_BUCKET = ':credential';
 
 /** A member of a body read as an object; `undefined` for any other body. */
 function memberOf(body: unknown, name: string): unknown {
@@ -336,17 +369,19 @@ async function decideAnswer(
     throw error;
   }
   const realmId = requestRealm(request).id;
-  const clientId = state.request.client_id;
+  // The engine counts by the client id as it is; an event carries it only
+  // when the envelope's bound allows (a CIMD URL can be longer).
+  const eventClientId = eventClientIdOf(state);
   const context = (receivedAt: number): RoundContext => ({
     realm: { id: realmId },
-    client: { id: clientId },
+    client: { id: state.request.client_id },
     receivedAt,
     ...ladderEndUserIp(request),
     audit: async (record) => {
       const event = signInAuditEvent(record);
       await emitUserEvent(request, event.type, event.data, {
         realmId,
-        clientId,
+        clientId: eventClientId,
         userId: event.userId,
         actor: 'user',
       });
@@ -464,22 +499,45 @@ export default async function (fastify: FastifyInstance) {
     return payload;
   });
 
-  const readRateLimit = {
-    // The ceremony app's pages read once per step: the authorization
-    // endpoint's budget, with its environment-aware cap (ADR-008 §5).
-    max: (request: FastifyRequest) =>
-      resolveRealmRateLimitMax(request.realm, {
-        lenientMax: env.AUTHORIZE_RATE_LIMIT_LENIENT,
-        strictMax: env.AUTHORIZE_RATE_LIMIT,
-      }),
+  // The authorization endpoint's budget, with its environment-aware cap
+  // (ADR-008 §5): a page reads once per step, and answers a step that
+  // carries no credential once.
+  const authorizeMax = (request: FastifyRequest) =>
+    resolveRealmRateLimitMax(request.realm, {
+      lenientMax: env.AUTHORIZE_RATE_LIMIT_LENIENT,
+      strictMax: env.AUTHORIZE_RATE_LIMIT,
+    });
+  const stepReadRateLimit = {
+    max: authorizeMax,
+    timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
+    // The ceremony app's server reads the step for every browser (ADR-019
+    // Decision 6), so the caller's address would put every person signing in
+    // behind one bucket: the read counts per interaction, by the id's hash,
+    // as the record is kept. A junk id, which never reaches Redis, counts
+    // per address.
+    keyGenerator: (request: FastifyRequest) => {
+      const id = interactionIdOf(request);
+      if (!isInteractionId(id)) return realmRateLimitKey(request);
+      return `${request.realm?.id ?? ''}:interaction:${interactionIdHash(id)}`;
+    },
+  };
+  const personalReadRateLimit = {
+    max: authorizeMax,
     timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
     keyGenerator: realmRateLimitKey,
   };
-  // An answer can carry a credential: the sign-in form's budget, per address.
+  // An answer per address, in two buckets read once the body is parsed: one
+  // that carries a credential spends the sign-in form's budget, as one
+  // `POST /ui/login` does, and any other answer, such as the identifier
+  // before a password, the authorization endpoint's.
   const answerRateLimit = {
-    max: env.LOGIN_RATE_LIMIT,
-    timeWindow: env.LOGIN_RATE_WINDOW * 1000,
-    keyGenerator: realmRateLimitKey,
+    hook: 'preHandler' as const,
+    keyGenerator: (request: FastifyRequest) =>
+      `${realmRateLimitKey(request)}${carriesCredential(request.body) ? CREDENTIAL_BUCKET : ':step'}`,
+    max: (request: FastifyRequest, key: string) =>
+      key.endsWith(CREDENTIAL_BUCKET) ? env.LOGIN_RATE_LIMIT : authorizeMax(request),
+    timeWindow: (_request: FastifyRequest, key: string) =>
+      (key.endsWith(CREDENTIAL_BUCKET) ? env.LOGIN_RATE_WINDOW : env.AUTHORIZE_RATE_WINDOW) * 1000,
   };
   const contract =
     'The Interaction API v1-rc.0 (ADR-019 Decision 6); its contract, with every step’s schema, is the document at /interaction/v1-rc.0/openapi.json.';
@@ -493,7 +551,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [410, 429],
       },
-      config: { surface: 'browser', rateLimit: readRateLimit },
+      config: { surface: 'browser', rateLimit: stepReadRateLimit },
     },
     async (request, reply) => {
       const view = await readInteractionStep(request, interactionIdOf(request));
@@ -510,7 +568,7 @@ export default async function (fastify: FastifyInstance) {
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [403, 410, 429],
       },
-      config: { surface: 'browser', rateLimit: readRateLimit },
+      config: { surface: 'browser', rateLimit: personalReadRateLimit },
     },
     async (request, reply) => {
       await requireRealmOrigin(request, 'unless_absent');
@@ -564,7 +622,7 @@ export default async function (fastify: FastifyInstance) {
               request,
               'urn:qauth:event:user.signed_in:v1-rc.0',
               { method: 'password' },
-              { realmId: realm.id, userId, clientId: result.request.client_id, actor: 'user' }
+              { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
           }
           return respond(request, reply, parsed.encoding, {
@@ -602,7 +660,12 @@ export default async function (fastify: FastifyInstance) {
       const result = await cancelInteraction(request, reply, interactionIdOf(request), {
         csrf: memberOf(fields, 'csrf'),
       });
-      if (result.kind === 'stale') return respondStale(request, reply, parsed.encoding);
+      // Another answer holds the turn: the page goes back to the step as it
+      // now is, where the person can cancel again. A JSON cancel gets that
+      // page as its redirect, the one result the contract gives a cancel.
+      if (result.kind === 'stale') {
+        return respond(request, reply, parsed.encoding, { location: ceremonyPageUrl(request) });
+      }
       return respond(request, reply, parsed.encoding, {
         location: interactionCancelRedirect(requestRealm(request), result.request),
       });
