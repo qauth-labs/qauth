@@ -17,6 +17,7 @@ import { type AdminOperation, operationSchemaExtensions } from '../../helpers/ad
 import { InvalidCursorError } from '../../helpers/api-request-errors';
 import { authMethodPluginSecretCipher } from '../../helpers/auth-method-plugins';
 import {
+  ADMIN_SECURITY_SCHEME,
   type AdminChange,
   adminTransaction,
   recordAdminChange,
@@ -568,7 +569,8 @@ export const pluginRoutes: FastifyPluginAsync = async (fastify) => {
   const configParams = installedPluginParams(fastify.authMethodPlugins.installed);
   const common = {
     'x-qauth-stability': 'experimental' as const,
-    security: [{ bearerAuth: [] }],
+    // A DPoP-bound admin token (#520).
+    security: [{ [ADMIN_SECURITY_SCHEME]: [] }],
   };
 
   typed.get(

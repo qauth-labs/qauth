@@ -16,6 +16,13 @@
  *   give a permission. Otherwise the request is refused, `invalid_target`
  *   (RFC 8707 §2), as for an audience the client does not list.
  *
+ * - An admin token is always bound to a DPoP key (#520, ADR-019 Decision 7).
+ *   A request that carries no valid DPoP proof gets no admin scope, and is
+ *   told so (`proofMissing`) when it would otherwise get one, or the admin
+ *   audience: the token route then refuses it, or withholds the scopes. A
+ *   request whose account holds no grant is answered as before, so the
+ *   answer to it does not depend on the proof.
+ *
  * Grants are read when the token is issued, so a refresh after a revocation
  * no longer carries what the grant gave. A request decided for no account
  * (`userId: null`) never gets either: a `client_credentials` token, which
@@ -52,6 +59,12 @@ export interface AdminIssuanceRequest {
   readonly scopes: readonly string[];
   /** The `aud` the token would carry. */
   readonly aud: string | readonly string[];
+  /**
+   * Whether the request carried a valid DPoP proof, so the access token is
+   * bound to its key (`cnf.jkt`, RFC 9449 §6.1). Without one, no admin scope
+   * is issued (#520).
+   */
+  readonly dpopBound: boolean;
 }
 
 /** The outcome of {@link adminIssuance}. */
@@ -62,6 +75,13 @@ export interface AdminIssuance {
   readonly withheld: string[];
   /** Whether `aud` names the admin audience for an account that may not have it. */
   readonly audienceRefused: boolean;
+  /**
+   * Whether the request would get an admin scope, or the admin audience, its
+   * account's grants allow, but carries no DPoP proof (#520): an admin token
+   * is bound to a key, so `scopes` holds none of them, and the audience must
+   * be refused.
+   */
+  readonly proofMissing: boolean;
 }
 
 /**
@@ -106,20 +126,33 @@ export async function adminIssuance(
   const reserved = request.scopes.filter((scope) => isReservedQauthScope(scope));
   const namesAdminAudience = [request.aud].flat().includes(API_FAMILY_AUDIENCES.admin);
   if (reserved.length === 0 && !namesAdminAudience) {
-    return { scopes: [...request.scopes], withheld: [], audienceRefused: false };
+    return {
+      scopes: [...request.scopes],
+      withheld: [],
+      audienceRefused: false,
+      proofMissing: false,
+    };
   }
 
   const held = await heldPermissionClasses(fastify, request.realmId, request.userId, registry);
   const clientListsAdmin =
     unlistedReservedAudiences(request.client, API_FAMILY_AUDIENCES.admin).length === 0;
-  const issuable = (scope: string): boolean => {
+  const allowedByGrants = (scope: string): boolean => {
     if (!isReservedQauthScope(scope)) return true;
     const permissionClass = permissionClassOfScope(scope);
     return clientListsAdmin && permissionClass !== undefined && held.has(permissionClass);
   };
+  const audienceRefused = namesAdminAudience && held.size === 0;
+  // An admin scope the grants allow still needs a key to bind the token to.
+  const unbound = (scope: string): boolean =>
+    !request.dpopBound && isReservedQauthScope(scope) && allowedByGrants(scope);
+  const issuable = (scope: string): boolean => allowedByGrants(scope) && !unbound(scope);
   return {
     scopes: request.scopes.filter(issuable),
     withheld: request.scopes.filter((scope) => !issuable(scope)),
-    audienceRefused: namesAdminAudience && held.size === 0,
+    audienceRefused,
+    proofMissing:
+      !request.dpopBound &&
+      ((namesAdminAudience && !audienceRefused) || request.scopes.some(unbound)),
   };
 }

@@ -16,6 +16,7 @@ import {
   UnauthorizedClientError,
   UnsupportedGrantTypeError,
 } from '@qauth-labs/shared-errors';
+import { isReservedQauthScope } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
@@ -56,7 +57,11 @@ import {
   validateIdJagAssertion,
 } from '../../helpers/id-jag';
 import { resolveProfileClaimsForScopes } from '../../helpers/profile-claims';
-import { type TokenLifetimes, tokenLifetimesOf } from '../../helpers/realm-policy-readers';
+import {
+  ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS,
+  type TokenLifetimes,
+  tokenLifetimesOf,
+} from '../../helpers/realm-policy-readers';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { realmIssuer, tokenRealm } from '../../helpers/realm-url';
 import {
@@ -552,13 +557,33 @@ function isPublicClient(client: OAuthClientLike): boolean {
 }
 
 /**
- * The key a newly issued refresh token is bound to (RFC 9449 §5): the
- * request's proof key for a PUBLIC client, which nothing else binds; none for
- * a confidential client, whose refresh tokens client authentication already
- * binds, so it may rotate its DPoP key without losing them.
+ * Whether an access token with these scopes and audience is an admin token:
+ * one that names the admin API's audience or carries an admin scope.
  */
-function refreshTokenBinding(ctx: HandlerContext<unknown>): string | null {
-  return isPublicClient(ctx.client) ? (ctx.dpopThumbprint ?? null) : null;
+function isAdminToken(issued: {
+  readonly scopes: readonly string[];
+  readonly aud: string | readonly string[];
+}): boolean {
+  return (
+    [issued.aud].flat().includes(API_FAMILY_AUDIENCES.admin) ||
+    issued.scopes.some((scope) => isReservedQauthScope(scope))
+  );
+}
+
+/**
+ * The key a newly issued refresh token is bound to (RFC 9449 §5): the
+ * request's proof key for a PUBLIC client, which nothing else binds, and for
+ * a refresh token issued beside an admin token (#520, ADR-019 Decision 7),
+ * whatever the client, so that only the key of the admin token refreshes it;
+ * otherwise none for a confidential client, whose refresh tokens client
+ * authentication already binds, so it may rotate its DPoP key without losing
+ * them.
+ */
+function refreshTokenBinding(
+  ctx: HandlerContext<unknown>,
+  issued: { readonly scopes: readonly string[]; readonly aud: string | readonly string[] }
+): string | null {
+  return isPublicClient(ctx.client) || isAdminToken(issued) ? (ctx.dpopThumbprint ?? null) : null;
 }
 
 /**
@@ -622,7 +647,11 @@ function accessTokenLifespanFor(
 ): number {
   const tierSeconds = accessTokenLifespanForPolicy(lifetimes, policy);
   return [aud].flat().includes(API_FAMILY_AUDIENCES.admin)
-    ? Math.min(tierSeconds, lifetimes.adminAccessTokenLifespanSeconds)
+    ? Math.min(
+        tierSeconds,
+        lifetimes.adminAccessTokenLifespanSeconds,
+        ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS
+      )
     : tierSeconds;
 }
 
@@ -820,6 +849,10 @@ async function assertReservedAudiencesListed(
  *   for.
  * - The admin audience is refused, RFC 8707 §2 `invalid_target`, for a token
  *   whose account holds no live admin grant, or that names no account.
+ * - An admin token is bound to the key of the request's DPoP proof (#520).
+ *   Without a proof, an admin scope the grants allow is withheld too, and the
+ *   request is refused, `invalid_dpop_proof`, when it names the admin
+ *   audience or when nothing else it asked for is left.
  *
  * Every grant calls it after {@link assertReservedAudiencesListed}, before it
  * issues anything or spends its grant: a refused code, refresh token or
@@ -830,18 +863,49 @@ async function issuableScopes(
   ctx: HandlerContext<{ grant_type: string }>,
   issuance: { userId: string | null; scopes: readonly string[]; aud: string | readonly string[] },
   /** The user a refusal's event names; the grant's user even when it is decided for none. */
-  eventUserId: string | null = issuance.userId
+  eventUserId: string | null = issuance.userId,
+  /**
+   * Whether the token issued is bound to a DPoP key (#520); by default,
+   * whether the request carried a proof.
+   */
+  dpopBound: boolean = ctx.dpopThumbprint !== undefined
 ): Promise<string[]> {
   const decision = await adminIssuance(ctx.fastify, {
     client: ctx.client,
     realmId: ctx.realmId,
     ...issuance,
+    dpopBound,
   });
   if (decision.audienceRefused) {
     await emitRequestFailed(ctx, 'invalid_target', 'admin_audience_without_grant', eventUserId);
     throw new InvalidTargetError(
       'the admin API audience is issued only to an account that holds an admin grant'
     );
+  }
+  // An admin token is bound to a DPoP key (#520): without a proof, the admin
+  // audience is refused, and so is a request left with nothing but the admin
+  // scopes it may not have; otherwise those scopes are only withheld. The
+  // refusal is `invalid_dpop_proof` where a proof would lift it: on a server
+  // that reads proofs, for a request that carried none. Where none could,
+  // with DPoP off or for a refresh family bound to no key, it names the
+  // audience or the scope.
+  const namesAdmin = [issuance.aud].flat().includes(API_FAMILY_AUDIENCES.admin);
+  if (decision.proofMissing && (namesAdmin || decision.scopes.length === 0)) {
+    if (ctx.fastify.dpop && ctx.dpopThumbprint === undefined) {
+      await emitRequestFailed(ctx, 'invalid_dpop_proof', 'admin_token_without_dpop', eventUserId);
+      throw new InvalidDpopProofError(
+        'a token for the admin API, or with an admin scope, is issued only with a DPoP proof'
+      );
+    }
+    await emitRequestFailed(
+      ctx,
+      namesAdmin ? 'invalid_target' : 'invalid_scope',
+      'admin_token_without_dpop',
+      eventUserId
+    );
+    throw namesAdmin
+      ? new InvalidTargetError('the admin API audience is issued only in a DPoP-bound token')
+      : new InvalidScopeError('admin scopes are issued only in a DPoP-bound token');
   }
   if (decision.scopes.length === 0 && decision.withheld.length > 0) {
     await emitRequestFailed(ctx, 'invalid_scope', 'admin_scope_without_grant', eventUserId);
@@ -1147,8 +1211,9 @@ async function handleAuthorizationCode(
           // refreshes produce access tokens with the same `aud`.
           resource: effectiveResource,
           // RFC 9449 §5 (#480): a public client's refresh token is bound to
-          // the proof key; a confidential client's is not.
-          cnfJkt: refreshTokenBinding(ctx),
+          // the proof key; a confidential client's is not, unless it comes
+          // with an admin token (#520).
+          cnfJkt: refreshTokenBinding(ctx, { scopes: issuedScopes, aud }),
         },
         tx
       );
@@ -1662,10 +1727,34 @@ async function handleRefreshToken(
   // Access-token lifespan under the environment policy (ADR-008 §5, #197).
   const accessTokenExpiresIn = accessTokenLifespanFor(ctx.tokenLifetimes, policy, aud);
   await assertReservedAudiencesListed(ctx, aud, user.id);
+  // An admin token comes only from a family bound to a DPoP key since its
+  // start (#520): a family issued unbound, before admin tokens needed a
+  // proof, never turns into one under whatever key the request proves now.
+  // The admin audience is refused, as a key change is (a new sign-in), and
+  // the admin scopes are withheld. A bound family passed its key check above.
+  const familyBound = storedToken.cnfJkt !== null && storedToken.cnfJkt !== undefined;
+  if (!familyBound && [aud].flat().includes(API_FAMILY_AUDIENCES.admin)) {
+    await emitRequestFailed(ctx, 'invalid_grant', 'admin_refresh_token_unbound', user.id);
+    throw new InvalidGrantError(
+      'a refresh token bound to no DPoP key refreshes no admin token: sign in again'
+    );
+  }
   // Without the admin scopes the account holds no live grant for now (#510).
-  // The rotated refresh token keeps `grantedScopes`, so a grant given again
-  // reaches the next refresh.
-  const issuedScopes = await issuableScopes(ctx, { userId: user.id, scopes: grantedScopes, aud });
+  // A bound family's rotated refresh token keeps `grantedScopes`, so a grant
+  // given again reaches the next refresh.
+  const issuedScopes = await issuableScopes(
+    ctx,
+    { userId: user.id, scopes: grantedScopes, aud },
+    user.id,
+    familyBound
+  );
+  // An unbound family carries no admin scope forward: it never refreshes an
+  // admin token, and a public client's rotated token is bound below to the
+  // key this request proves, so a kept admin scope would be issued from the
+  // next rotation on, against the rule above.
+  const familyScopes = familyBound
+    ? grantedScopes
+    : grantedScopes.filter((scope) => !isReservedQauthScope(scope));
 
   const scopeString = issuedScopes.length > 0 ? issuedScopes.join(' ') : undefined;
 
@@ -1692,14 +1781,16 @@ async function handleRefreshToken(
         familySessionExpiresAt: storedToken.familySessionExpiresAt ?? null,
         previousTokenHash: presentedHash,
         expiresAt: newRefreshTokenExpiresAt,
-        scopes: grantedScopes,
+        scopes: familyScopes,
         // RFC 8707: the rotated refresh token carries the (possibly
         // narrowed) resource binding — NOT the request's — so we never
         // widen the binding across a rotation.
         resource: effectiveResource,
         // RFC 9449 §5 (#480): every rotation keeps the family's DPoP key; a
-        // public client's unbound token is bound to the key it proves now.
-        cnfJkt: storedToken.cnfJkt ?? refreshTokenBinding(ctx),
+        // public client's unbound token is bound to the key it proves now,
+        // and so is one that now comes with an admin token (#520). Bound
+        // here, it holds no admin scope (`familyScopes`).
+        cnfJkt: storedToken.cnfJkt ?? refreshTokenBinding(ctx, { scopes: issuedScopes, aud }),
       },
       tx
     );
@@ -2382,6 +2473,9 @@ async function mintIdJagForExchange(args: {
     userId: null,
     scopes: grantedScopes,
     aud: targetAuthorizationServer,
+    // An assertion is never bound to a DPoP key; for no account, nothing
+    // reaches the proof rule anyway.
+    dpopBound: false,
   });
   if (issuance.audienceRefused) {
     await emitFailure('invalid_target', 'admin_audience_without_grant');

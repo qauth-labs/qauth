@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { testRealm } from '../../testing/request-realm';
 import {
+  ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS,
   dynamicRegistrationScopesOf,
   POLICIES_READ_FROM_REALM_ROW,
   tokenLifetimesOf,
@@ -145,6 +146,19 @@ describe('tokenLifetimesOf (#527)', () => {
       refreshTokenLifespanSeconds: 604_800,
       adminAccessTokenLifespanSeconds: 600,
     });
+  });
+
+  it('never lets an admin token live longer than 900 seconds, whatever the policy holds (#520)', () => {
+    for (const policiesVersion of [0, 1]) {
+      const lifetimes = tokenLifetimesOf(
+        sources({ ...STORED, adminAccessTokenLifespanSeconds: 86_400 }),
+        testRealm({ id: 'r', policiesVersion })
+      );
+      expect(lifetimes.adminAccessTokenLifespanSeconds).toBe(
+        ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS
+      );
+    }
+    expect(ADMIN_ACCESS_TOKEN_MAX_LIFESPAN_SECONDS).toBe(900);
   });
 
   it('hands out a frozen object', () => {

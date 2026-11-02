@@ -505,8 +505,13 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       policy: AccessTokenCheckPolicy = {}
     ): Promise<JWTPayload> {
       // `Bearer`, or `DPoP` only when the host app verifies DPoP proofs: without
-      // `verifyDpopProof` a `DPoP` header is no credential, as before DPoP.
-      const credential = jwtUtils.extractCredentialFromHeader(request.headers.authorization);
+      // `verifyDpopProof` a `DPoP` header is no credential, as before DPoP. A
+      // route that checks its own proofs (`requireDpop`) reads it either way.
+      const routeProof = policy.requireDpop;
+      const credential =
+        routeProof === undefined
+          ? jwtUtils.extractCredentialFromHeader(request.headers.authorization)
+          : extractAccessTokenCredential(request.headers.authorization, { allowDpop: true });
       if (!credential) {
         // No credential at all, an empty token or a scheme this server does
         // not take: the request "lacks any authentication information" (RFC
@@ -541,7 +546,18 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         throw new JWTInvalidError('Token has been revoked');
       }
 
-      if (scheme === 'DPoP' && options.verifyDpopProof !== undefined) {
+      if (routeProof !== undefined) {
+        // A route that takes DPoP-bound tokens only (#520): never a Bearer
+        // token, never a token bound to no key, and the proof is checked
+        // against the route's own URL.
+        if (scheme !== 'DPoP') {
+          throw new JWTInvalidError('This resource takes a DPoP-bound access token only');
+        }
+        if (payload.cnf === undefined) {
+          throw new JWTInvalidError('The access token is not bound to a DPoP key');
+        }
+        await routeProof(request, token, payload);
+      } else if (scheme === 'DPoP' && options.verifyDpopProof !== undefined) {
         // RFC 9449 §7.1: the DPoP scheme carries a DPoP-bound token, checked
         // against the proof's key. A token bound to no key has nothing to
         // check the proof against.

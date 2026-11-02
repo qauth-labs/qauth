@@ -297,12 +297,12 @@ describe('the plugin representation (#600)', () => {
 
 describe('the plugin routes in the admin OpenAPI document (#600)', () => {
   it("pass the API conventions against the server's own registry", async () => {
-    const [{ default: Fastify }, { default: swagger }, zod, { openapiOptions }, pipeline] =
+    const [{ default: Fastify }, { default: swagger }, zod, { adminOpenapiOptions }, pipeline] =
       await Promise.all([
         import('fastify'),
         import('@fastify/swagger'),
         import('fastify-type-provider-zod'),
-        import('../../openapi-options'),
+        import('../openapi-options'),
         import('../pipeline'),
       ]);
     const { checkApiConventions } = await import('../../api-conventions/openapi-conventions');
@@ -314,7 +314,7 @@ describe('the plugin routes in the admin OpenAPI document (#600)', () => {
       app.setValidatorCompiler(zod.validatorCompiler);
       app.setSerializerCompiler(zod.serializerCompiler);
       app.decorate('authMethodPlugins', authMethodPluginRuntime(await installed()));
-      await app.register(swagger, openapiOptions);
+      await app.register(swagger, adminOpenapiOptions);
       const uncounted: AdminRateLimitCheck = async () => ({ isAllowed: true, key: 'uncounted' });
       await app.register(pipeline.adminPipeline, {
         registry: OPERATION_REGISTRY,

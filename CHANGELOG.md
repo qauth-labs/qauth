@@ -1282,17 +1282,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Decisions 7 and 8). A process that holds the `admin` role runs a second HTTP
   server for the admin API, on `ADMIN_API_HOST` and `ADMIN_API_PORT`
   (`127.0.0.1`, port `3002`, by default) once `ADMIN_API_ENABLED=true` turns it
-  on: it is off by default until the first admin operations ([#517]) and
-  DPoP-bound admin tokens ([#520]) ship, and until [#520] a production process
-  refuses an `ADMIN_API_HOST` that is not loopback. It
+  on: it is off by default until the first admin operations ([#517]) ship. It
   binds before the public port and closes with the server. The public listener
   answers 404 for every admin path, but for a CORS preflight, which it answers
   as on any other path, and refuses to boot an admin route. The
   listener grants nothing for a caller's network position: every admin route
   runs behind the same stages, in order: the request id, the admin family's
-  token guard (with the keys of the realm the token's issuer names, the
-  `Bearer` scheme only, and one answer for every refusal), a DPoP stage left
-  empty for [#520], the realm from the path
+  token guard (with the keys of the realm the token's issuer names, and one
+  answer for every refusal), the DPoP proof check ([#520]), the realm from the path
   (`/admin/v1-rc.0/realms/{realmId}/...`, never the host), the authority from
   the caller's grants and scopes, the classification and permission check, an
   approval gate, the handler inside one database transaction, and the audit
@@ -1317,6 +1314,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   have hooks that would run before authorization. The admin OpenAPI document is
   served on the listener only, at `/admin/v1-rc.0/openapi.json`, without a
   token. No admin operation ships yet ([#517] adds the first).
+- **Admin tokens are DPoP-bound and short-lived** ([#520], ADR-019 Decision 7,
+  ADR-014 §3). The admin listener takes an access token only under the `DPoP`
+  scheme, bound to a key (`cnf.jkt`), with a proof (RFC 9449 §7.1) made with
+  that key for the call's method and for the new `ADMIN_API_BASE_URL` followed
+  by the call's path, never a URL built from the request; its `iat` within 60
+  seconds of the server's clock, its `ath` the token's hash, and its `jti`
+  used once (kept in Redis for 181 s, the proofs of the public listener's
+  store). A token under the `Bearer` scheme, a token bound to no key, or a
+  proof under another key is refused with 401 and a `DPoP`
+  `error="invalid_token"` challenge, any other refused proof with
+  `invalid_dpop_proof`; every challenge of the listener is a `DPoP` one. The
+  proof is checked inside the token guard, before the per-subject ceiling, so
+  a stolen token without its key counts against the caller's address, not the
+  admin's. The token endpoint issues the admin audience, or an admin scope,
+  only with a DPoP proof: without one an admin scope the account's grants
+  would give is withheld (RFC 6749 §3.3), and a request for the admin
+  audience, or for nothing but such scopes, is refused with
+  `invalid_dpop_proof` (`invalid_target` or `invalid_scope` on a process with
+  DPoP off, where no proof could help). The answers to an account without a
+  grant are unchanged. The refresh token issued beside an admin token is
+  bound to the proof's key whatever the client, so a confidential client
+  refreshes it only with that key. A token for the admin API never lives
+  longer than 900 s, whatever `tokens.adminAccessTokenLifespanSeconds` says. Where the admin listener runs (`ADMIN_API_ENABLED=true` on a process
+  with the `admin` role), the boot now requires `ADMIN_API_BASE_URL` (the
+  absolute http(s) URL clients address the admin API at) and
+  `DPOP_ENABLED=true`, and the production rule that `ADMIN_API_HOST` be
+  loopback is lifted: the listener may sit behind a load balancer that
+  terminates TLS. In production `ADMIN_API_BASE_URL` must be `https`, unless
+  both it and `ADMIN_API_HOST` name loopback. A refresh token issued bound to
+  no DPoP key never refreshes into an admin token: the admin audience is
+  refused with `invalid_grant` (sign in again) and the admin scopes are
+  withheld and dropped from the rotated refresh token, so a later refresh
+  of that family never issues them either, even once a public client's
+  rotation binds it to a key. The token endpoint's processes need
+  `DPOP_ENABLED=true` too, to
+  issue admin tokens.
+  The admin OpenAPI document names the `dpopAuth` security scheme.
 - **An internal listener with mutual TLS** ([#496], ADR-019 Decision 8). A
   process that holds the `signer` role while the roles are split runs one more
   HTTP server, on `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1`, port
