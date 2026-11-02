@@ -42,7 +42,12 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createRepositoryAccountDirectory } from './account-directory';
-import { createRedisFailureLadder, ladderCounterKey, type LadderRedis } from './failure-ladder';
+import {
+  createRedisFailureLadder,
+  ladderCounterKey,
+  ladderKnownIpsKey,
+  type LadderRedis,
+} from './failure-ladder';
 import { createCookieSecretIdentifierDigest, END_USER_IP_HMAC_LABEL } from './identifier-digest';
 import { createPasswordAttempts } from './password-attempts';
 import { createHardActionArming, createPasswordHardAction } from './password-hard-action';
@@ -339,6 +344,111 @@ describe('the failure ladder over real Redis and Postgres', () => {
     expect(await gate.reserve({ realmId, identifier: 'shared@example.com' })).toMatchObject({
       kind: 'wait',
     });
+  });
+
+  it('keeps a counter a day below the free failures and 30 days from its first wait, the same keys and times whether or not an account holds the identifier (#969)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const cache = redis;
+    await seed('held@example.com');
+    const identifiers = ['held@example.com', 'unheld@example.com'] as const;
+    const hmacs = await Promise.all(
+      identifiers.map((identifier) => identifierDigest({ realmId, identifier }))
+    );
+    /** The identifier's ladder keys, by what follows its hash tag, with each one's TTL in ms. */
+    const keysOf = async (hmac: string) => {
+      const prefix = `sign-in-ladder:{${realmId}:${hmac}}:`;
+      const keys = (await cache.keys(`${prefix}*`)).sort();
+      return Promise.all(
+        keys.map(async (key) => ({ key: key.slice(prefix.length), ttl: await cache.pttl(key) }))
+      );
+    };
+    /** Each TTL is at most `ms`, and at most a minute short of it: the call took no longer. */
+    const expectTtls = (kept: { key: string; ttl: number }[], ms: number) => {
+      expect(kept.map(({ key }) => key)).toEqual(['password']);
+      for (const { ttl } of kept) {
+        expect(ttl).toBeLessThanOrEqual(ms);
+        expect(ttl).toBeGreaterThan(ms - 60_000);
+      }
+    };
+
+    // The clock stands still: no wait holds an attempt back below the free failures.
+    for (let i = 0; i < PASSWORD_LADDER_POLICY.freeFailures - 1; i += 1) {
+      for (const identifier of identifiers) {
+        expect(isRefusedCredential(await attempt(identifier, 'wrong'))).toBe(true);
+      }
+    }
+    const runs = await Promise.all(identifiers.map((identifier) => counter(identifier)));
+    for (const run of runs) expect(run).toMatchObject({ n: '4' });
+    for (const hmac of hmacs)
+      expectTtls(await keysOf(hmac), PASSWORD_LADDER_POLICY.freeRetentionMs);
+
+    // The failure that sets the first wait keeps the run, now for 30 days.
+    for (const identifier of identifiers) {
+      expect(isRefusedCredential(await attempt(identifier, 'wrong'))).toBe(true);
+    }
+    for (const [i, identifier] of identifiers.entries()) {
+      expect(await counter(identifier)).toMatchObject({ n: '5', run: runs[i]?.run });
+    }
+    for (const hmac of hmacs) expectTtls(await keysOf(hmac), PASSWORD_LADDER_POLICY.retentionMs);
+  });
+
+  it('lets Redis drop a counter that never reached a wait once its short retention passes, and keeps one that did (#969)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const cache = redis;
+    // Times Redis can let pass in a test: 4 free failures, a 50 ms longest wait,
+    // a 300 ms free retention and the 30-day retention.
+    const ladder = createRedisFailureLadder(cache, {
+      ipDigest,
+      now: () => now,
+      policies: {
+        password: {
+          ...PASSWORD_LADDER_POLICY,
+          firstWaitMs: 1,
+          maxWaitMs: 50,
+          freeRetentionMs: 300,
+        },
+      },
+    });
+    const keyOf = async (identifier: string) =>
+      ladderCounterKey(realmId, await identifierDigest({ realmId, identifier }), 'password');
+    const fail = async (identifier: string, times: number) => {
+      const identifierHmac = await identifierDigest({ realmId, identifier });
+      for (let i = 0; i < times; i += 1) {
+        const verdict = await ladder.reserve({ realmId, identifierHmac, factor: 'password' });
+        if (verdict.kind !== 'reserved') throw new Error('expected a reservation');
+        await verdict.settle('failure');
+        now += 50;
+      }
+    };
+    const free = await keyOf('free-only@example.com');
+    const waited = await keyOf('waited@example.com');
+    await fail('free-only@example.com', PASSWORD_LADDER_POLICY.freeFailures - 1);
+    await fail('waited@example.com', PASSWORD_LADDER_POLICY.freeFailures);
+    expect(await cache.pttl(free)).toBeLessThanOrEqual(300);
+    expect(await cache.pttl(waited)).toBeGreaterThan(PASSWORD_LADDER_POLICY.retentionMs - 60_000);
+
+    await vi.waitFor(async () => expect(await cache.exists(free)).toBe(0), {
+      timeout: 5_000,
+      interval: 50,
+    });
+    expect(await cache.hgetall(waited)).toMatchObject({ n: '5' });
+  });
+
+  it('keeps an account’s known IPs 30 days from its last successful sign-in, as before (#969)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    await seed('known-retention@example.com');
+    expect(
+      isRefusedCredential(await attempt('known-retention@example.com', 'wrong', KNOWN_IP))
+    ).toBe(true);
+    expect(await attempt('known-retention@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    const hmac = await identifierDigest({ realmId, identifier: 'known-retention@example.com' });
+    const ttl = await redis.pttl(ladderKnownIpsKey(realmId, hmac));
+    expect(ttl).toBeLessThanOrEqual(PASSWORD_LADDER_POLICY.knownIpMs);
+    expect(ttl).toBeGreaterThan(PASSWORD_LADDER_POLICY.knownIpMs - 60_000);
+    // The success ended the run: no counter is kept.
+    expect(await counter('known-retention@example.com')).toEqual({});
   });
 
   it('keeps no address in any Redis key or value', async (testCtx) => {
