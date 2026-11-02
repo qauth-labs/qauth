@@ -266,19 +266,22 @@ rather than in Redis, so the probes answer while Redis does not.
   Point a readiness probe, a load balancer's health check or a Compose
   `healthcheck` at it. The Compose file's `auth-server` service does.
 
-| Check      | Runs on               | Passes when                                                                                                                                                         |
-| ---------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `database` | every role            | Postgres answers `SELECT 1`.                                                                                                                                        |
-| `redis`    | `web`, `api`, `admin` | Redis answers `PING`. It still holds the rate limits and the single-use stores those roles use.                                                                     |
-| `kek`      | `signer`              | The KEK provider reports itself usable and unwraps one stored key for each KEK reference in use. A pass stands for 30 seconds, as an unwrap may be a call to a KMS. |
-| `outbox`   | `delivery`            | The event delivery queue can be read.                                                                                                                               |
+| Check      | Runs on               | Passes when                                                                                                                                                                             |
+| ---------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `database` | every role            | Postgres answers `SELECT 1`.                                                                                                                                                            |
+| `redis`    | `web`, `api`, `admin` | Redis answers `PING`. It still holds the rate limits and the single-use stores those roles use.                                                                                         |
+| `kek`      | `signer`              | The KEK provider reports itself usable and unwraps one stored key for each KEK reference in use. A pass stands for 30 seconds and a failure for 5, as an unwrap may be a call to a KMS. |
+| `outbox`   | `delivery`            | The event delivery queue can be read.                                                                                                                                                   |
 
 A failed check gives a `reason`: `error` when the dependency refused or failed,
 `timeout` when it gave no answer within 2 seconds. The error itself goes to the
 log, never to the answer, which any caller can read: the warning
 `A readiness check fails: GET /ready answers 503 until it passes` once when a
 check starts failing, with the check's name and the error, and an info line
-when it passes again. Requests that arrive while a check runs share its run.
+when it passes again. Requests that arrive while a check runs share its run,
+and a request that stops waiting at the timeout leaves the run going: a check
+runs again only once its last run settled, so a stalled dependency holds one
+run of each check, whoever calls `/ready`.
 
 Later releases add checks of their own: the configuration digest on every
 role, and the signer service on a process that reaches a remote signer.
