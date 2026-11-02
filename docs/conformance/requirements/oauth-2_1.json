@@ -1,6 +1,6 @@
 {
   "specId": "oauth-2_1",
-  "note": "Hand-authored: the authorization-code replay rows (#627, ADR-017 Decision 10) and the authorization endpoint's no-CORS row (#930). `quote` is verbatim from draft-ietf-oauth-v2-1-17 (2026-10-31, the revision docs/spec-pin-log.md pins; the three replay passages read the same in -16, and the §3.1 sentence is new in -17) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The replay obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
+  "note": "Hand-authored: the authorization-code replay rows (#627, ADR-017 Decision 10) and the authorization endpoint's no-CORS row (#930). `quote` is verbatim from draft-ietf-oauth-v2-1-17 (2026-10-31, the revision docs/spec-pin-log.md pins; the three replay passages read the same in -16; the §3.1 sentence has stood since -09, and -17 only reworded it) with line wrapping removed and nothing else changed. Unsealed: OAuth 2.1 is broad, and these are its first rows. The replay obligation is RFC 6749 §4.1.2's and is restated by RFC 9700 §4.2.4; those specs carry their own rows, proven by the same tests.",
   "requirements": [
     {
       "id": "oauth-2_1-3_1-no-cors-at-authorization-endpoint",

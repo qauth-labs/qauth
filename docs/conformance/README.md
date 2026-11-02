@@ -272,8 +272,9 @@ reads.
 
 ## The authorization endpoint's no-CORS row (#930)
 
-One OAuth 2.1 row joined increment 4's: §3.1, new in `-17`, says CORS MUST NOT
-be supported at the authorization endpoint. QAuth leaves every `browser` route
+One OAuth 2.1 row joined increment 4's: §3.1 says CORS MUST NOT be supported
+at the authorization endpoint, a rule that has stood since `-09` and that `-17`
+reworded. QAuth leaves every `browser` route
 out of CORS, so the row's `applies` names them all. The assembled app's
 route-surface suite (`apps/auth-server/src/app/route-surfaces.test.ts`) proves
 it: with `CORS_ORIGIN` set, a preflight for `/oauth/authorize` gets no answer
