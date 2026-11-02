@@ -2,6 +2,7 @@
 /// <reference path="./zxcvbn-matching.d.ts" />
 import { z } from 'zod';
 import zxcvbn from 'zxcvbn';
+import frequencyLists from 'zxcvbn/lib/frequency_lists';
 import matching from 'zxcvbn/lib/matching';
 
 /**
@@ -59,22 +60,39 @@ export interface PasswordValidator {
    * Validate password strength using zxcvbn
    *
    * @param password - Password to validate
+   * @param userInputs - Words zxcvbn treats as known to an attacker (its
+   *   `user_inputs`): the context words of {@link passwordContextWords}.
    * @returns Password strength validation result
    */
-  validatePasswordStrength(password: string): PasswordStrengthResult;
+  validatePasswordStrength(
+    password: string,
+    userInputs?: readonly string[]
+  ): PasswordStrengthResult;
 }
 
 /**
- * Password validators by minimum score (#528): one per zxcvbn score from 0 to
- * 4, for a server whose realms each set their own lowest score
- * (`password.minScore`).
+ * The password policy's validators (#528, #634): one per policy, for a server
+ * whose realms each set their own minimum length and lowest score
+ * (`password.minLength`, `password.minScore`).
  */
 export interface PasswordValidators {
   /**
-   * The validator that accepts a password scoring at least `minScore`. Built
-   * on first use and cached by score, so every realm with one score shares one
-   * validator, and a realm's change of score needs no restart.
+   * The validator of `policy`. Built on first use and cached by policy, so
+   * every realm with one policy shares one validator, and a realm's change of
+   * policy needs no restart.
    *
+   * @param policy - The realm's minimum length and lowest score.
+   * @throws {z.ZodError} If `policy` is not one {@link passwordPolicySchema}
+   *   accepts; nothing is cached then.
+   */
+  forPolicy(policy: PasswordPolicy): PasswordPolicyValidator;
+
+  /**
+   * The validator that accepts a password scoring at least `minScore`. Built
+   * on first use and cached by score.
+   *
+   * @deprecated Use {@link PasswordValidators.forPolicy}, which also checks
+   *   the length and the blocklist.
    * @param minScore - The lowest zxcvbn score a password may have, 0 to 4.
    * @throws {z.ZodError} If `minScore` is not a whole number from 0 to 4;
    *   nothing is cached then.
@@ -198,7 +216,10 @@ export function createPasswordValidator(
   const finalConfig = { ...DEFAULT_PASSWORD_VALIDATION_CONFIG, ...config };
   const validatedConfig = passwordValidationConfigSchema.parse(finalConfig);
   return {
-    validatePasswordStrength(password: string): PasswordStrengthResult {
+    validatePasswordStrength(
+      password: string,
+      userInputs?: readonly string[]
+    ): PasswordStrengthResult {
       // Empty password check
       if (!password || password.length === 0) {
         return {
@@ -217,8 +238,13 @@ export function createPasswordValidator(
       }
 
       // Use zxcvbn to analyze password strength, on a bounded prefix
-      // (see ZXCVBN_MAX_INPUT_LENGTH).
-      const analysis = zxcvbn(password.slice(0, ZXCVBN_MAX_INPUT_LENGTH));
+      // (see ZXCVBN_MAX_INPUT_LENGTH), with the context words as its user
+      // inputs when there are any.
+      const scored = password.slice(0, ZXCVBN_MAX_INPUT_LENGTH);
+      const analysis =
+        userInputs !== undefined && userInputs.length > 0
+          ? zxcvbn(scored, [...userInputs])
+          : zxcvbn(scored);
 
       // Extract feedback messages
       const feedback: string[] = [];
@@ -245,20 +271,310 @@ export function createPasswordValidator(
 }
 
 /**
+ * NIST SP 800-63B-4 §3.1.1.2 "Password Verifiers": a password that may be the
+ * only factor of a sign-in is at least 15 characters long. The default of
+ * `password.minLength` (`PASSWORD_MIN_LENGTH`); a lower minimum is a recorded
+ * deviation while any account can sign in with a password alone (ADR-017
+ * Decision 8).
+ */
+export const PASSWORD_SINGLE_FACTOR_MIN_LENGTH = 15;
+
+/**
+ * The lowest minimum length an operator may set: NIST SP 800-63B-4 §3.1.1.2
+ * lets a password used only within multi-factor authentication be shorter
+ * than 15 characters, and never shorter than 8.
+ */
+export const PASSWORD_MIN_LENGTH_FLOOR = 8;
+
+/**
+ * The highest minimum length an operator may set. NIST SP 800-63B-4 asks a
+ * verifier to accept passwords of at least 64 characters; a minimum above that
+ * protects nothing more and only refuses passphrases. Widening the bound later
+ * is an additive change, narrowing it would not be.
+ */
+export const PASSWORD_MIN_LENGTH_CEILING = 64;
+
+/** The default minimum length of a new password, in code points. */
+export const DEFAULT_PASSWORD_MIN_LENGTH = PASSWORD_SINGLE_FACTOR_MIN_LENGTH;
+
+/**
+ * Why a new password was refused (ADR-017 Decision 8): NIST SP 800-63B-4
+ * §3.1.1.2 asks the verifier to say why.
+ *
+ * - `too_long`: more than {@link PASSWORD_MAX_LENGTH} UTF-16 code units, as
+ *   typed. Checked first, alone: nothing else runs on such a password.
+ * - `too_short`: fewer code points than the minimum, after NFC normalisation.
+ * - `blocklisted`: the whole password, ignoring case, is a word of zxcvbn's
+ *   dictionaries or one of the context words. A password that only contains
+ *   one is not blocklisted.
+ * - `too_weak`: zxcvbn scores it below the lowest score.
+ */
+export const PASSWORD_REJECTION_REASONS = [
+  'too_short',
+  'too_long',
+  'blocklisted',
+  'too_weak',
+] as const;
+
+/** One of {@link PASSWORD_REJECTION_REASONS}. */
+export type PasswordRejectionReason = (typeof PASSWORD_REJECTION_REASONS)[number];
+
+/**
+ * The normalisation a new password is hashed after: Unicode NFC. The password
+ * credential records it as its normalisation marker, and a verifier applies it
+ * to the presented password only when the credential carries the marker.
+ */
+export const PASSWORD_NORMALIZATION_NFC = 'nfc';
+
+/** The normalisation marker a password credential may carry. */
+export type PasswordNormalization = typeof PASSWORD_NORMALIZATION_NFC;
+
+/**
+ * A password in Unicode NFC, so two spellings of the same text (a precomposed
+ * `é` and an `e` followed by a combining accent, for example) are one password.
+ *
+ * NFC can lengthen a string: a few characters decompose and do not recompose
+ * (U+0958 becomes two code units). Unicode bounds the growth at three times,
+ * so a password within {@link PASSWORD_MAX_LENGTH} stays within 768 code units
+ * after it.
+ */
+export function normalizePassword(password: string): string {
+  return password.normalize('NFC');
+}
+
+/**
+ * The presented password a credential is verified with: in NFC when the
+ * credential records the NFC marker, as typed when it records none (a password
+ * set before the marker existed was hashed as typed).
+ */
+export function passwordForVerification(
+  presented: string,
+  normalization: PasswordNormalization | undefined
+): string {
+  return normalization === PASSWORD_NORMALIZATION_NFC ? normalizePassword(presented) : presented;
+}
+
+/**
+ * The password policy of a realm (ADR-017 Decision 8): its minimum length, in
+ * code points of the NFC form, and its lowest zxcvbn score. There are no
+ * composition rules and no periodic change.
+ */
+export interface PasswordPolicy {
+  /** `password.minLength`: 8 to 64, default 15. */
+  readonly minLength: number;
+  /** `password.minScore`: 0 to 4, default 2. */
+  readonly minScore: number;
+}
+
+/** What a {@link PasswordPolicy} may hold. */
+export const passwordPolicySchema = z.object({
+  minLength: z.int().min(PASSWORD_MIN_LENGTH_FLOOR).max(PASSWORD_MIN_LENGTH_CEILING),
+  minScore: z.int().min(0).max(4),
+});
+
+/** The policy of a realm that sets nothing: 15 code points, score 2. */
+export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = Object.freeze({
+  minLength: DEFAULT_PASSWORD_MIN_LENGTH,
+  minScore: DEFAULT_PASSWORD_VALIDATION_CONFIG.minScore,
+});
+
+/**
+ * What the password is chosen in, for the blocklist's context words (NIST SP
+ * 800-63B-4 §3.1.1.2: "context-specific words, such as the name of the
+ * service, the username, and derivatives thereof").
+ */
+export interface PasswordContext {
+  /** The account's address: the address itself, its local part and its domain are context words. */
+  readonly email?: string;
+  /** The service's name, such as the realm's mail sender name. */
+  readonly serviceName?: string;
+  /** The realm's name. */
+  readonly realmName?: string;
+  /** The names of the clients the password is chosen through. */
+  readonly clientNames?: readonly string[];
+}
+
+/**
+ * The context words of `context`, in lower case and NFC, each once: the
+ * address, its local part and its domain; the service, realm and client
+ * names. Empty ones are left out.
+ */
+export function passwordContextWords(context: PasswordContext): string[] {
+  const words = new Set<string>();
+  const add = (word: string | undefined) => {
+    const normalized = word?.normalize('NFC').trim().toLowerCase();
+    if (normalized) words.add(normalized);
+  };
+  if (context.email !== undefined) {
+    add(context.email);
+    const at = context.email.lastIndexOf('@');
+    if (at >= 0) {
+      add(context.email.slice(0, at));
+      add(context.email.slice(at + 1));
+    }
+  }
+  add(context.serviceName);
+  add(context.realmName);
+  for (const name of context.clientNames ?? []) add(name);
+  return [...words];
+}
+
+/** Every word of zxcvbn's frequency lists, built on first use and kept. */
+let dictionaryWords: ReadonlySet<string> | undefined;
+
+/**
+ * Whether the whole of `password` (already NFC), ignoring case, is a word of
+ * zxcvbn's dictionaries or one of `contextWords`. Never a substring match:
+ * NIST SP 800-63B-4 §3.1.1.2 says "The entire password SHALL be subject to
+ * comparison, not substrings or words that might be contained therein".
+ */
+function isBlocklisted(password: string, contextWords: readonly string[]): boolean {
+  dictionaryWords ??= new Set(Object.values(frequencyLists).flat());
+  const candidate = password.toLowerCase();
+  return dictionaryWords.has(candidate) || contextWords.includes(candidate);
+}
+
+/** The number of Unicode code points of `value`: what a minimum length counts. */
+function codePointLength(value: string): number {
+  return [...value].length;
+}
+
+/** The message `errors` carries for each reason a password was refused. */
+function reasonMessage(reason: PasswordRejectionReason, policy: PasswordPolicy): string {
+  switch (reason) {
+    case 'too_long':
+      return `Password must be at most ${PASSWORD_MAX_LENGTH} characters`;
+    case 'too_short':
+      return `Password must be at least ${policy.minLength} characters`;
+    case 'blocklisted':
+      return 'Password is a commonly used word or password, or names this service or account';
+    case 'too_weak':
+      return 'Password is too easy to guess';
+  }
+}
+
+/** The outcome of checking a new password against a {@link PasswordPolicy}. */
+export type PasswordPolicyCheck =
+  | {
+      readonly valid: true;
+      /** The password in NFC: what is hashed and stored. */
+      readonly password: string;
+      /** The marker the credential records, so a verifier normalises too. */
+      readonly normalization: PasswordNormalization;
+      /** The zxcvbn score, 0 to 4. */
+      readonly score: number;
+    }
+  | {
+      readonly valid: false;
+      /** Every reason the password was refused, in the order checked. */
+      readonly reasons: readonly PasswordRejectionReason[];
+      /** One message per reason, then zxcvbn's own feedback when it is too weak. */
+      readonly feedback: readonly string[];
+    };
+
+/** A validator of one {@link PasswordPolicy}. */
+export interface PasswordPolicyValidator {
+  /** The policy it checks. */
+  readonly policy: PasswordPolicy;
+  /**
+   * Check a new password (ADR-017 Decision 8), in this order:
+   *
+   * 1. its length as typed: more than {@link PASSWORD_MAX_LENGTH} UTF-16 code
+   *    units is `too_long`, and nothing else runs, neither normalisation nor
+   *    scoring nor hashing;
+   * 2. NFC normalisation ({@link normalizePassword});
+   * 3. fewer code points than `minLength` is `too_short`;
+   * 4. the whole password, ignoring case, equal to a word of zxcvbn's
+   *    dictionaries or a context word is `blocklisted`;
+   * 5. a zxcvbn score, with the context words as its user inputs, below
+   *    `minScore` is `too_weak`.
+   *
+   * Every reason found is returned. An accepted password comes back in NFC,
+   * which is what the caller hashes, with the marker to store beside it.
+   */
+  check(password: string, context?: PasswordContext): PasswordPolicyCheck;
+}
+
+/**
+ * Create the validator of `policy`, the one password policy for every new
+ * password (ADR-017 Decision 8): wherever QAuth stores a password a person
+ * chose, it is checked here and hashed in the form this returns.
+ *
+ * @param policy - Missing values take {@link DEFAULT_PASSWORD_POLICY}'s.
+ * @throws {z.ZodError} If the policy is out of bounds: a minimum length
+ *   outside 8 to 64, or a score outside 0 to 4.
+ */
+export function createPasswordPolicyValidator(
+  policy?: Partial<PasswordPolicy>
+): PasswordPolicyValidator {
+  const checked = Object.freeze(
+    passwordPolicySchema.parse({ ...DEFAULT_PASSWORD_POLICY, ...policy })
+  );
+  const strength = createPasswordValidator({ minScore: checked.minScore });
+  return Object.freeze({
+    policy: checked,
+    check(password: string, context: PasswordContext = {}): PasswordPolicyCheck {
+      if (password.length > PASSWORD_MAX_LENGTH) {
+        return {
+          valid: false,
+          reasons: ['too_long'],
+          feedback: [reasonMessage('too_long', checked)],
+        };
+      }
+      const normalized = normalizePassword(password);
+      const contextWords = passwordContextWords(context);
+      const reasons: PasswordRejectionReason[] = [];
+      if (codePointLength(normalized) < checked.minLength) reasons.push('too_short');
+      if (isBlocklisted(normalized, contextWords)) reasons.push('blocklisted');
+      // zxcvbn scores a bounded prefix anyway (ZXCVBN_MAX_INPUT_LENGTH).
+      // Cutting it here keeps a password that NFC lengthened past
+      // PASSWORD_MAX_LENGTH (see normalizePassword) from reading as too long
+      // to the strength check, after the length as typed was accepted.
+      const scored = strength.validatePasswordStrength(
+        normalized.slice(0, ZXCVBN_MAX_INPUT_LENGTH),
+        contextWords
+      );
+      if (!scored.valid) reasons.push('too_weak');
+      if (reasons.length > 0) {
+        return {
+          valid: false,
+          reasons,
+          feedback: [
+            ...reasons.map((reason) => reasonMessage(reason, checked)),
+            ...(scored.valid ? [] : (scored.feedback ?? [])),
+          ],
+        };
+      }
+      return {
+        valid: true,
+        password: normalized,
+        normalization: PASSWORD_NORMALIZATION_NFC,
+        score: scored.score,
+      };
+    },
+  });
+}
+
+/**
  * Create the password validators of {@link PasswordValidators}: a validator
- * per minimum score, built with {@link createPasswordValidator} on first use
- * and kept. At most five are ever built, one per valid score; a score the
- * configuration schema refuses throws and is not kept.
+ * per policy, built with {@link createPasswordPolicyValidator} on first use
+ * and kept. A policy the schema refuses throws and is not kept.
  *
  * @example
  * ```typescript
  * const validators = createPasswordValidators();
  *
- * // The lowest score of the realm the password is chosen in.
- * const result = validators.forMinScore(realmMinScore).validatePasswordStrength(password);
+ * // The policy of the realm the password is chosen in.
+ * const result = validators
+ *   .forPolicy({ minLength: 15, minScore: 2 })
+ *   .check(password, { email, realmName, serviceName });
+ * if (result.valid) {
+ *   const hash = await hasher.hashPassword(result.password);
+ * }
  * ```
  */
 export function createPasswordValidators(): PasswordValidators {
+  const byPolicy = new Map<string, PasswordPolicyValidator>();
   const byScore = new Map<number, PasswordValidator>();
   return Object.freeze({
     forMinScore(minScore: number): PasswordValidator {
@@ -266,6 +582,17 @@ export function createPasswordValidators(): PasswordValidators {
       if (cached !== undefined) return cached;
       const validator = createPasswordValidator({ minScore });
       byScore.set(minScore, validator);
+      return validator;
+    },
+    forPolicy(policy: PasswordPolicy): PasswordPolicyValidator {
+      const key = `${policy.minLength}:${policy.minScore}`;
+      const cached = byPolicy.get(key);
+      if (cached !== undefined) return cached;
+      const validator = createPasswordPolicyValidator({
+        minLength: policy.minLength,
+        minScore: policy.minScore,
+      });
+      byPolicy.set(key, validator);
       return validator;
     },
   });
