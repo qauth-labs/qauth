@@ -1603,6 +1603,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`/health` is liveness, `/ready` is new, and the metrics move to the
+  internal listener** ([#500], ADR-019 Decisions 1 and 8). `GET /health`
+  answers `200` while the process serves, with the service roles it runs
+  (`roles`), and checks no dependency: the `services` field and the `503
+  unhealthy` answer are gone. `GET /ready` runs the readiness checks of the
+  process's roles at once, each within 2 seconds: `database` on every role,
+  `redis` on `web`, `api` and `admin`, `kek` on `signer` (the KEK unwraps one
+  stored key per KEK reference in use) and `outbox` on `delivery`. It answers
+  `200` when every one passes, and otherwise `503` with a
+  `service_unavailable` problem document whose `checks` member holds each
+  check's result, a failure naming its reason (`error` or `timeout`) and never
+  the error, which is logged. A role's plugin adds its own check through `fastify.readiness`.
+  Both answer on any host, carry no realm data and keep
+  `HEALTH_RATE_LIMIT_MAX` per `HEALTH_RATE_LIMIT_WINDOW`, now counted per
+  client address in the process's memory, so they answer while Redis does not.
+  `GET /metrics` leaves the public port: every process serves its metrics as
+  `GET /internal/metrics` on the internal listener while `METRICS_ENABLED` is
+  on, to a peer whose certificate `INTERNAL_PEER_ROLES` maps to the new
+  `metrics` role, and in a single process without the internal TLS files, in
+  plain HTTP to loopback callers only. The Compose healthcheck calls `/ready`;
+  the image's `HEALTHCHECK` stays on `/health`.
+
+  **Action for operators**: point a probe that should take a process out of
+  rotation at `/ready`, since `/health` no longer fails for a database or Redis
+  outage. Move the Prometheus scrape to `INTERNAL_HOST:INTERNAL_PORT`
+  (`/internal/metrics`): issue the scraper a client certificate from the
+  internal CA and map its SAN to `metrics`, or scrape `127.0.0.1:3443` from
+  beside a single process. A process whose roles are split now runs the
+  internal listener for its metrics too, and refuses to boot without the
+  internal TLS files and `INTERNAL_PEER_ROLES`: map a scraper there, or set
+  `METRICS_ENABLED=false` on a process no scraper reads.
+
 - **The OID4VP verifier key moves into the key store** ([#546], ADR-019
   Decision 9). `OID4VP_VERIFIER_SIGNING_KEY` (or its `_PATH` form) is imported
   once, like the JWT keys, as the default realm's ES256
@@ -2635,6 +2667,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#495]: https://github.com/qauth-labs/qauth/issues/495
 [#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
+[#500]: https://github.com/qauth-labs/qauth/issues/500
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
