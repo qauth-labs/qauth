@@ -379,6 +379,13 @@
       "when": 1793569813933,
       "tag": "0053_oid4vp_response_key_sealing_kid",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1793639304377,
+      "tag": "0054_admin_approvals_no_request_body",
+      "breakpoints": true
     }
   ]
 }

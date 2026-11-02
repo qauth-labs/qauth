@@ -9,14 +9,19 @@ import { canonicalizeJson } from '@qauth-labs/fastify-plugin-db';
  * id, method, path parameters, query and body, the realm it acts on and the
  * account that asks. The canonical request holds those, serialized with the
  * JSON Canonicalization Scheme (RFC 8785, the canonicalizer the admin audit
- * log hashes with), and two SHA-256 digests are taken over it:
+ * log hashes with), and `op_hash` is its SHA-256 with the server's nonce:
  *
- * - `request_hash`, without the nonce: the admin pipeline recomputes it from
- *   the retried call and compares it with the stored one, so a changed body,
- *   path parameter, query, realm or requester finds no approval;
- * - `op_hash`, with the server's nonce: the challenge an approver's factor
- *   signs is derived from it, so an approval given for one filing never
- *   approves another, even of the same request.
+ * - the admin pipeline computes the `op_hash` of the retried call with the
+ *   approval's stored nonce and compares it with the stored one, so a changed
+ *   body, path parameter, query, realm or requester finds no approval;
+ * - the challenge an approver's factor signs is derived from it, so an
+ *   approval given for one filing never approves another, even of the same
+ *   request.
+ *
+ * Nothing else of the request is hashed: a digest without the nonce would let
+ * anyone with a copy of the approvals table test guesses of a body, a secret
+ * it may hold included, against it (#901). The approval never stores the
+ * body, and its nonce is overwritten once it is closed or expired.
  *
  * Values are compared after the route's own validation: the approval routes
  * parse the filed path parameters, query and body with the schemas of the
@@ -176,11 +181,6 @@ export function canonicalRequest(input: CanonicalRequestInput): CanonicalRequest
 }
 
 const sha256 = (text: string): Buffer => createHash('sha256').update(text, 'utf8').digest();
-
-/** `request_hash`: SHA-256 of the RFC 8785 form of the canonical request, without the nonce. */
-export function requestHashOf(request: CanonicalRequest): Buffer {
-  return sha256(canonicalizeJson(request));
-}
 
 /**
  * `op_hash`: SHA-256 of the RFC 8785 form of the canonical request with the

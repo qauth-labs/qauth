@@ -137,10 +137,13 @@ describe('approval standings (#512)', () => {
         status: 'consumed',
         approvals: approval(2, [requester, second]).approvals,
       }),
+      // The expiry sweep's move (#901).
+      approvalVersion({ status: 'expired', approvals: approval(2, [requester]).approvals }),
     ];
-    expect(versions).toEqual(['pending.0', 'pending.1', 'approved.2', 'consumed.2']);
+    expect(versions).toEqual(['pending.0', 'pending.1', 'approved.2', 'consumed.2', 'expired.1']);
     expect(parseApprovalVersion('approved.2')).toEqual({ status: 'approved', approvalCount: 2 });
-    for (const other of ['expired.0', 'pending.-1', 'pending.01', 'pending', '"pending.0"']) {
+    expect(parseApprovalVersion('expired.1')).toEqual({ status: 'expired', approvalCount: 1 });
+    for (const other of ['lapsed.0', 'pending.-1', 'pending.01', 'pending', '"pending.0"']) {
       expect(parseApprovalVersion(other), other).toBeUndefined();
     }
   });

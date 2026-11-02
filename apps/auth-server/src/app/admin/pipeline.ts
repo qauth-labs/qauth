@@ -45,7 +45,7 @@ import {
   requestClassification,
 } from '../plugins/admin-operations';
 import { intendedStatusCode } from '../plugins/error-handler';
-import { canonicalRequest, requestHashOf } from './approvals/canonical-request';
+import { type CanonicalRequest, canonicalRequest } from './approvals/canonical-request';
 import { auditApproval } from './approvals/engine';
 import {
   APPROVAL_HEADER,
@@ -144,7 +144,8 @@ export type AdminCaller = Extract<AdminAuthority, { allowed: true }>;
 /** The approval stage 7 found for a call, which its transaction consumes. */
 interface GatedApproval {
   readonly id: string;
-  readonly requestHash: Buffer;
+  /** Its `op_hash`, which the call's canonical request matched with its nonce. */
+  readonly opHash: Buffer;
 }
 
 /** What the pipeline knows of one request, stage by stage. */
@@ -662,9 +663,9 @@ function refusedApproval(
 /**
  * Stage 7, the approval gate (ADR-019 Decision 7, #512). A request classified
  * `security` runs only with a fresh approval bound to it: the one its
- * `QAuth-Approval` header names, in the realm it acts on, whose
- * `request_hash` is the one this call's canonical request hashes to (the
- * same operation, method, path parameters, query, body, realm and
+ * `QAuth-Approval` header names, in the realm it acts on, whose `op_hash`
+ * is the one this call's canonical request hashes to with the approval's
+ * nonce (the same operation, method, path parameters, query, body, realm and
  * requester), approved and unexpired. Any other answers `approval_required`.
  * The operation's transaction then consumes it ({@link inTransaction}).
  *
@@ -683,19 +684,17 @@ function approvalGate(registry: OperationRegistry) {
     const approvalId = approvalIdOf(header);
     if (approvalId === null) throw refusedApproval(request, operationId, null, 'malformed-header');
     const caller = requestAdminCaller(request);
-    let requestHash: Buffer;
+    let canonical: CanonicalRequest;
     try {
-      requestHash = requestHashOf(
-        canonicalRequest({
-          operationId,
-          method: request.method,
-          params: request.params,
-          query: request.query,
-          body: request.body,
-          realmId: caller.targetRealm.id,
-          requester: callerAccount(caller),
-        })
-      );
+      canonical = canonicalRequest({
+        operationId,
+        method: request.method,
+        params: request.params,
+        query: request.query,
+        body: request.body,
+        realmId: caller.targetRealm.id,
+        requester: callerAccount(caller),
+      });
     } catch {
       throw refusedApproval(request, operationId, approvalId, 'uncanonical-request');
     }
@@ -703,9 +702,11 @@ function approvalGate(registry: OperationRegistry) {
       caller.targetRealm.id,
       approvalId
     );
-    const refusal = approvalRefusal(approval, requestHash, Date.now());
-    if (refusal !== null) throw refusedApproval(request, operationId, approvalId, refusal);
-    pipelineState(request).approval = { id: approvalId, requestHash };
+    const refusal = approvalRefusal(approval, canonical, Date.now());
+    if (approval === undefined || refusal !== null) {
+      throw refusedApproval(request, operationId, approvalId, refusal ?? 'not-found');
+    }
+    pipelineState(request).approval = { id: approvalId, opHash: approval.opHash };
   };
 }
 
@@ -903,7 +904,7 @@ function inTransaction(handler: RouteHandlerMethod, registry: OperationRegistry)
           const consumed = await request.server.repositories.adminApprovals.consume(
             caller.targetRealm.id,
             gated.id,
-            { requestHash: gated.requestHash, now: Date.now() },
+            { opHash: gated.opHash, now: Date.now() },
             tx
           );
           if (consumed === undefined) {

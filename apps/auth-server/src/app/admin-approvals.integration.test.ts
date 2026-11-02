@@ -52,13 +52,6 @@ const steer: {
   release?: Promise<void>;
 } = { failAfterChange: false };
 
-/**
- * The registry the last boot's admin listener classifies against: the engine
- * renders an approval's operation from it, as the approval page will from the
- * server's own.
- */
-const fixture: { registry?: Awaited<ReturnType<typeof fixtureAdminApi>>['registry'] } = {};
-
 /** The fixture operations and routes, imported once the boot reset the modules. */
 async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true }) {
   const operations = await import('./helpers/admin-operations');
@@ -97,7 +90,6 @@ async function fixtureAdminApi(options: { renderer: boolean } = { renderer: true
     }),
   });
   const registry = operations.createAdminOperationRegistry([rotate, retire], { reserved: [] });
-  fixture.registry = registry;
 
   return {
     registry,
@@ -341,16 +333,12 @@ describe('approvals for security operations (#512, real containers)', () => {
   ) {
     const engine = await import('./admin/approvals/engine');
     const decision = { realmId, approvalId, approver, sessionIssuedAtMs: Date.now() };
-    const { challenge } = await engine.startApproval(app(), test.factor, decision, engineOptions());
-    return engine.completeApproval(
-      app(),
-      test.factor,
-      { ...decision, response: test.answer(challenge, approver) },
-      engineOptions()
-    );
+    const { challenge } = await engine.startApproval(app(), test.factor, decision);
+    return engine.completeApproval(app(), test.factor, {
+      ...decision,
+      response: test.answer(challenge, approver),
+    });
   }
-
-  const engineOptions = () => ({ ...(fixture.registry ? { registry: fixture.registry } : {}) });
 
   async function auditRows(realmId: string): Promise<AuditRow[]> {
     const { rows } = await app().dbPool.query<AuditRow>(
@@ -363,11 +351,42 @@ describe('approvals for security operations (#512, real containers)', () => {
   }
 
   async function storedApproval(approvalId: string) {
-    const { rows } = await app().dbPool.query<{ status: string; op_hash: Buffer }>(
-      'SELECT status, op_hash FROM admin_approvals WHERE id = $1',
+    const { rows } = await app().dbPool.query<{ status: string; op_hash: Buffer; nonce: Buffer }>(
+      'SELECT status, op_hash, nonce FROM admin_approvals WHERE id = $1',
       [approvalId]
     );
     return rows[0];
+  }
+
+  /** The row of `approvalId` as text, every column. */
+  async function storedRowText(approvalId: string): Promise<string> {
+    const { rows } = await app().dbPool.query<{ row: string }>(
+      'SELECT admin_approvals::text AS row FROM admin_approvals WHERE id = $1',
+      [approvalId]
+    );
+    return rows[0].row;
+  }
+
+  /** The `op_hash` of the fixture rotation of `realmId` by `requester`, with `nonce`. */
+  async function rotationOpHash(
+    realmId: string,
+    requester: { userId: string },
+    nonce: Buffer
+  ): Promise<Buffer> {
+    const { canonicalRequest, opHashOf } = await import('./admin/approvals/canonical-request');
+    const operator = await operatorRealm();
+    return opHashOf(
+      canonicalRequest({
+        operationId: 'fixtureKeys.rotate',
+        method: 'POST',
+        params: { realmId, keyId: 'signing-1' },
+        query: { dryRun: 'false' },
+        body: ROTATION,
+        realmId,
+        requester: { kind: 'human', realmId: operator.id, accountId: requester.userId },
+      }),
+      nonce
+    );
   }
 
   async function accountsIn(realmId: string): Promise<number> {
@@ -423,8 +442,14 @@ describe('approvals for security operations (#512, real containers)', () => {
         reason: { type: 'quote', source: 'requester', text: 'Quarterly rotation <b>now</b>' },
       },
     });
-    // The body is not part of the representation.
+    // The body is not part of the representation, nor of the row (#901): the
+    // row's op_hash is the filed request's with the row's nonce.
     expect(filed).not.toHaveProperty('body');
+    const open = await storedApproval(filed.id);
+    expect(open?.op_hash.equals(await rotationOpHash(realmId, requester, open.nonce))).toBe(true);
+    const openRow = await storedRowText(filed.id);
+    expect(openRow).not.toContain('retireAfterDays');
+    expect(openRow).toContain('Retire the old key after');
     const expiresIn =
       Date.parse(String(filed['expiresAt'])) - Date.parse(String(filed['createdAt']));
     expect(expiresIn).toBe(5 * 60_000);
@@ -460,12 +485,18 @@ describe('approvals for security operations (#512, real containers)', () => {
     const consumed = await get(approvals(realmId, `/${filed.id}`), requester.token);
     expect(consumed.json()).toMatchObject({ status: 'consumed', display: null });
     expect(consumed.json<{ usedAt: string | null }>().usedAt).not.toBeNull();
-    // The body it was filed with is no longer kept.
-    const { rows } = await app().dbPool.query<{ body: unknown }>(
-      `SELECT canonical_request -> 'body' AS body FROM admin_approvals WHERE id = $1`,
-      [filed.id]
+    // Acceptance criterion (#901): once closed, the approval's nonce is no
+    // longer the one its op_hash was computed with, so neither the row's
+    // op_hash nor the audit row's copy of it can be tested against a guessed
+    // body.
+    const closed = await storedApproval(filed.id);
+    expect(closed?.op_hash.equals(open?.op_hash ?? Buffer.alloc(0))).toBe(true);
+    expect(closed?.nonce.equals(open?.nonce ?? Buffer.alloc(0))).toBe(false);
+    expect(closed?.nonce).toHaveLength(32);
+    expect(closed?.op_hash.equals(await rotationOpHash(realmId, requester, closed.nonce))).toBe(
+      false
     );
-    expect(rows[0].body).toBeNull();
+    expect(await storedRowText(filed.id)).not.toContain('retireAfterDays');
 
     // A consumed approval runs nothing again.
     const again = await post(rotateUrl(realmId), requester.token, ROTATION, {
@@ -474,6 +505,44 @@ describe('approvals for security operations (#512, real containers)', () => {
     expect(again.statusCode).toBe(403);
     expect(again.json()).toMatchObject({ code: 'approval_required' });
     expect(runs).toEqual(['fixtureKeys.rotate']);
+  });
+
+  // Acceptance criterion (#901): an approval's display is served from what
+  // was stored when it was filed; nothing renders it again from a request,
+  // whose body the approval does not keep.
+  it('serves the display stored at filing, to the API and to the approval page', async () => {
+    const realmId = await tenant('alpha');
+    const requester = await adminWith(realmId, 'security-admin');
+    const filed = await file(realmId, requester.token);
+    const stored = {
+      operation: 'fixtureKeys.rotate',
+      title: 'As stored at filing',
+      fields: [{ label: 'Stored', value: 'yes', before: 'no' }],
+      reason: null,
+    };
+    await app().dbPool.query('UPDATE admin_approvals SET display = $2::jsonb WHERE id = $1', [
+      filed.id,
+      JSON.stringify(stored),
+    ]);
+
+    const read = await get(approvals(realmId, `/${filed.id}`), requester.token);
+    expect(read.statusCode).toBe(200);
+    expect(read.json<{ display: unknown }>().display).toEqual(stored);
+    const engine = await import('./admin/approvals/engine');
+    const { display } = await engine.startApproval(app(), test.factor, {
+      realmId,
+      approvalId: filed.id,
+      approver: requester.approver,
+      sessionIssuedAtMs: Date.now(),
+    });
+    expect(display).toEqual(stored);
+
+    // A stored value the display rules would not have let through is never shown.
+    await app().dbPool.query('UPDATE admin_approvals SET display = $2::jsonb WHERE id = $1', [
+      filed.id,
+      JSON.stringify({ ...stored, title: 'Rotate\u202e' }),
+    ]);
+    expect((await get(approvals(realmId, `/${filed.id}`), requester.token)).statusCode).toBe(500);
   });
 
   it('runs an operation whose route parses no query and takes no body, the query as the URL carries it', async () => {
@@ -687,18 +756,11 @@ describe('approvals for security operations (#512, real containers)', () => {
     // with the account's own credential.
     const approveAs = async (approver: { realmId: string; accountId: string }) => {
       const decision = { realmId, approvalId: filed.id, approver, sessionIssuedAtMs: Date.now() };
-      const { challenge } = await engine.startApproval(
-        app(),
-        test.factor,
-        decision,
-        engineOptions()
-      );
-      return engine.completeApproval(
-        app(),
-        test.factor,
-        { ...decision, response: test.answer(challenge, requester.approver) },
-        engineOptions()
-      );
+      const { challenge } = await engine.startApproval(app(), test.factor, decision);
+      return engine.completeApproval(app(), test.factor, {
+        ...decision,
+        response: test.answer(challenge, requester.approver),
+      });
     };
 
     // The requester's own step-up, stored as the database names the account.
@@ -737,20 +799,18 @@ describe('approvals for security operations (#512, real containers)', () => {
 
     // A session issued before the disablement is answered as a stranger is.
     await expect(
-      engine.startApproval(app(), test.factor, decision(disabledAt - 60_000), engineOptions())
+      engine.startApproval(app(), test.factor, decision(disabledAt - 60_000))
     ).rejects.toMatchObject({ statusCode: 404 });
-    await expect(
-      engine.denyApproval(app(), decision(disabledAt - 60_000), engineOptions())
-    ).rejects.toMatchObject({ statusCode: 404 });
+    await expect(engine.denyApproval(app(), decision(disabledAt - 60_000))).rejects.toMatchObject({
+      statusCode: 404,
+    });
     // One signed in after it was enabled again approves.
     const fresh = decision(disabledAt + 5_000);
-    const { challenge } = await engine.startApproval(app(), test.factor, fresh, engineOptions());
-    const approved = await engine.completeApproval(
-      app(),
-      test.factor,
-      { ...fresh, response: test.answer(challenge, requester.approver) },
-      engineOptions()
-    );
+    const { challenge } = await engine.startApproval(app(), test.factor, fresh);
+    const approved = await engine.completeApproval(app(), test.factor, {
+      ...fresh,
+      response: test.answer(challenge, requester.approver),
+    });
     expect(approved.status).toBe('approved');
   });
 
@@ -760,28 +820,18 @@ describe('approvals for security operations (#512, real containers)', () => {
     const first = await file(realmId, requester.token);
     const second = await file(realmId, requester.token);
     const engine = await import('./admin/approvals/engine');
-    const forFirst = await engine.startApproval(
-      app(),
-      test.factor,
-      {
-        realmId,
-        approvalId: first.id,
-        approver: requester.approver,
-        sessionIssuedAtMs: Date.now(),
-      },
-      engineOptions()
-    );
-    await engine.startApproval(
-      app(),
-      test.factor,
-      {
-        realmId,
-        approvalId: second.id,
-        approver: requester.approver,
-        sessionIssuedAtMs: Date.now(),
-      },
-      engineOptions()
-    );
+    const forFirst = await engine.startApproval(app(), test.factor, {
+      realmId,
+      approvalId: first.id,
+      approver: requester.approver,
+      sessionIssuedAtMs: Date.now(),
+    });
+    await engine.startApproval(app(), test.factor, {
+      realmId,
+      approvalId: second.id,
+      approver: requester.approver,
+      sessionIssuedAtMs: Date.now(),
+    });
     await expect(
       engine.completeApproval(app(), test.factor, {
         realmId,
@@ -811,15 +861,13 @@ describe('approvals for security operations (#512, real containers)', () => {
       approver: requester.approver,
       sessionIssuedAtMs: Date.now(),
     };
-    const { challenge } = await engine.startApproval(app(), broken, decision, engineOptions());
+    const { challenge } = await engine.startApproval(app(), broken, decision);
 
     const failed = await engine
-      .completeApproval(
-        app(),
-        broken,
-        { ...decision, response: test.answer(challenge, requester.approver) },
-        engineOptions()
-      )
+      .completeApproval(app(), broken, {
+        ...decision,
+        response: test.answer(challenge, requester.approver),
+      })
       .catch((error: unknown) => error);
     // Not the 403 of a refused answer: the server's own failure.
     expect(failed).toBeInstanceOf(Error);

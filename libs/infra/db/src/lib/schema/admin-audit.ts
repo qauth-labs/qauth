@@ -83,7 +83,7 @@ export const adminAuditLog = pgTable(
     maskedDiff: jsonb('masked_diff').$type<AdminAuditDiff | null>(),
     /** The approvals the operation ran on, both of a two-admin operation. */
     approvals: jsonb('approvals').$type<AdminAuditApproval[]>().notNull(),
-    /** SHA-256 of the canonical request, the hash an approval is bound to. */
+    /** The approval's `op_hash`: SHA-256 of the canonical request with the approval's nonce. */
     requestDigest: bytea('request_digest'),
     /** The id under which QAuth logged the request. */
     traceId: varchar('trace_id', { length: 128 }),

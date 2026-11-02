@@ -7,6 +7,7 @@ import {
   displayText,
   type RenderableApproval,
   renderOperation,
+  storedDisplay,
 } from './display';
 
 /**
@@ -32,8 +33,7 @@ function registryOf(render: AdminOperation['render'] | undefined) {
 
 const APPROVAL: RenderableApproval = {
   operationId: 'keys.rotate',
-  canonicalRequest: {
-    operationId: 'keys.rotate',
+  request: {
     method: 'POST',
     params: { realmId: 'r', keyId: `signing${RLO}1` },
     query: {},
@@ -163,7 +163,7 @@ describe('the display rules (#512, ADR-019 Decision 6)', () => {
     expect(Array.from(long.reason?.text ?? '')).toHaveLength(DISPLAY_LIMITS.reason);
   });
 
-  it('hands the renderer a frozen copy of the stored request, and nothing the requester wrote', () => {
+  it('hands the renderer a frozen copy of the filed request, and nothing the requester wrote', () => {
     let seen: RenderInput | undefined;
     renderOperation(
       APPROVAL,
@@ -206,6 +206,50 @@ describe('the display rules (#512, ADR-019 Decision 6)', () => {
       expect(() =>
         renderOperation(APPROVAL, registryOf(render as unknown as AdminOperation['render']))
       ).toThrow(ApprovalRenderError);
+    }
+  });
+});
+
+describe('the display data an approval stored (#901)', () => {
+  const rendered = () => renderOperation(APPROVAL, registryOf(rotate));
+  /** `rendered()` as the database hands it back: JSON, not the frozen object. */
+  const fromDatabase = () => JSON.parse(JSON.stringify(rendered())) as Record<string, unknown>;
+
+  it('is served as it was rendered at filing, frozen again', () => {
+    const served = storedDisplay(fromDatabase());
+    expect(served).toEqual(rendered());
+    expect(Object.isFrozen(served)).toBe(true);
+    expect(Object.isFrozen(served.fields)).toBe(true);
+    expect(Object.isFrozen(served.fields[0])).toBe(true);
+    expect(storedDisplay({ ...fromDatabase(), reason: null }).reason).toBeNull();
+  });
+
+  it('refuses a stored value that is not display data, or holds what the display rules escape', () => {
+    const stored = fromDatabase();
+    const fields = stored['fields'] as Record<string, unknown>[];
+    const refused: unknown[] = [
+      null,
+      'Rotate',
+      [],
+      { ...stored, html: '<b>x</b>' },
+      { ...stored, title: 3 },
+      { ...stored, title: `Rotate${RLO}` },
+      { ...stored, title: 'x'.repeat(DISPLAY_LIMITS.title + 1) },
+      { ...stored, fields: 'none' },
+      { ...stored, fields: [{ ...fields[0], markup: '<i>' }] },
+      { ...stored, fields: [{ ...fields[0], label: '' }] },
+      { ...stored, fields: [{ ...fields[0], value: `k${ZWSP}` }] },
+      { ...stored, fields: [{ ...fields[1], before: 7 }] },
+      {
+        ...stored,
+        fields: Array.from({ length: DISPLAY_LIMITS.fields + 1 }, () => fields[0]),
+      },
+      { ...stored, reason: { type: 'quote', source: 'operation', text: 'x' } },
+      { ...stored, reason: { type: 'quote', source: 'requester', text: `x\n` } },
+      { ...stored, reason: 'Please approve' },
+    ];
+    for (const value of refused) {
+      expect(() => storedDisplay(value), JSON.stringify(value)).toThrow(ApprovalRenderError);
     }
   });
 });

@@ -2,7 +2,9 @@ import { and, eq, inArray, type InferSelectModel, lte, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import {
+  ADMIN_APPROVAL_OPEN_STATUSES,
   type AdminApprovalClassification,
+  type AdminApprovalDisplay,
   type AdminApprovalEntry,
   type AdminApprovalRequesterKind,
   adminApprovals,
@@ -20,9 +22,14 @@ export interface NewAdminApproval {
   readonly requesterRealmId: string;
   readonly requesterId: string;
   readonly operationId: string;
-  /** The canonical request without the nonce. */
-  readonly canonicalRequest: Record<string, unknown>;
-  readonly requestHash: Buffer;
+  /** The operation's method, upper case. */
+  readonly method: string;
+  /** The operation's path parameters, `realmId` included. */
+  readonly params: Record<string, unknown>;
+  readonly query: Record<string, unknown>;
+  /** What an approver is shown, rendered from the request as it was filed. */
+  readonly display: AdminApprovalDisplay;
+  /** SHA-256 of the canonical request with `nonce`; the body is bound only through it. */
   readonly opHash: Buffer;
   readonly nonce: Buffer;
   readonly reason: string | null;
@@ -58,19 +65,15 @@ export interface AdminApprovalExpectedState {
  * (`apps/auth-server/src/app/admin/approvals`); the repository only keeps
  * the moves consistent.
  *
- * A move that closes an approval (consumed, cancelled, denied) drops the
- * operation's body from the stored request: the body may hold a secret, such
- * as a credential the operation sets, and nothing reads it once no approval
- * can be given or used. No job removes approvals: an approval that expires
- * unused keeps its body until the next one is filed in its realm, which drops
- * it.
+ * The row holds no body of the operation, nor a hash of the request without
+ * the nonce (#901). A move that closes an approval (consumed, cancelled,
+ * denied), and the expiry sweep ({@link AdminApprovalsRepository.expireLapsed}),
+ * overwrite its nonce with random bytes in the same `UPDATE`: once no approval
+ * can be given or used, the stored `op_hash`, and the audit log's copy of it,
+ * can no longer be tested against a guessed body. No job removes approvals.
  */
 export interface AdminApprovalsRepository {
-  /**
-   * File an approval request, `pending`, with no approval yet. First drops
-   * the body of every approval of the realm that expired unused by the new
-   * one's `createdAt`.
-   */
+  /** File an approval request, `pending`, with no approval yet. */
   create(approval: NewAdminApproval, tx?: DbClient): Promise<AdminApproval>;
 
   /** The approval with this id in the realm; `undefined` for another realm's, or an id that is not a UUID. */
@@ -117,17 +120,26 @@ export interface AdminApprovalsRepository {
   ): Promise<AdminApproval | undefined>;
 
   /**
-   * Use an `approved`, unexpired approval for the request whose
-   * `request_hash` is `requestHash`: it becomes `consumed`, with `used_at`.
-   * Run it in the transaction of the operation, so the operation's rollback
-   * takes the consumption back with it.
+   * Use an `approved`, unexpired approval for the request whose `op_hash`,
+   * computed with the approval's nonce, is `opHash`: it becomes `consumed`,
+   * with `used_at`. Run it in the transaction of the operation, so the
+   * operation's rollback takes the consumption back with it.
    */
   consume(
     realmId: string,
     id: string,
-    change: { readonly requestHash: Buffer; readonly now: number },
+    change: { readonly opHash: Buffer; readonly now: number },
     tx: DbClient
   ): Promise<AdminApproval | undefined>;
+
+  /**
+   * Mark `expired`, with a fresh random nonce, at most `limit` open approvals
+   * (`pending` or `approved`) of any realm that expired by `now`. An approval
+   * another transaction holds is skipped, and found again by the next call.
+   *
+   * @returns how many it marked
+   */
+  expireLapsed(now: number, limit: number): Promise<number>;
 }
 
 /** The row of one approval of the realm. */
@@ -177,11 +189,13 @@ async function lockApproval(tx: DbClient, realmId: string, id: string): Promise<
 const holds = (count: number) => sql`jsonb_array_length(${adminApprovals.approvals}) = ${count}`;
 
 /**
- * The stored request without its body. An approval that is used, cancelled or
- * denied keeps no body: it may hold a secret, and the two hashes are what the
- * audit log binds to.
+ * 32 random bytes, a fresh value on each row an `UPDATE` sets it on: the
+ * nonce of an approval that is closed or expired (#901). The SHA-256 of two
+ * random (v4) UUIDs, 244 random bits; the nonce only has to stop being the
+ * one `op_hash` was computed with, and no guess of it can be checked against
+ * anything.
  */
-const withoutBody = sql`${adminApprovals.canonicalRequest} - 'body'`;
+const retiredNonce = sql`sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8'))`;
 
 /**
  * Factory for the approval request repository (issue #512).
@@ -207,19 +221,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
 
   return {
     async create(approval, tx) {
-      const invoker = tx ?? defaultDb;
-      await invoker
-        .update(adminApprovals)
-        .set({ canonicalRequest: withoutBody })
-        .where(
-          and(
-            eq(adminApprovals.realmId, approval.realmId),
-            inArray(adminApprovals.status, ['pending', 'approved']),
-            lte(adminApprovals.expiresAt, approval.createdAt),
-            sql`${adminApprovals.canonicalRequest} ? 'body'`
-          )
-        );
-      const [record] = await invoker
+      const [record] = await (tx ?? defaultDb)
         .insert(adminApprovals)
         // The fields a new approval has, named one by one: its id, status,
         // approvals and time of use are the table's, never the caller's.
@@ -229,8 +231,10 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
           requesterRealmId: approval.requesterRealmId,
           requesterId: approval.requesterId,
           operationId: approval.operationId,
-          canonicalRequest: approval.canonicalRequest,
-          requestHash: approval.requestHash,
+          method: approval.method,
+          params: approval.params,
+          query: approval.query,
+          display: approval.display,
           opHash: approval.opHash,
           nonce: approval.nonce,
           reason: approval.reason,
@@ -294,7 +298,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       return onHeldRow(realmId, id, tx, async (invoker) => {
         const [record] = await invoker
           .update(adminApprovals)
-          .set({ status: 'denied', canonicalRequest: withoutBody })
+          .set({ status: 'denied', nonce: retiredNonce })
           .where(
             and(
               openApproval(realmId, id, now),
@@ -313,7 +317,7 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       return onHeldRow(realmId, id, tx, async (invoker) => {
         const [record] = await invoker
           .update(adminApprovals)
-          .set({ status: 'cancelled', canonicalRequest: withoutBody })
+          .set({ status: 'cancelled', nonce: retiredNonce })
           .where(
             and(
               openApproval(realmId, id, now),
@@ -329,22 +333,53 @@ export function createAdminApprovalsRepository(defaultDb: DbClient): AdminApprov
       });
     },
 
-    async consume(realmId, id, { requestHash, now }, tx) {
+    async consume(realmId, id, { opHash, now }, tx) {
       if (!isAdminRecordId(realmId) || !isAdminRecordId(id)) return undefined;
       return onHeldRow(realmId, id, tx, async (invoker) => {
         const [record] = await invoker
           .update(adminApprovals)
-          .set({ status: 'consumed', usedAt: now, canonicalRequest: withoutBody })
+          .set({ status: 'consumed', usedAt: now, nonce: retiredNonce })
           .where(
             and(
               openApproval(realmId, id, now),
               eq(adminApprovals.status, 'approved'),
-              eq(adminApprovals.requestHash, requestHash)
+              eq(adminApprovals.opHash, opHash)
             )
           )
           .returning();
         return record;
       });
+    },
+
+    async expireLapsed(now, limit) {
+      // The rows are claimed with SKIP LOCKED: one an operation's transaction
+      // holds may yet be consumed, if it is unexpired by the time that
+      // transaction checks it, and is left for the next call. A claimed row
+      // is held until the update, so no writer moves it in between; and every
+      // writer's own condition refuses an expired approval anyway.
+      const lapsed = defaultDb
+        .select({ id: adminApprovals.id })
+        .from(adminApprovals)
+        .where(
+          and(
+            inArray(adminApprovals.status, [...ADMIN_APPROVAL_OPEN_STATUSES]),
+            lte(adminApprovals.expiresAt, checkedAt(now))
+          )
+        )
+        .orderBy(adminApprovals.expiresAt)
+        .limit(limit)
+        .for('update', { skipLocked: true });
+      const marked = await defaultDb
+        .update(adminApprovals)
+        .set({ status: 'expired', nonce: retiredNonce })
+        .where(
+          and(
+            inArray(adminApprovals.id, lapsed),
+            inArray(adminApprovals.status, [...ADMIN_APPROVAL_OPEN_STATUSES])
+          )
+        )
+        .returning({ id: adminApprovals.id });
+      return marked.length;
     },
   };
 }

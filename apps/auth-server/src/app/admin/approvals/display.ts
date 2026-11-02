@@ -8,12 +8,14 @@ import {
 /**
  * WHAT AN APPROVER IS SHOWN (ADR-019 Decisions 6 and 7, issue #512).
  *
- * The approver sees the operation rendered from the stored request, never
- * from text the requester wrote. Every security operation registers a
+ * The approver sees the operation rendered from the request as it was filed,
+ * never from text the requester wrote. Every security operation registers a
  * renderer (`render` in its definition), and {@link renderOperation} turns
- * its output into typed display data, never HTML. The requester's reason
- * comes apart, as quoted text attributed to the requester, and never as the
- * operation.
+ * its output into typed display data, never HTML, when the approval is filed.
+ * The approval stores that display data and never the request's body, which
+ * may hold a secret (#901): every later reader is shown what was stored, read
+ * back through {@link storedDisplay}. The requester's reason comes apart, as
+ * quoted text attributed to the requester, and never as the operation.
  *
  * Every string, the renderer's and the reason, follows the display rules of
  * ADR-019 Decision 6: it is length-capped, and it shows no control,
@@ -26,8 +28,9 @@ import {
  * character are shown escaped, so a pile of them cannot spill over the lines
  * around it.
  *
- * The display data goes to every reader of the approval: a renderer never
- * shows a secret value of the request, such as a password in its body.
+ * The display data goes to every reader of the approval, and is stored with
+ * it: a renderer never shows a secret value of the request, such as a
+ * password in its body.
  */
 
 /** The length caps, in code points. A longer string ends in `…`. */
@@ -142,11 +145,16 @@ export class ApprovalRenderError extends Error {
   override readonly name = 'ApprovalRenderError';
 }
 
-/** What {@link renderOperation} reads of an approval. */
+/** What {@link renderOperation} reads of a request an approval is filed for. */
 export interface RenderableApproval {
   readonly operationId: string;
-  /** The stored canonical request. */
-  readonly canonicalRequest: Readonly<Record<string, unknown>>;
+  /** The filed request, as the operation's route parsed it. */
+  readonly request: {
+    readonly method: string;
+    readonly params: unknown;
+    readonly query: unknown;
+    readonly body: unknown;
+  };
   readonly reason: string | null;
 }
 
@@ -179,7 +187,7 @@ function displayField(field: unknown, index: number): DisplayField {
 
 /**
  * The display data of `approval`, from the renderer its operation registers in
- * `registry`, run on a frozen copy of the stored request. Every string follows
+ * `registry`, run on a frozen copy of the filed request. Every string follows
  * the display rules ({@link displayText}); the reason is quoted.
  *
  * @throws {ApprovalRenderError} when the operation has no renderer, or its
@@ -193,14 +201,14 @@ export function renderOperation(
   if (render === undefined) {
     throw new ApprovalRenderError(`the operation ${approval.operationId} has no renderer`);
   }
-  const stored = approval.canonicalRequest;
+  const { request } = approval;
   const input: RenderInput = deepFreeze(
     structuredClone({
       operationId: approval.operationId,
-      method: stored['method'],
-      params: stored['params'],
-      query: stored['query'],
-      body: stored['body'],
+      method: request.method,
+      params: request.params,
+      query: request.query,
+      body: request.body,
     })
   ) as RenderInput;
 
@@ -240,4 +248,73 @@ export function renderOperation(
             text: displayText(approval.reason, DISPLAY_LIMITS.reason),
           }),
   });
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * Whether `value` is a string as {@link displayText} shows one: at most
+ * `maxLength` code points, none of which is shown escaped.
+ */
+function isShownText(value: unknown, maxLength: number): value is string {
+  if (!isString(value)) return false;
+  let length = 0;
+  for (const codePoint of value) {
+    if (UNSAFE_CODE_POINT.test(codePoint)) return false;
+    length += 1;
+  }
+  return length <= maxLength;
+}
+
+/**
+ * The display data an approval stored when it was filed: what
+ * {@link renderOperation} returned then, checked and frozen again. A stored
+ * value of any other shape, or with a string the display rules would not
+ * have let through as it is, is refused rather than shown.
+ *
+ * @throws {ApprovalRenderError} when `value` is not display data
+ */
+export function storedDisplay(value: unknown): OperationDisplay {
+  const refused = () => new ApprovalRenderError('the stored display data is not display data');
+  if (!isRecord(value)) throw refused();
+  const { operation, title, fields, reason, ...rest } = value;
+  if (
+    Object.keys(rest).length > 0 ||
+    !isShownText(operation, DISPLAY_LIMITS.operation) ||
+    !isShownText(title, DISPLAY_LIMITS.title) ||
+    !Array.isArray(fields) ||
+    fields.length > DISPLAY_LIMITS.fields
+  ) {
+    throw refused();
+  }
+  const shownFields = fields.map((field: unknown): DisplayField => {
+    if (!isRecord(field)) throw refused();
+    const { label, value: shown, before, ...more } = field;
+    if (
+      Object.keys(more).length > 0 ||
+      !isShownText(label, DISPLAY_LIMITS.label) ||
+      label === '' ||
+      !isShownText(shown, DISPLAY_LIMITS.value) ||
+      (before !== undefined && !isShownText(before, DISPLAY_LIMITS.value))
+    ) {
+      throw refused();
+    }
+    return Object.freeze({ label, value: shown, ...(before === undefined ? {} : { before }) });
+  });
+  let quoted: QuotedText | null = null;
+  if (reason !== null) {
+    if (!isRecord(reason)) throw refused();
+    const { type, source, text, ...more } = reason;
+    if (
+      Object.keys(more).length > 0 ||
+      type !== 'quote' ||
+      source !== 'requester' ||
+      !isShownText(text, DISPLAY_LIMITS.reason)
+    ) {
+      throw refused();
+    }
+    quoted = Object.freeze({ type, source, text });
+  }
+  return Object.freeze({ operation, title, fields: Object.freeze(shownFields), reason: quoted });
 }

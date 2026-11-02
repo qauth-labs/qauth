@@ -30,7 +30,6 @@ import {
   CanonicalRequestError,
   newApprovalNonce,
   opHashOf,
-  requestHashOf,
 } from './canonical-request';
 import { renderOperation } from './display';
 import {
@@ -138,20 +137,19 @@ const approvalSchema = z
       .nullable()
       .meta({
         description:
-          'The operation as an approver sees it, rendered from the stored request: typed display data, never HTML. Null once the approval is used, cancelled, denied or expired. The reason, params and query beside it are raw: show this instead.',
+          'The operation as an approver sees it, rendered from the request when the approval was filed and stored then: typed display data, never HTML. Null once the approval is used, cancelled, denied or expired. The reason, params and query beside it are raw: show this instead.',
       }),
   })
   .meta({ description: 'An approval request for one request of a security operation.' });
 
 /** The audit diff of an approval: what was filed, never the body it was filed with. */
 function approvalSummary(approval: AdminApproval): NonNullable<AdminChange['change']['after']> {
-  const stored = approval.canonicalRequest;
   return {
     id: approval.id,
     operation: approval.operationId,
-    method: String(stored['method']),
-    params: (stored['params'] ?? {}) as Record<string, string>,
-    query: (stored['query'] ?? {}) as Record<string, string>,
+    method: approval.method,
+    params: approval.params as Record<string, string>,
+    query: approval.query as Record<string, string>,
     reason: approval.reason,
     status: approval.status,
     approvalsRequired: approval.approvalsRequired,
@@ -327,6 +325,14 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         throw error;
       }
 
+      // Rendered before anything is stored: an operation whose renderer fails
+      // on this request files nothing an approver could not be shown. What it
+      // rendered is what every reader of the approval is shown from now on;
+      // the body itself is never stored (#901).
+      const display = renderOperation(
+        { operationId: operation.id, request: canonical, reason: reason ?? null },
+        registry
+      );
       const nonce = newApprovalNonce();
       const now = Date.now();
       const approval = await request.server.repositories.adminApprovals.create(
@@ -336,8 +342,10 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
           requesterRealmId: caller.issuerRealm.id,
           requesterId: caller.userId,
           operationId: operation.id,
-          canonicalRequest: { ...canonical },
-          requestHash: requestHashOf(canonical),
+          method: canonical.method,
+          params: { ...canonical.params },
+          query: { ...canonical.query },
+          display,
           opHash: opHashOf(canonical, nonce),
           nonce,
           reason: reason ?? null,
@@ -352,9 +360,6 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
         },
         adminTransaction(request)
       );
-      // Rendered before the commit: an operation whose renderer fails on this
-      // request files nothing an approver could not be shown.
-      const display = renderOperation(approval, registry);
       recordAdminChange(request, {
         change: { before: null, after: approvalSummary(approval) },
         annotations: {},
@@ -366,7 +371,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       return approvalResource(approval, {
         now,
         approvalUrl: approvalUrlOf(caller.issuerRealm, approval),
-        display,
+        display: openApprovalDisplay(approval, now),
       });
     }
   );
@@ -392,7 +397,7 @@ export const approvalRoutes: FastifyPluginAsync = async (fastify) => {
       return approvalResource(approval, {
         now,
         approvalUrl: await approvalUrlFor(request, caller, approval),
-        display: openApprovalDisplay(approval, registry, now),
+        display: openApprovalDisplay(approval, now),
       });
     }
   );

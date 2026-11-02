@@ -6,15 +6,15 @@ import {
   type CanonicalRequestInput,
   newApprovalNonce,
   opHashOf,
-  requestHashOf,
 } from './canonical-request';
 import { approvalIdOf, approvalRefusal } from './gate';
 
 /**
  * THE APPROVAL GATE'S DECISION (#512): an approval approves a call only when
- * the call's canonical request hashes to the approval's `request_hash`, and
- * only while it is approved and unexpired. One case per part of the request
- * the approval binds, and one per state that refuses.
+ * the call's canonical request, hashed with the approval's stored nonce, gives
+ * the approval's `op_hash`, and only while it is approved and unexpired. One
+ * case per part of the request the approval binds, and one per state that
+ * refuses.
  */
 
 const REALM = '018f2d6e-8a8b-7c3d-9e0f-1a2b3c4d5e6f';
@@ -36,22 +36,23 @@ const FILED: CanonicalRequestInput = {
   requester: REQUESTER,
 };
 
+const NONCE = newApprovalNonce();
+
+type Status = 'pending' | 'approved' | 'denied' | 'cancelled' | 'consumed' | 'expired';
+
 /** The stored approval of `FILED`, in `status`, expiring five minutes after `NOW`. */
-function storedApproval(status: 'pending' | 'approved' | 'denied' | 'cancelled' | 'consumed') {
+function storedApproval(status: Status, nonce = NONCE) {
   return {
-    requestHash: requestHashOf(canonicalRequest(FILED)),
+    opHash: opHashOf(canonicalRequest(FILED), NONCE),
+    nonce,
     status,
     expiresAt: NOW + 5 * 60_000,
   };
 }
 
 /** The gate's answer for the call `call`, at `now`, against the approval of `FILED` in `status`. */
-function decide(
-  call: CanonicalRequestInput,
-  status: Parameters<typeof storedApproval>[0] = 'approved',
-  now = NOW + 1_000
-) {
-  return approvalRefusal(storedApproval(status), requestHashOf(canonicalRequest(call)), now);
+function decide(call: CanonicalRequestInput, status: Status = 'approved', now = NOW + 1_000) {
+  return approvalRefusal(storedApproval(status), canonicalRequest(call), now);
 }
 
 describe('the approval gate (#512)', () => {
@@ -130,12 +131,25 @@ describe('the approval gate (#512)', () => {
     expect(decide(FILED, 'cancelled')).toBe('cancelled');
   });
 
-  it('refuses a pending or denied approval, and an unknown one', () => {
+  it('refuses a pending, denied or swept-expired approval, and an unknown one', () => {
     expect(decide(FILED, 'pending')).toBe('pending');
     expect(decide(FILED, 'denied')).toBe('denied');
-    expect(approvalRefusal(undefined, requestHashOf(canonicalRequest(FILED)), NOW)).toBe(
-      'not-found'
-    );
+    expect(decide(FILED, 'expired')).toBe('expired');
+    expect(approvalRefusal(undefined, canonicalRequest(FILED), NOW)).toBe('not-found');
+  });
+
+  // #901: the hash binds the request only through the nonce stored with it.
+  it('matches no call once the nonce is not the one op_hash was computed with', () => {
+    const retired = storedApproval('approved', newApprovalNonce());
+    expect(approvalRefusal(retired, canonicalRequest(FILED), NOW + 1_000)).toBe('request-mismatch');
+    // A closed approval is refused for what it is, its nonce retired or not.
+    expect(
+      approvalRefusal(
+        storedApproval('consumed', newApprovalNonce()),
+        canonicalRequest(FILED),
+        NOW + 1_000
+      )
+    ).toBe('consumed');
   });
 
   it('reads one UUID from QAuth-Approval, and nothing else', () => {
@@ -150,14 +164,15 @@ describe('the approval gate (#512)', () => {
 });
 
 describe('the canonical request (#512)', () => {
-  it('binds op_hash to the server nonce, and request_hash to nothing but the request', () => {
+  it('binds op_hash to the server nonce', () => {
     const request = canonicalRequest(FILED);
     const first = newApprovalNonce();
     const second = newApprovalNonce();
     expect(first.equals(second)).toBe(false);
     expect(opHashOf(request, first).equals(opHashOf(request, second))).toBe(false);
-    expect(opHashOf(request, first).equals(requestHashOf(request))).toBe(false);
-    expect(requestHashOf(request).equals(requestHashOf(canonicalRequest({ ...FILED })))).toBe(true);
+    expect(opHashOf(request, first).equals(opHashOf(canonicalRequest({ ...FILED }), first))).toBe(
+      true
+    );
     expect(() => opHashOf(request, Buffer.alloc(16))).toThrow(CanonicalRequestError);
   });
 
