@@ -6250,6 +6250,16 @@
             "name": "dpop_jkt",
             "required": false,
             "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "in": "query",
+            "name": "login_hint",
+            "required": false,
+            "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. It pre-fills the identifier step of the sign-in; the person may answer it with another identifier."
           }
         ],
         "x-qauth-stability": "stable",
@@ -6387,6 +6397,11 @@
                   "dpop_jkt": {
                     "type": "string",
                     "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
+                  },
+                  "login_hint": {
+                    "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. It pre-fills the identifier step of the sign-in; the person may answer it with another identifier.",
+                    "type": "string",
+                    "maxLength": 254
                   }
                 },
                 "required": [
@@ -7851,6 +7866,16 @@
             "name": "dpop_jkt",
             "required": false,
             "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "in": "query",
+            "name": "login_hint",
+            "required": false,
+            "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. It pre-fills the identifier step of the sign-in; the person may answer it with another identifier."
           }
         ],
         "x-qauth-stability": "stable",
