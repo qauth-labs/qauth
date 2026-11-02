@@ -612,7 +612,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(grantReads).not.toHaveBeenCalled();
       expect(existing.json()).toMatchObject({ code: 'unauthorized' });
       // The listener takes DPoP-bound tokens only: its challenge is a DPoP one.
-      expect(existing.headers['www-authenticate']).toMatch(/^DPoP algs="[A-Z0-9 ]+"$/);
+      expect(existing.headers['www-authenticate']).toMatch(/^DPoP algs="[A-Za-z0-9 ]+"$/);
       expect(comparable(existing)).toEqual(comparable(await call('GET', realmPath(missing))));
       expect(JSON.stringify(existing.json())).not.toContain('alpha');
       expect(runs).toEqual([]);
@@ -678,7 +678,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(response.statusCode).toBe(401);
       expect(response.json()).toMatchObject({ code: 'invalid_access_token' });
       expect(response.headers['www-authenticate']).toMatch(
-        /^DPoP error="invalid_token", error_description="[^"]*", algs="[A-Z0-9 ]+"$/
+        /^DPoP error="invalid_token", error_description="[^"]*", algs="[A-Za-z0-9 ]+"$/
       );
     }
 
@@ -724,7 +724,7 @@ describe('the admin listener and its pipeline (#511, real containers)', () => {
       expect(noProof.statusCode).toBe(401);
       expect(noProof.json()).toMatchObject({ code: 'invalid_dpop_proof' });
       expect(noProof.headers['www-authenticate']).toMatch(
-        /^DPoP error="invalid_dpop_proof", algs="[A-Z0-9 ]+"$/
+        /^DPoP error="invalid_dpop_proof", algs="[A-Za-z0-9 ]+"$/
       );
       expect(runs).toEqual([]);
       expect(await accountsIn(realmId)).toBe(0);
