@@ -1266,10 +1266,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an error is redirected to the client. A finish the expiry sweep beat, and a
   replayed answer, issue no code. `prompt=none` starts no interaction. The
   consent step can be shown but not yet answered ([#629]): until then the person
-  can cancel, which redirects with `error=access_denied`. The endpoint takes
+  can cancel, which redirects with `error=access_denied` once the request is
+  checked again, as a finish is. The endpoint takes
   `login_hint` (OpenID Connect Core 1.0 §3.1.2.1, at most 254 bytes in UTF-8,
   longer is `invalid_request`), which the identifier step offers as its
-  pre-fill, in the step's personal data. The flow graph `core.authorization`
+  pre-fill, in the step's personal data; the request log censors it, and the
+  interaction id of the ceremony page path. The flow graph `core.authorization`
   draws the endpoint in both modes.
 
 - **Security operations, defined by effect, as an enforced classification**

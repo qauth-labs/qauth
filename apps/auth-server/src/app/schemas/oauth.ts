@@ -77,7 +77,7 @@ export const loginHintParamSchema = z
   .optional()
   .meta({
     description:
-      'OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. It pre-fills the identifier step of the sign-in; the person may answer it with another identifier.',
+      'OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it.',
   });
 
 /* -------------------------------------------------------------------------- */

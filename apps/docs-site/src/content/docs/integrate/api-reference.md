@@ -685,9 +685,10 @@ body is JSON or `application/x-www-form-urlencoded` (else `415`), at most 16 KiB
 answer to `webauthn_create` (else `413`); a form field may not be repeated (`400` `invalid_answer`).
 A form post gets `303` to the ceremony app's page of the interaction (under the realm's
 sign-in pages), or to the final redirect; a JSON answer gets the next step or the redirect as JSON. The redirect is
-taken from the interaction and the realm, never from the request. Until the authorization endpoint
-starts interactions and issues their codes (#628), a finished sign-in redirects to the client with
-`error=server_error`. Every answer is `Cache-Control: no-store`, sends no CORS header, and every
+taken from the interaction and the realm, never from the request. When a sign-in finishes, its
+authorization request goes on (#628): it is checked and decided again for the new session, and the
+client gets its code, or the next interaction starts; a cancel checks the request again before the
+client gets `error=access_denied`. Every answer is `Cache-Control: no-store`, sends no CORS header, and every
 error is a problem document without `detail` or `instance`; a throttled sign-in is `429` with
 `Retry-After`. Rate limits count per address and route, except the step read's: an answer that
 carries a credential (a password, a one-time or recovery code, a passkey response, a device's user
