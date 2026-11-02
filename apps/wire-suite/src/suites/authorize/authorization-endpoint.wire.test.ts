@@ -51,7 +51,7 @@ function redirectResponse(response: Response): URL {
   return url;
 }
 
-describe('RFC 7636 §4.4.1 — an authorization request without a valid PKCE challenge', () => {
+describe('[GET /oauth/authorize] RFC 7636 §4.4.1 — an authorization request without a valid PKCE challenge', () => {
   it('refuses a request with no code_challenge with 400 invalid_request, issuing no code (§4.4.1)', async () => {
     const { params } = authorizationRequest({ code_challenge: null });
 
@@ -74,7 +74,7 @@ describe('RFC 7636 §4.4.1 — an authorization request without a valid PKCE cha
     await expectRefusedWithoutRedirect(await call('GET /oauth/authorize', { query: params }));
   });
 
-  it('refuses a form-encoded POST with no code_challenge identically to GET (OIDC Core 1.0 §3.1.2.1)', async () => {
+  it('[POST /oauth/authorize] refuses a form-encoded POST with no code_challenge identically to GET (OIDC Core 1.0 §3.1.2.1)', async () => {
     const { params } = authorizationRequest({ code_challenge: null });
 
     const viaGet = await expectRefusedWithoutRedirect(
@@ -88,7 +88,7 @@ describe('RFC 7636 §4.4.1 — an authorization request without a valid PKCE cha
   });
 });
 
-describe('RFC 6749 §4.1.2.1 — a request whose client or redirect URI does not check out', () => {
+describe('[GET /oauth/authorize] RFC 6749 §4.1.2.1 — a request whose client or redirect URI does not check out', () => {
   it('refuses a redirect_uri the client did not register and never redirects to it (§4.1.2.1, §3.1.2.2)', async () => {
     const { params } = authorizationRequest({
       redirect_uri: 'https://wire-suite.example/callback',
@@ -112,7 +112,7 @@ describe('RFC 6749 §4.1.2.1 — a request whose client or redirect URI does not
   });
 });
 
-describe('RFC 9207 §2 — iss on every authorization response', () => {
+describe('[GET /oauth/authorize] RFC 9207 §2 — iss on every authorization response', () => {
   it('adds the iss equal to the published issuer to a login_required error under prompt=none (§2, §2.3; OIDC Core 1.0 §3.1.2.1)', async () => {
     const request = authorizationRequest({ prompt: 'none' });
 
@@ -125,7 +125,7 @@ describe('RFC 9207 §2 — iss on every authorization response', () => {
     expect(url.searchParams.has('code')).toBe(false);
   });
 
-  it('answers a form-encoded POST identically to GET, iss included (OIDC Core 1.0 §3.1.2.1)', async () => {
+  it('[POST /oauth/authorize] answers a form-encoded POST identically to GET, iss included (OIDC Core 1.0 §3.1.2.1)', async () => {
     const { params } = authorizationRequest({ prompt: 'none' });
 
     const viaGet = redirectResponse(await call('GET /oauth/authorize', { query: params }));

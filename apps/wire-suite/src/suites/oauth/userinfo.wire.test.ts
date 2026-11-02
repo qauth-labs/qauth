@@ -37,7 +37,7 @@ async function expectInvalidToken(response: Response): Promise<void> {
   await expectOAuthError(response, { status: 401, error: 'invalid_token' });
 }
 
-describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
+describe('[GET /oauth/userinfo] OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
   let session: SignedInBrowser;
   let tokens: TokenResponse;
   let subject: string;
@@ -58,7 +58,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     expect(claims['sub']).toBe(subject);
   });
 
-  it('answers POST with the Bearer header with the same claims as GET (§5.3.1; RFC 6750 §2.1)', async () => {
+  it('[POST /oauth/userinfo] answers POST with the Bearer header with the same claims as GET (§5.3.1; RFC 6750 §2.1)', async () => {
     const viaGet = await claimsOf(
       await call('GET /oauth/userinfo', {
         headers: { authorization: `Bearer ${tokens.access_token}` },
@@ -73,7 +73,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     expect(viaPost).toEqual(viaGet);
   });
 
-  it('answers POST with the token as a form-encoded access_token parameter (§5.3.1; RFC 6750 §2.2)', async () => {
+  it('[POST /oauth/userinfo] answers POST with the token as a form-encoded access_token parameter (§5.3.1; RFC 6750 §2.2)', async () => {
     const claims = await claimsOf(
       await call('POST /oauth/userinfo', { form: { access_token: tokens.access_token } })
     );
@@ -114,7 +114,7 @@ describe('OIDC Core 1.0 §5.3 — the UserInfo endpoint', () => {
     );
   });
 
-  it('refuses an access token once it is revoked, on GET and on POST (§5.3.3; RFC 7009 §2.1)', async () => {
+  it('[POST /oauth/userinfo] refuses an access token once it is revoked, on GET and on POST (§5.3.3; RFC 7009 §2.1)', async () => {
     const own = await readTokenResponse(await exchangeCode(await issueCode(session)));
     const revoked = await call('POST /oauth/revoke', {
       headers: { authorization: basicAuthorization(confidentialClient()) },

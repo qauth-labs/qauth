@@ -44,7 +44,7 @@ async function introspect(
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-describe('RFC 7662 §2 — token introspection by the client the token was issued to', () => {
+describe('[POST /oauth/introspect] RFC 7662 §2 — token introspection by the client the token was issued to', () => {
   it('reports a live access token active, with the claims a resource server needs (§2.2)', async () => {
     const client = confidentialClient();
     const token = await clientToken();

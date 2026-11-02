@@ -41,7 +41,7 @@ async function readRegistration(response: Response): Promise<Record<string, unkn
   return JSON.parse(text) as Record<string, unknown>;
 }
 
-describe('RFC 7591 §3 — open dynamic registration on a default deployment', () => {
+describe('[POST /oauth/register] RFC 7591 §3 — open dynamic registration on a default deployment', () => {
   it('registers a confidential client and answers 201 with its client_id and secret, never cached (§3.1, §3.2.1)', async () => {
     const before = Math.floor(Date.now() / 1000) - 5;
 

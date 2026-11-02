@@ -50,7 +50,7 @@ async function introspectionActive(token: string): Promise<unknown> {
   return (JSON.parse(text) as Record<string, unknown>)['active'];
 }
 
-describe('RFC 7009 §2 — token revocation answers 200', () => {
+describe('[POST /oauth/revoke] RFC 7009 §2 — token revocation answers 200', () => {
   it.each(['client_secret_basic', 'client_secret_post'] as const)(
     'answers 200 to a token it never issued, authenticated with %s (§2.1, §2.2)',
     async (authentication) => {

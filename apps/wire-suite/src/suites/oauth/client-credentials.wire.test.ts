@@ -26,7 +26,7 @@ function clientCredentials(
  * seeded can authenticate, and the token it gets verifies against the key set
  * the server publishes.
  */
-describe('RFC 6749 §4.4 — the client credentials grant, with the seeded client', () => {
+describe('[POST /oauth/token] RFC 6749 §4.4 — the client credentials grant, with the seeded client', () => {
   it('issues a Bearer access token that verifies against the discovered JWKS (§4.4.3)', async () => {
     const { body: metadata } = await getJsonObject(
       `${baseUrl.replace(/\/$/, '')}/.well-known/oauth-authorization-server`
@@ -72,7 +72,7 @@ describe('RFC 6749 §4.4 — the client credentials grant, with the seeded clien
   });
 });
 
-describe('RFC 6749 §2.3.1 — client password authentication at the token endpoint', () => {
+describe('[POST /oauth/token] RFC 6749 §2.3.1 — client password authentication at the token endpoint', () => {
   it.each(['client_secret_basic', 'client_secret_post'] as const)(
     'authenticates the client with %s (§2.3.1)',
     async (authentication) => {

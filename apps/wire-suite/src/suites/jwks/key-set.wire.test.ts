@@ -32,7 +32,7 @@ async function discoveredKeySet(): Promise<Record<string, unknown>[]> {
   return body['keys'] as Record<string, unknown>[];
 }
 
-describe('RFC 7517 §5 — the JWK Set at the discovered jwks_uri', () => {
+describe('[GET /.well-known/jwks.json] RFC 7517 §5 — the JWK Set at the discovered jwks_uri', () => {
   it('answers 200 with a JSON object whose "keys" array is not empty', async () => {
     const keys = await discoveredKeySet();
 
