@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 import { DpopProofError } from '../index';
 import {
+  createDpopService,
   DPOP_REPLAY_KEY_PREFIX,
   dpopPlugin,
   type DpopPluginOptions,
@@ -295,5 +296,84 @@ describe('dpopPlugin (#480)', () => {
       })()
     ).rejects.toThrow('must be an absolute http(s) URL');
     await app.close();
+  });
+});
+
+describe('createDpopService (#520)', () => {
+  const ADMIN_BASE = 'https://admin.auth.example.com/';
+
+  /** A bare server whose one route checks its proof with a service of its own. */
+  async function serviceApp(
+    redis: ReturnType<typeof fakeRedis>,
+    options: { iatWindowSeconds?: number; now?: () => number } = {}
+  ): Promise<FastifyInstance> {
+    const service = createDpopService(redis, { baseUrl: ADMIN_BASE, ...options });
+    const app = Fastify({ logger: false });
+    app.setErrorHandler((error, _request, reply) =>
+      error instanceof DpopProofError
+        ? reply.code(400).send({ error: error.error, reason: error.reason })
+        : reply.code(500).send({ error: String(error) })
+    );
+    app.get('/admin/v1-rc.0/realms/:realmId', async (request) => ({
+      thumbprint: (await service.verifyRequest(request)).thumbprint,
+    }));
+    await app.ready();
+    return app;
+  }
+
+  const call = (app: FastifyInstance, dpop: string) =>
+    app.inject({ method: 'GET', url: '/admin/v1-rc.0/realms/r1', headers: { dpop } });
+
+  it('compares htu with its own base URL, without its trailing slash, and the request path', async () => {
+    const redis = fakeRedis();
+    const app = await serviceApp(redis);
+    try {
+      const key = await proofKey();
+      const admin = await call(
+        app,
+        await proof(key, {
+          htm: 'GET',
+          htu: 'https://admin.auth.example.com/admin/v1-rc.0/realms/r1',
+        })
+      );
+      expect(admin.json()).toEqual({ thumbprint: key.thumbprint });
+      // A proof for the same path under the issuer's origin names another URL.
+      const issuer = await call(
+        app,
+        await proof(key, { htm: 'GET', htu: `${ORIGIN}/admin/v1-rc.0/realms/r1` })
+      );
+      expect(issuer.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'htu' });
+      // Recorded in the one store the server's own proofs go to.
+      expect([...redis.keys.keys()]).toEqual([
+        expect.stringMatching(new RegExp(`^${DPOP_REPLAY_KEY_PREFIX}`)),
+      ]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('holds iat to the window it is given, and keeps a used proof longer than twice the window', async () => {
+    const now = Date.now();
+    const redis = fakeRedis();
+    const app = await serviceApp(redis, { iatWindowSeconds: 30, now: () => now });
+    try {
+      const key = await proofKey();
+      const htu = 'https://admin.auth.example.com/admin/v1-rc.0/realms/r1';
+      const iat = Math.floor(now / 1000);
+      const old = await call(app, await proof(key, { htm: 'GET', htu, iat: iat - 31 }));
+      expect(old.json()).toEqual({ error: 'invalid_dpop_proof', reason: 'iat' });
+      const fresh = await call(app, await proof(key, { htm: 'GET', htu, iat: iat - 29 }));
+      expect(fresh.statusCode).toBe(200);
+      const [ttl] = [...redis.keys.values()];
+      expect(ttl).toBeGreaterThanOrEqual(2 * 30 * 1000);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a base URL that is not an absolute http(s) URL when it is built', () => {
+    expect(() => createDpopService(fakeRedis(), { baseUrl: 'admin.example.com' })).toThrow(
+      TypeError
+    );
   });
 });

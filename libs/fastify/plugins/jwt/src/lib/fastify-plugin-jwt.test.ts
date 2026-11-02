@@ -1322,6 +1322,82 @@ describe('requireJwt and DPoP (RFC 9449 §7, #480)', () => {
     }
   });
 
+  describe('a route that checks its own proofs (`requireDpop`, #520)', () => {
+    /** A request of realm A carrying `token` under `scheme`. */
+    const requestWith = (scheme: string, token: string) =>
+      ({ headers: { authorization: `${scheme} ${token}` } }) as FastifyRequest;
+
+    it("checks the proof with the route's check, not the plugin's", async () => {
+      const plugin = vi.fn(async () => undefined);
+      const route = vi.fn(async () => undefined);
+      for (const verify of [undefined, plugin]) {
+        const { app, sign } = await buildDpopApp(verify);
+        try {
+          const token = await sign(true);
+          await expect(
+            app.verifyRequestAccessToken(requestWith('DPoP', token), { requireDpop: route })
+          ).resolves.toMatchObject({ cnf: { jkt: JKT } });
+          expect(route).toHaveBeenLastCalledWith(
+            expect.anything(),
+            token,
+            expect.objectContaining({ cnf: { jkt: JKT } })
+          );
+        } finally {
+          await app.close();
+        }
+      }
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(plugin).not.toHaveBeenCalled();
+    });
+
+    it('refuses a Bearer token, bound or not, without checking a proof', async () => {
+      const route = vi.fn(async () => undefined);
+      const { app, sign } = await buildDpopApp(async () => undefined);
+      try {
+        for (const bound of [true, false]) {
+          await expect(
+            app.verifyRequestAccessToken(requestWith('Bearer', await sign(bound)), {
+              requireDpop: route,
+            })
+          ).rejects.toThrow('This resource takes a DPoP-bound access token only');
+        }
+        expect(route).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it('refuses an unbound token under the DPoP scheme without checking a proof', async () => {
+      const route = vi.fn(async () => undefined);
+      const { app, sign } = await buildDpopApp();
+      try {
+        await expect(
+          app.verifyRequestAccessToken(requestWith('DPoP', await sign(false)), {
+            requireDpop: route,
+          })
+        ).rejects.toThrow('The access token is not bound to a DPoP key');
+        expect(route).not.toHaveBeenCalled();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("refuses the request when the route's proof check throws", async () => {
+      const { app, sign } = await buildDpopApp(async () => undefined);
+      try {
+        await expect(
+          app.verifyRequestAccessToken(requestWith('DPoP', await sign(true)), {
+            requireDpop: async () => {
+              throw new JWTInvalidError('proof refused');
+            },
+          })
+        ).rejects.toThrow('proof refused');
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   it('still accepts an unbound Bearer token with DPoP on', async () => {
     const { app, sign } = await buildDpopApp(async () => undefined);
     try {

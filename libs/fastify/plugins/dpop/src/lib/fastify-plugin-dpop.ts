@@ -111,14 +111,73 @@ function canonicalBaseUrl(baseUrl: string): string {
  */
 export const DPOP_REPLAY_KEY_PREFIX = 'dpop-jti:';
 
+/** Options for {@link createDpopService}. */
+export interface DpopServiceOptions {
+  /** The base URL of the requests, as {@link DpopPluginOptions.baseUrl}. */
+  readonly baseUrl: string | ((request: FastifyRequest) => string);
+  /** The allowlist; default the verifier's `DEFAULT_DPOP_ALGORITHMS`. */
+  readonly algorithms?: readonly DpopAlgorithm[];
+  /**
+   * How far a proof's `iat` may be from the server's clock, in seconds, in
+   * either direction; the verifier's default (60) when unset. Used proofs are
+   * kept for longer than the window allows a proof to pass.
+   */
+  readonly iatWindowSeconds?: number;
+  /** The clock, in epoch milliseconds. Defaults to `Date.now`. */
+  readonly now?: () => number;
+}
+
+/**
+ * A {@link DpopService} over `redis`, which records used proofs under
+ * {@link DPOP_REPLAY_KEY_PREFIX} (RFC 9449 §11.1). The plugin builds the
+ * server's own with it; a listener whose requests are made to another base
+ * URL builds a second one, such as the admin API's, whose proofs name
+ * `ADMIN_API_BASE_URL` (#520). Both record proofs in the one store, so a
+ * proof is used once whichever checks it.
+ *
+ * A fixed `baseUrl` is checked here, so a bad one fails at boot. With Redis
+ * unavailable, every proof is refused: a replay can no longer be ruled out.
+ * The verifier itself bounds each Redis call to 250 ms.
+ */
+export function createDpopService(
+  redis: DpopRedisClient,
+  options: DpopServiceOptions
+): DpopService {
+  const { baseUrl: configured } = options;
+  const fixedBaseUrl = typeof configured === 'string' ? canonicalBaseUrl(configured) : undefined;
+  const baseUrlOf = (request: FastifyRequest): string =>
+    fixedBaseUrl ?? canonicalBaseUrl((configured as (request: FastifyRequest) => string)(request));
+
+  const verifier = createDpopVerifier({
+    replayStore: createRedisDpopReplayStore(redis, { keyPrefix: DPOP_REPLAY_KEY_PREFIX }),
+    ...(options.algorithms ? { algorithms: options.algorithms } : {}),
+    ...(options.iatWindowSeconds === undefined
+      ? {}
+      : { iatWindowSeconds: options.iatWindowSeconds }),
+    ...(options.now ? { now: options.now } : {}),
+  });
+
+  return {
+    algorithms: verifier.algorithms,
+    async verifyRequest(request, check = {}) {
+      return verifier.verify({
+        proof: request.headers.dpop,
+        method: request.method,
+        url: requestUrlUnder(baseUrlOf(request), request.url),
+        ...(check.accessToken === undefined ? {} : { accessToken: check.accessToken }),
+        ...(check.expectedThumbprint === undefined
+          ? {}
+          : { expectedThumbprint: check.expectedThumbprint }),
+      });
+    },
+  };
+}
+
 /**
  * The shared DPoP verifier (`@qauth-labs/server-dpop`) for Fastify routes,
  * issue #480. Decorates `fastify.dpop` with a {@link DpopService} over the
- * cache plugin's Redis client, which records used proofs (RFC 9449 §11.1), or
- * with `null` when `enabled` is false.
- *
- * With Redis unavailable, every proof is refused: a replay can no longer be
- * ruled out. The verifier itself bounds each Redis call to 250 ms.
+ * cache plugin's Redis client ({@link createDpopService}), or with `null`
+ * when `enabled` is false.
  */
 export const dpopPlugin = fp<DpopPluginOptions>(
   async (fastify: FastifyInstance, options: DpopPluginOptions) => {
@@ -126,38 +185,16 @@ export const dpopPlugin = fp<DpopPluginOptions>(
       fastify.decorate('dpop', null);
       return;
     }
-    // A fixed base is refused here, at boot, rather than on the first proof.
-    const { baseUrl: configured } = options;
-    const fixedBaseUrl = typeof configured === 'string' ? canonicalBaseUrl(configured) : undefined;
-    const baseUrlOf = (request: FastifyRequest): string =>
-      fixedBaseUrl ??
-      canonicalBaseUrl((configured as (request: FastifyRequest) => string)(request));
-
-    const verifier = createDpopVerifier({
+    fastify.decorate(
+      'dpop',
       // ioredis's `set` overloads include `SET key value PX ms NX`, the one
       // command the store sends.
-      replayStore: createRedisDpopReplayStore(fastify.redis as unknown as DpopRedisClient, {
-        keyPrefix: DPOP_REPLAY_KEY_PREFIX,
-      }),
-      ...(options.algorithms ? { algorithms: options.algorithms } : {}),
-      ...(options.now ? { now: options.now } : {}),
-    });
-
-    const service: DpopService = {
-      algorithms: verifier.algorithms,
-      async verifyRequest(request, check = {}) {
-        return verifier.verify({
-          proof: request.headers.dpop,
-          method: request.method,
-          url: requestUrlUnder(baseUrlOf(request), request.url),
-          ...(check.accessToken === undefined ? {} : { accessToken: check.accessToken }),
-          ...(check.expectedThumbprint === undefined
-            ? {}
-            : { expectedThumbprint: check.expectedThumbprint }),
-        });
-      },
-    };
-    fastify.decorate('dpop', service);
+      createDpopService(fastify.redis as unknown as DpopRedisClient, {
+        baseUrl: options.baseUrl,
+        ...(options.algorithms ? { algorithms: options.algorithms } : {}),
+        ...(options.now ? { now: options.now } : {}),
+      })
+    );
   },
   {
     name: DPOP_PLUGIN_NAME,
