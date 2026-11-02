@@ -78,7 +78,7 @@ Every line below is `await`ed except where noted, so the order in the file is th
 | 11  | `requestIdPlugin`, `apps/auth-server/src/app/app.ts:809`            | Echoes the request id back on the response            |
 | 12  | `metricsPlugin`, `apps/auth-server/src/app/app.ts:954`              | Prometheus registry                                   |
 | 13  | `corsPlugin`, `apps/auth-server/src/app/app.ts:1141`                | Fail-closed in production when `CORS_ORIGIN` is unset |
-| 14  | `formbody`, `apps/auth-server/src/app/app.ts:1101`                  | Form-encoded body parsing                             |
+| 14  | `formbody`, `apps/auth-server/src/app/app.ts:1162`                  | Form-encoded body parsing                             |
 
 Then three registrations whose **relative** order is the subject of the rest of this page, so this
 table deliberately does not pin them to line numbers:
@@ -114,7 +114,7 @@ the missing plugin.
 
 ### `formbody` must precede routes — verified
 
-`@fastify/formbody` at `apps/auth-server/src/app/app.ts:1101`, with its own comment:
+`@fastify/formbody` at `apps/auth-server/src/app/app.ts:1162`, with its own comment:
 
 > RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection) both mandate
 > `application/x-www-form-urlencoded` for request bodies. Fastify ships with a JSON parser by
@@ -148,9 +148,13 @@ notice — the first spec-compliant client to call `/oauth/token` gets a 415 —
 of the three that announces itself. The other two are silent, which is what makes them more
 dangerous despite affecting less of the surface.
 
-The registration has a dedicated test at `apps/auth-server/src/app/plugins/formbody.test.ts` — but
-note it is a test of the _plugin's behaviour_, deliberately built on a bare `Fastify()` instance,
-not a test that `app.ts` still registers it in the right place. Nothing tests the ordering.
+The registration has a dedicated test at `apps/auth-server/src/app/plugins/formbody.test.ts`. It is
+a test of the _plugin's behaviour_, deliberately built on a bare `Fastify()` instance: it pins the
+parsing the OAuth endpoints rely on, such as a repeated parameter becoming an array in the order
+sent. It does not check where `app.ts` registers the plugin. The ordering is guarded at runtime by
+`apps/auth-server/src/app/error-handler-wiring.test.ts` instead: its form-encoded `/oauth/token`
+tests answer `415` instead of `400` when the registration is moved below the route manifest
+(verified by doing so).
 
 ### `rateLimitPlugin` must precede routes — verified, and undocumented
 

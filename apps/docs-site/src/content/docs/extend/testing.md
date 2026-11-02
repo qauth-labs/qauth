@@ -72,8 +72,9 @@ There are two stronger patterns in the tree, and the difference between them is 
   `app.ts` itself.
 
 When you add a test whose subject is _wiring_ rather than _logic_, the second pattern is the one
-that caught #365; the first would not have. `formbody` still has a real ordering requirement and no
-guard of either kind.
+that caught #365; the first would not have. `formbody`'s ordering requirement is guarded the second
+way: the assembled app's form-encoded `/oauth/token` tests answer `415` when it is registered after
+the routes.
 
 [#365]: https://github.com/qauth-labs/qauth/issues/365
 
