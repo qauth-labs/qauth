@@ -869,9 +869,9 @@ A form post was refused because its CSRF check failed: the token was missing or 
 - Subject: `user`, when known
 - Schema: [request.csrf_rejected.v1-rc.0.json](/schemas/events/request.csrf_rejected.v1-rc.0.json)
 
-| Member | Type                                                                                                 | Required | Meaning                                                        |
-| ------ | ---------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
-| `form` | one of `sign_in`, `wallet_sign_in`, `wallet_link`, `consent`, `consent_revocation`, or a later value | yes      | The form that was posted. The set may grow in a minor release. |
+| Member | Type                                                                                                                | Required | Meaning                                                        |
+| ------ | ------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
+| `form` | one of `sign_in`, `wallet_sign_in`, `wallet_link`, `consent`, `consent_revocation`, `interaction`, or a later value | yes      | The form that was posted. The set may grow in a minor release. |
 
 ### ssf.stream.verification_requested v1-rc.0
 

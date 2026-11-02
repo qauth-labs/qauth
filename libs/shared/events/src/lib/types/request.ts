@@ -12,6 +12,8 @@ export const CSRF_FORMS = [
   'wallet_link',
   'consent',
   'consent_revocation',
+  /** An answer or a cancel at the Interaction API (#616). */
+  'interaction',
 ] as const;
 
 export const requestCsrfRejected = defineEventType({
