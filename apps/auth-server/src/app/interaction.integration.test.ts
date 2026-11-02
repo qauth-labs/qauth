@@ -1,4 +1,4 @@
-import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
+import { stepUrn } from '@qauth-labs/shared-interaction-contract';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyBaseLogger, FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,6 +42,15 @@ import type { InteractionStep } from './helpers/interaction-record';
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
+
+/**
+ * Where the stand-in routes live: beside the Interaction API's own routes
+ * (#616), which the app now registers at `/interaction/v1-rc.0`, under a
+ * release candidate no route serves. The log censor and the bare problem
+ * documents cover every `/interaction/v<N>-rc.<M>` path, so these paths get
+ * the same treatment.
+ */
+const TEST_PREFIX = '/interaction/v1-rc.999';
 
 const EMAIL = 'interaction-owner@example.com';
 const FLOW_COOKIE = '__Host-qauth_flow';
@@ -96,13 +105,13 @@ async function interactionRoutes(app: FastifyInstance): Promise<void> {
       ...(body.personal === undefined ? {} : { personal: body.personal as never }),
     });
   });
-  app.get(`${INTERACTION_API_PREFIX}/:id`, browser, async (request) =>
+  app.get(`${TEST_PREFIX}/:id`, browser, async (request) =>
     interaction.readInteractionStep(request, idOf(request))
   );
-  app.get(`${INTERACTION_API_PREFIX}/:id/personal`, browser, async (request) =>
+  app.get(`${TEST_PREFIX}/:id/personal`, browser, async (request) =>
     interaction.readInteractionPersonalData(request, idOf(request))
   );
-  app.post(`${INTERACTION_API_PREFIX}/:id/answer`, browser, async (request, reply) => {
+  app.post(`${TEST_PREFIX}/:id/answer`, browser, async (request, reply) => {
     const { revision, decision, delayMs } = request.body as {
       revision: number;
       decision: DecisionSpec;
@@ -126,10 +135,10 @@ async function interactionRoutes(app: FastifyInstance): Promise<void> {
       }
     );
   });
-  app.post(`${INTERACTION_API_PREFIX}/:id/cancel`, browser, async (request, reply) =>
+  app.post(`${TEST_PREFIX}/:id/cancel`, browser, async (request, reply) =>
     interaction.cancelInteraction(request, reply, idOf(request))
   );
-  app.post(`${INTERACTION_API_PREFIX}/:id/switch`, browser, async (request, reply) =>
+  app.post(`${TEST_PREFIX}/:id/switch`, browser, async (request, reply) =>
     interaction.switchInteractionUser(request, reply, idOf(request))
   );
 }
@@ -168,15 +177,15 @@ class Browser {
   }
 
   read(id: string) {
-    return this.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    return this.request('GET', `${TEST_PREFIX}/${id}`);
   }
 
   personal(id: string) {
-    return this.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`);
+    return this.request('GET', `${TEST_PREFIX}/${id}/personal`);
   }
 
   answer(id: string, revision: number, decision: DecisionSpec, delayMs?: number) {
-    return this.request('POST', `${INTERACTION_API_PREFIX}/${id}/answer`, {
+    return this.request('POST', `${TEST_PREFIX}/${id}/answer`, {
       revision,
       decision,
       delayMs,
@@ -284,6 +293,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     expect((await owner.personal(id)).json()).toEqual({
       step: SELECT_ACCOUNT_STEP.name,
       data: { accounts: ['owner@x'] },
+      current: SELECT_ACCOUNT_STEP,
     });
     expect((await owner.answer(id, 0, { kind: 'step', step: CONSENT_STEP })).statusCode).toBe(200);
     expect(decided).toHaveLength(1);
@@ -301,9 +311,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
 
     expect((await browserA.personal(idB)).statusCode).toBe(410);
     expect((await browserA.answer(idB, 0, { kind: 'finished' })).statusCode).toBe(410);
-    expect(
-      (await browserA.request('POST', `${INTERACTION_API_PREFIX}/${idB}/cancel`)).statusCode
-    ).toBe(410);
+    expect((await browserA.request('POST', `${TEST_PREFIX}/${idB}/cancel`)).statusCode).toBe(410);
     expect(decided).toHaveLength(0);
     expect((await browserB.personal(idB)).statusCode).toBe(200);
   });
@@ -369,7 +377,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     expect(owner.jar.get(FLOW_COOKIE)).not.toBe(flowBefore);
     const old = await app.inject({
       method: 'GET',
-      url: `${INTERACTION_API_PREFIX}/${id}/personal`,
+      url: `${TEST_PREFIX}/${id}/personal`,
       headers: { cookie: `${FLOW_COOKIE}=${flowBefore}` },
     });
     expect(old.statusCode).toBe(410);
@@ -423,7 +431,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     const id = await owner.start();
     await owner.answer(id, 0, { kind: 'authenticated', userId, amr: ['pwd'], step: CONSENT_STEP });
 
-    const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    const switched = await owner.request('POST', `${TEST_PREFIX}/${id}/switch`);
     expect(switched.statusCode).toBe(200);
     const { kind, id: newId } = switched.json() as { kind: string; id: string };
     expect(kind).toBe('switched');
@@ -502,7 +510,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     expect(before.statusCode).toBe(302);
     expect(new URL(before.headers['location'] as string).searchParams.get('code')).not.toBeNull();
 
-    const switched = await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+    const switched = await owner.request('POST', `${TEST_PREFIX}/${id}/switch`);
     expect(switched.statusCode).toBe(200);
     expect(switched.json()).toMatchObject({ kind: 'switched' });
 
@@ -590,7 +598,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     });
     await owner.answer(first, 1, { kind: 'finished' });
     const second = await owner.start();
-    await owner.request('POST', `${INTERACTION_API_PREFIX}/${second}/cancel`);
+    await owner.request('POST', `${TEST_PREFIX}/${second}/cancel`);
 
     const types = (await interactionEvents(app)).map((row) => row.type);
     expect(types).toEqual([
