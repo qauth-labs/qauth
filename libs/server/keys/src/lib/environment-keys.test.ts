@@ -171,6 +171,21 @@ describe('prepareEnvironmentKeys — RS256', () => {
     expect(key.kid).toBe(key.thumbprint);
   });
 
+  it('accepts an RSA key in PKCS#1 PEM and stores it as PKCS#8, as operate/keys says', async () => {
+    const pkcs1 = createPrivateKey(RSA.privateKey).export({ type: 'pkcs1', format: 'pem' });
+    expect(pkcs1.toString()).toMatch(/^-----BEGIN RSA PRIVATE KEY-----/);
+
+    const [key] = await prepareEnvironmentKeys(
+      { rs256: { privateKey: source(pkcs1.toString(), 'JWT_RS256_PRIVATE_KEY') } },
+      { enabledSignatureAlgorithms: ED25519_ONLY }
+    );
+
+    expect(Buffer.from(key.material)).toEqual(
+      createPrivateKey(RSA.privateKey).export({ type: 'pkcs8', format: 'der' })
+    );
+    expect(key.publicJwk).toMatchObject(createPublicKey(RSA.publicKey).export({ format: 'jwk' }));
+  });
+
   it(`refuses an RSA key shorter than ${MIN_RSA_MODULUS_BITS} bits`, async () => {
     const short = pemPair('rsa', 1024);
 
