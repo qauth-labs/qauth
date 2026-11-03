@@ -126,6 +126,11 @@ export const LOG_REDACTED_QUERY_PARAMETERS = [
   'response_code',
   'token',
   'login_hint',
+  // The end-session endpoint (#675): the ID token an app sends as a hint
+  // carries the person's claims, and logout_hint names the account, as
+  // login_hint does.
+  'id_token_hint',
+  'logout_hint',
 ] as const;
 
 /**

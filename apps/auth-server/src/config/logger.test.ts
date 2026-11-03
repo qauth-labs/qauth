@@ -296,7 +296,7 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists the bearer values that ride in a query string, and login_hint (#628)', () => {
+  it('lists the bearer values that ride in a query string, login_hint (#628) and the end-session hints (#675)', () => {
     expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual([
       'code',
       'id_token',
@@ -304,7 +304,19 @@ describe('redactLoggedUrl', () => {
       'response_code',
       'token',
       'login_hint',
+      'id_token_hint',
+      'logout_hint',
     ]);
+  });
+
+  it('censors the id_token_hint and logout_hint of an end-session request (#675)', () => {
+    expect(
+      redactLoggedUrl(
+        '/oauth/end-session?id_token_hint=eyJh.eyJz.c2ln&logout_hint=alice%40example.com&state=s'
+      )
+    ).toBe(
+      `/oauth/end-session?id_token_hint=${LOG_REDACT_CENSOR}&logout_hint=${LOG_REDACT_CENSOR}&state=s`
+    );
   });
 
   it('censors the login_hint of an authorization request (#628)', () => {
@@ -365,7 +377,7 @@ describe('redactLoggedUrl', () => {
     );
     // Only the parameter named `token`, not one that ends or starts with it.
     for (const url of [
-      '/r?id_token_hint=abc',
+      '/r?id_token_type=abc',
       '/r?token_type_hint=refresh_token',
       '/r?x_token=keep',
       '/r?state=token',
