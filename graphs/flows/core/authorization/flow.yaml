@@ -14,8 +14,10 @@
 #   answers the browser itself.
 # - An error the endpoint would redirect before the person has seen any QAuth page goes by 302 only to a client an
 #   operator provisioned; for any other client it is shown on the issuer (RFC 9700 §4.11.2), the exits ending in
-#   `_shown`. An error decided when an interaction finishes is redirected for every client: the person has used QAuth's
-#   pages by then, as a cancel, and as the consent page's own refusals.
+#   `_shown`. An error decided when an interaction finishes follows the same rule: the answer sends the browser to the
+#   client's redirect_uri only for a client an operator provisioned, and for any other to the issuer page that shows
+#   it, /ui/resume/<handle> (the exits ending in `_after_sign_in_shown`), since the Interaction API returns no HTML. A
+#   cancel is redirected for every client: it is the person's own choice, as the consent page's deny.
 # - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
 #   `source:` of the transition it decides: the line of the check.
 # - The two requests of the interaction mode are drawn as one walk: the GET or POST that starts the interaction, and
@@ -186,8 +188,8 @@ context:
         by the finish or the cancel, client_id names no client any more, or its redirect URI was removed or is no longer
         permitted
       clientUnusable: >-
-        by the finish or the cancel, the client was disabled or suspended, or lost the authorization_code grant or the code response
-        type
+        by the finish or the cancel, the client was disabled or suspended, or lost the authorization_code grant or the
+        code response type
   finishSession:
     values: [live, unusable]
     initial: any
@@ -266,6 +268,10 @@ failures:
     server: [server_error]
   continuingToConsent:
     from: interactionStore
+    tooLarge: [invalid_request]
+    server: [server_error]
+  parkingFinishError:
+    from: pendingAuthorizationStore
     tooLarge: [invalid_request]
     server: [server_error]
 
@@ -426,11 +432,11 @@ states:
       - guard: dpopJktMalformed and operatorClient
         target: invalid_request.malformed_dpop_jkt
         say: 'dpop_jkt is not one thumbprint, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:118
       - guard: dpopJktMalformed
         target: invalid_request.malformed_dpop_jkt_shown
         say: 'dpop_jkt is not one thumbprint, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - target: findingSession
         say: 'dpop_jkt is absent, unread or well formed'
         source: apps/auth-server/src/app/routes/oauth/authorize.ts:133
@@ -453,7 +459,7 @@ states:
       - guard: (noSession or unusableSession) and silent
         target: login_required.no_session_shown
         say: 'no usable session under prompt=none, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - guard: noSession or unusableSession
         target: signInNeeded
         say: 'no usable session: the person signs in first, and the request is decided again with that session'
@@ -469,18 +475,24 @@ states:
     description: ADR-007 §2 (#184). On the raw scope parameter, before the allowlist filter.
     source: apps/auth-server/src/app/helpers/authorization-request.ts:371
     always:
-      - guard: overAgentCap and finishing
+      - guard: overAgentCap and finishing and operatorClient
         target: invalid_scope.agent_scope_mode_exceeded_after_sign_in
-        say: 'an agent scope is above the cap, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:257
+        say: >-
+          an agent scope is above the cap, decided when the interaction finished, for a client an operator provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:243
+      - guard: overAgentCap and finishing
+        target: parkingFinishError
+        say: >-
+          an agent scope is above the cap, decided when the interaction finished, for a client no operator provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:244
       - guard: overAgentCap and operatorClient
         target: invalid_scope.agent_scope_mode_exceeded
         say: 'an agent scope is above the cap, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:118
       - guard: overAgentCap
         target: invalid_scope.agent_scope_mode_exceeded_shown
         say: 'an agent scope is above the cap, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - target: checkingAudience
         say: "no agent scope is above the cap; the scopes are the requested ones the client's allowlist holds"
         source: apps/auth-server/src/app/helpers/authorization-request.ts:393
@@ -490,18 +502,26 @@ states:
     description: RFC 8707 §2 (#509), before a consent screen offers what the token endpoint would refuse.
     source: apps/auth-server/src/app/helpers/authorization-request.ts:410
     always:
-      - guard: audienceUnlisted and finishing
+      - guard: audienceUnlisted and finishing and operatorClient
         target: invalid_target.unlisted_reserved_audience_after_sign_in
-        say: 'a resource names a QAuth API audience the client does not list, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:257
+        say: >-
+          a resource names a QAuth API audience the client does not list, decided when the interaction finished, for a
+          client an operator provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:243
+      - guard: audienceUnlisted and finishing
+        target: parkingFinishError
+        say: >-
+          a resource names a QAuth API audience the client does not list, decided when the interaction finished, for a
+          client no operator provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:244
       - guard: audienceUnlisted and operatorClient
         target: invalid_target.unlisted_reserved_audience
         say: 'a resource names a QAuth API audience the client does not list, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:118
       - guard: audienceUnlisted
         target: invalid_target.unlisted_reserved_audience_shown
         say: 'a resource names a QAuth API audience the client does not list, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - target: decidingStepUp
         say: 'every QAuth API audience among the resources is one the client lists'
         source: apps/auth-server/src/app/helpers/authorization-request.ts:428
@@ -523,7 +543,7 @@ states:
       - guard: silent and needsFreshLogin
         target: login_required.fresh_login_shown
         say: 'prompt=none, and the sign-in is too old for what is asked, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - guard: silent and consentMissing and operatorClient
         target: consent_required.prompt_none
         say: 'prompt=none, and no consent covers the request, for a client an operator provisioned'
@@ -531,7 +551,7 @@ states:
       - guard: silent and consentMissing
         target: consent_required.prompt_none_shown
         say: 'prompt=none, and no consent covers the request, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - guard: needsFreshLogin
         target: signInNeeded
         effect: [forFreshLogin]
@@ -562,7 +582,7 @@ states:
           target: code_issued.after_sign_in
           effect: [mintCode]
           say: 'the code is stored, for the request whose interaction finished'
-          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:255
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:288
         - target: code_issued
           effect: [mintCode]
           say: 'the code is stored'
@@ -575,7 +595,7 @@ states:
         - guard: silent
           target: login_required.session_ended_shown
           say: 'the session ended under the request, under prompt=none, for a client no operator provisioned'
-          source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+          source: apps/auth-server/src/app/helpers/authorization-error.ts:135
         - target: signInNeeded
           effect: [forEndedSession]
           say: 'the session ended under the request: the person signs in again'
@@ -588,7 +608,7 @@ states:
         - guard: silent
           target: consent_required.consent_withdrawn_shown
           say: 'the consent was revoked under the request, under prompt=none, for a client no operator provisioned'
-          source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+          source: apps/auth-server/src/app/helpers/authorization-error.ts:135
         - target: consentNeeded
           effect: [forWithdrawnConsent]
           say: 'the consent was revoked under the request: the person is asked again'
@@ -612,7 +632,7 @@ states:
       - guard: finishing
         target: continuingToSignIn
         say: 'the request is decided at the finish of an interaction: the next interaction continues it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:259
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:298
       - guard: pages
         target: parkingRequest
         say: 'INTERACTION_UI_ENABLED is off'
@@ -638,34 +658,50 @@ states:
         target: consent_screen.page
         say: 'INTERACTION_UI_ENABLED is off'
         source: apps/auth-server/src/app/routes/oauth/authorize.ts:206
-      - guard: scopesUnshowable and finishing
+      - guard: scopesUnshowable and finishing and operatorClient
         target: invalid_scope.consent_not_shown_after_sign_in
-        say: 'the consent step cannot show the scopes, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:262
-      - guard: resourcesUnshowable and finishing
+        say: >-
+          the consent step cannot show the scopes, decided when the interaction finished, for a client an operator
+          provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:243
+      - guard: scopesUnshowable and finishing
+        target: parkingFinishError
+        say: >-
+          the consent step cannot show the scopes, decided when the interaction finished, for a client no operator
+          provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:244
+      - guard: resourcesUnshowable and finishing and operatorClient
         target: invalid_target.consent_not_shown_after_sign_in
-        say: 'the consent step cannot show the resources, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:262
+        say: >-
+          the consent step cannot show the resources, decided when the interaction finished, for a client an operator
+          provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:243
+      - guard: resourcesUnshowable and finishing
+        target: parkingFinishError
+        say: >-
+          the consent step cannot show the resources, decided when the interaction finished, for a client no operator
+          provisioned
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:244
       - guard: scopesUnshowable and operatorClient
         target: invalid_scope.consent_not_shown
         say: 'the consent step cannot show the scopes, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:123
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:128
       - guard: scopesUnshowable
         target: invalid_scope.consent_not_shown_shown
         say: 'the consent step cannot show the scopes, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - guard: resourcesUnshowable and operatorClient
         target: invalid_target.consent_not_shown
         say: 'the consent step cannot show the resources, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:125
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:130
       - guard: resourcesUnshowable
         target: invalid_target.consent_not_shown_shown
         say: 'the consent step cannot show the resources, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
       - guard: finishing
         target: continuingToConsent
         say: 'the consent step can show the request, which an interaction just finished: the next one continues it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:268
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:313
       - target: startingConsent
         say: 'the consent step can show the request'
         source: apps/auth-server/src/app/routes/oauth/authorize.ts:179
@@ -678,29 +714,29 @@ states:
       The authorize URL, rebuilt from the validated form for a POST, is checked against 16 KiB and stored under a
       single-use handle for ten minutes (#316), and the browser is sent to /ui/login with /ui/resume/<handle> as its
       return_to, which sends it back here once signed in.
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:293
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:383
     invoke: { external: pendingAuthorizationStore }
     on:
       DONE:
         - guard: noSession
           target: sign_in_required.no_session
           say: 'the request is parked, for a request with no session'
-          source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+          source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
         - guard: unusableSession
           target: sign_in_required.unusable_session
           say: 'the request is parked, for a cookie of no usable session'
-          source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+          source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
         - guard: "signInCause == 'sessionEnded'"
           target: sign_in_required.session_ended
           say: 'the request is parked, for a session that ended under it'
-          source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+          source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
         - target: sign_in_required.fresh_login
           say: 'the request is parked, for a step-up'
-          source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+          source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the rebuilt request is over 16 KiB'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:225
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:261
 
   # INTERACTION_UI_ENABLED on: the interactions (#628)
 
@@ -810,7 +846,7 @@ states:
       cancelAuthorization: the cancel has ended the interaction, its record deleted and its secret out of the flow
       cookie; the request it held is checked again as the endpoint checks it, as a finish is, so a client disabled, or
       a redirect URI removed, since the interaction started gets no redirect.
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:295
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:340
     always:
       - guard: "since == 'clientGone'"
         target: invalid_request.client_changed
@@ -822,7 +858,7 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-request.ts:228
       - target: access_denied.cancelled
         say: 'the request still passes'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:296
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:341
 
   # The answer that finishes an interaction (POST /interaction/v1-rc.0/{id}/answer).
 
@@ -860,7 +896,7 @@ states:
       checkAuthorizationRequest on the request the record holds: the client may have been deleted, disabled or
       changed since the interaction started. A refusal is thrown, so nothing is sent to a redirect URI the client no
       longer holds.
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:249
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
     always:
       - guard: "since == 'clientGone'"
         target: invalid_request.client_changed
@@ -872,14 +908,14 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-request.ts:228
       - target: findingTransactionSession
         say: 'the request still passes'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:252
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:285
 
   findingTransactionSession:
     title: Find the session the interaction holds
     description: >-
       By its sid, not by the cookie, which the answer is only now setting: live, its user's, and its account still
       allowed to use it (liveBrowserSession, the cookie path's rules).
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:252
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:285
     always:
       - guard: "finishSession == 'unusable'"
         target: signInNeeded
@@ -888,7 +924,7 @@ states:
         source: apps/auth-server/src/app/helpers/browser-session.ts:178
       - target: checkingAgentCap
         say: 'the session is live: the request is decided again for it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:253
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:286
 
   continuingToSignIn:
     title: Continue the request in a new sign-in interaction
@@ -902,7 +938,7 @@ states:
         target: atSignInCeremony
         effect: [openInteraction]
         say: 'the next interaction is stored'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:272
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:317
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
@@ -922,7 +958,7 @@ states:
         target: atConsentCeremony
         effect: [openInteraction]
         say: 'the next interaction is stored'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:272
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:317
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
@@ -930,6 +966,41 @@ states:
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
+        source: apps/auth-server/src/app/plugins/error-handler.ts:636
+
+  parkingFinishError:
+    title: Park the error the finish decided, for the issuer page that shows it
+    description: >-
+      The client is not one an operator provisioned, so its error goes to no redirect URI before the person has seen
+      it (RFC 9700 §4.11.2). The answer endpoint returns no HTML (ADR-019 Decision 6): the error response is checked
+      against 16 KiB and parked under a single-use handle of 43 base64url characters for ten minutes, in the store
+      that parks an authorize URL for the sign-in page, and the browser is sent to /ui/resume/<handle>.
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:347
+    invoke: { external: pendingAuthorizationStore }
+    on:
+      DONE:
+        - guard: overAgentCap
+          target: invalid_scope.agent_scope_mode_exceeded_after_sign_in_shown
+          say: 'the error is parked: an agent scope above the cap'
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+        - guard: audienceUnlisted
+          target: invalid_target.unlisted_reserved_audience_after_sign_in_shown
+          say: 'the error is parked: an audience the client does not list'
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+        - guard: scopesUnshowable
+          target: invalid_scope.consent_not_shown_after_sign_in_shown
+          say: 'the error is parked: scopes the consent step cannot show'
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+        - target: invalid_target.consent_not_shown_after_sign_in_shown
+          say: 'the error is parked: resources the consent step cannot show'
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+      FAIL.tooLarge:
+        target: invalid_request.error_too_large_after_sign_in
+        say: 'the error response is over 16 KiB'
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:261
+      FAIL.server:
+        target: server_error.interaction_store_after_sign_in
+        say: 'the store fails'
         source: apps/auth-server/src/app/plugins/error-handler.ts:636
 
   # Exits: success
@@ -966,7 +1037,7 @@ states:
     type: final
     title: Send a browser with no session to sign in
     redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
     response:
       status: 302
       headers:
@@ -976,7 +1047,7 @@ states:
     type: final
     title: Send a browser whose session cookie is of no use to sign in
     redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
     response:
       status: 302
       headers:
@@ -987,7 +1058,7 @@ states:
     type: final
     title: Send a browser whose sign-in is too old for the request to sign in again
     redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
     response:
       status: 302
       headers:
@@ -997,7 +1068,7 @@ states:
     type: final
     title: Send a browser whose session ended under the request to sign in again
     redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
     response:
       status: 302
       headers:
@@ -1112,7 +1183,7 @@ states:
     type: final
     title: Refuse a finish or a cancel whose client or redirect URI no longer passes
     redirect: never
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:249
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
     response:
       status: 400
       headers:
@@ -1128,7 +1199,7 @@ states:
     type: final
     title: Refuse a finish or a cancel whose client may no longer use the endpoint
     redirect: never
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:249
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
     response:
       status: 400
       headers:
@@ -1158,7 +1229,7 @@ states:
 
   server_error.interaction_store_after_sign_in:
     type: final
-    title: Fail the answer when the interaction store fails
+    title: Fail the answer when the interaction store, or the store that parks an error to show, fails
     redirect: never
     source: apps/auth-server/src/app/plugins/error-handler.ts:636
     response:
@@ -1188,10 +1259,10 @@ states:
 
   invalid_scope.agent_scope_mode_exceeded_after_sign_in:
     type: final
-    title: Tell the client an agent scope is above its cap, once the person signed in
+    title: Tell the client an agent scope is above its cap, once the person signed in, if an operator provisioned it
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:257
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:290
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1202,10 +1273,11 @@ states:
 
   invalid_target.unlisted_reserved_audience_after_sign_in:
     type: final
-    title: Tell the client it named an audience it does not list, once the person signed in
+    title: >-
+      Tell the client it named an audience it does not list, once the person signed in, if an operator provisioned it
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:257
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:290
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1216,10 +1288,11 @@ states:
 
   invalid_scope.consent_not_shown_after_sign_in:
     type: final
-    title: Tell the client the consent step cannot show its scopes, once the person signed in
+    title: >-
+      Tell the client the consent step cannot show its scopes, once the person signed in, if an operator provisioned it
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:262
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:301
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1230,10 +1303,12 @@ states:
 
   invalid_target.consent_not_shown_after_sign_in:
     type: final
-    title: Tell the client the consent step cannot show its resources, once the person signed in
+    title: >-
+      Tell the client the consent step cannot show its resources, once the person signed in, if an operator provisioned
+      it
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:262
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:301
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1242,6 +1317,62 @@ states:
           shown for consent, state when the request had one, and iss
       body: 'for a JSON answer, { result: redirect, location: the same URL }'
 
+  invalid_scope.agent_scope_mode_exceeded_after_sign_in_shown:
+    type: final
+    title: Show, rather than redirect, that an agent scope is above the cap, once the person signed in
+    redirect: never
+    code: invalid_scope
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+    response: &shownAfterSignIn
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, <issuer>/ui/resume/<handle>, whose GET answers, once, the page the endpoint shows for such
+          a client (400, text/html; charset=utf-8, no-store): titled "Sign-in not completed", it names the error with
+          its description and the host of redirect_uri and, for an http(s) redirect URI, links "Continue to <host>"
+          with the whole error response; a second GET of the handle answers the expired page
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  invalid_target.unlisted_reserved_audience_after_sign_in_shown:
+    type: final
+    title: Show, rather than redirect, that the client named an audience it does not list, once the person signed in
+    redirect: never
+    code: invalid_target
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+    response: *shownAfterSignIn
+
+  invalid_scope.consent_not_shown_after_sign_in_shown:
+    type: final
+    title: Show, rather than redirect, that the consent step cannot show the scopes, once the person signed in
+    redirect: never
+    code: invalid_scope
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+    response: *shownAfterSignIn
+
+  invalid_target.consent_not_shown_after_sign_in_shown:
+    type: final
+    title: Show, rather than redirect, that the consent step cannot show the resources, once the person signed in
+    redirect: never
+    code: invalid_target
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:245
+    response: *shownAfterSignIn
+
+  invalid_request.error_too_large_after_sign_in:
+    type: final
+    title: Refuse an error to show that is too large to park
+    redirect: never
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:261
+    response:
+      status: 400
+      headers:
+        Content-Type: application/problem+json
+        Cache-Control: no-store
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-request
+        status: 400
+        code: invalid_request
+        trace_id: the request id
+
   # Exits: errors redirected to an operator-provisioned client, or shown for any other
 
   invalid_request.malformed_dpop_jkt:
@@ -1249,7 +1380,7 @@ states:
     title: Tell the client its dpop_jkt is malformed
     redirect: error
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:102
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:118
     response:
       status: 302
       headers:
@@ -1262,7 +1393,7 @@ states:
     title: Show, rather than redirect, the dpop_jkt error of a client no operator provisioned
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: &shown
       status: 400
       headers:
@@ -1291,7 +1422,7 @@ states:
     title: Show, rather than redirect, the login_required of a client no operator provisioned
     redirect: never
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   invalid_scope.agent_scope_mode_exceeded:
@@ -1312,7 +1443,7 @@ states:
     title: Show, rather than redirect, the agent-cap error of a client no operator provisioned
     redirect: never
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   invalid_target.unlisted_reserved_audience:
@@ -1333,7 +1464,7 @@ states:
     title: Show, rather than redirect, the audience error of a client no operator provisioned
     redirect: never
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   login_required.fresh_login:
@@ -1354,7 +1485,7 @@ states:
     title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   consent_required.prompt_none:
@@ -1375,7 +1506,7 @@ states:
     title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
     code: consent_required
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   login_required.session_ended:
@@ -1396,7 +1527,7 @@ states:
     title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
     code: login_required
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   consent_required.consent_withdrawn:
@@ -1417,7 +1548,7 @@ states:
     title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
     code: consent_required
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   invalid_scope.consent_not_shown:
@@ -1425,7 +1556,7 @@ states:
     title: Tell the client the consent step cannot show its scopes
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:123
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:128
     response:
       status: 302
       headers:
@@ -1438,7 +1569,7 @@ states:
     title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   invalid_target.consent_not_shown:
@@ -1446,7 +1577,7 @@ states:
     title: Tell the client the consent step cannot show its resources
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:125
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:130
     response:
       status: 302
       headers:
@@ -1459,7 +1590,7 @@ states:
     title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
     response: *shown
 
   # Exits: errors of the endpoint itself, the RFC 6749 body
@@ -1679,7 +1810,7 @@ assertions:
     say: >-
       No code is minted above the agent cap, for an audience the client does not list, or for a client that no longer
       passes the checks when its interaction finishes
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:249
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
   - id: shown-not-redirected-before-any-page
     never: >-
       provisioning == 'selfService' and state in ['invalid_request.malformed_dpop_jkt', 'login_required.no_session',
@@ -1689,7 +1820,16 @@ assertions:
     say: >-
       Before the person has seen any QAuth page, an error goes by redirect only to a client an operator provisioned
       (RFC 9700 §4.11.2)
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:101
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:117
+  - id: shown-not-redirected-at-a-finish
+    never: >-
+      provisioning == 'selfService' and state in ['invalid_scope.agent_scope_mode_exceeded_after_sign_in',
+      'invalid_target.unlisted_reserved_audience_after_sign_in', 'invalid_scope.consent_not_shown_after_sign_in',
+      'invalid_target.consent_not_shown_after_sign_in']
+    say: >-
+      An error decided when an interaction finishes goes by redirect only to a client an operator provisioned; any
+      other client's is shown on an issuer page first (RFC 9700 §4.11.2)
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:243
   - id: a-finish-only-from-an-interaction
     never: "phase == 'finish' and not interactionStarted"
     say: 'The request is decided at a finish only for an interaction this request started'
