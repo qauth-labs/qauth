@@ -1,0 +1,65 @@
+name: Dependency audit
+
+# The dependency audit (#795): `pnpm audit --audit-level high` fails on any
+# high or critical advisory against the lockfile, on every path, development
+# tooling included; moderate and low ones go to the job summary and fail
+# nothing. An advisory that no release fixes is accepted in one place,
+# `auditConfig.ignoreGhsas` in pnpm-workspace.yaml, each entry with why and
+# until when.
+#
+# The CI workflow calls this on every pull request and every push to main, so
+# a change that brings in a vulnerable version fails there. The daily run
+# audits main's unchanged lockfile, so an advisory published after the last
+# push is seen without waiting for a pull request; GitHub tells the workflow's
+# owner when a scheduled run fails. The schedule lives here and not in the CI
+# workflow, whose every other job would otherwise run daily too, and whose
+# concurrency group a run on main shares, so a scheduled run would cancel a
+# push's.
+#
+# No install: `pnpm audit` reads the lockfile and the workspace file, and the
+# summary script uses Node's standard library only.
+on:
+  workflow_call:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          filter: tree:0
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@v6
+        name: Install pnpm
+        with:
+          version: 12.14.0
+          run_install: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+
+      # The gate. The registry's advisory database answers at the moment of
+      # the run, so a red run on an unchanged lockfile means a new advisory,
+      # not a new dependency. A registry error fails it too: no answer is not
+      # a clean audit.
+      - name: No high or critical advisory
+        run: pnpm audit --audit-level high
+
+      # Every advisory, whatever its severity, in the job summary. It runs
+      # after a red gate too, which is when the list matters most. A finding
+      # does not fail this step (the gate above decides); a report it cannot
+      # read does.
+      - name: Every advisory in the job summary
+        if: ${{ !cancelled() }}
+        run: |
+          pnpm audit --json > "$RUNNER_TEMP/audit.json" || true
+          node scripts/dependency-audit/summary.mjs "$RUNNER_TEMP/audit.json" >> "$GITHUB_STEP_SUMMARY"

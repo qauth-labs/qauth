@@ -91,6 +91,12 @@ A husky `pre-commit` hook runs lint-staged (`oxlint --fix`, then Oxfmt) on stage
 - A PR that adds, renames or removes an environment key registers it in the
   configuration key registry in the same PR, with its tier, role, default and
   one sentence (see [`libs/server/config`](./libs/server/config/README.md#configuration-key-registry)).
+- `pnpm audit --audit-level high` must pass. CI's `audit` job runs it on every PR, on main and
+  once a day, fails on any high or critical advisory on any path, development tooling included,
+  and lists moderate and low ones in its job summary. Fix an advisory with a floor in
+  `overrides` in `pnpm-workspace.yaml`: a direct update can leave a second, vulnerable copy
+  that a transitive dependent pins. Accept one under `auditConfig.ignoreGhsas` only when no
+  release fixes it, with a comment that says why and until when.
 - All code, comments, docs, commits, and PRs are in **English**; only user-facing
   content may be localized.
 - The pull request template lists three checks. Tick each one that applies: a stable route
