@@ -346,8 +346,12 @@ describe('the roles’ database users (real Postgres, #498)', () => {
       expect(await heldGrants(Object.values(USERS))).toEqual(before);
     }
 
-    it('refuses a user that does not exist', async () => {
+    it('refuses a user that does not exist, and the check reports it', async () => {
       await expectRefused({ ...USERS, delivery: 'qauth_nobody' }, /qauth_nobody/);
+      // The check returns the refusal instead of failing on the drift queries.
+      await expect(
+        checkDatabaseUserGrants(target(), { ...USERS, delivery: 'qauth_nobody' })
+      ).resolves.toEqual([expect.stringMatching(/"qauth_nobody" does not exist/)]);
     });
 
     it('refuses the owner of the tables, and a superuser', async () => {
@@ -388,6 +392,31 @@ describe('the roles’ database users (real Postgres, #498)', () => {
         await owner().query(`DROP SEQUENCE public.forged_sequence`);
       }
       await expect(checkDatabaseUserGrants(target(), USERS)).resolves.toEqual([]);
+    });
+
+    it('grants on public whatever search_path the owner sets, never on a same-named object elsewhere', async () => {
+      // A schema ahead of public, with a function of the map's signature.
+      await owner().query(`CREATE SCHEMA shadow`);
+      await owner().query(
+        `CREATE FUNCTION shadow.events_own_row(uuid) RETURNS boolean LANGUAGE sql AS 'SELECT true'`
+      );
+      await owner().query(`REVOKE ALL ON FUNCTION shadow.events_own_row(uuid) FROM PUBLIC`);
+      const { rows } = await owner().query<{ name: string }>(`SELECT current_database() AS name`);
+      const database = `"${rows[0].name}"`;
+      await owner().query(`ALTER DATABASE ${database} SET search_path = shadow, public`);
+      try {
+        await applyDatabaseUserGrants(target(), USERS);
+        const { rows: executable } = await owner().query<{ shadow: boolean; public: boolean }>(
+          `SELECT has_function_privilege($1, 'shadow.events_own_row(uuid)', 'EXECUTE') AS shadow,
+                  has_function_privilege($1, 'public.events_own_row(uuid)', 'EXECUTE') AS public`,
+          [USERS.web]
+        );
+        expect(executable[0]).toEqual({ shadow: false, public: true });
+        await expect(checkDatabaseUserGrants(target(), USERS)).resolves.toEqual([]);
+      } finally {
+        await owner().query(`ALTER DATABASE ${database} RESET search_path`);
+        await owner().query(`DROP SCHEMA shadow CASCADE`);
+      }
     });
 
     it('refuses grants PUBLIC holds beyond the map, and the check names them', async () => {

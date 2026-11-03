@@ -96,12 +96,21 @@ async function connect(target: DatabaseUserGrantsTarget): Promise<Client> {
   client.on('error', () => undefined);
   try {
     await client.connect();
+    // The map names its tables and functions as the migrations do, without
+    // a schema. Pinned, they resolve to `public` whatever search_path the
+    // owner's role or database sets: never missing, and never a same-named
+    // object of another schema, such as the owner's own (`"$user"`).
+    await client.query('SET search_path = pg_catalog, public');
   } catch (error) {
     await client.end().catch(() => undefined);
     throw error;
   }
   return client;
 }
+
+/** The start of the refusal for a named user the database does not have. */
+const MISSING_USER = 'The database user ';
+const MISSING_USER_REASON = ' does not exist: create it first';
 
 /**
  * Why the grants cannot be applied as the current user: a table or function
@@ -201,7 +210,7 @@ export async function databaseUserGrantRefusals(
     const user = JSON.stringify(String(row['name']));
     if (row['exists'] !== true) {
       problems.push(
-        `The database user ${user} does not exist: create it first (CREATE ROLE … LOGIN PASSWORD …). ` +
+        `${MISSING_USER}${user}${MISSING_USER_REASON} (CREATE ROLE … LOGIN PASSWORD …). ` +
           'QAuth creates no database user.'
       );
     } else if (row['superuser'] === true) {
@@ -472,8 +481,18 @@ export async function checkDatabaseUserGrants(
   const client = await connect(target);
   try {
     const refusals = await databaseUserGrantRefusals(client, users, map);
-    // Without the tables, every privilege on them would be reported missing.
-    if (refusals.some((problem) => problem.startsWith('The database has no'))) return refusals;
+    // Without the tables, every privilege on them would be reported missing,
+    // and a user that does not exist has no privileges to read: Postgres
+    // would refuse the drift queries, and the refusal would be lost.
+    if (
+      refusals.some(
+        (problem) =>
+          problem.startsWith('The database has no') ||
+          (problem.startsWith(MISSING_USER) && problem.includes(MISSING_USER_REASON))
+      )
+    ) {
+      return refusals;
+    }
     return [...refusals, ...(await databaseUserGrantDrift(client, users, map))];
   } finally {
     await client.end().catch(() => undefined);
