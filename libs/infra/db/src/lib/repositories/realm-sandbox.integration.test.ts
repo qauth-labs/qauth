@@ -249,9 +249,68 @@ describe('paired sandbox realm integration (real Postgres)', () => {
     });
 
     it('refuses a live realm that does not exist', async () => {
-      await expect(
-        sandboxOn('0190a000-0000-7000-8000-0000000000ff', 'sandbox.example.com')
-      ).rejects.toBeInstanceOf(NotFoundError);
+      const missing = '0190a000-0000-7000-8000-0000000000ff';
+      await expect(sandboxOn(missing, 'sandbox.example.com')).rejects.toBeInstanceOf(NotFoundError);
+      expect(await pgError(insertRealm({ sandbox_of_realm_id: missing }))).toEqual({
+        code: '23503',
+        constraint: 'realms_sandbox_of_realm_id_realms_id_fk',
+      });
+    });
+
+    it('refuses a live realm a later row of the same statement inserts', async () => {
+      // The foreign key checks at the end of the statement; the trigger
+      // refuses at the row, so no row pairs with a realm it cannot read.
+      const live = await liveRealmOn('auth.example.com');
+      const first = '0190a000-0000-7000-8000-0000000000a1';
+      const second = '0190a000-0000-7000-8000-0000000000a2';
+      const twoRows = (rows: readonly (readonly [string, string | null, boolean])[]) =>
+        pool().query(
+          `INSERT INTO realms (id, name, sandbox_of_realm_id, is_operator)
+           VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+          rows.flatMap(([id, sandboxOf, isOperator]) => [
+            id,
+            unique('by-hand'),
+            sandboxOf,
+            isOperator,
+          ])
+        );
+
+      // A sandbox of a sandbox, the inner pairing written second.
+      expect(
+        await pgError(
+          twoRows([
+            [second, first, false],
+            [first, live, false],
+          ])
+        )
+      ).toEqual({ code: '23503', constraint: 'realms_sandbox_of_realm_id_realms_id_fk' });
+      // A sandbox of the operator realm, the operator realm written second.
+      expect(
+        await pgError(
+          twoRows([
+            [second, first, false],
+            [first, null, true],
+          ])
+        )
+      ).toEqual({ code: '23503', constraint: 'realms_sandbox_of_realm_id_realms_id_fk' });
+      // Written first, the operator realm is read, and refused as one.
+      expect(
+        await pgError(
+          twoRows([
+            [first, null, true],
+            [second, first, false],
+          ])
+        )
+      ).toEqual({ code: '23514', constraint: 'realms_sandbox_of_operator' });
+      expect(await repo.findById(first)).toBeUndefined();
+      expect(await repo.findById(second)).toBeUndefined();
+
+      // Written first, a realm that is no sandbox is a live realm like any.
+      await twoRows([
+        [first, null, false],
+        [second, first, false],
+      ]);
+      expect((await repo.findSandboxOf(first))?.id).toBe(second);
     });
   });
 

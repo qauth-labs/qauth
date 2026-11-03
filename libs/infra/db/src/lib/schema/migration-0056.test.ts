@@ -84,6 +84,9 @@ describe('migration 0056 (the paired sandbox realm)', () => {
       'realms_sandbox_pairing_permanent',
       'realms_sandbox_of_operator',
       'realms_sandbox_of_sandbox',
+      // A live realm the trigger cannot read, a later row of the statement
+      // included, is refused at once, not at the end of the statement.
+      'realms_sandbox_of_realm_id_realms_id_fk',
     ]) {
       expect(fn).toContain(`CONSTRAINT = '${constraint}'`);
     }

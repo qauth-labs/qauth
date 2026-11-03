@@ -170,16 +170,15 @@ const SANDBOX_OF_REALM_FK = 'realms_sandbox_of_realm_id_realms_id_fk';
 /**
  * Throw a {@link SandboxPairingError} when `error` is a violation of a rule
  * of the paired sandbox realm; return otherwise, for the caller to map the
- * error further.
+ * error further. A violation of {@link SANDBOX_OF_REALM_FK} is the caller's
+ * to read: on a delete it is a live realm whose sandbox exists, on an insert
+ * a live realm that does not exist.
  */
 function throwIfSandboxRule(error: unknown): void {
   const code = pgErrorCodeOf(error);
+  if (code !== '23505' && code !== '23514') return;
   const constraint = extractConstraintName(error);
   if (constraint === undefined) return;
-  if (code === '23503' && constraint === SANDBOX_OF_REALM_FK) {
-    throw new SandboxPairingError('live_realm_has_sandbox', error);
-  }
-  if (code !== '23505' && code !== '23514') return;
   const rule = Object.hasOwn(SANDBOX_RULE_BY_CONSTRAINT, constraint)
     ? SANDBOX_RULE_BY_CONSTRAINT[constraint]
     : undefined;
@@ -808,6 +807,8 @@ export function createRealmsRepository(
         });
       } catch (error) {
         throwIfSandboxRule(error);
+        // On an insert, the pairing's foreign key fails only for a live
+        // realm that does not exist.
         if (
           pgErrorCodeOf(error) === '23503' &&
           extractConstraintName(error) === SANDBOX_OF_REALM_FK
@@ -1149,7 +1150,12 @@ export function createRealmsRepository(
       } catch (error) {
         // A live realm is not deleted while its sandbox exists (#554): the
         // sandbox's foreign key is `ON DELETE RESTRICT`.
-        throwIfSandboxRule(error);
+        if (
+          pgErrorCodeOf(error) === '23503' &&
+          extractConstraintName(error) === SANDBOX_OF_REALM_FK
+        ) {
+          throw new SandboxPairingError('live_realm_has_sandbox', error);
+        }
         throw error;
       }
     },
