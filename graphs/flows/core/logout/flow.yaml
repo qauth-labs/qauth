@@ -28,11 +28,13 @@ summary: >-
   An app sends the browser to /oauth/end-session with an id_token_hint, its client_id, a post_logout_redirect_uri and
   state, all optional. QAuth checks the hint's signature and issuer and accepts it expired. A return URI must be one
   the app registered, matched exactly, for the client the hint or client_id names; otherwise QAuth shows an info page,
-  ends nothing and never redirects. When the hint names the account of the browser's session (and, by its sid, no
-  other session), that session ends at once: its rows, its cookie and its registry rows go, and the session's end reaches the back-channel logout of its
-  apps. In every other case a browser that is signed in gets the logout_confirm step, and nothing ends until the person
-  answers it. The person signs out of this account or of every account on the browser, or stays signed in; either way
-  the browser goes back to the app's registered URI with state, or to the sign-out status page.
+  ends nothing and never redirects. When the hint names the account of the browser's session and, by its sid, that
+  session, the session ends at once: its rows, its cookie and its registry rows go, and the session's end reaches the
+  back-channel logout of its apps. In every other case a browser that is signed in gets the logout_confirm step, and
+  nothing ends until the person answers it. The person signs out of this account or of every account on the browser,
+  or stays signed in; either way the browser goes back to the app's registered URI with state, or to the sign-out
+  status page. An app the operator did not set up is never redirected to before the browser has seen a QAuth page: the
+  signed-out page links to its return URI instead.
 
 scope:
   shows: >-
@@ -114,13 +116,17 @@ context:
       mismatch: 'client_id and the aud of a valid hint name different clients (§2: the OP MUST verify they match)'
   # the return checks, in their order: which fails first, if any
   returnTo:
-    values: [none, registered, noClient, unregistered, clientUnusable]
+    values: [none, registered, registeredUnvetted, noClient, unregistered, clientUnusable]
     initial: any
     say:
       none: 'the request carries no post_logout_redirect_uri'
       registered: >-
         post_logout_redirect_uri is, exactly, one of the post_logout_redirect_uris of the client the valid hint's aud or
-        client_id names, and that client may be used
+        client_id names, that client may be used, and the operator set it up (the seed manifest)
+      registeredUnvetted: >-
+        as registered, but the client was not set up by the operator (open dynamic registration, a CIMD document, the
+        developer API): whoever registered it chose the URI, so the browser is not sent there before it has seen a
+        QAuth page (RFC 9700 §4.11.2)
       noClient: 'post_logout_redirect_uri is given, and neither client_id nor a valid hint names a client'
       unregistered: >-
         post_logout_redirect_uri is given, and the client named is unknown or does not register exactly that URI (a
@@ -132,11 +138,12 @@ context:
     say:
       none: 'the browser holds no live session of this realm'
       hinted: >-
-        the browser's session is of the account the valid hint's sub names, the hint's sid (when it carries one) is that
-        session's, and the client the hint was issued to is known and may be used
+        the browser's session is of the account the valid hint's sub names, the hint's sid is that session's, and the
+        client the hint was issued to is known and may be used
       other: >-
         the browser holds a live session, and no valid hint names its account, or the hint names another session of it
-        by its sid (RP-Initiated Logout 1.0 §2 holds that request suspect), or the hint's client may no longer be used
+        by its sid or none (RP-Initiated Logout 1.0 §2 holds that request suspect), or the hint's client may no longer
+        be used
   interactionUi:
     values: [off, on]
     initial: any
@@ -172,7 +179,8 @@ context:
 guards:
   hintValid: "hint in ['valid', 'expired']"
   canReturn: "returnTo == 'registered'"
-  canReturnAtFinish: "returnTo == 'registered' and recheck == 'kept'"
+  canOfferReturn: "returnTo == 'registeredUnvetted'"
+  canReturnAtFinish: "returnTo in ['registered', 'registeredUnvetted'] and recheck == 'kept'"
   declined: "decision == 'stay'"
 
 effects:
@@ -327,7 +335,10 @@ states:
       DONE:
         - guard: canReturn
           target: nothing_to_end.returned
-          say: 'the request carries a registered return URI'
+          say: 'the request carries a registered return URI of a client the operator set up'
+        - guard: canOfferReturn
+          target: nothing_to_end.offered
+          say: 'the request carries a registered return URI of a client the operator did not set up'
         - target: nothing_to_end.page
           say: 'there is nowhere to return'
       FAIL.server:
@@ -359,7 +370,10 @@ states:
       DONE:
         - guard: canReturn
           target: signed_out.returned
-          say: 'the request carries a registered return URI'
+          say: 'the request carries a registered return URI of a client the operator set up'
+        - guard: canOfferReturn
+          target: signed_out.offered
+          say: 'the request carries a registered return URI of a client the operator did not set up'
         - target: signed_out.page
           say: 'there is nowhere to return'
       FAIL.server:
@@ -668,6 +682,37 @@ states:
         Cache-Control: no-store
       body: '"You are signed out."'
 
+  signed_out.offered:
+    type: final
+    title: Show that the browser is signed out, with a link back to an app the operator did not set up
+    redirect: never
+    carries: [state]
+    response:
+      status: 200
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Set-Cookie: >-
+          __Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when SESSION_COOKIE_SECURE is
+          on
+        Cache-Control: no-store
+      body: >-
+        "You are signed out.", the host of post_logout_redirect_uri, and, for an http(s) URI, a link to it with state
+        added when the request had one
+
+  nothing_to_end.offered:
+    type: final
+    title: Show that the browser is signed out, with a link back to an app the operator did not set up; it was not signed in
+    redirect: never
+    carries: [state]
+    response:
+      status: 200
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Cache-Control: no-store
+      body: >-
+        "You are signed out.", the host of post_logout_redirect_uri, and, for an http(s) URI, a link to it with state
+        added when the request had one
+
   # Exits: the answer and the cancel, as the Interaction API answers them
 
   signed_out.confirmed_returned:
@@ -954,6 +999,11 @@ assertions:
   - id: staying-ends-nothing
     never: "state in ['stayed.returned', 'stayed.page'] and sessionEnded"
     say: 'A person who stays signed in, or cancels, keeps the session'
+  - id: no-unseen-redirect-for-an-unvetted-client
+    never: "state in ['signed_out.returned', 'nothing_to_end.returned'] and returnTo == 'registeredUnvetted'"
+    say: >-
+      A client the operator did not set up is never redirected to before the browser has seen a QAuth page: the
+      signed-out page offers its return URI as a link
   - id: no-step-without-a-session
     never: "interactionOpen and account == 'none'"
     say: 'The confirm step is shown only to a browser that is signed in'

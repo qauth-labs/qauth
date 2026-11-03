@@ -693,9 +693,10 @@ What happens:
 - **The hint names the signed-in account.** The browser's session ends at
   once: QAuth revokes it, clears the session cookie and goes back to the
   registered URI with `state`, or shows "You are signed out". The hint's
-  `sid`, when it carries one, must be this session's: a hint from another
-  session of the account is suspect (§2) and gets the confirmation step. So
-  does a hint of an app that was deleted, disabled or suspended since.
+  `sid` must be this session's: a hint from another session of the account,
+  or one without `sid` (an ID token minted before ID tokens carried it), is
+  suspect (§2) and gets the confirmation step. So does a hint of an app that
+  was deleted, disabled or suspended since.
 - **Any other signed-in browser** gets a confirmation step: sign out, sign out
   of all accounts, or stay signed in. Nothing ends until the person answers.
   So a request without a valid hint, such as a cross-site image tag, ends
@@ -705,6 +706,13 @@ What happens:
   signed in.
 - **A browser that is not signed in** goes back to the registered URI, or sees
   "You are signed out".
+- **An app the operator did not set up** (open dynamic registration, a CIMD
+  document, the developer API) chose its own return URIs, so QAuth does not
+  send the browser there before it has shown a page of its own (RFC 9700
+  §4.11.2, as for the authorization endpoint's errors). When the session ends
+  at once, or there is none, "You are signed out" names the host of the return
+  URI and links to it, with `state`. After the confirmation step the browser
+  goes back as for any app.
 - **A refused request** (a `client_id` that is not the hint's audience, a
   return URI with no client named, a URI the client did not register, or a
   disabled client) gets a `400` information page. Nothing ends and the browser
@@ -720,7 +728,9 @@ Back-channel logout tokens are not sent yet.
 Register return URIs as `post_logout_redirect_uris`: in the
 [registration request](#dynamic-client-registration-rfc-7591), in a CIMD
 document, or in the seed manifest. They follow the same scheme rules as
-`redirect_uris`. A client that registered none is never redirected.
+`redirect_uris`. A client that registered none is never redirected. A CIMD
+document whose list breaks a rule registers none, and its client still
+resolves.
 
 ---
 

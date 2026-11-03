@@ -1,7 +1,7 @@
 import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
 import type { FastifyReply } from 'fastify';
 
-import { html, render, type SafeHtml } from './html';
+import { html, render, safe, type SafeHtml } from './html';
 
 /**
  * The pages of RP-initiated logout (#675, `graphs/flows/core/logout`): what
@@ -40,6 +40,17 @@ export type EndSessionPage =
   | { readonly kind: 'signed_out' }
   /** The status page, while the browser still holds a session. */
   | { readonly kind: 'signed_in' }
+  /**
+   * Signed out, and the app's registered return URI offered as a link rather
+   * than a redirect: the app was not set up by the operator.
+   */
+  | {
+      readonly kind: 'leaving';
+      /** The host the link goes to. */
+      readonly host: string;
+      /** The link, only for an http(s) URI (`safeUrl`); a native app's scheme gets none. */
+      readonly href: string | undefined;
+    }
   /** A refused request: nothing ended, and the browser is not redirected. */
   | { readonly kind: 'refused'; readonly traceId: string };
 
@@ -86,6 +97,24 @@ function content(page: EndSessionPage): { title: string; body: SafeHtml } {
         title: 'You are signed out',
         body: html`<h1>You are signed out</h1>
           <p>This browser is no longer signed in. You can close this page.</p>`,
+      };
+    case 'leaving':
+      return {
+        title: 'You are signed out',
+        body: html`<h1>You are signed out</h1>
+          <p>This browser is no longer signed in.</p>
+          <p>
+            The app that asked was not set up by the operator of this server, so you are not sent
+            back to it automatically. Continue only if you expected to return to
+            <strong>${page.host}</strong>.
+          </p>
+          ${
+            page.href === undefined
+              ? safe('')
+              : html`<p>
+                  <a href="${page.href}" rel="noopener noreferrer">Continue to ${page.host}</a>
+                </p>`
+          }`,
       };
     case 'signed_in':
       return {

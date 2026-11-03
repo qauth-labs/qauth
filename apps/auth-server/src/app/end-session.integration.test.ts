@@ -142,6 +142,9 @@ describe('RP-initiated logout at /oauth/end-session (#675, real containers)', ()
       grantTypes: ['authorization_code', 'refresh_token'],
       enabled: true,
       requirePkce: true,
+      // As the seed manifest sets it: an operator's client is sent back
+      // automatically; any other gets a page with a link.
+      provisionedByOperator: true,
     });
     await app.repositories.oauthConsents.upsertGrant(realmId, userId, client.id, SCOPES);
     return client.id;

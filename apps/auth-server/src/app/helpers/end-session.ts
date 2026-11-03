@@ -11,12 +11,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import type { EndSessionParams, LogoutRequest } from '../schemas/end-session';
+import { isOperatorProvisionedClient } from './authorization-error';
 import { endBrowserSession, liveBrowserSession, resolveBrowserSession } from './browser-session';
 import { clientDisplay } from './client-display';
 import { resolveClient, type ResolvedClient } from './client-resolution';
 import { isClientUsable } from './client-status';
+import { redirectHost } from './consent';
 import { sendEndSessionPage } from './end-session-pages';
 import { resolveEnvironmentPolicy } from './environment-policy';
+import { safeUrl } from './html';
 import { readInteractionStep, startLogoutInteraction } from './interaction';
 import type {
   CarriedSession,
@@ -54,8 +57,8 @@ import { emitUserEvent } from './user-events';
  *   information page, nothing ended, and never a redirect. A client that
  *   registered none never gets one.
  * - **The session.** Only when a valid hint names the account of the browser's
- *   session, names no other session by its `sid`, and the client it was
- *   issued to may still be used, does it end at once. Otherwise a signed-in browser gets the
+ *   session and, by its `sid`, that session, and the client it was issued to
+ *   may still be used, does it end at once. Otherwise a signed-in browser gets the
  *   `logout_confirm` step and nothing ends until the person answers: a
  *   cross-site image tag, which carries no valid hint, ends nothing.
  * - **Ending it.** The session service revokes the one session (`sign_out`):
@@ -244,6 +247,36 @@ export async function logoutReturnLocation(
   return returnLocation(uri, logout.state);
 }
 
+/**
+ * Send the browser back to the app before it has seen any QAuth page: the
+ * answer to a request with a registered return URI that ended the session at
+ * once, or found none to end.
+ *
+ * RFC 9700 §4.11.2, as the authorization endpoint's errors apply it
+ * (`helpers/authorization-error.ts`): only a client the operator set up is
+ * trusted with an automatic redirect. Any other client (open dynamic
+ * registration, a CIMD document, the developer API) registered its own
+ * `post_logout_redirect_uris`, perhaps to bounce visitors off the issuer, so
+ * the browser gets a page instead: signed out, and the host it would go to,
+ * with a link the person may follow. After the confirm step the person has
+ * seen QAuth's page naming the app, and the answer redirects as for any client.
+ */
+function sendBackToApp(
+  reply: FastifyReply,
+  client: ResolvedClient | null,
+  location: string
+): FastifyReply {
+  reply.header('Cache-Control', 'no-store');
+  if (client !== null && isOperatorProvisionedClient(client)) {
+    return reply.redirect(location, 303);
+  }
+  return sendEndSessionPage(reply, 200, {
+    kind: 'leaving',
+    host: redirectHost(location),
+    href: safeUrl(location),
+  });
+}
+
 /** Record why a logout ended nothing. */
 async function recordSignOutFailed(
   request: FastifyRequest,
@@ -354,27 +387,23 @@ export async function answerEndSession(
     await recordSignOutFailed(request, realm.id, 'no_session', clientId, null);
     return back === undefined
       ? sendEndSessionPage(reply, 200, { kind: 'signed_out' })
-      : reply.redirect(back, 303);
+      : sendBackToApp(reply, client, back);
   }
 
   const carried: CarriedSession = { userId: session.userId, sid: session.sid };
-  if (
-    hint !== null &&
-    client !== null &&
-    hint.sub === session.userId &&
-    (hint.sid === undefined || hint.sid === session.sid)
-  ) {
+  if (hint !== null && client !== null && hint.sub === session.userId && hint.sid === session.sid) {
     // The app's own ID token names the account signed in here, and the app
     // may still be used: no confirmation is asked. A hint of a client that
     // was deleted, disabled or suspended since gets the confirm step, and so
-    // does a hint whose sid names another session of the account: §2 holds
-    // such a request suspect.
+    // does a hint whose sid is not this session's: §2 holds such a request
+    // suspect. An ID token without sid (minted before migration 0042, or on
+    // the retired Bearer path) names no session, so it is asked too.
     await endLogoutSession(fastify, realm.id, carried);
     clearSessionCookie(reply);
     await recordSignedOut(request, realm.id, carried, clientId);
     return back === undefined
       ? sendEndSessionPage(reply, 200, { kind: 'signed_out' })
-      : reply.redirect(back, 303);
+      : sendBackToApp(reply, client, back);
   }
 
   // No valid hint names this account: the person is asked, and nothing ends

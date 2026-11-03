@@ -90,6 +90,34 @@ describe('the status pages (#675)', () => {
   });
 });
 
+describe('the signed-out page of a client the operator did not set up (#675)', () => {
+  it('names the host and links to the return URI, escaped', () => {
+    const page = endSessionPage(
+      {
+        kind: 'leaving',
+        host: 'app.example<b>',
+        href: 'https://app.example/out?state="x"&a=1',
+      },
+      NONCE
+    );
+    expect(page).toContain('You are signed out');
+    expect(page).toContain('<strong>app.example&lt;b&gt;</strong>');
+    expect(page).toContain(
+      '<a href="https://app.example/out?state=&quot;x&quot;&amp;a=1" rel="noopener noreferrer">'
+    );
+    expect(page).not.toContain('<form');
+  });
+
+  it('shows no link for a return URI that is not http(s)', () => {
+    const page = endSessionPage(
+      { kind: 'leaving', host: 'com.example.app', href: undefined },
+      NONCE
+    );
+    expect(page).toContain('com.example.app');
+    expect(page).not.toContain('href=');
+  });
+});
+
 describe('formActionSourceOf (#675)', () => {
   it.each([
     [

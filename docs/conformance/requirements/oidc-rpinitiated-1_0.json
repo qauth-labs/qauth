@@ -144,7 +144,7 @@
       "section": "3.1",
       "level": "OPTIONAL",
       "quote": "post_logout_redirect_uris: OPTIONAL. Array of URLs supplied by the RP to which it MAY request that the End-User's User Agent be redirected using the post_logout_redirect_uri parameter after a logout has been performed.",
-      "applies": "apps/auth-server/src/app/routes/oauth/register.ts, helpers/dynamic-client-registration.ts, helpers/cimd.ts — registered through dynamic registration and client metadata documents under the redirect URI rule; a client with none never gets a redirect.",
+      "applies": "apps/auth-server/src/app/routes/oauth/register.ts, helpers/dynamic-client-registration.ts, helpers/cimd.ts — registered through dynamic registration and client metadata documents under the redirect URI rule (a CIMD document whose list breaks it registers none); a client with none never gets a redirect.",
       "status": "covered",
       "evidenceMatch": "post_logout_redirect_uris"
     },

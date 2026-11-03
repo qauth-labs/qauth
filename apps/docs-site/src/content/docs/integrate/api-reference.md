@@ -538,13 +538,16 @@ browser here. **Parameters** (query, or form-encoded body): `id_token_hint`,
 `logout_hint`, each optional and given at most once.
 
 - A valid `id_token_hint` (expired accepted) that names the account of the
-  browser session, and no other session by its `sid`, ends that session: **`303`** to the registered
-  `post_logout_redirect_uri` with `state`, or **`200`** with a signed-out page,
-  and the session cookie cleared.
+  browser session and, by its `sid`, that session ends it: **`303`** to the
+  registered `post_logout_redirect_uri` with `state`, or **`200`** with a
+  signed-out page, and the session cookie cleared.
 - Any other signed-in browser gets the `logout_confirm` step: **`200`** with a
   form, or **`303`** to the ceremony page when `INTERACTION_UI_ENABLED` is on.
   Nothing ends until the person answers.
 - A browser with no session: **`303`** to the registered URI, or **`200`**.
+- A client the operator did not set up (open dynamic registration, CIMD, the
+  developer API) gets no automatic redirect in either case: **`200`** with the
+  signed-out page, which links to the registered URI with `state`.
 - **`400`** HTML information page, never a redirect: `client_id` is not the
   hint's audience, a `post_logout_redirect_uri` comes with no client named, or
   the client does not register it exactly, or the client is disabled.

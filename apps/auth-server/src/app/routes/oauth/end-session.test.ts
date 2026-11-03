@@ -64,6 +64,7 @@ const ISSUER = 'https://auth.example.com';
 const USER_ID = '11111111-1111-4111-8111-111111111111';
 const OTHER_USER_ID = '33333333-3333-4333-8333-333333333333';
 const RETURN_URI = 'https://notes.example.com/signed-out';
+const DCR_RETURN_URI = 'https://registered.example.net/signed-out';
 const STATE = 'af0ifjsldkj';
 const LOGOUT_CONFIRM = stepUrn('logout_confirm');
 
@@ -88,7 +89,9 @@ function clientRow(overrides: Record<string, unknown>) {
     isAgent: false,
     maxAgentMode: null,
     environment: 'production',
-    provisionedByOperator: false,
+    // Set up by the operator (the seed manifest): trusted with an automatic
+    // redirect. `dcr-app` below is not.
+    provisionedByOperator: true,
     verifiedDomain: null,
     developerId: null,
     firstPartyProfile: null,
@@ -103,6 +106,13 @@ const CLIENTS: Record<string, ReturnType<typeof clientRow>> = {
   'notes-app': clientRow({ clientId: 'notes-app', postLogoutRedirectUris: [RETURN_URI] }),
   // A client that registered no return URI.
   'quiet-app': clientRow({ clientId: 'quiet-app', name: 'Quiet' }),
+  // A client of open dynamic registration: it registered its own return URI.
+  'dcr-app': clientRow({
+    clientId: 'dcr-app',
+    name: 'Registered',
+    provisionedByOperator: false,
+    postLogoutRedirectUris: [DCR_RETURN_URI],
+  }),
   'disabled-app': clientRow({
     clientId: 'disabled-app',
     enabled: false,
@@ -137,6 +147,7 @@ const HINTS: Record<string, IdTokenHint> = {
   // An ID token issued before ID tokens carried sid.
   'hint.alice.no-sid': { sub: USER_ID, aud: ['notes-app'], expired: false },
   'hint.bob': { sub: OTHER_USER_ID, aud: ['notes-app'], expired: false },
+  'hint.alice.dcr-app': { sub: USER_ID, aud: ['dcr-app'], sid: SID, expired: false },
   'hint.alice.quiet': { sub: USER_ID, aud: ['quiet-app'], expired: false },
   'hint.alice.disabled-app': { sub: USER_ID, aud: ['disabled-app'], expired: false },
   'hint.alice.suspended-app': { sub: USER_ID, aud: ['suspended-app'], expired: false },
@@ -557,6 +568,57 @@ describe('no session to end (RP-Initiated Logout 1.0 §4, #675)', () => {
   });
 });
 
+describe('a client the operator did not set up (RFC 9700 §4.11.2, #675)', () => {
+  const back = `${DCR_RETURN_URI}?state=${STATE}`;
+
+  it('offers its registered return URI as a link, never a redirect, when there is no session to end', async () => {
+    const response = await endSession({
+      client_id: 'dcr-app',
+      post_logout_redirect_uri: DCR_RETURN_URI,
+      state: STATE,
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.body).toContain('You are signed out');
+    expect(response.body).toContain('not set up by the operator');
+    expect(response.body).toContain(`href="${back}"`);
+    expect(response.body).toContain('Continue to registered.example.net');
+    expect(eventOf('urn:qauth:event:user.sign_out_failed:v1-rc.0').data).toEqual({
+      reason: 'no_session',
+    });
+  });
+
+  it('ends the session at once for a valid hint, then offers the return URI as a link', async () => {
+    const cookie = await signedIn();
+    const response = await endSession(
+      {
+        id_token_hint: 'hint.alice.dcr-app',
+        post_logout_redirect_uri: DCR_RETURN_URI,
+        state: STATE,
+      },
+      cookie
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.body).toContain(`href="${back}"`);
+    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(clearsSessionCookie(response)).toBe(true);
+    expect(eventTypes()).toContain('urn:qauth:event:user.signed_out:v1-rc.0');
+  });
+
+  it('still refuses a URI it did not register, with no link', async () => {
+    const response = await endSession({
+      client_id: 'dcr-app',
+      post_logout_redirect_uri: 'https://registered.example.net/elsewhere',
+      state: STATE,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.body).not.toContain('href=');
+  });
+});
+
 describe('the confirm step (RP-Initiated Logout 1.0 §2, #675)', () => {
   /** The interaction the request started, read back from the store. */
   async function storedInteraction(id: string) {
@@ -630,13 +692,13 @@ describe('the confirm step (RP-Initiated Logout 1.0 §2, #675)', () => {
     expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_out:v1-rc.0');
   });
 
-  it('ends the session at once for a valid hint of the account that carries no sid', async () => {
+  it('asks the person to confirm when a valid hint of the account carries no sid: it names no session', async () => {
     const cookie = await signedIn();
     const response = await endSession({ id_token_hint: 'hint.alice.no-sid' }, cookie);
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.body).toContain('You are signed out');
-    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
-    expect(clearsSessionCookie(response)).toBe(true);
+    expect(response.body).toContain('Sign out?');
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(clearsSessionCookie(response)).toBe(false);
   });
 
   it.each(['deleted-app', 'disabled-app', 'suspended-app'])(
