@@ -409,6 +409,7 @@ Full request/response detail and a worked end-to-end walkthrough live in the
 | [`/oauth/userinfo`](/integrate/oauth-flow/#userinfo-oidc)                          | GET, POST | —            | OIDC UserInfo (Bearer header, or POST with a form-encoded `access_token`, RFC 6750 §2.2)                                                           |
 | [`/oauth/register`](/integrate/oauth-flow/#dynamic-client-registration-rfc-7591)   | POST      | JSON         | Dynamic Client Registration (RFC 7591, open mode)                                                                                                  |
 | `/oauth/revoke`                                                                    | POST      | form         | Token revocation (RFC 7009)                                                                                                                        |
+| [`/oauth/end-session`](/integrate/oauth-flow/#rp-initiated-logout)                 | GET, POST | query / form | RP-initiated logout (OpenID Connect RP-Initiated Logout 1.0) — browser-navigated, not an API call                                                  |
 
 Key contract facts:
 
@@ -528,6 +529,30 @@ probe whether a token exists. The only non-`200` outcomes are a client
 authentication failure (`invalid_client`) and `503` with `Retry-After` when the
 server is too busy to check the client secret (`temporarily_unavailable`; RFC
 7009 §2.2.1: the token still exists, retry after the delay).
+
+### `GET|POST /oauth/end-session`
+
+OpenID Connect RP-Initiated Logout 1.0. A browser route: the app sends the
+browser here. **Parameters** (query, or form-encoded body): `id_token_hint`,
+`client_id`, `post_logout_redirect_uri`, `state`, `ui_locales` and
+`logout_hint`, each optional and given at most once.
+
+- A valid `id_token_hint` (expired accepted) that names the account of the
+  browser session ends that session: **`303`** to the registered
+  `post_logout_redirect_uri` with `state`, or **`200`** with a signed-out page,
+  and the session cookie cleared.
+- Any other signed-in browser gets the `logout_confirm` step: **`200`** with a
+  form, or **`303`** to the ceremony page when `INTERACTION_UI_ENABLED` is on.
+  Nothing ends until the person answers.
+- A browser with no session: **`303`** to the registered URI, or **`200`**.
+- **`400`** HTML information page, never a redirect: `client_id` is not the
+  hint's audience, a `post_logout_redirect_uri` comes with no client named, or
+  the client does not register it exactly, or the client is disabled.
+- **`400`** `validation_error` for a repeated or over-long parameter; **`429`**
+  over the authorization endpoint's rate limit.
+
+No refresh token is revoked. `GET /oauth/end-session/status` takes no
+parameter and says whether this browser is still signed in.
 
 ---
 

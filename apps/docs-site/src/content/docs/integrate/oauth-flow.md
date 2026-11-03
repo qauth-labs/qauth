@@ -39,6 +39,7 @@ OIDC Core / Discovery 1.0 · RFC 9700 (OAuth 2.0 Security BCP).
 | `/oauth/userinfo`                         | GET    | OIDC UserInfo (Bearer)                       |
 | `/oauth/register`                         | POST   | Dynamic Client Registration (RFC 7591, open) |
 | `/oauth/revoke`                           | POST   | Token revocation (RFC 7009)                  |
+| `/oauth/end-session`                      | GET    | RP-initiated logout (browser)                |
 
 Discover these programmatically instead of hard-coding paths:
 
@@ -660,6 +661,62 @@ so a hybrid ID-JAG would be unverifiable at exactly the party that must verify i
 
 ---
 
+## RP-Initiated Logout
+
+`GET` or `POST /oauth/end-session` signs the browser out of QAuth at an app's
+request, then sends it back to the app (OpenID Connect RP-Initiated Logout 1.0).
+Discovery lists it as `end_session_endpoint`. The app sends the browser there
+with a link, a redirect or a form post. It is not an API call.
+
+```text
+https://auth.example.com/oauth/end-session
+  ?id_token_hint=ID_TOKEN
+  &client_id=CLIENT_ID
+  &post_logout_redirect_uri=https%3A%2F%2Fapp.example.com%2Fsigned-out
+  &state=af0ifjsldkj
+```
+
+| Parameter                   | Notes                                                                                                                                                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id_token_hint`             | An ID token QAuth issued to the app. Its signature, issuer and `typ` must verify; an expired one is accepted (§2). One that does not verify counts as absent.                          |
+| `client_id`                 | The app. With `id_token_hint`, it must be the hint's audience, or the request is refused.                                                                                              |
+| `post_logout_redirect_uri`  | Where the browser goes afterwards. It must be one of the app's registered `post_logout_redirect_uris`, matched exactly. Any other value gets an information page and never a redirect. |
+| `state`                     | Added to `post_logout_redirect_uri` when the browser goes back.                                                                                                                        |
+| `ui_locales`, `logout_hint` | Accepted and not read.                                                                                                                                                                 |
+
+What happens:
+
+- **The hint names the signed-in account.** The browser's session ends at
+  once: QAuth revokes it, clears the session cookie and goes back to the
+  registered URI with `state`, or shows "You are signed out".
+- **Any other signed-in browser** gets a confirmation step: sign out, sign out
+  of all accounts, or stay signed in. Nothing ends until the person answers.
+  So a request without a valid hint, such as a cross-site image tag, ends
+  nothing. The browser then goes back to the registered URI with `state`,
+  whatever the person chose, or to the sign-out status page
+  (`/oauth/end-session/status`), which says whether the browser is still
+  signed in.
+- **A browser that is not signed in** goes back to the registered URI, or sees
+  "You are signed out".
+- **A refused request** (a `client_id` that is not the hint's audience, a
+  return URI with no client named, a URI the client did not register, or a
+  disabled client) gets a `400` information page. Nothing ends and the browser
+  is not redirected.
+
+The route ends the browser session only. It revokes no refresh token: an app
+that signs out revokes its own refresh token at [`/oauth/revoke`](#token-revocation-rfc-7009)
+first, then sends the browser here. Each outcome is recorded as
+`user.signed_out`, which names the ended session (`sid`), or as
+`user.sign_out_failed` with the reason. QAuth sends no front-channel logout.
+Back-channel logout tokens are not sent yet.
+
+Register return URIs as `post_logout_redirect_uris`: in the
+[registration request](#dynamic-client-registration-rfc-7591), in a CIMD
+document, or in the seed manifest. They follow the same scheme rules as
+`redirect_uris`. A client that registered none is never redirected.
+
+---
+
 ## Token Revocation (RFC 7009)
 
 `POST /oauth/revoke` invalidates an access or refresh token. Requires
@@ -695,13 +752,14 @@ descendant cannot be replayed.
 
 Every way of ending a grant stops new tokens being minted from it:
 
-| Revocation                                                    | Ends                                                                                                                                  |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `/oauth/revoke` with a refresh token                          | That token's whole rotation family                                                                                                    |
-| A replayed refresh token, or a replayed authorization code    | The whole rotation family, and every access token issued in it or from the code (denylisted by `jti` until it would have expired)     |
-| `/oauth/revoke` with an access token                          | That access token (denylisted by `jti` until it would have expired)                                                                   |
-| Consent revocation (`DELETE /consents/{id}`, `/api/consents`) | The user's refresh tokens and unredeemed authorization codes for that client                                                          |
-| `POST /auth/logout`                                           | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
+| Revocation                                                         | Ends                                                                                                                                  |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `/oauth/revoke` with a refresh token                               | That token's whole rotation family                                                                                                    |
+| A replayed refresh token, or a replayed authorization code         | The whole rotation family, and every access token issued in it or from the code (denylisted by `jti` until it would have expired)     |
+| `/oauth/revoke` with an access token                               | That access token (denylisted by `jti` until it would have expired)                                                                   |
+| Consent revocation (`DELETE /consents/{id}`, `/api/consents`)      | The user's refresh tokens and unredeemed authorization codes for that client                                                          |
+| `POST /auth/logout`                                                | The user's hosted browser sessions, refresh tokens and unredeemed authorization codes at every client, and the access token presented |
+| `/oauth/end-session` ([RP-initiated logout](#rp-initiated-logout)) | One browser session and its unredeemed authorization codes; no refresh token                                                          |
 
 **Otherwise, access tokens already issued under the grant are not reached.**
 They are stateless JWTs and stay valid until `exp` wherever they are accepted: at resource servers that verify
@@ -807,12 +865,13 @@ with it too.
 `POST /oauth/register` is **open** (no `initial_access_token`) and rate-limited.
 See the example in [step 0](#0-prerequisites--a-client). Key fields:
 
-| Field                        | Notes                                                                  |
-| ---------------------------- | ---------------------------------------------------------------------- |
-| `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                 |
-| `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`. |
-| `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.  |
-| `scope`                      | Space-separated; **capped to the realm allowlist**. No `qauth:` scope. |
+| Field                        | Notes                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                  |
+| `post_logout_redirect_uris`  | Optional. Where [RP-initiated logout](#rp-initiated-logout) may return. |
+| `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`.  |
+| `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.   |
+| `scope`                      | Space-separated; **capped to the realm allowlist**. No `qauth:` scope.  |
 
 Each redirect URI must be `https`, `http` to a loopback host (`127.0.0.1`,
 `[::1]` or `localhost`), or an RFC 8252 §7.1 private-use scheme for a native

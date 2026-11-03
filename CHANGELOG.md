@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **RP-initiated logout** ([#675], OpenID Connect RP-Initiated Logout 1.0,
+  ADR-017 phase F0, ADR-019 Decision 4). `GET` and `POST /oauth/end-session`,
+  listed in discovery as `end_session_endpoint`, sign the browser out at an
+  app's request. An `id_token_hint` must verify with the realm's token keys and
+  issuer; an expired one is accepted. `client_id` must be the hint's audience.
+  `post_logout_redirect_uri` must be one of the client's new
+  `post_logout_redirect_uris` (migration 0057; the seed manifest, dynamic
+  registration and CIMD documents take it), matched exactly; any other value
+  gets an information page and never a redirect. Only a valid hint that names
+  the signed-in account ends the session at once; any other signed-in browser
+  gets the `logout_confirm` step (an interaction of purpose `logout`, or a
+  plain form while `INTERACTION_UI_ENABLED` is off), so a cross-site request
+  ends nothing. The session ends through the session service, which tells its
+  listeners for back-channel logout (#624); no refresh token is revoked.
+  `GET /oauth/end-session/status` says whether the browser is still signed in.
+  `user.signed_out` gains `sid`, and its CAEP `session-revoked` SET then names
+  the user and the session as a complex subject; `interaction.created` gains the
+  `logout` purpose. The `web` role now loads the JWT plugin to verify the hint.
+
 - **A database user for each service role** ([#498], ADR-019 Decisions 8 and
   9). A declarative grants map
   (`libs/infra/db/src/lib/database-users/grants-map.ts`) says which role may
@@ -2914,6 +2933,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#614]: https://github.com/qauth-labs/qauth/issues/614
 [#615]: https://github.com/qauth-labs/qauth/issues/615
 [#616]: https://github.com/qauth-labs/qauth/issues/616
+[#624]: https://github.com/qauth-labs/qauth/issues/624
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
 [#629]: https://github.com/qauth-labs/qauth/issues/629
@@ -2924,6 +2944,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#639]: https://github.com/qauth-labs/qauth/issues/639
 [#642]: https://github.com/qauth-labs/qauth/issues/642
 [#646]: https://github.com/qauth-labs/qauth/issues/646
+[#675]: https://github.com/qauth-labs/qauth/issues/675
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845

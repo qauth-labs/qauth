@@ -61,6 +61,9 @@ the open work.
   a replayed one revokes its whole family.
 - Discovery, JWKS, ID tokens, userinfo, introspection (RFC 7662) and
   revocation (RFC 7009).
+- RP-initiated logout: an app sends the browser to `/oauth/end-session` to
+  sign it out, and gets it back at a URI it registered. Without a valid
+  `id_token_hint` for the signed-in account, the person confirms first.
 - Resource indicators (RFC 8707): each token is bound to its audience.
 - Client registration by Client ID Metadata Document (CIMD). RFC 7591 dynamic
   registration remains as a fallback.
