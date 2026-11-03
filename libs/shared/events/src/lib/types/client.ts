@@ -217,6 +217,33 @@ export const clientFirstPartyChanged = defineEventType({
     'No CAEP 1.0 or RISC 1.0 event describes a change of trust in a client. The tokens the removal revoked were the client’s, not a person’s session.',
 });
 
+const verifiedDomain = (description: string) =>
+  z.string().min(1).max(253).nullable().describe(description);
+
+export const clientVerifiedDomainChanged = defineEventType({
+  name: 'client.verified_domain_changed',
+  version: 1,
+  rc: 0,
+  description:
+    "An operator set, replaced or removed an operator-provisioned client's verified domain (ADR-019 Decision 6), the domain the consent screen and every other screen that names the client show first.",
+  category: 'admin',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'client',
+  data: z.strictObject({
+    from: verifiedDomain(
+      'The verified domain before the change, in its stored form (lower case, `xn--` labels), or `null` when the client had none.'
+    ),
+    to: verifiedDomain(
+      'The verified domain after the change, in its stored form, or `null` when it was removed.'
+    ),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'No CAEP 1.0 or RISC 1.0 event describes a change of trust in a client: it changes what screens show about the client, not a person’s session or credentials.',
+});
+
 export const apiKeyCreated = defineEventType({
   name: 'api_key.created',
   version: 1,
@@ -274,6 +301,7 @@ export const CLIENT_EVENT_TYPES = [
   clientSuspended,
   clientSuspensionLifted,
   clientFirstPartyChanged,
+  clientVerifiedDomainChanged,
   apiKeyCreated,
   apiKeyRevoked,
 ] as const;
