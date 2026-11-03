@@ -1,9 +1,9 @@
 ---
 title: Upgrades
-description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — and the history of migration 0011, the destructive ADR-002 identity migration.
+description: How to upgrade QAuth — back up the database, run the new version's migration runner, start the new version — the upgrade from 0.1 to 0.2 with its hosts, keys, sessions and roles, and the history of migration 0011, the destructive ADR-002 identity migration.
 sidebar:
   order: 7
-lastVerified: '2026-11-02'
+lastVerified: '2026-11-03'
 ---
 
 Every upgrade takes the same three steps: back up the database, run the new
@@ -106,8 +106,413 @@ server logs a warning with the number of newer migrations and starts.
 
 ### Release notes that need more than these steps
 
-Read the release's `CHANGELOG.md` entry before you upgrade. One migration in
-QAuth's history needs more: migration 0011, below.
+Read the release's `CHANGELOG.md` entry before you upgrade. Two upgrades need
+more: the upgrade from 0.1 to 0.2, in the next section, and migration 0011 in
+QAuth's history, at the end of this page.
+
+## Upgrading from 0.1 to 0.2
+
+:::caution[Back up first. Downgrades are not supported.]
+Take the backup of [step 1](#1-back-up-the-database) before anything else.
+There is no way back from 0.2 to 0.1 but to restore that backup: every write
+made after it is lost. Keep the 0.1 release's environment, its key variables
+included, beside the backup: a restored 0.1 deployment needs them again.
+:::
+
+0.2 brings the deployment topology of
+[ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/):
+one host and one issuer per realm, keys in an encrypted key store, browser
+sessions in Postgres, service roles, and health, readiness and metrics per
+process. [Topology](/operate/topology/) describes the result. Most of it needs
+no action. This section says what does, in order.
+
+| What changes                                         | What breaks when you do nothing                                                                      |
+| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| The default realm answers on its issuer's host only. | A caller that reaches the server by another name, such as an internal name, gets `421`.              |
+| Keys move into a key store, wrapped by a KEK.        | With `NODE_ENV=production`, the server does not start without a KEK.                                 |
+| Browser sessions move to Postgres.                   | Every signed-in user signs in once more.                                                             |
+| `/health` checks nothing; `/ready` does.             | A probe on `/health` no longer takes a process out of rotation when Postgres or Redis is down.       |
+| The metrics leave the public port.                   | A scrape of `/metrics` gets `404`.                                                                   |
+| Two private-address switches are removed.            | A deployment that sets `CIMD_ALLOW_PRIVATE_ADDRESSES` or `ID_JAG_ALLOW_PRIVATE_ADDRESSES` won't start. |
+
+### The upgrade, step by step
+
+1. **Back up the database** ([step 1](#1-back-up-the-database)). Keep the 0.1
+   environment with it.
+2. **Make a KEK and keep it apart from the database.** Run
+   `openssl rand -base64 32`. Set the output as `KEK`, or put it in a file and
+   set `KEK_PATH`. Store a copy where your database backups are not. See
+   [The KEK](#the-kek).
+3. **Keep `JWT_ISSUER` as it is.** It becomes the default realm's issuer, and
+   its host the realm's host, for good. See
+   [The issuer becomes permanent](#the-issuer-becomes-permanent).
+4. **List your internal host names in `DEFAULT_REALM_ENDPOINT_HOSTS`.** Name
+   every host a server-side caller uses to reach the auth server, such as the
+   host of the developer portal's `AUTH_SERVER_URL`. See
+   [Endpoint hosts](#endpoint-hosts-for-server-side-callers).
+5. **Leave the key variables set for the first boot, and do not change
+   them.** The first boot imports them into the key store. See
+   [The key import](#the-key-import-and-its-boot-warnings).
+6. **Unset `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES`.**
+   If you set either, read
+   [The private-address switches are gone](#the-private-address-switches-are-gone).
+7. **Move your probes.** Point readiness probes and load balancer health
+   checks at `/ready`, and liveness probes at `/health`. Move the Prometheus
+   scrape to the internal listener. See
+   [Health, readiness and metrics](#health-readiness-and-metrics).
+8. **Read the notes of this release below, from
+   [Users sign in once more](#users-sign-in-once-more-after-the-upgrade-to-v02)
+   on, then run the migration runner** ([step 2](#2-run-the-migration-runner-of-the-new-version)).
+   Some migrations pause token requests while they run.
+9. **Start 0.2** ([step 3](#3-start-the-new-version)) **and read the boot
+   log.** A good first boot logs `default realm ready` and `realm keys ready`,
+   and one warning for each key variable that is still set.
+10. **Check the deployment.** See [Check the upgrade](#check-the-upgrade).
+11. **Remove the old key variables after the first good boot.** See
+    [Remove the key variables](#remove-the-key-variables).
+12. **Tell your users.** Each user signs in once more, and developers sign in
+    to the portal again
+    ([the portal's token](#the-developer-portals-token-moves-to-the-developer-apis-audience)).
+    Relying parties that verify tokens themselves follow
+    [the JWKS rule](/operate/keys/#what-relying-parties-do-with-the-jwks).
+
+With Docker Compose, `docker-compose.yml` already forwards `KEK`, sets
+`DEFAULT_REALM_ENDPOINT_HOSTS` to `auth-server`, the portal's name for the
+server, and checks `/ready`. Add `KEK` (or `KEK_PATH`) to your `.env`. Set
+`DEFAULT_REALM_ENDPOINT_HOSTS` only when other callers reach the server by
+other names, and list `auth-server` among them.
+
+### New settings
+
+The settings 0.2 adds for hosts, keys, sessions and roles.
+[Configuration](/operate/configuration/) lists every key, those of other areas
+new in 0.2 among them.
+
+| Setting                              | Default                                         | What it sets                                                                                                                                  |
+| ------------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_REALM_ENDPOINT_HOSTS`       | empty                                           | Host names, comma-separated, that server-side callers reach the default realm by. Added as endpoint hosts at boot.                            |
+| `WEBAUTHN_RP_ID`                     | the default realm's host, from `JWT_ISSUER`     | The default realm's passkey RP ID. Locked once the realm has a passkey.                                                                       |
+| `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN` | `false`                                         | Allows a parent domain of the realm host as the RP ID. The server warns at every boot.                                                        |
+| `KEK_PROVIDER`                       | `local`                                         | Where the KEK lives. `local` reads `KEK` or `KEK_PATH`. Another name loads the adapter package `@qauth-labs/keys-<name>`.                     |
+| `KEK`                                | none; outside production, a published dev KEK   | The KEK, as the base64 of 32 random bytes. `NODE_ENV=production` refuses to start without a KEK.                                               |
+| `KEK_PATH`                           | none                                            | A file holding the KEK. It wins over `KEK`.                                                                                                   |
+| `KEK_PREVIOUS`                       | none                                            | The KEK in use before a KEK rotation. Keys wrapped under it still open.                                                                       |
+| `KEK_PREVIOUS_PATH`                  | none                                            | A file holding the previous KEK. It wins over `KEK_PREVIOUS`.                                                                                 |
+| `KEK_AWS_*`, `KEK_VAULT_*`           | see [Keys](/operate/keys/#environment-variables) | The settings of the two KEK adapter packages.                                                                                                 |
+| `SESSION_LAST_SEEN_INTERVAL`         | `60`                                            | How often, at most, in seconds, a browser session's last-seen time is written.                                                                |
+| `SESSION_RETENTION_DAYS`             | `30`                                            | The days an ended browser session is kept before the purge job deletes it.                                                                    |
+| `SERVICE_ROLES`                      | `all`                                           | The roles this process runs: `all`, or a list of `web`, `api`, `admin`, `signer` and `delivery`. See [Service roles](/operate/service-roles/). |
+| `SIGNER_URL`                         | none                                            | The `https` URL of the signer service, on a process without the `signer` role.                                                                |
+| `INTERNAL_HOST`                      | `127.0.0.1`                                     | The address the internal listener binds to.                                                                                                   |
+| `INTERNAL_PORT`                      | `3443`                                          | The port of the internal listener. It must differ from `PORT` and `ADMIN_API_PORT`.                                                           |
+| `INTERNAL_TLS_CERT_PATH`             | none                                            | This process's certificate for mutual TLS between the roles.                                                                                  |
+| `INTERNAL_TLS_KEY_PATH`              | none                                            | The private key of that certificate.                                                                                                          |
+| `INTERNAL_TLS_CA_PATH`               | none                                            | The CA certificates that issue every peer's certificate.                                                                                      |
+| `INTERNAL_PEER_ROLES`                | none                                            | A JSON object from a peer certificate's SAN to the role it calls as, or to `metrics` for a scraper.                                          |
+| `EGRESS_ALLOWLIST_PATH`              | none                                            | A JSON file of private hosts and ranges that operator- and admin-set destinations may reach, per realm.                                      |
+
+These settings change meaning:
+
+| Setting                                                                                   | In 0.2                                                                                                                                 |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ISSUER`                                                                              | The default realm's permanent issuer. A later boot with another value refuses to start.                                                |
+| `JWT_PRIVATE_KEY`, `JWT_RS256_PRIVATE_KEY`, `JWT_MLDSA_PRIVATE_KEY`, `SESSION_COOKIE_SECRET`, `OID4VP_VERIFIER_SIGNING_KEY` and their `_PATH` forms | Optional. Read only by the key boot step, which imports them into the key store or replaces a stored key with a new one.               |
+| `METRICS_ENABLED`                                                                         | Serves the metrics at `GET /internal/metrics` on the internal listener, never on the public port.                                     |
+| `OID4VP_RESPONSE_KEY_SECRET`                                                              | Read only to open wallet request states written by 0.1, which expire within 15 minutes.                                               |
+
+`CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are removed.
+
+### The issuer becomes permanent
+
+At the first boot, `JWT_ISSUER` becomes the issuer of the default realm
+(`DEFAULT_REALM_NAME`, `master` by default), and its host the realm's primary
+host. Both are permanent: a database trigger refuses to change them. Every
+issued token, registered client and enrolled passkey depends on them.
+
+- **The realm row.** 0.1 created the default realm with no issuer. The first
+  boot of 0.2 fills in its issuer and host. Existing clients, tokens and
+  consents keep working.
+- **A later change refuses the boot.** A boot whose `JWT_ISSUER` differs from
+  the stored issuer stops with
+  `A realm's issuer and its host are permanent: set JWT_ISSUER to "<stored>".`
+  The comparison is exact, letter case and port included, after one trailing
+  slash is removed.
+- **A trailing slash.** The realm stores the issuer without it, and its
+  discovery documents and tokens name it that way. Each boot warns
+  `JWT_ISSUER ends with a slash: ... remove the slash`. 0.1 named the issuer
+  with the slash in its tokens, so a relying party that compares `iss` with
+  the slashed form must drop the slash. Upgrade such a deployment all at once,
+  not node by node: in a mixed fleet each release refuses the other's access
+  tokens until they expire.
+- **A path.** `https://example.com/auth` keeps working: the issuer keeps its
+  path, and only the host routes requests to the realm. Each boot warns that
+  `JWT_ISSUER has a path`. A new realm's issuer is an origin with no path, and
+  QAuth needs a [dedicated host](/operate/topology/#a-dedicated-host-never-a-path).
+- **A host it refuses.** The host must be a name, not an IP address, because a
+  passkey RP ID cannot be one. Plain `http` is accepted for `localhost` and
+  `*.localhost` only. Either refusal stops the first boot, and nothing is
+  written.
+
+The port is part of the issuer, not of the host: `https://auth.example.com:8443`
+has the host `auth.example.com`.
+
+Keep `DEFAULT_REALM_NAME` as it is too: the boot finds the default realm by
+that name.
+
+### Endpoint hosts for server-side callers
+
+From 0.2 a request belongs to the realm whose host it names. The server reads
+the host from `Host`, or from `X-Forwarded-Host` when the hop that sent it is
+listed in `TRUST_PROXY`. The match ignores case and the port. A request for any
+other host gets `421 Misdirected Request`, with no cookie and no fallback to the
+default realm. Only `/health` and `/ready` answer on every host.
+
+So a server-side caller that reaches the auth server by another name breaks,
+unless that name is an **endpoint host** of the realm. List every such name in
+`DEFAULT_REALM_ENDPOINT_HOSTS`, comma-separated:
+
+- the host of the developer portal's `AUTH_SERVER_URL` (`auth-server` in the
+  Compose file);
+- the host a resource server introspects tokens at, or fetches the JWKS from,
+  when it is not the issuer's host;
+- an internal load balancer's name, or an IP address that a monitor calls.
+
+```bash
+DEFAULT_REALM_ENDPOINT_HOSTS=auth-server,auth.internal.example
+```
+
+Write bare host names: a port is dropped, and a scheme, path or wildcard
+refuses the boot. Each boot adds every listed host the realm lacks, and never
+removes one: a shorter list later changes nothing. A host belongs to one realm
+only, as one kind, so the boot refuses the issuer's own host, or a host of
+another realm.
+
+An endpoint host answers the API routes: token, introspection, revocation,
+userinfo, registration, discovery, JWKS, the `/auth/*` API routes and the
+account and developer APIs. It refuses the browser-session routes with `421`:
+`/oauth/authorize`, `/ui/*`, the Interaction API, `/consents`,
+`/auth/link/wallet` and the email verification page (`GET /auth/verify`). A
+browser always uses the issuer's host.
+
+A reverse proxy in front of the server must pass the realm host as `Host`, or
+set `X-Forwarded-Host` and be listed in `TRUST_PROXY`. A proxy that sends its
+upstream's name instead (`proxy_set_header Host auth-server`) makes every
+request a `421`. See [Reverse proxy](/operate/reverse-proxy/).
+
+### The KEK
+
+The key store wraps every stored key with a key-encryption key (KEK). The
+default provider, `KEK_PROVIDER=local`, reads it from `KEK` or `KEK_PATH`.
+
+**Make one.** The KEK is the base64 of 32 random bytes:
+
+```bash
+openssl rand -base64 32 > qauth-kek
+chmod 600 qauth-kek
+```
+
+Set `KEK_PATH` to the file, or `KEK` to its content. `KEK_PATH` wins when both
+are set, and the server warns when group or others can read the file. Give it
+to every process that holds the `signer` role: every process, while
+`SERVICE_ROLES` is `all`. A process without that role refuses to boot with a
+KEK.
+
+**Keep it apart from the database.** The database holds the stored keys,
+wrapped. Whoever holds a database backup and the KEK holds every key. So never
+put the KEK in the database backup, and back it up on its own, for example in
+your secret manager and once more offline. A restored backup needs the KEK it
+was taken under.
+
+**Losing it loses every stored key.** Nothing opens a stored key without the
+KEK that wrapped it. The signing keys, the cookie key, the data-at-rest key
+and the realm secrets it protects, such as the mail password, are lost with
+it: the server can no longer sign a token or a cookie, and `/ready` fails its
+`kek` check.
+
+Outside production the server falls back to a published development KEK and
+warns. It refuses to import a key variable under it, in every environment.
+`NODE_ENV=production` refuses to start without a KEK, and refuses the
+development KEK. A key management service can hold the KEK instead, through
+an adapter package; choose the provider before the first boot, as
+[Keys](/operate/keys/#the-kek) describes.
+
+### The key import and its boot warnings
+
+The first boot of a process that holds the `signer` role imports the key
+variables into the default realm's key store, under an advisory lock, so nodes
+that start together import once:
+
+| Variable                                   | Becomes                                                        |
+| ------------------------------------------ | -------------------------------------------------------------- |
+| `JWT_PRIVATE_KEY` / `_PATH`                | The Ed25519 token signing key                                  |
+| `JWT_RS256_PRIVATE_KEY` / `_PATH`          | The RS256 token signing key, which then signs ID tokens        |
+| `JWT_MLDSA_PRIVATE_KEY` / `_PATH`          | The ML-DSA-65 key of the hybrid pair, with hybrid signing on   |
+| `SESSION_COOKIE_SECRET`                    | The cookie key                                                 |
+| `OID4VP_VERIFIER_SIGNING_KEY` / `_PATH`    | The wallet verifier's request-signing key                      |
+
+The keys themselves do not change, so the tokens 0.1 signed still verify. The
+boot then creates the keys the realm lacks: the event-signing and data-at-rest
+keys, and the cookie key when `SESSION_COOKIE_SECRET` is unset. A realm that
+imports no signing key gets an Ed25519 and an RS256 one. A realm that imports
+only `JWT_PRIVATE_KEY` gets no RS256 key, and keeps signing ID tokens with
+EdDSA: add one with
+[`auth-server:keys:create`](/operate/keys/#adding-a-key-auth-serverkeyscreate).
+
+Every boot logs one info line, `realm keys ready`, that names each key it
+imported or created, by purpose, algorithm and `kid`. Then it warns once for
+each key variable still set, for example:
+
+```text
+JWT_PRIVATE_KEY is in the realm's key store, which signs the tokens: the variable is read only at boot, where a new key in it replaces the stored key and unpublishes the old one at once. Remove it unless you may roll back to a release that signs with it.
+```
+
+The warnings are expected after the upgrade. They stop when you remove the
+variables. A variable that holds a **new** key at a later boot replaces the
+stored key, and the old key leaves the JWKS at once
+([Replacing a signing key](/operate/keys/#replacing-a-signing-key)): do not
+change a key variable during the upgrade.
+
+The boot stops, naming the variable, when no KEK is set, when a public key
+variable is not the half of its private key, when an RS256 key is shorter than
+2048 bits, or when a variable's `kid` already names another stored key.
+
+### Check the upgrade
+
+```bash
+ISSUER=https://auth.example.com   # your JWT_ISSUER
+
+curl -fsS "$ISSUER/ready"
+curl -fsS "$ISSUER/.well-known/openid-configuration" | grep -o '"issuer":"[^"]*"'
+curl -fsS "$ISSUER/.well-known/jwks.json"
+```
+
+- `/ready` answers `200`, with every check `ok`.
+- Discovery names `JWT_ISSUER`, without a trailing slash.
+- The JWKS lists the keys of the `realm keys ready` line, each with its `kid`.
+  An imported key's `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, and
+  otherwise the RFC 7638 thumbprint of its public key.
+- An access token issued before the upgrade still introspects `active: true`,
+  and a refresh token issued before it still rotates.
+- Each endpoint host answers. With Compose, from the portal's container:
+
+  ```bash
+  docker compose exec developer-portal node -e \
+    "fetch('http://auth-server:3000/.well-known/openid-configuration').then((r) => console.log(r.status))"
+  ```
+
+  `200` means the host is an endpoint host; `421` means it is missing from
+  `DEFAULT_REALM_ENDPOINT_HOSTS`.
+
+### Remove the key variables
+
+Remove the private key variables once all three hold:
+
+- every node runs 0.2;
+- the first boot logged `realm keys ready` with each key imported;
+- you will not go back to 0.1, which signs with them. A rollback restores the
+  backup and needs them again, so keep a copy with the KEK until then.
+
+That is `JWT_PRIVATE_KEY`, `JWT_RS256_PRIVATE_KEY`, `JWT_MLDSA_PRIVATE_KEY`,
+`SESSION_COOKIE_SECRET`, `OID4VP_VERIFIER_SIGNING_KEY` and their `_PATH`
+forms, with `JWT_RS256_PUBLIC_KEY`, `JWT_RS256_KID` and `JWT_MLDSA_KID`. Keep
+the OID4VP certificate chain variables: they are public and name the stored
+key.
+
+One public key stays a little longer. An access token issued by 0.1 names no
+key (`kid`), and the server verifies such a token only with the Ed25519 key
+that `JWT_PRIVATE_KEY` or `JWT_PUBLIC_KEY` holds. So, when you remove
+`JWT_PRIVATE_KEY`, keep `JWT_PUBLIC_KEY` set to its public half
+(`openssl pkey -in jwt-private.pem -pubout`) until the longest access token
+lifetime has passed since the last 0.1 node stopped: `ACCESS_TOKEN_LIFESPAN`,
+15 minutes by default, or `DEV_ACCESS_TOKEN_LIFESPAN` for development clients,
+8 hours by default. Then remove it too. The next release refuses every token
+without a `kid`.
+
+Remove `OID4VP_RESPONSE_KEY_SECRET` 15 minutes after the last 0.1 node stopped,
+and `SMTP_PASSWORD` and `RESEND_API_KEY` once every node runs 0.2
+([Mail secrets move into the realm](#mail-secrets-move-into-the-realm)).
+
+### Health, readiness and metrics
+
+- **`/health` is liveness.** It answers `200` while the process serves, with
+  its service roles, and checks nothing. 0.1 checked Postgres and Redis there
+  and answered `503` when one was down.
+- **`/ready` is readiness.** It runs the checks of the process's roles
+  (`database`, `redis`, `kek`, `outbox`) and answers `200`, or `503` with a
+  problem document that names the failing check.
+- **The metrics are on the internal listener.** `GET /internal/metrics` on
+  `INTERNAL_HOST:INTERNAL_PORT` (`127.0.0.1:3443` by default). The public port
+  answers `404` to `/metrics`. A single process without the internal TLS files
+  serves them in plain HTTP on loopback only; a scraper on another machine
+  needs mutual TLS, with its certificate's SAN mapped to `metrics` in
+  `INTERNAL_PEER_ROLES`.
+
+Both probes answer on every host and carry no realm data. The Compose file's
+health check calls `/ready`; the image's own `HEALTHCHECK` stays on `/health`.
+See [Health and readiness](/operate/observability/#health-and-readiness) and
+[Who can read the metrics](/operate/observability/#who-can-read-the-metrics).
+
+### The private-address switches are gone
+
+0.2 sends every outbound call through one egress client, which never connects
+to a private, loopback or link-local address on its own
+([ADR-019 Decision 8](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
+`CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are
+removed. A value that is not blank stops the boot with a message that names the
+replacement:
+
+- **`CIMD_ALLOW_PRIVATE_ADDRESSES`** has nothing to replace it. A client's
+  metadata document and its `jwks_uri` come from the client, and never reach a
+  private address now. A test reaches a local server through the test-only
+  `createTestEgressClient`.
+- **`ID_JAG_ALLOW_PRIVATE_ADDRESSES`** is replaced by the egress allowlist. A
+  trusted issuer's discovery URL on a private address is listed, for the realms
+  that trust it, in the JSON file `EGRESS_ALLOWLIST_PATH` names. The `jwks_uri`
+  its discovery document names never reaches a private address.
+
+```json
+{
+  "entries": [
+    { "host": "idp.corp.example", "realms": ["master"] },
+    { "cidr": "10.20.0.0/16", "realms": ["master"], "note": "partner VPN" }
+  ]
+}
+```
+
+See [Outbound calls and the egress allowlist](/operate/docker/#outbound-calls-and-the-egress-allowlist)
+for the file's rules.
+
+### Service roles are optional
+
+`SERVICE_ROLES` defaults to `all`: one process runs every role, as 0.1 did.
+Nothing changes until you split the roles. [Service roles](/operate/service-roles/)
+says which splits work in this release, and [Topology](/operate/topology/#service-roles-and-mutual-tls)
+how they fit together.
+
+### The operator realm
+
+In simple mode, one realm on one host, the default realm is also the
+**operator realm**
+([ADR-019 Decision 1](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
+The first boot of 0.2 marks it so. Its admins are the operator's admins, and
+the admin console will be a client of it. A one-host deployment needs no
+second realm, host or issuer for administration.
+
+Adding a second realm splits the two, in a step called the operator-realm
+split:
+
+- The default realm keeps its host and its issuer, which are permanent. Its
+  clients, users, tokens and passkeys are untouched.
+- The operator realm becomes a realm of its own, on a host of its own, with its
+  own DNS name and certificate. Operator admins and service accounts sign in
+  there, and the admin console moves to that host.
+
+0.2 has no way to add a second realm, so the split cannot happen yet: the realm
+lifecycle operations of the admin API
+([#694](https://github.com/qauth-labs/qauth/issues/694)) add realms, and this
+guide gives the split's commands with them. Meanwhile, choose the operator
+realm's host and keep it free, so that it can get its DNS name and certificate
+when the split comes.
 
 ### Users sign in once more after the upgrade to v0.2
 
@@ -1003,5 +1408,7 @@ of that release's migrations — nothing to sequence around.
   Troubleshooting section points back here for a migration 0011 failure.
 - [Configuration](/operate/configuration/) — `DB_MIGRATION_WAIT_MS`, the auth
   server's wait for missing migrations at boot.
-- [Keys](/operate/keys/) — unrelated to migrations, but worth checking while
-  you have the deployment open for maintenance.
+- [Keys](/operate/keys/) — the key store and the KEK that the upgrade to 0.2
+  moves the key variables into.
+- [Topology](/operate/topology/) — the hosts, roles and proxy rules a 0.2
+  deployment follows.
