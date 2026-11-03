@@ -452,3 +452,17 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
 export function routeModulesFor(roles: readonly ServiceRole[]): readonly RouteModule[] {
   return ROUTE_MANIFEST.filter((entry) => entry.roles.some((role) => roles.includes(role)));
 }
+
+/** The modules every process registers to answer for itself (#500). */
+const PROBE_MODULES: ReadonlySet<string> = new Set(['health', 'ready']);
+
+/**
+ * Whether `role` registers a route module beyond the probes: `web` and
+ * `api`. A process of none of these roles serves `/health` and `/ready`
+ * alone, so it answers no CORS preflight (#498).
+ */
+export function servesOwnRoutes(role: ServiceRole): boolean {
+  return ROUTE_MANIFEST.some(
+    (entry) => entry.roles.includes(role) && !PROBE_MODULES.has(entry.module)
+  );
+}
