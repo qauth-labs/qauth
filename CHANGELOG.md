@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reads of tables it may not read whole, and the definer functions each role
   may execute. `realm_keys` is the signer's alone; every role reads
   `realm_public_keys` and only the signer writes it; no role writes
-  `audit_logs`; no role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER` or can
-  create, alter or drop a table. The new `nx run infra-db:db:grants` command,
+  `audit_logs`; no role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER`,
+  creates a table in the schema, or alters or drops one. The new `nx run infra-db:db:grants` command,
   and the migration runner after its migrations, apply it to the users named by
   `DB_USER_WEB`, `DB_USER_API`, `DB_USER_ADMIN`, `DB_USER_SIGNER` and
   `DB_USER_DELIVERY`, as the owner of the tables, in one transaction under the

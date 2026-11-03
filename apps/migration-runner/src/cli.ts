@@ -45,7 +45,8 @@ export const RUNNER_EXIT = Object.freeze({
   /**
    * Every migration is applied, but the grants of the roles' database users
    * named by the `DB_USER_*` environment could not be applied (#498). They
-   * are as they were before the run.
+   * are as they were before the run. It wins over
+   * {@link RUNNER_EXIT.systemClientFailed} when both fail; stderr names both.
    */
   grantsFailed: 5,
 } as const);
@@ -75,7 +76,8 @@ export const RUNNER_USAGE =
   '       gives each of them exactly the grants of its roles once the migrations are\n' +
   '       applied, as the owner of the tables DATABASE_URL connects as. None of them set\n' +
   '       is a single deployment, whose one user holds every grant: nothing is granted.\n' +
-  '       Exits 5 when the migrations are applied but the grants could not be.';
+  '       Exits 5 when the migrations are applied but the grants could not be, whether\n' +
+  '       or not the system client was provisioned: each failure is reported on stderr.';
 
 export interface RunnerArgs {
   readonly check: boolean;

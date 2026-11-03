@@ -238,7 +238,9 @@ What the grants give, from the map in
 | The outbox and its queue | `delivery`, with only the columns of `realms`, `oauth_clients` and the stream subjects it reads.     |
 
 No role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can
-create one: only the owner, the migration runner's user, changes the schema.
+create one in the schema (a temporary table, which lasts as long as its own
+session, is Postgres's default for every user): only the owner, the migration
+runner's user, changes the schema.
 
 The run refuses, and changes nothing, when a user:
 

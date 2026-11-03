@@ -60,14 +60,14 @@ exits `0`. The runner holds a Postgres advisory lock while it works, so a second
 runner started beside it, for example by every node of a cluster at once, waits
 for the first, then finds nothing to do.
 
-| Exit code | Meaning                                                                                                                                             |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                |
-| `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending. |
-| `2`       | Usage error: an unknown flag, `DATABASE_URL` is not set, or the system-client or `DB_USER_*` variables are incomplete or invalid. Nothing was done. |
-| `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                      |
-| `4`       | Every migration is applied, but the system client set by `SYSTEM_CLIENT_REDIRECT_URI` could not be provisioned. The error names why.                |
-| `5`       | Every migration is applied, but the grants of the roles' database users named by `DB_USER_*` could not be applied. They are as they were.           |
+| Exit code | Meaning                                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                                                             |
+| `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending.                                              |
+| `2`       | Usage error: an unknown flag, `DATABASE_URL` is not set, or the system-client or `DB_USER_*` variables are incomplete or invalid. Nothing was done.                                              |
+| `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                                                                   |
+| `4`       | Every migration is applied, but the system client set by `SYSTEM_CLIENT_REDIRECT_URI` could not be provisioned. The error names why.                                                             |
+| `5`       | Every migration is applied, but the grants of the roles' database users named by `DB_USER_*` could not be applied. They are as they were. It wins over `4` when both fail; the errors name both. |
 
 `--check` reports the pending migrations and changes nothing: it takes no lock
 and creates nothing, so a read-only database role can run it.
