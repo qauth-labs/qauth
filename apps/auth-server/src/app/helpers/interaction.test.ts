@@ -99,6 +99,7 @@ const SELECT_ACCOUNT_STEP: InteractionStep = {
   alternatives: [],
 };
 const CONSENT_STEP: InteractionStep = { name: stepUrn('consent'), params: {}, alternatives: [] };
+const IDENTIFIER: InteractionStep = { name: IDENTIFIER_STEP, params: {}, alternatives: [] };
 
 /** A decision as a test sends it in a request body. */
 type DecisionSpec =
@@ -119,6 +120,15 @@ type DecisionSpec =
     }
   | { kind: 'finished' };
 
+/**
+ * The password accounts of the realm, by identifier: what the user switch's
+ * lookup of a shown identifier finds (#964).
+ */
+const ACCOUNTS: Record<string, string> = {
+  'alice@example.com': USER_A,
+  'bob@example.com': USER_B,
+};
+
 interface Harness {
   app: FastifyInstance;
   redis: ReturnType<typeof createMemoryInteractionRedis>;
@@ -128,6 +138,8 @@ interface Harness {
   /** Run inside `decide`, for a test that acts while the engine works. */
   duringDecide: { action?: () => Promise<void> };
   logs: string[];
+  /** The account lookup by identifier (`userCredentials.findByRealmProviderSub`). */
+  findCredential: ReturnType<typeof vi.fn>;
 }
 
 let harness: Harness;
@@ -157,6 +169,15 @@ async function buildHarness(): Promise<Harness> {
   app.decorate('sessionService', sessions.service);
   // The session cookie is signed with the realm's cookie key (#493).
   app.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
+  const findCredential = vi.fn(async (realmId: string, providerType: string, sub: string) => {
+    const userId = ACCOUNTS[sub];
+    return realmId === REALM.id && providerType === 'password' && userId !== undefined
+      ? { userId, providerType, externalSub: sub }
+      : undefined;
+  });
+  app.decorate('repositories', {
+    userCredentials: { findByRealmProviderSub: findCredential },
+  } as unknown as FastifyInstance['repositories']);
   const decided: InteractionState[] = [];
   const duringDecide: Harness['duringDecide'] = {};
 
@@ -257,7 +278,7 @@ async function buildHarness(): Promise<Harness> {
     switchInteractionUser(request, reply, (request.params as { id: string }).id)
   );
   await app.ready();
-  return { app, redis, sessions, decided, duringDecide, logs };
+  return { app, redis, sessions, decided, duringDecide, logs, findCredential };
 }
 
 /** A browser: its cookie jar, replayed on every request. */
@@ -1482,6 +1503,39 @@ describe('a user switch for a browser that was signed in when the interaction st
     );
   }
 
+  /** A sign-in engine transaction of this request, with `fields`. */
+  function signInWith(fields: Partial<SignInTransaction>): SignInTransaction {
+    return {
+      v: 1,
+      realmId: REALM.id,
+      clientId: AUTHORIZE_REQUEST.client_id,
+      createdAt: Date.now(),
+      verified: [],
+      ...fields,
+    };
+  }
+
+  /**
+   * Answer the identifier step with `identifier`: the password step comes
+   * next, showing it with "Not you?".
+   */
+  async function showsIdentifier(owner: Browser, id: string, identifier: string) {
+    const answered = await owner.answer(id, 0, {
+      kind: 'step',
+      step: PASSWORD_STEP,
+      signInTransaction: signInWith({ identifier }),
+    });
+    expect(answered.statusCode, answered.body).toBe(200);
+  }
+
+  /** An interaction a sign-in asked for again started for the signed-in browser. */
+  function startSignInAgain(owner: Browser, session: { sid: string }) {
+    return owner.start({
+      step: IDENTIFIER,
+      carriedSession: { userId: USER_A, sid: session.sid },
+    });
+  }
+
   /** The record of the interaction `id` names, as Redis holds it. */
   function recordOf(id: string) {
     return readInteractionRecord(
@@ -1524,11 +1578,13 @@ describe('a user switch for a browser that was signed in when the interaction st
     ]);
   });
 
-  it('ends the session a sign-in asked for again was started for, before anyone signed in during it', async () => {
+  it('ends the session a sign-in asked for again was started for, when the screen shows its account', async () => {
     const { owner, session } = await signedInBrowser(USER_A);
     // `max_age`, `prompt=login` or a dangerous scope: the person signs in
     // again, as anyone, so the session is carried in and is no subject.
-    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    const id = await startSignInAgain(owner, session);
+    // The password screen shows the account the person named: the carried-in one.
+    await showsIdentifier(owner, id, 'alice@example.com');
 
     const switched = await switchUser(owner, id);
 
@@ -1550,7 +1606,8 @@ describe('a user switch for a browser that was signed in when the interaction st
 
   it('ends a later session of the same user that the cookie names too (a sign-in again in another tab)', async () => {
     const { owner, session } = await signedInBrowser(USER_A);
-    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    const id = await startSignInAgain(owner, session);
+    await showsIdentifier(owner, id, 'alice@example.com');
     const { session: later } = await harness.sessions.signIn({ realmId: REALM.id, userId: USER_A });
     await cookieNames(owner, later);
 
@@ -1564,7 +1621,8 @@ describe('a user switch for a browser that was signed in when the interaction st
 
   it('leaves a later cookie session of another user, and still ends the carried-in one', async () => {
     const { owner, session } = await signedInBrowser(USER_A);
-    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    const id = await startSignInAgain(owner, session);
+    await showsIdentifier(owner, id, 'alice@example.com');
     const { session: later } = await harness.sessions.signIn({ realmId: REALM.id, userId: USER_B });
     await cookieNames(owner, later);
 
@@ -1576,6 +1634,86 @@ describe('a user switch for a browser that was signed in when the interaction st
     expect(
       await verifySessionCookie(harness.app, REALM.id, owner.cookies.get(SESSION_COOKIE_NAME))
     ).toBe(later.sid);
+  });
+
+  it.each([
+    ['another account', 'bob@example.com'],
+    ['no account', 'nobody@example.com'],
+  ])(
+    'leaves the carried-in session when the screen shows an identifier of %s: "Not you?" signs out only the account shown',
+    async (_, identifier) => {
+      const { owner, session } = await signedInBrowser(USER_A);
+      const id = await startSignInAgain(owner, session);
+      await showsIdentifier(owner, id, identifier);
+
+      const switched = await switchUser(owner, id);
+
+      expect(switched.json()).toMatchObject({ kind: 'switched' });
+      expect(harness.findCredential).toHaveBeenCalledWith(REALM.id, 'password', identifier);
+      expect(harness.sessions.service.revoke).not.toHaveBeenCalled();
+      expect(String(switched.headers['set-cookie'])).not.toContain(SESSION_COOKIE_NAME);
+      expect(
+        await verifySessionCookie(harness.app, REALM.id, owner.cookies.get(SESSION_COOKIE_NAME))
+      ).toBe(session.sid);
+      expect(cancelledEvents()).toEqual([
+        {
+          data: expect.not.objectContaining({ sessionEnded: expect.anything() }),
+          options: expect.objectContaining({ userId: null }),
+        },
+      ]);
+    }
+  );
+
+  it('leaves the carried-in session while the screen shows no account yet', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    // A step before any identifier, such as a discoverable passkey.
+    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+
+    await switchUser(owner, id);
+
+    expect(harness.findCredential).not.toHaveBeenCalled();
+    expect(harness.sessions.service.revoke).not.toHaveBeenCalled();
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(true);
+  });
+
+  it('ends the carried-in session when the first factor proved its account, without a lookup', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await startSignInAgain(owner, session);
+    // A first factor proved the account, and the next step shows it: a
+    // discoverable passkey, so a subject without an identifier.
+    await owner.answer(id, 0, {
+      kind: 'step',
+      step: PASSWORD_STEP,
+      signInTransaction: signInWith({ subject: USER_A, authTime: Date.now() }),
+    });
+
+    await switchUser(owner, id);
+
+    expect(harness.findCredential).not.toHaveBeenCalled();
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(false);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+  });
+
+  it('keeps the interaction and the session when the account lookup fails, so a retry switches', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await startSignInAgain(owner, session);
+    await showsIdentifier(owner, id, 'alice@example.com');
+    harness.app.log.level = 'fatal';
+    harness.findCredential.mockRejectedValueOnce(new Error('database down'));
+
+    const failed = await switchUser(owner, id);
+
+    expect(failed.statusCode).toBe(500);
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).json()).toMatchObject({
+      step: PASSWORD_STEP,
+      revision: 1,
+    });
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(true);
+    expect(cancelledEvents()).toEqual([]);
+
+    const retry = await switchUser(owner, id);
+    expect(retry.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(false);
   });
 
   it('ends no session on "Use another account" at the account chooser: the accounts it lists stay signed in', async () => {

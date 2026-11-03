@@ -175,8 +175,10 @@ export type InteractionTransaction = z.infer<typeof interactionTransactionSchema
  * The browser session an interaction started for (#964): the one the
  * authorization request came with, when the browser was already signed in.
  * Not something the interaction proved: the transaction holds that. A user
- * switch ("Not you?") ends it while nobody else has signed in during the
- * interaction; the account chooser's "Use another account" does not.
+ * switch ("Not you?") ends it when the screen shows its account: the
+ * consent's user, or, while nobody has signed in during the interaction, the
+ * account the sign-in's identifier names. The account chooser's "Use another
+ * account" does not.
  */
 export const carriedSessionSchema = z.strictObject({
   userId: z.uuid(),

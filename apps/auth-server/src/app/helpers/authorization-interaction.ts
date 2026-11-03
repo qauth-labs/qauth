@@ -53,9 +53,10 @@ import { emitUserEvent } from './user-events';
  * An interaction started for a browser that is already signed in, a consent
  * or a sign-in the request asks for again (`max_age`, `prompt=login`, a
  * dangerous scope), records that browser session as carried in
- * (`carriedSession`, #964): "Not you?" ends it, as it ends a session a
- * sign-in during the interaction started (#896), and the account chooser's
- * "Use another account" does not (`switchInteractionUser`).
+ * (`carriedSession`, #964): "Not you?" ends it when the screen shows its
+ * account, as it ends a session a sign-in during the interaction started
+ * (#896), and the account chooser's "Use another account" does not
+ * (`switchInteractionUser`).
  *
  * When the interaction finishes, {@link finishAuthorization} decides the
  * request again, as the endpoint does, for the session the interaction holds,

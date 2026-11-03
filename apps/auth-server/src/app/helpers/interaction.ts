@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
+import { PASSWORD_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
 import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions';
 import type { SignInTransaction } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { ForbiddenError, InvalidRequestError } from '@qauth-labs/shared-errors';
@@ -957,62 +958,95 @@ interface SwitchedUser {
 }
 
 /**
- * The user a "Not you?" switch leaves (#896, #964): the one who signed in
- * during the interaction or the one the transaction is for (a consent for the
- * signed-in browser, #628), else the user of the browser session the
- * interaction started for. Their sessions the record holds: the
- * transaction's, and the carried-in one when it is the same user's. A carried
- * session of another user stays: someone else signed in over it during the
- * interaction, and the person switches away from them, not from it.
- * `undefined` when the interaction is for nobody yet: a browser that was not
- * signed in, before anyone signed in.
+ * The account a "Not you?" switch leaves (#896, #964): the account the screen
+ * shows, and no other. That is the user who signed in during the interaction
+ * or the one the transaction is for (a consent for the signed-in browser,
+ * #628); while nobody has, the user the sign-in's first factor proved, else
+ * the account the identifier the person gave names. Its sessions the record
+ * holds: the transaction's, and the carried-in one when it is that account's.
+ * A carried session of another account stays: the screen does not show it,
+ * whether someone else signed in over it during the interaction or the person
+ * gave another identifier. `undefined` when the record holds no session of the
+ * account shown, or the screen shows none yet.
+ *
+ * The identifier is looked up only when the interaction carried a session in
+ * and nobody has signed in during it: otherwise the record holds no session
+ * the lookup could match. It is the lookup the sign-in engine makes for that
+ * identifier (`findByIdentifier`), so a shown identifier names the account a
+ * sign-in with it would.
  */
-function switchedUserOf(record: InteractionRecord): SwitchedUser | undefined {
+async function switchedUserOf(
+  request: FastifyRequest,
+  record: InteractionRecord
+): Promise<SwitchedUser | undefined> {
   const { userId, sid } = record.transaction;
   const carried = record.carriedSession;
-  const leaving = userId ?? carried?.userId;
-  if (leaving === undefined) return undefined;
+  const shown = userId ?? (carried === undefined ? undefined : await signInUserOf(request, record));
+  if (shown === undefined) return undefined;
   const sids = new Set<string>();
   if (userId !== undefined && sid !== undefined) sids.add(sid);
-  if (carried !== undefined && carried.userId === leaving) sids.add(carried.sid);
-  return sids.size === 0 ? undefined : { userId: leaving, sids: [...sids] };
+  if (carried !== undefined && carried.userId === shown) sids.add(carried.sid);
+  return sids.size === 0 ? undefined : { userId: shown, sids: [...sids] };
+}
+
+/**
+ * The user the sign-in in progress shows, before it completes: the one its
+ * first factor proved, else the one whose password credential holds the
+ * identifier it was given, if any. `undefined` before the sign-in has an
+ * identifier, as at a discoverable passkey.
+ */
+async function signInUserOf(
+  request: FastifyRequest,
+  record: InteractionRecord
+): Promise<string | undefined> {
+  const signIn = record.signInTransaction;
+  if (signIn === null) return undefined;
+  if (signIn.subject !== undefined) return signIn.subject;
+  if (signIn.identifier === undefined) return undefined;
+  const credential = await request.server.repositories.userCredentials.findByRealmProviderSub(
+    record.realmId,
+    PASSWORD_PROVIDER_TYPE,
+    signIn.identifier
+  );
+  return credential?.userId;
 }
 
 /**
  * End the browser sessions a "Not you?" switch leaves behind (#896, #964):
- * those of the user it leaves ({@link switchedUserOf}), whether a sign-in
- * during the interaction started them or the interaction started for an
- * already signed-in browser and carried its session in, and the session the
- * browser's cookie names when that is a later one of the same user, such as a
- * sign-in again in another tab. Kept, any of them would sign the browser in
- * as that user wherever the person goes next, should they abandon the new
- * ceremony: on a shared device, the next person or the next client would get
- * the previous user's session. That is the common "Not you?": the screen
- * names the signed-in user, and someone else is at the keyboard. A cookie
- * session of another user stays: that user signed in on this browser since,
- * and is not the one the person switches away from.
+ * those of the account the screen shows ({@link switchedUserOf}), whether a
+ * sign-in during the interaction started them or the interaction started for
+ * an already signed-in browser and carried its session in, and the session
+ * the browser's cookie names when that is a later one of the same account,
+ * such as a sign-in again in another tab. Kept, any of them would sign the
+ * browser in as that account wherever the person goes next, should they
+ * abandon the new ceremony: on a shared device, the next person or the next
+ * client would get the previous user's session. That is the common "Not
+ * you?": the screen names the signed-in user, and someone else is at the
+ * keyboard. A session of an account the screen does not show stays: the
+ * person did not say they are not that account. The ceremony app's label says
+ * that the switch signs out.
  *
  * The account chooser's "Use another account" (a switch at the
  * `select_account` step, #658) ends nothing: it adds an account, and the
  * accounts it lists stay signed in (ADR-019 Decision 3, #548). Today the
  * cookie names one session and is cleared whole; #548, which brings several
  * accounts to one cookie, must make "Not you?" a sign-out of the account it
- * leaves alone: its sessions the cookie lists, not only the active one, and
- * the cookie keeping the others.
+ * leaves alone (`signOutAccount`): its sessions the cookie lists, not only the
+ * active one, and the cookie keeping the others.
  *
- * The person ends them as that user, as a sign-out does: the switch is made
- * by the browser that holds the flow cookie of the interaction, which the
- * carried-in session came from as well. Ended while the switch holds the turn
- * and before the interaction is deleted: when an end fails, or the session
- * service cannot read the cookie's session, the turn is given back and the
- * interaction stays as it was, so a retry switches again; the switch never
- * goes on while a session it ends is still live. Ending a session twice is
- * safe, so a retry ends nothing new.
+ * The person ends them as that account, as a sign-out does: the switch is
+ * made by the browser that holds the flow cookie of the interaction, which
+ * the carried-in session came from as well. Ended while the switch holds the
+ * turn and before the interaction is deleted: when the account lookup or an
+ * end fails, or the session service cannot read the cookie's session, the
+ * turn is given back and the interaction stays as it was, so a retry switches
+ * again; the switch never goes on while a session it ends is still live.
+ * Ending a session twice is safe, so a retry ends nothing new.
  *
  * @returns `undefined` when the switch ends nothing ("Use another account",
- *   or an interaction that is for nobody yet); otherwise the user it left
- *   and whether the browser's cookie names a session this ended, and is to
- *   be cleared
+ *   or no session of the account shown); otherwise the account it left and
+ *   whether the browser's cookie names a session this ended, and is to be
+ *   cleared
  */
 async function endSwitchedSessions(
   request: FastifyRequest,
@@ -1020,11 +1054,11 @@ async function endSwitchedSessions(
   idHash: string
 ): Promise<{ readonly userId: string; readonly clearCookie: boolean } | undefined> {
   if (taken.step.name === SELECT_ACCOUNT_STEP) return undefined;
-  const switched = switchedUserOf(taken);
-  if (switched === undefined) return undefined;
-  const { userId, sids } = switched;
   const { realmId } = taken;
   try {
+    const switched = await switchedUserOf(request, taken);
+    if (switched === undefined) return undefined;
+    const { userId, sids } = switched;
     for (const sid of sids) await endFirstUserSession(request, realmId, sid, userId);
     const named = await switchCookieSessionId(request, realmId);
     if (named === null || sids.includes(named)) return { userId, clearCookie: named !== null };
@@ -1092,17 +1126,21 @@ async function switchCookieSessionId(
  * Which sessions end depends on the step the switch is made at (#964):
  *
  * - "Not you?", at any step but the account chooser: the sessions of the
- *   user the interaction is for end, as a sign-out by that user. That is the
- *   one a sign-in during the interaction started (#896), or, while nobody
- *   has signed in during it, the browser session the interaction started for
+ *   account the screen shows end, and no other account's, as a sign-out by
+ *   that account. That is the session a sign-in during the interaction
+ *   started (#896); the browser session the interaction started for
  *   (`carriedSession`: a consent or a sign-in again for an already signed-in
- *   browser), and the session the browser's cookie names when it is a later
- *   one of that user. The cookie is cleared when it names one of them, and
- *   `interaction.cancelled` records it (`sessionEnded`), about that user.
+ *   browser), when the screen shows its account: the consent's user, or,
+ *   while nobody has signed in during it, the account the sign-in's first
+ *   factor proved or its identifier names; and the session the browser's
+ *   cookie names when it is a later one of that account. The cookie is
+ *   cleared when it names one of them, and `interaction.cancelled` records
+ *   it (`sessionEnded`), about that account.
  * - "Use another account", at the `select_account` step: no session ends.
  *
- * An interaction for nobody yet (a browser that was not signed in, before
- * anyone signed in) ends no session. The old id gets the generic expired
+ * A switch while the screen shows no account with a session the interaction
+ * holds (a browser that was not signed in, before anyone signed in; or
+ * another identifier than the carried-in account's) ends no session. The old id gets the generic expired
  * answer from now on. The new interaction keeps the request's absolute
  * expiry: one authorization request has one lifetime, and switching never
  * extends it.
