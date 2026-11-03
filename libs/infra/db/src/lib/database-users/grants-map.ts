@@ -9,8 +9,9 @@ import type { DatabaseRole } from './roles';
  * Each role gets what its code runs: the repositories the auth server builds
  * for it (`repositoriesFor` in `apps/auth-server/src/app/service-roles.ts`),
  * the boot steps it runs, its jobs, and the signer's own key store. The
- * container suite `database-role-routes.integration.test.ts` runs each role's
- * routes as its user and fails on a permission error. A privilege a
+ * container suite `apps/auth-server/src/app/database-users.integration.test.ts`
+ * runs each role's routes and jobs as its user and fails on a permission
+ * error. A privilege a
  * repository method needs only through `RETURNING`, `ON CONFLICT`, a lock
  * (`FOR UPDATE`) or a trigger counts as needed.
  *
@@ -92,8 +93,10 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   api_keys: { api: SIU },
   // Read-only since #458 and read by nothing at run time.
   audit_logs: {},
-  authorization_codes: { web: SIUD, api: SIUD },
-  email_verification_tokens: { web: SIUD, api: SIUD },
+  // Only the purge job, on `api`, deletes the expired rows of the four
+  // short-lived token tables (`purge-expired.ts`).
+  authorization_codes: { web: SIU, api: SIUD },
+  email_verification_tokens: { web: SIU, api: SIUD },
   // The retention job's anchor of each realm's admin chain (#536).
   event_chain_anchors: { delivery: SIU },
   // The delivery queue (#460). `api` enqueues the SSF verification event for
@@ -107,7 +110,7 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // registers, updates and deletes clients. `delivery` reads columns only.
   oauth_clients: { web: SIU, api: SIUD },
   oauth_consents: { web: SIU, api: SIU },
-  oid4vp_request_states: { web: SIUD, api: SIUD },
+  oid4vp_request_states: { web: SIU, api: SIUD },
   // Each realm's AuthMethod plugins (#600): enabled and configured by admin.
   realm_auth_method_plugins: { web: S, admin: SIU },
   realm_hosts: { web: SI, api: SI, admin: SI, signer: SI },
@@ -120,10 +123,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // them, admin writes them, `api`'s mail sender reads them.
   realm_secrets: { api: S, admin: SIU, signer: SIU },
   realms: { web: SIU, api: SIU, admin: SIU, signer: SIU },
-  refresh_tokens: { web: SIUD, api: SIUD },
+  refresh_tokens: { web: SIU, api: SIUD },
   roles: {},
   session_clients: { web: SID, api: SID },
-  sessions: { web: SIUD, api: SIUD },
+  // Only the session purge, on `web`, deletes a session (`session-purge.ts`).
+  sessions: { web: SIUD, api: SIU },
   // The SSF streams (#410): managed on `api`, read by the delivery route.
   ssf_stream_subjects: { api: SID },
   ssf_streams: { api: SIUD, delivery: S },
