@@ -24,7 +24,7 @@ const UNREAD_HINT_MAX_LENGTH = 256;
 export const endSessionParamsSchema = z.object({
   id_token_hint: z.string().min(1).max(ID_TOKEN_HINT_MAX_LENGTH).optional().meta({
     description:
-      'RP-Initiated Logout 1.0 §2: an ID token this realm issued to the client, expired or not. When it names the account of the browser session, the session ends without a confirmation.',
+      'RP-Initiated Logout 1.0 §2: an ID token this realm issued to the client, expired or not. When it names the browser session (its account by sub, the session by sid), the session ends without a confirmation.',
   }),
   client_id: clientIdParamSchema.optional().meta({
     description:
