@@ -25,6 +25,7 @@ import {
   PreconditionRequiredError,
   ProviderAlreadyRegisteredError,
   ProviderNotRegisteredError,
+  SandboxPairingError,
   TemporarilyUnavailableError,
   TokenAlreadyUsedError,
   TokenExpiredError,
@@ -37,6 +38,7 @@ import {
 
 import {
   InvalidCursorError,
+  SandboxCeilingError,
   UnprocessableContentError,
   UnsupportedMediaTypeError,
 } from '../helpers/api-request-errors';
@@ -132,6 +134,10 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'already_exists',
     oauthError: 'invalid_request',
   },
+  // A rule of the paired sandbox realm (#554): a second sandbox, a sandbox
+  // of a sandbox or of the operator realm, a live realm deleted before its
+  // sandbox. A refused ceiling reaches the caller as `sandbox_ceiling`.
+  { errorClass: SandboxPairingError, code: 'conflict', oauthError: 'invalid_request' },
 
   // Authentication errors.
   {
@@ -216,7 +222,7 @@ export const ERROR_CLASSES: readonly ErrorClassEntry[] = [
  * Framework transmitter's refusals (SSF 1.0 §8.1 defines no error body, so its
  * routes answer problem documents), the admin pipeline's refusal of a
  * security operation that carries no approval, an approval's refused move,
- * and a refused realm policy update. Each code is one the problem types page
+ * and a refused realm policy update, a sandbox realm's ceiling among them. Each code is one the problem types page
  * publishes, for the status the class carries.
  *
  * A test fails when an error class of the app that declares a `statusCode` has
@@ -263,6 +269,9 @@ export const APP_ERROR_CLASSES: readonly ErrorClassEntry[] = [
     code: 'unsupported_media_type',
     oauthError: 'invalid_request',
   },
+  // A realm policy update that would give a sandbox realm the `development`
+  // ceiling (#554).
+  { errorClass: SandboxCeilingError, code: 'sandbox_ceiling', oauthError: 'invalid_request' },
   // `@qauth-labs/server-ssf`, through the SSF plugin: a stream request the
   // protocol refuses. Its message, which echoes no value, is the `detail`.
   { errorClass: SsfRequestError, code: 'bad_request', oauthError: 'invalid_request' },

@@ -3,7 +3,7 @@ title: Problem types
 description: Every problem type, code and status a QAuth route that is not an OAuth protocol endpoint answers an error with.
 sidebar:
   order: 3
-lastVerified: '2026-11-02'
+lastVerified: '2026-11-03'
 ---
 
 Every route that is not an OAuth protocol endpoint answers an error with an RFC 9457 problem
@@ -312,6 +312,12 @@ The request is well formed, but its content cannot be applied, such as a merge p
 **Code** `weak_password` · **Status** 422 · **Title** Weak password
 
 The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`), and `errors` carries a message for each, then any feedback, under `/password`.
+
+## `sandbox-ceiling`
+
+**Code** `sandbox_ceiling` · **Status** 422 · **Title** Sandbox ceiling
+
+The realm is a sandbox realm, whose environment ceiling is staging or production, never development. `errors` names `/posture/maxEnvironmentLaxity`.
 
 ## `precondition-required`
 

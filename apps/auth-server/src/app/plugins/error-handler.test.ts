@@ -43,6 +43,7 @@ import { ERROR_CLASSES } from '../api-conventions/error-classes';
 import { OAUTH_ERROR_CODES, oauthErrorResponses } from '../api-conventions/oauth-error';
 import { pageQuerySchema, pageSchema } from '../api-conventions/paging';
 import { PROBLEM_CODES, PROBLEM_TYPE_BASE, problemResponses } from '../api-conventions/problem';
+import { SandboxCeilingError } from '../helpers/api-request-errors';
 import { SignInRequiredError } from '../helpers/sign-in-required';
 import errorHandler from './error-handler';
 
@@ -126,6 +127,9 @@ async function buildApp(): Promise<FastifyInstance> {
       ['Password must be at least 15 characters', 'Password is too easy to guess'],
       ['too_short', 'too_weak']
     );
+  });
+  app.patch('/admin/v1-rc.0/realms/:realmId/policies', async () => {
+    throw new SandboxCeilingError();
   });
   app.get('/auth/oauth-class', async () => {
     throw new InvalidRequestError('the cursor has expired');
@@ -532,6 +536,31 @@ describe('error-handler plugin (#513)', { timeout: 30_000 }, () => {
         errors: [
           { pointer: '/password', message: 'Password must be at least 15 characters' },
           { pointer: '/password', message: 'Password is too easy to guess' },
+        ],
+      });
+
+      await app.close();
+    });
+
+    it("answers a sandbox realm's development ceiling with 422 sandbox_ceiling, naming the field (#554)", async () => {
+      const app = await buildApp();
+
+      const response = await app.inject({
+        method: 'PATCH',
+        url: '/admin/v1-rc.0/realms/0190a000-0000-7000-8000-000000000001/policies',
+      });
+
+      expect(response.statusCode).toBe(422);
+      expect(bodyOf(response)).toMatchObject({
+        status: 422,
+        code: 'sandbox_ceiling',
+        type: `${PROBLEM_TYPE_BASE}sandbox-ceiling`,
+        title: 'Sandbox ceiling',
+        errors: [
+          {
+            pointer: '/posture/maxEnvironmentLaxity',
+            message: 'posture.maxEnvironmentLaxity of a sandbox realm is staging or production',
+          },
         ],
       });
 
