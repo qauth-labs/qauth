@@ -1,6 +1,6 @@
 # OIDF OP Certification Runbook — QAuth (Basic OP + Config OP)
 
-**Date:** 2026-07-20 · **anchors re-verified against `main` 2026-07-25**
+**Date:** 2026-07-20 · **anchors re-verified against `main` 2026-07-25** · **key steps re-verified for the key store 2026-11-03**
 **Applies to:** QAuth OAuth 2.1 / OIDC server (TypeScript · Fastify · Nx), repo `qauth-labs/qauth`
 **Target certifications:** OpenID Foundation **Basic OP** (bundling **Config OP**)
 **Related work:** gap analysis #286 · RS256 ID-token signing #309 · POST authorize/userinfo + `auth_time` #310 · login-bounce rework #319 · `prompt=none` #318
@@ -29,21 +29,30 @@ The rest of the deployment env (DB, Redis, email, rate limits, environment-polic
 
 ---
 
-## Step 1 — Generate the signing keys
+## Step 1 — Get an RS256 key into the realm's key store
+
+Since 0.2 the signing keys live in each realm's encrypted key store, wrapped with the KEK (`KEK` or `KEK_PATH`, see [Keys](https://docs.qauth.dev/operate/keys/#the-kek)). The certification run needs the realm to hold an RS256 `token_signing` key, which then signs every ID token. Which case is yours:
+
+| Deployment                                           | RS256 key                                                   | Do                                                                                                                               |
+| ---------------------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Fresh 0.2 deployment, no key variables               | Generated at the first boot, with the Ed25519 key           | Nothing; go to Step 2                                                                                                            |
+| Upgraded from 0.1, which had `JWT_RS256_PRIVATE_KEY` | Imported from the variable at the first boot                | Nothing; go to Step 2                                                                                                            |
+| Upgraded from 0.1 without an RS256 key               | None: ID tokens are EdDSA-only and the suite **hard-fails** | Create one ([c](#c-or-create-the-rs256-key-in-the-key-store)), or import one ([b](#b-rs256-rsa-2048--for-a-realm-that-has-none)) |
 
 ### What QAuth actually imports (verified)
 
-Private keys are imported with jose `importPKCS8`; public keys with `importSPKI` (`libs/core/crypto/src/lib/key-management.ts:7, 41-42, 51-52`). RS256 wiring: EdDSA private → `importPrivateSigningKey(pem,'EdDSA')`, RS256 private → `importPrivateSigningKey(pem,'RS256')`, RS256 public → `importSPKI(...,'RS256')`, and public-key derivation via `node:crypto` `createPublicKey(...).export({type:'spki',format:'pem'})` (`libs/server/jwt/src/lib/key-management.ts:44-46, 74-76, 84-86, 104-106`).
+The key boot step parses each key variable with `node:crypto` `createPrivateKey`, derives the public half with `createPublicKey`, and stores the private key as PKCS#8 DER in the key store (`libs/server/keys/src/lib/environment-keys.ts:183, 209, 223`). The JWT plugin holds no key since #491; the signer signs (`apps/auth-server/src/app/app.ts:585` registers the JWT plugin, `:817` the signer).
 
 Therefore:
 
-- **Private keys MUST be PKCS#8 PEM** — first line `-----BEGIN PRIVATE KEY-----`.
+- **Private keys: PKCS#8 PEM recommended** — first line `-----BEGIN PRIVATE KEY-----`. The key boot step also reads an RSA key in PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`) and stores it as PKCS#8, but a 0.1 release refuses PKCS#1, so keep PKCS#8 while you may roll back.
 - **Public keys (optional) MUST be SPKI PEM** — first line `-----BEGIN PUBLIC KEY-----`. QAuth derives the public key from the private key if you omit it.
-- **RSA MUST be ≥2048-bit.** The conformance test fixture uses exactly `rsa` `modulusLength: 2048` exported pkcs8/pem, ed25519 as pkcs8/spki, example kid `'rsa-2026'` (`apps/auth-server/src/app/routes/oauth/oidc-conformance.test.ts:54-57, 61-63, 68`).
+- **RSA MUST be ≥2048-bit.** The key boot step refuses a shorter key. The conformance test fixture uses exactly `rsa` `modulusLength: 2048` exported pkcs8/pem, ed25519 as pkcs8/spki, example kid `'rsa-2026'` (`apps/auth-server/src/app/routes/oauth/oidc-conformance.test.ts:54-57, 61-63, 68`).
+- **A KEK must be set** whenever a key variable is imported, in every environment: the boot stops without one.
 
-> **Pitfall:** a **PKCS#1** private key (`-----BEGIN RSA PRIVATE KEY-----`) is rejected — `importPKCS8` reads PKCS#8 only. Which command produces which depends on your OpenSSL: since **3.0**, `openssl genrsa` defaults to PKCS#8, and `-traditional` is needed to get PKCS#1; on **1.1.x and earlier** it emits PKCS#1 unconditionally. Check with `openssl version`, or just look at the first line of the file. `openssl genpkey` (below) emits PKCS#8 on every version, which is why it is the recommendation here. To convert an existing PKCS#1 key: `openssl pkcs8 -topk8 -nocrypt -in old.pem -out jwt-rs256-private.pem`.
+> **Format note:** `openssl genpkey` (below) emits PKCS#8 on every OpenSSL version, which is why it is the recommendation here. `openssl genrsa` emits PKCS#8 since **3.0** (`-traditional` gives PKCS#1) and PKCS#1 on **1.1.x and earlier**. To convert an existing PKCS#1 key: `openssl pkcs8 -topk8 -nocrypt -in old.pem -out jwt-rs256-private.pem`.
 
-### (a) EdDSA (Ed25519) — required; signs access tokens (and ID tokens when RS256 absent)
+### (a) EdDSA (Ed25519) — optional; generated when unset; signs access tokens (and ID tokens when RS256 absent)
 
 ```bash
 openssl genpkey -algorithm ed25519 -out jwt-ed25519-private.pem
@@ -51,7 +60,7 @@ openssl genpkey -algorithm ed25519 -out jwt-ed25519-private.pem
 openssl pkey -in jwt-ed25519-private.pem -pubout -out jwt-ed25519-public.pem
 ```
 
-### (b) RS256 (RSA-2048) — REQUIRED for the conformance deployment
+### (b) RS256 (RSA-2048) — for a realm that has none
 
 ```bash
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out jwt-rs256-private.pem
@@ -62,20 +71,36 @@ openssl pkey -in jwt-rs256-private.pem -pubout -out jwt-rs256-public.pem
 ### Verify format before deploying
 
 ```bash
-head -1 jwt-ed25519-private.pem   # MUST be: -----BEGIN PRIVATE KEY-----
-head -1 jwt-rs256-private.pem      # MUST be: -----BEGIN PRIVATE KEY-----  (NOT "RSA PRIVATE KEY")
+head -1 jwt-ed25519-private.pem   # expect: -----BEGIN PRIVATE KEY-----
+head -1 jwt-rs256-private.pem      # expect: -----BEGIN PRIVATE KEY-----  (PKCS#8, which every release reads)
 openssl pkey -in jwt-rs256-private.pem -noout -text | head -1   # "Private-Key: (2048 bit ...)"
 ```
+
+Set the file as `JWT_RS256_PRIVATE_KEY_PATH` (Step 2). The first boot imports it into the key store; from then on the variable signs nothing, and a new key in it replaces the stored one at the next boot.
+
+### (c) Or create the RS256 key in the key store
+
+Instead of generating a key file, let the server create the key in the realm's key store. On a host that holds the KEK, with the server's environment ([Keys](https://docs.qauth.dev/operate/keys/#adding-a-key-auth-serverkeyscreate)):
+
+```bash
+# From a checkout:
+pnpm nx run auth-server:keys:create --purpose=token_signing --algorithm=RS256
+# In the auth-server image, from /app (Docker Compose: docker compose exec auth-server …):
+tsx src/keys-create.ts --purpose token_signing --algorithm RS256
+```
+
+It prints the new key as one JSON line with its `kid` (the RFC 7638 thumbprint of its public key) and exits `0`. Every process reads the realm's key list again within a minute, and from then on signs ID tokens with RS256; Step 3a shows it. The private key never leaves the key store, so leave `JWT_RS256_PRIVATE_KEY` unset: a key in it would replace this one at the next boot. A realm that already has an active RS256 key refuses a second one (exit `1`).
 
 ---
 
 ## Step 2 — Configure the environment
 
-Names verified in `libs/server/config/src/lib/schemas/jwt.ts`; plugin wiring in `apps/auth-server/src/app/app.ts:539-573`.
+Names verified in `libs/server/config/src/lib/schemas/jwt.ts` and the KEK keys of the configuration registry (`libs/server/config/src/lib/registry/keys/kek.ts`); the signer and its key boot step are registered at `apps/auth-server/src/app/app.ts:817`.
 
 | Env var                                                     | Required?                                                    | Meaning / notes                                                                                                                                                                                                                                                                                                                                                                              | Source                  |
 | ----------------------------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- |
 | `JWT_ISSUER`                                                | **Yes**                                                      | Public issuer URL; must be a valid URL. Sets the `iss` claim, the base for every well-known URL, and the RFC 9207 `iss` redirect param. Use the exact public HTTPS origin the suite reaches. A single trailing slash is stripped (`resolveIssuerIdentifier`, `apps/auth-server/src/app/helpers/discovery.ts:366-367`); prefer **no** trailing slash so the compared value is byte-identical. | `jwt.ts:124`            |
+| `KEK` **or** `KEK_PATH`                                     | **Yes**                                                      | The key-encryption key that wraps every key in the key store: the base64 of 32 random bytes (`openssl rand -base64 32`), or a file holding it. The boot stops without one in production, and whenever a key variable must be imported. Keep it apart from the database backups.                                                                                                              | `kek.ts`                |
 | `JWT_PRIVATE_KEY` **or** `JWT_PRIVATE_KEY_PATH`             | No                                                           | EdDSA private key (PKCS#8 PEM), inline or path, imported into the realm's key store; unset, a fresh deployment generates its keys.                                                                                                                                                                                                                                                           | `jwt.ts:65-71, 156-168` |
 | `JWT_PUBLIC_KEY` / `JWT_PUBLIC_KEY_PATH`                    | No                                                           | EdDSA public key (SPKI PEM). Derived if omitted.                                                                                                                                                                                                                                                                                                                                             | `jwt.ts:77-83`          |
 | `JWT_RS256_PRIVATE_KEY` **or** `JWT_RS256_PRIVATE_KEY_PATH` | **Yes for conformance**, unless the realm holds an RS256 key | RS256 private key (PKCS#8 PEM), imported into the realm's key store, which then signs ID tokens with RS256 and publishes the RSA JWK. A realm with no RS256 key ⇒ EdDSA-only ⇒ OIDF suite **hard-fails**.                                                                                                                                                                                    | `jwt.ts:93-99`          |
@@ -86,10 +111,14 @@ Names verified in `libs/server/config/src/lib/schemas/jwt.ts`; plugin wiring in 
 
 ```bash
 JWT_ISSUER=https://auth.example.com
+KEK_PATH=/run/secrets/qauth-kek
+# Only to import keys you generated (Step 1a/1b); a fresh realm generates its own:
 JWT_PRIVATE_KEY_PATH=/run/secrets/jwt-ed25519-private.pem
 JWT_RS256_PRIVATE_KEY_PATH=/run/secrets/jwt-rs256-private.pem
 JWT_RS256_KID=rsa-2026
 ```
+
+After the first good boot the key store holds the keys: the boot log's `realm keys ready` line names each imported key, and each boot warns while a key variable is still set. Remove the private key variables once you no longer need them for a rollback ([Upgrades](https://docs.qauth.dev/operate/upgrades/#remove-the-key-variables)).
 
 > **Resolved 2026-07-25 (#286):** the RS256 vars are now documented in `.env.example` alongside the EdDSA block, including the PKCS#1-vs-PKCS#8 pitfall and the `openssl genpkey` recipe. Earlier readings of this runbook noted them as schema-supported but undocumented.
 
@@ -106,7 +135,7 @@ curl -sS "$ISSUER/.well-known/openid-configuration" \
   | jq '{issuer, id_token_signing_alg_values_supported, jwks_uri, token_endpoint_auth_methods_supported}'
 ```
 
-Expect `id_token_signing_alg_values_supported` = `["RS256","EdDSA"]` and `issuer` byte-identical to `JWT_ISSUER` (minus any trailing slash). This is sourced live from the realm's key store (`getIdTokenSigningAlgValuesSupported(realm)`), so `["EdDSA"]` here means the realm holds no RS256 key — import or create one before proceeding.
+Expect `id_token_signing_alg_values_supported` = `["RS256","EdDSA"]` and `issuer` byte-identical to `JWT_ISSUER` (minus any trailing slash). This is sourced live from the realm's key store (`getIdTokenSigningAlgValuesSupported(realm)`), so `["EdDSA"]` here means the realm holds no RS256 key — import or create one before proceeding (Step 1b or 1c).
 
 ### (b) JWKS has a distinct RSA key
 
@@ -138,7 +167,7 @@ curl -sS -X POST "$ISSUER/oauth/token" \
   -d redirect_uri=<CB> -d code_verifier=$VERIFIER | jq .
 ```
 
-Confirm the returned `id_token` header decodes to `{"alg":"RS256","kid":"<JWT_RS256_KID>"}` and the payload carries `iss/aud/sub/exp/iat/nonce` (and `auth_time`).
+Confirm the returned `id_token` header decodes to `{"alg":"RS256","kid":"<the RSA key's kid>"}` (`JWT_RS256_KID` for a key imported with it, else the key's thumbprint, as in the JWKS) and the payload carries `iss/aud/sub/exp/iat/nonce` (and `auth_time`).
 
 ---
 
@@ -268,7 +297,7 @@ Set **publish** to allow results to be published for certification. Use the **JS
 
 Watch these during the run; each is anchored to QAuth code so you know the expected outcome and the one-line fix if it fails. (From the #286 gap analysis.)
 
-- [ ] **`id_token` signature = RS256.** Discovery shows `["RS256","EdDSA"]` and tokens sign RS256. If EdDSA-only, the RS256 env was not picked up (Step 2 / Step 3a). _Hard-fail if wrong._
+- [ ] **`id_token` signature = RS256.** Discovery shows `["RS256","EdDSA"]` and tokens sign RS256. If EdDSA-only, the realm holds no RS256 key: import one (Step 1b, Step 2) or create one (Step 1c), then re-check Step 3a. _Hard-fail if wrong._
 - [ ] **`auth_time` present** when `max_age` is requested (emitted since #310, now in `main`).
 - [ ] **`prompt=none` while unauthenticated → expect `error=login_required` on the `redirect_uri`, not a login page (#318, landed 2026-07-25 — after this runbook's first draft).** OIDC Core §3.1.2.1 forbids any user-facing UI for `prompt=none`; QAuth now returns the error on the client's redirect URI instead of bouncing to `/ui/login` (`authorize.ts:284-292`, and the same check on the authenticated step-up path below it). Before #318 a silent-renewal request rendered a login form inside the client's hidden iframe and hung until timeout. If a module exercises `prompt=none`, this is the behaviour it should see — with an operator-provisioned client. A DCR, CIMD or `POST /api/clients` client gets the error on an issuer page instead (Step 4).
 - [ ] **Both client-auth methods demonstrated** (`client_secret_basic` + `client_secret_post`) — one confidential client covers both (`client-auth.ts:109-137, 144-161`).
