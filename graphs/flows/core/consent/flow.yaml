@@ -50,7 +50,8 @@ scope:
       realm resolver, rate limit, form schema, session cookie and CSRF check (core.consent-page): an answer names its
       step view by that view's CSRF value, a turn is taken once, and the finish deletes the record, so a replayed
       answer gets 410 and issues nothing (core.authorization, interaction_expired.finished)"
-    - 'the refusals of the reads: an id that names no live interaction answers 410 interaction_expired; the
+    - 'the refusals of the reads: an id that names no live interaction answers 410 interaction_expired, as a consent
+      record that holds no client display does (no server of #629 writes one) to a read and to an answer; the
       personal-data read answers 410 without the flow cookie that binds the interaction and 403 from another origin;
       both reads have their own rate limits (#616)'
     - 'the cancel: core.authorization (recheckingCancel), which checks the request again and sends access_denied with
@@ -108,8 +109,9 @@ context:
         over 128 characters
       unshowableResources: 'the step cannot carry the resources: more than 16, or one over 2048 characters'
       unshowableAudience: >-
-        the request names no resource, and the step cannot carry the audience an operator configured for the client:
-        more than 16 values, or one outside the alphabet or over 2048 characters
+        the request names no resource, and the step cannot carry the audience the token gets from the client's
+        configuration: a value holding markup or a control character (the token endpoint reads at most 20 values of at
+        most 256 characters, which the step carries)
   clientIsAgent:
     values: [false, true]
     initial: any
@@ -292,13 +294,13 @@ states:
   buildingStep:
     title: Build the consent step from the request
     description: >-
-      consentStep: the requested scopes the client's allowlist holds (filterRequestedScopes), in request order, each
-      { scope, text?, sensitive: false, dangerous } (text is describeScope's for the scopes QAuth defines, dangerous is
-      isDangerousScope); the request's resource indicators; when the request named none, the audience an operator
-      configured for the client; agent ({} or { max_lifespan } from the realm's sso_max_lifespan) for an AI agent
-      client only; remember_default true. A request the step cannot carry is refused with authorization.failed
-      (consent_step_unshowable) recorded, to the redirect_uri unless the client registered itself and the person has
-      seen no QAuth page yet.
+      consentStep: the requested scopes the client's allowlist holds (filterRequestedScopes), in request order, each {
+      scope, text?, sensitive: false, dangerous } (text is describeScope's for the scopes QAuth defines, dangerous is
+      isDangerousScope); the request's resource indicators; when the request named none, the token's aud from the
+      audience an operator configured for the client, without QAuth API audiences (userGrantDefaultAudience); agent ({}
+      or { max_lifespan } from the realm's sso_max_lifespan) for an AI agent client only; remember_default true. A
+      request the step cannot carry is refused with authorization.failed (consent_step_unshowable) recorded, to the
+      redirect_uri unless the client registered itself and the person has seen no QAuth page yet.
     always:
       - guard: scopesUnshowable and atFinish
         target: invalid_scope.consent_not_shown_at_finish
@@ -403,7 +405,9 @@ states:
         params:
           scopes: 'the shown scopes, in request order, each { scope, text?, sensitive: false, dangerous }'
           resources: "the request's resource indicators"
-          audience: "the client's configured audience, only when the request named no resource and the client has one"
+          audience: >-
+            the token's aud from the client's configured audience, only when the request named no resource and the
+            tokens are not for the client itself
           remember_default: 'true'
     on:
       READ_PERSONAL:
