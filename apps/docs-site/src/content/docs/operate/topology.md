@@ -145,7 +145,7 @@ nodes. [Service roles](/operate/service-roles/) gives the details.
   one. A process without the signer verifies tokens with each realm's published
   keys, which it reads without a KEK.
 - **The internal listener.** A second HTTP server of each process, on
-  `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1:3443` by default), serves
+  `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1` and `3443` by default), serves
   what only other parts of the deployment call: the metrics to a scraper, and
   the signer service to the other roles. It is not routed by host, and the
   public port serves none of its paths.
