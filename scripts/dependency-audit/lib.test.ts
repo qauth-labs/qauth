@@ -7,6 +7,15 @@ import { describe, expect, it } from 'vitest';
 
 import { parseReport, renderSummary, ReportError } from './lib.mjs';
 
+/**
+ * The pipes that separate cells in a table row, as Markdown tables read them: a
+ * pipe is escaped only by an odd number of backslashes before it. Six cells
+ * have seven.
+ */
+function cellBoundaries(row: string | undefined): number {
+  return row?.match(/(?<!\\)(?:\\\\)*\|/g)?.length ?? 0;
+}
+
 type Finding = { version: string; paths: string[] };
 
 /** One advisory in the shape pnpm 12 prints it, with `overrides` on top. */
@@ -269,8 +278,27 @@ describe('renderSummary', () => {
     expect(row).toBe(
       "| high | `pkg\\|name'` | `1.0.0` | `>=1 \\| <2` | [GHSA-mrwp-f3q8-3g9p](https://example.test/advisories/GHSA-mrwp-f3q8-3g9p) a \\| b \\| x \\| \\<img src=x onerror=alert\\(1\\)\\> \\[link\\]\\(https://evil.test\\) \\*bold\\* \\`tick\\` | 1, e.g. `.>a\\|b>'c'` |"
     );
-    // Six cells: every pipe that is not escaped separates two of them.
-    expect(row?.match(/(?<!\\)\|/g)).toHaveLength(7);
+    expect(cellBoundaries(row)).toBe(7);
+  });
+
+  // `\\|` is an escaped backslash and then a pipe that ends the cell: the backslash
+  // must be escaped before the pipe is.
+  it('keeps a backslash before a pipe from ending the cell', () => {
+    const summary = renderSummary(
+      parseReport(
+        report(
+          advisory({
+            module_name: 'pkg\\|name',
+            findings: [{ version: '1.0.0\\', paths: ['.>a\\|b'] }],
+          })
+        )
+      )
+    );
+    const row = summary.split('\n').find((line) => line.startsWith('| high '));
+
+    expect(row).toContain("| `pkg\\\\\\|name` | `1.0.0\\\\` |");
+    expect(row).toContain('| 1, e.g. `.>a\\\\\\|b` |');
+    expect(cellBoundaries(row)).toBe(7);
   });
 
   it.each([
@@ -282,6 +310,16 @@ describe('renderSummary', () => {
 
     expect(summary).toContain('| GHSA-mrwp-f3q8-3g9p follow-redirects');
     expect(summary).not.toContain('](');
+  });
+
+  it('keeps a pipe in a URL from ending the cell', () => {
+    const summary = renderSummary(
+      parseReport(report(advisory({ url: 'https://example.test/a|b?q=c|d' })))
+    );
+    const row = summary.split('\n').find((line) => line.startsWith('| high '));
+
+    expect(row).toContain('[GHSA-mrwp-f3q8-3g9p](https://example.test/a%7Cb?q=c%7Cd)');
+    expect(cellBoundaries(row)).toBe(7);
   });
 
   it('keeps a parenthesis in a URL from closing the link', () => {

@@ -134,8 +134,11 @@ const text = (value) => oneLine(value).replace(/[\\`*_[\]()<>|~!#&]/g, '\\$&');
 /**
  * A code span in a table cell. A backtick would end the span, so it is
  * replaced; a pipe would end the cell even inside the span, so it is escaped.
+ * A backslash is escaped first: the table reads `\\|` as an escaped backslash
+ * and then a pipe that ends the cell.
  */
-const code = (value) => `\`${oneLine(value).replace(/`/g, "'").replace(/\|/g, '\\|')}\``;
+const code = (value) =>
+  `\`${oneLine(value).replace(/`/g, "'").replace(/\\/g, '\\\\').replace(/\|/g, '\\|')}\``;
 
 const GHSA_ID = /^GHSA(-[a-z0-9]{4}){3}$/;
 
@@ -149,7 +152,8 @@ function advisoryLink(advisory) {
     return label;
   }
   if (url.protocol !== 'https:') return label;
-  const href = url.href.replace(/\(/g, '%28').replace(/\)/g, '%29');
+  // A parenthesis would close the link; a pipe, which the URL parser leaves as it is, would end the cell.
+  const href = url.href.replace(/\(/g, '%28').replace(/\)/g, '%29').replace(/\|/g, '%7C');
   return `[${label}](${href})`;
 }
 
