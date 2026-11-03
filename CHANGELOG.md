@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A database user for each service role** ([#498], ADR-019 Decisions 8 and
+  9). A declarative grants map
+  (`libs/infra/db/src/lib/database-users/grants-map.ts`) says which role may
+  `SELECT`, `INSERT`, `UPDATE` or `DELETE` each table, the columns `delivery`
+  reads of tables it may not read whole, and the definer functions each role
+  may execute. `realm_keys` is the signer's alone; every role reads
+  `realm_public_keys` and only the signer writes it; no role writes
+  `audit_logs`; no role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER` or can
+  create, alter or drop a table. The new `nx run infra-db:db:grants` command,
+  and the migration runner after its migrations, apply it to the users named by
+  `DB_USER_WEB`, `DB_USER_API`, `DB_USER_ADMIN`, `DB_USER_SIGNER` and
+  `DB_USER_DELIVERY`, as the owner of the tables, in one transaction under the
+  migration lock: each user's grants on the schema are revoked, the map's
+  granted, and the run commits only once every user holds exactly them, through
+  `PUBLIC` and inherited roles included. A superuser, the owner, a member of the
+  owner or a missing user is refused. It creates no user and sets no password,
+  and with no `DB_USER_*` set (a single deployment) it does nothing. A partial
+  set exits `2`; grants the runner could not apply exit `5` with the
+  migrations applied. `--check` reports drift; `--print` prints the SQL.
+  Migration 0055 adds `ssf_subject_events_pending`, a `SECURITY DEFINER`
+  function the SSF subject sweep calls instead of reading `events`, granted to
+  `api` alone.
 - **Published container images** (ADR-018 §6). A release tag now publishes
   `ghcr.io/qauth-labs/qauth/auth-server` and
   `ghcr.io/qauth-labs/qauth/migration-runner` for `linux/amd64`, pushed by
@@ -1695,6 +1717,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A process whose only role is `delivery` skips the default realm's boot
+  step** ([#498]). The step creates and updates the realm row, which the
+  delivery role's database user may not write; any other role's process runs
+  it as before.
 - **`POST /auth/register` applies one password policy, with a minimum of 15
   characters** ([#634], ADR-017 Decision 8, NIST SP 800-63B-4 §3.1.1.2). This
   is the announced change of ADR-017's first phase: every deployment refuses,
@@ -2801,6 +2827,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#495]: https://github.com/qauth-labs/qauth/issues/495
 [#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
+[#498]: https://github.com/qauth-labs/qauth/issues/498
 [#500]: https://github.com/qauth-labs/qauth/issues/500
 [#501]: https://github.com/qauth-labs/qauth/issues/501
 [#507]: https://github.com/qauth-labs/qauth/issues/507

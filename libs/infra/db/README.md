@@ -276,7 +276,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - A secret field is stored as `ADMIN_AUDIT_SECRET_MARKER`, never as a value. Annotate every secret a diff can carry, a set-up or reset link, code or token included.
   - Triggers in migration 0026 hold for every role whose statements fire them (SQLSTATE 23514, the constraint named): an inserted row must follow the realm's chain head (`admin_audit_log_follows_head`); no row is updated and neither table is truncated (`admin_audit_log_append_only`, `admin_audit_log_checkpoints_append_only`); a row is deleted only when a checkpoint covers it; a checkpoint names a row still in the log with its hash (`admin_audit_log_checkpoints_match`), moves forward (`admin_audit_log_checkpoints_forward`), covers an unbroken, linked run of rows (`admin_audit_log_checkpoints_unbroken`) and none younger than 90 days (`admin_audit_log_retention_floor`). The retention job removes rows with `SELECT admin_audit_log_prune(realm_id, through_seq)`, which writes the checkpoint and deletes the realm's rows up to that `seq`; `EXECUTE` on it is revoked from `PUBLIC`. Run `verifyAdminAuditChain` before a prune: the database checks the links, not the row hashes. A table owner or a superuser can disable a trigger, so only the per-role grants (#498) protect the log from the application's own database user. The triggers are hand-written SQL, which `drizzle-kit push` does not create; use the migrations.
   - The hash is unkeyed: a party that can rewrite a row and every row after it, or cut the newest rows, leaves a chain that verifies. A copy of each head kept outside the database, such as the outbox event that mirrors the row with its `seq` and `row_hash`, is what shows that.
-  - `adminAuditLogWriterGrantStatements(role)` returns the statements that give a writing role `INSERT` and `SELECT` on the log and `SELECT` on the checkpoints, and nothing else. The per-role grants script that will apply them (#498) is not built yet.
+  - `adminAuditLogWriterGrantStatements(role)` returns the statements that give a writing role `INSERT` and `SELECT` on the log and `SELECT` on the checkpoints, and nothing else. The grants map (#498) gives them to the `admin` role.
 - **`createEventsRepository(db, options?)`**: The event store (ADR-019 Decision 8, #457): the transactional outbox and the event log in one append-only table, `events`. It takes the root database, which reads and `emitInOwnTransaction` use. See [Event store](#event-store) for the write rule, the read rule and the lag.
   - `emit(tx, event)` writes one event in the caller's transaction (a `DbTransaction`, not the root database) and returns its id. It checks the event with `parseEvent` from `@qauth-labs/shared-events` first and throws `EventValidationError` on an unknown type, a payload that fails its schema or the payload rules, or a NUL character; nothing is written then. The repository makes the id (a UUIDv7) and the time, and takes the category from the registry. The insert reads nothing back, so a role granted only `INSERT` on `events` can write.
   - `emitInOwnTransaction(event)` is the same for a caller without a transaction: one `INSERT`, a transaction of its own.
@@ -458,9 +458,10 @@ Only the retention job deletes (#536). A writing role is granted `INSERT` on
 `events` and `EXECUTE` on `events_admin_chain_head` and `events_own_row`, and no
 `SELECT` (#827): with it, a writer could read every realm's events, request IPs,
 user agents and admin diffs included. `eventsWriterGrantStatements(role)`
-returns the statements, which the per-role grants script (#498) will apply. That script is not built yet. QAuth creates no database users;
-until the roles are split, the one database user owns the table, and the hash
-chain shows an admin event it removed.
+returns the statements; the grants map (#498) gives `web` and `api` the same,
+and `db:grants` applies them. QAuth creates no database users; while every role
+connects as one user, that user owns the table, and the hash chain shows an
+admin event it removed.
 
 #### Admin events and the hash chain
 
@@ -684,6 +685,32 @@ that loads only `pg` and `drizzle-orm`:
 pnpm nx run migration-runner:migrate
 pnpm nx run migration-runner:migrate -- --check
 ```
+
+### The roles' database users
+
+ADR-019 Decisions 8 and 9 give each service role a Postgres user of its own
+(issue #498). `src/lib/database-users/grants-map.ts` is the map: for each
+table, which role may `SELECT`, `INSERT`, `UPDATE` or `DELETE` it, the columns
+`delivery` reads of tables it may not read whole, and the definer functions
+each role may execute. Its unit test holds the rules that must not drift:
+every table of the schema is in it, `realm_keys` is the signer's alone, only
+the signer writes `realm_public_keys`, no role writes `audit_logs`, and each
+role holds what the grant builders below give it.
+
+```bash
+# As the owner of the tables (the migration runner's user), name each role's user
+DATABASE_URL=postgresql://qauth_owner:…@host:5432/qauth \
+DB_USER_WEB=qauth_web DB_USER_API=qauth_api DB_USER_ADMIN=qauth_admin \
+DB_USER_SIGNER=qauth_signer DB_USER_DELIVERY=qauth_delivery \
+  pnpm nx run infra-db:db:grants            # apply; --check reports drift, --print the SQL
+```
+
+It creates no user and sets no password, and with no `DB_USER_*` set it does
+nothing. It runs in one transaction under the migration lock, revokes what each
+user held on the schema, grants the map, and commits only when every user holds
+exactly that, `PUBLIC` and inherited roles counted. The migration runner applies
+the same grants after its migrations. The package exports the module as
+`@qauth-labs/infra-db/grants`, which loads only `pg`.
 
 ### Database Management
 

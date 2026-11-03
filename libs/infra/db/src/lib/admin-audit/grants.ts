@@ -10,9 +10,10 @@ export type { TablePrivilege } from '../role-grants';
  * The prune function itself stays with the table owner; the retention job's
  * role (#536) is the only one ever granted `EXECUTE` on it.
  *
- * QAuth creates no database users: the operator does, and the per-role grants
- * script (#498) applies these entries to the users it is given. Until the
- * roles are split, the one database user owns the table: the triggers of
+ * QAuth creates no database users: the operator does. The grants map of #498
+ * (`database-users/grants-map.ts`) gives the `admin` role these entries, which
+ * `db:grants` and the migration runner apply to its user. While every role
+ * connects as one user, the one database user owns the table: the triggers of
  * migration 0026 keep the log append-only against the application's own
  * statements, but an owner can disable a trigger.
  */

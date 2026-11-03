@@ -14,9 +14,9 @@ import { quoteRoleName, type TablePrivilege } from '../role-grants';
  * retention job's role holds (#536). The identity column needs no sequence
  * grant.
  *
- * QAuth creates no database users: the operator does, and the per-role grants
- * script (#498) applies these statements to the users it is given. Until the
- * roles are split, the one database user owns the table and can delete rows;
+ * QAuth creates no database users: the operator does. The grants map of #498
+ * (`database-users/grants-map.ts`) gives `web` and `api`, the roles that
+ * write events, these grants. While every role connects as one user, the one database user owns the table and can delete rows;
  * the hash chain shows a removed admin row.
  */
 

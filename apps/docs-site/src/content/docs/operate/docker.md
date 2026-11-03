@@ -227,7 +227,7 @@ auth-server starts.
 
 - The image holds Node and one bundled program with the migrations beside it:
   no pnpm, nx or drizzle-kit. It reads `DATABASE_URL`, and the optional
-  system-client variables below.
+  system-client and database-user variables below.
 - It takes a Postgres advisory lock, so a second runner waits, then finds
   nothing to do. It logs each migration it applies with its duration.
 - It exits `0` when the database is current, whether it applied migrations or
@@ -290,6 +290,38 @@ migration runner, and every run provisions it once the migrations are applied:
 Until the system client is provisioned, the portal's sign-in still works: the
 auth server creates a placeholder that holds no secret and no key, and so
 authenticates nowhere.
+
+#### The roles' database users
+
+A split deployment can give each service role a Postgres user of its own,
+with only the grants the role needs
+([#498](https://github.com/qauth-labs/qauth/issues/498); see
+[Topology](/operate/topology/#one-user-per-role)). Create the users, then name
+them to the migration runner, whose `DATABASE_URL` stays the owner of the
+tables. Every run then gives each user exactly the grants of its roles once
+the migrations are applied:
+
+| Variable           | Meaning                                     |
+| ------------------ | ------------------------------------------- |
+| `DB_USER_WEB`      | The database user the `web` role uses.      |
+| `DB_USER_API`      | The database user the `api` role uses.      |
+| `DB_USER_ADMIN`    | The database user the `admin` role uses.    |
+| `DB_USER_SIGNER`   | The database user the `signer` role uses.   |
+| `DB_USER_DELIVERY` | The database user the `delivery` role uses. |
+
+- None of them set, the runner grants nothing: every role connects as the one
+  user, which owns the tables. That is the single deployment's default.
+- Set one, set all five: roles that run in one process name the same user. A
+  partial set, or a name Postgres would cut short (over 63 bytes), is a usage
+  error (exit `2`), and the runner does nothing at all.
+- The grants are applied in one transaction under the migration lock: each
+  user's grants on the schema are revoked, the map's are granted, and the run
+  commits only once every user holds exactly them. A second run gives the same
+  grants.
+- A user that does not exist, a superuser, the owner of the tables or a member
+  of the owner, or a user that would still hold more through `PUBLIC` or a role
+  it is a member of, fails the run: the runner names it, leaves the grants as
+  they were and exits `5`, the migrations applied.
 
 ### Auth Server
 
