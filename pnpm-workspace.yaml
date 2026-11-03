@@ -51,6 +51,24 @@ auditConfig:
     # so no request data reaches deepmerge. Until a patched deepmerge is
     # published, or 2027-02-03, whichever comes first.
     - GHSA-gcqx-w48m-w2h4
+    # glob >=9 <=14.0.1, moderate: aborting a walk through its AbortSignal
+    # does not stop it, so it goes on reading directories after the timeout.
+    # The only fix is 14.0.2, a new major no consumer asks for: glob@13 under
+    # @fastify/static (in the auth-server image) and glob@10 under jest and
+    # archiver-utils (tooling, testcontainers). None of them passes a signal.
+    # @fastify/static calls glob only when registered with `wildcard: false`,
+    # and @fastify/swagger-ui, its only user, never sets that, so the shipped
+    # copy never runs. Until glob 10.x and 13.x carry the fix, or those
+    # consumers move to 14, or 2026-12-03, whichever comes first.
+    - GHSA-3g3m-2fjr-6pw4
+    # minimatch <11.0.1, moderate: a crafted pattern expands into enough glob
+    # parts to stall matching (denial of service). The only fix is 11.0.1, a
+    # new major no consumer asks for: minimatch 3, 5, 9 and 10 under eslint,
+    # nx, test-exclude, archiver and glob. Every pattern they match comes from
+    # code or repository config, never from a request; the one shipped path
+    # is the glob@13 above, which never runs. Until those lines carry the fix,
+    # or the consumers move to 11, or 2026-12-03, whichever comes first.
+    - GHSA-g3hv-75wg-m249
 # Workspace deps are linked into consumers as injected (hard-linked) COPIES
 # rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
 # only self-contained when the workspace injects, and `--legacy` instead emits
