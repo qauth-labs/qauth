@@ -688,7 +688,8 @@ export const oauthClients = pgTable(
      *
      * ADMIN-SET, NOT SELF-ASSERTED. Setting it is a security operation of
      * `clients.update` (`qauth:admin:security`, ADR-019 Decision 7); until the
-     * admin API ships, only the `db:seed-oauth-clients` manifest writes it.
+     * admin API ships, only the `db:seed-oauth-clients` manifest and
+     * `db:set-client-verified-domain` (#914) write it.
      * Dynamic registration, CIMD materialisation and `/api/clients` never name
      * it, and `UpdateOAuthClient` excludes it, so no client can verify itself.
      */

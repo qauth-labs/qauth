@@ -6,6 +6,7 @@ import type {
   JsonObject,
   RegisteredEventType,
 } from '@qauth-labs/shared-events';
+import type { RedirectTargetRefusal } from '@qauth-labs/shared-validation';
 import type { InferInsertModel, InferSelectModel } from 'drizzle-orm';
 
 import type {
@@ -311,6 +312,60 @@ export interface RealmScopedRepository<TSelect, TInsert, TUpdate> {
 }
 
 /**
+ * Who can change a client's redirect URIs, from how its row was made (#914):
+ *
+ * - `cimd` — its Client ID Metadata Document, which its owner publishes;
+ * - `operator` — the operator (`provisioned_by_operator`: the seed manifest,
+ *   the system client, or migration 0023's backfill);
+ * - `developer` — the developer who owns it, through `/api/clients`;
+ * - `dynamic` — RFC 7591 dynamic registration, which cannot change a client
+ *   after it registered;
+ * - `other` — none of these marks: a row written by hand, or a developer's
+ *   client whose developer was deleted.
+ */
+export type RedirectUriSource = 'cimd' | 'operator' | 'developer' | 'dynamic' | 'other';
+
+/** A stored redirect URI the consent screen cannot show, and why (#914). */
+export interface UnshowableRedirectUri {
+  uri: string;
+  reason: RedirectTargetRefusal;
+}
+
+/** A client with at least one redirect URI the consent screen cannot show (#914). */
+export interface ClientWithUnshowableRedirectUris {
+  /** `oauth_clients.id`. */
+  id: string;
+  realmId: string;
+  realmName: string;
+  clientId: string;
+  source: RedirectUriSource;
+  /** Only the URIs the screen cannot show, in their stored order. */
+  redirectUris: UnshowableRedirectUri[];
+}
+
+/** What {@link OAuthClientsRepository.findUnshowableRedirectUris} found. */
+export interface UnshowableRedirectUriScan {
+  /** Ordered by realm name, then client id. */
+  clients: ClientWithUnshowableRedirectUris[];
+  /** How many clients were read. */
+  scanned: number;
+  /** False when the deadline stopped the scan before every client was read. */
+  complete: boolean;
+}
+
+/** Which clients {@link OAuthClientsRepository.findUnshowableRedirectUris} reads. */
+export interface UnshowableRedirectUriScanOptions {
+  /** Only this realm's clients; every realm's when absent. */
+  realmId?: string;
+  /**
+   * When to stop, in epoch milliseconds: no page of clients is read once it
+   * has passed, and the result says `complete: false`. A boot check sets one,
+   * so a large table never holds the boot; the operator command reads all.
+   */
+  deadline?: number;
+}
+
+/**
  * OAuth clients repository interface: realm-scoped CRUD plus lookups by the
  * public `client_id` and by owning developer
  */
@@ -387,6 +442,18 @@ export interface OAuthClientsRepository extends RealmScopedRepository<
    * the auth-code / refresh-token / audit foreign keys.
    */
   upsertCimdClient(data: NewOAuthClient, tx?: DbClient): Promise<OAuthClient>;
+
+  /**
+   * The clients holding a redirect URI the consent screen cannot show
+   * (`redirectTarget` in shared-validation, #914): the operator's listing
+   * command and the boot warning. Reads every realm's clients unless
+   * `options.realmId` names one, a page at a time; not realm-scoped by
+   * default on purpose, and never called with a value from a request.
+   */
+  findUnshowableRedirectUris(
+    options?: UnshowableRedirectUriScanOptions,
+    tx?: DbClient
+  ): Promise<UnshowableRedirectUriScan>;
 }
 
 /**

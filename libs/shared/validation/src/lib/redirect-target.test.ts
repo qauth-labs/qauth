@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isLoopbackHost, redirectTarget } from './redirect-target';
+import { isLoopbackHost, redirectTarget, redirectTargetRefusal } from './redirect-target';
 
 describe('redirectTarget (#593)', () => {
   it('returns a web host in its ASCII form, without a trailing dot', () => {
@@ -58,5 +58,33 @@ describe('redirectTarget (#593)', () => {
     expect(isLoopbackHost('128.0.0.1')).toBe(false);
     expect(isLoopbackHost('localhost.example.com')).toBe(false);
     expect(isLoopbackHost('[::ffff:c000:201]')).toBe(false);
+  });
+});
+
+describe('redirectTargetRefusal (#914)', () => {
+  it('says why each URI the screen cannot show fails', () => {
+    expect(redirectTargetRefusal('not a url')).toBe('unparseable');
+    expect(redirectTargetRefusal('https://[2001:db8::1]/cb')).toBe('ip_literal');
+    expect(redirectTargetRefusal('http://[fe80::1]:8080/cb')).toBe('ip_literal');
+    expect(redirectTargetRefusal('https://my_app.example.com/cb')).toBe('host');
+    expect(redirectTargetRefusal('https://a..b.example/cb')).toBe('host');
+    expect(redirectTargetRefusal('https://-app.example.com/cb')).toBe('host');
+    expect(redirectTargetRefusal(`https://${'a'.repeat(64)}.example/cb`)).toBe('host');
+    expect(redirectTargetRefusal(`com.example.${'a'.repeat(53)}:/cb`)).toBe('scheme');
+  });
+
+  it('refuses nothing redirectTarget describes', () => {
+    for (const uri of [
+      'https://App.Example.com/cb',
+      'https://bücher.example./cb',
+      'http://127.0.0.1:53817/cb',
+      'http://[::1]/cb',
+      'http://[::ffff:7f00:1]/cb',
+      'com.example.notes:/callback',
+      `com.example.${'a'.repeat(52)}:/cb`,
+    ]) {
+      expect(redirectTarget(uri), uri).toBeDefined();
+      expect(redirectTargetRefusal(uri), uri).toBeUndefined();
+    }
   });
 });

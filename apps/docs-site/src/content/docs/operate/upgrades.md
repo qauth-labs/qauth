@@ -968,23 +968,31 @@ characters. A client stored before the upgrade with such a URI breaks:
   request, but the consent screen answers a new user, or one whose request
   needs the screen, with `invalid_request` (400).
 
-Before you upgrade, find the redirect URIs that break with this query. It
-finds the usual cases (an underscore in the host, an IPv6 address that is not
-`[::1]`, a long scheme). A host with an empty label or an outer hyphen is
-rarer, and the consent screen refuses it with `invalid_request` and the
-description `redirect_uri cannot be shown`.
+Before you upgrade, list the clients that break with the new release's
+listing command ([#914](https://github.com/qauth-labs/qauth/issues/914)). It
+applies the rule the consent screen applies, so it finds every such URI, and it
+reads no column newer than migration 0023, so it runs against the 0.1 database
+before the migration runner does. Run it from a checkout of the new release:
 
-```sql
-SELECT realm_id, client_id, u AS redirect_uri
-FROM oauth_clients, jsonb_array_elements_text(redirect_uris) AS u
-WHERE u ~* '^https?://[^/?#]*_'
-   OR (u ~* '^https?://\[' AND u !~* '^https?://\[::1\]')
-   OR length(split_part(u, ':', 1)) > 64;
+```bash
+DATABASE_URL=postgresql://qauth:pw@db:5432/qauth \
+  pnpm nx run infra-db:db:list-unshowable-redirect-uris
 ```
+
+It lists the clients per realm (`-- --realm=<realm name>` for one realm), each
+with the URIs the screen cannot show, why, and who can replace them. It exits
+`0` when there are none and `1` when it lists any; Nx reports every other
+failure as `1` too, so a script that must tell them apart runs
+`pnpm --dir libs/infra/db exec tsx src/scripts/list-unshowable-redirect-uris.ts`,
+which exits `2` on a usage error and `3` when it could not run. After the
+upgrade, every boot of a node that serves the consent screen (the `web` role)
+also names such clients in a `warn` line (`the client "…" of the realm "…"
+has a redirect URI the consent screen cannot show …`), up to 20 of them, and
+says when there are more.
 
 Replace each URI with one the client can receive its code on, through the
 client's own registration path, the seed manifest or, for a CIMD client, its
-document.
+document, as the listing says for each client.
 
 ### Migration 0047 can meet a client registration in a deadlock
 

@@ -3,7 +3,7 @@ title: Hosted UI
 description: The server-rendered login, consent, and resume screens an integrator's users see during authorization_code + PKCE.
 sidebar:
   order: 3
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-03'
 ---
 
 `authorization_code` + PKCE ([OAuth 2.1 Flow, step 2](/integrate/oauth-flow/#2-redirect-the-user-to-oauthauthorize))
@@ -74,7 +74,8 @@ Decision 6):
   the `allowlist` trust policy
   ([CIMD](/operate/docker/#what-the-consent-screen-shows-for-a-cimd-client)).
 - A client the operator provisioned is shown by the domain the operator set on
-  it: `verified_domain` in the `db:seed-oauth-clients` manifest.
+  it: `verified_domain` in the `db:seed-oauth-clients` manifest, or
+  `db:set-client-verified-domain` for a client that exists already.
 - Any other client, a dynamically registered or developer-portal one included,
   is shown as an unverified app, with the host that receives the code.
 

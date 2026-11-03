@@ -1446,8 +1446,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bidirectional, zero-width and markup characters and of stacked combining
   marks; a client-supplied logo or link is never returned. Migration 0047 adds
   the nullable `oauth_clients.verified_domain`, which only the
-  `db:seed-oauth-clients` manifest (`verified_domain`) writes until the admin
-  API's `clients.update` does, as a security operation.
+  `db:seed-oauth-clients` manifest (`verified_domain`) and, since [#914],
+  `db:set-client-verified-domain` write until the admin API's `clients.update`
+  does, as a security operation.
+- **Operator commands for the clients #593 changed** ([#914]). A redirect URI
+  the consent screen cannot show breaks a client stored before #593, and an
+  operator-provisioned client shows as unverified until its verified domain is
+  set. `db:list-unshowable-redirect-uris` lists, per realm (or for one
+  `--realm`), the clients holding such a URI, why each URI fails and who can
+  replace it; it only reads, runs against a 0.1 database before the upgrade,
+  and exits `1` when it lists any. Every boot of a process with the `web` role
+  names such clients as `warn` lines too, up to 20 with a count of the rest,
+  within a 2-second scan that says when it stopped early; the boot waits for
+  it at most 3 seconds and never fails for it. `db:set-client-verified-domain`
+  sets or clears an operator-provisioned client's `verified_domain` without
+  issuing it a new secret, refusing a value the manifest refuses, a public
+  suffix included, and refusing a CIMD client or one that is not
+  operator-provisioned. Each change is recorded as the new
+  `client.verified_domain_changed` event (`admin`, `warning`), with the domain
+  before and after. `redirectTargetRefusal` in
+  `@qauth-labs/shared-validation` names why `redirectTarget` refuses a URI.
 
 - **Approvals for security operations, bound to the exact request** ([#512],
   ADR-019 Decision 7). The admin pipeline's approval gate, which refused every
@@ -1954,8 +1972,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole, so running it again changes no client. A client registered
   dynamically, through `/api/clients` or by the manifest keeps working for a
   user whose stored consent covers the request, but the consent screen answers
-  a new user `invalid_request` (400). The upgrade guide (`operate/upgrades`)
-  gives a query that finds such clients before you upgrade.
+  a new user `invalid_request` (400). `db:list-unshowable-redirect-uris`
+  ([#914]) lists such clients, before the upgrade too; the upgrade guide
+  (`operate/upgrades`) shows how.
 - **A split process holding the signer needs the internal listener's TLS
   files** ([#496]). A process whose `SERVICE_ROLES` names `signer` but not every
   role, such as `api,admin,signer,delivery`, now refuses to start unless
@@ -2847,6 +2866,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#896]: https://github.com/qauth-labs/qauth/issues/896
 [#901]: https://github.com/qauth-labs/qauth/issues/901
 [#908]: https://github.com/qauth-labs/qauth/issues/908
+[#914]: https://github.com/qauth-labs/qauth/issues/914
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964

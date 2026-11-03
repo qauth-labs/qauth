@@ -242,6 +242,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                  | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                  | admin    | info     | v0.2.0 |
 | [`urn:qauth:event:client.first_party_changed:v1-rc.0`](#clientfirst_party_changed-v1-rc0)              | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:client.verified_domain_changed:v1-rc.0`](#clientverified_domain_changed-v1-rc0)      | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                        | user     | info     | v0.2.0 |
@@ -729,6 +730,21 @@ An operator set, changed or removed a client's first-party profile (ADR-017 Deci
 | `pkceRequired`      | boolean                                                          | no       | Whether a `native_backend` client's policy requires PKCE at the authorization challenge endpoint after the change. `false` is a deviation the operator chose for this client. Absent for any other profile. |
 | `writtenReason`     | string                                                           | no       | The reason the operator wrote for the profile, as stored with the client. Absent when the profile was removed.                                                                                              |
 | `revokedTokenCount` | integer                                                          | yes      | How many refresh tokens the removal revoked: every token of every family of the client that was not already revoked, expired ones included. `0` when the profile was set or changed.                        |
+
+### client.verified_domain_changed v1-rc.0
+
+An operator set, replaced or removed an operator-provisioned client's verified domain (ADR-019 Decision 6), the domain the consent screen and every other screen that names the client show first.
+
+- Identifier: `urn:qauth:event:client.verified_domain_changed:v1-rc.0`
+- Category: `admin` · Severity: `warning` · Since: v0.2.0
+- Subject: `client`, when known
+- Schema: [client.verified_domain_changed.v1-rc.0.json](/schemas/events/client.verified_domain_changed.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member | Type          | Required | Meaning                                                                                                                    |
+| ------ | ------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `from` | string or any | yes      | The verified domain before the change, in its stored form (lower case, `xn--` labels), or `null` when the client had none. |
+| `to`   | string or any | yes      | The verified domain after the change, in its stored form, or `null` when it was removed.                                   |
 
 ### api_key.created v1-rc.0
 

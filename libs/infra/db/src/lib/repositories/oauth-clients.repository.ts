@@ -4,17 +4,20 @@ import {
   NotFoundError,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
-import { and, count, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, lt, or, sql } from 'drizzle-orm';
 
 import type {
   KeysetPage,
   NewOAuthClient,
   OAuthClient,
   OAuthClientsRepository,
+  UnshowableRedirectUriScan,
+  UnshowableRedirectUriScanOptions,
   UpdateOAuthClient,
 } from '../../types/repository';
 import { DbClient } from '../db';
-import { oauthClients } from '../schema/core';
+import { oauthClients, realms } from '../schema/core';
+import { scanUnshowableRedirectUris } from './unshowable-redirect-uris';
 
 /** The client row `id` names in `realmId`: a client of another realm matches nothing (#489). */
 function clientOfRealm(realmId: string, id: string) {
@@ -411,6 +414,51 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         .where(clientOfRealm(realmId, id))
         .returning();
       return !!client;
+    },
+
+    /**
+     * The clients holding a redirect URI the consent screen cannot show
+     * (#914), a page of `REDIRECT_URI_SCAN_PAGE_SIZE` rows at a time in
+     * `id` order (the primary key), with the realm's name. Not realm-scoped
+     * unless `options.realmId` is given: the operator's listing command and
+     * the boot warning read every realm.
+     *
+     * @param options - One realm only, and when to stop
+     * @param tx - Optional transaction client
+     * @returns The clients found, how many were read, and whether all were
+     */
+    async findUnshowableRedirectUris(
+      options: UnshowableRedirectUriScanOptions = {},
+      tx?: DbClient
+    ): Promise<UnshowableRedirectUriScan> {
+      const invoker = tx ?? defaultDb;
+      return scanUnshowableRedirectUris({
+        ...(options.deadline === undefined ? {} : { deadline: options.deadline }),
+        page: (after, limit) =>
+          invoker
+            .select({
+              id: oauthClients.id,
+              realmId: oauthClients.realmId,
+              realmName: realms.name,
+              clientId: oauthClients.clientId,
+              redirectUris: oauthClients.redirectUris,
+              metadata: oauthClients.metadata,
+              provisionedByOperator: oauthClients.provisionedByOperator,
+              developerId: oauthClients.developerId,
+            })
+            .from(oauthClients)
+            .innerJoin(realms, eq(realms.id, oauthClients.realmId))
+            .where(
+              and(
+                options.realmId === undefined
+                  ? undefined
+                  : eq(oauthClients.realmId, options.realmId),
+                after === undefined ? undefined : gt(oauthClients.id, after)
+              )
+            )
+            .orderBy(asc(oauthClients.id))
+            .limit(limit),
+      });
     },
   };
 }
