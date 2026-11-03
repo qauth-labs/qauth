@@ -1262,9 +1262,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the request is checked and decided again for the session the interaction
   holds, and only then is the code minted (`mintAuthorizationCode`, under the
   consent and the session) and the browser sent to the client with `code`,
-  `state` and `iss`; a consent it still needs starts a consent interaction, and
-  an error is redirected to the client. A finish the expiry sweep beat, and a
-  replayed answer, issue no code. `prompt=none` starts no interaction. The
+  `state` and `iss`; a consent it still needs starts a consent interaction. An
+  error is redirected to a client an operator provisioned; any other client's
+  is parked under a single-use handle for ten minutes and shown on the issuer
+  page `/ui/resume/{handle}`, as the endpoint shows it (RFC 9700 §4.11.2). A
+  finish the expiry sweep beat, and a replayed answer, issue no code. `prompt=none` starts no interaction. The
   consent step can be shown but not yet answered ([#629]): until then the person
   can cancel, which redirects with `error=access_denied` once the request is
   checked again, as a finish is. The endpoint takes
