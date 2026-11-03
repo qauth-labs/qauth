@@ -118,8 +118,9 @@ authentication, run before the call). The first unmet rule produces the answer.
 
 `PASSWORD_LADDER_POLICY` (`src/lib/ladder.ts`) is the password's ladder (ADR-017 Decision 7): from
 5 consecutive failures the next attempt waits 2^(n−5) seconds, capped at 15 minutes; an end-user IP
-with a successful sign-in to the account in the last 30 days skips the wait and still counts; 100
-consecutive counted failures fire the hard action; a run is kept after its last counted failure
+with a successful sign-in to the account in the last 30 days skips the wait while the run has fewer
+than 20 counted failures (`knownIpFreeFailures`, #968) and waits as any other address from then on,
+every attempt counted; 100 consecutive counted failures fire the hard action; a run is kept after its last counted failure
 2 days while it has fewer than 5 (`freeRetentionMs`) and 30 days once it has reached a wait
 (`retentionMs`), by the count alone, so the same for an identifier no account holds (#969). A
 correct password clears its own counter and no other (`onSuccess: 'clear'`); a counter

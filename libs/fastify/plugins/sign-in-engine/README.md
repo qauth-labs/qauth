@@ -66,4 +66,5 @@ sign-in, the right password included, and no row of any table changes.
 real Redis and Postgres: 200 parallel wrong passwords reach the verifier no more often than
 sequential ones, an attempt inside a wait is neither verified nor counted, the 100th failure
 disables the password only while armed, an ignored mark lets the user in, a known IP skips the
-wait and still counts, and a stopped Redis refuses the round before any credential is checked.
+wait below 20 counted failures and reaches the 100th only through the waits, still counting each,
+and a stopped Redis refuses the round before any credential is checked.

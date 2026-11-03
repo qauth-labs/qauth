@@ -133,7 +133,7 @@ context:
       ladderWait: >-
         the account the address names, held or not, is inside the wait of its failure ladder: from its 5th consecutive
         counted failure, the n-th makes the next attempt wait 2^(n-5) seconds, at most 15 minutes; and the client
-        address has not signed in to the account in the last 30 days
+        address has not signed in to the account in the last 30 days, or the run already has 20 counted failures (#968)
   account:
     values: [verified, unverified, disabled, disabledUnverified, unknown]
     initial: any
@@ -470,9 +470,10 @@ states:
       the sign-in engine. One Redis script, keyed on the keyed HMAC of the realm and the normalized address whether or
       not an account holds it, reads the account's wait, refuses an attempt inside it, and otherwise counts the
       attempt as a failure and sets the next wait, so guesses sent at once meet the ladder as guesses sent one at a
-      time. An address that signed in to the account in the last 30 days skips the wait and is still counted. Any
-      error of the store, or of the cookie key the HMACs are derived from, refuses the attempt before a credential is
-      read.
+      time. An address that signed in to the account in the last 30 days skips the wait while the run has fewer than
+      20 counted failures and is still counted; from then on it waits as any other address does, since many clients
+      may share it (#968). Any error of the store, or of the cookie key the HMACs are derived from, refuses the
+      attempt before a credential is read.
     source: apps/auth-server/src/app/routes/ui/login.ts:395
     always:
       - guard: ladderUnavailable
@@ -492,7 +493,7 @@ states:
       - target: checkingPassword
         effect: [reserveAttempt]
         say: "the attempt is counted on the account's ladder, and the next wait set"
-        source: libs/fastify/plugins/sign-in-engine/src/lib/failure-ladder.ts:103
+        source: libs/fastify/plugins/sign-in-engine/src/lib/failure-ladder.ts:114
 
   checkingPassword:
     title: Check the password
