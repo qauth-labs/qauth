@@ -17,7 +17,7 @@ import type {
 } from '../../types/repository';
 import { DbClient } from '../db';
 import { oauthClients, realms } from '../schema/core';
-import { REDIRECT_URI_SCAN_PAGE_SIZE, scanUnshowableRedirectUris } from './unshowable-redirect-uris';
+import { scanUnshowableRedirectUris } from './unshowable-redirect-uris';
 
 /** The client row `id` names in `realmId`: a client of another realm matches nothing (#489). */
 function clientOfRealm(realmId: string, id: string) {
@@ -418,7 +418,7 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
 
     /**
      * The clients holding a redirect URI the consent screen cannot show
-     * (#914), a page of {@link REDIRECT_URI_SCAN_PAGE_SIZE} rows at a time in
+     * (#914), a page of `REDIRECT_URI_SCAN_PAGE_SIZE` rows at a time in
      * `id` order (the primary key), with the realm's name. Not realm-scoped
      * unless `options.realmId` is given: the operator's listing command and
      * the boot warning read every realm.

@@ -269,7 +269,9 @@ describe('createOAuthClientsRepository.findUnshowableRedirectUris', () => {
   it('narrows to one realm when asked', async () => {
     const { db, queries } = createRecordingDb();
 
-    await createOAuthClientsRepository(db).findUnshowableRedirectUris({ realmId: CIMD_ROW.realmId });
+    await createOAuthClientsRepository(db).findUnshowableRedirectUris({
+      realmId: CIMD_ROW.realmId,
+    });
 
     const sql = queries[0].text.toLowerCase();
     expect(sql).toContain('where "oauth_clients"."realm_id" = $1');
