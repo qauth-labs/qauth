@@ -13,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createOAuthClientsRepository, createRealmsRepository } from '../lib/repositories';
 import { type IntegrationDb, setupIntegrationDb } from '../lib/repositories/integration-setup';
 import { oauthClients } from '../lib/schema/core';
+import { events } from '../lib/schema/events';
 import type { NewOAuthClient } from '../types';
 import { setClientVerifiedDomain } from './client-verified-domain';
 
@@ -63,8 +64,18 @@ describe('setClientVerifiedDomain (real Postgres)', () => {
     return r;
   }
 
+  const CHANGED = 'urn:qauth:event:client.verified_domain_changed:v1-rc.0';
+
+  async function recorded(realmId: string) {
+    return db()
+      .select({ type: events.type, data: events.data })
+      .from(events)
+      .where(eq(events.realmId, realmId))
+      .orderBy(events.seq);
+  }
+
   it('sets the stored form on an operator-provisioned client and changes nothing else', async () => {
-    const { client } = await seed('vd-1', 'notes');
+    const { realm, client } = await seed('vd-1', 'notes');
     const before = await row(client.id);
 
     const result = await setClientVerifiedDomain(db(), {
@@ -85,10 +96,22 @@ describe('setClientVerifiedDomain (real Postgres)', () => {
     expect(after.updatedAt).toBeGreaterThan(1);
     // The secret, the redirect URIs and the marker stay as they were.
     expect({ ...after, verifiedDomain: null, updatedAt: before.updatedAt }).toEqual(before);
+    // The change is on record, committed with it.
+    const [event, ...rest] = await db().select().from(events).where(eq(events.realmId, realm.id));
+    expect(rest).toEqual([]);
+    expect(event).toMatchObject({
+      type: CHANGED,
+      category: 'admin',
+      actorType: 'operator_cli',
+      subjectType: 'client',
+      subjectId: 'notes',
+      clientId: 'notes',
+      data: { from: null, to: 'xn--bcher-kva.example' },
+    });
   });
 
   it('replaces, keeps and clears the domain, writing only when it changes', async () => {
-    const { client } = await seed('vd-2', 'notes', { verifiedDomain: 'old.example.com' });
+    const { realm, client } = await seed('vd-2', 'notes', { verifiedDomain: 'old.example.com' });
 
     await expect(
       setClientVerifiedDomain(db(), {
@@ -124,6 +147,12 @@ describe('setClientVerifiedDomain (real Postgres)', () => {
     await expect(
       setClientVerifiedDomain(db(), { realm: 'vd-2', clientId: 'notes', domain: null })
     ).resolves.toMatchObject({ status: 'unchanged', verifiedDomain: null });
+
+    // One event per change, none for a run that changed nothing.
+    expect(await recorded(realm.id)).toEqual([
+      { type: CHANGED, data: { from: 'old.example.com', to: 'notes.example.com' } },
+      { type: CHANGED, data: { from: 'notes.example.com', to: null } },
+    ]);
   });
 
   it('refuses a client whose screens would not show the domain, and writes nothing', async () => {
@@ -163,6 +192,7 @@ describe('setClientVerifiedDomain (real Postgres)', () => {
       .from(oauthClients)
       .where(eq(oauthClients.realmId, realm.id));
     expect(stored).toEqual([{ verifiedDomain: null }, { verifiedDomain: null }]);
+    expect(await recorded(realm.id)).toEqual([]);
   });
 
   it('reports an unknown realm or client, and touches no other realm’s client of that id', async () => {

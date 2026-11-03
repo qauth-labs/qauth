@@ -1,5 +1,6 @@
 /**
- * Set or clear an operator-provisioned client's verified domain (#914).
+ * Set or clear an operator-provisioned client's verified domain (#914), and
+ * record it as a `client.verified_domain_changed` event.
  *
  * The consent screen, and every screen that names a client, leads with what
  * the server verified about it (ADR-019 Decision 6, #593). For a client the
@@ -23,6 +24,8 @@
  * `seed-oauth-clients.ts`. The logic lives here, apart from the CLI in
  * `set-client-verified-domain.ts`, so it can be tested without running it.
  */
+import { userInfo } from 'node:os';
+
 import {
   InvalidVerifiedDomainError,
   type InvalidVerifiedDomainReason,
@@ -31,7 +34,9 @@ import {
 import { and, eq, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 
+import { createEventsRepository } from '../lib/repositories/events.repository';
 import { oauthClients, realms } from '../lib/schema/core';
+import type { Database, DbTransaction } from '../types';
 
 export interface VerifiedDomainArgs {
   realm: string;
@@ -93,11 +98,27 @@ export type VerifiedDomainResult =
 type OperatorDb = NodePgDatabase<any>;
 
 /**
+ * The operating-system user running the tool, the `actor.id` of its event.
+ * `undefined` when the process has no user entry (a container without one),
+ * so the event still names the tool as its actor.
+ */
+function operatorUser(): string | undefined {
+  try {
+    const name = userInfo().username;
+    return name.length > 0 && name.length <= 255 ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Set the client's verified domain to the normalised `args.domain`, or clear
- * it, in one transaction that writes `verified_domain` and `updated_at` only.
- * Idempotent: a client that already holds the value is reported `unchanged`
- * and nothing is written. A value `normaliseVerifiedDomain` refuses is
- * refused before the database is read.
+ * it, in one transaction that writes `verified_domain` and `updated_at` of
+ * the client and a `client.verified_domain_changed` event (actor
+ * `operator_cli`, the operating-system user when there is one). Idempotent: a
+ * client that already holds the value is reported `unchanged` and nothing is
+ * written. A value `normaliseVerifiedDomain` refuses is refused before the
+ * database is read.
  */
 export async function setClientVerifiedDomain(
   db: OperatorDb,
@@ -169,6 +190,21 @@ export async function setClientVerifiedDomain(
         updatedAt: sql`(EXTRACT(EPOCH FROM now()) * 1000)::bigint`,
       })
       .where(eq(oauthClients.id, client.id));
+
+    // The event commits with the change (#914), as a suspension's does: the
+    // domain is what every screen shows first as verified, so who changed it,
+    // and from what, is on record. The tool's database handle has a schema
+    // generic of its own; at run time it is the same node-postgres database
+    // and transaction the repository takes.
+    const operator = operatorUser();
+    await createEventsRepository(db as unknown as Database).emit(tx as unknown as DbTransaction, {
+      type: 'urn:qauth:event:client.verified_domain_changed:v1-rc.0',
+      realm: realm.id,
+      actor: { type: 'operator_cli', ...(operator === undefined ? {} : { id: operator }) },
+      subject: { type: 'client', id: client.clientId },
+      client: { id: client.clientId },
+      data: { from: previous, to: verifiedDomain },
+    });
 
     return {
       status: verifiedDomain === null ? ('cleared' as const) : ('set' as const),
