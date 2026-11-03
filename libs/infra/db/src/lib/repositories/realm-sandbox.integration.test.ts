@@ -393,8 +393,9 @@ describe('paired sandbox realm integration (real Postgres)', () => {
       const deleted = repo.delete(live);
       await expect(deleted).rejects.toBeInstanceOf(SandboxPairingError);
       await expect(deleted).rejects.toMatchObject({ rule: 'live_realm_has_sandbox' });
+      // ON DELETE RESTRICT answers with restrict_violation, not foreign_key_violation.
       expect(await pgError(pool().query('DELETE FROM realms WHERE id = $1', [live]))).toEqual({
-        code: '23503',
+        code: '23001',
         constraint: 'realms_sandbox_of_realm_id_realms_id_fk',
       });
       expect(await repo.findById(live)).toBeDefined();

@@ -1149,9 +1149,12 @@ export function createRealmsRepository(
         return !!realm;
       } catch (error) {
         // A live realm is not deleted while its sandbox exists (#554): the
-        // sandbox's foreign key is `ON DELETE RESTRICT`.
+        // sandbox's foreign key is `ON DELETE RESTRICT`, which PostgreSQL
+        // answers with `23001` (restrict_violation); `23503` would be a
+        // `NO ACTION` foreign key's answer, should the key ever become one.
+        const code = pgErrorCodeOf(error);
         if (
-          pgErrorCodeOf(error) === '23503' &&
+          (code === '23001' || code === '23503') &&
           extractConstraintName(error) === SANDBOX_OF_REALM_FK
         ) {
           throw new SandboxPairingError('live_realm_has_sandbox', error);
