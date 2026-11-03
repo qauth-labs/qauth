@@ -247,3 +247,43 @@ describe('UpdateOAuthClient', () => {
     expect([flag, unflag, policy, reason]).toHaveLength(4);
   });
 });
+
+// #914: the scan behind the listing command and the boot warning reads only,
+// a keyset page at a time in primary-key order, with the realm's name.
+describe('createOAuthClientsRepository.findUnshowableRedirectUris', () => {
+  it('reads a page of every realm by id, joined to the realm, and writes nothing', async () => {
+    const { db, queries } = createRecordingDb();
+
+    const scan = await createOAuthClientsRepository(db).findUnshowableRedirectUris();
+
+    expect(scan).toEqual({ clients: [], scanned: 0, complete: true });
+    expect(queries).toHaveLength(1);
+    const sql = queries[0].text.toLowerCase();
+    expect(sql.startsWith('select ')).toBe(true);
+    expect(sql).toContain('inner join "realms" on "realms"."id" = "oauth_clients"."realm_id"');
+    expect(sql).toContain('order by "oauth_clients"."id" asc');
+    expect(sql).not.toContain(' where ');
+    expect(queries[0].values).toEqual([500]);
+  });
+
+  it('narrows to one realm when asked', async () => {
+    const { db, queries } = createRecordingDb();
+
+    await createOAuthClientsRepository(db).findUnshowableRedirectUris({ realmId: CIMD_ROW.realmId });
+
+    const sql = queries[0].text.toLowerCase();
+    expect(sql).toContain('where "oauth_clients"."realm_id" = $1');
+    expect(queries[0].values).toEqual([CIMD_ROW.realmId, 500]);
+  });
+
+  it('reads nothing once its deadline has passed', async () => {
+    const { db, queries } = createRecordingDb();
+
+    const scan = await createOAuthClientsRepository(db).findUnshowableRedirectUris({
+      deadline: Date.now() - 1,
+    });
+
+    expect(scan).toEqual({ clients: [], scanned: 0, complete: false });
+    expect(queries).toHaveLength(0);
+  });
+});
