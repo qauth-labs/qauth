@@ -441,7 +441,7 @@ and `SMTP_PASSWORD` and `RESEND_API_KEY` once every node runs 0.2
   (`database`, `redis`, `kek`, `outbox`) and answers `200`, or `503` with a
   problem document that names the failing check.
 - **The metrics are on the internal listener.** `GET /internal/metrics` on
-  `INTERNAL_HOST:INTERNAL_PORT` (`127.0.0.1:3443` by default). The public port
+  `INTERNAL_HOST:INTERNAL_PORT` (`127.0.0.1` and `3443` by default). The public port
   answers `404` to `/metrics`. A single process without the internal TLS files
   serves them in plain HTTP on loopback only; a scraper on another machine
   needs mutual TLS, with its certificate's SAN mapped to `metrics` in
