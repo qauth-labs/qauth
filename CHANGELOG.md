@@ -1659,6 +1659,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `flows/admin/plugin-enable` now names its exits that way too, one exit per
   cause for a refused enable and a refused disable alike. CI does not run the
   target yet; [#568] will.
+- **The upgrade guide from 0.1 to 0.2** ([#501]). `operate/upgrades` gains
+  _Upgrading from 0.1 to 0.2_: back up first, no downgrade, a numbered upgrade
+  procedure, a table of every new host, key, session and role setting with its
+  default, and what to do about the permanent issuer, the endpoint hosts, the
+  KEK, the key import and its boot warnings, the key variables left over,
+  `/health`, `/ready` and the internal metrics, the removed private-address
+  switches and the operator realm. `operate/keys` is rewritten for the key
+  store: the KEK, the boot import, the rotation windows, adding a key with
+  `auth-server:keys:create`, and how a relying party caches the JWKS. The new
+  **Topology** page (`operate/topology`) gives the layout ADR-019 fixes: one
+  host and issuer per realm, a dedicated host, DNS and TLS per realm, endpoint
+  hosts, service roles and mutual TLS, database users and the proxy rules. The
+  OIDF certification runbook adds the RS256 key in the key store. The key
+  import's acceptance of a PKCS#1 RSA key, which the docs used to call refused,
+  is now pinned by a test.
 
 ### Changed
 
@@ -2768,6 +2783,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#496]: https://github.com/qauth-labs/qauth/issues/496
 [#497]: https://github.com/qauth-labs/qauth/issues/497
 [#500]: https://github.com/qauth-labs/qauth/issues/500
+[#501]: https://github.com/qauth-labs/qauth/issues/501
 [#507]: https://github.com/qauth-labs/qauth/issues/507
 [#508]: https://github.com/qauth-labs/qauth/issues/508
 [#509]: https://github.com/qauth-labs/qauth/issues/509
