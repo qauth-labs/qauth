@@ -90,7 +90,7 @@ export const interactionCancelled = defineEventType({
     sessionEnded: z
       .boolean()
       .describe(
-        'For a user switch after the person signed in during this interaction: `true`. The browser session that sign-in started was ended, and so was the session the browser’s cookie named when it was a later one of the same user, so no later sign-in or client on the browser continues them. Absent otherwise: on a cancel, and on a switch before anyone signed in.'
+        'For a "Not you?" user switch that signed the browser out of the account the screen showed: `true`. The sessions of that account the interaction held were ended (the one a sign-in during the interaction started, and the one the browser was already signed in with when the interaction started when it was that account’s, #964), and so was the session the browser’s cookie named when it was a later one of the same account, so no later sign-in or client on the browser continues them. The event’s subject is that account. Absent otherwise: on a cancel, on "Use another account" at the account chooser, and on a switch while the screen showed no account with a session the interaction held.'
       )
       .optional(),
   }),

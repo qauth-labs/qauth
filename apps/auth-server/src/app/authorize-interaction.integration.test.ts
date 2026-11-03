@@ -22,6 +22,7 @@ import {
   signInWithPassword,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { SESSION_COOKIE, sessionCookieParts } from '../testing/session-cookie-value';
 
 /**
  * `/oauth/authorize` STARTS AN INTERACTION (#628, ADR-019 Decision 6), end to
@@ -40,6 +41,9 @@ import {
  * - `prompt=none` answers as before and starts no interaction.
  * - A request that needs consent after the sign-in continues in a consent
  *   interaction, which the person can cancel (`access_denied`).
+ * - An interaction started for a browser that is already signed in, a consent
+ *   or a sign-in `max_age` asks for again, carries its session in: "Not you?"
+ *   ends it, so the browser is signed out (#964).
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -60,6 +64,28 @@ const CREATED = 'urn:qauth:event:interaction.created:v1-rc.0';
 const STEP_UP = 'urn:qauth:event:step_up.required:v1-rc.0';
 /** An interaction id: 43 base64url characters. */
 const INTERACTION_ID = /^[A-Za-z0-9_-]{43}$/;
+/**
+ * Where the user switch's stand-in route lives: a release candidate no route
+ * serves, which the bare problem documents and the log censor cover, as in
+ * `interaction.integration.test.ts`.
+ */
+const SWITCH_PREFIX = '/interaction/v1-rc.999';
+
+/**
+ * The user switch ("Not you?"), which no Interaction API operation answers
+ * yet (#619): a test route that calls the helper, on the browser surface.
+ */
+async function switchRoute(app: FastifyInstance): Promise<void> {
+  // Imported here, after the boot reset the module registry, so this is the
+  // instance the app loaded.
+  const { switchInteractionUser } = await import('./helpers/interaction');
+  app.post(
+    `${SWITCH_PREFIX}/:id/switch`,
+    { config: { surface: 'browser' as const } },
+    async (request, reply) =>
+      switchInteractionUser(request, reply, (request.params as { id: string }).id)
+  );
+}
 
 /**
  * The interaction id of a ceremony page location, relative or on the realm
@@ -84,10 +110,13 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
-    booted = await bootAuthServer({
-      ...baseEnvironment(infra, await generateJwtPem()),
-      INTERACTION_UI_ENABLED: 'true',
-    });
+    booted = await bootAuthServer(
+      {
+        ...baseEnvironment(infra, await generateJwtPem()),
+        INTERACTION_UI_ENABLED: 'true',
+      },
+      { routes: switchRoute }
+    );
   }, 240_000);
 
   afterAll(async () => {
@@ -198,11 +227,11 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
   }
 
   /** Answer the identifier step; the next answer is the password's, with its CSRF value. */
-  async function toPasswordStep(jar: CookieJar, id: string): Promise<string> {
+  async function toPasswordStep(jar: CookieJar, id: string, loginHint = EMAIL): Promise<string> {
     const identifier = await post(jar, id, {
       type: IDENTIFIER,
       csrf: (await read(id)).csrf,
-      login_hint: EMAIL,
+      login_hint: loginHint,
     });
     expect(identifier.statusCode, identifier.body).toBe(303);
     const step = await read(id);
@@ -229,6 +258,39 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
 
   function events(type: string): Promise<number> {
     return count('SELECT count(*) AS count FROM events WHERE type = $1', [type]);
+  }
+
+  /** "Not you?" at the interaction `id`, from the browser holding `jar`. */
+  async function switchUser(jar: CookieJar, id: string): Promise<LightMyRequestResponse> {
+    const response = await server().inject({
+      method: 'POST',
+      url: `${SWITCH_PREFIX}/${id}/switch`,
+      headers: { cookie: jar.header() ?? '' },
+    });
+    jar.absorb(response.headers['set-cookie']);
+    return response;
+  }
+
+  /** Whether the session `sid` has ended, and why. */
+  async function sessionEnd(sid: string) {
+    const { rows } = await server().dbPool.query<{
+      revoked: boolean;
+      revoked_reason: string | null;
+    }>('SELECT revoked_at IS NOT NULL AS revoked, revoked_reason FROM sessions WHERE id = $1', [
+      sid,
+    ]);
+    return rows[0];
+  }
+
+  /** The `interaction.cancelled` events, oldest first. */
+  async function cancelledEvents() {
+    const { rows } = await server().dbPool.query<{
+      data: Record<string, unknown>;
+      subject_id: string | null;
+    }>(
+      "SELECT data, subject_id FROM events WHERE type = 'urn:qauth:event:interaction.cancelled:v1-rc.0' ORDER BY seq"
+    );
+    return rows;
   }
 
   it('redirects with the interaction id only, even for a 2048-character state, then issues the code with iss', async () => {
@@ -444,5 +506,88 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
     expect(callback.searchParams.get('state')).toBe('interaction-state');
     expect(callback.searchParams.get('iss')).toBe(ORIGIN);
     expect(await codes()).toBe(0);
+  });
+
+  it('signs the browser out on "Not you?" at the consent it started for, so the request signs in again (#964)', async () => {
+    const jar = await signInWithPassword(server(), EMAIL);
+    const cookie = jar.get(SESSION_COOKIE);
+    if (cookie === undefined) throw new Error('the sign-in set no session cookie');
+    const { sid } = sessionCookieParts(cookie);
+    // No stored consent: the consent screen names the signed-in user.
+    const id = interactionIdOf(await authorize(jar));
+    expect((await read(id)).step).toBe(CONSENT);
+
+    const switched = await switchUser(jar, id);
+
+    expect(switched.statusCode, switched.body).toBe(200);
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    // Ended for good, as a sign-out by that user, and its cookie cleared.
+    expect(await sessionEnd(sid)).toEqual({ revoked: true, revoked_reason: 'sign_out' });
+    expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+    expect(await cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ reason: 'user_switch', sessionEnded: true }),
+        subject_id: userId,
+      },
+    ]);
+
+    // With a stored consent, a live session would get the code at once. The
+    // browser as it is now, and one that kept the old cookie, sign in first.
+    await consentTo(['openid', 'email']);
+    const kept = new CookieJar();
+    kept.absorb(`${SESSION_COOKIE}=${cookie}`);
+    for (const browser of [jar, kept]) {
+      expect((await read(interactionIdOf(await authorize(browser)))).step).toBe(IDENTIFIER);
+    }
+    expect(await codes()).toBe(0);
+  });
+
+  it('signs the browser out on "Not you?" at a sign-in max_age asks for again, before anyone signed in (#964)', async () => {
+    await consentTo(['openid', 'email']);
+    const jar = await signInWithPassword(server(), EMAIL);
+    const cookie = jar.get(SESSION_COOKIE);
+    if (cookie === undefined) throw new Error('the sign-in set no session cookie');
+    const { sid } = sessionCookieParts(cookie);
+    vi.setSystemTime(Date.now() + 5_000);
+    const id = interactionIdOf(await authorize(jar, { max_age: '1' }));
+    // The password screen, which shows the identifier with "Not you?".
+    await toPasswordStep(jar, id);
+
+    const switched = await switchUser(jar, id);
+
+    expect(switched.statusCode, switched.body).toBe(200);
+    expect(await sessionEnd(sid)).toEqual({ revoked: true, revoked_reason: 'sign_out' });
+    expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+    // About the user whose session ended, though nobody signed in during it.
+    expect(await cancelledEvents()).toEqual([
+      { data: expect.objectContaining({ sessionEnded: true }), subject_id: userId },
+    ]);
+    // Without max_age the stored consent would give a code at once: the
+    // browser signs in first now.
+    expect((await read(interactionIdOf(await authorize(jar)))).step).toBe(IDENTIFIER);
+    expect(await codes()).toBe(0);
+  });
+
+  it('keeps the browser signed in on "Not you?" beside another identifier at a sign-in max_age asks for again (#964)', async () => {
+    await consentTo(['openid', 'email']);
+    const jar = await signInWithPassword(server(), EMAIL);
+    const cookie = jar.get(SESSION_COOKIE);
+    if (cookie === undefined) throw new Error('the sign-in set no session cookie');
+    const { sid } = sessionCookieParts(cookie);
+    vi.setSystemTime(Date.now() + 5_000);
+    const id = interactionIdOf(await authorize(jar, { max_age: '1' }));
+    // The password screen shows the identifier the person gave, not the
+    // signed-in account: "Not you?" there signs that account out, not this one.
+    await toPasswordStep(jar, id, 'someone-else@example.test');
+
+    const switched = await switchUser(jar, id);
+
+    expect(switched.statusCode, switched.body).toBe(200);
+    expect(await sessionEnd(sid)).toEqual({ revoked: false, revoked_reason: null });
+    const kept = jar.get(SESSION_COOKIE);
+    expect(kept === undefined ? undefined : sessionCookieParts(kept).sid).toBe(sid);
+    expect(await cancelledEvents()).toEqual([
+      { data: expect.not.objectContaining({ sessionEnded: expect.anything() }), subject_id: null },
+    ]);
   });
 });

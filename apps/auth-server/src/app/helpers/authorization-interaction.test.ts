@@ -136,7 +136,7 @@ describe('consentStep', () => {
 });
 
 describe('authorizationInteractionStart', () => {
-  it('starts a sign-in at the identifier step, the hint as its prefill, with no transaction', () => {
+  it('starts a sign-in at the identifier step, the hint as its prefill, with no transaction and nothing carried in', () => {
     expect(
       authorizationInteractionStart(
         { kind: 'sign_in' },
@@ -150,7 +150,19 @@ describe('authorizationInteractionStart', () => {
     });
   });
 
-  it('starts a consent for the session: its user, sid and authentication time', () => {
+  it('starts a sign-in asked for again over the session the browser holds, and records it as carried in (#964)', () => {
+    // `max_age`, `prompt=login` or a dangerous scope: the person signs in
+    // again, as anyone, so the session is no subject of the transaction.
+    expect(
+      authorizationInteractionStart({ kind: 'sign_in' }, REQUEST, ISS, SESSION as never)
+    ).toEqual({
+      step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
+      personal: {},
+      carriedSession: { userId: 'user-1', sid: 'sid-1' },
+    });
+  });
+
+  it('starts a consent for the session: its user, sid and authentication time, carried in (#964)', () => {
     const start = authorizationInteractionStart(
       { kind: 'consent', scopes: ['email'], resources: [] },
       REQUEST,
@@ -161,6 +173,7 @@ describe('authorizationInteractionStart', () => {
       step: { name: CONSENT_STEP },
       personal: {},
       transaction: { userId: 'user-1', sid: 'sid-1', authTime: SESSION.authTime, amr: [] },
+      carriedSession: { userId: 'user-1', sid: 'sid-1' },
     });
   });
 
@@ -264,10 +277,12 @@ describe('finishAuthorization', () => {
       step: expect.objectContaining({ name: CONSENT_STEP }),
       personal: {},
       transaction: { userId: 'user-1', sid: 'sid-1', authTime: SESSION.authTime, amr: [] },
+      // The sign-in's session, which the consent is for: "Not you?" ends it (#964).
+      carriedSession: { userId: 'user-1', sid: 'sid-1' },
     });
   });
 
-  it('continues with a sign-in when the session ended meanwhile', async () => {
+  it('continues with a sign-in when the session ended meanwhile, carrying no session', async () => {
     decideAuthorization.mockResolvedValue({ kind: 'sign_in' });
     liveBrowserSession.mockResolvedValue(null);
 

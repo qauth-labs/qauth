@@ -35,9 +35,11 @@ import type { InteractionStep } from './helpers/interaction-record';
  * processed; the browser session id changes at authentication; an expired
  * interaction is refused and its expiry audited; a user switch starts a new
  * interaction for the same request, and one after authentication ends the
- * first user's session so no client gets SSO from it (#896); a finish after
- * that session was signed out is refused (#963); and no audit row holds an id
- * or a flow secret.
+ * first user's session so no client gets SSO from it (#896), as "Not you?"
+ * on an interaction started for an already signed-in browser does, while
+ * "Use another account" at the account chooser leaves it signed in (#964); a
+ * finish after that session was signed out is refused (#963); and no audit
+ * row holds an id or a flow secret.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -80,9 +82,19 @@ const SELECT_ACCOUNT_STEP: InteractionStep = {
   alternatives: [],
 };
 const CONSENT_STEP: InteractionStep = { name: stepUrn('consent'), params: {}, alternatives: [] };
+const IDENTIFIER_STEP: InteractionStep = {
+  name: stepUrn('identifier'),
+  params: {},
+  alternatives: [],
+};
 
 type DecisionSpec =
-  | { kind: 'step'; step: InteractionStep }
+  | {
+      kind: 'step';
+      step: InteractionStep;
+      /** The identifier the sign-in engine's transaction holds from now on (#964). */
+      identifier?: string;
+    }
   | { kind: 'authenticated'; userId: string; amr: string[]; step: InteractionStep }
   | { kind: 'finished' };
 
@@ -94,15 +106,25 @@ async function interactionRoutes(app: FastifyInstance): Promise<void> {
   // Imported here, after the boot reset the module registry, so these are the
   // instances the app loaded.
   const interaction = await import('./helpers/interaction');
+  const browserSessions = await import('./helpers/browser-session');
+  const { requestRealm } = await import('./helpers/request-realm');
   const browser = { config: { surface: 'browser' as const } };
   const idOf = (request: { params: unknown }) => (request.params as { id: string }).id;
 
   app.post('/test/interactions', browser, async (request, reply) => {
-    const body = (request.body ?? {}) as { step?: InteractionStep; personal?: object };
+    const body = (request.body ?? {}) as {
+      step?: InteractionStep;
+      personal?: object;
+      /** Carry the browser's session in, as `/oauth/authorize` does (#964). */
+      carry?: boolean;
+    };
+    const session =
+      body.carry === true ? await browserSessions.resolveBrowserSession(app, request, reply) : null;
     return interaction.startInteraction(request, reply, {
       request: AUTHORIZE_REQUEST,
       step: body.step ?? PASSWORD_STEP,
       ...(body.personal === undefined ? {} : { personal: body.personal as never }),
+      ...(session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } }),
     });
   });
   app.get(`${TEST_PREFIX}/:id`, browser, async (request) =>
@@ -129,6 +151,21 @@ async function interactionRoutes(app: FastifyInstance): Promise<void> {
             kind: 'authenticated',
             signIn: { userId: decision.userId, amr: decision.amr, identifier: EMAIL },
             step: decision.step,
+          };
+        }
+        if (decision.kind === 'step' && decision.identifier !== undefined) {
+          // As the engine answers an identifier: the next step, for it.
+          return {
+            kind: 'step',
+            step: decision.step,
+            signInTransaction: {
+              v: 1,
+              realmId: requestRealm(request).id,
+              clientId: AUTHORIZE_REQUEST.client_id,
+              createdAt: Date.now(),
+              identifier: decision.identifier,
+              verified: [],
+            },
           };
         }
         return decision;
@@ -463,11 +500,12 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     ).toMatchObject({ data: { reason: 'user_switch' }, subject_id: userId });
   });
 
-  it("ends the first user's session on a switch after authentication, so a client starting authorize afterwards gets no SSO from it (#896)", async () => {
-    const app = await boot();
-    const userId = await registerPasswordAccount(app, EMAIL);
-    // A client the user already granted its scopes: with a live session,
-    // `/oauth/authorize` answers it with a code at once.
+  /**
+   * A client `userId` already granted its scopes: with a live session,
+   * `/oauth/authorize` answers it with a code at once. Its authorize request,
+   * from a browser sending `cookie`.
+   */
+  async function grantedClient(app: FastifyInstance, userId: string) {
     const realm = await app.repositories.realms.findByName(E2E_REALM_NAME);
     if (!realm) throw new Error('default realm missing');
     const scopes = AUTHORIZE_REQUEST.scope.split(' ');
@@ -484,7 +522,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
       requirePkce: true,
     });
     await app.repositories.oauthConsents.upsertGrant(realm.id, userId, client.id, scopes);
-    const authorize = (cookie: string | undefined) =>
+    return (cookie: string | undefined) =>
       app.inject({
         method: 'GET',
         url: `/oauth/authorize?${new URLSearchParams({
@@ -498,6 +536,21 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
         }).toString()}`,
         headers: cookie === undefined ? {} : { cookie },
       });
+  }
+
+  /** How the session `sid` stands in Postgres: ended or not, and why. */
+  async function sessionEnd(app: FastifyInstance, sid: string) {
+    const { rows } = await app.dbPool.query<{ revoked: boolean; revoked_reason: string | null }>(
+      'SELECT revoked_at IS NOT NULL AS revoked, revoked_reason FROM sessions WHERE id = $1',
+      [sid]
+    );
+    return rows[0];
+  }
+
+  it("ends the first user's session on a switch after authentication, so a client starting authorize afterwards gets no SSO from it (#896)", async () => {
+    const app = await boot();
+    const userId = await registerPasswordAccount(app, EMAIL);
+    const authorize = await grantedClient(app, userId);
 
     const owner = new Browser(app);
     const id = await owner.start();
@@ -542,6 +595,62 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
       subject_id: userId,
       actor_type: 'user',
     });
+  });
+
+  it('leaves a browser signed in before the interaction signed in on "Use another account" and on "Not you?" beside another account, and signs it out on "Not you?" beside its own (#964)', async () => {
+    const app = await boot();
+    const userId = await registerPasswordAccount(app, EMAIL);
+    const authorize = await grantedClient(app, userId);
+    const owner = new Browser(app, await signInWithPassword(app, EMAIL));
+    const cookie = owner.jar.get(SESSION_COOKIE);
+    if (cookie === undefined) throw new Error('the sign-in set no session cookie');
+    const sid = sessionIdOfCookie(cookie);
+    const codeOf = (response: LightMyRequestResponse) =>
+      new URL(String(response.headers['location'])).searchParams.get('code');
+
+    // "Use another account", at the account chooser of an interaction started
+    // for this browser: the account it lists stays signed in, and SSO with it.
+    const chooser = await owner.start({ step: SELECT_ACCOUNT_STEP, carry: true });
+    const another = await owner.request('POST', `${TEST_PREFIX}/${chooser}/switch`);
+    expect(another.json()).toMatchObject({ kind: 'switched' });
+    expect(await sessionEnd(app, sid)).toEqual({ revoked: false, revoked_reason: null });
+    expect(owner.jar.get(SESSION_COOKIE)).toBe(cookie);
+    expect(codeOf(await authorize(owner.jar.header()))).not.toBeNull();
+
+    // "Not you?" next to another account's identifier, at the password step
+    // of an interaction started for it: the screen does not show the
+    // signed-in account, so it stays signed in.
+    const other = await owner.start({ step: IDENTIFIER_STEP, carry: true });
+    await owner.answer(other, 0, {
+      kind: 'step',
+      step: PASSWORD_STEP,
+      identifier: 'someone-else@example.com',
+    });
+    const notThem = await owner.request('POST', `${TEST_PREFIX}/${other}/switch`);
+    expect(notThem.json()).toMatchObject({ kind: 'switched' });
+    expect(await sessionEnd(app, sid)).toEqual({ revoked: false, revoked_reason: null });
+    expect(owner.jar.get(SESSION_COOKIE)).toBe(cookie);
+
+    // "Not you?" next to its own identifier: the browser is signed out, and
+    // the client gets the login page.
+    const id = await owner.start({ step: IDENTIFIER_STEP, carry: true });
+    await owner.answer(id, 0, { kind: 'step', step: PASSWORD_STEP, identifier: EMAIL });
+    const notYou = await owner.request('POST', `${TEST_PREFIX}/${id}/switch`);
+    expect(notYou.json()).toMatchObject({ kind: 'switched' });
+    expect(await sessionEnd(app, sid)).toEqual({ revoked: true, revoked_reason: 'sign_out' });
+    expect(owner.jar.get(SESSION_COOKIE)).toBeUndefined();
+    for (const sent of [owner.jar.header(), `${SESSION_COOKIE}=${cookie}`]) {
+      expect((await authorize(sent)).headers['location']).toMatch(/^\/ui\/login\?/);
+    }
+
+    const cancelled = (await interactionEvents(app)).filter(
+      (row) => row.type === 'urn:qauth:event:interaction.cancelled:v1-rc.0'
+    );
+    expect(cancelled.map((row) => [row.data['sessionEnded'], row.subject_id])).toEqual([
+      [undefined, null],
+      [undefined, null],
+      [true, userId],
+    ]);
   });
 
   it('refuses to finish an interaction whose session was signed out after its sign-in (#963)', async () => {

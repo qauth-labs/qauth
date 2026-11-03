@@ -50,6 +50,14 @@ import { emitUserEvent } from './user-events';
  *   answers it; until then an answer to it is refused, and the person can
  *   only cancel.
  *
+ * An interaction started for a browser that is already signed in, a consent
+ * or a sign-in the request asks for again (`max_age`, `prompt=login`, a
+ * dangerous scope), records that browser session as carried in
+ * (`carriedSession`, #964): "Not you?" ends it when the screen shows its
+ * account, as it ends a session a sign-in during the interaction started
+ * (#896), and the account chooser's "Use another account" does not
+ * (`switchInteractionUser`).
+ *
  * When the interaction finishes, {@link finishAuthorization} decides the
  * request again, as the endpoint does, for the session the interaction holds,
  * and issues the code (`mintAuthorizationCode`) or starts the next interaction
@@ -128,16 +136,18 @@ export function consentStep(
 /** The first step of the interaction an outcome that needs the person starts. */
 export type AuthorizationInteractionStart = Pick<
   StartInteractionInput,
-  'step' | 'personal' | 'transaction'
+  'step' | 'personal' | 'transaction' | 'carriedSession'
 >;
 
 /**
  * The interaction a `sign_in` or `consent` outcome starts: its first step,
- * its personal data and its transaction; or the error for the client's
- * `redirect_uri` when the consent step cannot show the request.
+ * its personal data, its transaction and the browser session it is started
+ * for (#964); or the error for the client's `redirect_uri` when the consent
+ * step cannot show the request.
  *
- * @param session - the browser session a consent is for; a consent outcome
- *   always has one
+ * @param session - the browser session the request came with, `null` for a
+ *   browser that is not signed in; a consent is for it, and a consent
+ *   outcome always has one
  */
 export function authorizationInteractionStart(
   outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' | 'consent' }>,
@@ -145,8 +155,10 @@ export function authorizationInteractionStart(
   iss: string,
   session: BrowserSession | null
 ): AuthorizationInteractionStart | { readonly error: AuthorizationErrorParams } {
+  const carried =
+    session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } };
   if (outcome.kind === 'sign_in') {
-    return { step: identifierStep(), personal: identifierPrefill(query.login_hint) };
+    return { step: identifierStep(), personal: identifierPrefill(query.login_hint), ...carried };
   }
   if (session === null) {
     // `decideAuthorization` answers `consent` only for a session.
@@ -172,7 +184,7 @@ export function authorizationInteractionStart(
     authTime: session.authTime,
     amr: [],
   };
-  return { step, personal: {}, transaction };
+  return { step, personal: {}, transaction, ...carried };
 }
 
 /**

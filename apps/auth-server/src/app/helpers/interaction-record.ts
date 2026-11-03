@@ -23,7 +23,8 @@ import { authorizeQuerySchema } from '../schemas/oauth';
  *   once. Redis keys the record by the id's SHA-256 ({@link interactionIdHash}),
  *   so the id itself is stored nowhere.
  * - **State.** A bounded snapshot of the validated authorization request, the
- *   engine transaction (who has been proved, how and when), the current step
+ *   engine transaction (who has been proved, how and when), the browser
+ *   session the interaction started for when there was one, the current step
  *   and its personal data, the flow-cookie binding (a hash, `flow-cookie.ts`),
  *   the creation time and an absolute expiry. A revision counts the written
  *   states, so an answer is bound to the step view it answers. Beside them,
@@ -64,12 +65,21 @@ const INTERACTION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 /**
  * The record format. A record of another version reads as absent. Version 2
  * (#616) added the CSRF key, the sign-in engine's transaction and the params
- * of the alternatives.
+ * of the alternatives. The optional `carriedSession` (#964) joined version 2
+ * without a new version: a record without it reads as before, and a server
+ * from before it reads a record that holds it as absent, as any record it
+ * cannot parse.
  */
 export const INTERACTION_RECORD_VERSION = 2;
 
 /** The identifier step: where an interaction starts again after a user switch. */
 export const IDENTIFIER_STEP = stepUrn('identifier');
+
+/**
+ * The account chooser (`prompt=select_account`, #658): a user switch made at
+ * this step is "Use another account", which ends no session (#964).
+ */
+export const SELECT_ACCOUNT_STEP = stepUrn('select_account');
 
 /** A new interaction id. */
 export function mintInteractionId(): string {
@@ -161,6 +171,22 @@ export const interactionTransactionSchema = z.strictObject({
 
 export type InteractionTransaction = z.infer<typeof interactionTransactionSchema>;
 
+/**
+ * The browser session an interaction started for (#964): the one the
+ * authorization request came with, when the browser was already signed in.
+ * Not something the interaction proved: the transaction holds that. A user
+ * switch ("Not you?") ends it when the screen shows its account: the
+ * consent's user, or, while nobody has signed in during the interaction, the
+ * account the sign-in's identifier names. The account chooser's "Use another
+ * account" does not.
+ */
+export const carriedSessionSchema = z.strictObject({
+  userId: z.uuid(),
+  sid: z.uuid(),
+});
+
+export type CarriedSession = z.infer<typeof carriedSessionSchema>;
+
 /** The validated authorization request an interaction is for (ADR-019 Decision 6, #628). */
 export type InteractionRequest = z.infer<typeof authorizeQuerySchema>;
 
@@ -177,6 +203,8 @@ export const interactionRecordSchema = z.strictObject({
   step: interactionStepSchema,
   personal: stepDataSchema,
   transaction: interactionTransactionSchema,
+  /** The browser session the interaction started for, when there was one (#964). */
+  carriedSession: carriedSessionSchema.optional(),
   /** The SHA-256 (base64url) of the flow secret the record is bound to. */
   flowBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   /**

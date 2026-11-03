@@ -312,6 +312,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'oauthClients',
       'oauthConsents',
       'sessions',
+      'userCredentials',
       'users',
     ],
     load: () => import('./routes/oauth/authorize'),

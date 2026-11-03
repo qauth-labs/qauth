@@ -157,8 +157,10 @@ export default async function (fastify: FastifyInstance) {
    * that holds the validated request, bound to this browser by the flow
    * cookie, and redirect to the ceremony page with its id and nothing else.
    * The sign-in starts at the identifier step, `login_hint` as its prefill;
-   * a consent at the consent step, for the signed-in user. A request too
-   * large to hold is refused with `invalid_request`, as the stash refuses it.
+   * a consent at the consent step, for the signed-in user. Either records
+   * the browser session the request came with, when there is one, so "Not
+   * you?" ends it when the screen shows its account (#964). A request too large to hold is refused with
+   * `invalid_request`, as the stash refuses it.
    */
   const startCeremony = async (
     request: FastifyRequest,
