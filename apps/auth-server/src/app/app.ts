@@ -100,6 +100,7 @@ import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
 import { routeModulesFor } from './route-manifest';
 import {
+  bootsDefaultRealm,
   checkServiceRoles,
   describeServiceRoles,
   holdsSigner,
@@ -771,8 +772,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // DEFAULT_REALM_ENDPOINT_HOSTS. It runs in an `onReady` hook, so before the
   // server listens, and refuses the boot when the stored issuer differs from
   // JWT_ISSUER, or the realm's passkeys are bound to another RP ID. Registered right after the database so its hook runs before
-  // the job runner starts.
-  if (defaultRealmBoot) {
+  // the job runner starts. A process that holds only `delivery` skips it: its
+  // database user may not write `realms` (ADR-019 Decision 8, #498).
+  if (defaultRealmBoot && bootsDefaultRealm(roles)) {
     await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
   }
 
