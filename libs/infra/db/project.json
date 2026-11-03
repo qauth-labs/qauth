@@ -88,6 +88,24 @@
       },
       "description": "Operator-only client suspension (ANT-2026-DR5XI3LV): pass `-- --realm=<name> --client-id=<client_id> [--lift]`"
     },
+    "db:list-unshowable-redirect-uris": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/list-unshowable-redirect-uris.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "List the clients, per realm, with a redirect URI the consent screen cannot show (#914): pass `-- [--realm=<name>]`. The script exits 0 when there are none, 1 when it lists any, 2 on a usage error and 3 when it could not run, but Nx reports every failure as 1: an upgrade script runs `pnpm --dir libs/infra/db exec tsx src/scripts/list-unshowable-redirect-uris.ts` instead."
+    },
+    "db:set-client-verified-domain": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/set-client-verified-domain.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "Set or clear an operator-provisioned client's verified domain without rotating its secret (#914): pass `-- --realm=<name> --client-id=<client_id> (--domain=<domain> | --clear)`"
+    },
     "db:disable-user": {
       "executor": "nx:run-commands",
       "options": {
