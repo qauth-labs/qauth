@@ -85,6 +85,7 @@
               "misdirected_request",
               "unprocessable_content",
               "weak_password",
+              "sandbox_ceiling",
               "precondition_required",
               "too_many_requests",
               "request_header_fields_too_large",
