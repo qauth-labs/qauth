@@ -490,13 +490,17 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
       },
     });
 
-    // The consent answer is #629's: refused until then, with the step kept.
+    // An answer carrying a member the step does not declare is refused, and
+    // the step is kept (#629): no answer names a scope.
     const answered = await post(jar, next, {
       type: CONSENT,
       csrf: consent.csrf,
       decision: 'allow',
+      scope: 'openid email write:notes',
     });
     expect(answered.statusCode).toBe(400);
+    expect((await read(next)).step).toBe(CONSENT);
+    expect(await codes()).toBe(0);
 
     const cancelled = await post(jar, next, { csrf: (await read(next)).csrf }, 'cancel');
     expect(cancelled.statusCode).toBe(303);
