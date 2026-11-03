@@ -208,6 +208,15 @@ jobs:
         if: always()
         run: node scripts/action-refs/check.mjs .github/workflows
 
+  # Dependency audit (#795): `pnpm audit --audit-level high` fails on a high or
+  # critical advisory against the lockfile, and every advisory goes to the job
+  # summary. The job lives in dependency-audit.yml, which also runs it daily
+  # against main, so this call and the scheduled run are the same steps. Not
+  # affected-scoped: an advisory can be published against a lockfile no pull
+  # request changed, and the audit takes seconds.
+  audit:
+    uses: ./.github/workflows/dependency-audit.yml
+
   # Unit tests and the coverage gate: a single repo-wide vitest run runs every
   # unit test (each project's `test` target runs a subset of the same files
   # under the same settings, so CI has no `test` leg) and enforces the global
