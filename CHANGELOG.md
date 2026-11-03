@@ -23,8 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DB_USER_DELIVERY`, as the owner of the tables, in one transaction under the
   migration lock: each user's grants on the schema are revoked, the map's
   granted, and the run commits only once every user holds exactly them, through
-  `PUBLIC` and inherited roles included. A superuser, the owner, a member of the
-  owner or a missing user is refused. It creates no user and sets no password,
+  `PUBLIC` and every role the user can reach (`SET ROLE` included) counted. A
+  superuser, the owner, a member of the owner, a missing user, and a user with
+  `REPLICATION`, `CREATEROLE`, `BYPASSRLS`, a predefined role that reads past
+  the grants or `CREATE` on the database are refused, as is a `SECURITY
+  DEFINER` function `PUBLIC` may execute. It creates no user and sets no password,
   and with no `DB_USER_*` set (a single deployment) it does nothing. A partial
   set exits `2`; grants the runner could not apply exit `5` with the
   migrations applied. `--check` reports drift; `--print` prints the SQL.

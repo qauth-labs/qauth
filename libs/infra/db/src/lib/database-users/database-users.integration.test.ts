@@ -357,6 +357,39 @@ describe('the roles’ database users (real Postgres, #498)', () => {
       await expectRefused({ ...USERS, admin: 'qauth_root' }, /qauth_root/);
     });
 
+    it('refuses a user that can SET ROLE to the signer’s user without inheriting it', async () => {
+      await owner().query(`CREATE ROLE qauth_setrole LOGIN PASSWORD 'qauth_setrole'`);
+      await owner().query(`GRANT ${USERS.signer} TO qauth_setrole WITH INHERIT FALSE`);
+      await expectRefused({ ...USERS, web: 'qauth_setrole' }, /holds SELECT on realm_keys/);
+    });
+
+    it('refuses a user with an attribute or a predefined role that reaches past the grants', async () => {
+      await owner().query(`CREATE ROLE qauth_replica LOGIN REPLICATION PASSWORD 'qauth_replica'`);
+      await expectRefused({ ...USERS, api: 'qauth_replica' }, /qauth_replica.*REPLICATION/);
+      await owner().query(`CREATE ROLE qauth_reader LOGIN PASSWORD 'qauth_reader'`);
+      await owner().query(`GRANT pg_read_all_data TO qauth_reader`);
+      await expectRefused({ ...USERS, api: 'qauth_reader' }, /qauth_reader.*pg_read_all_data/);
+    });
+
+    it('refuses a SECURITY DEFINER function PUBLIC may execute, and a sequence a user holds', async () => {
+      await owner().query(
+        `CREATE FUNCTION public.forged_definer() RETURNS integer LANGUAGE sql SECURITY DEFINER AS 'SELECT 1'`
+      );
+      try {
+        await expectRefused(USERS, /PUBLIC may execute forged_definer\(\)/);
+      } finally {
+        await owner().query(`DROP FUNCTION public.forged_definer()`);
+      }
+      await owner().query(`CREATE SEQUENCE public.forged_sequence`);
+      try {
+        await owner().query(`GRANT USAGE ON SEQUENCE public.forged_sequence TO PUBLIC`);
+        await expectRefused(USERS, /USAGE on the sequence forged_sequence/);
+      } finally {
+        await owner().query(`DROP SEQUENCE public.forged_sequence`);
+      }
+      await expect(checkDatabaseUserGrants(target(), USERS)).resolves.toEqual([]);
+    });
+
     it('refuses grants PUBLIC holds beyond the map, and the check names them', async () => {
       await owner().query(`GRANT SELECT ON realm_keys TO PUBLIC`);
       try {

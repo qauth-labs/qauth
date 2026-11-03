@@ -240,11 +240,20 @@ What the grants give, from the map in
 No role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can
 create one: only the owner, the migration runner's user, changes the schema.
 
-The run refuses, and changes nothing, when a user does not exist, is a
-superuser, owns the tables or is a member of their owner, or would hold other
-privileges than the map gives it, through `PUBLIC` or a role it is a member of
-included. It never revokes what `PUBLIC` holds: a grant to `PUBLIC` the map
-does not give is yours to revoke, and the run names it.
+The run refuses, and changes nothing, when a user:
+
+- does not exist, is a superuser, owns the tables or is a member of their
+  owner;
+- has `REPLICATION`, `CREATEROLE` or `BYPASSRLS`, is a member of
+  `pg_read_all_data`, `pg_write_all_data` or a predefined role that reads,
+  writes or runs the server's files, or may create schemas in the database;
+- would hold other privileges than the map gives it, a sequence included,
+  through `PUBLIC` or through any role it is a member of, one it can only
+  `SET ROLE` to included.
+
+It also refuses while `PUBLIC` may execute a `SECURITY DEFINER` function in the
+schema. It never revokes what `PUBLIC` holds: a grant to `PUBLIC` the map does
+not give is yours to revoke, and the run names it.
 
 A process whose only role is `delivery` skips the default realm's boot step,
 which writes `realms`: on a new database, start another role's process first.

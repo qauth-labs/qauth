@@ -13,10 +13,32 @@ import { databaseUserGrantStatements, grantsOfUsers, type UserGrants } from './s
  * migration runner's user), in one transaction under the migration lock:
  * it checks the users first, applies {@link databaseUserGrantStatements},
  * then reads back what each user can do and commits only when that is
- * exactly what the map gives it. What a user inherits from `PUBLIC` or from
- * a role it is a member of counts, so a user that can still read `realm_keys`
- * through some other grant fails the run instead of passing it.
+ * exactly what the map gives it. What a user holds through `PUBLIC`, or
+ * through any role it is a member of (whether it inherits that role's
+ * privileges or can only `SET ROLE` to it), counts, so a user that can still
+ * read `realm_keys` through some other grant fails the run instead of
+ * passing it.
  */
+
+/**
+ * The predefined roles whose members read or write every table, or the
+ * server's files and programs, whatever a table grants: a role user that is
+ * a member of one is refused.
+ */
+const ALL_REACHING_ROLES = [
+  'pg_read_all_data',
+  'pg_write_all_data',
+  'pg_read_server_files',
+  'pg_write_server_files',
+  'pg_execute_server_program',
+] as const;
+
+/**
+ * The roles `$1` (a user's name) is a member of, itself included, with or
+ * without inheriting their privileges: a member that does not inherit can
+ * still `SET ROLE` to one and use them.
+ */
+const REACHABLE_ROLES = `SELECT oid FROM pg_roles WHERE pg_has_role($1, oid, 'MEMBER')`;
 
 /** Every table privilege Postgres has, so a check sees the ones QAuth never grants too. */
 const ALL_TABLE_PRIVILEGES = [
@@ -85,8 +107,9 @@ async function connect(target: DatabaseUserGrantsTarget): Promise<Client> {
  * Why the grants cannot be applied as the current user: a table or function
  * of the map the database lacks (migrations pending), a table the current
  * user does not own, and each named user that does not exist, is a
- * superuser, or owns (or is a member of the owner of) a table. Empty when
- * they can.
+ * superuser, owns (or is a member of the owner of) a table, holds an
+ * attribute or a predefined role that reaches past the table grants, or may
+ * create schemas in the database. Empty when they can.
  */
 export async function databaseUserGrantRefusals(
   db: MigrationQueryable,
@@ -157,9 +180,22 @@ export async function databaseUserGrantRefusals(
             ) OR EXISTS (
               SELECT 1 FROM pg_namespace n
                WHERE n.nspname IN ('public', $2) AND pg_has_role(r.oid, n.nspowner, 'MEMBER')
-            ) AS owns
+            ) AS owns,
+            array_remove(ARRAY[
+              CASE WHEN r.rolreplication THEN 'REPLICATION' END,
+              CASE WHEN r.rolcreaterole THEN 'CREATEROLE' END,
+              CASE WHEN r.rolbypassrls THEN 'BYPASSRLS' END
+            ], NULL) AS attributes,
+            ARRAY(
+              SELECT p.name FROM unnest($3::text[]) AS p(name)
+               WHERE to_regrole(p.name) IS NOT NULL
+                 AND pg_has_role(r.oid, to_regrole(p.name), 'MEMBER')
+               ORDER BY p.name
+            ) AS predefined,
+            r.oid IS NOT NULL AND has_database_privilege(r.oid, current_database(), 'CREATE')
+              AS creates_schemas
        FROM unnest($1::text[]) AS u(name) LEFT JOIN pg_roles r ON r.rolname = u.name`,
-    [named, MIGRATIONS_SCHEMA]
+    [named, MIGRATIONS_SCHEMA, [...ALL_REACHING_ROLES]]
   );
   for (const row of found) {
     const user = JSON.stringify(String(row['name']));
@@ -175,6 +211,26 @@ export async function databaseUserGrantRefusals(
         `The database user ${user} owns the schema or its tables, or is a member of their owner: ` +
           'a role user must not be the migration runner’s user, which can change the schema.'
       );
+    } else {
+      const attributes = (row['attributes'] as string[] | null) ?? [];
+      if (attributes.length > 0) {
+        problems.push(
+          `The database user ${user} has ${attributes.join(', ')}, which reaches past the table grants: ` +
+            `ALTER ROLE ${user} ${attributes.map((attribute) => `NO${attribute}`).join(' ')}.`
+        );
+      }
+      const predefined = (row['predefined'] as string[] | null) ?? [];
+      if (predefined.length > 0) {
+        problems.push(
+          `The database user ${user} is a member of ${predefined.join(', ')}, which reads or writes ` +
+            'past the table grants: revoke the membership.'
+        );
+      }
+      if (row['creates_schemas'] === true) {
+        problems.push(
+          `The database user ${user} may create schemas in the database: REVOKE CREATE ON DATABASE … FROM ${user} (and from PUBLIC).`
+        );
+      }
     }
   }
   return problems;
@@ -183,9 +239,11 @@ export async function databaseUserGrantRefusals(
 /**
  * How each user's privileges differ from what the map gives its roles, read
  * from Postgres as it stands: what the user holds directly, through `PUBLIC`
- * and through the roles it is a member of. Empty when every user holds
- * exactly its grants. Functions `PUBLIC` may execute are not counted: a
- * function the map names is one a migration took from `PUBLIC`.
+ * and through every role it is a member of, one it can only `SET ROLE` to
+ * included. Sequences count too: the map grants none. Empty when every user
+ * holds exactly its grants. A function `PUBLIC` may execute is not counted
+ * against a user, unless it runs as its owner (`SECURITY DEFINER`): that is
+ * reported once, for every user.
  */
 export async function databaseUserGrantDrift(
   db: MigrationQueryable,
@@ -193,14 +251,37 @@ export async function databaseUserGrantDrift(
   map: DatabaseGrantsMap = DATABASE_GRANTS
 ): Promise<string[]> {
   const problems: string[] = [];
+  // A function that runs as its owner and that PUBLIC may execute gives every
+  // role user its owner's reach. Each migration takes EXECUTE on one from
+  // PUBLIC, and the map gives it to the roles that call it.
+  const { rows: openDefiners } = await db.query(
+    `SELECT p.oid::regprocedure::text AS signature
+       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.prosecdef
+        AND has_function_privilege('public', p.oid, 'EXECUTE')
+      ORDER BY 1`
+  );
+  for (const row of openDefiners) {
+    const signature = String(row['signature']);
+    problems.push(
+      `PUBLIC may execute ${signature}, which runs as its owner: REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC.`
+    );
+  }
   for (const grants of grantsOfUsers(users, map)) {
     const who = `${JSON.stringify(grants.user)} (${grants.roles.join(', ')})`;
 
+    // `on_table` is what the user's own sessions use; `reachable` adds what a
+    // role it is a member of holds, which `SET ROLE` reaches.
     const { rows: tablePrivileges } = await db.query(
-      `SELECT c.relname AS name, p.privilege,
+      `WITH reach AS (${REACHABLE_ROLES})
+       SELECT c.relname AS name, p.privilege,
               has_table_privilege($1, c.oid, p.privilege) AS on_table,
+              EXISTS (SELECT 1 FROM reach WHERE has_table_privilege(reach.oid, c.oid, p.privilege))
+                AS reachable,
               CASE WHEN p.privilege = ANY($3::text[])
-                   THEN has_any_column_privilege($1, c.oid, p.privilege) ELSE false END AS on_column
+                   THEN EXISTS (SELECT 1 FROM reach
+                                 WHERE has_any_column_privilege(reach.oid, c.oid, p.privilege))
+                   ELSE false END AS on_column
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         CROSS JOIN unnest($2::text[]) AS p(privilege)
         WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -216,7 +297,7 @@ export async function databaseUserGrantDrift(
       const onTable = row['on_table'] === true;
       if (expected === true && !onTable) {
         problems.push(`${who} lacks ${privilege} on ${table}, which the map gives it.`);
-      } else if (expected !== true && onTable) {
+      } else if (expected !== true && row['reachable'] === true) {
         problems.push(
           `${who} holds ${privilege} on ${table}, which the map does not give it: directly, through PUBLIC or through a role it is a member of.`
         );
@@ -233,7 +314,11 @@ export async function databaseUserGrantDrift(
 
     for (const [table, columns] of grants.columns) {
       const { rows } = await db.query(
-        `SELECT a.attname AS name, has_column_privilege($1, c.oid, a.attnum, 'SELECT') AS readable
+        `WITH reach AS (${REACHABLE_ROLES})
+         SELECT a.attname AS name, has_column_privilege($1, c.oid, a.attnum, 'SELECT') AS readable,
+                EXISTS (SELECT 1 FROM reach
+                         WHERE has_column_privilege(reach.oid, c.oid, a.attnum, 'SELECT'))
+                  AS reachable
            FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
            JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
           WHERE n.nspname = 'public' AND c.relname = $2
@@ -245,15 +330,20 @@ export async function databaseUserGrantDrift(
         const expected = columns.includes(column);
         if (expected && row['readable'] !== true) {
           problems.push(`${who} cannot read ${table}.${column}, which the map gives it.`);
-        } else if (!expected && row['readable'] === true) {
+        } else if (!expected && row['reachable'] === true) {
           problems.push(`${who} can read ${table}.${column}, which the map does not give it.`);
         }
       }
     }
 
+    // A function PUBLIC may execute is anyone's, and not counted here,
+    // unless it runs as its owner: that one is reported once, below.
     const { rows: functions } = await db.query(
-      `SELECT p.oid::regprocedure::text AS signature,
+      `WITH reach AS (${REACHABLE_ROLES})
+       SELECT p.oid::regprocedure::text AS signature,
               has_function_privilege($1, p.oid, 'EXECUTE') AS executable,
+              EXISTS (SELECT 1 FROM reach WHERE has_function_privilege(reach.oid, p.oid, 'EXECUTE'))
+                AS reachable,
               p.oid = ANY (SELECT to_regprocedure(s)::oid FROM unnest($2::text[]) AS s) AS granted,
               has_function_privilege('public', p.oid, 'EXECUTE') AS public
          FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -265,19 +355,41 @@ export async function databaseUserGrantDrift(
       const signature = String(row['signature']);
       if (row['granted'] === true && row['executable'] !== true) {
         problems.push(`${who} cannot execute ${signature}, which the map gives it.`);
-      } else if (row['granted'] !== true && row['public'] !== true && row['executable'] === true) {
+      } else if (row['granted'] !== true && row['public'] !== true && row['reachable'] === true) {
         problems.push(`${who} can execute ${signature}, which the map does not give it.`);
       }
     }
 
+    // The map gives no role a sequence: the identity columns need none.
+    const { rows: sequences } = await db.query(
+      `WITH reach AS (${REACHABLE_ROLES})
+       SELECT c.relname AS name, p.privilege
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN unnest(ARRAY['USAGE', 'SELECT', 'UPDATE']) AS p(privilege)
+        WHERE n.nspname = 'public' AND c.relkind = 'S'
+          AND EXISTS (SELECT 1 FROM reach WHERE has_sequence_privilege(reach.oid, c.oid, p.privilege))
+        ORDER BY c.relname, p.privilege`,
+      [grants.user]
+    );
+    for (const row of sequences) {
+      problems.push(
+        `${who} holds ${String(row['privilege'])} on the sequence ${String(row['name'])}, which the map does not give it.`
+      );
+    }
+
     const { rows: schemas } = await db.query(
-      `SELECT has_schema_privilege($1, 'public', 'USAGE') AS public_usage,
-              has_schema_privilege($1, 'public', 'CREATE') AS public_create,
+      `WITH reach AS (${REACHABLE_ROLES})
+       SELECT has_schema_privilege($1, 'public', 'USAGE') AS public_usage,
+              EXISTS (SELECT 1 FROM reach WHERE has_schema_privilege(reach.oid, 'public', 'CREATE'))
+                AS public_create,
               has_schema_privilege($1, $2, 'USAGE') AS journal_usage,
-              has_schema_privilege($1, $2, 'CREATE') AS journal_create,
+              EXISTS (SELECT 1 FROM reach WHERE has_schema_privilege(reach.oid, $2, 'CREATE'))
+                AS journal_create,
               has_table_privilege($1, quote_ident($2) || '.' || quote_ident($3), 'SELECT') AS journal_read,
-              has_table_privilege($1, quote_ident($2) || '.' || quote_ident($3),
-                'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') AS journal_write`,
+              EXISTS (SELECT 1 FROM reach
+                       WHERE has_table_privilege(reach.oid, quote_ident($2) || '.' || quote_ident($3),
+                               'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER'))
+                AS journal_write`,
       [grants.user, MIGRATIONS_SCHEMA, MIGRATIONS_TABLE]
     );
     const schema = schemas[0] ?? {};

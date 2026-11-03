@@ -319,9 +319,11 @@ the migrations are applied:
   commits only once every user holds exactly them. A second run gives the same
   grants.
 - A user that does not exist, a superuser, the owner of the tables or a member
-  of the owner, or a user that would still hold more through `PUBLIC` or a role
-  it is a member of, fails the run: the runner names it, leaves the grants as
-  they were and exits `5`, the migrations applied.
+  of the owner, a user with `REPLICATION`, `CREATEROLE` or a predefined role
+  that reads past the grants, or a user that would still hold more through
+  `PUBLIC` or any role it is a member of, fails the run (see
+  [Topology](/operate/topology/#one-user-per-role)): the runner names it,
+  leaves the grants as they were and exits `5`, the migrations applied.
 
 ### Auth Server
 

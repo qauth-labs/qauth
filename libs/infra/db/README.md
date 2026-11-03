@@ -708,7 +708,10 @@ DB_USER_SIGNER=qauth_signer DB_USER_DELIVERY=qauth_delivery \
 It creates no user and sets no password, and with no `DB_USER_*` set it does
 nothing. It runs in one transaction under the migration lock, revokes what each
 user held on the schema, grants the map, and commits only when every user holds
-exactly that, `PUBLIC` and inherited roles counted. The migration runner applies
+exactly that, `PUBLIC` and every role the user can reach (`SET ROLE` included)
+counted. It refuses a user that is a superuser, owns the tables, has
+`REPLICATION`, `CREATEROLE` or `BYPASSRLS`, belongs to a predefined role that
+reads past the grants, or may create schemas. The migration runner applies
 the same grants after its migrations. The package exports the module as
 `@qauth-labs/infra-db/grants`, which loads only `pg`.
 
