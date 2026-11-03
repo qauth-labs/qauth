@@ -300,7 +300,7 @@ states:
         say: >-
           an answer, a cancel or a read names an interaction of this request that already finished, such as a
           replayed or a second form post
-        source: apps/auth-server/src/app/helpers/interaction.ts:288
+        source: apps/auth-server/src/app/helpers/interaction.ts:290
 
   resolvingRealm:
     title: Find the realm of the host
@@ -723,7 +723,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:470
+        source: apps/auth-server/src/app/helpers/interaction.ts:472
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -745,7 +745,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:470
+        source: apps/auth-server/src/app/helpers/interaction.ts:472
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -834,7 +834,7 @@ states:
       interaction's secret leaves the flow cookie. Only now is the request decided again: the code is never minted
       while the interaction can still be answered, and a finish the sweep beat issues none. For a sign-in, the answer
       also carries the new session cookie, and the user's last sign-in and user.signed_in are recorded.
-    source: apps/auth-server/src/app/helpers/interaction.ts:760
+    source: apps/auth-server/src/app/helpers/interaction.ts:762
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -844,11 +844,11 @@ states:
       FAIL.expired:
         target: interaction_expired.finished_late
         say: 'the expiry sweep claimed the interaction first'
-        source: apps/auth-server/src/app/helpers/interaction.ts:768
+        source: apps/auth-server/src/app/helpers/interaction.ts:770
       FAIL.sessionEnded:
         target: interaction_expired.session_ended
         say: 'the session the sign-in started has ended since, such as by a sign-out in another tab'
-        source: apps/auth-server/src/app/helpers/interaction.ts:764
+        source: apps/auth-server/src/app/helpers/interaction.ts:766
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails; the turn is given back'
@@ -895,7 +895,7 @@ states:
     description: >-
       continueInteraction: as a new interaction, but within the finished one's absolute expiry (one request, one
       lifetime) and on the flow secrets the finish left.
-    source: apps/auth-server/src/app/helpers/interaction.ts:516
+    source: apps/auth-server/src/app/helpers/interaction.ts:518
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -906,7 +906,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:470
+        source: apps/auth-server/src/app/helpers/interaction.ts:472
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
@@ -915,7 +915,7 @@ states:
   continuingToConsent:
     title: Continue the request in a consent interaction
     description: As continuingToSignIn, at the consent step, for the session the finished interaction holds.
-    source: apps/auth-server/src/app/helpers/interaction.ts:516
+    source: apps/auth-server/src/app/helpers/interaction.ts:518
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -926,7 +926,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:470
+        source: apps/auth-server/src/app/helpers/interaction.ts:472
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
@@ -1062,7 +1062,7 @@ states:
       The record is gone once the interaction finished, so a replayed answer issues no second code, and an id is never
       answered again.
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:288
+    source: apps/auth-server/src/app/helpers/interaction.ts:290
     response:
       status: 410
       headers:
@@ -1079,7 +1079,7 @@ states:
     title: Refuse a finish the expiry sweep beat
     description: The sweep reports the interaction expired; nothing is issued.
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:768
+    source: apps/auth-server/src/app/helpers/interaction.ts:770
     response:
       status: 410
       headers:
@@ -1096,7 +1096,7 @@ states:
     title: Refuse a finish whose session ended since
     description: Nothing is written; the turn is given back (#963).
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:764
+    source: apps/auth-server/src/app/helpers/interaction.ts:766
     response:
       status: 410
       headers:
@@ -1144,7 +1144,7 @@ states:
     type: final
     title: Refuse a next interaction too large to hold
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:470
+    source: apps/auth-server/src/app/helpers/interaction.ts:472
     response:
       status: 400
       headers:
@@ -1570,7 +1570,7 @@ states:
       and a record of 32 KiB.
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/interaction.ts:470
+    source: apps/auth-server/src/app/helpers/interaction.ts:472
     response:
       status: 400
       headers:
@@ -1665,7 +1665,7 @@ assertions:
     say: >-
       A code is minted only once the interaction has ended: never while it can still be answered, so a finish that the
       expiry sweep beat, or a replayed answer, issues none
-    source: apps/auth-server/src/app/helpers/interaction.ts:765
+    source: apps/auth-server/src/app/helpers/interaction.ts:767
   - id: no-code-without-consent
     never: 'codeMinted and consentMissing'
     say: 'A code is minted only under a stored or administrative consent that covers the request'

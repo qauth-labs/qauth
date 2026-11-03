@@ -71,7 +71,9 @@ import { emitUserEvent } from './user-events';
  * | {@link cancelInteraction}          | the id, the flow cookie, the CSRF value|
  * | {@link switchInteractionUser}      | the id and the flow cookie             |
  *
- * (The answer and cancel routes check the same origin first, #616.) The CSRF
+ * (The answer and cancel routes check the same origin first, #616; the route
+ * that will call the switch, #619, must check the origin and the CSRF value
+ * too, #964.) The CSRF
  * value (`interaction-csrf.ts`) is checked after the flow cookie: a value
  * that is not the current step view's is refused with a generic `403`
  * (`ForbiddenError`) and audited (`request.csrf_rejected`), and nothing else
@@ -992,9 +994,11 @@ function switchedUserOf(record: InteractionRecord): SwitchedUser | undefined {
  *
  * The account chooser's "Use another account" (a switch at the
  * `select_account` step, #658) ends nothing: it adds an account, and the
- * accounts it lists stay signed in (ADR-019 Decision 3, #548). When the
- * cookie holds several accounts (#548), "Not you?" is a sign-out of the
- * account it leaves only, and the cookie keeps the others.
+ * accounts it lists stay signed in (ADR-019 Decision 3, #548). Today the
+ * cookie names one session and is cleared whole; #548, which brings several
+ * accounts to one cookie, must make "Not you?" a sign-out of the account it
+ * leaves alone: its sessions the cookie lists, not only the active one, and
+ * the cookie keeping the others.
  *
  * The person ends them as that user, as a sign-out does: the switch is made
  * by the browser that holds the flow cookie of the interaction, which the
@@ -1102,6 +1106,12 @@ async function switchCookieSessionId(
  * answer from now on. The new interaction keeps the request's absolute
  * expiry: one authorization request has one lifetime, and switching never
  * extends it.
+ *
+ * No Interaction API operation calls this yet (#619). The route that does
+ * must check the realm origin and the current step's CSRF value first, as
+ * the answer and cancel routes do: a switch can sign the browser out of the
+ * session it was signed in with before the interaction, so a cross-site or
+ * replayed request must not reach it.
  *
  * @param identifierStep - the identifier step as the engine offers it (its
  *   alternatives); the plain identifier step when absent
