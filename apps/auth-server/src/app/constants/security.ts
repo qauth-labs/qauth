@@ -203,6 +203,14 @@ export const EMAIL_MAX_LENGTH = 254;
 export const AUTHORIZE_BODY_LIMIT_BYTES = 128 * 1024;
 
 /**
+ * The body bound of `POST /oauth/end-session` (#675): six optional form
+ * fields, each bounded by `endSessionParamsSchema` (an 8 KiB `id_token_hint`,
+ * three 2 KiB values and two short hints), with room for percent-encoding.
+ * Bounded at the edge, as the authorization endpoint's body is.
+ */
+export const END_SESSION_BODY_LIMIT_BYTES = 64 * 1024;
+
+/**
  * Lifetime of a wallet-login flow record — the server-side state tying one
  * browser to one in-flight OID4VP presentation request (#239).
  *

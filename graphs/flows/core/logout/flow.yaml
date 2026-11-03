@@ -229,7 +229,9 @@ states:
 
   rateLimiting:
     title: Count the request against the end-session limit
-    description: LOGOUT_RATE_LIMIT requests per LOGOUT_RATE_WINDOW seconds, for each client address and realm.
+    description: >-
+      The authorization endpoint's budget, for each client address and realm: AUTHORIZE_RATE_LIMIT requests per
+      AUTHORIZE_RATE_WINDOW seconds, or AUTHORIZE_RATE_LIMIT_LENIENT where the realm's environment ceiling allows it.
     always:
       - guard: overLimit
         target: too_many_requests.end_session_limit

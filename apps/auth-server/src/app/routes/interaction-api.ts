@@ -34,6 +34,12 @@ import {
   finishConsent,
 } from '../helpers/authorization-interaction';
 import {
+  cancelLogout,
+  finishLogout,
+  LOGOUT_CONFIRM_STEP,
+  type LogoutDecision,
+} from '../helpers/end-session';
+import {
   answerInteraction,
   cancelInteraction,
   type InteractionDecision,
@@ -75,7 +81,9 @@ import { emitUserEvent } from '../helpers/user-events';
  * round (`@qauth-labs/fastify-plugin-sign-in-engine`) and its result becomes
  * the next state. An answer to the consent step runs no round (#629): it
  * finishes the interaction, and `finishConsent` decides it for the scope set
- * the step showed.
+ * the step showed. An answer to the `logout_confirm` step of an RP-initiated
+ * logout (#675) runs no round either: it finishes the interaction, and
+ * `finishLogout` ends the session, or not, as the person decided.
  *
  * A JSON answer gets the next step view, or the final redirect, as JSON. A
  * form post gets `303 See Other` to the ceremony page of the interaction,
@@ -432,11 +440,30 @@ function decideConsent(
 }
 
 /**
+ * Decide an answer to a logout's confirm step (#675): read it by the step
+ * grammar, whose answer holds the decision and nothing else. The interaction
+ * then finishes, with nothing ended yet: `finishLogout` decides once it has
+ * ended, as a consent is decided.
+ */
+function decideLogout(
+  state: Extract<InteractionState, { purpose: 'logout' }>,
+  answer: { readonly fields: unknown; readonly encoding: AnswerEncoding },
+  answered: (decision: LogoutDecision) => void
+): InteractionDecision {
+  // A logout's only step: anything else is a record no server writes.
+  if (state.step.name !== LOGOUT_CONFIRM_STEP) throw new InteractionExpiredError();
+  const read = readAnswer(state.step, answer);
+  answered((read.answer as { decision: LogoutDecision }).decision);
+  return { kind: 'finished' };
+}
+
+/**
  * Decide an answer: read it against the step it answers, run one round of
  * the engine, and turn its result into the interaction's next state. Runs
  * once the turn is taken: a refusal thrown here gives the turn back, so the
  * step and its CSRF value stay as they were. An answer to the consent step
- * runs no engine round ({@link decideConsent}).
+ * runs no engine round ({@link decideConsent}), nor does one to a logout's
+ * confirm step ({@link decideLogout}).
  */
 async function decideAnswer(
   request: FastifyRequest,
@@ -448,9 +475,13 @@ async function decideAnswer(
     readonly receivedAt: number;
   },
   state: InteractionState,
-  answeredConsent: (consent: AnsweredConsent) => void
+  answered: {
+    readonly consent: (consent: AnsweredConsent) => void;
+    readonly logout: (decision: LogoutDecision) => void;
+  }
 ): Promise<InteractionDecision> {
-  if (state.step.name === CONSENT_STEP) return decideConsent(state, answer, answeredConsent);
+  if (state.purpose === 'logout') return decideLogout(state, answer, answered.logout);
+  if (state.step.name === CONSENT_STEP) return decideConsent(state, answer, answered.consent);
   readAnswer(state.step, answer);
   const realmId = requestRealm(request).id;
   // The engine counts by the client id as it is; an event carries it only
@@ -672,6 +703,7 @@ export default async function (fastify: FastifyInstance) {
       const realm = requestRealm(request);
       const engine = engines.of(accountPoliciesOf(fastify, realm).requireVerifiedAccount);
       let consent: AnsweredConsent | undefined;
+      let logout: LogoutDecision | undefined;
       const result = await answerInteraction(
         request,
         reply,
@@ -683,8 +715,13 @@ export default async function (fastify: FastifyInstance) {
             engine,
             { fields, encoding: parsed.encoding, receivedAt },
             state,
-            (answered) => {
-              consent = answered;
+            {
+              consent: (answered) => {
+                consent = answered;
+              },
+              logout: (decision) => {
+                logout = decision;
+              },
             }
           )
       );
@@ -694,6 +731,14 @@ export default async function (fastify: FastifyInstance) {
         case 'step':
           return respond(request, reply, parsed.encoding, { view: result.view });
         case 'finished': {
+          if (result.purpose === 'logout') {
+            // The confirm step finished the interaction (#675): the session
+            // ends now, or stays, as the person decided.
+            if (logout === undefined) throw new Error('a logout finished without a decision');
+            return respond(request, reply, parsed.encoding, {
+              location: await finishLogout(fastify, request, reply, result, logout),
+            });
+          }
           if (consent !== undefined) {
             // The consent answer finished the interaction (#629): nobody
             // signed in. It is decided now, with the step the interaction
@@ -758,7 +803,10 @@ export default async function (fastify: FastifyInstance) {
         return respond(request, reply, parsed.encoding, { location: ceremonyPageUrl(request) });
       }
       return respond(request, reply, parsed.encoding, {
-        location: await cancelAuthorization(fastify, request, result.request),
+        location:
+          result.purpose === 'logout'
+            ? await cancelLogout(fastify, request, result)
+            : await cancelAuthorization(fastify, request, result.request),
       });
     }
   );

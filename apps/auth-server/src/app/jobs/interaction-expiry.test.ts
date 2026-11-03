@@ -13,6 +13,7 @@ import {
   REDIS_KEYS,
 } from '../constants';
 import {
+  type AuthorizationInteractionRecord,
   claimExpiredInteraction,
   deleteInteraction,
   expiredInteractionEntries,
@@ -44,7 +45,9 @@ const NOW = Date.now();
  * unanswered one (revision 0) is held to the shorter deadline of
  * `INTERACTION_UNANSWERED_TTL_MS`.
  */
-function record(overrides: Partial<InteractionRecord> = {}): InteractionRecord {
+function record(
+  overrides: Partial<AuthorizationInteractionRecord> = {}
+): AuthorizationInteractionRecord {
   return {
     v: 2,
     ref: randomUUID(),

@@ -261,7 +261,7 @@ async function buildHarness(): Promise<Harness> {
       { id: (request.params as { id: string }).id, revision: 0 },
       decideBy({ kind: 'finished' })
     );
-    if (result.kind !== 'finished') return result;
+    if (result.kind !== 'finished' || result.purpose !== 'authorization') return result;
     const next = await continueInteraction(request, reply, result.continuation, {
       request: result.request,
       step: { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
@@ -982,6 +982,7 @@ describe('answers (#592)', () => {
 
     expect(finished.json()).toEqual({
       kind: 'finished',
+      purpose: 'authorization',
       request: AUTHORIZE_REQUEST,
       transaction: { amr: [] },
       continuation: { secrets: [], expiresAt: expect.any(Number) },
@@ -2216,6 +2217,7 @@ describe('expiry of an unanswered interaction (#592)', () => {
 
     expect(finished.json()).toEqual({
       kind: 'finished',
+      purpose: 'authorization',
       request: AUTHORIZE_REQUEST,
       transaction: { amr: [] },
       continuation: { secrets: [], expiresAt: expect.any(Number) },

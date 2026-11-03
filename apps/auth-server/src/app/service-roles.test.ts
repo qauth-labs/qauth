@@ -171,9 +171,11 @@ describe('what each role loads (the boot-time list)', () => {
     // It sends no mail, so it reads no realm secret (#529).
     expect(web).not.toContain('realmSecrets');
     // No web route reads an access token since the authorization endpoint's
-    // Bearer path was retired (#524).
+    // Bearer path was retired (#524). The end-session endpoint verifies an
+    // id_token_hint with the realm's token keys (#675), so web holds `jwt`.
     expect([...pluginsFor(['web'])]).toEqual([
       'dpop',
+      'jwt',
       'password',
       'federation',
       'email',

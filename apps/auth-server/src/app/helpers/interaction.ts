@@ -24,6 +24,7 @@ import {
   type CarriedSession,
   deleteInteraction,
   eventClientIdOf,
+  eventUserIdOf,
   IDENTIFIER_STEP,
   insertInteraction,
   INTERACTION_RECORD_VERSION,
@@ -38,6 +39,7 @@ import {
   interactionStepSchema,
   type InteractionTransaction,
   isInteractionId,
+  type LogoutRequest,
   mintInteractionId,
   readInteractionRecord,
   returnInteractionTurn,
@@ -124,8 +126,11 @@ import { emitUserEvent } from './user-events';
 /** The step view a reader of the interaction id may see: no personal data. */
 export interface InteractionView {
   readonly step: InteractionStep;
-  /** The `client_id` of the request the interaction is for. */
-  readonly clientId: string;
+  /**
+   * The `client_id` of the request the interaction is for. Absent for a
+   * logout request that named no client (#675).
+   */
+  readonly clientId?: string;
   /**
    * Who the client is, for a step that names it (the consent step, #629): the
    * display data the interaction started with. Absent for any other step.
@@ -162,9 +167,8 @@ export interface InteractionPersonalView {
   readonly current: InteractionStep;
 }
 
-/** What the engine sees when it decides an answer. */
-export interface InteractionState {
-  readonly request: InteractionRequest;
+/** What every {@link InteractionState} holds, whatever the interaction is for. */
+interface InteractionStateFields {
   readonly step: InteractionStep;
   readonly personal: InteractionPersonalData;
   readonly transaction: InteractionTransaction;
@@ -174,6 +178,22 @@ export interface InteractionState {
   /** Who the client is, as the step read showed it (#629): the consent step's. */
   readonly client?: ClientDisplay;
 }
+
+/**
+ * What the engine sees when it decides an answer: the interaction's purpose
+ * and its request, with the state every interaction holds.
+ */
+export type InteractionState =
+  | (InteractionStateFields & {
+      readonly purpose: 'authorization';
+      readonly request: InteractionRequest;
+    })
+  | (InteractionStateFields & {
+      readonly purpose: 'logout';
+      readonly request: LogoutRequest;
+      /** The browser session the logout is for (#675). */
+      readonly carriedSession?: CarriedSession;
+    });
 
 /** Who an answer proved, for {@link InteractionDecision} `authenticated`. */
 export interface InteractionSignIn {
@@ -226,11 +246,29 @@ export type InteractionAnswerResult =
   /** The answer was processed; the interaction waits at this step. */
   | { readonly kind: 'step'; readonly view: InteractionView }
   /** The answer finished the interaction. */
+  | InteractionFinished;
+
+/**
+ * An interaction an answer finished: its request, by its purpose, and what
+ * it proved. The caller completes the request: the authorization request
+ * (#628), or the logout the person confirmed or declined (#675).
+ */
+export type InteractionFinished =
   | {
       readonly kind: 'finished';
+      readonly purpose: 'authorization';
       readonly request: InteractionRequest;
       readonly transaction: InteractionTransaction;
       /** What the next interaction of the same request starts from (#628). */
+      readonly continuation: InteractionContinuation;
+    }
+  | {
+      readonly kind: 'finished';
+      readonly purpose: 'logout';
+      readonly request: LogoutRequest;
+      /** The browser session the logout is for. */
+      readonly carriedSession?: CarriedSession;
+      readonly transaction: InteractionTransaction;
       readonly continuation: InteractionContinuation;
     };
 
@@ -250,7 +288,18 @@ export interface InteractionContinuation {
 /** What {@link cancelInteraction} did. */
 export type InteractionCancelResult =
   | { readonly kind: 'stale' }
-  | { readonly kind: 'cancelled'; readonly request: InteractionRequest };
+  | {
+      readonly kind: 'cancelled';
+      readonly purpose: 'authorization';
+      readonly request: InteractionRequest;
+    }
+  | {
+      readonly kind: 'cancelled';
+      readonly purpose: 'logout';
+      readonly request: LogoutRequest;
+      /** The browser session the logout was for: it stays. */
+      readonly carriedSession?: CarriedSession;
+    };
 
 /** What {@link switchInteractionUser} did. */
 export type InteractionSwitchResult =
@@ -287,7 +336,7 @@ export async function refuseForbidden(
       : {
           realmId: record.realmId,
           clientId: eventClientIdOf(record),
-          userId: record.transaction.userId ?? null,
+          userId: eventUserIdOf(record),
           actor: 'user',
         }
   );
@@ -308,7 +357,7 @@ function lifetimeMs(): number {
 function viewOf(record: InteractionRecord): InteractionView {
   return {
     step: record.step,
-    clientId: record.request.client_id,
+    ...(record.request.client_id === undefined ? {} : { clientId: record.request.client_id }),
     // Written only by `createInteraction`, from `clientDisplay`'s output.
     ...(record.client === undefined ? {} : { client: record.client as unknown as ClientDisplay }),
     expiresAt: record.expiresAt,
@@ -328,7 +377,7 @@ async function emitInteractionEvent<Type extends RegisteredEventType>(
   record: InteractionRecord,
   type: Type,
   data: EventDataOf<Type>,
-  userId: string | null = record.transaction.userId ?? null
+  userId: string | null = eventUserIdOf(record)
 ): Promise<void> {
   await emitUserEvent(request, type, data, {
     realmId: record.realmId,
@@ -441,6 +490,20 @@ export interface StartedInteraction {
   readonly expiresAt: number;
 }
 
+/** What an interaction is for, and the request it holds. */
+type InteractionTarget =
+  | { readonly purpose: 'authorization'; readonly request: InteractionRequest }
+  | { readonly purpose: 'logout'; readonly request: LogoutRequest };
+
+/** The input of {@link createInteraction}. */
+interface CreateInteractionInput extends Omit<StartInteractionInput, 'request'> {
+  readonly target: InteractionTarget;
+  readonly secrets: readonly string[];
+  readonly replace?: { readonly secret: string; readonly ref: string };
+  /** The absolute expiry, when it is not `INTERACTION_TTL` from now. */
+  readonly expiresAt?: number;
+}
+
 /**
  * Create an interaction, bound to this browser by a new flow secret, and
  * audit it. The new secret joins the others the browser's flow cookie holds.
@@ -448,12 +511,7 @@ export interface StartedInteraction {
 async function createInteraction(
   request: FastifyRequest,
   reply: FastifyReply,
-  input: StartInteractionInput & {
-    readonly secrets: readonly string[];
-    readonly replace?: { readonly secret: string; readonly ref: string };
-    /** The absolute expiry, when it is not `INTERACTION_TTL` from now. */
-    readonly expiresAt?: number;
-  }
+  input: CreateInteractionInput
 ): Promise<StartedInteraction> {
   const step = interactionStepSchema.parse(input.step);
   const id = mintInteractionId();
@@ -463,8 +521,7 @@ async function createInteraction(
     v: INTERACTION_RECORD_VERSION,
     ref: randomUUID(),
     realmId: requestRealm(request).id,
-    purpose: 'authorization',
-    request: input.request,
+    ...input.target,
     step,
     personal: input.personal ?? {},
     transaction: input.transaction ?? { amr: [] },
@@ -518,7 +575,46 @@ export async function startInteraction(
   reply: FastifyReply,
   input: StartInteractionInput
 ): Promise<StartedInteraction> {
-  return createInteraction(request, reply, { ...input, secrets: readFlowSecrets(request) });
+  const { request: authorization, ...rest } = input;
+  return createInteraction(request, reply, {
+    ...rest,
+    target: { purpose: 'authorization', request: authorization },
+    secrets: readFlowSecrets(request),
+  });
+}
+
+/** The input of {@link startLogoutInteraction}. */
+export interface StartLogoutInteractionInput {
+  /** The checked logout request: the client, the return URI and `state`. */
+  readonly request: LogoutRequest;
+  /** The `logout_confirm` step. */
+  readonly step: InteractionStep;
+  /** The step's personal data: the accounts signed in on this browser. */
+  readonly personal: InteractionPersonalData;
+  /** The browser session the logout ends once the person confirms it. */
+  readonly carriedSession: CarriedSession;
+  /** Who the client is, when the request named one. */
+  readonly client?: ClientDisplay;
+}
+
+/**
+ * Start the confirmation of an RP-initiated logout (#675, ADR-019 Decision
+ * 4): an interaction of purpose `logout` at the `logout_confirm` step, in the
+ * request's realm, bound to this browser as {@link startInteraction} binds
+ * one. Nothing ends until the person answers it. Its transaction is empty:
+ * nobody proves anything at a logout.
+ */
+export async function startLogoutInteraction(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  input: StartLogoutInteractionInput
+): Promise<StartedInteraction> {
+  const { request: logout, ...rest } = input;
+  return createInteraction(request, reply, {
+    ...rest,
+    target: { purpose: 'logout', request: logout },
+    secrets: readFlowSecrets(request),
+  });
 }
 
 /**
@@ -538,8 +634,10 @@ export async function continueInteraction(
   after: InteractionContinuation,
   input: StartInteractionInput
 ): Promise<StartedInteraction> {
+  const { request: authorization, ...rest } = input;
   return createInteraction(request, reply, {
-    ...input,
+    ...rest,
+    target: { purpose: 'authorization', request: authorization },
     secrets: after.secrets,
     expiresAt: after.expiresAt,
   });
@@ -743,6 +841,53 @@ async function signInSessionIsLive(
   return session !== null && session.userId === userId;
 }
 
+/** What the engine sees of a record whose turn an answer took. */
+function stateOf(taken: InteractionRecord): InteractionState {
+  const fields = {
+    step: taken.step,
+    personal: taken.personal,
+    transaction: taken.transaction,
+    signInTransaction: taken.signInTransaction,
+    revision: taken.revision,
+    // Written only by `createInteraction`, from `clientDisplay`'s output.
+    ...(taken.client === undefined ? {} : { client: taken.client as unknown as ClientDisplay }),
+  };
+  if (taken.purpose === 'authorization') {
+    return { ...fields, purpose: 'authorization', request: taken.request };
+  }
+  return {
+    ...fields,
+    purpose: 'logout',
+    request: taken.request,
+    ...(taken.carriedSession === undefined ? {} : { carriedSession: taken.carriedSession }),
+  };
+}
+
+/** The result of an answer that finished `taken`, by its purpose. */
+function finishedOf(
+  taken: InteractionRecord,
+  transaction: InteractionTransaction,
+  continuation: InteractionContinuation
+): InteractionFinished {
+  if (taken.purpose === 'authorization') {
+    return {
+      kind: 'finished',
+      purpose: 'authorization',
+      request: taken.request,
+      transaction,
+      continuation,
+    };
+  }
+  return {
+    kind: 'finished',
+    purpose: 'logout',
+    request: taken.request,
+    ...(taken.carriedSession === undefined ? {} : { carriedSession: taken.carriedSession }),
+    transaction,
+    continuation,
+  };
+}
+
 /** {@link answerInteraction} once the turn is taken: decide, then write what was decided. */
 async function settleAnswer(
   request: FastifyRequest,
@@ -753,18 +898,7 @@ async function settleAnswer(
   settled: Settlement
 ): Promise<InteractionAnswerResult> {
   const { redis } = request.server;
-  const decision = await decide(
-    Object.freeze({
-      request: taken.request,
-      step: taken.step,
-      personal: taken.personal,
-      transaction: taken.transaction,
-      signInTransaction: taken.signInTransaction,
-      revision: taken.revision,
-      // Written only by `createInteraction`, from `clientDisplay`'s output.
-      ...(taken.client === undefined ? {} : { client: taken.client as unknown as ClientDisplay }),
-    })
-  );
+  const decision = await decide(Object.freeze(stateOf(taken)));
   // The engine may take a while (a password hash): an interaction that
   // expired meanwhile is not answered. The turn stays taken; the sweep reports it.
   if (interactionDeadline(taken) <= Date.now()) refuse(request, 'expired');
@@ -790,12 +924,14 @@ async function settleAnswer(
     const secrets = nextFlowSecrets(bound.secrets, { remove: bound.secret });
     setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', taken);
-    return {
-      kind: 'finished',
-      request: taken.request,
-      transaction: taken.transaction,
-      continuation: { secrets, expiresAt: taken.expiresAt },
-    };
+    return finishedOf(taken, taken.transaction, { secrets, expiresAt: taken.expiresAt });
+  }
+
+  if (taken.purpose === 'logout') {
+    // A logout's only step is its confirmation, which finishes it: nobody
+    // signs in and no other step follows. An engine bug, thrown before
+    // anything is written, so the turn is given back.
+    throw new Error('a logout interaction has no step after its confirmation');
   }
 
   if (decision.kind === 'step') {
@@ -861,12 +997,7 @@ async function settleAnswer(
     setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', { ...taken, transaction: proved });
     await endReplacedSession(request, taken, session.sid);
-    return {
-      kind: 'finished',
-      request: taken.request,
-      transaction: proved,
-      continuation: { secrets, expiresAt: taken.expiresAt },
-    };
+    return finishedOf(taken, proved, { secrets, expiresAt: taken.expiresAt });
   }
   const secret = mintFlowSecret();
   const next: InteractionRecord = {
@@ -966,7 +1097,15 @@ export async function cancelInteraction(
     step: taken.step.name,
     reason: 'user',
   });
-  return { kind: 'cancelled', request: taken.request };
+  if (taken.purpose === 'authorization') {
+    return { kind: 'cancelled', purpose: 'authorization', request: taken.request };
+  }
+  return {
+    kind: 'cancelled',
+    purpose: 'logout',
+    request: taken.request,
+    ...(taken.carriedSession === undefined ? {} : { carriedSession: taken.carriedSession }),
+  };
 }
 
 /** Who a user switch leaves, and the sessions of theirs the interaction holds. */
@@ -1183,8 +1322,12 @@ export async function switchInteractionUser(
     throw new Error('a user switch starts at the identifier step');
   }
   const bound = await locateBound(request, id);
+  // A logout's confirmation shows the account it signs out; there is no
+  // other account to switch to (#675).
+  if (bound.record.purpose !== 'authorization') refuse(request, 'unknown');
   const taken = await takeBound(request, bound);
-  if (taken === null) return { kind: 'stale' };
+  // The record the turn was taken for is the one located: the same purpose.
+  if (taken === null || taken.purpose !== 'authorization') return { kind: 'stale' };
   // The left user's sessions end first. When the sweep claimed the
   // interaction meanwhile, they stay ended: the person asked to leave them,
   // and the cookie that names one is cleared on its next read.
@@ -1204,7 +1347,7 @@ export async function switchInteractionUser(
     ended?.userId ?? taken.transaction.userId ?? null
   );
   const started = await createInteraction(request, reply, {
-    request: taken.request,
+    target: { purpose: 'authorization', request: taken.request },
     step: identifierStep,
     secrets: bound.secrets,
     replace: { secret: bound.secret, ref: taken.ref },

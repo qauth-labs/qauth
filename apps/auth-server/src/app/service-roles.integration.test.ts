@@ -105,6 +105,10 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /interaction/v1-rc.0/:interactionId/personal',
   'POST /interaction/v1-rc.0/:interactionId/answer',
   'POST /interaction/v1-rc.0/:interactionId/cancel',
+  // RP-initiated logout: the end-session endpoint and its status page (#675).
+  'GET /oauth/end-session',
+  'POST /oauth/end-session',
+  'GET /oauth/end-session/status',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */
