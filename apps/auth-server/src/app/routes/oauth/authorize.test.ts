@@ -3090,7 +3090,12 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
   /** The endpoint, for `query`, with a client allowing `scopes`, and `cookie` when signed in. */
   async function authorize(
     query: Record<string, unknown>,
-    options: { readonly scopes?: string[]; readonly signedIn?: boolean } = {}
+    options: {
+      readonly scopes?: string[];
+      readonly signedIn?: boolean;
+      /** The identifier the session's side record holds (#230). */
+      readonly identifier?: string;
+    } = {}
   ) {
     const { fastify, ctx, sessions } = makeFastify();
     await authorizeRoute(fastify);
@@ -3106,6 +3111,7 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
         sid: 'sid-628',
         realmId: REALM.id,
         userId: 'user-1',
+        ...(options.identifier === undefined ? {} : { side: { identifier: options.identifier } }),
       });
       headers.cookie = signedIn.cookie;
       authTime = (await sessions.service.get({ realmId: REALM.id, sid: 'sid-628' }))?.authTime;
@@ -3148,7 +3154,7 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
   it('starts the consent for the signed-in user, with the requested scopes and resources', async () => {
     const { state, authTime } = await authorize(
       { scope: 'email write:foo', resource: ['https://api.example.com/v1'] },
-      { scopes: ['email', 'write:foo'], signedIn: true }
+      { scopes: ['email', 'write:foo'], signedIn: true, identifier: 'alice@example.com' }
     );
 
     expectConsent(state);
@@ -3157,7 +3163,8 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
       name: stepUrn('consent'),
       params: {
         scopes: [
-          { scope: 'email', sensitive: false, dangerous: false },
+          // QAuth's own text for a scope it defines; none for the client's own (#629).
+          { scope: 'email', text: 'View your email address', sensitive: false, dangerous: false },
           { scope: 'write:foo', sensitive: false, dangerous: true },
         ],
         resources: ['https://api.example.com/v1'],
@@ -3166,6 +3173,24 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
       alternatives: [],
     });
     expect(input.transaction).toEqual({ userId: 'user-1', sid: 'sid-628', authTime, amr: [] });
+    // Who the client is, from the server's own records, kept with the
+    // interaction (#593): an operator-provisioned client with no verified
+    // domain is unverified, and the screen shows where the code goes.
+    expect(input.client).toEqual({
+      kind: 'unverified',
+      redirect: { target: 'host', host: 'example.com' },
+      newClient: false,
+    });
+    // The identifier the user signed in with: personal data, never a param.
+    expect(input.personal).toEqual({ identifier: 'alice@example.com' });
+    expect(JSON.stringify(input.step)).not.toContain('alice@example.com');
+  });
+
+  it('starts the consent with no personal data when the side record holds no identifier', async () => {
+    const { state } = await authorize({ scope: 'email' }, { signedIn: true });
+
+    expectConsent(state);
+    expect(startedInteraction().personal).toEqual({});
   });
 
   it('refuses a scope the consent step cannot show with invalid_scope, and starts nothing', async () => {

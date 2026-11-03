@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/consent.json",
   "title": "urn:qauth:ia:consent:v1-rc.0",
-  "description": "The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript.",
+  "description": "The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6), and an AI agent is named as one in QAuth’s own words (ADR-014 §11). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step, and an AI agent never skips it; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript.",
   "x-qauth-transports": [
     "interaction"
   ],
@@ -95,7 +95,7 @@
                 "maxLength": 280,
                 "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
                 "x-qauth-display": "realm",
-                "description": "The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Absent when the catalog has none: the screen shows the scope value."
+                "description": "The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Until realms hold a catalog, QAuth’s own text for a scope it defines (`openid`, `profile`, `email`, `offline_access`). Absent when there is none: the screen shows the scope value."
               },
               "sensitive": {
                 "type": "boolean",
@@ -131,6 +131,33 @@
             "description": "One resource indicator, as the request named it. The request chose it, so the screen marks it as asked for by the app.",
             "x-qauth-declared": true
           }
+        },
+        "audience": {
+          "type": "array",
+          "description": "Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, exactly the tokens’ `aud`. For any client but the system client it leaves out the QAuth API audiences (`urn:qauth:aud:`), which a user’s token then gets only when the request names them. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself.",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+            "x-qauth-display": "realm",
+            "description": "One audience value, as the operator configured it, at most 256 characters as the token endpoint reads it; no markup or control character."
+          }
+        },
+        "agent": {
+          "type": "object",
+          "description": "Present when the client is an AI agent (ADR-014 §11, ADR-015 Decision 11): the screen says, in QAuth’s own words, that the app is an AI agent and how long it may keep working once allowed. Nothing in it comes from the client.",
+          "properties": {
+            "max_lifespan": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "description": "The realm’s `sso_max_lifespan`, in seconds: the agent may keep working until the person revokes it, or until this long after they signed in, whichever comes first. Absent when the realm sets none: until the person revokes it."
+            }
+          },
+          "additionalProperties": false
         },
         "remember_default": {
           "type": "boolean",

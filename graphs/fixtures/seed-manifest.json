@@ -4,7 +4,7 @@
     {
       "client_id": "consent-web",
       "name": "Consent replay web app",
-      "description": "The consent graph's ordinary client (graphs/flows/core/consent). Replay fixture: never seed it into a deployment that serves real users.",
+      "description": "The consent graph's ordinary client (graphs/flows/core/consent-page). Replay fixture: never seed it into a deployment that serves real users.",
       "grant_types": ["authorization_code", "refresh_token"],
       "response_types": ["code"],
       "scopes": ["openid", "profile", "email", "offline_access", "write:notes"],

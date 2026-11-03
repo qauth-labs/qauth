@@ -188,9 +188,9 @@ TOTP enrolment, with the fixed parameters of ADR-020 §3. The secret is personal
 
 `urn:qauth:ia:consent:v1-rc.0` — Asks the person to allow or deny what the client asks for.
 
-The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript.
+The OAuth consent decision (#629). The interaction’s `client` names the client, verified domain first (ADR-019 Decision 6), and an AI agent is named as one in QAuth’s own words (ADR-014 §11). The grant is exactly the scope set shown here, which the interaction holds: the answer cannot add a scope. A dangerous scope and `prompt=consent` always reach this step, and an AI agent never skips it; a first-party client may skip it only through the administrative waiver (ADR-017 Decision 9). Works without JavaScript.
 
-- Params: `scopes`, `resources`, `remember_default`
+- Params: `scopes`, `resources`, `audience`, `agent`, `remember_default`
 - Schema: [steps/consent.json](/interaction/v1-rc.0/steps/consent.json)
 
 ### select_account

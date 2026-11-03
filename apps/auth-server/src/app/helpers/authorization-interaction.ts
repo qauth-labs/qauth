@@ -6,7 +6,10 @@ import {
 import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../constants';
 import type { AuthorizeQuery } from '../schemas/oauth';
+import { toStoredAssuranceLevel } from './acr-claims';
+import { mintAuthorizationCode } from './authorization-code';
 import type { AuthorizationErrorParams } from './authorization-error';
 import {
   type AuthorizationOutcome,
@@ -15,6 +18,14 @@ import {
   decideAuthorization,
 } from './authorization-request';
 import { liveBrowserSession } from './browser-session';
+import {
+  findExceedingAgentScopesForClient,
+  unlistedReservedAudiences,
+  userGrantDefaultAudience,
+} from './client-auth';
+import { clientDisplay } from './client-display';
+import { isAgentClient } from './client-resolution';
+import { filterRequestedScopes, forcesLoginPrompt, standardScopeText } from './consent';
 import {
   continueInteraction,
   type InteractionContinuation,
@@ -29,10 +40,12 @@ import {
 } from './interaction-record';
 import { interactionCancelRedirect } from './interaction-redirect';
 import { buildRedirectUrl } from './oauth-redirect';
-import { buildRealmUrl } from './realm-url';
+import { buildRealmUrl, realmIssuer } from './realm-url';
 import { requestRealm } from './request-realm';
-import { isDangerousScope } from './step-up';
-import { emitUserEvent } from './user-events';
+import { highestAgentModeInScopes } from './scope-modes';
+import { readSessionSideRecord } from './session-side-record';
+import { evaluateStepUp, isDangerousScope, parsePromptMode } from './step-up';
+import { emitUserEvent, type UserEventOptions } from './user-events';
 
 /**
  * THE AUTHORIZATION REQUEST'S INTERACTIONS (#628, ADR-019 Decision 6): with
@@ -46,9 +59,10 @@ import { emitUserEvent } from './user-events';
  *   with an empty transaction; the request's `login_hint`, when the step's
  *   personal data can show it, is the identifier field's prefill.
  * - **Consent** (`consent`): the consent step, with the requested scopes and
- *   resources, bound to the browser session the request came with. #629
- *   answers it; until then an answer to it is refused, and the person can
- *   only cancel.
+ *   resources, bound to the browser session the request came with, and the
+ *   client's display data (#593). The scope set the step shows is the one the
+ *   interaction holds, and the only one an `allow` grants
+ *   ({@link finishConsent}, #629).
  *
  * An interaction started for a browser that is already signed in, a consent
  * or a sign-in the request asks for again (`max_age`, `prompt=login`, a
@@ -65,7 +79,9 @@ import { emitUserEvent } from './user-events';
  * minted while the interaction is still answerable, and a finish the expiry
  * sweep beat issues nothing (`answerInteraction` refuses it first). When the
  * person cancels, {@link cancelAuthorization} checks the request again the
- * same way before it sends the browser to the client.
+ * same way before it sends the browser to the client. When the person answers
+ * the consent step, {@link finishConsent} decides the answer, once the
+ * interaction has ended, with every guard of the consent page (#629).
  */
 
 /** The consent step's name (`urn:qauth:ia:consent:v1-rc.0`). */
@@ -94,28 +110,71 @@ export function identifierPrefill(loginHint: string | undefined): InteractionPer
   return personal;
 }
 
+/** What the consent step shows, beside the scopes and resources the request comes to. */
+export interface ConsentStepSubject {
+  /**
+   * The tokens' `aud` when the request names no resource, from the audience an
+   * operator configured for the client, as `/oauth/token` resolves it
+   * (`userGrantDefaultAudience`): empty when the tokens are for the client
+   * itself.
+   */
+  readonly clientAudience: readonly string[];
+  /** Whether the client is an AI agent (`isAgentClient`, fail-closed). */
+  readonly agent: boolean;
+  /** The realm's `sso_max_lifespan`, in seconds, `null` when it sets none. */
+  readonly ssoMaxLifespan: number | null;
+}
+
 /**
- * The consent step for `scopes` at `resources`, or the error the request gets
- * when the step cannot show them: more scopes or resources than it lists, or a
- * scope outside its alphabet (the contract: "A requested scope outside it
- * never reaches this step: the request is refused first"). Whether a scope is
- * dangerous is the server's own classification; no realm scope catalog exists
- * yet, so no scope is marked sensitive and none has a consent text (#629).
+ * The consent step for `scopes` at `resources` (#629), or the error the
+ * request gets when the step cannot show them: more scopes or resources than
+ * it lists, a scope outside its alphabet (the contract: "A requested scope
+ * outside it never reaches this step: the request is refused first"), or an
+ * audience it cannot carry.
+ *
+ * - Each scope carries QAuth's own text for a scope it defines
+ *   (`standardScopeText`), and whether it is dangerous, by the server's own
+ *   classification (`isDangerousScope`). No realm scope catalog exists yet, so
+ *   no scope is marked sensitive.
+ * - `audience`: where the tokens may be used when the request names no
+ *   resource, exactly the `aud` `/oauth/token` gives them from the client's
+ *   configured audience (the resources are the audience otherwise).
+ * - `agent`: present for an AI agent client (ADR-014 §11): the screen names it
+ *   as one in QAuth's words, and says how long it may keep working, from the
+ *   realm's `sso_max_lifespan`. Nothing in it comes from the client.
+ * - "Remember this decision" starts checked, as on the consent page.
  */
 export function consentStep(
   scopes: readonly string[],
-  resources: readonly string[]
+  resources: readonly string[],
+  subject: ConsentStepSubject
 ): InteractionStep | 'invalid_scope' | 'invalid_target' {
-  const step = (shown: readonly string[]): InteractionStep => ({
+  const audience =
+    resources.length === 0 && subject.clientAudience.length > 0
+      ? [...subject.clientAudience]
+      : undefined;
+  const step = (where: {
+    readonly resources: readonly string[];
+    readonly audience?: readonly string[];
+  }): InteractionStep => ({
     name: CONSENT_STEP,
     params: {
-      scopes: scopes.map((scope) => ({
-        scope,
-        sensitive: false,
-        dangerous: isDangerousScope(scope),
-      })),
-      resources: [...shown],
-      // "Remember this decision" starts checked, as on the consent page.
+      scopes: scopes.map((scope) => {
+        const text = standardScopeText(scope);
+        return {
+          scope,
+          ...(text === undefined ? {} : { text }),
+          sensitive: false,
+          dangerous: isDangerousScope(scope),
+        };
+      }),
+      resources: [...where.resources],
+      ...(where.audience === undefined ? {} : { audience: [...where.audience] }),
+      ...(subject.agent
+        ? {
+            agent: subject.ssoMaxLifespan === null ? {} : { max_lifespan: subject.ssoMaxLifespan },
+          }
+        : {}),
       remember_default: true,
     },
     alternatives: [],
@@ -128,33 +187,59 @@ export function consentStep(
       return false;
     }
   };
-  if (!shows(step([]))) return 'invalid_scope';
-  const full = step(resources);
+  if (!shows(step({ resources: [] }))) return 'invalid_scope';
+  const full = step({ resources, ...(audience === undefined ? {} : { audience }) });
   return shows(full) ? full : 'invalid_target';
 }
 
 /** The first step of the interaction an outcome that needs the person starts. */
 export type AuthorizationInteractionStart = Pick<
   StartInteractionInput,
-  'step' | 'personal' | 'transaction' | 'carriedSession'
+  'step' | 'personal' | 'transaction' | 'carriedSession' | 'client'
 >;
 
 /**
+ * The consent step's personal data: the identifier the user signed in with
+ * (the session's side record, #230), when the step's personal data can hold
+ * it, and nothing otherwise. Personal data: only the personal-data read
+ * returns it, to the browser holding the flow cookie.
+ */
+async function consentPersonal(
+  fastify: FastifyInstance,
+  step: InteractionStep,
+  session: BrowserSession
+): Promise<InteractionPersonalData> {
+  const { identifier } = await readSessionSideRecord(fastify, session);
+  if (identifier === undefined) return {};
+  const personal = { identifier };
+  try {
+    interactionPersonalView(step, personal);
+  } catch {
+    return {};
+  }
+  return personal;
+}
+
+/**
  * The interaction a `sign_in` or `consent` outcome starts: its first step,
- * its personal data, its transaction and the browser session it is started
- * for (#964); or the error for the client's `redirect_uri` when the consent
- * step cannot show the request.
+ * its personal data, its transaction, the browser session it is started for
+ * (#964) and, for a consent, the client's display data (#593); or the error
+ * for the client's `redirect_uri` when the consent step cannot show the
+ * request.
  *
  * @param session - the browser session the request came with, `null` for a
  *   browser that is not signed in; a consent is for it, and a consent
  *   outcome always has one
+ * @throws InvalidRequestError when the consent step cannot show where the
+ *   code goes (`clientDisplay`), as the consent page refuses to render
  */
-export function authorizationInteractionStart(
+export async function authorizationInteractionStart(
+  fastify: FastifyInstance,
   outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' | 'consent' }>,
   query: AuthorizeQuery,
-  iss: string,
+  target: Pick<AuthorizationTarget, 'realm' | 'iss' | 'client'>,
   session: BrowserSession | null
-): AuthorizationInteractionStart | { readonly error: AuthorizationErrorParams } {
+): Promise<AuthorizationInteractionStart | { readonly error: AuthorizationErrorParams }> {
   const carried =
     session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } };
   if (outcome.kind === 'sign_in') {
@@ -164,7 +249,17 @@ export function authorizationInteractionStart(
     // `decideAuthorization` answers `consent` only for a session.
     throw new Error('a consent interaction is for a signed-in browser');
   }
-  const step = consentStep(outcome.scopes, outcome.resources);
+  const { client } = target;
+  // ADR-019 Decision 6 (#593): who the client is, from the server's own
+  // records, kept with the interaction so every read of the step shows what
+  // it started with. First, as on the consent page: a redirect it cannot show
+  // refuses the step, and no error is sent to it.
+  const display = clientDisplay(client, { redirectUri: query.redirect_uri });
+  const step = consentStep(outcome.scopes, outcome.resources, {
+    clientAudience: userGrantDefaultAudience(client),
+    agent: isAgentClient(client),
+    ssoMaxLifespan: target.realm.ssoMaxLifespan,
+  });
   if (typeof step === 'string') {
     return {
       error: {
@@ -172,9 +267,12 @@ export function authorizationInteractionStart(
         error_description:
           step === 'invalid_scope'
             ? 'the requested scopes cannot be shown for consent'
-            : 'the requested resources cannot be shown for consent',
+            : outcome.resources.length > 0
+              ? 'the requested resources cannot be shown for consent'
+              : // No resource named: the client's configured audience is what the step could not carry.
+                "the client's audience cannot be shown for consent",
         state: query.state ?? undefined,
-        iss,
+        iss: target.iss,
       },
     };
   }
@@ -184,7 +282,13 @@ export function authorizationInteractionStart(
     authTime: session.authTime,
     amr: [],
   };
-  return { step, personal: {}, transaction, ...carried };
+  return {
+    step,
+    personal: await consentPersonal(fastify, step, session),
+    transaction,
+    client: display,
+    ...carried,
+  };
 }
 
 /**
@@ -263,6 +367,25 @@ export async function finishAuthorization(
   const { target } = checked;
   const session = await transactionSession(fastify, target.realm.id, finished.transaction);
   const outcome = await decideAuthorization(fastify, request, target, query, session);
+  return continueAuthorization(fastify, request, reply, finished, target, session, outcome);
+}
+
+/**
+ * Where the browser goes for what the request of a finished interaction came
+ * to: the client's `redirect_uri` with the code or an error, or the ceremony
+ * page of the request's next interaction, started on the same reply
+ * ({@link continueInteraction}).
+ */
+async function continueAuthorization(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  finished: FinishedAuthorization,
+  target: AuthorizationTarget,
+  session: BrowserSession | null,
+  outcome: AuthorizationOutcome
+): Promise<string> {
+  const query = finished.request;
   switch (outcome.kind) {
     case 'code':
       return outcome.location;
@@ -270,7 +393,7 @@ export async function finishAuthorization(
       return buildRedirectUrl(query.redirect_uri, outcome.params);
     case 'sign_in':
     case 'consent': {
-      const start = authorizationInteractionStart(outcome, query, target.iss, session);
+      const start = await authorizationInteractionStart(fastify, outcome, query, target, session);
       if ('error' in start) {
         // `authorizationInteractionStart` answers an error only for a consent,
         // which is always for a session.
@@ -284,6 +407,337 @@ export async function finishAuthorization(
       return buildRealmUrl(target.realm, ceremonyPagePath(next.id));
     }
   }
+}
+
+/** The person's answer to the consent step, as the step grammar read it. */
+export interface ConsentAnswer {
+  readonly decision: 'allow' | 'deny';
+  /** Whether to remember an `allow` for later requests that fit it. */
+  readonly remember: boolean;
+}
+
+/** A consent interaction that finished: the step it showed, and the answer. */
+export interface FinishedConsent extends FinishedAuthorization {
+  /** The consent step the interaction held: what the person saw. */
+  readonly step: InteractionStep;
+  readonly answer: ConsentAnswer;
+}
+
+/** The scope values a consent step shows, in its order. */
+function shownScopes(step: InteractionStep): string[] {
+  const scopes = step.params['scopes'] as readonly { readonly scope: string }[];
+  return scopes.map((entry) => entry.scope);
+}
+
+/** The resource indicators a consent step shows. */
+function shownResources(step: InteractionStep): string[] {
+  return [...(step.params['resources'] as readonly string[])];
+}
+
+/** Whether a consent step named its client as an AI agent. */
+function shownAsAgent(step: InteractionStep): boolean {
+  return step.params['agent'] !== undefined;
+}
+
+/** Order-independent equality of two scope or resource sets. */
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...right].every((value) => left.has(value));
+}
+
+/**
+ * Decide the person's answer to the consent step (#629, ADR-019 Decision 6),
+ * once the interaction has ended (`answerInteraction` `finished`), with every
+ * guard of the consent page's POST, and return where the browser goes.
+ *
+ * 1. The request is checked again, as the endpoint checks it
+ *    (`checkAuthorizationRequest`).
+ * 2. `deny`: `consent.denied`, and `access_denied` with `state` and `iss`.
+ * 3. `allow`, for the browser session the interaction holds, read again with
+ *    its account: none left, and the request needs a sign-in, which a new
+ *    interaction starts.
+ * 4. The agent scope cap (ADR-007 §2) and the QAuth API audiences (#509),
+ *    checked again: `invalid_scope` / `invalid_target`, no code.
+ * 5. A client that changed whether it is an AI agent since the step was shown
+ *    gets nothing: the request is decided again, so the person sees the step
+ *    the client needs now (ADR-014 §11).
+ * 6. The grant is the scope set the step showed, which the interaction holds,
+ *    never a field of the answer; it must still be in the client's allowlist,
+ *    and the resources must be the request's (`consent_scope_mismatch`,
+ *    `consent_resource_mismatch`).
+ * 7. The step-up gate on the mint path (ADR-007 §2): a sign-in too old for
+ *    what is granted (a dangerous scope, `prompt=login`, `max_age`, a
+ *    `native_backend` client) gets no code, and the request continues at a
+ *    fresh sign-in.
+ * 8. The code (`mintAuthorizationCode`), the remembered grant and the events
+ *    (`step_up.elevated` for a dangerous scope, `consent.granted`) commit in
+ *    one transaction (#549): a session that ended under the request leaves
+ *    none of them, and the request continues at a sign-in.
+ *
+ * @throws InvalidRequestError or UnauthorizedClientError, as the endpoint,
+ *   when the client or its redirect URI no longer qualify: no redirect goes
+ *   to a URI the client no longer holds
+ */
+export async function finishConsent(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  finished: FinishedConsent
+): Promise<string> {
+  const query = finished.request;
+  const { transaction, step, answer } = finished;
+  const userId = transaction.userId;
+  if (userId === undefined) {
+    // `authorizationInteractionStart` starts a consent only for a session.
+    throw new Error('a consent interaction is for a signed-in user');
+  }
+  const checked = await checkAuthorizationRequest(fastify, request, query);
+  const realm = requestRealm(request);
+  const iss = realmIssuer(realm);
+  const state = query.state ?? undefined;
+  const userEvent: UserEventOptions = {
+    realmId: realm.id,
+    userId,
+    clientId: (checked.kind === 'checked' ? checked.target.client : checked.client).clientId,
+    actor: 'user',
+  };
+
+  // RFC 6749 §4.1.2.1: the person declined. A request the checks now refuse
+  // (a dpop_jkt that DPoP, switched on since, cannot read) still has a
+  // redirect URI the client holds: the person's decision stands, as a
+  // cancel's does.
+  if (answer.decision === 'deny') {
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:consent.denied:v1-rc.0',
+      { error: 'access_denied' },
+      userEvent
+    );
+    return buildRedirectUrl(query.redirect_uri, {
+      error: 'access_denied',
+      error_description: 'User denied the authorization request.',
+      state,
+      iss,
+    });
+  }
+  if (checked.kind === 'refused') return buildRedirectUrl(query.redirect_uri, checked.params);
+  const { target } = checked;
+  const { client, policy } = target;
+
+  // The session again, with its account: one disabled since cannot consent.
+  // The request goes on at a sign-in, as one with no session does.
+  const session = await transactionSession(fastify, realm.id, transaction);
+  if (session === null) {
+    return continueAuthorization(fastify, request, reply, finished, target, null, {
+      kind: 'sign_in',
+    });
+  }
+
+  /** Refuse the grant: `consent.denied` and the error at the client's `redirect_uri`. */
+  const refuse = async (
+    error: 'invalid_scope' | 'invalid_target',
+    reason: string,
+    errorDescription: string
+  ): Promise<string> => {
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:consent.denied:v1-rc.0',
+      { error, reason },
+      userEvent
+    );
+    return buildRedirectUrl(query.redirect_uri, {
+      error,
+      error_description: errorDescription,
+      state,
+      iss,
+    });
+  };
+
+  // ADR-007 §2 (#184): the agent scope-mode cap, on the path that mints the
+  // code, against the request the interaction holds. Deny-by-default: a
+  // non-agent client asking for an agent mode is refused too.
+  if (findExceedingAgentScopesForClient(query.scope, client).length > 0) {
+    return refuse(
+      'invalid_scope',
+      'agent_scope_mode_exceeded',
+      'requested scope exceeds the agent scope mode for this client'
+    );
+  }
+
+  // #509: a QAuth API audience is issued only to a client that lists it; an
+  // operator may have removed it since the step was shown.
+  const resources = query.resource ?? [];
+  if (unlistedReservedAudiences(client, resources).length > 0) {
+    return refuse(
+      'invalid_target',
+      'reserved_audience_not_listed',
+      'a QAuth API audience is issued only to a client that lists it'
+    );
+  }
+
+  // ADR-014 §11 (#845): a code is minted only for the client the step showed.
+  // A CIMD document can change `is_agent` while the step is shown: an agent
+  // the step did not name as one, or a client it named as one that is no
+  // longer, gets nothing, and the request is decided again, so the person
+  // sees the step the client needs now.
+  if (shownAsAgent(step) !== isAgentClient(client)) {
+    request.log.warn(
+      { realmId: realm.id, clientId: client.clientId, shownAsAgent: shownAsAgent(step) },
+      'the client changed whether it is an agent since its consent step; deciding the request again'
+    );
+    const outcome = await decideAuthorization(fastify, request, target, query, session);
+    return continueAuthorization(fastify, request, reply, finished, target, session, outcome);
+  }
+
+  // Scope-presentation integrity (#150): the grant is the scope set the step
+  // showed, which the interaction holds; the answer carries no scope. Each of
+  // them must still be in the client's allowlist: an owner who removed one
+  // since the step was shown gets no code for it.
+  const scopes = shownScopes(step);
+  if (!sameSet(filterRequestedScopes(scopes.join(' '), client), scopes)) {
+    return refuse(
+      'invalid_scope',
+      'consent_scope_mismatch',
+      'a scope the consent step showed is no longer allowed for the client'
+    );
+  }
+  // RFC 8707: the resources the step named, which become the token's `aud`,
+  // are the request's.
+  if (!sameSet(shownResources(step), resources)) {
+    return refuse(
+      'invalid_target',
+      'consent_resource_mismatch',
+      'the consent step showed other resources than the request names'
+    );
+  }
+
+  // ADR-007 §2 (#185): the step-up gate on the mint path. The sign-in must be
+  // fresh enough for every scope about to be granted (prior consent is not
+  // consulted), for `prompt=login` and `max_age`, and for a `native_backend`
+  // client, whose request asks for a fresh login whatever it says (ADR-017
+  // Decision 9). A stale one gets no code: the person signs in again, in a
+  // new interaction that carries the session in, and the request is decided
+  // again after it.
+  const prompt = parsePromptMode(query.prompt);
+  const forcedLogin = forcesLoginPrompt(client);
+  const stepUp = evaluateStepUp({
+    requestedScopes: scopes,
+    priorConsentScopes: [],
+    prompt,
+    maxAgeSeconds: query.max_age ?? null,
+    authTimeMs: session.authTime,
+    nowMs: Date.now(),
+    freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
+    // ADR-008 §5 (#197): a development client is spared the dangerous-scope
+    // rule only; `prompt` and `max_age` hold everywhere.
+    enforceDangerousStepUp: policy.agentStepUpEnforced,
+    forceFreshLogin: forcedLogin,
+  });
+  if (stepUp.requiresFreshLogin) {
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:step_up.required:v1-rc.0',
+      {
+        reason: forcedLogin ? 'native_profile_login_required' : 'fresh_authentication_required',
+        ...(stepUp.dangerous.length > 0 ? { dangerousScopes: stepUp.dangerous } : {}),
+        ...(prompt === null ? {} : { prompt }),
+        ...(query.max_age === undefined ? {} : { maxAge: query.max_age }),
+      },
+      userEvent
+    );
+    return continueAuthorization(fastify, request, reply, finished, target, session, {
+      kind: 'sign_in',
+    });
+  }
+
+  // The code, the session's record of this client (#549), the remembered
+  // grant and the events commit together, in one READ COMMITTED transaction
+  // (`MINT_TRANSACTION`). A sign-out that committed first leaves no live
+  // session, and nothing is written. A grant that is not remembered is
+  // one-time: /oauth/token mints a refresh token only under a stored consent.
+  const dangerous = scopes.filter(isDangerousScope);
+  const minted = await fastify.db.transaction(async (tx) => {
+    const outcome = await mintAuthorizationCode(
+      fastify,
+      {
+        oauthClientId: client.id,
+        userId,
+        redirectUri: query.redirect_uri,
+        codeChallenge: query.code_challenge,
+        codeChallengeMethod: query.code_challenge_method,
+        nonce: query.nonce ?? null,
+        // OIDC Core §2 `auth_time`: the real end-user authentication time.
+        authTime: session.authTime,
+        // #237: the authentication's eIDAS LoA, for the ID token's `acr`.
+        assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
+        // ADR-019 Decision 3 (#552): the refresh family never outlives the session.
+        sessionExpiresAt: session.expiresAt,
+        // ADR-019 Decisions 3 and 4 (#549): the session the ID token names.
+        session: { realmId: session.realmId, sid: session.sid },
+        scopes,
+        resource: [...resources],
+        state: query.state ?? null,
+        // RFC 9449 §10 (#480): the DPoP key the token request must prove.
+        dpopJkt: target.dpopJkt,
+      },
+      tx
+    );
+    if (outcome === 'session_ended') return outcome;
+    if (answer.remember) {
+      await fastify.repositories.oauthConsents.upsertGrant(
+        realm.id,
+        userId,
+        client.id,
+        scopes,
+        [...resources],
+        tx
+      );
+    }
+    // ADR-007 §2 (#185, #186): a grant of a dangerous scope is recorded as an
+    // elevation, with the fresh sign-in's time, and the agent's scope mode
+    // when the client is an agent.
+    if (dangerous.length > 0) {
+      const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(scopes) : null;
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:step_up.elevated:v1-rc.0',
+        {
+          scopes,
+          dangerousScopes: dangerous,
+          ...(scopeMode === null ? {} : { scopeMode }),
+          authenticatedAt: new Date(session.authTime).toISOString(),
+        },
+        { ...userEvent, tx }
+      );
+    }
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:consent.granted:v1-rc.0',
+      {
+        scopes,
+        remembered: answer.remember,
+        ...(dangerous.length > 0 ? { dangerousScopes: dangerous } : {}),
+      },
+      { ...userEvent, tx }
+    );
+    return outcome;
+  }, MINT_TRANSACTION);
+
+  if (minted === 'session_ended') {
+    // The session ended under the request: the answer a request arriving
+    // after the sign-out gets, a sign-in.
+    await emitUserEvent(
+      request,
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error: 'login_required', reason: 'session_ended_during_authorization' },
+      userEvent
+    );
+    return continueAuthorization(fastify, request, reply, finished, target, null, {
+      kind: 'sign_in',
+    });
+  }
+  return buildRedirectUrl(query.redirect_uri, { code: minted.code, state, iss: target.iss });
 }
 
 /**

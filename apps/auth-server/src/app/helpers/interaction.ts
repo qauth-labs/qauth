@@ -5,6 +5,7 @@ import type { SessionAssuranceLevel } from '@qauth-labs/fastify-plugin-sessions'
 import type { SignInTransaction } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { ForbiddenError, InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { EventDataOf, RegisteredEventType } from '@qauth-labs/shared-events';
+import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
@@ -126,6 +127,11 @@ export interface InteractionView {
   /** The `client_id` of the request the interaction is for. */
   readonly clientId: string;
   /**
+   * Who the client is, for a step that names it (the consent step, #629): the
+   * display data the interaction started with. Absent for any other step.
+   */
+  readonly client?: ClientDisplay;
+  /**
    * The absolute expiry, in epoch milliseconds. An interaction nobody has
    * answered yet ends sooner (`INTERACTION_UNANSWERED_TTL_MS` after it was
    * created); the first processed answer lifts that deadline, never this one.
@@ -165,6 +171,8 @@ export interface InteractionState {
   /** The sign-in engine's transaction, `null` before its first round (#616). */
   readonly signInTransaction: SignInTransaction | null;
   readonly revision: number;
+  /** Who the client is, as the step read showed it (#629): the consent step's. */
+  readonly client?: ClientDisplay;
 }
 
 /** Who an answer proved, for {@link InteractionDecision} `authenticated`. */
@@ -301,6 +309,8 @@ function viewOf(record: InteractionRecord): InteractionView {
   return {
     step: record.step,
     clientId: record.request.client_id,
+    // Written only by `createInteraction`, from `clientDisplay`'s output.
+    ...(record.client === undefined ? {} : { client: record.client as unknown as ClientDisplay }),
     expiresAt: record.expiresAt,
     deadline: interactionDeadline(record),
     revision: record.revision,
@@ -417,6 +427,11 @@ export interface StartInteractionInput {
    * browser that was not signed in.
    */
   readonly carriedSession?: CarriedSession;
+  /**
+   * Who the client is, for a step that names it (the consent step, #629):
+   * `clientDisplay`'s output, which the step read returns as `client`.
+   */
+  readonly client?: ClientDisplay;
 }
 
 /** What {@link startInteraction} returns. */
@@ -454,6 +469,7 @@ async function createInteraction(
     personal: input.personal ?? {},
     transaction: input.transaction ?? { amr: [] },
     ...(input.carriedSession === undefined ? {} : { carriedSession: input.carriedSession }),
+    ...(input.client === undefined ? {} : { client: { ...input.client } }),
     flowBinding: flowBindingOf(secret),
     csrfKey: mintCsrfKey(),
     signInTransaction: null,
@@ -745,6 +761,8 @@ async function settleAnswer(
       transaction: taken.transaction,
       signInTransaction: taken.signInTransaction,
       revision: taken.revision,
+      // Written only by `createInteraction`, from `clientDisplay`'s output.
+      ...(taken.client === undefined ? {} : { client: taken.client as unknown as ClientDisplay }),
     })
   );
   // The engine may take a while (a password hash): an interaction that

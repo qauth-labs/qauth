@@ -29,7 +29,9 @@ import { UnsupportedMediaTypeError } from '../helpers/api-request-errors';
 import {
   cancelAuthorization,
   CONSENT_STEP,
+  type ConsentAnswer,
   finishAuthorization,
+  finishConsent,
 } from '../helpers/authorization-interaction';
 import {
   answerInteraction,
@@ -42,6 +44,8 @@ import {
   refuseForbidden,
 } from '../helpers/interaction';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
+import { InteractionExpiredError } from '../helpers/interaction-expired';
+import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
 import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
@@ -69,7 +73,9 @@ import { emitUserEvent } from '../helpers/user-events';
  * answer against the step grammar. A request from another origin and a wrong CSRF value get one
  * generic `403`, audited as `request.csrf_rejected`. Then the engine runs one
  * round (`@qauth-labs/fastify-plugin-sign-in-engine`) and its result becomes
- * the next state.
+ * the next state. An answer to the consent step runs no round (#629): it
+ * finishes the interaction, and `finishConsent` decides it for the scope set
+ * the step showed.
  *
  * A JSON answer gets the next step view, or the final redirect, as JSON. A
  * form post gets `303 See Other` to the ceremony page of the interaction,
@@ -208,11 +214,22 @@ async function requireRealmOrigin(request: FastifyRequest, rule: OriginRule): Pr
   }
 }
 
-/** The step read of a view: the contract's `Interaction`. */
+/**
+ * The step read of a view: the contract's `Interaction`, with the client's
+ * display data for a step that names its client (the consent step, #629).
+ *
+ * @throws InteractionExpiredError for a consent step whose record holds no
+ *   client, which no server of #629 writes: the contract requires `client`
+ *   there, and the person must see who the client is (ADR-019 Decision 6)
+ */
 function stepRead(view: InteractionView) {
+  if (view.step.name === CONSENT_STEP && view.client === undefined) {
+    throw new InteractionExpiredError();
+  }
   return {
     ...interactionStepView(view.step),
     csrf: view.csrf,
+    ...(view.client === undefined ? {} : { client: view.client }),
     brand: DEFAULT_BRAND,
     expiresAt: new Date(view.deadline).toISOString(),
   };
@@ -370,11 +387,56 @@ function createInteractionEngines(fastify: FastifyInstance): InteractionEngines 
   return { of: (requireVerifiedAccount) => (requireVerifiedAccount ? verified : unverified) };
 }
 
+/** A consent answer that finished its interaction: the step it answered, and what it said. */
+interface AnsweredConsent {
+  readonly step: InteractionStep;
+  readonly answer: ConsentAnswer;
+}
+
+/**
+ * Read an answer against the step it answers, by the step grammar.
+ *
+ * @throws InvalidAnswerError for an answer the grammar refuses
+ */
+function readAnswer(
+  step: InteractionStep,
+  answer: { readonly fields: unknown; readonly encoding: AnswerEncoding }
+): ReturnType<typeof readInteractionAnswer> {
+  try {
+    return readInteractionAnswer(step, answer.fields, answer.encoding);
+  } catch (error) {
+    if (error instanceof StepAnswerError) throw new InvalidAnswerError(error.message);
+    throw error;
+  }
+}
+
+/**
+ * Decide an answer to the consent step (#629): read it by the step grammar,
+ * whose answer holds the decision and "remember" and nothing else, so no
+ * answer can name a scope. The interaction then finishes, with nothing issued
+ * yet: `finishConsent` decides the answer once it has ended, for the step the
+ * interaction held, which `answered` keeps.
+ */
+function decideConsent(
+  state: InteractionState,
+  answer: { readonly fields: unknown; readonly encoding: AnswerEncoding },
+  answered: (consent: AnsweredConsent) => void
+): InteractionDecision {
+  // A consent record from before #629 holds no client: the person was never
+  // shown who it is, so nothing is decided for it (`stepRead`).
+  if (state.client === undefined) throw new InteractionExpiredError();
+  const read = readAnswer(state.step, answer);
+  const { decision, remember } = read.answer as { decision: 'allow' | 'deny'; remember: boolean };
+  answered({ step: state.step, answer: { decision, remember } });
+  return { kind: 'finished' };
+}
+
 /**
  * Decide an answer: read it against the step it answers, run one round of
  * the engine, and turn its result into the interaction's next state. Runs
  * once the turn is taken: a refusal thrown here gives the turn back, so the
- * step and its CSRF value stay as they were.
+ * step and its CSRF value stay as they were. An answer to the consent step
+ * runs no engine round ({@link decideConsent}).
  */
 async function decideAnswer(
   request: FastifyRequest,
@@ -385,20 +447,11 @@ async function decideAnswer(
     readonly encoding: AnswerEncoding;
     readonly receivedAt: number;
   },
-  state: InteractionState
+  state: InteractionState,
+  answeredConsent: (consent: AnsweredConsent) => void
 ): Promise<InteractionDecision> {
-  if (state.step.name === CONSENT_STEP) {
-    // The consent step is shown, and cancelled, but not answered yet: the
-    // consent answer and the stored decision it makes are #629. The person
-    // can cancel, which sends the client `access_denied`.
-    throw new InvalidAnswerError('This step cannot be answered yet.');
-  }
-  try {
-    readInteractionAnswer(state.step, answer.fields, answer.encoding);
-  } catch (error) {
-    if (error instanceof StepAnswerError) throw new InvalidAnswerError(error.message);
-    throw error;
-  }
+  if (state.step.name === CONSENT_STEP) return decideConsent(state, answer, answeredConsent);
+  readAnswer(state.step, answer);
   const realmId = requestRealm(request).id;
   // The engine counts by the client id as it is; an event carries it only
   // when the envelope's bound allows (a CIMD URL can be longer).
@@ -618,6 +671,7 @@ export default async function (fastify: FastifyInstance) {
       checkAnswerBodySize(fields, parsed.bytes);
       const realm = requestRealm(request);
       const engine = engines.of(accountPoliciesOf(fastify, realm).requireVerifiedAccount);
+      let consent: AnsweredConsent | undefined;
       const result = await answerInteraction(
         request,
         reply,
@@ -628,7 +682,10 @@ export default async function (fastify: FastifyInstance) {
             reply,
             engine,
             { fields, encoding: parsed.encoding, receivedAt },
-            state
+            state,
+            (answered) => {
+              consent = answered;
+            }
           )
       );
       switch (result.kind) {
@@ -637,6 +694,15 @@ export default async function (fastify: FastifyInstance) {
         case 'step':
           return respond(request, reply, parsed.encoding, { view: result.view });
         case 'finished': {
+          if (consent !== undefined) {
+            // The consent answer finished the interaction (#629): nobody
+            // signed in. It is decided now, with the step the interaction
+            // held: the code, an error for the client, or the request's next
+            // interaction.
+            return respond(request, reply, parsed.encoding, {
+              location: await finishConsent(fastify, request, reply, { ...result, ...consent }),
+            });
+          }
           const { userId } = result.transaction;
           if (userId !== undefined) {
             await fastify.repositories.users.updateLastLogin(realm.id, userId);

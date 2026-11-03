@@ -43,7 +43,7 @@ export const consent = defineStep({
         text: displayText(
           'realm',
           280,
-          'The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Absent when the catalog has none: the screen shows the scope value.'
+          'The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Until realms hold a catalog, QAuth’s own text for a scope it defines (`openid`, `profile`, `email`, `offline_access`). Absent when there is none: the screen shows the scope value.'
         ).optional(),
         sensitive: z
           .boolean()
@@ -68,6 +68,26 @@ export const consent = defineStep({
       16,
       'Where the tokens may be used: the resource indicators (RFC 8707) of the request.'
     ),
+    audience: array(
+      displayText(
+        'realm',
+        256,
+        'One audience value, as the operator configured it, at most 256 characters as the token endpoint reads it; no markup or control character.'
+      ),
+      1,
+      20,
+      'Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, exactly the tokens’ `aud`. For any client but the system client it leaves out the QAuth API audiences (`urn:qauth:aud:`), which a user’s token then gets only when the request names them. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself.'
+    ).optional(),
+    agent: object(
+      {
+        max_lifespan: integer(
+          1,
+          Number.MAX_SAFE_INTEGER,
+          'The realm’s `sso_max_lifespan`, in seconds: the agent may keep working until the person revokes it, or until this long after they signed in, whichever comes first. Absent when the realm sets none: until the person revokes it.'
+        ).optional(),
+      },
+      'Present when the client is an AI agent (ADR-014 §11, ADR-015 Decision 11): the screen says, in QAuth’s own words, that the app is an AI agent and how long it may keep working once allowed. Nothing in it comes from the client.'
+    ).optional(),
     remember_default: z
       .boolean()
       .meta({ description: 'Whether "remember this decision" starts checked.' }),

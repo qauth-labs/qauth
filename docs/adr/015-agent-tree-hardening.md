@@ -467,6 +467,16 @@ _Decided 2026-10-06 (maintainer), question 6._
 **Why.** The screen shows each tree's agent, allowlist, purpose and
 persistence. A stored consent does not show them again.
 
+**What it covers** (stated 2026-11-03, #629). "The consent screen" is the
+consent of the authorization code flow, wherever QAuth shows it: the
+`/ui/consent` page and the Interaction API's `consent` step (#629), which the
+device authorization grant reuses and always shows (ADR-020 §3). The rule
+does not reach a grant that issues an agent a user's tokens without a QAuth
+consent screen. The ID-JAG grant (ADR-011) mints them under the enterprise
+IdP's policy, which stands in for per-user consent; a token exchange inside a
+tree (RFC 8693) derives from a root whose consent screen the person approved
+(ADR-014 §1). Their own gates bound those grants, not this rule.
+
 ## Threats
 
 Only threats this record adds or changes. T-numbers are ADR-014's.

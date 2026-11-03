@@ -1,1422 +1,1184 @@
-# GET and POST /ui/consent as the code works today (capture mode, #612): the consent screen /oauth/authorize sends a
-# signed-in user to, and the baseline that INT-07 changes when the consent decision moves into the Interaction API.
-# It has no UI graph: the ceremony app replaces the page (CER-08, CER-12), and CER-08 writes that graph. The states run
-# in the order the server runs them: the realm resolver and the rate limiter (onRequest hooks), the route's schema,
-# then the handler, first for the GET that renders the page and then for the POST that carries the decision.
+# The consent step of the Interaction API (INT-07, #629; ADR-019 Decision 6, ADR-017 Decision 9, ADR-020 §3): the
+# consent decision that /ui/consent makes today, moved into an interaction whose step the ceremony app only renders.
+# Written before the code (status: proposed), as ADR-021 Decision 4 asks of a new core flow, so it carries no source
+# anchors. It replaces the baseline that #612 captured here: that graph, of the server-rendered /ui/consent page, is now
+# graphs/flows/core/consent-page, and keeps its own rules while INTERACTION_UI_ENABLED is off.
 #
+# - The walk runs from the start of a consent interaction (decideAuthorization's consent outcome, at /oauth/authorize or
+#   at the finish of another interaction) through the step read, the personal-data read and the answer
+#   (POST /interaction/v1-rc.0/{id}/answer) to the response. What comes before the start, and every check an answer
+#   passes before its turn is taken, is core.authorization's and the Interaction API's own (#616): see outOfView.
 # - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees. An
-#   error the handler throws is answered with the error handler's RFC 9457 problem document, sent as
-#   application/problem+json (apps/auth-server/src/app/plugins/error-handler.ts, #513), since /ui/consent is not an
-#   OAuth protocol endpoint; <error> is the document's code. A client branches on the code; the detail wording may
-#   change. An exit with `redirect: error` sends the browser to the client's redirect_uri with error,
-#   error_description, state and iss (RFC 6749 §4.1.2.1, RFC 9207 §2); `redirect: never` answers the browser.
-# - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard's anchor is the
-#   `source:` of the transition it decides: the line of the check.
-# - The GET and the POST are two requests, and the context describes the one in flight: the same variables (the host,
-#   the session, the client) are read again by the POST. A POST from idle is one whose page this walk did not render,
-#   such as a second tab, a replayed form or a forged one.
-# - `invoke: { external }` names a store the domain graph holds no entity for: the session's side record lives in the
-#   cache, and the event store has its own writer (ADR-019 Decision 8). The two database writes are domain actions
-#   (graphs/domain/).
+#   error the Interaction API throws is a bare RFC 9457 problem document; an error /oauth/authorize throws while it
+#   starts the interaction is the RFC 6749 body. An exit with `redirect: error` sends the browser to the client's
+#   redirect_uri with error, error_description, state and iss (RFC 6749 §4.1.2.1, RFC 9207 §2): a form post gets it
+#   as 303 See Other, a JSON answer as { result: redirect, location }.
+# - The checks of an allowed answer run in a fixed order and each refuses on its own, so one variable (allowGate) says
+#   which of them the answer fails first, if any, as core.consent-page does with `gate`: one variable per check would
+#   multiply the starting situations the checker stores.
+# - `invoke: { external }` names a store the domain graph holds no entity for: the interaction store (#592) and the
+#   event store, which has its own writer (ADR-019 Decision 8). The two database writes of the mint transaction are
+#   domain actions (graphs/domain/).
 schema: delurio-graph/0
 kind: flow
 id: core.consent
-status: captured
+status: proposed
 domain: qauth
-title: Ask the user to approve a client's access
+title: Ask the signed-in person to allow a client's access, as a step of the Interaction API
 summary: >-
-  /oauth/authorize sends a signed-in user here when no stored consent covers the request, when the client is an AI agent,
-  which never skips the screen, or when prompt=consent asks for the screen. An operator-flagged first-party client
-  (ADR-017 Decision 9) needs no stored consent there: its administrative consent covers its scopes, so it is sent here
-  only for a dangerous scope or prompt=consent. The GET checks the client and its redirect
-  URI again, refuses a QAuth API audience the client does not list, binds the scopes and resource indicators it is
-  about to show to the session, and renders a page with a CSRF value; for an agent client the page also names it as an
-  AI agent and says how long it may keep working. The POST checks that value, burns it, checks the client again and acts on the decision: deny
-  sends access_denied back to the client; allow refuses a scope above the agent cap, a scope or resource set other
-  than the one the page showed, and a sign-in too old for what is asked (for a native_backend client, any sign-in older
-  than two minutes), then saves the consent when the user ticked
-  "Remember this decision", mints an authorization code and sends it back.
+  When decideAuthorization answers that a request needs consent and INTERACTION_UI_ENABLED is on, a consent interaction
+  starts for the signed-in browser session. Its step holds the client as the server's own records describe it, the
+  scopes the client's allowlist holds (each marked when it is dangerous), the resources or else the client's audience,
+  for an AI agent a line in QAuth's own words, and "Remember this decision", checked by default; a request the step
+  cannot show is refused at the start. The answer carries only allow or deny and the remember choice. The interaction
+  finishes before anything is decided; the request is checked again, deny sends access_denied to the client, and allow
+  checks the account, the agent scope cap, the QAuth API audiences, whether the client is still what the step said, the
+  shown set against the client as it is now, and the step-up gate. Then one transaction mints the code for exactly the
+  shown set, saves the grant when the person asked to remember it, and records the events; the browser goes back to the
+  client with the code, state and iss.
 
 scope:
-  shows: GET and POST /ui/consent from the request to the response, in the order the server runs its checks
+  shows: >-
+    the consent step of an authorization request with INTERACTION_UI_ENABLED on: its start, the step and personal-data
+    reads, and the answer from its grammar check to the response
   world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
   outOfView:
-    - 'the consent skip: /oauth/authorize decides it (canSkipConsent), and sends a request here only when no stored
-      consent covers it, the client is an agent, or prompt=consent asks for the screen; an agent never skips the screen
-      (ADR-015 Decision 11), so prompt=none from one answers consent_required there and never reaches this flow'
-    - "the administrative consent (ADR-017 Decision 9, #633): /oauth/authorize skips the screen for a client whose
-      operator-set first-party profile resolves (resolveFirstPartyProfile) when no requested scope is dangerous and
-      prompt is not consent, writes no consent, and records consent.administrative with the code; a dangerous scope or
-      prompt=consent sends such a client here, where the screen runs as for any client. A native_backend client's
-      request asks for a fresh sign-in there as prompt=login does, whatever it says (its own prompt=consent still sends
-      it here), and prompt=none from one answers login_required there"
-    - 'revoking a consent (/consents, /api/consents), which is its own flow: ACC-11 moves it to the account console
-      and writes its graph'
-    - 'a store failure before anything is written (the lookup of the host, the rate-limit counter, the session, the
-      side record, the client) answers 500, and so does a failure to end the session of a disabled user; a failure to
-      record the event of a refusal (request.csrf_rejected, consent.denied, step_up.required) turns that refusal into
-      a 500'
-    - "Fastify's own answers before the schema check: a POST body of a media type no parser takes is refused with
-      415; a JSON body is parsed and checked like the form, and takes the same flow"
-    - 'the causes of a 421 (a malformed or unknown host, a disabled realm, a realm with no issuer, an endpoint host)
-      give one answer and are drawn as one exit'
-    - 'with RATE_LIMIT_ENABLED=false neither rate limit is applied'
-    - 'when the pending-authorization store is down, the login redirect carries the authorize URL itself in return_to
-      instead of a handle'
-    - "staging reads as production in every check drawn here; environment names the effective environment, the
-      stricter of the client's and its realm's ceiling"
-    - 'the effects are not one transaction: a failure after the consent is saved leaves it saved, and a failure to
-      record the grant leaves the code minted, though the client never receives it'
-    - "the POST does not check the QAuth API audiences again: it grants the resources a GET of the session bound, and
-      that GET refused an unlisted one; an operator who changes the client's audience between the two requests is not
-      drawn, and /oauth/token refuses the code then"
-    - 'a client whose is_agent changes between the GET and the POST (a CIMD document that changed) is not drawn:
-      clientIsAgent holds for both requests. The POST compares it with what the GET bound, grants nothing when they
-      differ, and sends the browser to /oauth/authorize again, which shows the page the client needs now (#845)'
+    - "the checks an answer passes before its turn is taken, unchanged from #616 and drawn by core.authorization and the
+      Interaction API's own rules: the same origin (403, request.csrf_rejected), the media type (415), the body bound
+      (413), the flow cookie that binds the interaction (410 interaction_expired), the CSRF value of the current step
+      view (403), and the turn (an answer another answer beat gets the step as it now is). They stand in for the page's
+      realm resolver, rate limit, form schema, session cookie and CSRF check (core.consent-page): an answer names its
+      step view by that view's CSRF value, a turn is taken once, and the finish deletes the record, so a replayed
+      answer gets 410 and issues nothing (core.authorization, interaction_expired.finished)"
+    - 'the refusals of the reads: an id that names no live interaction answers 410 interaction_expired, as a consent
+      record that holds no client display does (no server of #629 writes one) to a read and to an answer; the
+      personal-data read answers 410 without the flow cookie that binds the interaction and 403 from another origin;
+      both reads have their own rate limits (#616)'
+    - 'the cancel: core.authorization (recheckingCancel), which checks the request again and sends access_denied with
+      state and iss to the client'
+    - 'whether the step is shown at all: core.authorization decides it (decideAuthorization). The step is skipped only
+      through canSkipConsent (a stored consent that covers every requested scope at each requested resource) or the
+      administrative waiver of an operator-flagged first-party client (ADR-017 Decision 9). An AI agent never skips it,
+      a covering stored consent included (ADR-015 Decision 11). A dangerous scope (write:*, agent:admin, agent:exec),
+      a request that widens a stored grant and prompt=consent always show it; prompt=none never reaches it
+      (consent_required, or login_required when a fresh sign-in is needed). The decision refuses an agent scope above
+      the cap and an unlisted QAuth API audience before any consent interaction starts'
+    - 'a later request that fits a remembered grant: core.authorization skips the step through canSkipConsent, except
+      for an agent client, a dynamically registered client inside its badge window, prompt=consent, a dangerous scope
+      of a first-party client, and a scope or resource outside the grant'
+    - "the outcomes of the request decided again, when the client changed whether it is an agent since the step was
+      shown, other than the usual new consent interaction drawn here: a code under a stored consent for a client that
+      is no longer an agent, a refusal, or a sign-in are core.authorization's finish path"
+    - 'the server-rendered page (core.consent-page), the screen the ceremony app draws from the step (CER-08), and the
+      device grant, which reuses the step and always shows it (PRO-36)'
+    - "the page's guards with no counterpart here: no scope set bound (the interaction record always holds the shown
+      set, so there is no unbound case), a development client's style policy (there is no server-rendered page) and a
+      request too large to park (an interaction holds the request within its record bound instead: tooLarge)"
+    - 'a store failure before anything is written (the client, the realm, the session, the consent) answers 500, and a
+      failure to record the event of a refusal (consent.denied, step_up.required, authorization.failed) turns that
+      refusal into a 500'
+    - "staging reads as production in every check drawn here; the environment is the stricter of the client's and its
+      realm's ceiling, and a development client is spared only the dangerous-scope rule of the step-up gate"
 
 context:
-  # The checks before the agent cap run in a fixed order and each refuses on its own, so the first two variables say
-  # which of them the request fails first, if any: one variable per check would give the checker millions of starting
-  # situations instead of 580,608. Both hold for the request in flight, the GET or the POST.
-  gate:
+  # where decideAuthorization answered consent, and, at /oauth/authorize, who provisioned the client: a refusal the
+  # person has seen no QAuth page for goes by redirect only to a client an operator provisioned (RFC 9700 §4.11.2)
+  entry:
+    values: [authorizeOperator, authorizeSelfService, finish]
+    initial: any
+    say:
+      authorizeOperator: >-
+        at /oauth/authorize, for a client an operator provisioned: the system client or the seed manifest
+      authorizeSelfService: >-
+        at /oauth/authorize, for a client that registered itself: open registration, CIMD or a developer account
+      finish: >-
+        at the finish of another interaction of the request: a sign-in, or a consent whose client changed whether it
+        is an agent
+  # the checks of the start run in a fixed order: the client display first, then what the step can carry
+  startGate:
+    values:
+      [shown, undescribableRedirect, unshowableScopes, unshowableResources, unshowableAudience]
+    initial: any
+    say:
+      shown: 'the client display describes the redirect URI, and the step can carry the scopes, resources and audience'
+      undescribableRedirect: >-
+        clientDisplay cannot describe where redirect_uri goes: an IPv6 address that is not loopback, a host that is not
+        a DNS name of valid labels, or a scheme over 64 characters, which only a client registered before #593 holds
+      unshowableScopes: >-
+        the step cannot carry the scopes: more than 64, or one outside its alphabet (RFC 6749 §3.3 without < and >) or
+        over 128 characters
+      unshowableResources: 'the step cannot carry the resources: more than 16, or one over 2048 characters'
+      unshowableAudience: >-
+        the request names no resource, and the step cannot carry the audience the token gets from the client's
+        configuration: a value holding markup or a control character (the token endpoint reads at most 20 values of at
+        most 256 characters, which the step carries)
+  clientIsAgent:
+    values: [false, true]
+    initial: any
+    say:
+      'true': 'the client is an AI agent when the step is built (isAgentClient, fail-closed)'
+      'false': 'the client is not an agent when the step is built'
+  # the answer: its grammar and what it carries
+  answer:
+    values: [allow, allowRemember, deny, malformed]
+    initial: any
+    say:
+      allow: 'decision allow, with remember false or absent'
+      allowRemember: 'decision allow, with remember true, as the checked box of a form post sends it'
+      deny: 'decision deny, whatever remember says'
+      malformed: >-
+        the answer does not pass the step grammar: no decision, another decision, a remember that is no boolean, or a
+        member beyond type, csrf, decision and remember, such as a scope or a resource
+  # checkAuthorizationRequest on the request the record holds, at the finish
+  recheck:
+    values: [unchanged, clientGone, clientUnusable, dpopRefused]
+    initial: any
+    say:
+      unchanged: >-
+        the client still resolves and may use the endpoint, its redirect URI is still registered and permitted
+      clientGone: >-
+        client_id names no client any more, or the redirect URI was removed from it or is no longer permitted
+      clientUnusable: >-
+        the client was disabled or suspended, or lost the authorization_code grant or the code response type
+      dpopRefused: 'DPoP was switched on since, and the dpop_jkt the request named is not one thumbprint'
+  # the checks of an allowed answer, in finishConsent's order; the first that fails decides the answer
+  allowGate:
     values:
       - open
-      - unknownHost
-      - endpointHost
-      - rateLimited
-      - invalidInput
-      - malformedCookie
-      - noSession
-      - staleSession
       - accountDisabled
+      - overAgentCap
+      - unlistedAudience
+      - agentChanged
+      - scopesNarrowed
+      - resourcesDiffer
+      - promptLogin
+      - maxAgeExceeded
+      - dangerousScope
+      - dangerousScopeInDevelopment
     initial: any
     say:
-      open: >-
-        the host is the primary host of an enabled realm, the address is under its limit, the query or form passes
-        the route schema, and the request carries a live browser session of an enabled user
-      unknownHost: 'the host names no realm, a disabled realm or a realm with no issuer'
-      endpointHost: "the host is one of the realm's endpoint hosts, which serve no browser route"
-      rateLimited: >-
-        the address has used up its requests for the window: the global limit for the GET, the authorize limit for the
-        POST
-      invalidInput:
-        'the query (GET) or the form (POST) does not pass the route schema, such as a missing
-        code_challenge or decision'
-      malformedCookie: >-
-        the request carries a session cookie whose value is not valid percent-encoding, such as %zz, which the cookie
-        reader decodes without a catch
-      noSession: >-
-        the request carries no session cookie, or one that names a cookie key this process has not read yet and may not
-        read again yet (#493), which is left for the next request
-      staleSession: >-
-        the cookie does not verify with the realm's cookie keys (#493), or it does but its session has ended or
-        expired
+      open: 'every check passes, and nothing asks for a fresh sign-in or the sign-in is fresh enough for what asks'
       accountDisabled: >-
-        the session is live, but its user has been deleted or disabled, or was disabled after the session began
-        and enabled again since
-  returnUrl:
-    values: [fits, tooLarge]
-    initial: any
-    say:
-      fits: 'the authorization request, rebuilt for a sign-in redirect, is at most 16 KiB'
-      tooLarge: >-
-        it is longer: the rebuild encodes each ~ ! ' ( ) of the parameters as three bytes, so a request line of some
-        8 KiB can give 24 KiB
-  params:
-    values:
-      - valid
-      - unknownClient
-      - unusableClient
-      - unregisteredRedirect
-      - unpermittedRedirect
-      - malformedDpopJkt
-      - unshownRedirect
-    initial: any
-    say:
-      valid: >-
-        client_id names a usable client, redirect_uri is one of its registered URIs that the environment permits, and
-        dpop_jkt is absent, unread (DPoP off) or one base64url SHA-256 thumbprint
-      unknownClient: 'client_id names no client of the realm, or a CIMD document that does not resolve'
-      unusableClient: 'client_id names a client that is disabled or suspended'
-      unregisteredRedirect: "redirect_uri is none of the client's"
-      unpermittedRedirect: >-
-        redirect_uri is the client's, but no environment permits it: a scheme outside the allowed ones, or plain http
-        to a host that is not loopback
-      malformedDpopJkt: 'DPoP is on and dpop_jkt is not one thumbprint'
-      unshownRedirect: >-
-        every other parameter is valid, but the client display data (#593) cannot show where redirect_uri goes: an
-        IPv6 address that is not loopback, a host that is not a DNS name of valid labels, or a scheme over 64
-        characters. Every registration path refuses such a URI since #593, so only an older client holds one; read
-        by the GET only, after the agent cap
-  agentScope:
-    values: [withinCap, overCap, overCapSelfService]
-    initial: any
-    say:
-      withinCap: 'the scope parameter names no agent:* scope above the agent mode cap the operator set for the client'
-      overCap: >-
-        it names one (any agent:* scope for a client that is no agent or has no cap, or a mode above its cap), and an
-        operator provisioned the client: the system client or the seed manifest
-      overCapSelfService:
-        'it names one, and the client registered itself: open registration, CIMD or a developer
-        account'
-  audience:
-    # read by the GET only, after the agent cap: the POST grants the resources the GET bound
-    values: [listed, unlisted, unlistedSelfService]
-    initial: any
-    say:
-      listed: >-
-        the resource indicators name no QAuth API audience (urn:qauth:aud:) that the client's own audience does not
-        list
-      unlisted: >-
-        they name one, and an operator provisioned the client: the system client or the seed manifest
-      unlistedSelfService: >-
-        they name one, and the client registered itself: open registration, CIMD or a developer account; an open
-        registration or CIMD client lists none, whatever its row holds
-  clientIsAgent:
-    # read by the GET only, as it renders the page. Whether the realm sets sso_max_lifespan changes only the wording of
-    # the agent page's persistence line (renderedForAgent), never a step, so it is no variable of its own.
-    values: [false, true]
-    initial: any
-    say:
-      'true': 'the client is an AI agent: its is_agent is true (isAgentClient, fail-closed)'
-      'false': 'the client is not an agent: its is_agent is false'
-  environment:
-    values: [production, development]
-    initial: any
-    say:
-      production: 'the client resolves to the production or staging profile'
-      development: 'the client is a development client in a realm whose ceiling allows it'
-  csrf:
-    values: [matches, wrong]
-    initial: any
-    say:
-      matches: "the posted csrf_token is the session's live value"
-      wrong: >-
-        it is another value, one an earlier POST of the session burned, or the session holds none; a form with no
-        csrf_token fails the schema instead
-  decision:
-    values: [allow, deny]
-    initial: any
-    say: { allow: 'the user pressed Allow', deny: 'the user pressed Deny' }
-  posted:
-    values: [shown, otherScopes, unboundScopes, otherResources]
-    initial: any
-    say:
-      shown: >-
-        the posted scope, filtered by the client's allowlist, is the set the session bound for this client, and the
-        posted resource fields name the bound resources
-      otherScopes: 'the posted scopes are another set, such as a tampered hidden field'
-      unboundScopes: 'the session bound no scope set for this client: no page for it was rendered in this session'
-      otherResources:
-        'the scopes match, but the resource fields name other resources, or none where the page named
-        some'
-  stepUp:
-    values: [none, promptLogin, maxAgeExceeded, dangerousScope]
-    initial: any
-    say:
-      none: 'nothing asks for a fresh sign-in, or the sign-in is fresh enough for what asks'
+        the account was disabled since the step was shown: liveBrowserSession finds no usable session for the user
+      overAgentCap: >-
+        the request's scope names an agent:* scope above the client's agent mode cap (any agent:* scope for a client
+        that is no agent or has no cap), as findExceedingAgentScopesForClient reads it now
+      unlistedAudience: >-
+        a resource names a QAuth API audience (urn:qauth:aud:) the client no longer lists (unlistedReservedAudiences)
+      agentChanged: >-
+        the client changed whether it is an agent since the step was shown: params.agent is present and the client is
+        no agent now, or the other way round (a CIMD document that changed)
+      scopesNarrowed: "the shown scopes, filtered by the client's allowlist as it is now, are not the shown set"
+      resourcesDiffer: "the shown resources are not the request's (defensive: they cannot differ by construction)"
       promptLogin: >-
-        the form carries prompt=login, or the client's first-party profile is native_backend, whose request asks for a
-        fresh sign-in as prompt=login does whatever the form says (ADR-017 Decision 9), and the sign-in is more than two
-        minutes old
-      maxAgeExceeded: 'the form carries max_age, and the sign-in is older than that many whole seconds'
+        prompt=login, or the client's first-party profile is native_backend (forcesLoginPrompt), and the sign-in is more
+        than two minutes old (STEP_UP_FRESH_AUTH_WINDOW_MS)
+      maxAgeExceeded: 'the request carries max_age, and the sign-in is older than that many whole seconds'
       dangerousScope: >-
-        the scopes include a dangerous one (write:*, agent:admin, agent:exec) and the sign-in is more than two minutes
+        a shown scope is dangerous, the client is not a development client, and the sign-in is more than two minutes
         old
-  allowForever:
-    values: [false, true]
-    initial: any
-    say:
-      'true': 'allow_forever is 1, as the ticked "Remember this decision" box sends it'
-      'false': 'allow_forever is absent or any other value'
-  csrfBurned: { values: [false, true], initial: false }
-  consentSaved: { values: [false, true], initial: false }
-  codeMinted: { values: [false, true], initial: false }
+      dangerousScopeInDevelopment: >-
+        the only step-up reason is a dangerous scope on a sign-in more than two minutes old, and the client is a
+        development client, whose policy does not enforce the dangerous-scope rule (agentStepUpEnforced false)
+  # what this walk has done
+  interactionOpen: { values: [false, true], initial: false }
+  finished: { values: [false, true], initial: false }
+  signInCause: { values: [none, freshLogin, accountDisabled, sessionEnded], initial: none }
+  # written in the open mint transaction, and whether it committed
+  codeWritten: { values: [false, true], initial: false }
+  grantWritten: { values: [false, true], initial: false }
+  committed: { values: [false, true], initial: false }
 
 guards:
-  hostUnknown: "gate == 'unknownHost'"
-  endpointHost: "gate == 'endpointHost'"
-  rateLimited: "gate == 'rateLimited'"
-  inputInvalid: "gate == 'invalidInput'"
-  cookieMalformed: "gate == 'malformedCookie'"
-  noSession: "gate == 'noSession'"
-  staleSession: "gate == 'staleSession'"
-  accountDisabled: "gate == 'accountDisabled'"
-  requestTooLarge: "returnUrl == 'tooLarge'"
-  clientUnknown: "params == 'unknownClient'"
-  clientUnusable: "params == 'unusableClient'"
-  redirectUnregistered: "params == 'unregisteredRedirect'"
-  redirectNotPermitted: "params == 'unpermittedRedirect'"
-  dpopJktMalformed: "params == 'malformedDpopJkt'"
-  redirectNotShown: "params == 'unshownRedirect'"
-  overAgentCap: "agentScope != 'withinCap'"
-  overAgentCapShown: "agentScope == 'overCapSelfService'"
-  audienceUnlisted: "audience != 'listed'"
-  audienceUnlistedShown: "audience == 'unlistedSelfService'"
-  developmentClient: "environment == 'development'"
+  atFinish: "entry == 'finish'"
+  operatorClient: "entry == 'authorizeOperator'"
+  redirectUndescribable: "startGate == 'undescribableRedirect'"
+  scopesUnshowable: "startGate == 'unshowableScopes'"
+  resourcesUnshowable: "startGate == 'unshowableResources'"
+  audienceUnshowable: "startGate == 'unshowableAudience'"
   agentClient: clientIsAgent
-  csrfWrong: "csrf == 'wrong'"
-  denied: "decision == 'deny'"
-  scopesUnbound: "posted == 'unboundScopes'"
-  scopesDiffer: "posted == 'otherScopes'"
-  resourcesDiffer: "posted == 'otherResources'"
-  # evaluateStepUp: prompt=login and max_age hold in every environment, the dangerous-scope rule not for a development
-  # client. A native_backend client's request asks for a fresh sign-in as prompt=login does (forceFreshLogin), so it
-  # reads as promptLogin
-  needsFreshLogin:
-    "stepUp in ['promptLogin', 'maxAgeExceeded'] or (stepUp == 'dangerousScope' and not
-    developmentClient)"
-  remember: allowForever
+  malformedAnswer: "answer == 'malformed'"
+  denied: "answer == 'deny'"
+  remember: "answer == 'allowRemember'"
+  clientGone: "recheck == 'clientGone'"
+  clientUnusable: "recheck == 'clientUnusable'"
+  dpopRefused: "recheck == 'dpopRefused'"
+  accountDisabled: "allowGate == 'accountDisabled'"
+  overAgentCap: "allowGate == 'overAgentCap'"
+  audienceUnlisted: "allowGate == 'unlistedAudience'"
+  agentChanged: "allowGate == 'agentChanged'"
+  scopesNarrowed: "allowGate == 'scopesNarrowed'"
+  resourcesDiffer: "allowGate == 'resourcesDiffer'"
+  # evaluateStepUp with every shown scope treated as new (priorConsentScopes: [])
+  needsFreshLogin: "allowGate in ['promptLogin', 'maxAgeExceeded', 'dangerousScope']"
 
 effects:
-  burnCsrf: { set: { csrfBurned: true } }
-  saveConsent: { set: { consentSaved: true } }
-  mintCode: { set: { codeMinted: true } }
+  openInteraction: { set: { interactionOpen: true } }
+  finishInteraction: { set: { interactionOpen: false, finished: true } }
+  becameAgent: { set: { clientIsAgent: true } }
+  ceasedAgent: { set: { clientIsAgent: false } }
+  # the request decided again starts a new consent interaction, at the finish of this one, for whatever it then holds
+  nextInteraction:
+    set: { entry: finish, finished: false }
+    havoc: [startGate, answer, recheck, allowGate]
+  forFreshLogin: { set: { signInCause: freshLogin } }
+  forDisabledAccount: { set: { signInCause: accountDisabled } }
+  forEndedSession: { set: { signInCause: sessionEnded } }
+  writeCode: { set: { codeWritten: true } }
+  writeGrant: { set: { grantWritten: true } }
+  commit: { set: { committed: true } }
+  # the mint transaction rolls back: nothing it wrote is left
+  rollBack: { set: { codeWritten: false, grantWritten: false } }
 
 failures:
-  # each step fails only on a store error, which the error handler answers with 500
-  bindingScopes: { from: sessionSideRecord, server: [server_error] }
-  burningCsrf: { from: sessionSideRecord, server: [server_error] }
+  startingConsent: { from: interactionStore, tooLarge: [invalid_request], server: [server_error] }
+  takingFinish:
+    from: interactionStore
+    expired: [interaction_expired]
+    sessionEnded: [interaction_expired]
+    server: [server_error]
+  # the mint transaction (MINT_TRANSACTION, READ COMMITTED): the code, the grant and the events commit together
+  mintingCode:
+    from: AuthorizationCode.mint
+    sessionEnded: [login_required]
+    server: [server_error]
   savingConsent: { from: Consent.grant, server: [server_error] }
-  mintingCode: { from: AuthorizationCode.mint, server: [server_error] }
   recordingGrant: { from: eventStore, server: [server_error] }
+  continuingToSignIn:
+    { from: interactionStore, tooLarge: [invalid_request], server: [server_error] }
 
-# The main story: a signed-in user is shown the page, presses Allow with "Remember this decision" ticked, and the
-# client gets its code.
+# The main story: /oauth/authorize starts a consent interaction for a signed-in browser, the ceremony page reads the
+# step and its personal data, the person allows with "Remember this decision" checked, and the client gets its code.
 main:
   given:
-    gate: open
-    returnUrl: fits
-    params: valid
-    agentScope: withinCap
-    audience: listed
+    entry: authorizeOperator
+    startGate: shown
     clientIsAgent: false
-    environment: production
-    csrf: matches
-    decision: allow
-    posted: shown
-    stepUp: none
-    allowForever: true
-  events: [SHOW, DONE, SUBMIT, DONE, DONE, DONE, DONE]
+    answer: allowRemember
+    recheck: unchanged
+    allowGate: open
+  events: [START, DONE, READ, READ_PERSONAL, ANSWER, DONE, DONE, DONE, DONE]
 
 initial: idle
 states:
   idle:
-    title: Wait for a consent request
-    source: apps/auth-server/src/app/routes/ui/consent.ts:412
+    title: Wait for a request that needs consent
     on:
-      SHOW:
-        target: showResolvingRealm
-        say: 'GET /ui/consent arrives, with the parameters of /oauth/authorize'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:418
-      SUBMIT:
-        target: submitResolvingRealm
-        say: 'POST /ui/consent arrives for a page this walk did not render'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:648
-
-  # GET /ui/consent
-
-  showResolvingRealm:
-    title: Find the realm of the host
-    description: >-
-      The realm resolver's onRequest hook, before any route code. /ui/consent is a browser route, so it answers on
-      the realm's primary host only. A request refused here is never counted by the rate limiter.
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
-    always:
-      - guard: hostUnknown
-        target: misdirected_request.host
-        say: 'the host names no enabled realm with an issuer'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
-      - guard: endpointHost
-        target: misdirected_request.host
-        say: "the host is one of the realm's endpoint hosts"
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:167
-      - target: showRateLimiting
-        say: 'the request has its realm'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
-
-  showRateLimiting:
-    title: Count the request against the global limit
-    description: >-
-      The GET has no limit of its own: RATE_LIMIT_MAX requests per RATE_LIMIT_WINDOW seconds, for each client address
-      and realm, shared with every route that sets none.
-    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-    always:
-      - guard: rateLimited
-        target: too_many_requests.global_limit
-        say: 'the address has used up its requests'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:26
-      - target: showValidatingQuery
-        say: 'the address is under its limit'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:27
-
-  showValidatingQuery:
-    title: Check the query against the authorize schema
-    description: The same schema as /oauth/authorize (authorizeQuerySchema in apps/auth-server/src/app/schemas/oauth.ts).
-    source: apps/auth-server/src/app/routes/ui/consent.ts:427
-    always:
-      - guard: inputInvalid
-        target: validation_error.query
-        say: 'the query does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:264
-      - target: showFindingSession
-        say: 'the query matches the schema'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:432
-
-  showFindingSession:
-    title: Find the browser session
-    description: >-
-      Without a session the authorize URL is rebuilt from the query and parked server-side, and the browser is sent
-      to sign in with a short handle that /ui/resume swaps back for it.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:441
-    always:
-      - guard: cookieMalformed
-        target: server_error.malformed_cookie
-        say: 'the session cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
-      - guard: noSession
-        target: parkingRequest
-        say: 'the request carries no session; the authorize URL is rebuilt from the query'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:446
-      - guard: staleSession
-        target: parkingRequest
-        say: 'the cookie does not verify, or names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:118
-      - guard: accountDisabled
-        target: parkingRequest
+      START:
+        target: describingClient
         say: >-
-          the session's user is gone or disabled, or was disabled after the session began; the session is ended and
-          its cookie cleared
-        source: apps/auth-server/src/app/helpers/browser-session.ts:133
-      - target: showCheckingClient
-        say: 'the session is live'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:458
+          decideAuthorization answers consent for a signed-in browser session (core.authorization, consentNeeded): at
+          /oauth/authorize, or at the finish of a sign-in interaction of the request
 
-  showCheckingClient:
-    title: Find the client
-    description: >-
-      A pre-registered client first; otherwise a URL client_id is resolved as a CIMD document, and a materialised one
-      is resolved again. A client_id that names no client and a client that cannot be used are refused apart.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:463
-    always:
-      - guard: clientUnknown
-        target: invalid_request.unknown_client
-        say: 'the client_id names no client of the realm'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:464
-      - guard: clientUnusable
-        target: unauthorized_client.disabled
-        say: 'the client is disabled or suspended'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:466
-      - target: showCheckingRedirectUri
-        say: 'the client is enabled and not suspended'
-        source: apps/auth-server/src/app/helpers/client-status.ts:15
+  # The start (authorizationInteractionStart)
 
-  showCheckingRedirectUri:
-    title: Check the redirect URI against the client and its environment
-    description: >-
-      An exact match against the registered URIs (a loopback URI may differ only in its port), then the environment
-      gate, so the page is never shown for a redirect the POST would refuse.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:467
-    always:
-      - guard: redirectUnregistered
-        target: invalid_request.redirect_uri_not_registered
-        say: 'redirect_uri is not registered for the client'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:467
-      - guard: redirectNotPermitted
-        target: invalid_request.redirect_uri_not_permitted
-        say: 'no environment permits that redirect_uri'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:479
-      - target: showReadingDpopKey
-        say: 'the redirect URI is registered and permitted'
-        source: apps/auth-server/src/app/helpers/oauth-redirect.ts:235
-
-  showReadingDpopKey:
-    title: Read the DPoP key the code is to be bound to
-    description: RFC 9449 §10. Read only while DPOP_ENABLED is on; /oauth/authorize refused a malformed value already.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:487
-    always:
-      - guard: dpopJktMalformed
-        target: invalid_request.malformed_dpop_jkt
-        say: 'dpop_jkt is not one thumbprint'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:488
-      - target: showCheckingAgentCap
-        say: 'dpop_jkt is absent, unread or well formed'
-        source: apps/auth-server/src/app/helpers/dpop.ts:137
-
-  showCheckingAgentCap:
-    title: Refuse an agent scope above the client's cap
-    description: >-
-      ADR-007 §2. On the raw scope parameter, before the allowlist filter. The user has seen no page yet, so the error
-      of a client no operator provisioned is shown rather than redirected (RFC 9700 §4.11.2).
-    source: apps/auth-server/src/app/routes/ui/consent.ts:499
-    always:
-      - guard: overAgentCapShown
-        target: invalid_scope.agent_scope_mode_exceeded_shown
-        say: 'an agent scope is above the cap, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
-      - guard: overAgentCap
-        target: invalid_scope.agent_scope_mode_exceeded
-        say: 'an agent scope is above the cap, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
-      - target: showDescribingClient
-        say: 'no agent scope is above the cap'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:512
-
-  showDescribingClient:
+  describingClient:
     title: Describe the client from the server's own records
     description: >-
-      ADR-019 Decision 6 (#593). What the page shows first is what the server verified: the host of a CIMD client's
-      client id URL, or the domain an admin set on a client the operator provisioned; any other client is unverified.
-      Then where the code goes, a loopback address as "this device", and only then the name the client declared,
-      stripped and capped. A redirect the display data cannot show refuses the screen before anything is bound.
-    source: apps/auth-server/src/app/helpers/client-display.ts:243
+      clientDisplay(client, { redirectUri }) (#593, ADR-019 Decision 6), computed once, as the interaction starts, and
+      kept in the interaction record (its optional member client; the record version stays): kind (cimd,
+      admin_registered or unverified), the verified domain, where the code goes (a host, this_device for a loopback
+      address, or an app's scheme), the declared name, sanitised and marked declared, and the newly registered badge
+      (isDynamicClientWithinBadgeWindow). Never a logo, never a URL the client supplied. A redirect URI the display
+      cannot describe refuses the start (InvalidRequestError), as the page does, and is never redirected to.
     always:
-      - guard: redirectNotShown
+      - guard: redirectUndescribable and atFinish
+        target: invalid_request.redirect_uri_not_shown_at_finish
+        say: 'the display cannot describe where the redirect URI goes, at the finish of an interaction'
+      - guard: redirectUndescribable
         target: invalid_request.redirect_uri_not_shown
-        say: 'the client display data cannot show where the redirect URI goes'
-        source: apps/auth-server/src/app/helpers/client-display.ts:232
-      - target: showCheckingAudience
-        say: "the client is described; the scopes to show are the requested ones the client's allowlist holds"
-        source: apps/auth-server/src/app/helpers/consent.ts:94
+        say: 'the display cannot describe where the redirect URI goes, at /oauth/authorize'
+      - target: buildingStep
+        say: 'the client is described'
 
-  showCheckingAudience:
-    title: Refuse a QAuth API audience the client does not list
+  buildingStep:
+    title: Build the consent step from the request
     description: >-
-      #509. A urn:qauth:aud: audience among the request's resource indicators must be one the client's own audience
-      lists, and a client that registered itself through open registration or CIMD lists none. /oauth/authorize
-      refuses such a request before it redirects here; this refuses one that comes straight to the screen, so no
-      consent is shown, bound or stored for an audience the token endpoint would refuse. The user has seen no page yet,
-      so the error of a client no operator provisioned is shown rather than redirected (RFC 9700 §4.11.2).
-    source: apps/auth-server/src/app/routes/ui/consent.ts:526
+      consentStep: the requested scopes the client's allowlist holds (filterRequestedScopes), in request order, each {
+      scope, text?, sensitive: false, dangerous } (text is describeScope's for the scopes QAuth defines, dangerous is
+      isDangerousScope); the request's resource indicators; when the request named none, the token's aud from the
+      audience an operator configured for the client, without QAuth API audiences (userGrantDefaultAudience); agent ({}
+      or { max_lifespan } from the realm's sso_max_lifespan) for an AI agent client only; remember_default true. A
+      request the step cannot carry is refused with authorization.failed (consent_step_unshowable) recorded, to the
+      redirect_uri unless the client registered itself and the person has seen no QAuth page yet.
     always:
-      - guard: audienceUnlistedShown
-        target: invalid_target.unlisted_reserved_audience_shown
-        say: 'a resource names a QAuth API audience the client does not list, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
-      - guard: audienceUnlisted
-        target: invalid_target.unlisted_reserved_audience
-        say: 'a resource names a QAuth API audience the client does not list, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
-      - target: bindingScopes
-        say: 'every QAuth API audience among the resources is one the client lists'
-        source: apps/auth-server/src/app/helpers/client-auth.ts:682
+      - guard: scopesUnshowable and atFinish
+        target: invalid_scope.consent_not_shown_at_finish
+        say: 'the step cannot carry the scopes, at the finish of an interaction'
+      - guard: scopesUnshowable and operatorClient
+        target: invalid_scope.consent_not_shown
+        say: 'the step cannot carry the scopes, for a client an operator provisioned'
+      - guard: scopesUnshowable
+        target: invalid_scope.consent_not_shown_shown
+        say: 'the step cannot carry the scopes, for a client no operator provisioned'
+      - guard: resourcesUnshowable and atFinish
+        target: invalid_target.consent_not_shown_at_finish
+        say: 'the step cannot carry the resources, at the finish of an interaction'
+      - guard: resourcesUnshowable and operatorClient
+        target: invalid_target.consent_not_shown
+        say: 'the step cannot carry the resources, for a client an operator provisioned'
+      - guard: resourcesUnshowable
+        target: invalid_target.consent_not_shown_shown
+        say: 'the step cannot carry the resources, for a client no operator provisioned'
+      - guard: audienceUnshowable and atFinish
+        target: invalid_target.audience_not_shown_at_finish
+        say: "the step cannot carry the client's audience, at the finish of an interaction"
+      - guard: audienceUnshowable and operatorClient
+        target: invalid_target.audience_not_shown
+        say: "the step cannot carry the client's audience, for a client an operator provisioned"
+      - guard: audienceUnshowable
+        target: invalid_target.audience_not_shown_shown
+        say: "the step cannot carry the client's audience, for a client no operator provisioned"
+      - target: startingConsent
+        say: 'the step can show the request'
 
-  bindingScopes:
-    title: Bind the shown scopes and resources, and the CSRF value, to the session
+  startingConsent:
+    title: Start the consent interaction
     description: >-
-      The scopes are the request's, filtered by the client's allowlist; the resources are the request's resource
-      indicators. Both are written to the session's side record under the client_id, with the session's CSRF value,
-      which is reused when it exists (a second tab or a reload keeps the first tab's form valid) and minted otherwise.
-      The side record expires with the session; rendering never extends it.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:538
-    invoke: { external: sessionSideRecord }
+      An interaction record (#592) holding the validated request, the consent step and the client display, at most 32
+      KiB, with a transaction of the browser session's user, sid and sign-in time, and that session recorded as carried
+      in (#964); interaction.created is recorded. At /oauth/authorize a new secret in the __Host-qauth_flow cookie binds
+      it to the browser; at a finish, continueInteraction keeps the finished interaction's absolute expiry and adds the
+      new secret to the flow secrets the finish left. The exact scope set shown is the record's step params.
+    invoke: { external: interactionStore }
     on:
       DONE:
+        target: atConsentCeremony
+        effect: [openInteraction]
+        say: 'the interaction is stored'
+      FAIL.tooLarge:
+        - guard: atFinish
+          target: invalid_request.authorization_too_large_at_finish
+          say: 'the record of the next interaction is over 32 KiB'
+        - target: invalid_request.authorization_too_large
+          say: 'the request is over 16 KiB, or the record over 32 KiB'
+      FAIL.server:
+        - guard: atFinish
+          target: server_error.interaction_store_at_finish
+          say: 'the interaction store fails, at the finish of an interaction'
+        - target: server_error.interaction_store
+          say: 'the interaction store fails'
+
+  atConsentCeremony:
+    title: Send the browser to the ceremony page of the consent interaction
+    description: The redirect carries the interaction id and nothing else, as core.authorization's atConsentCeremony.
+    response:
+      status: '302 from /oauth/authorize; 303 for a form post or 200 for a JSON answer at the finish of an interaction'
+      headers:
+        Location: >-
+          /ui/interaction/<the interaction id, 43 base64url characters>, from /oauth/authorize; the same path on the
+          realm's issuer, at the finish of an interaction
+        Set-Cookie: >-
+          __Host-qauth_flow=<the browser's interaction secrets, this one's added>; Path=/; HttpOnly; SameSite=Lax
+        Cache-Control: no-store
+      body: >-
+        none from /oauth/authorize; at the finish of an interaction, a JSON answer gets { result: redirect, location }
+    on:
+      READ:
         - guard: agentClient
-          target: renderedForAgent
-          say: >-
-            the binding is written and the client is an agent; a development client's page is marked for the relaxed
-            style policy as well
-          source: apps/auth-server/src/app/routes/ui/consent.ts:637
-        - guard: developmentClient
-          target: rendered
-          say: 'the binding is written, and the page is marked for the relaxed style policy of a development client'
-          source: apps/auth-server/src/app/routes/ui/consent.ts:588
-        - target: rendered
-          say: 'the binding is written'
-          source: apps/auth-server/src/app/routes/ui/consent.ts:559
-      FAIL.server:
-        target: server_error.store
-        say: 'the cache fails'
-        source: apps/auth-server/src/app/helpers/session-side-record.ts:164
+          target: showingStepForAgent
+          say: 'the ceremony page reads the step by the interaction id, for an agent client'
+        - target: showingStep
+          say: 'the ceremony page reads the step by the interaction id'
 
-  rendered:
-    title: Show the consent page
+  # The reads (GET /interaction/v1-rc.0/{id} and GET /interaction/v1-rc.0/{id}/personal)
+
+  showingStep:
+    title: Return the consent step
     description: >-
-      The page of a client that is not an agent. It leads with the client's verified domain (its registrable domain
-      in bold, a shared-hosting suffix flagged) or says the app is unverified, then names where the code goes ("this
-      device", with a warning, for a loopback address), the name the client declared, marked as declared, a badge for
-      a client registered dynamically in the last DYNAMIC_CLIENT_BADGE_DAYS days, the signed-in identifier, the
-      scopes and their descriptions and the audience (the resources, else the client's audience). No logo or link the
-      client supplied appears. Its form
-      posts the scopes the page lists, never the raw request, so an allowlist widened after this render cannot add a
-      scope the user did not see.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:592
+      The step read needs the interaction id only and holds no personal data. Its data is the record's: the scope set
+      the answer will grant is the one listed here, and nothing in it is HTML or a URL the client supplied.
     response:
       status: 200
       headers:
-        Content-Type: text/html; charset=utf-8
+        Content-Type: application/json; charset=utf-8
         Cache-Control: no-store
-        Content-Security-Policy: >-
-          the global policy, whose style-src carries this response's nonce; for a development client
-          "default-src 'self'; base-uri 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'
-          data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; object-src 'none'; frame-ancestors
-          'none'"
       body:
-        form:
-          method: post
-          action: /ui/consent
-          fields:
-            csrf_token: "the session's CSRF value (hidden)"
-            allow_forever: '1, ticked by default'
-            decision: 'deny or allow, the two submit buttons'
-            client_id: the request's (hidden)
-            redirect_uri: the request's (hidden)
-            scope: 'the scopes the page lists, joined by spaces (hidden)'
-            resource: 'one hidden field per resource indicator'
-            state: the request's, when it has one (hidden)
-            nonce: the request's, when it has one (hidden)
-            code_challenge: the request's (hidden)
-            code_challenge_method: S256 (hidden)
-            response_type: code (hidden)
-            prompt: the request's, when it has one (hidden)
-            max_age: the request's, when it has one (hidden)
-            dpop_jkt: 'the bound key, while DPoP is on and the request named one (hidden)'
+        step: 'urn:qauth:ia:consent:v1-rc.0'
+        alternatives: '[]'
+        csrf: 'the CSRF value of this step view, for one answer'
+        brand: "the realm's brand"
+        expiresAt: 'when the interaction expires'
+        client: >-
+          the client display the start computed: kind, verifiedDomain, redirect (host, this_device with the loopback
+          warning, or app), declaredName marked declared, newClient
+        params:
+          scopes: 'the shown scopes, in request order, each { scope, text?, sensitive: false, dangerous }'
+          resources: "the request's resource indicators"
+          audience: >-
+            the token's aud from the client's configured audience, only when the request named no resource and the
+            tokens are not for the client itself
+          remember_default: 'true'
     on:
-      SUBMIT:
-        target: submitResolvingRealm
-        say: 'the user presses Allow or Deny, and the browser posts the form'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:386
+      READ_PERSONAL:
+        target: showingPersonal
+        say: 'the ceremony page reads the personal data, with the flow cookie'
+      ANSWER:
+        target: checkingAnswer
+        say: 'the person allows or denies, with the CSRF value of this view; the answer takes the turn'
 
-  renderedForAgent:
-    title: Show the consent page for an AI agent
+  showingStepForAgent:
+    title: Return the consent step of an AI agent client
     description: >-
-      ADR-014 §11 (#845). The same page as rendered, with two lines after the signed-in identifier, in QAuth's words
-      and never the client's: the client named as an AI agent ("This app", never the name it declared), and how long it
-      may keep working once allowed. That is the end of its refresh-token family (#552): with no sso_max_lifespan on the
-      realm, until the user revokes the consent; with one, no later than the family's start plus the limit and the end
-      of the browser session behind the code, which ends the limit after the sign-in. The realm's limit is read from
-      the request's realm row as the page renders. An access token already issued is not cut short by either end, and
-      the family needs a stored consent (out of view: /oauth/token). /oauth/authorize sends an agent here even when a
-      stored consent covers the request (ADR-015 Decision 11).
-    source: apps/auth-server/src/app/routes/ui/consent.ts:237
+      As showingStep, with params.agent (ADR-014 §11, ADR-019 Decision 6): the screen says "This app is an AI agent."
+      and how long it may keep working, in QAuth's own words, from this typed data only, never from the name the client
+      declared.
     response:
       status: 200
       headers:
-        Content-Type: text/html; charset=utf-8
+        Content-Type: application/json; charset=utf-8
         Cache-Control: no-store
-        Content-Security-Policy: 'as for rendered'
       body:
-        agentLine: '"This app is an AI agent."'
-        persistenceLine: >-
-          "It may keep working until you revoke it." when the realm sets no sso_max_lifespan; when it sets one, "It may
-          keep working until you revoke it, or until <the limit, an exact duration such as 1 hour or 1 day and 12
-          hours> after you signed in, whichever comes first."
-        form: 'the same form as rendered'
+        step: 'urn:qauth:ia:consent:v1-rc.0'
+        params:
+          agent: >-
+            {} when the realm sets no sso_max_lifespan; { max_lifespan: <the realm's sso_max_lifespan, in seconds> }
+          others: 'as showingStep'
+        others: 'as showingStep'
     on:
-      SUBMIT:
-        target: submitResolvingRealm
-        say: 'the user presses Allow or Deny, and the browser posts the form'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:386
+      READ_PERSONAL:
+        target: showingPersonal
+        say: 'the ceremony page reads the personal data, with the flow cookie'
+      ANSWER:
+        target: checkingAnswer
+        say: 'the person allows or denies, with the CSRF value of this view; the answer takes the turn'
 
-  # POST /ui/consent
+  showingPersonal:
+    title: Return the consent step's personal data
+    description: Only to the browser whose flow cookie binds the interaction, and never from another origin.
+    response:
+      status: 200
+      headers:
+        Content-Type: application/json; charset=utf-8
+        Cache-Control: no-store
+      body: >-
+        { identifier }, the identifier the user signed in with, from the session's side record, when it holds one; {}
+        otherwise
+    on:
+      READ:
+        - guard: agentClient
+          target: showingStepForAgent
+          say: 'the ceremony page reads the step again'
+        - target: showingStep
+          say: 'the ceremony page reads the step again'
+      ANSWER:
+        target: checkingAnswer
+        say: 'the person allows or denies, with the CSRF value of the step view; the answer takes the turn'
 
-  submitResolvingRealm:
-    title: Find the realm of the host
-    description: The realm resolver's onRequest hook, as for the GET.
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
-    always:
-      - guard: hostUnknown
-        target: misdirected_request.host
-        say: 'the host names no enabled realm with an issuer'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
-      - guard: endpointHost
-        target: misdirected_request.host
-        say: "the host is one of the realm's endpoint hosts"
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:167
-      - target: submitRateLimiting
-        say: 'the request has its realm'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
+  # The answer (POST /interaction/v1-rc.0/{id}/answer), JSON or a form post
 
-  submitRateLimiting:
-    title: Count the request against the authorize limit
-    description: AUTHORIZE_RATE_LIMIT requests per AUTHORIZE_RATE_WINDOW seconds, for each client address and realm.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:661
-    always:
-      - guard: rateLimited
-        target: too_many_requests.authorize_limit
-        say: 'the address has used up its authorize requests'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:662
-      - target: submitValidatingForm
-        say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:663
-
-  submitValidatingForm:
-    title: Check the form against the consent form schema
+  checkingAnswer:
+    title: Check the answer against the consent step's grammar
     description: >-
-      consentFormSchema in apps/auth-server/src/app/schemas/consent.ts: the authorize schema's parameters with the same
-      bounds, code_challenge's RFC 7636 character set among them, plus decision, allow_forever and csrf_token.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:657
+      { type: urn:qauth:ia:consent:v1-rc.0, csrf, decision: allow | deny, remember?: boolean, default false }, nothing
+      else: a member the grammar does not declare is refused, so no answer field can add a scope or a resource. A
+      refusal gives the turn back; the step and its CSRF value stay.
     always:
-      - guard: inputInvalid
-        target: validation_error.form
-        say: 'the form does not match the schema'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:264
-      - target: submitFindingSession
-        say: 'the form matches the schema'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:669
+      - guard: malformedAnswer
+        target: invalid_answer.grammar
+        say: 'the answer does not pass the step grammar'
+      - target: takingFinish
+        say: 'the answer passes the grammar'
 
-  submitFindingSession:
-    title: Find the browser session
+  takingFinish:
+    title: End the interaction before anything is decided
     description: >-
-      Without a session the authorize URL is rebuilt from the form, not from a /ui/consent URL, so that
-      /oauth/authorize checks the client again after the sign-in. That rebuild leaves out the form's resource
-      fields, so the resumed request names no resource indicator; the step-up redirect below keeps them.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:678
-    always:
-      - guard: cookieMalformed
-        target: server_error.malformed_cookie
-        say: 'the session cookie cannot be decoded'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
-      - guard: noSession
-        target: parkingRequest
-        say: 'the request carries no session; the authorize URL is rebuilt from the form'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:701
-      - guard: staleSession
-        target: parkingRequest
-        say: 'the cookie does not verify, or names a session that has ended, and is cleared'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:118
-      - guard: accountDisabled
-        target: parkingRequest
-        say: >-
-          the session's user is gone or disabled, or was disabled after the session began; the session is ended and
-          its cookie cleared
-        source: apps/auth-server/src/app/helpers/browser-session.ts:133
-      - target: checkingCsrf
-        say: 'the session is live'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:704
-
-  checkingCsrf:
-    title: Check the CSRF value against the session's
-    description: >-
-      A timing-safe comparison with the value in the session's side record. It runs before the client_id is read, so
-      the refusal records request.csrf_rejected with no client.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:705
-    always:
-      - guard: csrfWrong
-        target: invalid_csrf_token.mismatch
-        say: "the posted value is not the session's live one"
-        source: apps/auth-server/src/app/routes/ui/consent.ts:713
-      - target: burningCsrf
-        say: 'the values are equal'
-        source: apps/auth-server/src/app/helpers/session-cookie.ts:450
-
-  burningCsrf:
-    title: Burn the CSRF value
-    description: >-
-      Deleted from the side record before anything else is checked, so the same form cannot be posted twice, whatever
-      this POST ends in. The next GET mints a new value. The scope bindings stay.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:718
-    invoke: { external: sessionSideRecord }
+      As every finish (#616, #963): the browser session the consent was for must still be live, the record is deleted
+      unless the expiry sweep claimed it first, the interaction's secret leaves the flow cookie, and
+      interaction.answered (outcome finished) is recorded. No user.signed_in and no last-login update: nobody signed in.
+      Only now is the answer decided (finishConsent), so no code is minted while the interaction can still be answered.
+    invoke: { external: interactionStore }
     on:
       DONE:
-        target: submitCheckingClient
-        effect: [burnCsrf]
-        say: 'the value is burned'
-        source: apps/auth-server/src/app/helpers/session-side-record.ts:171
+        target: recheckingRequest
+        effect: [finishInteraction]
+        say: 'the interaction is over'
+      FAIL.expired:
+        target: interaction_expired.finished_late
+        say: 'the expiry sweep claimed the interaction first'
+      FAIL.sessionEnded:
+        target: interaction_expired.session_ended
+        say: 'the session the consent was for has ended, such as by a sign-out in another tab'
       FAIL.server:
-        target: server_error.store
-        say: 'the cache fails'
-        source: apps/auth-server/src/app/helpers/session-side-record.ts:175
+        target: server_error.interaction_store_at_finish
+        say: 'the interaction store fails; the turn is given back'
 
-  submitCheckingClient:
-    title: Find the client again
-    source: apps/auth-server/src/app/routes/ui/consent.ts:721
+  recheckingRequest:
+    title: Check the request again, as the endpoint checks it
+    description: >-
+      checkAuthorizationRequest on the request the record held: the client may have been deleted, disabled or changed
+      since the step was shown. A refusal is thrown, so nothing goes to a redirect URI the client no longer holds.
     always:
-      - guard: clientUnknown
-        target: invalid_request.unknown_client
-        say: 'the client_id names no client of the realm'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:722
+      - guard: clientGone
+        target: invalid_request.client_changed
+        say: 'the client, or its redirect URI, no longer passes'
       - guard: clientUnusable
-        target: unauthorized_client.disabled
-        say: 'the client is disabled or suspended'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:724
-      - target: submitCheckingRedirectUri
-        say: 'the client is enabled and not suspended'
-        source: apps/auth-server/src/app/helpers/client-status.ts:15
-
-  submitCheckingRedirectUri:
-    title: Check the redirect URI against the client and its environment again
-    source: apps/auth-server/src/app/routes/ui/consent.ts:725
-    always:
-      - guard: redirectUnregistered
-        target: invalid_request.redirect_uri_not_registered
-        say: 'redirect_uri is not registered for the client'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:725
-      - guard: redirectNotPermitted
-        target: invalid_request.redirect_uri_not_permitted
-        say: 'no environment permits that redirect_uri'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:733
-      - target: submitReadingDpopKey
-        say: 'the redirect URI is registered and permitted'
-        source: apps/auth-server/src/app/helpers/oauth-redirect.ts:235
-
-  submitReadingDpopKey:
-    title: Read the DPoP key from the form
-    description: A malformed value was never rendered, so it is refused.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:740
-    always:
-      - guard: dpopJktMalformed
-        target: invalid_request.malformed_dpop_jkt
-        say: 'dpop_jkt is not one thumbprint'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:741
+        target: unauthorized_client.client_changed
+        say: 'the client may no longer use the endpoint'
       - target: readingDecision
-        say: 'dpop_jkt is absent, unread or well formed'
-        source: apps/auth-server/src/app/helpers/dpop.ts:137
+        say: 'the request still passes, or only its dpop_jkt is refused'
 
   readingDecision:
     title: Read the decision
-    description: Deny is answered before any scope is looked at, so a denial with a tampered scope field is a denial.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:747
+    description: Deny is answered before anything else of the request is looked at.
     always:
       - guard: denied
         target: access_denied.user_denied
-        say: 'the user pressed Deny; consent.denied is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:747
-      - target: submitCheckingAgentCap
-        say: 'the user pressed Allow'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:775
+        say: 'the person denied; consent.denied { error: access_denied } is recorded'
+      - guard: dpopRefused
+        target: invalid_request.dpop_jkt_unreadable
+        say: 'the person allowed, and the request is refused for its dpop_jkt'
+      - target: findingSession
+        say: 'the person allowed'
 
-  submitCheckingAgentCap:
+  findingSession:
+    title: Find the session again, with its account
+    description: liveBrowserSession, by the sid the interaction holds.
+    always:
+      - guard: accountDisabled
+        target: continuingToSignIn
+        effect: [forDisabledAccount]
+        say: 'the account was disabled since: the request needs a sign-in'
+      - target: checkingAgentCap
+        say: 'the session is live and its account may use it'
+
+  checkingAgentCap:
     title: Refuse an agent scope above the client's cap, where the code is minted
-    description: >-
-      ADR-007 §2. The posted scope field is the user's browser's to change, so the cap the GET applied is applied
-      again. The user has seen the destination host on the page, so the error is redirected for every client.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:775
+    description: ADR-007 §2. findExceedingAgentScopesForClient on the request's scope and the client as it is now.
     always:
       - guard: overAgentCap
         target: invalid_scope.agent_scope_mode_exceeded
-        say: 'an agent scope is above the cap; consent.denied is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:776
-      - target: checkingScopeBinding
+        say: >-
+          an agent scope is above the cap; consent.denied { error: invalid_scope, reason: agent_scope_mode_exceeded }
+          is recorded
+      - target: checkingAudience
         say: 'no agent scope is above the cap'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:837
 
-  checkingScopeBinding:
-    title: Grant only the scopes the page showed
-    description: >-
-      The posted scope, filtered by the client's allowlist as it is now, must equal the set the session bound for this
-      client, in any order. The bound set, never the posted one, is what is granted.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:837
+  checkingAudience:
+    title: Refuse a QAuth API audience the client no longer lists
+    description: unlistedReservedAudiences (#509), on the client as it is now.
     always:
-      - guard: scopesUnbound
-        target: invalid_scope.consent_scope_mismatch
-        say: 'the session holds no scope set for this client; consent.denied is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:839
-      - guard: scopesDiffer
-        target: invalid_scope.consent_scope_mismatch
-        say: 'the posted scopes are not the ones the page showed; consent.denied is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:64
-      - target: checkingResourceBinding
-        say: 'the posted scopes are the shown ones'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:857
+      - guard: audienceUnlisted
+        target: invalid_target.unlisted_reserved_audience
+        say: >-
+          a resource names a QAuth API audience the client does not list; consent.denied { error: invalid_target,
+          reason: reserved_audience_not_listed } is recorded
+      - target: checkingAgentKind
+        say: 'every QAuth API audience among the resources is one the client lists'
 
-  checkingResourceBinding:
-    title: Grant only the resources the page named
+  checkingAgentKind:
+    title: Check that the client is still what the step said
     description: >-
-      RFC 8707. The posted resource fields must name the bound resources, in any order and ignoring repeats. A session
-      rendered before resources were bound reads as having named none.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:865
+      params.agent present against isAgentClient(client) now (#845): the person must not allow an agent that the step
+      did not name as one, nor see an agent line for a client that is no agent any more.
+    always:
+      - guard: agentChanged and agentClient
+        target: decidingAgain
+        effect: [ceasedAgent]
+        say: 'the step named an AI agent, and the client is no agent now; nothing is granted'
+      - guard: agentChanged
+        target: decidingAgain
+        effect: [becameAgent]
+        say: 'the step named no agent, and the client is an AI agent now; nothing is granted'
+      - target: checkingScopes
+        say: 'the client is what the step said'
+
+  decidingAgain:
+    title: Decide the request again for the client as it is now
+    description: >-
+      decideAuthorization, as core.authorization runs it at a finish, logged at warn and with no event of its own. It
+      normally asks for consent again, and a new consent interaction starts, whose step names the client as it is now;
+      its other outcomes are core.authorization's.
+    always:
+      - target: describingClient
+        effect: [nextInteraction]
+        say: 'the decision asks for consent: a new consent interaction continues the request'
+
+  checkingScopes:
+    title: Grant only the scopes the step showed, while the client may still have them
+    description: >-
+      The shown scopes, filtered by the client's allowlist as it is now, must be the shown set. The grant is the shown
+      set, from the record: never the request's scope parameter, never a field of the answer.
+    always:
+      - guard: scopesNarrowed
+        target: invalid_scope.consent_scope_mismatch
+        say: >-
+          the client may no longer have every shown scope; consent.denied { error: invalid_scope, reason:
+          consent_scope_mismatch } is recorded
+      - target: checkingResources
+        say: 'the shown scopes are still grantable'
+
+  checkingResources:
+    title: Grant only the resources the step showed
+    description: RFC 8707. The shown resources must be the request's.
     always:
       - guard: resourcesDiffer
         target: invalid_target.consent_resource_mismatch
-        say: 'the posted resources are not the ones the page named; consent.denied is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:867
+        say: >-
+          the shown resources are not the request's; consent.denied { error: invalid_target, reason:
+          consent_resource_mismatch } is recorded
       - target: checkingStepUp
-        say: 'the posted resources are the named ones'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:885
+        say: "the shown resources are the request's"
 
   checkingStepUp:
     title: Ask for a fresh sign-in when the grant needs one
     description: >-
-      ADR-007 §2. Every scope about to be granted is treated as new, so a prior consent cannot skip the gate.
-      prompt=login and a dangerous scope ask for a sign-in within the last two minutes (STEP_UP_FRESH_AUTH_WINDOW_MS);
-      max_age asks for one within that many whole seconds. A development client is spared only the dangerous-scope
-      rule. A native_backend client's request asks for a fresh sign-in as prompt=login does, whatever the form says
-      (ADR-017 Decision 9), so a page reached without /oauth/authorize cannot mint a code for its browser leg on a
-      sign-in older than two minutes. The
-      authorize URL is rebuilt from the form with the bound resources and parked, and the browser is sent
-      to sign in.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:903
+      ADR-007 §2. evaluateStepUp with the shown scopes, no prior consent scopes (every scope about to be granted counts
+      as new, so a stored grant cannot skip the gate), the request's prompt and max_age, the session's sign-in time,
+      the two-minute window, the client's policy (agentStepUpEnforced) and forcesLoginPrompt(client) for a
+      native_backend client.
     always:
       - guard: needsFreshLogin
-        target: parkingRequest
-        say: 'the sign-in is too old for what is asked; step_up.required is recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:924
-      - guard: remember
-        target: savingConsent
-        say: 'the sign-in is fresh enough, and the user ticked "Remember this decision"'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:961
+        target: continuingToSignIn
+        effect: [forFreshLogin]
+        say: >-
+          the sign-in is too old for what is asked; step_up.required { reason: fresh_authentication_required or
+          native_profile_login_required, dangerousScopes?, prompt?, maxAge? } is recorded
       - target: mintingCode
-        say: 'the sign-in is fresh enough, and the approval is for this request only'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:972
-
-  savingConsent:
-    title: Save the consent
-    description: >-
-      Merged into the user's active consent for the client, or created: the shown scopes, and those scopes for each
-      named resource. Only a saved consent that covers a code's scopes at each of its resources lets /oauth/token mint
-      a refresh token for it. A saved consent also lets /oauth/authorize skip this screen next time. A first-party
-      client's administrative consent (ADR-017 Decision 9) skips it without one, for a request with no dangerous scope
-      and no prompt=consent; such a code gets a refresh token only when a saved consent covers it all the same.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:962
-    invoke: { action: Consent.grant }
-    on:
-      DONE:
-        target: mintingCode
-        effect: [saveConsent]
-        say: 'the consent is saved'
-        source: libs/infra/db/src/lib/repositories/oauth-consents.repository.ts:160
-      FAIL.server:
-        target: server_error.store
-        say: 'the database fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:604
+        say: 'the sign-in is fresh enough'
 
   mintingCode:
-    title: Mint the authorization code
+    title: Mint the authorization code, in the mint transaction
     description: >-
-      Through mintAuthorizationCode (apps/auth-server/src/app/helpers/authorization-code.ts), the one place every code
-      is minted: 32 random bytes, bound to the client, the user, the redirect URI, the PKCE challenge, the nonce, the
-      shown scopes and resources, the DPoP key, the session's sign-in time, assurance level and end, for
-      AUTHORIZATION_CODE_TTL_MS (five minutes). It refuses, before it writes anything, a challenge that is not S256 and
-      43 to 128 unreserved characters; the form schema holds code_challenge to the same rule, so the POST never
-      reaches that refusal. A code that collides with a stored one is drawn again, three attempts in all.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:972
+      One READ COMMITTED transaction (MINT_TRANSACTION) begins with mintAuthorizationCode: the shown scopes, the shown
+      resources, the request's code_challenge and method, nonce, state, redirect_uri and dpop_jkt, the session's sign-in
+      time, assurance level, expiry and sid. It locks the session's row and refuses a session that has ended; nothing
+      is written then, and authorization.failed { error: login_required, reason: session_ended_during_authorization }
+      is recorded.
     invoke: { action: AuthorizationCode.mint }
     on:
       DONE:
-        target: recordingGrant
-        effect: [mintCode]
-        say: 'the code is stored'
-        source: apps/auth-server/src/app/helpers/authorization-code.ts:139
+        - guard: remember
+          target: savingConsent
+          effect: [writeCode]
+          say: 'the code is written, and the person asked to remember the decision'
+        - target: recordingGrant
+          effect: [writeCode]
+          say: 'the code is written, for this request only'
+      FAIL.sessionEnded:
+        target: continuingToSignIn
+        effect: [forEndedSession]
+        say: 'the session ended under the request; nothing is written'
       FAIL.server:
-        target: server_error.store
-        say: 'the database fails, or three codes in a row collide'
-        source: apps/auth-server/src/app/helpers/authorization-code.ts:141
+        target: server_error.store_at_finish
+        say: 'the database fails, or three codes in a row collide; nothing is written'
+
+  savingConsent:
+    title: Save the grant, in the same transaction
+    description: >-
+      oauthConsents.upsertGrant(realm, user, client, the shown scopes, the shown resources): one active oauth_consents
+      row, merged with a prior grant of the client. A later request that fits it skips the step through canSkipConsent.
+    invoke: { action: Consent.grant }
+    on:
+      DONE:
+        target: recordingGrant
+        effect: [writeGrant]
+        say: 'the grant is written'
+      FAIL.server:
+        target: server_error.store_at_finish
+        effect: [rollBack]
+        say: 'the database fails; the transaction rolls back and no code is left'
 
   recordingGrant:
-    title: Record the grant
+    title: Record the grant, in the same transaction, and commit
     description: >-
-      step_up.elevated when a dangerous scope is granted, with the highest agent:* mode among the granted scopes for
-      an agent client, then
-      consent.granted with the scopes and whether they were remembered. A failed write fails the request after the code
-      is minted.
-    source: apps/auth-server/src/app/routes/ui/consent.ts:1004
+      step_up.elevated { scopes, dangerousScopes, scopeMode?, authenticatedAt } when a dangerous scope is granted
+      (scopeMode only for an agent client), then consent.granted { scopes, remembered, dangerousScopes? }. The code, the
+      grant and both events commit together.
     invoke: { external: eventStore }
     on:
       DONE:
         target: code_issued
-        say: 'the events are recorded'
-        source: apps/auth-server/src/app/routes/ui/consent.ts:1038
+        effect: [commit]
+        say: 'the events are recorded and the transaction commits'
       FAIL.server:
-        target: server_error.store
-        say: 'the event store fails'
-        source: apps/auth-server/src/app/plugins/error-handler.ts:604
+        target: server_error.store_at_finish
+        effect: [rollBack]
+        say: 'the event store fails; the transaction rolls back and neither the code nor the grant is left'
 
-  parkingRequest:
-    title: Park the authorization request for the sign-in
+  continuingToSignIn:
+    title: Continue the request in a new sign-in interaction
     description: >-
-      Every sign-in redirect of this flow runs here: the rebuilt authorize URL is checked against 16 KiB, stored under a
-      single-use handle for ten minutes, and the browser is sent to /ui/login with /ui/resume/<handle> as its return_to.
-      A stale cookie was already cleared, and a disabled user's session already ended, before this step.
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:293
-    always:
-      - guard: requestTooLarge
-        target: invalid_request.authorization_too_large
-        say: 'the rebuilt request is over 16 KiB'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:224
-      - guard: noSession
-        target: sign_in_required.no_session
-        say: 'the request is parked, for a request with no session'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
-      - guard: staleSession
-        target: sign_in_required.stale_session
-        say: 'the request is parked, for a stale cookie'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
-      - guard: accountDisabled
-        target: sign_in_required.account_disabled
-        say: "the request is parked, for a disabled user's session"
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
-      - target: sign_in_required.fresh_login
-        say: 'the request is parked, for a step-up'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
+      continueInteraction at the identifier step, carrying the session in (#964) so that "Not you?" can end it, within
+      the finished interaction's absolute expiry. The person signs in afresh, the request is decided again and the
+      consent step is shown again. No code.
+    invoke: { external: interactionStore }
+    on:
+      DONE:
+        - guard: "signInCause == 'freshLogin'"
+          target: sign_in_continues.fresh_login
+          say: 'the sign-in interaction is stored, for a step-up'
+        - guard: "signInCause == 'accountDisabled'"
+          target: sign_in_continues.account_disabled
+          say: 'the sign-in interaction is stored, for a disabled account'
+        - target: sign_in_continues.session_ended
+          say: 'the sign-in interaction is stored, for a session that ended under the request'
+      FAIL.tooLarge:
+        target: invalid_request.authorization_too_large_at_finish
+        say: 'the record of the next interaction is over 32 KiB'
+      FAIL.server:
+        target: server_error.interaction_store_at_finish
+        say: 'the interaction store fails'
+
+  # Exits: success
 
   code_issued:
     type: final
     title: Send the authorization code to the client
     redirect: success
     carries: [code, state, iss]
-    source: apps/auth-server/src/app/routes/ui/consent.ts:1038
     response:
-      status: 302
+      status: '303 for a form post; 200 for a JSON answer'
       headers:
-        Location: 'redirect_uri with code (43 base64url characters), state when the form had one, and iss'
+        Location: >-
+          for a form post, redirect_uri with code (43 base64url characters), state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  # Exits: a new interaction continues the request
+
+  sign_in_continues.fresh_login:
+    type: final
+    title: Send the browser to sign in afresh before the grant
+    redirect: never
+    response: &signInContinues
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, the ceremony page of the new interaction on the realm's issuer: <issuer>/ui/interaction/<the
+          interaction id>
+        Set-Cookie: "__Host-qauth_flow with the new interaction's secret, and without the finished interaction's"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  sign_in_continues.account_disabled:
+    type: final
+    title: Send the browser to sign in, for an account disabled since the step was shown
+    redirect: never
+    response: *signInContinues
+
+  sign_in_continues.session_ended:
+    type: final
+    title: Send the browser to sign in, for a session that ended under the request
+    redirect: never
+    response: *signInContinues
+
+  # Exits: errors redirected to the client, once the person has used QAuth's pages
 
   access_denied.user_denied:
     type: final
-    title: Tell the client the user denied the request
+    title: Tell the client the person denied the request
     redirect: error
     code: access_denied
-    source: apps/auth-server/src/app/routes/ui/consent.ts:754
     response:
-      status: 302
+      status: '303 for a form post; 200 for a JSON answer'
       headers:
         Location: >-
-          redirect_uri with error=access_denied, error_description=User denied the authorization request., state when
-          the form had one, and iss
+          for a form post, redirect_uri with error=access_denied, error_description=User denied the authorization
+          request., state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  invalid_request.dpop_jkt_unreadable:
+    type: final
+    title: Tell the client its dpop_jkt is malformed, now that DPoP is on
+    redirect: error
+    code: invalid_request
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, redirect_uri with error=invalid_request, error_description=dpop_jkt must be the base64url
+          SHA-256 JWK thumbprint of a DPoP key, state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
 
   invalid_scope.agent_scope_mode_exceeded:
     type: final
     title: Tell the client an agent scope is above its cap
-    description: >-
-      Reached from the GET for a client an operator provisioned (helpers/authorization-error.ts), and from the POST for
-      every client, where consent.denied is recorded first. The two answers are the same.
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/routes/ui/consent.ts:783
     response:
-      status: 302
+      status: '303 for a form post; 200 for a JSON answer'
       headers:
         Location: >-
-          redirect_uri with error=invalid_scope, error_description=requested scope exceeds the agent scope mode for this
-          client, state when the request had one, and iss
-
-  invalid_scope.agent_scope_mode_exceeded_shown:
-    type: final
-    title: Show, rather than redirect, the agent-cap error of a client no operator provisioned
-    redirect: never
-    code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
-    response:
-      status: 400
-      headers:
-        Content-Type: text/html; charset=utf-8
+          for a form post, redirect_uri with error=invalid_scope, error_description=requested scope exceeds the agent
+          scope mode for this client, state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
         Cache-Control: no-store
-      body: >-
-        a page titled "Sign-in not completed" that names the error invalid_scope with its description and the host of
-        redirect_uri, and, for an http(s) redirect URI, a link "Continue to <host>" carrying the whole error response
-
-  invalid_scope.consent_scope_mismatch:
-    type: final
-    title: Refuse a scope set the page did not show
-    redirect: error
-    code: invalid_scope
-    source: apps/auth-server/src/app/routes/ui/consent.ts:846
-    response:
-      status: 302
-      headers:
-        Location: >-
-          redirect_uri with error=invalid_scope, error_description=consent scope does not match the rendered
-          authorization request, state when the form had one, and iss
-
-  invalid_target.consent_resource_mismatch:
-    type: final
-    title: Refuse a resource set the page did not name
-    redirect: error
-    code: invalid_target
-    source: apps/auth-server/src/app/routes/ui/consent.ts:874
-    response:
-      status: 302
-      headers:
-        Location: >-
-          redirect_uri with error=invalid_target, error_description=consent resource does not match the rendered
-          authorization request, state when the form had one, and iss
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
 
   invalid_target.unlisted_reserved_audience:
     type: final
     title: Tell the client it named a QAuth API audience it does not list
-    description: Reached from the GET only, for a client an operator provisioned (helpers/authorization-error.ts).
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/routes/ui/consent.ts:527
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, redirect_uri with error=invalid_target, error_description=a QAuth API audience is issued
+          only to a client that lists it, state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  invalid_scope.consent_scope_mismatch:
+    type: final
+    title: Refuse a shown scope set the client may no longer have
+    redirect: error
+    code: invalid_scope
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, redirect_uri with error=invalid_scope, error_description=a scope the consent step showed is
+          no longer allowed for the client, state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  invalid_target.consent_resource_mismatch:
+    type: final
+    title: Refuse shown resources that are not the request's
+    redirect: error
+    code: invalid_target
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, redirect_uri with error=invalid_target, error_description=the consent step showed other
+          resources than the request names, state when the request had one, and iss
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  # Exits: the start refused
+
+  invalid_scope.consent_not_shown:
+    type: final
+    title: Tell the client the consent step cannot show its scopes
+    redirect: error
+    code: invalid_scope
     response:
       status: 302
       headers:
         Location: >-
-          redirect_uri with error=invalid_target, error_description=a QAuth API audience is issued only to a client
-          that lists it, state when the request had one, and iss
+          redirect_uri with error=invalid_scope, error_description=the requested scopes cannot be shown for consent,
+          state when the request had one, and iss
 
-  invalid_target.unlisted_reserved_audience_shown:
+  invalid_scope.consent_not_shown_shown:
     type: final
-    title: Show, rather than redirect, the unlisted-audience error of a client no operator provisioned
+    title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
-    code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
-    response:
+    code: invalid_scope
+    response: &shown
       status: 400
       headers:
         Content-Type: text/html; charset=utf-8
         Cache-Control: no-store
       body: >-
-        a page titled "Sign-in not completed" that names the error invalid_target with its description and the host of
-        redirect_uri, and, for an http(s) redirect URI, a link "Continue to <host>" carrying the whole error response
+        a page titled "Sign-in not completed" that names the error with its description and the host of redirect_uri,
+        and, for an http(s) redirect URI, a link "Continue to <host>" carrying the whole error response
 
-  sign_in_required.no_session:
+  invalid_scope.consent_not_shown_at_finish:
     type: final
-    title: Send the browser to sign in, then back to the authorization request
-    redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
+    title: Tell the client the consent step cannot show its scopes, at the finish of an interaction
+    redirect: error
+    code: invalid_scope
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, redirect_uri with error=invalid_scope, error_description=the requested scopes cannot be
+          shown for consent, state when the request had one, and iss
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  invalid_target.consent_not_shown:
+    type: final
+    title: Tell the client the consent step cannot show its resources
+    redirect: error
+    code: invalid_target
     response:
       status: 302
       headers:
-        Location: '/ui/login?return_to=%2Fui%2Fresume%2F<handle>, the handle 43 base64url characters'
+        Location: >-
+          redirect_uri with error=invalid_target, error_description=the requested resources cannot be shown for
+          consent, state when the request had one, and iss
 
-  sign_in_required.stale_session:
+  invalid_target.consent_not_shown_shown:
     type: final
-    title: Clear the stale session cookie and send the browser to sign in
+    title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:118
+    code: invalid_target
+    response: *shown
+
+  invalid_target.consent_not_shown_at_finish:
+    type: final
+    title: Tell the client the consent step cannot show its resources, at the finish of an interaction
+    redirect: error
+    code: invalid_target
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: >-
+          for a form post, redirect_uri with error=invalid_target, error_description=the requested resources cannot be
+          shown for consent, state when the request had one, and iss
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  invalid_target.audience_not_shown:
+    type: final
+    title: Tell the client the consent step cannot show its audience
+    redirect: error
+    code: invalid_target
     response:
       status: 302
       headers:
-        Set-Cookie:
-          '__Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when SESSION_COOKIE_SECURE is
-          on'
-        Location: '/ui/login?return_to=%2Fui%2Fresume%2F<handle>'
+        Location: >-
+          redirect_uri with error=invalid_target, error_description=the client's audience cannot be shown for consent,
+          state when the request had one, and iss
 
-  sign_in_required.account_disabled:
+  invalid_target.audience_not_shown_shown:
     type: final
-    title: End the session of a disabled or deleted user and send the browser to sign in
-    description: The session is revoked and its side record deleted before the cookie is cleared.
+    title: Show, rather than redirect, that error for a client no operator provisioned
     redirect: never
-    source: apps/auth-server/src/app/helpers/browser-session.ts:133
+    code: invalid_target
+    response: *shown
+
+  invalid_target.audience_not_shown_at_finish:
+    type: final
+    title: Tell the client the consent step cannot show its audience, at the finish of an interaction
+    redirect: error
+    code: invalid_target
     response:
-      status: 302
+      status: '303 for a form post; 200 for a JSON answer'
       headers:
-        Set-Cookie:
-          '__Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when SESSION_COOKIE_SECURE is
-          on'
-        Location: '/ui/login?return_to=%2Fui%2Fresume%2F<handle>'
-
-  sign_in_required.fresh_login:
-    type: final
-    title: Send the browser to sign in again before the grant
-    description: /ui/login mints a new session, so the resumed request is evaluated with a fresh sign-in time.
-    redirect: never
-    source: apps/auth-server/src/app/routes/ui/consent.ts:952
-    response:
-      status: 302
-      headers:
-        Location: '/ui/login?return_to=%2Fui%2Fresume%2F<handle>'
-
-  invalid_request.authorization_too_large:
-    type: final
-    title: Refuse a request too large to park for the sign-in
-    description: A stale cookie is cleared in the same response.
-    redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:225
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-request
-        title: Invalid request
-        status: 400
-        detail: authorization request is too large
-        instance: /ui/consent
-        code: invalid_request
-        trace_id: the request id
-
-  invalid_csrf_token.mismatch:
-    type: final
-    title: Refuse a form whose CSRF value is not the session's
-    redirect: never
-    source: apps/auth-server/src/app/routes/ui/consent.ts:713
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-csrf-token
-        title: Invalid CSRF token
-        status: 400
-        detail: The CSRF token is missing or does not match the session
-        instance: /ui/consent
-        code: invalid_csrf_token
-        trace_id: the request id
-
-  invalid_request.unknown_client:
-    type: final
-    title: Refuse a client_id that names no client
-    description: Shown, not redirected, because no redirect URI is trusted yet.
-    redirect: never
-    source: apps/auth-server/src/app/helpers/client-resolution.ts:238
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-request
-        title: Invalid request
-        status: 400
-        detail: client_id does not name a client of this realm
-        instance: /ui/consent
-        code: invalid_request
-        trace_id: the request id
-
-  unauthorized_client.disabled:
-    type: final
-    title: Refuse a client that is disabled or suspended
-    description: Shown, not redirected, because no redirect URI is trusted yet. A suspended client reads as disabled.
-    redirect: never
-    source: apps/auth-server/src/app/helpers/client-status.ts:25
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#unauthorized-client
-        title: Unauthorized client
-        status: 400
-        detail: client is disabled
-        instance: /ui/consent
-        code: unauthorized_client
-        trace_id: the request id
-
-  invalid_request.redirect_uri_not_registered:
-    type: final
-    title: Refuse a redirect URI the client did not register
-    redirect: never
-    source: apps/auth-server/src/app/helpers/oauth-redirect.ts:307
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-request
-        title: Invalid request
-        status: 400
-        detail: redirect_uri not registered
-        instance: /ui/consent
-        code: invalid_request
-        trace_id: the request id
-
-  invalid_request.redirect_uri_not_permitted:
-    type: final
-    title: Refuse a registered redirect URI that no environment permits
-    redirect: never
-    source: apps/auth-server/src/app/helpers/oauth-redirect.ts:316
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-request
-        title: Invalid request
-        status: 400
-        detail: redirect_uri not permitted for this environment
-        instance: /ui/consent
-        code: invalid_request
-        trace_id: the request id
-
-  invalid_request.malformed_dpop_jkt:
-    type: final
-    title: Refuse a dpop_jkt that is not a key thumbprint
-    redirect: never
-    source: apps/auth-server/src/app/helpers/dpop.ts:119
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-request
-        title: Invalid request
-        status: 400
-        detail: dpop_jkt must be the base64url SHA-256 JWK thumbprint of a DPoP key
-        instance: /ui/consent
-        code: invalid_request
-        trace_id: the request id
+        Location: >-
+          for a form post, redirect_uri with error=invalid_target, error_description=the client's audience cannot be
+          shown for consent, state when the request had one, and iss
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
 
   invalid_request.redirect_uri_not_shown:
     type: final
-    title: Refuse a redirect URI the screen cannot show
+    title: Refuse a redirect URI the consent step cannot describe, at /oauth/authorize
     redirect: never
-    source: apps/auth-server/src/app/helpers/client-display.ts:232
+    code: invalid_request
     response:
       status: 400
+      headers:
+        Content-Type: application/json; charset=utf-8
+      body:
+        error: invalid_request
+        error_description: redirect_uri cannot be shown
+
+  invalid_request.redirect_uri_not_shown_at_finish:
+    type: final
+    title: Refuse a redirect URI the consent step cannot describe, at the finish of an interaction
+    redirect: never
+    code: invalid_request
+    response: &invalidRequestProblem
+      status: 400
+      headers:
+        Content-Type: application/problem+json
+        Cache-Control: no-store
       body:
         type: https://docs.qauth.dev/reference/problem-types/#invalid-request
-        title: Invalid request
         status: 400
-        detail: redirect_uri cannot be shown
-        instance: /ui/consent
         code: invalid_request
         trace_id: the request id
 
-  validation_error.query:
+  invalid_request.authorization_too_large:
     type: final
-    title: Refuse a query that does not match the authorize schema
+    title: Refuse a request too large to hold in an interaction, at /oauth/authorize
     redirect: never
-    source: apps/auth-server/src/app/plugins/error-handler.ts:339
+    code: invalid_request
     response:
       status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#validation-error
-        title: Validation error
-        status: 400
-        detail: The request is not valid.
-        instance: /ui/consent
-        code: validation_error
-        trace_id: the request id
-        errors:
-          - pointer: '/<the parameter>, such as /code_challenge'
-            message: "the schema's message"
-
-  validation_error.form:
-    type: final
-    title: Refuse a form that does not match the consent form schema
-    redirect: never
-    source: apps/auth-server/src/app/plugins/error-handler.ts:339
-    response:
-      status: 400
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#validation-error
-        title: Validation error
-        status: 400
-        detail: The request is not valid.
-        instance: /ui/consent
-        code: validation_error
-        trace_id: the request id
-        errors:
-          - pointer: '/<the field>, such as /decision'
-            message: "the schema's message"
-
-  misdirected_request.host:
-    type: final
-    title: Refuse a host that serves no browser route
-    redirect: never
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:149
-    response:
-      status: 421
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#misdirected-request
-        title: Misdirected request
-        status: 421
-        detail: This server does not answer for the requested host
-        instance: /ui/consent
-        code: misdirected_request
-        trace_id: the request id
-
-  too_many_requests.global_limit:
-    type: final
-    title: Refuse a GET over the global limit
-    redirect: never
-    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-    response:
-      status: 429
       headers:
-        x-ratelimit-limit: RATE_LIMIT_MAX
-        x-ratelimit-remaining: '0'
-        x-ratelimit-reset: the seconds until the window resets
-        retry-after: the same seconds
+        Content-Type: application/json; charset=utf-8
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
-        title: Too many requests
-        status: 429
-        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 1 minute}'
-        instance: /ui/consent
-        code: too_many_requests
-        trace_id: the request id
+        error: invalid_request
+        error_description: authorization request is too large
 
-  too_many_requests.authorize_limit:
+  invalid_request.authorization_too_large_at_finish:
     type: final
-    title: Refuse a POST over the authorize limit
+    title: Refuse a next interaction too large to hold
     redirect: never
-    source: apps/auth-server/src/app/routes/ui/consent.ts:661
-    response:
-      status: 429
-      headers:
-        x-ratelimit-limit: AUTHORIZE_RATE_LIMIT
-        x-ratelimit-remaining: '0'
-        x-ratelimit-reset: the seconds until the window resets
-        retry-after: the same seconds
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
-        title: Too many requests
-        status: 429
-        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 1 minute}'
-        instance: /ui/consent
-        code: too_many_requests
-        trace_id: the request id
+    code: invalid_request
+    response: *invalidRequestProblem
 
-  server_error.malformed_cookie:
+  server_error.interaction_store:
     type: final
-    title: Fail on a session cookie that cannot be decoded
-    description: >-
-      The URIError reaches the error handler as an unknown error, logged at error level. The body says nothing of the
-      failure, in any NODE_ENV; its trace_id finds the log line.
+    title: Fail the request when the interaction store fails, at /oauth/authorize
     redirect: never
-    source: apps/auth-server/src/app/plugins/error-handler.ts:604
+    code: server_error
     response:
       status: 500
+      headers:
+        Content-Type: application/json; charset=utf-8
+      body:
+        error: server_error
+
+  # Exits: refusals of the Interaction API, bare problem documents
+
+  invalid_answer.grammar:
+    type: final
+    title: Refuse an answer the consent step's grammar does not accept
+    description: The interaction stays at the step, with its CSRF value; nothing is finished or granted.
+    redirect: never
+    code: invalid_answer
+    response:
+      status: 400
+      headers:
+        Content-Type: application/problem+json
+        Cache-Control: no-store
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-answer
+        status: 400
+        code: invalid_answer
+        trace_id: the request id
+
+  interaction_expired.finished_late:
+    type: final
+    title: Refuse an answer the expiry sweep beat
+    description: The sweep reports the interaction expired; nothing is issued.
+    redirect: never
+    code: interaction_expired
+    response: &expired
+      status: 410
+      headers:
+        Content-Type: application/problem+json
+        Cache-Control: no-store
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#interaction-expired
+        status: 410
+        code: interaction_expired
+        trace_id: the request id
+
+  interaction_expired.session_ended:
+    type: final
+    title: Refuse an answer whose browser session ended since the step was shown
+    description: Nothing is written; the turn is given back and the step stays (#963).
+    redirect: never
+    code: interaction_expired
+    response: *expired
+
+  invalid_request.client_changed:
+    type: final
+    title: Refuse an answer whose client or redirect URI no longer passes
+    description: No redirect goes to a URI the client may no longer hold, whatever the decision was.
+    redirect: never
+    code: invalid_request
+    response: *invalidRequestProblem
+
+  unauthorized_client.client_changed:
+    type: final
+    title: Refuse an answer whose client may no longer use the endpoint
+    redirect: never
+    code: unauthorized_client
+    response:
+      status: 400
+      headers:
+        Content-Type: application/problem+json
+        Cache-Control: no-store
+      body:
+        type: https://docs.qauth.dev/reference/problem-types/#unauthorized-client
+        status: 400
+        code: unauthorized_client
+        trace_id: the request id
+
+  server_error.interaction_store_at_finish:
+    type: final
+    title: Fail the answer when the interaction store fails
+    redirect: never
+    code: server_error
+    response: &problem500
+      status: 500
+      headers:
+        Content-Type: application/problem+json
       body:
         type: https://docs.qauth.dev/reference/problem-types/#internal-error
-        title: Internal error
         status: 500
-        instance: /ui/consent
         code: internal_error
         trace_id: the request id
 
-  server_error.store:
+  server_error.store_at_finish:
     type: final
-    title: Fail on a store error
+    title: Fail the answer when the mint transaction fails
+    description: 'The transaction rolls back: no code, no grant and no event of the grant is left.'
     redirect: never
-    description: >-
-      The steps before the failing one stay done. The body says nothing of the failure, in any NODE_ENV; its trace_id
-      finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:604
-    response:
-      status: 500
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#internal-error
-        title: Internal error
-        status: 500
-        instance: /ui/consent
-        code: internal_error
-        trace_id: the request id
+    code: server_error
+    response: *problem500
 
 assertions:
-  - id: page-only-for-a-request-the-post-accepts
-    never: "state in ['rendered', 'renderedForAgent'] and (gate != 'open' or params != 'valid' or overAgentCap)"
+  - id: step-only-for-a-request-it-can-show
+    never: "interactionOpen and startGate != 'shown'"
     say: >-
-      The page is shown only for a live session, a usable client, a permitted redirect URI and agent scopes within the
-      cap, so the user is never asked about a request the POST would refuse for those reasons
-    source: apps/auth-server/src/app/routes/ui/consent.ts:499
-  - id: no-page-for-an-unlisted-reserved-audience
-    never: "state in ['bindingScopes', 'rendered', 'renderedForAgent'] and audienceUnlisted"
-    say: >-
-      No page is shown, and no scope or resource is bound to the session, for a request whose resource indicators name
-      a QAuth API audience the client does not list; the POST grants only what a GET bound
-    source: apps/auth-server/src/app/routes/ui/consent.ts:526
-  - id: no-code-without-the-live-csrf-value
-    never: "state in ['savingConsent', 'mintingCode', 'recordingGrant', 'code_issued'] and csrfWrong"
-    say: "Nothing is saved or minted for a form that does not carry the session's live CSRF value"
-    source: apps/auth-server/src/app/routes/ui/consent.ts:705
-  - id: csrf-value-spent-before-the-client-is-read
-    never:
-      "state in ['submitCheckingClient', 'submitCheckingRedirectUri', 'submitReadingDpopKey', 'readingDecision',
-      'submitCheckingAgentCap', 'checkingScopeBinding', 'checkingResourceBinding', 'checkingStepUp', 'savingConsent',
-      'mintingCode', 'recordingGrant', 'code_issued'] and not csrfBurned"
-    say: >-
-      A form that passes the CSRF check has spent its value before anything else is checked, so it cannot be posted
-      again, whatever it ends in
-    source: apps/auth-server/src/app/routes/ui/consent.ts:718
-  - id: only-the-shown-scopes-and-resources-are-granted
-    never: "state in ['savingConsent', 'mintingCode', 'recordingGrant', 'code_issued'] and posted != 'shown'"
-    say: 'A consent is saved and a code minted only for the scopes and resources the page showed'
-    source: apps/auth-server/src/app/routes/ui/consent.ts:857
-  - id: deny-mints-nothing
-    never:
-      "(state in ['savingConsent', 'mintingCode', 'recordingGrant', 'code_issued'] or consentSaved or codeMinted) and
-      denied"
-    say: 'A denial saves no consent and mints no code, whatever scopes the form carries'
-    source: apps/auth-server/src/app/routes/ui/consent.ts:747
-  - id: no-code-above-the-agent-cap
-    never: "state in ['savingConsent', 'mintingCode', 'recordingGrant', 'code_issued'] and overAgentCap"
-    say: "No consent is saved and no code minted for an agent scope above the client's cap"
-    source: apps/auth-server/src/app/routes/ui/consent.ts:775
-  - id: no-code-on-a-stale-sign-in
-    never: "state in ['savingConsent', 'mintingCode', 'recordingGrant', 'code_issued'] and needsFreshLogin"
-    say: 'No consent is saved and no code minted on a sign-in older than what the request or its scopes ask for'
-    source: apps/auth-server/src/app/routes/ui/consent.ts:924
-  - id: remembered-only-when-asked
-    never: 'consentSaved and not allowForever'
-    say: 'A consent is saved only when the form carries allow_forever=1'
-    source: apps/auth-server/src/app/routes/ui/consent.ts:961
-  - id: code-issued-means-minted-and-remembered-as-asked
-    never: "state == 'code_issued' and (not codeMinted or (allowForever and not consentSaved))"
-    say: 'A code reaches the client only once it is stored, and after the consent is saved when the user asked for it'
-    source: apps/auth-server/src/app/routes/ui/consent.ts:1038
+      A consent interaction exists only for a request whose client display and step data can be shown: a redirect URI
+      the display cannot describe, or scopes, resources or an audience the step cannot carry, refuse the start
   - id: an-agent-is-named-as-one
-    never: "(state == 'rendered' and agentClient) or (state == 'renderedForAgent' and not agentClient)"
+    never: "(state == 'showingStep' and agentClient) or (state == 'showingStepForAgent' and not agentClient)"
     say: >-
-      An agent client is shown only the page that names it as an AI agent and says how long it may keep working, and a
-      client that is not an agent never is
-    source: apps/auth-server/src/app/routes/ui/consent.ts:637
+      The step of an AI agent client carries the agent marker, and the step of a client that is no agent never does
+  - id: no-code-without-the-finish
+    never: "(codeWritten or grantWritten or state == 'code_issued') and (interactionOpen or not finished)"
+    say: >-
+      Nothing is minted or granted until the interaction has finished: never while it can still be answered, so a
+      replayed answer, or one the expiry sweep beat, issues nothing
+  - id: no-answer-field-reaches-the-grant
+    never: "(codeWritten or grantWritten or state == 'code_issued') and malformedAnswer"
+    say: >-
+      An answer that carries anything beyond its decision and the remember choice, such as a scope or a resource, is
+      refused, so no answer can add a scope the person did not see
+  - id: only-the-shown-set-is-granted
+    never: "(codeWritten or grantWritten or state == 'code_issued') and (scopesNarrowed or resourcesDiffer)"
+    say: >-
+      The code and the grant are for exactly the scope set and resources the step showed, and only while the client may
+      still have them
+  - id: no-code-on-a-stale-sign-in
+    never: "(codeWritten or grantWritten or state == 'code_issued') and needsFreshLogin"
+    say: 'No code is minted and nothing granted on a sign-in older than what the request or its scopes ask for'
+  - id: dangerous-scope-signs-in-afresh-first
+    never: >-
+      allowGate == 'dangerousScope' and state in ['mintingCode', 'savingConsent', 'recordingGrant', 'code_issued']
+    say: >-
+      A dangerous scope on a sign-in more than two minutes old reaches no code: the person is sent to a fresh sign-in
+      first (outside development)
+  - id: no-code-above-the-agent-cap
+    never: "(codeWritten or grantWritten or state == 'code_issued') and overAgentCap"
+    say: 'A client over its agent scope cap gets invalid_scope, and no code is minted and no grant saved'
+  - id: no-code-for-a-changed-client
+    never: "(codeWritten or grantWritten or state == 'code_issued') and (recheck != 'unchanged' or agentChanged)"
+    say: >-
+      No code is minted for a client that no longer passes the endpoint's checks, or that changed whether it is an AI
+      agent since the step was shown
+  - id: deny-grants-nothing
+    never: >-
+      denied and (codeWritten or grantWritten or state in ['code_issued', 'sign_in_continues.fresh_login',
+      'sign_in_continues.account_disabled', 'sign_in_continues.session_ended', 'decidingAgain'])
+    say: 'A denial mints no code, saves no grant and starts no further interaction'
+  - id: access-denied-only-for-a-denial
+    never: "state == 'access_denied.user_denied' and not denied"
+    say: 'access_denied goes to the client, with state and iss, only when the person denied'
+  - id: remembered-only-when-asked
+    never: 'grantWritten and not remember'
+    say: 'A grant is saved only when the answer carries remember true'
+  - id: grant-only-in-the-code-transaction
+    never: 'grantWritten and not codeWritten'
+    say: "A grant is written only in the transaction that mints the request's code"
+  - id: code-issued-means-committed-and-remembered-as-asked
+    never: "state == 'code_issued' and (not committed or not codeWritten or (remember and not grantWritten))"
+    say: >-
+      The code reaches the client only once the code, the grant the person asked to remember and the events have
+      committed together
+  - id: nothing-left-after-a-failed-mint
+    never: >-
+      state in ['server_error.store_at_finish', 'sign_in_continues.session_ended'] and (codeWritten or
+      grantWritten)
+    say: 'A mint transaction that fails, or finds the session ended, leaves no code and no grant'

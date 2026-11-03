@@ -1298,14 +1298,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `state` and `iss`; a consent it still needs starts a consent interaction, and
   an error is redirected to the client. A finish the expiry sweep beat, and a
   replayed answer, issue no code. `prompt=none` starts no interaction. The
-  consent step can be shown but not yet answered ([#629]): until then the person
-  can cancel, which redirects with `error=access_denied` once the request is
-  checked again, as a finish is. The endpoint takes
+  person can cancel the consent step, which redirects with
+  `error=access_denied` once the request is checked again, as a finish is, and
+  answer it ([#629]). The endpoint takes
   `login_hint` (OpenID Connect Core 1.0 §3.1.2.1, at most 254 bytes in UTF-8,
   longer is `invalid_request`), which the identifier step offers as its
   pre-fill, in the step's personal data; the request log censors it, and the
   interaction id of the ceremony page path. The flow graph `core.authorization`
   draws the endpoint in both modes.
+
+- **The consent step of the Interaction API can be answered** ([#629],
+  ADR-019 Decision 6). With `INTERACTION_UI_ENABLED` on, the decision
+  `/ui/consent` makes is now the `consent` step, which the ceremony app only
+  renders. Its read names the client through `client` ([#593]), lists the
+  requested scopes the client may have (QAuth's own text for `openid`,
+  `profile`, `email` and `offline_access`, and a mark on each dangerous one),
+  the resources, or else the `aud` the token gets from the audience an operator
+  configured for the client (the new `audience` param), and, for an AI agent,
+  the new `agent` param, from
+  which the screen says in QAuth's words that the app is an AI agent and how
+  long it may keep working (the realm's `sso_max_lifespan`). "Remember this
+  decision" starts checked, and the step's personal data is the identifier the
+  person signed in with. The answer carries `decision` (`allow` or `deny`) and
+  `remember` and nothing else, so it cannot add a scope or a resource. The
+  interaction finishes first, then the request is checked again: `deny`
+  redirects with `error=access_denied`, `state` and `iss` (`consent.denied`);
+  `allow` checks the account, the agent scope cap, the QAuth API audiences,
+  whether the client is still the kind the step showed, the shown scopes
+  against the client's allowlist and the step-up gate (a dangerous scope on a
+  stale sign-in, `prompt=login`, `max_age` or a native first-party profile
+  starts a fresh sign-in interaction, `step_up.required`), and then one
+  transaction mints the code for exactly the shown scopes and resources, saves
+  the grant when "remember" is set, and records `step_up.elevated` and
+  `consent.granted`. An AI agent never skips the step. The `/ui/consent` page
+  is unchanged; its graph is now `core.consent-page`, and `core.consent` is
+  the proposed graph of the step. ADR-015 Decision 11 now says which flows it
+  covers.
 
 - **Security operations, defined by effect, as an enforced classification**
   ([#508], ADR-019 Decision 7). The eleven effect tags (`credential-path`,

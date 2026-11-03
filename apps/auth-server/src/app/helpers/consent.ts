@@ -258,7 +258,18 @@ const SCOPE_DESCRIPTIONS: Record<string, string> = {
 };
 
 export function describeScope(scope: string): string {
-  return SCOPE_DESCRIPTIONS[scope] ?? scope;
+  return standardScopeText(scope) ?? scope;
+}
+
+/**
+ * QAuth's own consent text for a scope it defines (`openid`, `profile`,
+ * `email`, `offline_access`), or `undefined` for any other scope: the consent
+ * step's `text` until realms hold a scope catalog (#629). Read as an own
+ * member, so a scope named after an `Object.prototype` member, such as
+ * `constructor`, has no text.
+ */
+export function standardScopeText(scope: string): string | undefined {
+  return Object.hasOwn(SCOPE_DESCRIPTIONS, scope) ? SCOPE_DESCRIPTIONS[scope] : undefined;
 }
 
 const DURATION_UNITS: readonly (readonly [seconds: number, name: string])[] = [

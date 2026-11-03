@@ -633,15 +633,28 @@ export function resolveUserGrantAudience(
   client: OAuthClientLike,
   resource?: string[]
 ): string | string[] {
-  if ((resource !== undefined && resource.length > 0) || client.clientId === systemClientId()) {
-    return resolveAudience(client, resource);
-  }
+  if (resource !== undefined && resource.length > 0) return resolveAudience(client, resource);
+  const audience = userGrantDefaultAudience(client);
+  if (audience.length === 0) return client.clientId;
+  return audience.length === 1 ? audience[0] : [...audience];
+}
+
+/**
+ * The `aud` a user grant's token gets from the client's configured audience,
+ * when the request names no `resource` ({@link resolveUserGrantAudience}):
+ * empty when the token's `aud` is the client id instead (no audience, a
+ * malformed one, or only QAuth API audiences). The consent step shows it
+ * (#629), so the screen names exactly where the token may be used.
+ */
+export function userGrantDefaultAudience(
+  client: Pick<OAuthClientLike, 'clientId' | 'audience'>
+): readonly string[] {
   const parsed = audienceSchema.safeParse(client.audience);
-  if (!parsed.success) return resolveAudience(client);
-  return resolveAudience({
-    ...client,
-    audience: parsed.data.filter((value) => !isReservedAudience(value)),
-  });
+  if (!parsed.success) return [];
+  // The system client keeps its default: `/auth/login` mints the developer
+  // portal's token from it without a `resource`.
+  if (client.clientId === systemClientId()) return parsed.data;
+  return parsed.data.filter((value) => !isReservedAudience(value));
 }
 
 /**
