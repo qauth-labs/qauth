@@ -8,6 +8,7 @@ import {
 } from '@qauth-labs/shared-validation';
 import { relations, sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
@@ -97,6 +98,23 @@ export const realms = pgTable(
      * The partial unique index `idx_realms_one_operator` allows at most one.
      */
     isOperator: boolean('is_operator').notNull().default(false),
+    /**
+     * The live realm this realm is the paired sandbox of (ADR-019 Decision 11,
+     * ADR-020 §4, issue #554); NULL on every other realm. A sandbox is a realm
+     * in its own right, with its own host, issuer, keys and passkey RP ID, and
+     * no users of the live realm.
+     *
+     * Set when the sandbox is created (`createSandboxWithPrimaryHost`) and
+     * permanent: the trigger `realms_sandbox_pairing` refuses every change of
+     * it, and refuses a pairing with a sandbox or with the operator realm. The
+     * unique index allows a live realm one sandbox; the CHECKs below refuse a
+     * realm paired with itself, a sandbox that is the operator realm, and a
+     * sandbox whose environment ceiling is `development`. The foreign key
+     * refuses deleting a live realm while its sandbox exists.
+     */
+    sandboxOfRealmId: uuid('sandbox_of_realm_id').references((): AnyPgColumn => realms.id, {
+      onDelete: 'restrict',
+    }),
     /**
      * The realm's passkey RP ID (ADR-019 Decision 2, issues #467 and #553):
      * NULL means the realm's primary host, the default. A value is a parent
@@ -248,6 +266,23 @@ export const realms = pgTable(
     uniqueIndex('idx_realms_one_operator')
       .on(t.isOperator)
       .where(sql`${t.isOperator} = true`),
+    // The paired sandbox realm (#554): a live realm has at most one. NULLs
+    // are distinct, so every realm that is no sandbox fits.
+    uniqueIndex('idx_realms_sandbox_of_realm_id').on(t.sandboxOfRealmId),
+    // A realm is not its own sandbox.
+    check(
+      'realms_sandbox_not_self',
+      sql`${t.sandboxOfRealmId} IS NULL OR ${t.sandboxOfRealmId} <> ${t.id}`
+    ),
+    // The operator realm is no sandbox; the trigger `realms_sandbox_pairing`
+    // keeps it from having one.
+    check('realms_sandbox_not_operator', sql`${t.sandboxOfRealmId} IS NULL OR NOT ${t.isOperator}`),
+    // A sandbox's ADR-008 ceiling is `staging` or stricter, never
+    // `development` (ADR-019 Decision 11), whoever writes the row.
+    check(
+      'realms_sandbox_ceiling',
+      sql`${t.sandboxOfRealmId} IS NULL OR ${t.maxEnvironmentLaxity} <> 'development'`
+    ),
     check('realms_issuer_not_empty', sql`${t.issuer} <> ''`),
     check('realms_issuer_no_trailing_slash', sql`right(${t.issuer}, 1) <> '/'`),
     // RFC 8414 §2 issuers are https. Plain http only on localhost or a name

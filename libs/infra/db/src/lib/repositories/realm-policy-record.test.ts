@@ -26,6 +26,7 @@ function realmRow(overrides: Partial<Realm> = {}): Realm {
     enabled: true,
     issuer: 'https://auth.example.com',
     isOperator: true,
+    sandboxOfRealmId: null,
     webauthnRpId: null,
     webauthnRpIdLockedAt: null,
     accessTokenLifespan: 600,
