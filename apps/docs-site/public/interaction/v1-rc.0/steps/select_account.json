@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/select_account.json",
   "title": "urn:qauth:ia:select_account:v1-rc.0",
-  "description": "The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. \"Use another account\" answers the `identifier` step, offered beside this one: that starts a new interaction for the same authorization request, and the result is a redirect to its page (#592). Needs JavaScript, to read the list.",
+  "description": "The account chooser for `prompt=select_account`, when the browser holds sessions for several accounts of the realm (ADR-019 Decision 3, ADR-020 §3). The list is personal data. \"Use another account\" answers the `identifier` step, offered beside this one: that starts a new interaction for the same authorization request, and the result is a redirect to its page (#592). It ends no session: the accounts the list shows stay signed in (#964). Needs JavaScript, to read the list.",
   "x-qauth-transports": [
     "interaction"
   ],

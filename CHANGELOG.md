@@ -1099,18 +1099,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new `sid`) and rotates the flow secret; a browser that loses that response
   retries with the old secret and gets `interaction_expired`, so the ceremony
   transport ([#616]) must submit credential steps by `fetch` or guard a form
-  against a double submit. A user switch ends the interaction and
-  starts a new one for the same request at the identifier step, with nothing
-  proved carried over and the request's absolute expiry kept. A switch made
-  after the person signed in also ends, as a sign-out by the first user, the
-  browser session that sign-in started and the session the browser's cookie
-  names when it is a later one of the same user (a sign-in again in another
-  tab), and clears that cookie ([#896]); `interaction.cancelled` records it
-  with `sessionEnded: true`. A cookie session of another user stays, and when
-  the cookie keys cannot be read only the session the sign-in started ends. A
-  switch before anyone signed in ends no session, so a browser that was
-  already signed in when the interaction started stays signed in ([#964]). An
-  unknown, expired or finished interaction and a wrong cookie get one
+  against a double submit. A user switch ends the interaction and starts a new
+  one for the same request at the identifier step, with nothing proved carried
+  over and the request's absolute expiry kept. "Not you?", a switch at any step
+  but the account chooser, also signs the browser out of the account the
+  interaction is for, as a sign-out by that account: the browser session a
+  sign-in during the interaction started ([#896]) or, while nobody has signed in
+  during it, the session the browser was already signed in with when
+  `/oauth/authorize` started the interaction, for a consent or a sign-in the
+  client asked for again, which the interaction records as carried in ([#964]);
+  and the session the browser's cookie names when it is a later one of the same
+  account (a sign-in again in another tab). It clears the cookie when it names
+  one of them, and `interaction.cancelled` records it with `sessionEnded: true`,
+  about that account. A cookie session of another user stays, and when the
+  cookie keys cannot be read only the sessions the interaction holds end. "Use
+  another account", the switch at the account chooser, ends no session: the
+  accounts it lists stay signed in. An unknown, expired or finished
+  interaction and a wrong cookie get one
   `interaction_expired` answer (410), the same bytes whatever the cause, and so
   does a finish after the session its sign-in started has ended, by a sign-out
   in another tab, a revoke or its own end ([#963]): no request completes under
