@@ -126,13 +126,13 @@ sessions in Postgres, service roles, and health, readiness and metrics per
 process. [Topology](/operate/topology/) describes the result. Most of it needs
 no action. This section says what does, in order.
 
-| What changes                                         | What breaks when you do nothing                                                                      |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| The default realm answers on its issuer's host only. | A caller that reaches the server by another name, such as an internal name, gets `421`.              |
-| Keys move into a key store, wrapped by a KEK.        | With `NODE_ENV=production`, the server does not start without a KEK.                                 |
-| Browser sessions move to Postgres.                   | Every signed-in user signs in once more.                                                             |
-| `/health` checks nothing; `/ready` does.             | A probe on `/health` no longer takes a process out of rotation when Postgres or Redis is down.       |
-| The metrics leave the public port.                   | A scrape of `/metrics` gets `404`.                                                                   |
+| What changes                                         | What breaks when you do nothing                                                                        |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| The default realm answers on its issuer's host only. | A caller that reaches the server by another name, such as an internal name, gets `421`.                |
+| Keys move into a key store, wrapped by a KEK.        | With `NODE_ENV=production`, the server does not start without a KEK.                                   |
+| Browser sessions move to Postgres.                   | Every signed-in user signs in once more.                                                               |
+| `/health` checks nothing; `/ready` does.             | A probe on `/health` no longer takes a process out of rotation when Postgres or Redis is down.         |
+| The metrics leave the public port.                   | A scrape of `/metrics` gets `404`.                                                                     |
 | Two private-address switches are removed.            | A deployment that sets `CIMD_ALLOW_PRIVATE_ADDRESSES` or `ID_JAG_ALLOW_PRIVATE_ADDRESSES` won't start. |
 
 ### The upgrade, step by step
@@ -188,37 +188,37 @@ The settings 0.2 adds for hosts, keys, sessions and roles.
 [Configuration](/operate/configuration/) lists every key, those of other areas
 new in 0.2 among them.
 
-| Setting                              | Default                                         | What it sets                                                                                                                                  |
-| ------------------------------------ | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DEFAULT_REALM_ENDPOINT_HOSTS`       | empty                                           | Host names, comma-separated, that server-side callers reach the default realm by. Added as endpoint hosts at boot.                            |
-| `WEBAUTHN_RP_ID`                     | the default realm's host, from `JWT_ISSUER`     | The default realm's passkey RP ID. Locked once the realm has a passkey.                                                                       |
-| `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN` | `false`                                         | Allows a parent domain of the realm host as the RP ID. The server warns at every boot.                                                        |
-| `KEK_PROVIDER`                       | `local`                                         | Where the KEK lives. `local` reads `KEK` or `KEK_PATH`. Another name loads the adapter package `@qauth-labs/keys-<name>`.                     |
-| `KEK`                                | none; outside production, a published dev KEK   | The KEK, as the base64 of 32 random bytes. `NODE_ENV=production` refuses to start without a KEK.                                               |
-| `KEK_PATH`                           | none                                            | A file holding the KEK. It wins over `KEK`.                                                                                                   |
-| `KEK_PREVIOUS`                       | none                                            | The KEK in use before a KEK rotation. Keys wrapped under it still open.                                                                       |
-| `KEK_PREVIOUS_PATH`                  | none                                            | A file holding the previous KEK. It wins over `KEK_PREVIOUS`.                                                                                 |
-| `KEK_AWS_*`, `KEK_VAULT_*`           | see [Keys](/operate/keys/#environment-variables) | The settings of the two KEK adapter packages.                                                                                                 |
-| `SESSION_LAST_SEEN_INTERVAL`         | `60`                                            | How often, at most, in seconds, a browser session's last-seen time is written.                                                                |
-| `SESSION_RETENTION_DAYS`             | `30`                                            | The days an ended browser session is kept before the purge job deletes it.                                                                    |
-| `SERVICE_ROLES`                      | `all`                                           | The roles this process runs: `all`, or a list of `web`, `api`, `admin`, `signer` and `delivery`. See [Service roles](/operate/service-roles/). |
-| `SIGNER_URL`                         | none                                            | The `https` URL of the signer service, on a process without the `signer` role.                                                                |
-| `INTERNAL_HOST`                      | `127.0.0.1`                                     | The address the internal listener binds to.                                                                                                   |
-| `INTERNAL_PORT`                      | `3443`                                          | The port of the internal listener. It must differ from `PORT` and `ADMIN_API_PORT`.                                                           |
-| `INTERNAL_TLS_CERT_PATH`             | none                                            | This process's certificate for mutual TLS between the roles.                                                                                  |
-| `INTERNAL_TLS_KEY_PATH`              | none                                            | The private key of that certificate.                                                                                                          |
-| `INTERNAL_TLS_CA_PATH`               | none                                            | The CA certificates that issue every peer's certificate.                                                                                      |
-| `INTERNAL_PEER_ROLES`                | none                                            | A JSON object from a peer certificate's SAN to the role it calls as, or to `metrics` for a scraper.                                          |
-| `EGRESS_ALLOWLIST_PATH`              | none                                            | A JSON file of private hosts and ranges that operator- and admin-set destinations may reach, per realm.                                      |
+| Setting                              | Default                                          | What it sets                                                                                                                                   |
+| ------------------------------------ | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DEFAULT_REALM_ENDPOINT_HOSTS`       | empty                                            | Host names, comma-separated, that server-side callers reach the default realm by. Added as endpoint hosts at boot.                             |
+| `WEBAUTHN_RP_ID`                     | the default realm's host, from `JWT_ISSUER`      | The default realm's passkey RP ID. Locked once the realm has a passkey.                                                                        |
+| `WEBAUTHN_RP_ID_ALLOW_PARENT_DOMAIN` | `false`                                          | Allows a parent domain of the realm host as the RP ID. The server warns at every boot.                                                         |
+| `KEK_PROVIDER`                       | `local`                                          | Where the KEK lives. `local` reads `KEK` or `KEK_PATH`. Another name loads the adapter package `@qauth-labs/keys-<name>`.                      |
+| `KEK`                                | none; outside production, a published dev KEK    | The KEK, as the base64 of 32 random bytes. `NODE_ENV=production` refuses to start without a KEK.                                               |
+| `KEK_PATH`                           | none                                             | A file holding the KEK. It wins over `KEK`.                                                                                                    |
+| `KEK_PREVIOUS`                       | none                                             | The KEK in use before a KEK rotation. Keys wrapped under it still open.                                                                        |
+| `KEK_PREVIOUS_PATH`                  | none                                             | A file holding the previous KEK. It wins over `KEK_PREVIOUS`.                                                                                  |
+| `KEK_AWS_*`, `KEK_VAULT_*`           | see [Keys](/operate/keys/#environment-variables) | The settings of the two KEK adapter packages.                                                                                                  |
+| `SESSION_LAST_SEEN_INTERVAL`         | `60`                                             | How often, at most, in seconds, a browser session's last-seen time is written.                                                                 |
+| `SESSION_RETENTION_DAYS`             | `30`                                             | The days an ended browser session is kept before the purge job deletes it.                                                                     |
+| `SERVICE_ROLES`                      | `all`                                            | The roles this process runs: `all`, or a list of `web`, `api`, `admin`, `signer` and `delivery`. See [Service roles](/operate/service-roles/). |
+| `SIGNER_URL`                         | none                                             | The `https` URL of the signer service, on a process without the `signer` role.                                                                 |
+| `INTERNAL_HOST`                      | `127.0.0.1`                                      | The address the internal listener binds to.                                                                                                    |
+| `INTERNAL_PORT`                      | `3443`                                           | The port of the internal listener. It must differ from `PORT` and `ADMIN_API_PORT`.                                                            |
+| `INTERNAL_TLS_CERT_PATH`             | none                                             | This process's certificate for mutual TLS between the roles.                                                                                   |
+| `INTERNAL_TLS_KEY_PATH`              | none                                             | The private key of that certificate.                                                                                                           |
+| `INTERNAL_TLS_CA_PATH`               | none                                             | The CA certificates that issue every peer's certificate.                                                                                       |
+| `INTERNAL_PEER_ROLES`                | none                                             | A JSON object from a peer certificate's SAN to the role it calls as, or to `metrics` for a scraper.                                            |
+| `EGRESS_ALLOWLIST_PATH`              | none                                             | A JSON file of private hosts and ranges that operator- and admin-set destinations may reach, per realm.                                        |
 
 These settings change meaning:
 
-| Setting                                                                                   | In 0.2                                                                                                                                 |
-| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `JWT_ISSUER`                                                                              | The default realm's permanent issuer. A later boot with another value refuses to start.                                                |
-| `JWT_PRIVATE_KEY`, `JWT_RS256_PRIVATE_KEY`, `JWT_MLDSA_PRIVATE_KEY`, `SESSION_COOKIE_SECRET`, `OID4VP_VERIFIER_SIGNING_KEY` and their `_PATH` forms | Optional. Read only by the key boot step, which imports them into the key store or replaces a stored key with a new one.               |
-| `METRICS_ENABLED`                                                                         | Serves the metrics at `GET /internal/metrics` on the internal listener, never on the public port.                                     |
-| `OID4VP_RESPONSE_KEY_SECRET`                                                              | Read only to open wallet request states written by 0.1, which expire within 15 minutes.                                               |
+| Setting                                                                                                                                             | In 0.2                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `JWT_ISSUER`                                                                                                                                        | The default realm's permanent issuer. A later boot with another value refuses to start.                                  |
+| `JWT_PRIVATE_KEY`, `JWT_RS256_PRIVATE_KEY`, `JWT_MLDSA_PRIVATE_KEY`, `SESSION_COOKIE_SECRET`, `OID4VP_VERIFIER_SIGNING_KEY` and their `_PATH` forms | Optional. Read only by the key boot step, which imports them into the key store or replaces a stored key with a new one. |
+| `METRICS_ENABLED`                                                                                                                                   | Serves the metrics at `GET /internal/metrics` on the internal listener, never on the public port.                        |
+| `OID4VP_RESPONSE_KEY_SECRET`                                                                                                                        | Read only to open wallet request states written by 0.1, which expire within 15 minutes.                                  |
 
 `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are removed.
 
@@ -342,13 +342,13 @@ The first boot of a process that holds the `signer` role imports the key
 variables into the default realm's key store, under an advisory lock, so nodes
 that start together import once:
 
-| Variable                                   | Becomes                                                        |
-| ------------------------------------------ | -------------------------------------------------------------- |
-| `JWT_PRIVATE_KEY` / `_PATH`                | The Ed25519 token signing key                                  |
-| `JWT_RS256_PRIVATE_KEY` / `_PATH`          | The RS256 token signing key, which then signs ID tokens        |
-| `JWT_MLDSA_PRIVATE_KEY` / `_PATH`          | The ML-DSA-65 key of the hybrid pair, with hybrid signing on   |
-| `SESSION_COOKIE_SECRET`                    | The cookie key                                                 |
-| `OID4VP_VERIFIER_SIGNING_KEY` / `_PATH`    | The wallet verifier's request-signing key                      |
+| Variable                                | Becomes                                                      |
+| --------------------------------------- | ------------------------------------------------------------ |
+| `JWT_PRIVATE_KEY` / `_PATH`             | The Ed25519 token signing key                                |
+| `JWT_RS256_PRIVATE_KEY` / `_PATH`       | The RS256 token signing key, which then signs ID tokens      |
+| `JWT_MLDSA_PRIVATE_KEY` / `_PATH`       | The ML-DSA-65 key of the hybrid pair, with hybrid signing on |
+| `SESSION_COOKIE_SECRET`                 | The cookie key                                               |
+| `OID4VP_VERIFIER_SIGNING_KEY` / `_PATH` | The wallet verifier's request-signing key                    |
 
 The keys themselves do not change, so the tokens 0.1 signed still verify. The
 boot then creates the keys the realm lacks: the event-signing and data-at-rest
