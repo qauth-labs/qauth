@@ -82,9 +82,19 @@ const SELECT_ACCOUNT_STEP: InteractionStep = {
   alternatives: [],
 };
 const CONSENT_STEP: InteractionStep = { name: stepUrn('consent'), params: {}, alternatives: [] };
+const IDENTIFIER_STEP: InteractionStep = {
+  name: stepUrn('identifier'),
+  params: {},
+  alternatives: [],
+};
 
 type DecisionSpec =
-  | { kind: 'step'; step: InteractionStep }
+  | {
+      kind: 'step';
+      step: InteractionStep;
+      /** The identifier the sign-in engine's transaction holds from now on (#964). */
+      identifier?: string;
+    }
   | { kind: 'authenticated'; userId: string; amr: string[]; step: InteractionStep }
   | { kind: 'finished' };
 
@@ -97,6 +107,7 @@ async function interactionRoutes(app: FastifyInstance): Promise<void> {
   // instances the app loaded.
   const interaction = await import('./helpers/interaction');
   const browserSessions = await import('./helpers/browser-session');
+  const { requestRealm } = await import('./helpers/request-realm');
   const browser = { config: { surface: 'browser' as const } };
   const idOf = (request: { params: unknown }) => (request.params as { id: string }).id;
 
@@ -140,6 +151,21 @@ async function interactionRoutes(app: FastifyInstance): Promise<void> {
             kind: 'authenticated',
             signIn: { userId: decision.userId, amr: decision.amr, identifier: EMAIL },
             step: decision.step,
+          };
+        }
+        if (decision.kind === 'step' && decision.identifier !== undefined) {
+          // As the engine answers an identifier: the next step, for it.
+          return {
+            kind: 'step',
+            step: decision.step,
+            signInTransaction: {
+              v: 1,
+              realmId: requestRealm(request).id,
+              clientId: AUTHORIZE_REQUEST.client_id,
+              createdAt: Date.now(),
+              identifier: decision.identifier,
+              verified: [],
+            },
           };
         }
         return decision;
@@ -571,7 +597,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     });
   });
 
-  it('leaves a browser signed in before the interaction signed in on "Use another account", and signs it out on "Not you?" (#964)', async () => {
+  it('leaves a browser signed in before the interaction signed in on "Use another account" and on "Not you?" beside another account, and signs it out on "Not you?" beside its own (#964)', async () => {
     const app = await boot();
     const userId = await registerPasswordAccount(app, EMAIL);
     const authorize = await grantedClient(app, userId);
@@ -591,9 +617,24 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
     expect(owner.jar.get(SESSION_COOKIE)).toBe(cookie);
     expect(codeOf(await authorize(owner.jar.header()))).not.toBeNull();
 
-    // "Not you?", at the password step of an interaction started for it: the
-    // browser is signed out, and the client gets the login page.
-    const id = await owner.start({ carry: true });
+    // "Not you?" next to another account's identifier, at the password step
+    // of an interaction started for it: the screen does not show the
+    // signed-in account, so it stays signed in.
+    const other = await owner.start({ step: IDENTIFIER_STEP, carry: true });
+    await owner.answer(other, 0, {
+      kind: 'step',
+      step: PASSWORD_STEP,
+      identifier: 'someone-else@example.com',
+    });
+    const notThem = await owner.request('POST', `${TEST_PREFIX}/${other}/switch`);
+    expect(notThem.json()).toMatchObject({ kind: 'switched' });
+    expect(await sessionEnd(app, sid)).toEqual({ revoked: false, revoked_reason: null });
+    expect(owner.jar.get(SESSION_COOKIE)).toBe(cookie);
+
+    // "Not you?" next to its own identifier: the browser is signed out, and
+    // the client gets the login page.
+    const id = await owner.start({ step: IDENTIFIER_STEP, carry: true });
+    await owner.answer(id, 0, { kind: 'step', step: PASSWORD_STEP, identifier: EMAIL });
     const notYou = await owner.request('POST', `${TEST_PREFIX}/${id}/switch`);
     expect(notYou.json()).toMatchObject({ kind: 'switched' });
     expect(await sessionEnd(app, sid)).toEqual({ revoked: true, revoked_reason: 'sign_out' });
@@ -606,6 +647,7 @@ describe('the interaction record and the flow cookie (#592, real containers)', (
       (row) => row.type === 'urn:qauth:event:interaction.cancelled:v1-rc.0'
     );
     expect(cancelled.map((row) => [row.data['sessionEnded'], row.subject_id])).toEqual([
+      [undefined, null],
       [undefined, null],
       [true, userId],
     ]);

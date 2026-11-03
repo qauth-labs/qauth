@@ -227,11 +227,11 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
   }
 
   /** Answer the identifier step; the next answer is the password's, with its CSRF value. */
-  async function toPasswordStep(jar: CookieJar, id: string): Promise<string> {
+  async function toPasswordStep(jar: CookieJar, id: string, loginHint = EMAIL): Promise<string> {
     const identifier = await post(jar, id, {
       type: IDENTIFIER,
       csrf: (await read(id)).csrf,
-      login_hint: EMAIL,
+      login_hint: loginHint,
     });
     expect(identifier.statusCode, identifier.body).toBe(303);
     const step = await read(id);
@@ -566,5 +566,28 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
     // browser signs in first now.
     expect((await read(interactionIdOf(await authorize(jar)))).step).toBe(IDENTIFIER);
     expect(await codes()).toBe(0);
+  });
+
+  it('keeps the browser signed in on "Not you?" beside another identifier at a sign-in max_age asks for again (#964)', async () => {
+    await consentTo(['openid', 'email']);
+    const jar = await signInWithPassword(server(), EMAIL);
+    const cookie = jar.get(SESSION_COOKIE);
+    if (cookie === undefined) throw new Error('the sign-in set no session cookie');
+    const { sid } = sessionCookieParts(cookie);
+    vi.setSystemTime(Date.now() + 5_000);
+    const id = interactionIdOf(await authorize(jar, { max_age: '1' }));
+    // The password screen shows the identifier the person gave, not the
+    // signed-in account: "Not you?" there signs that account out, not this one.
+    await toPasswordStep(jar, id, 'someone-else@example.test');
+
+    const switched = await switchUser(jar, id);
+
+    expect(switched.statusCode, switched.body).toBe(200);
+    expect(await sessionEnd(sid)).toEqual({ revoked: false, revoked_reason: null });
+    const kept = jar.get(SESSION_COOKIE);
+    expect(kept === undefined ? undefined : sessionCookieParts(kept).sid).toBe(sid);
+    expect(await cancelledEvents()).toEqual([
+      { data: expect.not.objectContaining({ sessionEnded: expect.anything() }), subject_id: null },
+    ]);
   });
 });
