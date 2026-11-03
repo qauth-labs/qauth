@@ -70,11 +70,9 @@
       "section": "2",
       "level": "SHOULD",
       "quote": "If the ID Token's sid claim does not correspond to the RP's current session or a recent session at the OP, the OP SHOULD treat the logout request as suspect, and MAY decline to act upon it.",
-      "applies": "apps/auth-server/src/app/helpers/end-session.ts (answerEndSession) — the hint's sid is not compared with the browser session.",
-      "status": "waived",
-      "reason": "A valid hint ends the browser's session at once when its sub is the session's account, whatever its sid. The hint is the app's own ID token for that account, and ending a session is the safe direction: at worst the person signs in again. A sid of another session does not make the request suspect today.",
-      "decision": "graphs/flows/core/logout/flow.yaml",
-      "revisit": "never"
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (answerEndSession) — a valid hint whose sid is not the browser session's does not end it at once: the person gets the logout_confirm step, and nothing ends until they answer.",
+      "status": "covered",
+      "evidenceMatch": "names the account but another session by its sid"
     },
     {
       "id": "rpinitiated-2-ask-whether-to-log-out",

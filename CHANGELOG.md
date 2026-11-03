@@ -18,10 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `post_logout_redirect_uris` (migration 0057; the seed manifest, dynamic
   registration and CIMD documents take it), matched exactly; any other value
   gets an information page and never a redirect. Only a valid hint that names
-  the signed-in account ends the session at once; any other signed-in browser
-  gets the `logout_confirm` step (an interaction of purpose `logout`, or a
-  plain form while `INTERACTION_UI_ENABLED` is off), so a cross-site request
-  ends nothing. The session ends through the session service, which tells its
+  the signed-in account, and no other session by its `sid`, ends the session
+  at once; any other signed-in browser gets the `logout_confirm` step (an
+  interaction of purpose `logout`, or a plain form while
+  `INTERACTION_UI_ENABLED` is off), so a cross-site request ends nothing. The session ends through the session service, which tells its
   listeners for back-channel logout (#624); no refresh token is revoked.
   `GET /oauth/end-session/status` says whether the browser is still signed in.
   `user.signed_out` gains `sid`, and its CAEP `session-revoked` SET then names

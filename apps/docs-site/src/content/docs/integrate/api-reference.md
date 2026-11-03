@@ -538,7 +538,7 @@ browser here. **Parameters** (query, or form-encoded body): `id_token_hint`,
 `logout_hint`, each optional and given at most once.
 
 - A valid `id_token_hint` (expired accepted) that names the account of the
-  browser session ends that session: **`303`** to the registered
+  browser session, and no other session by its `sid`, ends that session: **`303`** to the registered
   `post_logout_redirect_uri` with `state`, or **`200`** with a signed-out page,
   and the session cookie cleared.
 - Any other signed-in browser gets the `logout_confirm` step: **`200`** with a

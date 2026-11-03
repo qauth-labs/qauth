@@ -692,7 +692,10 @@ What happens:
 
 - **The hint names the signed-in account.** The browser's session ends at
   once: QAuth revokes it, clears the session cookie and goes back to the
-  registered URI with `state`, or shows "You are signed out".
+  registered URI with `state`, or shows "You are signed out". The hint's
+  `sid`, when it carries one, must be this session's: a hint from another
+  session of the account is suspect (§2) and gets the confirmation step. So
+  does a hint of an app that was deleted, disabled or suspended since.
 - **Any other signed-in browser** gets a confirmation step: sign out, sign out
   of all accounts, or stay signed in. Nothing ends until the person answers.
   So a request without a valid hint, such as a cross-site image tag, ends

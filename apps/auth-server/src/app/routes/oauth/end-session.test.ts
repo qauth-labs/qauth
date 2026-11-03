@@ -127,6 +127,15 @@ const HINTS: Record<string, IdTokenHint> = {
     exp: 1_700_000_000,
     expired: true,
   },
+  // The account's ID token from another of its sessions.
+  'hint.alice.other-session': {
+    sub: USER_ID,
+    aud: ['notes-app'],
+    sid: '55555555-5555-4555-8555-555555555555',
+    expired: false,
+  },
+  // An ID token issued before ID tokens carried sid.
+  'hint.alice.no-sid': { sub: USER_ID, aud: ['notes-app'], expired: false },
   'hint.bob': { sub: OTHER_USER_ID, aud: ['notes-app'], expired: false },
   'hint.alice.quiet': { sub: USER_ID, aud: ['quiet-app'], expired: false },
   'hint.alice.disabled-app': { sub: USER_ID, aud: ['disabled-app'], expired: false },
@@ -601,6 +610,33 @@ describe('the confirm step (RP-Initiated Logout 1.0 §2, #675)', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain('Sign out?');
     expect(sessions.service.revoke).not.toHaveBeenCalled();
+  });
+
+  it('asks the person to confirm when a valid hint names the account but another session by its sid, a suspect request (RP-Initiated Logout 1.0 §2)', async () => {
+    const cookie = await signedIn();
+    const response = await endSession(
+      {
+        id_token_hint: 'hint.alice.other-session',
+        post_logout_redirect_uri: RETURN_URI,
+        state: STATE,
+      },
+      cookie
+    );
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers.location).toBeUndefined();
+    expect(response.body).toContain('Sign out?');
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(clearsSessionCookie(response)).toBe(false);
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_out:v1-rc.0');
+  });
+
+  it('ends the session at once for a valid hint of the account that carries no sid', async () => {
+    const cookie = await signedIn();
+    const response = await endSession({ id_token_hint: 'hint.alice.no-sid' }, cookie);
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.body).toContain('You are signed out');
+    expect(sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(clearsSessionCookie(response)).toBe(true);
   });
 
   it.each(['deleted-app', 'disabled-app', 'suspended-app'])(

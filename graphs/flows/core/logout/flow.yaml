@@ -28,8 +28,8 @@ summary: >-
   An app sends the browser to /oauth/end-session with an id_token_hint, its client_id, a post_logout_redirect_uri and
   state, all optional. QAuth checks the hint's signature and issuer and accepts it expired. A return URI must be one
   the app registered, matched exactly, for the client the hint or client_id names; otherwise QAuth shows an info page,
-  ends nothing and never redirects. When the hint names the account of the browser's session, that session ends at
-  once: its rows, its cookie and its registry rows go, and the session's end reaches the back-channel logout of its
+  ends nothing and never redirects. When the hint names the account of the browser's session (and, by its sid, no
+  other session), that session ends at once: its rows, its cookie and its registry rows go, and the session's end reaches the back-channel logout of its
   apps. In every other case a browser that is signed in gets the logout_confirm step, and nothing ends until the person
   answers it. The person signs out of this account or of every account on the browser, or stays signed in; either way
   the browser goes back to the app's registered URI with state, or to the sign-out status page.
@@ -132,9 +132,11 @@ context:
     say:
       none: 'the browser holds no live session of this realm'
       hinted: >-
-        the browser's session is of the account the valid hint's sub names, and the client the hint was issued to is
-        known and may be used
-      other: 'the browser holds a live session, and no valid hint names its account'
+        the browser's session is of the account the valid hint's sub names, the hint's sid (when it carries one) is that
+        session's, and the client the hint was issued to is known and may be used
+      other: >-
+        the browser holds a live session, and no valid hint names its account, or the hint names another session of it
+        by its sid (RP-Initiated Logout 1.0 §2 holds that request suspect), or the hint's client may no longer be used
   interactionUi:
     values: [off, on]
     initial: any

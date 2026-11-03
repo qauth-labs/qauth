@@ -54,8 +54,8 @@ import { emitUserEvent } from './user-events';
  *   information page, nothing ended, and never a redirect. A client that
  *   registered none never gets one.
  * - **The session.** Only when a valid hint names the account of the browser's
- *   session, and the client it was issued to may still be used, does it end
- *   at once. Otherwise a signed-in browser gets the
+ *   session, names no other session by its `sid`, and the client it was
+ *   issued to may still be used, does it end at once. Otherwise a signed-in browser gets the
  *   `logout_confirm` step and nothing ends until the person answers: a
  *   cross-site image tag, which carries no valid hint, ends nothing.
  * - **Ending it.** The session service revokes the one session (`sign_out`):
@@ -358,10 +358,17 @@ export async function answerEndSession(
   }
 
   const carried: CarriedSession = { userId: session.userId, sid: session.sid };
-  if (hint !== null && client !== null && hint.sub === session.userId) {
+  if (
+    hint !== null &&
+    client !== null &&
+    hint.sub === session.userId &&
+    (hint.sid === undefined || hint.sid === session.sid)
+  ) {
     // The app's own ID token names the account signed in here, and the app
     // may still be used: no confirmation is asked. A hint of a client that
-    // was deleted, disabled or suspended since gets the confirm step.
+    // was deleted, disabled or suspended since gets the confirm step, and so
+    // does a hint whose sid names another session of the account: §2 holds
+    // such a request suspect.
     await endLogoutSession(fastify, realm.id, carried);
     clearSessionCookie(reply);
     await recordSignedOut(request, realm.id, carried, clientId);
