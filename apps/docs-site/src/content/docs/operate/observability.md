@@ -173,8 +173,15 @@ does not depend on the realm's `bruteForce` policy: a realm whose lock is off
   verified nor counted; it counts as `reason="locked_out"` on
   `qauth_login_attempts_total`.
 - **Known IPs.** An end-user IP with a successful sign-in to the account in
-  the last 30 days skips the wait (the 16 most recent per account), and its
-  attempts still count toward the hard action.
+  the last 30 days (the 16 most recent per account) skips the wait while
+  fewer than 20 of the run's counted failures came from such known IPs.
+  Once 20 have, its next attempt waits as any other address's does, so a
+  shared address (a carrier or office NAT, a VPN exit, or a reverse proxy's
+  own address while `TRUST_PROXY` is unset) cannot run free to the hard
+  action: alone, it reaches the 100th failure only through the waits, in
+  about 20 hours. Failures from other addresses never use the 20 up, so a
+  guesser elsewhere cannot keep the owner out. Its attempts still count
+  toward the hard action, and a correct password still ends the run.
 - **No address in Redis.** The keys are
   `sign-in-ladder:{<realm id>:<identifier HMAC>}:password` and
   `…:known-ips`: the identifier and each known IP are kept as keyed HMACs,

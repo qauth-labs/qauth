@@ -47,7 +47,9 @@ export function createMemoryLadder(
   policy: LadderPolicy = PASSWORD_LADDER_POLICY
 ): MemoryLadder {
   checkLadderPolicy(policy);
-  const counters = new Map<string, MemoryLadderRun>();
+  /** A run, and how many of its counted failures came from known IPs (#968). */
+  type Counter = MemoryLadderRun & { readonly knownIpFailures: number };
+  const counters = new Map<string, Counter>();
   const known = new Map<string, Map<string, number>>();
   const reservations: MemoryLadder['reservations'] = [];
   let runs = 0;
@@ -84,8 +86,12 @@ export function createMemoryLadder(
         endUserIp === undefined
           ? undefined
           : known.get(knownKey(realmId, identifierHmac))?.get(endUserIp);
-      const exempt = policy.knownIpMs > 0 && seen !== undefined && at - seen < policy.knownIpMs;
+      const knownIp = policy.knownIpMs > 0 && seen !== undefined && at - seen < policy.knownIpMs;
       const state = live(key);
+      // A known IP skips the wait only while fewer than the bound of the run's
+      // counted failures came from known IPs (#968), as the Redis script.
+      const knownIpFailures = state?.knownIpFailures ?? 0;
+      const exempt = knownIp && knownIpFailures < policy.knownIpFreeFailures;
       if (!exempt && state !== undefined && state.waitUntil > at) {
         reservations.push({ factor, outcome: 'wait' });
         return { kind: 'wait', retryAfterSeconds: Math.ceil((state.waitUntil - at) / 1000) };
@@ -97,7 +103,13 @@ export function createMemoryLadder(
       // The retention follows the count alone, as the Redis script's PEXPIRE.
       const retention =
         failures >= policy.freeFailures ? policy.retentionMs : policy.freeRetentionMs;
-      counters.set(key, { failures, waitUntil, run, expiresAt: at + retention });
+      counters.set(key, {
+        failures,
+        waitUntil,
+        run,
+        expiresAt: at + retention,
+        knownIpFailures: knownIpFailures + (knownIp ? 1 : 0),
+      });
       reservations.push({ factor, outcome: 'reserved' });
       let settled = false;
       const reservation: LadderReservation = {

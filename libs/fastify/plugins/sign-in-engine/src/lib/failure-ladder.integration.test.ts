@@ -295,8 +295,10 @@ describe('the failure ladder over real Redis and Postgres', () => {
     expect(await disabledAt('marked@example.com')).toBeNull();
   });
 
-  it('lets a known IP skip the wait while every attempt still counts toward the 100th', async (testCtx) => {
+  it('lets a known IP skip the wait below 20 counted failures and makes it wait from then on as any other address, to the 100th only through the waits (#968)', async (testCtx) => {
     if (!dockerUp) return testCtx.skip();
+    const bound = PASSWORD_LADDER_POLICY.knownIpFreeFailures;
+    expect(bound).toBe(20);
     await seed('known@example.com');
     expect(await attempt('known@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
       kind: 'complete',
@@ -304,20 +306,110 @@ describe('the failure ladder over real Redis and Postgres', () => {
 
     hostedReset = true;
     try {
-      // The clock stands still: only the exemption lets these through.
-      for (let i = 0; i < 99; i += 1) {
-        expect(isRefusedCredential(await attempt('known@example.com', 'wrong', KNOWN_IP))).toBe(
-          true
-        );
+      // The clock stands still: 200 parallel guesses from the known IP, each in
+      // its own transaction, get the bound's 20 through and no more.
+      const burst = await Promise.all(
+        Array.from({ length: 200 }, () => attempt('known@example.com', 'wrong', KNOWN_IP))
+      );
+      expect(burst.filter(isRefusedCredential)).toHaveLength(bound);
+      expect(burst.filter(isThrottled)).toHaveLength(200 - bound);
+      expect(await counter('known@example.com')).toMatchObject({ n: String(bound) });
+
+      // From the bound on, the known IP gets the wait any other address gets,
+      // the right password included, and nothing is counted.
+      const wait = { kind: 'refused', reason: 'throttled', retryAfterSeconds: QUARTER_HOUR / 1000 };
+      expect(await attempt('known@example.com', PASSWORD, KNOWN_IP)).toMatchObject(wait);
+      expect(await attempt('known@example.com', 'wrong', OTHER_IP)).toMatchObject(wait);
+      expect(await counter('known@example.com')).toMatchObject({ n: String(bound) });
+
+      // The only way on to the 100th is to let each wait pass.
+      let waited = 0;
+      let counted = bound;
+      while (counted < 100) {
+        expect(await disabledAt('known@example.com')).toBeNull();
+        const result = await attempt('known@example.com', 'wrong', KNOWN_IP);
+        if (result.kind === 'refused' && result.reason === 'throttled') {
+          const ms = result.retryAfterSeconds * 1000;
+          expect(ms).toBeGreaterThan(0);
+          now += ms;
+          waited += ms;
+          continue;
+        }
+        expect(isRefusedCredential(result)).toBe(true);
+        counted += 1;
       }
-      expect(await counter('known@example.com')).toMatchObject({ n: '99' });
-      expect(isThrottled(await attempt('known@example.com', 'wrong', OTHER_IP))).toBe(true);
-      expect(await disabledAt('known@example.com')).toBeNull();
-      await attempt('known@example.com', 'wrong', KNOWN_IP);
+      expect(await counter('known@example.com')).toMatchObject({ n: '100' });
       expect(await disabledAt('known@example.com')).toEqual(expect.any(Number));
+      // The waits the 20th to the 99th failures set, 15 minutes each: 20 hours.
+      expect(waited).toBe((100 - bound) * QUARTER_HOUR);
     } finally {
       hostedReset = false;
     }
+  });
+
+  it('counts only known IPs’ failures toward the bound: a guesser elsewhere cannot keep the owner out (#968)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const bound = PASSWORD_LADDER_POLICY.knownIpFreeFailures;
+    await seed('known-owner@example.com');
+    expect(await attempt('known-owner@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    // A guesser at another address climbs past the bound through the waits.
+    let counted = 0;
+    while (counted < bound + 5) {
+      const result = await attempt('known-owner@example.com', 'wrong', OTHER_IP);
+      if (result.kind === 'refused' && result.reason === 'throttled') {
+        now += result.retryAfterSeconds * 1000;
+        continue;
+      }
+      expect(isRefusedCredential(result)).toBe(true);
+      counted += 1;
+    }
+    expect(isThrottled(await attempt('known-owner@example.com', 'wrong', OTHER_IP))).toBe(true);
+    const run = await counter('known-owner@example.com');
+    expect(run).toMatchObject({ n: String(bound + 5) });
+    expect(run).not.toHaveProperty('k');
+
+    // Inside that wait the owner's known IP is still exempt: a typo, then the right password.
+    expect(isRefusedCredential(await attempt('known-owner@example.com', 'wrong', KNOWN_IP))).toBe(
+      true
+    );
+    expect(await counter('known-owner@example.com')).toMatchObject({
+      n: String(bound + 6),
+      k: '1',
+    });
+    expect(await attempt('known-owner@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    expect(await counter('known-owner@example.com')).toEqual({});
+  });
+
+  it('still clears the run on a success from a known IP past its bound, which then skips the wait again (#968)', async (testCtx) => {
+    if (!dockerUp) return testCtx.skip();
+    const bound = PASSWORD_LADDER_POLICY.knownIpFreeFailures;
+    await seed('known-cleared@example.com');
+    expect(await attempt('known-cleared@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    for (let i = 0; i < bound; i += 1) {
+      expect(
+        isRefusedCredential(await attempt('known-cleared@example.com', 'wrong', KNOWN_IP))
+      ).toBe(true);
+    }
+    expect(isThrottled(await attempt('known-cleared@example.com', PASSWORD, KNOWN_IP))).toBe(true);
+
+    // Once the wait is over the owner signs in from the known IP: the run ends.
+    now += QUARTER_HOUR;
+    expect(await attempt('known-cleared@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    expect(await counter('known-cleared@example.com')).toEqual({});
+    for (let i = 0; i < bound; i += 1) {
+      expect(
+        isRefusedCredential(await attempt('known-cleared@example.com', 'wrong', KNOWN_IP))
+      ).toBe(true);
+    }
+    expect(await counter('known-cleared@example.com')).toMatchObject({ n: String(bound) });
   });
 
   it('counts the legacy login routes’ attempts on the same ladder as the engine’s', async (testCtx) => {

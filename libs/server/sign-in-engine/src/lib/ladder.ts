@@ -30,11 +30,30 @@ export interface LadderPolicy {
   readonly hardCeiling: number | null;
   /**
    * How long a successful sign-in from an end-user IP makes that IP known to
-   * the account: a known IP skips the wait and still counts toward the hard
-   * ceiling. `0` for a ladder with no exemption (a second factor: only a
-   * holder of the first factor reaches it).
+   * the account: a known IP skips the wait while fewer than
+   * `knownIpFreeFailures` of the run's counted failures came from known IPs,
+   * and every attempt of it still counts toward the hard ceiling. `0` for a
+   * ladder with no exemption (a second factor: only a holder of the first
+   * factor reaches it).
    */
   readonly knownIpMs: number;
+  /**
+   * The counted failures from IPs known to the account that a run lets skip
+   * the wait: once this many of its counted failures came from known IPs,
+   * a known IP waits as any other address does (#968). Many clients can
+   * share one address (a carrier or office NAT, a VPN exit, a reverse
+   * proxy's own address while `TRUST_PROXY` is unset), so after one sign-in
+   * of the owner an unbounded exemption let anyone behind it guess the
+   * account's password with no wait, up to the hard ceiling within seconds.
+   * Failures from other addresses never use the bound up, so a guesser
+   * elsewhere cannot take the owner's exemption away. `0` makes the
+   * exemption skip nothing, as `knownIpMs` 0 does. With a hard ceiling and
+   * an exemption, the waits a run's known-IP failures can skip are at most
+   * the bound's longest ones before it, and their time must be no more than
+   * the rest's, so a run reaches the ceiling in no less than half the time
+   * it takes from addresses no one signed in from. ADR-017 Decision 7: 20.
+   */
+  readonly knownIpFreeFailures: number;
   /**
    * How long a run that has reached a wait (`freeFailures` counted failures
    * or more) is kept after its last counted failure; each counted failure
@@ -78,10 +97,11 @@ const DAY_MS = 86_400_000;
  * The password ladder (ADR-017 Decision 7): from 5 consecutive failures the
  * next attempt waits 2^(n−5) seconds, capped at 15 minutes; 100 consecutive
  * counted failures fire the hard action; an IP with a successful sign-in to
- * the account in the last 30 days skips the wait; a run is kept after its
- * last counted failure 2 days while it has fewer than 5, and 30 days once it
- * has reached a wait. `development` may relax these (ADR-008 §5); `staging`
- * and `production` keep them.
+ * the account in the last 30 days skips the wait while fewer than 20 of
+ * the run's counted failures came from such IPs, and from then on waits as
+ * any other address does; a run is kept after its last counted failure 2 days while it has
+ * fewer than 5, and 30 days once it has reached a wait. `development` may
+ * relax these (ADR-008 §5); `staging` and `production` keep them.
  */
 export const PASSWORD_LADDER_POLICY: LadderPolicy = Object.freeze({
   freeFailures: 5,
@@ -89,6 +109,7 @@ export const PASSWORD_LADDER_POLICY: LadderPolicy = Object.freeze({
   maxWaitMs: 15 * 60_000,
   hardCeiling: 100,
   knownIpMs: 30 * DAY_MS,
+  knownIpFreeFailures: 20,
   retentionMs: 30 * DAY_MS,
   freeRetentionMs: 2 * DAY_MS,
   onSuccess: 'clear',
@@ -111,6 +132,20 @@ export function ladderWaitMs(failures: number, policy: LadderPolicy): number {
   return Math.min(policy.firstWaitMs * 2 ** doublings, policy.maxWaitMs);
 }
 
+/**
+ * The waits a run meets on its way from `from` consecutive counted failures to
+ * `to`: the sum of the waits its failures `from` … `to − 1` set, in ms.
+ */
+function waitsBetween(from: number, to: number, policy: LadderPolicy): number {
+  // Past MAX_DOUBLINGS every wait is the longest: those are counted at once.
+  const capped = policy.freeFailures + MAX_DOUBLINGS;
+  let total = 0;
+  let n = Math.max(from, policy.freeFailures);
+  for (; n < to && n < capped; n += 1) total += ladderWaitMs(n, policy);
+  if (to > n) total += (to - n) * policy.maxWaitMs;
+  return total;
+}
+
 /** Check a policy's numbers, so a store never runs a ladder that cannot hold. */
 export function checkLadderPolicy(policy: LadderPolicy): LadderPolicy {
   const whole = (value: number, min: number) => Number.isSafeInteger(value) && value >= min;
@@ -123,6 +158,27 @@ export function checkLadderPolicy(policy: LadderPolicy): LadderPolicy {
     throw new Error('ladder policy: hardCeiling below freeFailures');
   }
   if (!whole(policy.knownIpMs, 0)) throw new Error('ladder policy: knownIpMs is not a time');
+  if (!whole(policy.knownIpFreeFailures, 0)) {
+    throw new Error('ladder policy: knownIpFreeFailures is not a count');
+  }
+  // A known IP may be shared by many clients: it must not run free to the
+  // hard ceiling (#968). Waits never shrink as a run climbs, so its
+  // known-IP failures skip at most the `knownIpFreeFailures` waits just
+  // below the ceiling; the run still meets every wait before those, and
+  // they must be at least as long, so the ceiling takes at least half the
+  // time it takes with no known IP.
+  // A ladder with no exemption (`knownIpMs` 0) skips none.
+  const skippable =
+    policy.knownIpMs > 0 ? Math.min(policy.knownIpFreeFailures, policy.hardCeiling ?? 0) : 0;
+  if (
+    policy.hardCeiling !== null &&
+    waitsBetween(0, policy.hardCeiling - skippable, policy) <
+      waitsBetween(policy.hardCeiling - skippable, policy.hardCeiling, policy)
+  ) {
+    throw new Error(
+      'ladder policy: knownIpFreeFailures skips more than half the waits before the hard ceiling'
+    );
+  }
   if (!whole(policy.retentionMs, policy.maxWaitMs)) {
     throw new Error('ladder policy: retentionMs shorter than the longest wait');
   }

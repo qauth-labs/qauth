@@ -35,7 +35,8 @@ is read, refused inside its wait, and settled after the check. The plugin also r
 ceiling.
 
 The ladder's keys are `sign-in-ladder:{<realm id>:<identifier HMAC>}:<factor>` (a hash: the run's
-consecutive failures, the end of its wait, the run's id) and `…:known-ips` (a sorted set of
+consecutive failures, the end of its wait, the run's id and how many of its failures came from
+known IPs) and `…:known-ips` (a sorted set of
 end-user IP HMACs, scored by their last successful sign-in). The braces are a Redis Cluster hash
 tag, so one script reads and writes both. Every Redis call is bounded (2 s), and any error or
 timeout of a reservation refuses the attempt before a credential is checked.
@@ -66,4 +67,5 @@ sign-in, the right password included, and no row of any table changes.
 real Redis and Postgres: 200 parallel wrong passwords reach the verifier no more often than
 sequential ones, an attempt inside a wait is neither verified nor counted, the 100th failure
 disables the password only while armed, an ignored mark lets the user in, a known IP skips the
-wait and still counts, and a stopped Redis refuses the round before any credential is checked.
+wait for 20 known-IP failures of a run, whatever other addresses tried, and reaches the 100th only
+through the waits, still counting each, and a stopped Redis refuses the round before any credential is checked.

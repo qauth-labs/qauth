@@ -1204,8 +1204,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minutes; an attempt inside the wait gets `429` with `Retry-After`, is not
   verified and is not counted. A correct password clears the password's
   counter and no other. An end-user IP with a successful sign-in to the
-  account in the last 30 days skips the wait (up to 16 per account) and still
-  counts toward the hard action. A run of failures is kept 2 days after its
+  account in the last 30 days (up to 16 per account) skips the wait while
+  fewer than 20 of the run's counted failures came from such known IPs, and
+  from then on waits as any other address does ([#968]): many clients can
+  share one address, which must not guess its way to the hard action within
+  seconds, and failures from elsewhere never use the 20 up. Its attempts still
+  count toward the hard action. A run of failures is kept 2 days after its
   last counted failure while it has fewer than 5, and 30 days after its last
   counted failure once it has reached a wait ([#969]). Both follow the count
   alone, the same whether or not an account holds the identifier. A spray
@@ -2961,6 +2965,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#960]: https://github.com/qauth-labs/qauth/issues/960
 [#963]: https://github.com/qauth-labs/qauth/issues/963
 [#964]: https://github.com/qauth-labs/qauth/issues/964
+[#968]: https://github.com/qauth-labs/qauth/issues/968
 [#969]: https://github.com/qauth-labs/qauth/issues/969
 
 ### Deprecated
