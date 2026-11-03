@@ -184,9 +184,11 @@ no action. This section says what does, in order.
 
 With Docker Compose, `docker-compose.yml` already forwards `KEK`, sets
 `DEFAULT_REALM_ENDPOINT_HOSTS` to `auth-server`, the portal's name for the
-server, and checks `/ready`. Add `KEK` (or `KEK_PATH`) to your `.env`. Set
-`DEFAULT_REALM_ENDPOINT_HOSTS` only when other callers reach the server by
-other names, and list `auth-server` among them.
+server, and checks `/ready`. Add `KEK` to your `.env`, or set `KEK_PATH` and
+mount the file into `auth-server` as a Compose secret, as the comment above
+`KEK_PATH` in `docker-compose.yml` shows: without the mount the server does
+not start. Set `DEFAULT_REALM_ENDPOINT_HOSTS` only when other callers reach the
+server by other names, and list `auth-server` among them.
 
 ### New settings
 
@@ -315,11 +317,13 @@ default provider, `KEK_PROVIDER=local`, reads it from `KEK` or `KEK_PATH`.
 **Make one.** The KEK is the base64 of 32 random bytes:
 
 ```bash
-(umask 077 && openssl rand -base64 32 > qauth-kek)
+mkdir -p -m 700 ~/qauth-secrets
+(umask 077 && openssl rand -base64 32 > ~/qauth-secrets/qauth-kek)
 ```
 
-`umask 077` keeps the file its owner's alone from the start. Keep it out of
-any git checkout. [Keys](/operate/keys/#the-kek) says how a container reads it.
+`umask 077` keeps the file its owner's alone from the start. Keep it in a
+directory of its own, outside any git checkout and apart from the database
+backups. [Keys](/operate/keys/#the-kek) says how a container reads it.
 
 Set `KEK_PATH` to the file, or `KEK` to its content. `KEK_PATH` wins when both
 are set, and the server warns when group or others can read the file. Give it
@@ -398,7 +402,9 @@ curl -fsS "$ISSUER/.well-known/jwks.json"
 
 - `/ready` answers `200`, with every check `ok`.
 - Discovery names `JWT_ISSUER`, without a trailing slash.
-- The JWKS lists the keys of the `realm keys ready` line, each with its `kid`.
+- The JWKS lists the `token_signing` keys of the `realm keys ready` line, each
+  with its `kid`. The line's other keys, such as `cookie_hmac` and
+  `data_at_rest`, are never in the JWKS.
   An imported key's `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, and
   otherwise the RFC 7638 thumbprint of its public key.
 - An access token issued before the upgrade still introspects `active: true`,
