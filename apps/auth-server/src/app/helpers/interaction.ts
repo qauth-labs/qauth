@@ -19,6 +19,7 @@ import {
 import { interactionCsrf, matchesInteractionCsrf, mintCsrfKey } from './interaction-csrf';
 import { InteractionExpiredError } from './interaction-expired';
 import {
+  type CarriedSession,
   deleteInteraction,
   eventClientIdOf,
   IDENTIFIER_STEP,
@@ -38,6 +39,7 @@ import {
   mintInteractionId,
   readInteractionRecord,
   returnInteractionTurn,
+  SELECT_ACCOUNT_STEP,
   takeInteractionTurn,
   writeInteractionState,
 } from './interaction-record';
@@ -303,17 +305,22 @@ function viewOf(record: InteractionRecord): InteractionView {
   };
 }
 
-/** Emit one of the interaction events, about the record's client and user. */
+/**
+ * Emit one of the interaction events, about the record's client and user:
+ * the transaction's, or `userId` when the caller names another, such as the
+ * user whose session a user switch ended.
+ */
 async function emitInteractionEvent<Type extends RegisteredEventType>(
   request: FastifyRequest,
   record: InteractionRecord,
   type: Type,
-  data: EventDataOf<Type>
+  data: EventDataOf<Type>,
+  userId: string | null = record.transaction.userId ?? null
 ): Promise<void> {
   await emitUserEvent(request, type, data, {
     realmId: record.realmId,
     clientId: eventClientIdOf(record),
-    userId: record.transaction.userId ?? null,
+    userId,
     actor: 'user',
   });
 }
@@ -397,6 +404,16 @@ export interface StartInteractionInput {
    * needs the one a sign-in in the interaction started (#963).
    */
   readonly transaction?: InteractionTransaction;
+  /**
+   * The browser session the authorization request came with, when the
+   * browser was already signed in (#964): for a consent, the session the
+   * transaction is for; for a sign-in the request asks for again (`max_age`,
+   * `prompt=login`, a dangerous scope), the session the person signs in
+   * over. A user switch ("Not you?") ends it while nobody else has signed in
+   * during the interaction ({@link switchInteractionUser}). Absent for a
+   * browser that was not signed in.
+   */
+  readonly carriedSession?: CarriedSession;
 }
 
 /** What {@link startInteraction} returns. */
@@ -433,6 +450,7 @@ async function createInteraction(
     step,
     personal: input.personal ?? {},
     transaction: input.transaction ?? { amr: [] },
+    ...(input.carriedSession === undefined ? {} : { carriedSession: input.carriedSession }),
     flowBinding: flowBindingOf(secret),
     csrfKey: mintCsrfKey(),
     signInTransaction: null,
@@ -930,54 +948,93 @@ export async function cancelInteraction(
   return { kind: 'cancelled', request: taken.request };
 }
 
+/** Who a user switch leaves, and the sessions of theirs the interaction holds. */
+interface SwitchedUser {
+  readonly userId: string;
+  readonly sids: readonly string[];
+}
+
 /**
- * End the browser sessions a user switch leaves behind (#896): the one the
- * interaction's authentication started, and the session the browser's cookie
- * names when that is a later one of the same user, such as a sign-in again in
- * another tab (#964). Kept, either would sign the browser in as the first user
- * wherever the person goes next, should they abandon the new ceremony: on a
- * shared device, the next person or the next client would get the previous
- * user's session. Keeping them would be a multi-account model, which ADR-017
- * does not describe. A cookie session of another user stays: that user signed
- * in on this browser since, and is not the one the person switches away from.
+ * The user a "Not you?" switch leaves (#896, #964): the one who signed in
+ * during the interaction or the one the transaction is for (a consent for the
+ * signed-in browser, #628), else the user of the browser session the
+ * interaction started for. Their sessions the record holds: the
+ * transaction's, and the carried-in one when it is the same user's. A carried
+ * session of another user stays: someone else signed in over it during the
+ * interaction, and the person switches away from them, not from it.
+ * `undefined` when the interaction is for nobody yet: a browser that was not
+ * signed in, before anyone signed in.
+ */
+function switchedUserOf(record: InteractionRecord): SwitchedUser | undefined {
+  const { userId, sid } = record.transaction;
+  const carried = record.carriedSession;
+  const leaving = userId ?? carried?.userId;
+  if (leaving === undefined) return undefined;
+  const sids = new Set<string>();
+  if (userId !== undefined && sid !== undefined) sids.add(sid);
+  if (carried !== undefined && carried.userId === leaving) sids.add(carried.sid);
+  return sids.size === 0 ? undefined : { userId: leaving, sids: [...sids] };
+}
+
+/**
+ * End the browser sessions a "Not you?" switch leaves behind (#896, #964):
+ * those of the user it leaves ({@link switchedUserOf}), whether a sign-in
+ * during the interaction started them or the interaction started for an
+ * already signed-in browser and carried its session in, and the session the
+ * browser's cookie names when that is a later one of the same user, such as a
+ * sign-in again in another tab. Kept, any of them would sign the browser in
+ * as that user wherever the person goes next, should they abandon the new
+ * ceremony: on a shared device, the next person or the next client would get
+ * the previous user's session. That is the common "Not you?": the screen
+ * names the signed-in user, and someone else is at the keyboard. A cookie
+ * session of another user stays: that user signed in on this browser since,
+ * and is not the one the person switches away from.
  *
- * The person ends them as their user, as a sign-out does: the switch is made
- * by the browser that holds the flow cookie of the first user's interaction.
- * Ended while the switch holds the turn and before the interaction is
- * deleted: when an end fails, or the session service cannot read the
- * cookie's session, the turn is given back and the interaction stays as it
- * was, so a retry switches again; the switch never goes on while a session it
- * ends is still live. Ending a session twice is safe, so a retry ends nothing
- * new.
+ * The account chooser's "Use another account" (a switch at the
+ * `select_account` step, #658) ends nothing: it adds an account, and the
+ * accounts it lists stay signed in (ADR-019 Decision 3, #548). When the
+ * cookie holds several accounts (#548), "Not you?" is a sign-out of the
+ * account it leaves only, and the cookie keeps the others.
  *
- * @returns `undefined` when the interaction held no session (a switch before
- *   anyone authenticated in it, which ends nothing: the account chooser's
- *   "Use another account", #658); otherwise whether the browser's cookie
- *   names a session this ended, and is to be cleared
+ * The person ends them as that user, as a sign-out does: the switch is made
+ * by the browser that holds the flow cookie of the interaction, which the
+ * carried-in session came from as well. Ended while the switch holds the turn
+ * and before the interaction is deleted: when an end fails, or the session
+ * service cannot read the cookie's session, the turn is given back and the
+ * interaction stays as it was, so a retry switches again; the switch never
+ * goes on while a session it ends is still live. Ending a session twice is
+ * safe, so a retry ends nothing new.
+ *
+ * @returns `undefined` when the switch ends nothing ("Use another account",
+ *   or an interaction that is for nobody yet); otherwise the user it left
+ *   and whether the browser's cookie names a session this ended, and is to
+ *   be cleared
  */
 async function endSwitchedSessions(
   request: FastifyRequest,
   taken: InteractionRecord,
   idHash: string
-): Promise<{ readonly clearCookie: boolean } | undefined> {
-  const { sid, userId } = taken.transaction;
-  if (sid === undefined || userId === undefined) return undefined;
+): Promise<{ readonly userId: string; readonly clearCookie: boolean } | undefined> {
+  if (taken.step.name === SELECT_ACCOUNT_STEP) return undefined;
+  const switched = switchedUserOf(taken);
+  if (switched === undefined) return undefined;
+  const { userId, sids } = switched;
   const { realmId } = taken;
   try {
-    await endFirstUserSession(request, realmId, sid, userId);
+    for (const sid of sids) await endFirstUserSession(request, realmId, sid, userId);
     const named = await switchCookieSessionId(request, realmId);
-    if (named === null || named === sid) return { clearCookie: named === sid };
+    if (named === null || sids.includes(named)) return { userId, clearCookie: named !== null };
     const later = await request.server.sessionService.get({ realmId, sid: named });
-    if (later === null || later.userId !== userId) return { clearCookie: false };
+    if (later === null || later.userId !== userId) return { userId, clearCookie: false };
     await endFirstUserSession(request, realmId, named, userId);
-    return { clearCookie: true };
+    return { userId, clearCookie: true };
   } catch (error) {
     await giveTurnBack(request, taken, idHash);
     throw error;
   }
 }
 
-/** End one of the first user's sessions at a user switch: a sign-out by that user. */
+/** End one of the left user's sessions at a user switch: a sign-out by that user. */
 async function endFirstUserSession(
   request: FastifyRequest,
   realmId: string,
@@ -999,7 +1056,7 @@ async function endFirstUserSession(
  * `/auth/logout` reads it, or `null` when it names none that verifies. Best
  * effort (#493): the cookie verifies only with the realm's cookie keys, and a
  * signer this process cannot reach must not fail a switch. Then this is
- * `null`, logged: the session the sign-in started still ends, the cookie
+ * `null`, logged: the sessions the interaction holds still end, the cookie
  * stays, and the next page that reads it clears it if its session has ended.
  */
 async function switchCookieSessionId(
@@ -1015,7 +1072,7 @@ async function switchCookieSessionId(
   } catch (error) {
     request.log.warn(
       { reason: error instanceof Error ? error.name : 'unknown_error' },
-      'the session cookie could not be checked at a user switch; it stays, and only the session the sign-in started was ended'
+      'the session cookie could not be checked at a user switch; it stays, and only the sessions the interaction held were ended'
     );
     return null;
   }
@@ -1026,15 +1083,25 @@ async function switchCookieSessionId(
  * interaction and start a new one for the same authorization request, at the
  * identifier step, bound to a new flow secret that replaces this one's.
  * Nothing proved here carries over (ADR-017, one subject per transaction):
- * the new transaction is empty. A switch made after the person authenticated
- * also ends the browser session that authentication started, and the session
- * the browser's cookie names when it is the same user's, and clears that
- * cookie (#896, #964); `interaction.cancelled` records it (`sessionEnded`). A
- * switch before anyone authenticated ends no session, so a browser already
- * signed in when the interaction started stays signed in (#964). The old id
- * gets the generic expired answer from now on. The new interaction keeps the
- * request's absolute expiry: one authorization request has one lifetime, and
- * switching never extends it.
+ * the new transaction is empty, and the new interaction carries no session.
+ *
+ * Which sessions end depends on the step the switch is made at (#964):
+ *
+ * - "Not you?", at any step but the account chooser: the sessions of the
+ *   user the interaction is for end, as a sign-out by that user. That is the
+ *   one a sign-in during the interaction started (#896), or, while nobody
+ *   has signed in during it, the browser session the interaction started for
+ *   (`carriedSession`: a consent or a sign-in again for an already signed-in
+ *   browser), and the session the browser's cookie names when it is a later
+ *   one of that user. The cookie is cleared when it names one of them, and
+ *   `interaction.cancelled` records it (`sessionEnded`), about that user.
+ * - "Use another account", at the `select_account` step: no session ends.
+ *
+ * An interaction for nobody yet (a browser that was not signed in, before
+ * anyone signed in) ends no session. The old id gets the generic expired
+ * answer from now on. The new interaction keeps the request's absolute
+ * expiry: one authorization request has one lifetime, and switching never
+ * extends it.
  *
  * @param identifierStep - the identifier step as the engine offers it (its
  *   alternatives); the plain identifier step when absent
@@ -1052,18 +1119,24 @@ export async function switchInteractionUser(
   const bound = await locateBound(request, id);
   const taken = await takeBound(request, bound);
   if (taken === null) return { kind: 'stale' };
-  // The first user's sessions end first. When the sweep claimed the
+  // The left user's sessions end first. When the sweep claimed the
   // interaction meanwhile, they stay ended: the person asked to leave them,
   // and the cookie that names one is cleared on its next read.
   const ended = await endSwitchedSessions(request, taken, bound.idHash);
   if (!(await deleteTaken(request, taken, bound.idHash))) refuse(request, 'expired');
   if (ended?.clearCookie === true) clearSessionCookie(reply);
-  await emitInteractionEvent(request, taken, 'urn:qauth:event:interaction.cancelled:v1-rc.0', {
-    interaction: taken.ref,
-    step: taken.step.name,
-    reason: 'user_switch',
-    ...(ended === undefined ? {} : { sessionEnded: true }),
-  });
+  await emitInteractionEvent(
+    request,
+    taken,
+    'urn:qauth:event:interaction.cancelled:v1-rc.0',
+    {
+      interaction: taken.ref,
+      step: taken.step.name,
+      reason: 'user_switch',
+      ...(ended === undefined ? {} : { sessionEnded: true }),
+    },
+    ended?.userId ?? taken.transaction.userId ?? null
+  );
   const started = await createInteraction(request, reply, {
     request: taken.request,
     step: identifierStep,

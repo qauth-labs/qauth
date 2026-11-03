@@ -45,9 +45,11 @@ import {
   switchInteractionUser,
 } from './interaction';
 import {
+  type CarriedSession,
   IDENTIFIER_STEP,
   interactionIdHash,
   type InteractionStep,
+  type InteractionTransaction,
   readInteractionRecord,
   takeInteractionTurn,
   writeInteractionState,
@@ -163,6 +165,9 @@ async function buildHarness(): Promise<Harness> {
       step?: InteractionStep;
       personal?: object;
       request?: object;
+      /** As `/oauth/authorize` starts one for a signed-in browser (#628, #964). */
+      transaction?: InteractionTransaction;
+      carriedSession?: CarriedSession;
     };
     return startInteraction(request, reply, {
       request: {
@@ -172,6 +177,8 @@ async function buildHarness(): Promise<Harness> {
       },
       step: body.step ?? PASSWORD_STEP,
       ...(body.personal === undefined ? {} : { personal: body.personal as never }),
+      ...(body.transaction === undefined ? {} : { transaction: body.transaction }),
+      ...(body.carriedSession === undefined ? {} : { carriedSession: body.carriedSession }),
     });
   });
   app.get(`${INTERACTION_API_PREFIX}/:id`, async (request) =>
@@ -1293,10 +1300,10 @@ describe("the user switch ends the first user's browser session (#896)", () => {
     ]);
   });
 
-  it('ends no session on a switch before anyone authenticated in the interaction', async () => {
+  it('ends no session on a switch from an interaction that is for nobody yet', async () => {
     const owner = new Browser();
-    // The browser holds a session from before this interaction, which the
-    // interaction never used: the switch leaves it.
+    // The browser holds a session the interaction was not started for (one
+    // signed in in another tab since): the switch leaves it.
     const { session } = await harness.sessions.signIn({ realmId: REALM.id, userId: USER_B });
     owner.cookies.set(
       SESSION_COOKIE_NAME,
@@ -1440,6 +1447,218 @@ describe("the user switch ends the first user's browser session (#896)", () => {
       'the session cookie could not be checked at a user switch'
     );
     expect(cancelledEvents()[0]?.data).toMatchObject({ sessionEnded: true });
+  });
+});
+
+describe('a user switch for a browser that was signed in when the interaction started (#964)', () => {
+  function switchUser(owner: Browser, id: string) {
+    return owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`);
+  }
+
+  /** The `interaction.cancelled` events emitted so far, oldest first. */
+  function cancelledEvents() {
+    return vi
+      .mocked(emitUserEvent)
+      .mock.calls.filter(([, type]) => type === 'urn:qauth:event:interaction.cancelled:v1-rc.0')
+      .map(([, , data, options]) => ({ data, options }));
+  }
+
+  /** A browser whose cookie names a live session of `userId`. */
+  async function signedInBrowser(userId: string) {
+    const owner = new Browser();
+    const { session } = await harness.sessions.signIn({ realmId: REALM.id, userId });
+    owner.cookies.set(
+      SESSION_COOKIE_NAME,
+      (await sessionCookie(harness.app, session)).split('=')[1]
+    );
+    return { owner, session };
+  }
+
+  /** Point the browser's session cookie at `session`, as a sign-in in another tab does. */
+  async function cookieNames(owner: Browser, session: { sid: string }) {
+    owner.cookies.set(
+      SESSION_COOKIE_NAME,
+      (await sessionCookie(harness.app, session as never)).split('=')[1]
+    );
+  }
+
+  /** The record of the interaction `id` names, as Redis holds it. */
+  function recordOf(id: string) {
+    return readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+  }
+
+  it('ends the session a consent was started for, clears its cookie, and records it about that user', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    // As `/oauth/authorize` starts a consent for a signed-in browser (#628):
+    // the transaction is for the session, which is carried in.
+    const id = await owner.start({
+      step: CONSENT_STEP,
+      transaction: { userId: USER_A, sid: session.sid, authTime: session.authTime, amr: [] },
+      carriedSession: { userId: USER_A, sid: session.sid },
+    });
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    // Ended once, as a sign-out by the session's own user.
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: session.sid,
+      reason: 'sign_out',
+      actor: { type: 'user', id: USER_A },
+      userId: USER_A,
+    });
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(false);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ reason: 'user_switch', sessionEnded: true }),
+        options: expect.objectContaining({ userId: USER_A, actor: 'user' }),
+      },
+    ]);
+  });
+
+  it('ends the session a sign-in asked for again was started for, before anyone signed in during it', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    // `max_age`, `prompt=login` or a dangerous scope: the person signs in
+    // again, as anyone, so the session is carried in and is no subject.
+    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(false);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    // The event names the user whose session ended, though nobody signed in.
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ reason: 'user_switch', sessionEnded: true }),
+        options: expect.objectContaining({ userId: USER_A }),
+      },
+    ]);
+    // The new interaction is for nobody, and carries nothing in.
+    const next = await recordOf((switched.json() as { id: string }).id);
+    expect(next?.transaction).toEqual({ amr: [] });
+    expect(next).not.toHaveProperty('carriedSession');
+  });
+
+  it('ends a later session of the same user that the cookie names too (a sign-in again in another tab)', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    const { session: later } = await harness.sessions.signIn({ realmId: REALM.id, userId: USER_A });
+    await cookieNames(owner, later);
+
+    await switchUser(owner, id);
+
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(false);
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(false);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(2);
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+  });
+
+  it('leaves a later cookie session of another user, and still ends the carried-in one', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    const { session: later } = await harness.sessions.signIn({ realmId: REALM.id, userId: USER_B });
+    await cookieNames(owner, later);
+
+    await switchUser(owner, id);
+
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(false);
+    expect(harness.sessions.service.sessions.has(later.sid)).toBe(true);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(
+      await verifySessionCookie(harness.app, REALM.id, owner.cookies.get(SESSION_COOKIE_NAME))
+    ).toBe(later.sid);
+  });
+
+  it('ends no session on "Use another account" at the account chooser: the accounts it lists stay signed in', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await owner.start({
+      step: SELECT_ACCOUNT_STEP,
+      carriedSession: { userId: USER_A, sid: session.sid },
+    });
+
+    const switched = await switchUser(owner, id);
+
+    expect(switched.json()).toMatchObject({ kind: 'switched' });
+    expect(harness.sessions.service.revoke).not.toHaveBeenCalled();
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(true);
+    expect(String(switched.headers['set-cookie'])).not.toContain(SESSION_COOKIE_NAME);
+    expect(
+      await verifySessionCookie(harness.app, REALM.id, owner.cookies.get(SESSION_COOKIE_NAME))
+    ).toBe(session.sid);
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.not.objectContaining({ sessionEnded: expect.anything() }),
+        options: expect.objectContaining({ userId: null }),
+      },
+    ]);
+    // The new interaction carries nothing in either: a later "Not you?" in it
+    // leaves the listed accounts too, until someone signs in there.
+    expect(await recordOf((switched.json() as { id: string }).id)).not.toHaveProperty(
+      'carriedSession'
+    );
+  });
+
+  it('ends the carried-in session and the new one when the same user signed in again during the interaction', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_A,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+    const fresh = await verifySessionCookie(
+      harness.app,
+      REALM.id,
+      owner.cookies.get(SESSION_COOKIE_NAME)
+    );
+    expect(fresh).not.toBeNull();
+    expect(fresh).not.toBe(session.sid);
+
+    await switchUser(owner, id);
+
+    for (const sid of [session.sid, fresh as string]) {
+      expect(harness.sessions.service.sessions.has(sid)).toBe(false);
+    }
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+  });
+
+  it('leaves the carried-in session of a user someone else signed in over during the interaction', async () => {
+    const { owner, session } = await signedInBrowser(USER_A);
+    const id = await owner.start({ carriedSession: { userId: USER_A, sid: session.sid } });
+    await owner.answer(id, 0, {
+      kind: 'authenticated',
+      userId: USER_B,
+      amr: ['pwd'],
+      step: CONSENT_STEP,
+    });
+    const signedIn = await verifySessionCookie(
+      harness.app,
+      REALM.id,
+      owner.cookies.get(SESSION_COOKIE_NAME)
+    );
+
+    await switchUser(owner, id);
+
+    // "Not you?" leaves USER_B, the user the interaction is for now.
+    expect(harness.sessions.service.sessions.has(signedIn as string)).toBe(false);
+    expect(harness.sessions.service.sessions.has(session.sid)).toBe(true);
+    expect(harness.sessions.service.revoke).toHaveBeenCalledTimes(1);
+    expect(cancelledEvents()).toEqual([
+      {
+        data: expect.objectContaining({ sessionEnded: true }),
+        options: expect.objectContaining({ userId: USER_B }),
+      },
+    ]);
   });
 });
 
