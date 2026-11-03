@@ -25,6 +25,10 @@ coverage/
 .env
 .env.local
 
+# KEK files, as operate/keys makes them
+qauth-kek
+qauth-kek-previous
+
 # System files
 .DS_Store
 Thumbs.db
