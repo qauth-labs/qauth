@@ -19,9 +19,9 @@ import { quoteRoleName, type TablePrivilege } from '../role-grants';
  *   which events every enabled destination has finished.
  * - `realms`: `SELECT` on the id and the two retention columns only.
  *
- * QAuth creates no database users: the operator does, and the per-role
- * grants script (#498) applies these statements to the user the topology
- * area runs the retention job as. Until the roles are split, the one
+ * QAuth creates no database users: the operator does. The grants map of #498
+ * (`database-users/grants-map.ts`) gives these grants to the `delivery` role,
+ * which runs the retention job. While every role connects as one user, the one
  * database user owns the tables and can delete rows; the hash chain and its
  * anchor show a removed admin row.
  */

@@ -19,6 +19,12 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  createDatabaseUsers,
+  databaseUrlAs,
+  grantDatabaseUsers,
+  PERMISSION_ERROR,
+} from '../testing/database-users';
+import {
   baseEnvironment,
   bootAuthServer,
   type BootedAuthServer,
@@ -30,6 +36,8 @@ import {
   registerPasswordAccount,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { SIGNER_LISTENER } from '../testing/service-role-env';
+import type { ServiceRole } from './service-roles';
 
 /**
  * QAUTH'S SECURITY EVENTS ON SSF STREAMS, END TO END (issue #540).
@@ -50,6 +58,16 @@ import {
  * subject ends by the sweep once the consent is withdrawn and its SET is
  * delivered, not before. Every delivered SET is checked for the claims
  * RFC 8417 §2.2 requires.
+ *
+ * The suite runs twice. Once as one process holding every role on one
+ * database user; once with the roles apart, each process on a database user
+ * of its own that `db:grants` gave exactly its roles' grants (#498): `api`
+ * manages the streams and runs the subject sweep, which reads the event
+ * store only through `ssf_subject_events_pending` (migration 0055), and
+ * `delivery` fans the events out and pushes the SETs. Both hold the signer
+ * too, on a user given the signer's grants as well, as nothing else signs a
+ * token or a SET until the signer service ships (#497). A permission error
+ * either logs fails the test.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -96,618 +114,718 @@ interface Receiver {
   readonly token: string;
 }
 
+/** How the suite deploys the server: see the file's comment. */
+type Deployment = 'one process' | 'split roles';
+
+/** The split deployment's database users: one per role, and two that add the signer's grants. */
+const USERS: Readonly<Record<ServiceRole, string>> = {
+  web: 'qauth_ssfsec_web',
+  api: 'qauth_ssfsec_api',
+  admin: 'qauth_ssfsec_admin',
+  signer: 'qauth_ssfsec_signer',
+  delivery: 'qauth_ssfsec_delivery',
+};
+const API_SIGNER = 'qauth_ssfsec_api_signer';
+const DELIVERY_SIGNER = 'qauth_ssfsec_delivery_signer';
+
 /** A delivered SET, verified with the transmitter's own keys. */
 interface DeliveredSet {
   readonly header: ReturnType<typeof decodeProtectedHeader>;
   readonly claims: JWTPayload & Record<string, unknown>;
 }
 
-describe('security events on SSF streams (real containers)', () => {
-  let infra: E2eInfrastructure | undefined;
-  let jwt: PemKeyPair | undefined;
-  let net: FixtureNetwork | undefined;
-  let receiver: FixtureServer;
-  let otherReceiver: FixtureServer;
-  /** A receiver that answers `flakyStatus`: a test makes it fail, then accept. */
-  let flakyReceiver: FixtureServer;
-  let flakyStatus = 202;
-  let dockerUp = false;
-  const booted: BootedAuthServer[] = [];
+describe.each<Deployment>(['one process', 'split roles'])(
+  'security events on SSF streams (%s, real containers)',
+  (deployment) => {
+    let infra: E2eInfrastructure | undefined;
+    let jwt: PemKeyPair | undefined;
+    let net: FixtureNetwork | undefined;
+    let receiver: FixtureServer;
+    let otherReceiver: FixtureServer;
+    /** A receiver that answers `flakyStatus`: a test makes it fail, then accept. */
+    let flakyReceiver: FixtureServer;
+    let flakyStatus = 202;
+    let dockerUp = false;
+    const booted: BootedAuthServer[] = [];
+    /** Split: the owner's process, which created the default realm and its keys. */
+    let fixture: BootedAuthServer | undefined;
+    /** The pool of the tables' owner: the fixtures' reads and writes, past any role's grants. */
+    let owner: FastifyInstance['dbPool'] | undefined;
+    /** Split: what the role processes logged, `warn` and up. */
+    const logLines: string[] = [];
 
-  beforeAll(async () => {
-    dockerUp = await requireDockerOrSkip();
-    if (!dockerUp) return;
-    infra = await startE2eInfrastructure();
-    jwt = await generateJwtPem();
-    net = await createFixtureNetwork();
-    const accept = (_req: IncomingMessage, _body: Buffer, res: ServerResponse) => {
-      res.writeHead(202);
-      res.end();
-    };
-    receiver = await net.serve(RECEIVER_ADDRESS, accept);
-    otherReceiver = await net.serve(OTHER_RECEIVER_ADDRESS, accept);
-    flakyReceiver = await net.serve(FLAKY_RECEIVER_ADDRESS, (_req, _body, res) => {
-      res.writeHead(flakyStatus);
-      res.end();
-    });
-  }, 240_000);
-
-  afterAll(async () => {
-    await net?.close();
-    await infra?.teardown();
-  });
-
-  beforeEach((ctx) => {
-    if (!dockerUp || !net) {
-      ctx.skip();
-      return;
-    }
-    net.dns.clear();
-    net.dns.set('receiver.egress.test', [RECEIVER_ADDRESS]);
-    net.dns.set('other.egress.test', [OTHER_RECEIVER_ADDRESS]);
-    net.dns.set('flaky.egress.test', [FLAKY_RECEIVER_ADDRESS]);
-    for (const server of [receiver, otherReceiver, flakyReceiver]) server.requests.length = 0;
-    flakyStatus = 202;
-    network.current = net.transport;
-  });
-
-  afterEach(async () => {
-    await Promise.all(booted.splice(0).map((server) => server.close()));
-  });
-
-  /** Boot the server with the transmitter on; the database keeps earlier tests' rows, so every id is new. */
-  async function boot(): Promise<{ app: FastifyInstance; realmId: string }> {
-    if (!infra || !jwt) throw new Error('infrastructure not started');
-    const server = await bootAuthServer({
-      ...baseEnvironment(infra, jwt),
-      SSF_TRANSMITTER_ENABLED: 'true',
-      // Every request comes from one address, and the suite registers and
-      // signs in more accounts than the per-address defaults allow.
-      REGISTRATION_RATE_LIMIT: '100',
-      LOGIN_RATE_LIMIT: '100',
-      VERIFICATION_RATE_LIMIT: '100',
-      EVENT_DELIVERY_RETRY_INITIAL_DELAY: '1',
-      EVENT_DELIVERY_RETRY_MAX_DELAY: '2',
-    });
-    booted.push(server);
-    const { app } = server;
-    const { rows } = await app.dbPool.query<{ id: string }>(
-      'UPDATE realms SET ssf_transmitter_enabled = true WHERE name = $1 RETURNING id::text AS id',
-      [E2E_REALM_NAME]
-    );
-    app.realmHostCache.clear();
-    return { app, realmId: rows[0].id };
-  }
-
-  /**
-   * A receiver: the client users sign in through, given `client_credentials`
-   * and `ssf:stream` as well, and an access token it got with its own
-   * credentials. Its users' relation to it is seeded by each test.
-   */
-  async function newReceiver(
-    app: FastifyInstance,
-    realmId: string,
-    options: { developerId?: string; audience?: string[] } = {}
-  ): Promise<Receiver> {
-    const clientId = `receiver-${randomUUID()}`;
-    const secret = `secret-${randomUUID()}`;
-    const client = await app.repositories.oauthClients.create({
-      realmId,
-      clientId,
-      clientSecretHash: await app.passwordHasher.hashPassword(secret),
-      tokenEndpointAuthMethod: 'client_secret_post',
-      name: 'SSF receiver',
-      redirectUris: ['https://receiver.example.com/callback'],
-      scopes: ['openid', 'ssf:stream'],
-      grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
-      audience: options.audience ?? [ISSUER],
-      enabled: true,
-      requirePkce: true,
-      ...(options.developerId === undefined ? {} : { developerId: options.developerId }),
-    });
-    const response = await app.inject({
-      method: 'POST',
-      url: '/oauth/token',
-      headers: FORM,
-      payload: new URLSearchParams({
-        grant_type: 'client_credentials',
-        client_id: clientId,
-        client_secret: secret,
-        scope: 'ssf:stream',
-      }).toString(),
-    });
-    expect(response.statusCode, response.body).toBe(200);
-    return {
-      clientId,
-      id: client.id,
-      secret,
-      token: response.json<{ access_token: string }>().access_token,
-    };
-  }
-
-  function call(app: FastifyInstance, who: Receiver, url: string, payload: unknown) {
-    return app.inject({
-      method: 'POST',
-      url,
-      headers: { authorization: `Bearer ${who.token}` },
-      payload: payload as Record<string, unknown>,
-    });
-  }
-
-  async function createStream(
-    app: FastifyInstance,
-    who: Receiver,
-    endpoint = 'https://receiver.egress.test/events'
-  ): Promise<string> {
-    const response = await call(app, who, '/ssf/stream', {
-      events_requested: ALL_EVENTS,
-      delivery: { method: PUSH, endpoint_url: endpoint },
-    });
-    expect(response.statusCode, response.body).toBe(201);
-    const created = response.json<{ stream_id: string; events_delivered: string[] }>();
-    expect([...created.events_delivered].sort()).toEqual([...ALL_EVENTS].sort());
-    return created.stream_id;
-  }
-
-  async function addSubject(
-    app: FastifyInstance,
-    who: Receiver,
-    streamId: string,
-    subject: Record<string, string>
-  ): Promise<LightMyRequestResponse> {
-    return call(app, who, '/ssf/subjects/add', { stream_id: streamId, subject });
-  }
-
-  const userSubject = (userId: string) => ({ format: 'iss_sub', iss: ISSUER, sub: userId });
-
-  /**
-   * Wait until the fan-out has a position in the realm. The first fan-out
-   * that sees an SSF stream in a realm starts at the horizon: an event
-   * committed before it is not offered to the realm's streams, so a test acts
-   * only once the position exists, after adding its subjects.
-   */
-  async function fanOutStarted(app: FastifyInstance, realmId: string): Promise<void> {
-    await vi.waitFor(
-      async () => {
-        const { rows } = await app.dbPool.query(
-          `SELECT 1 FROM event_delivery_positions WHERE realm_id = $1 AND destination_kind = 'ssf'`,
-          [realmId]
-        );
-        expect(rows).toHaveLength(1);
-      },
-      { timeout: 10_000, interval: 100 }
-    );
-  }
-
-  /** A verified user, consented to `clientRowId` when given, and the portal token `/auth/login` gives them. */
-  async function newUser(app: FastifyInstance, realmId: string, consentTo?: string) {
-    const email = `ssf-${randomUUID()}@example.test`;
-    const userId = await registerPasswordAccount(app, email);
-    const consent =
-      consentTo === undefined
-        ? undefined
-        : await app.repositories.oauthConsents.upsertGrant(realmId, userId, consentTo, ['openid']);
-    const login = await app.inject({
-      method: 'POST',
-      url: '/auth/login',
-      payload: { email, password: E2E_PASSWORD },
-    });
-    expect(login.statusCode, login.body).toBe(200);
-    return { userId, consent, token: login.json<{ access_token: string }>().access_token };
-  }
-
-  /** The SETs a receiver server got, verified with the keys at the metadata's `jwks_uri`. */
-  async function deliveredSets(app: FastifyInstance, server: FixtureServer, audience: string) {
-    const metadata = await app.inject({ method: 'GET', url: '/.well-known/ssf-configuration' });
-    const jwksUri = new URL(metadata.json<{ jwks_uri: string }>().jwks_uri);
-    const keys = createLocalJWKSet(
-      (await app.inject({ method: 'GET', url: jwksUri.pathname })).json<JSONWebKeySet>()
-    );
-    const sets: DeliveredSet[] = [];
-    for (const request of server.requests) {
-      expect(request.headers['content-type']).toBe('application/secevent+jwt');
-      const token = request.body.toString('utf8');
-      const { payload } = await jwtVerify(token, keys, {
-        issuer: ISSUER,
-        audience,
-        typ: 'secevent+jwt',
+    beforeAll(async () => {
+      dockerUp = await requireDockerOrSkip();
+      if (!dockerUp) return;
+      infra = await startE2eInfrastructure();
+      jwt = await generateJwtPem();
+      net = await createFixtureNetwork();
+      const accept = (_req: IncomingMessage, _body: Buffer, res: ServerResponse) => {
+        res.writeHead(202);
+        res.end();
+      };
+      receiver = await net.serve(RECEIVER_ADDRESS, accept);
+      otherReceiver = await net.serve(OTHER_RECEIVER_ADDRESS, accept);
+      flakyReceiver = await net.serve(FLAKY_RECEIVER_ADDRESS, (_req, _body, res) => {
+        res.writeHead(flakyStatus);
+        res.end();
       });
-      sets.push({
-        header: decodeProtectedHeader(token),
-        claims: payload as DeliveredSet['claims'],
-      });
+      if (deployment === 'split roles') {
+        // The owner's deployment, as the migration runner's user: the signer
+        // alone, so it creates the default realm and its keys and delivers
+        // nothing.
+        fixture = await bootAuthServer({
+          ...baseEnvironment(infra, jwt),
+          ...SIGNER_LISTENER,
+          SERVICE_ROLES: 'signer',
+        });
+        await createDatabaseUsers(fixture.app.dbPool, [
+          ...Object.values(USERS),
+          API_SIGNER,
+          DELIVERY_SIGNER,
+        ]);
+        // A user a run does not name keeps its grants: the last two runs give
+        // a role's user and the signer's one user.
+        const connectionString = infra.postgres.connectionString;
+        await grantDatabaseUsers(connectionString, USERS);
+        await grantDatabaseUsers(connectionString, {
+          ...USERS,
+          api: API_SIGNER,
+          signer: API_SIGNER,
+        });
+        await grantDatabaseUsers(connectionString, {
+          ...USERS,
+          delivery: DELIVERY_SIGNER,
+          signer: DELIVERY_SIGNER,
+        });
+      }
+    }, 240_000);
+
+    afterAll(async () => {
+      await net?.close();
+      await fixture?.close();
+      await infra?.teardown();
+    });
+
+    beforeEach((ctx) => {
+      if (!dockerUp || !net) {
+        ctx.skip();
+        return;
+      }
+      net.dns.clear();
+      net.dns.set('receiver.egress.test', [RECEIVER_ADDRESS]);
+      net.dns.set('other.egress.test', [OTHER_RECEIVER_ADDRESS]);
+      net.dns.set('flaky.egress.test', [FLAKY_RECEIVER_ADDRESS]);
+      for (const server of [receiver, otherReceiver, flakyReceiver]) server.requests.length = 0;
+      flakyStatus = 202;
+      network.current = net.transport;
+    });
+
+    afterEach(async () => {
+      await Promise.all(booted.splice(0).map((server) => server.close()));
+      const denied = logLines.filter((line) => PERMISSION_ERROR.test(line));
+      logLines.length = 0;
+      expect(denied).toEqual([]);
+    });
+
+    /** The owner's pool, once a test booted. */
+    function ownerPool(): FastifyInstance['dbPool'] {
+      if (owner === undefined) throw new Error('not booted');
+      return owner;
     }
-    return sets;
-  }
 
-  /** Wait for a SET of `eventUri` to reach `server`, and return it. */
-  async function waitForSet(
-    app: FastifyInstance,
-    server: FixtureServer,
-    audience: string,
-    eventUri: string
-  ): Promise<DeliveredSet> {
-    let found: DeliveredSet | undefined;
-    await vi.waitFor(
-      async () => {
-        const sets = await deliveredSets(app, server, audience);
-        found = sets.find((set) => Object.hasOwn(set.claims['events'] as object, eventUri));
-        expect(found, `no ${eventUri} SET yet`).toBeDefined();
-      },
-      { timeout: 20_000, interval: 200 }
-    );
-    return found as DeliveredSet;
-  }
-
-  /** The id of the latest event of `type` about `userId`: the SET's `jti`. */
-  async function eventIdOf(app: FastifyInstance, type: string, subjectId: string) {
-    const { rows } = await app.dbPool.query<{ id: string }>(
-      `SELECT id::text AS id FROM events WHERE type = $1 AND subject_id = $2 ORDER BY seq DESC LIMIT 1`,
-      [type, subjectId]
-    );
-    return rows[0]?.id;
-  }
-
-  /**
-   * RFC 8417 §2.2: `iss`, `iat` and `jti` are REQUIRED, and `events` holds
-   * one event object; SSF 1.0 §4.1 forbids `sub` and `exp` and requires
-   * explicit typing.
-   */
-  function expectRfc8417Claims(set: DeliveredSet): void {
-    expect(set.header).toMatchObject({ typ: 'secevent+jwt', kid: expect.any(String) });
-    expect(set.claims['iss']).toBe(ISSUER);
-    expect(set.claims['iat']).toEqual(expect.any(Number));
-    expect(set.claims['jti']).toEqual(expect.any(String));
-    const events = set.claims['events'] as Record<string, unknown>;
-    expect(Object.keys(events)).toHaveLength(1);
-    expect(Object.values(events)[0]).toEqual(expect.any(Object));
-    expect(set.claims).not.toHaveProperty('sub');
-    expect(set.claims).not.toHaveProperty('exp');
-  }
-
-  it('delivers a sign-out of a subscribed user as session-revoked, with iss_sub, event_timestamp and initiating_entity', async () => {
-    const { app, realmId } = await boot();
-    const who = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who);
-    const user = await newUser(app, realmId, who.id);
-    const added = await addSubject(app, who, streamId, userSubject(user.userId));
-    expect(added.statusCode, added.body).toBe(200);
-    await fanOutStarted(app, realmId);
-
-    const logout = await app.inject({
-      method: 'POST',
-      url: '/auth/logout',
-      headers: { authorization: `Bearer ${user.token}` },
-    });
-    expect(logout.statusCode, logout.body).toBe(200);
-
-    const set = await waitForSet(app, receiver, who.clientId, SESSION_REVOKED);
-    expectRfc8417Claims(set);
-    const eventId = await eventIdOf(app, 'urn:qauth:event:user.signed_out:v1-rc.0', user.userId);
-    expect(set.claims).toMatchObject({
-      jti: eventId,
-      aud: who.clientId,
-      sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
-    });
-    const members = (set.claims['events'] as Record<string, Record<string, unknown>>)[
-      SESSION_REVOKED
-    ];
-    expect(members).toEqual({ event_timestamp: set.claims['iat'], initiating_entity: 'user' });
-  });
-
-  it('delivers a revoked API key as credential-change to its own client’s stream, and to no other receiver', async () => {
-    const { app, realmId } = await boot();
-    const developer = await newUser(app, realmId);
-    const who = await newReceiver(app, realmId, { developerId: developer.userId });
-    const other = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who);
-    const otherStream = await createStream(app, other, 'https://other.egress.test/events');
-    const key = await app.repositories.apiKeys.create({
-      realmId,
-      clientId: who.id,
-      developerId: developer.userId,
-      name: 'ci',
-      keyHash: createHash('sha256').update(randomUUID()).digest('hex'),
-      prefix: `qk_${randomUUID().slice(0, 8)}`,
-      last4: 'abcd',
-    });
-    // Both add the key's client; only its own stream may learn of its keys.
-    for (const [receiverOf, stream] of [
-      [who, streamId],
-      [other, otherStream],
-    ] as const) {
-      const added = await addSubject(app, receiverOf, stream, {
-        format: 'opaque',
-        id: who.clientId,
-      });
-      expect(added.statusCode, added.body).toBe(200);
-    }
-    await fanOutStarted(app, realmId);
-
-    const revoked = await app.inject({
-      method: 'DELETE',
-      url: `/api/clients/${who.id}/api-keys/${key.id}`,
-      headers: { authorization: `Bearer ${developer.token}` },
-    });
-    expect(revoked.statusCode, revoked.body).toBe(200);
-
-    const set = await waitForSet(app, receiver, who.clientId, CREDENTIAL_CHANGE);
-    expectRfc8417Claims(set);
-    expect(set.claims).toMatchObject({
-      jti: await eventIdOf(app, 'urn:qauth:event:api_key.revoked:v1-rc.0', key.id),
-      sub_id: { format: 'opaque', id: who.clientId },
-      events: {
-        [CREDENTIAL_CHANGE]: {
-          credential_type: 'api-key',
-          change_type: 'revoke',
-          event_timestamp: expect.any(Number),
-          initiating_entity: 'admin',
-        },
-      },
-    });
-    const rows = await app.dbPool.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM event_deliveries
-         WHERE destination_kind = 'ssf' AND destination_id = $1`,
-      [otherStream]
-    );
-    expect(rows.rows[0].count).toBe(0);
-    expect(otherReceiver.requests).toHaveLength(0);
-  });
-
-  it('delivers a withdrawn consent as token-claims-change to that client’s stream only', async () => {
-    const { app, realmId } = await boot();
-    const who = await newReceiver(app, realmId);
-    const other = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who);
-    const otherStream = await createStream(app, other, 'https://other.egress.test/events');
-    const user = await newUser(app, realmId, who.id);
-    // Related to the other receiver too, through its own consent.
-    await app.repositories.oauthConsents.upsertGrant(realmId, user.userId, other.id, ['openid']);
-    for (const [receiverOf, stream] of [
-      [who, streamId],
-      [other, otherStream],
-    ] as const) {
-      const added = await addSubject(app, receiverOf, stream, userSubject(user.userId));
-      expect(added.statusCode, added.body).toBe(200);
-    }
-    await fanOutStarted(app, realmId);
-
-    const withdrawn = await app.inject({
-      method: 'DELETE',
-      url: `/api/consents/${user.consent?.id}`,
-      headers: { authorization: `Bearer ${user.token}` },
-    });
-    expect(withdrawn.statusCode, withdrawn.body).toBeLessThan(300);
-
-    const set = await waitForSet(app, receiver, who.clientId, TOKEN_CLAIMS_CHANGE);
-    expectRfc8417Claims(set);
-    expect(set.claims).toMatchObject({
-      jti: await eventIdOf(app, 'urn:qauth:event:consent.revoked:v1-rc.0', user.userId),
-      sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
-      events: {
-        [TOKEN_CLAIMS_CHANGE]: {
-          claims: { scope: '' },
-          event_timestamp: expect.any(Number),
-          initiating_entity: 'user',
-        },
-      },
-    });
-    // The other receiver added the same user, but the consent was not its
-    // own: no SET, and no delivery row that could become one.
-    const rows = await app.dbPool.query<{ count: number }>(
-      `SELECT count(*)::int AS count FROM event_deliveries
-         WHERE destination_kind = 'ssf' AND destination_id = $1`,
-      [otherStream]
-    );
-    expect(rows.rows[0].count).toBe(0);
-    expect(otherReceiver.requests).toHaveLength(0);
-  });
-
-  it('delivers an RFC 7009 revocation as the QAuth-defined token-revoked event', async () => {
-    const { app, realmId } = await boot();
-    const who = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who);
-    const user = await newUser(app, realmId);
-    // A refresh token the receiver's client was issued for the user: it
-    // relates the user to the client, with no consent.
-    const refreshToken = `rt-${randomUUID()}`;
-    await app.repositories.refreshTokens.create({
-      userId: user.userId,
-      oauthClientId: who.id,
-      tokenHash: app.jwtUtils.hashRefreshToken(refreshToken),
-      familyCreatedAt: Date.now(),
-      familySessionExpiresAt: null,
-      expiresAt: Date.now() + 3_600_000,
-    });
-    const added = await addSubject(app, who, streamId, userSubject(user.userId));
-    expect(added.statusCode, added.body).toBe(200);
-    await fanOutStarted(app, realmId);
-
-    const revoked = await app.inject({
-      method: 'POST',
-      url: '/oauth/revoke',
-      headers: FORM,
-      payload: new URLSearchParams({
-        token: refreshToken,
-        token_type_hint: 'refresh_token',
-        client_id: who.clientId,
-        client_secret: who.secret,
-      }).toString(),
-    });
-    expect(revoked.statusCode, revoked.body).toBe(200);
-
-    const set = await waitForSet(app, receiver, who.clientId, TOKEN_REVOKED);
-    expectRfc8417Claims(set);
-    // A versioned QAuth identifier, a release candidate until 1.0.0.
-    expect(TOKEN_REVOKED).toMatch(/^urn:qauth:[a-z:-]+:v[1-9][0-9]*(-rc\.(0|[1-9][0-9]*))?$/);
-    expect(set.claims).toMatchObject({
-      jti: await eventIdOf(app, 'urn:qauth:event:token.revoked:v1-rc.0', user.userId),
-      sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
-      events: {
-        [TOKEN_REVOKED]: { token_type_hint: 'refresh_token', event_timestamp: expect.any(Number) },
-      },
-    });
-  });
-
-  it('refuses to add a user with no consent for and no token from the receiver’s client, and adds one who has', async () => {
-    const { app, realmId } = await boot();
-    const who = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who);
-    const stranger = await newUser(app, realmId);
-    const consented = await newUser(app, realmId, who.id);
-    // Consented to another client only: still a stranger to this one.
-    const elsewhere = await newReceiver(app, realmId);
-    const otherwise = await newUser(app, realmId, elsewhere.id);
-
-    for (const userId of [stranger.userId, otherwise.userId, randomUUID()]) {
-      const refused = await addSubject(app, who, streamId, userSubject(userId));
-      expect(refused.statusCode, refused.body).toBe(403);
-      expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
-      expect(refused.json()).toMatchObject({ status: 403, code: 'forbidden' });
-    }
-    // An unknown user and an unrelated one get the same answer.
-    const unknown = await addSubject(app, who, streamId, userSubject(randomUUID()));
-    const unrelated = await addSubject(app, who, streamId, userSubject(stranger.userId));
-    const comparable = (response: LightMyRequestResponse) =>
-      Object.fromEntries(
-        Object.entries(response.json<Record<string, unknown>>()).filter(
-          ([member]) => member !== 'trace_id'
-        )
+    /**
+     * Boot the server with the transmitter on; the database keeps earlier
+     * tests' rows, so every id is new. Split, it boots `api` and `delivery`,
+     * each with the signer and on its user, and returns the `api` process: the
+     * one a receiver, a user and the sweep call.
+     */
+    async function boot(): Promise<{ app: FastifyInstance; realmId: string }> {
+      if (!infra || !jwt) throw new Error('infrastructure not started');
+      const environment: Record<string, string> = {
+        ...baseEnvironment(infra, jwt),
+        SSF_TRANSMITTER_ENABLED: 'true',
+        // Every request comes from one address, and the suite registers and
+        // signs in more accounts than the per-address defaults allow.
+        REGISTRATION_RATE_LIMIT: '100',
+        LOGIN_RATE_LIMIT: '100',
+        VERIFICATION_RATE_LIMIT: '100',
+        EVENT_DELIVERY_RETRY_INITIAL_DELAY: '1',
+        EVENT_DELIVERY_RETRY_MAX_DELAY: '2',
+      };
+      let processes: FastifyInstance[];
+      if (deployment === 'one process') {
+        const server = await bootAuthServer(environment);
+        booted.push(server);
+        processes = [server.app];
+        owner = server.app.dbPool;
+      } else {
+        if (!fixture) throw new Error('no fixture');
+        const connectionString = infra.postgres.connectionString;
+        const log = { write: (line: string) => void logLines.push(line) };
+        // One at a time: each boot sets the process environment its app reads.
+        for (const [roles, user] of [
+          ['api,signer', API_SIGNER],
+          ['delivery,signer', DELIVERY_SIGNER],
+        ] as const) {
+          booted.push(
+            await bootAuthServer(
+              {
+                ...environment,
+                ...SIGNER_LISTENER,
+                SERVICE_ROLES: roles,
+                DATABASE_URL: databaseUrlAs(connectionString, user),
+              },
+              { logStream: log }
+            )
+          );
+        }
+        processes = booted.map((server) => server.app);
+        owner = fixture.app.dbPool;
+      }
+      const { rows } = await ownerPool().query<{ id: string }>(
+        'UPDATE realms SET ssf_transmitter_enabled = true WHERE name = $1 RETURNING id::text AS id',
+        [E2E_REALM_NAME]
       );
-    expect(comparable(unknown)).toEqual(comparable(unrelated));
+      for (const app of processes) app.realmHostCache.clear();
+      return { app: processes[0], realmId: rows[0].id };
+    }
 
-    const added = await addSubject(app, who, streamId, userSubject(consented.userId));
-    expect(added.statusCode, added.body).toBe(200);
-    const { rows } = await app.dbPool.query<{ event_subject_id: string }>(
-      'SELECT event_subject_id FROM ssf_stream_subjects WHERE stream_id = $1',
-      [streamId]
-    );
-    expect(rows.map((row) => row.event_subject_id)).toEqual([consented.userId]);
-  });
-  /** The event subjects of a stream's subjects. */
-  async function subjectsOf(app: FastifyInstance, streamId: string): Promise<string[]> {
-    const { rows } = await app.dbPool.query<{ event_subject_id: string }>(
-      'SELECT event_subject_id FROM ssf_stream_subjects WHERE stream_id = $1 ORDER BY 1',
-      [streamId]
-    );
-    return rows.map((row) => row.event_subject_id);
-  }
+    /**
+     * A receiver: the client users sign in through, given `client_credentials`
+     * and `ssf:stream` as well, and an access token it got with its own
+     * credentials. Its users' relation to it is seeded by each test.
+     */
+    async function newReceiver(
+      app: FastifyInstance,
+      realmId: string,
+      options: { developerId?: string; audience?: string[] } = {}
+    ): Promise<Receiver> {
+      const clientId = `receiver-${randomUUID()}`;
+      const secret = `secret-${randomUUID()}`;
+      const client = await app.repositories.oauthClients.create({
+        realmId,
+        clientId,
+        clientSecretHash: await app.passwordHasher.hashPassword(secret),
+        tokenEndpointAuthMethod: 'client_secret_post',
+        name: 'SSF receiver',
+        redirectUris: ['https://receiver.example.com/callback'],
+        scopes: ['openid', 'ssf:stream'],
+        grantTypes: ['authorization_code', 'refresh_token', 'client_credentials'],
+        audience: options.audience ?? [ISSUER],
+        enabled: true,
+        requirePkce: true,
+        ...(options.developerId === undefined ? {} : { developerId: options.developerId }),
+      });
+      const response = await app.inject({
+        method: 'POST',
+        url: '/oauth/token',
+        headers: FORM,
+        payload: new URLSearchParams({
+          grant_type: 'client_credentials',
+          client_id: clientId,
+          client_secret: secret,
+          scope: 'ssf:stream',
+        }).toString(),
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      return {
+        clientId,
+        id: client.id,
+        secret,
+        token: response.json<{ access_token: string }>().access_token,
+      };
+    }
 
-  /** The delivery of `eventId` to `streamId`, as the queue holds it. */
-  async function deliveryOf(app: FastifyInstance, streamId: string, eventId: string) {
-    const { rows } = await app.dbPool.query<{
-      status: string;
-      attempt_count: number;
-      last_status_code: number | null;
-    }>(
-      `SELECT status, attempt_count, last_status_code FROM event_deliveries
-         WHERE destination_kind = 'ssf' AND destination_id = $1 AND event_id = $2`,
-      [streamId, eventId]
-    );
-    return rows[0];
-  }
+    function call(app: FastifyInstance, who: Receiver, url: string, payload: unknown) {
+      return app.inject({
+        method: 'POST',
+        url,
+        headers: { authorization: `Bearer ${who.token}` },
+        payload: payload as Record<string, unknown>,
+      });
+    }
 
-  // Decided 2026-10-31: a user subject ends when its relation ends, by a
-  // sweep, and never before the event that ended it reached the stream.
-  it('ends a user subject by the sweep once the consent is withdrawn and its SET delivered (#540)', async () => {
-    const { app, realmId } = await boot();
-    const who = await newReceiver(app, realmId);
-    const streamId = await createStream(app, who, 'https://flaky.egress.test/events');
-    const user = await newUser(app, realmId, who.id);
-    const added = await addSubject(app, who, streamId, userSubject(user.userId));
-    expect(added.statusCode, added.body).toBe(200);
-    await fanOutStarted(app, realmId);
-    const sweep = () => app.repositories.ssfStreams.sweepUserSubjects(Date.now());
+    async function createStream(
+      app: FastifyInstance,
+      who: Receiver,
+      endpoint = 'https://receiver.egress.test/events'
+    ): Promise<string> {
+      const response = await call(app, who, '/ssf/stream', {
+        events_requested: ALL_EVENTS,
+        delivery: { method: PUSH, endpoint_url: endpoint },
+      });
+      expect(response.statusCode, response.body).toBe(201);
+      const created = response.json<{ stream_id: string; events_delivered: string[] }>();
+      expect([...created.events_delivered].sort()).toEqual([...ALL_EVENTS].sort());
+      return created.stream_id;
+    }
 
-    // Related through the consent: the sweep keeps the subject.
-    await sweep();
-    expect(await subjectsOf(app, streamId)).toEqual([user.userId]);
+    async function addSubject(
+      app: FastifyInstance,
+      who: Receiver,
+      streamId: string,
+      subject: Record<string, string>
+    ): Promise<LightMyRequestResponse> {
+      return call(app, who, '/ssf/subjects/add', { stream_id: streamId, subject });
+    }
 
-    // The receiver fails for now, so the withdrawal's SET waits, retried.
-    flakyStatus = 503;
-    const withdrawn = await app.inject({
-      method: 'DELETE',
-      url: `/api/consents/${user.consent?.id}`,
-      headers: { authorization: `Bearer ${user.token}` },
-    });
-    expect(withdrawn.statusCode, withdrawn.body).toBeLessThan(300);
-    const eventId = await eventIdOf(app, 'urn:qauth:event:consent.revoked:v1-rc.0', user.userId);
-    expect(eventId).toBeDefined();
-    await vi.waitFor(
-      async () => {
-        expect(await deliveryOf(app, streamId, eventId as string)).toMatchObject({
-          status: 'pending',
-          last_status_code: 503,
+    const userSubject = (userId: string) => ({ format: 'iss_sub', iss: ISSUER, sub: userId });
+
+    /**
+     * Wait until the fan-out has a position in the realm. The first fan-out
+     * that sees an SSF stream in a realm starts at the horizon: an event
+     * committed before it is not offered to the realm's streams, so a test acts
+     * only once the position exists, after adding its subjects.
+     */
+    async function fanOutStarted(realmId: string): Promise<void> {
+      await vi.waitFor(
+        async () => {
+          const { rows } = await ownerPool().query(
+            `SELECT 1 FROM event_delivery_positions WHERE realm_id = $1 AND destination_kind = 'ssf'`,
+            [realmId]
+          );
+          expect(rows).toHaveLength(1);
+        },
+        { timeout: 10_000, interval: 100 }
+      );
+    }
+
+    /** A verified user, consented to `clientRowId` when given, and the portal token `/auth/login` gives them. */
+    async function newUser(app: FastifyInstance, realmId: string, consentTo?: string) {
+      const email = `ssf-${randomUUID()}@example.test`;
+      const userId = await registerPasswordAccount(app, email);
+      const consent =
+        consentTo === undefined
+          ? undefined
+          : await app.repositories.oauthConsents.upsertGrant(realmId, userId, consentTo, [
+              'openid',
+            ]);
+      const login = await app.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email, password: E2E_PASSWORD },
+      });
+      expect(login.statusCode, login.body).toBe(200);
+      return { userId, consent, token: login.json<{ access_token: string }>().access_token };
+    }
+
+    /** The SETs a receiver server got, verified with the keys at the metadata's `jwks_uri`. */
+    async function deliveredSets(app: FastifyInstance, server: FixtureServer, audience: string) {
+      const metadata = await app.inject({ method: 'GET', url: '/.well-known/ssf-configuration' });
+      const jwksUri = new URL(metadata.json<{ jwks_uri: string }>().jwks_uri);
+      const keys = createLocalJWKSet(
+        (await app.inject({ method: 'GET', url: jwksUri.pathname })).json<JSONWebKeySet>()
+      );
+      const sets: DeliveredSet[] = [];
+      for (const request of server.requests) {
+        expect(request.headers['content-type']).toBe('application/secevent+jwt');
+        const token = request.body.toString('utf8');
+        const { payload } = await jwtVerify(token, keys, {
+          issuer: ISSUER,
+          audience,
+          typ: 'secevent+jwt',
         });
-      },
-      { timeout: 20_000, interval: 200 }
-    );
-
-    // The relation has ended, but the SET about it has not gone out: the
-    // sweep keeps the subject.
-    expect(
-      await app.repositories.ssfStreams.isRelatedUser(realmId, who.id, user.userId, Date.now())
-    ).toBe(false);
-    await sweep();
-    expect(await subjectsOf(app, streamId)).toEqual([user.userId]);
-
-    // The receiver accepts it now: the SET is delivered, and the next sweep
-    // ends the subject.
-    flakyStatus = 202;
-    const set = await waitForSet(app, flakyReceiver, who.clientId, TOKEN_CLAIMS_CHANGE);
-    expect(set.claims).toMatchObject({
-      jti: eventId,
-      sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
-    });
-    await vi.waitFor(
-      async () => {
-        expect(await deliveryOf(app, streamId, eventId as string)).toMatchObject({
-          status: 'delivered',
+        sets.push({
+          header: decodeProtectedHeader(token),
+          claims: payload as DeliveredSet['claims'],
         });
-      },
-      { timeout: 20_000, interval: 200 }
-    );
-    await sweep();
-    expect(await subjectsOf(app, streamId)).toEqual([]);
-  });
+      }
+      return sets;
+    }
 
-  // Decided 2026-10-31: a resource server relates to the users who hold a
-  // live token for it, beside the users of its own client.
-  it('lets a resource server add a user holding a live token for it, and refuses one who does not (#540)', async () => {
-    const { app, realmId } = await boot();
-    const API = `https://api-${randomUUID()}.example.com`;
-    // The resource server: it manages its stream under the issuer, and serves
-    // the API.
-    const server = await newReceiver(app, realmId, { audience: [ISSUER, API] });
-    const streamId = await createStream(app, server);
-    // The client users sign in through, a client of its own.
-    const signIn = await newReceiver(app, realmId);
-    const tokenFor = (userId: string, resource: string[]) =>
-      app.repositories.refreshTokens.create({
-        userId,
-        oauthClientId: signIn.id,
-        tokenHash: app.jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
+    /** Wait for a SET of `eventUri` to reach `server`, and return it. */
+    async function waitForSet(
+      app: FastifyInstance,
+      server: FixtureServer,
+      audience: string,
+      eventUri: string
+    ): Promise<DeliveredSet> {
+      let found: DeliveredSet | undefined;
+      await vi.waitFor(
+        async () => {
+          const sets = await deliveredSets(app, server, audience);
+          found = sets.find((set) => Object.hasOwn(set.claims['events'] as object, eventUri));
+          expect(found, `no ${eventUri} SET yet`).toBeDefined();
+        },
+        { timeout: 20_000, interval: 200 }
+      );
+      return found as DeliveredSet;
+    }
+
+    /** The id of the latest event of `type` about `userId`: the SET's `jti`. */
+    async function eventIdOf(type: string, subjectId: string) {
+      const { rows } = await ownerPool().query<{ id: string }>(
+        `SELECT id::text AS id FROM events WHERE type = $1 AND subject_id = $2 ORDER BY seq DESC LIMIT 1`,
+        [type, subjectId]
+      );
+      return rows[0]?.id;
+    }
+
+    /**
+     * RFC 8417 §2.2: `iss`, `iat` and `jti` are REQUIRED, and `events` holds
+     * one event object; SSF 1.0 §4.1 forbids `sub` and `exp` and requires
+     * explicit typing.
+     */
+    function expectRfc8417Claims(set: DeliveredSet): void {
+      expect(set.header).toMatchObject({ typ: 'secevent+jwt', kid: expect.any(String) });
+      expect(set.claims['iss']).toBe(ISSUER);
+      expect(set.claims['iat']).toEqual(expect.any(Number));
+      expect(set.claims['jti']).toEqual(expect.any(String));
+      const events = set.claims['events'] as Record<string, unknown>;
+      expect(Object.keys(events)).toHaveLength(1);
+      expect(Object.values(events)[0]).toEqual(expect.any(Object));
+      expect(set.claims).not.toHaveProperty('sub');
+      expect(set.claims).not.toHaveProperty('exp');
+    }
+
+    it('delivers a sign-out of a subscribed user as session-revoked, with iss_sub, event_timestamp and initiating_entity', async () => {
+      const { app, realmId } = await boot();
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const user = await newUser(app, realmId, who.id);
+      const added = await addSubject(app, who, streamId, userSubject(user.userId));
+      expect(added.statusCode, added.body).toBe(200);
+      await fanOutStarted(realmId);
+
+      const logout = await app.inject({
+        method: 'POST',
+        url: '/auth/logout',
+        headers: { authorization: `Bearer ${user.token}` },
+      });
+      expect(logout.statusCode, logout.body).toBe(200);
+
+      const set = await waitForSet(app, receiver, who.clientId, SESSION_REVOKED);
+      expectRfc8417Claims(set);
+      const eventId = await eventIdOf('urn:qauth:event:user.signed_out:v1-rc.0', user.userId);
+      expect(set.claims).toMatchObject({
+        jti: eventId,
+        aud: who.clientId,
+        sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+      });
+      const members = (set.claims['events'] as Record<string, Record<string, unknown>>)[
+        SESSION_REVOKED
+      ];
+      expect(members).toEqual({ event_timestamp: set.claims['iat'], initiating_entity: 'user' });
+    });
+
+    it('delivers a revoked API key as credential-change to its own client’s stream, and to no other receiver', async () => {
+      const { app, realmId } = await boot();
+      const developer = await newUser(app, realmId);
+      const who = await newReceiver(app, realmId, { developerId: developer.userId });
+      const other = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const otherStream = await createStream(app, other, 'https://other.egress.test/events');
+      const key = await app.repositories.apiKeys.create({
+        realmId,
+        clientId: who.id,
+        developerId: developer.userId,
+        name: 'ci',
+        keyHash: createHash('sha256').update(randomUUID()).digest('hex'),
+        prefix: `qk_${randomUUID().slice(0, 8)}`,
+        last4: 'abcd',
+      });
+      // Both add the key's client; only its own stream may learn of its keys.
+      for (const [receiverOf, stream] of [
+        [who, streamId],
+        [other, otherStream],
+      ] as const) {
+        const added = await addSubject(app, receiverOf, stream, {
+          format: 'opaque',
+          id: who.clientId,
+        });
+        expect(added.statusCode, added.body).toBe(200);
+      }
+      await fanOutStarted(realmId);
+
+      const revoked = await app.inject({
+        method: 'DELETE',
+        url: `/api/clients/${who.id}/api-keys/${key.id}`,
+        headers: { authorization: `Bearer ${developer.token}` },
+      });
+      expect(revoked.statusCode, revoked.body).toBe(200);
+
+      const set = await waitForSet(app, receiver, who.clientId, CREDENTIAL_CHANGE);
+      expectRfc8417Claims(set);
+      expect(set.claims).toMatchObject({
+        jti: await eventIdOf('urn:qauth:event:api_key.revoked:v1-rc.0', key.id),
+        sub_id: { format: 'opaque', id: who.clientId },
+        events: {
+          [CREDENTIAL_CHANGE]: {
+            credential_type: 'api-key',
+            change_type: 'revoke',
+            event_timestamp: expect.any(Number),
+            initiating_entity: 'admin',
+          },
+        },
+      });
+      const rows = await ownerPool().query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM event_deliveries
+         WHERE destination_kind = 'ssf' AND destination_id = $1`,
+        [otherStream]
+      );
+      expect(rows.rows[0].count).toBe(0);
+      expect(otherReceiver.requests).toHaveLength(0);
+    });
+
+    it('delivers a withdrawn consent as token-claims-change to that client’s stream only', async () => {
+      const { app, realmId } = await boot();
+      const who = await newReceiver(app, realmId);
+      const other = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const otherStream = await createStream(app, other, 'https://other.egress.test/events');
+      const user = await newUser(app, realmId, who.id);
+      // Related to the other receiver too, through its own consent.
+      await app.repositories.oauthConsents.upsertGrant(realmId, user.userId, other.id, ['openid']);
+      for (const [receiverOf, stream] of [
+        [who, streamId],
+        [other, otherStream],
+      ] as const) {
+        const added = await addSubject(app, receiverOf, stream, userSubject(user.userId));
+        expect(added.statusCode, added.body).toBe(200);
+      }
+      await fanOutStarted(realmId);
+
+      const withdrawn = await app.inject({
+        method: 'DELETE',
+        url: `/api/consents/${user.consent?.id}`,
+        headers: { authorization: `Bearer ${user.token}` },
+      });
+      expect(withdrawn.statusCode, withdrawn.body).toBeLessThan(300);
+
+      const set = await waitForSet(app, receiver, who.clientId, TOKEN_CLAIMS_CHANGE);
+      expectRfc8417Claims(set);
+      expect(set.claims).toMatchObject({
+        jti: await eventIdOf('urn:qauth:event:consent.revoked:v1-rc.0', user.userId),
+        sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+        events: {
+          [TOKEN_CLAIMS_CHANGE]: {
+            claims: { scope: '' },
+            event_timestamp: expect.any(Number),
+            initiating_entity: 'user',
+          },
+        },
+      });
+      // The other receiver added the same user, but the consent was not its
+      // own: no SET, and no delivery row that could become one.
+      const rows = await ownerPool().query<{ count: number }>(
+        `SELECT count(*)::int AS count FROM event_deliveries
+         WHERE destination_kind = 'ssf' AND destination_id = $1`,
+        [otherStream]
+      );
+      expect(rows.rows[0].count).toBe(0);
+      expect(otherReceiver.requests).toHaveLength(0);
+    });
+
+    it('delivers an RFC 7009 revocation as the QAuth-defined token-revoked event', async () => {
+      const { app, realmId } = await boot();
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const user = await newUser(app, realmId);
+      // A refresh token the receiver's client was issued for the user: it
+      // relates the user to the client, with no consent.
+      const refreshToken = `rt-${randomUUID()}`;
+      await app.repositories.refreshTokens.create({
+        userId: user.userId,
+        oauthClientId: who.id,
+        tokenHash: app.jwtUtils.hashRefreshToken(refreshToken),
         familyCreatedAt: Date.now(),
         familySessionExpiresAt: null,
         expiresAt: Date.now() + 3_600_000,
-        resource,
       });
+      const added = await addSubject(app, who, streamId, userSubject(user.userId));
+      expect(added.statusCode, added.body).toBe(200);
+      await fanOutStarted(realmId);
 
-    const holder = await newUser(app, realmId);
-    await tokenFor(holder.userId, [API]);
-    const elsewhere = await newUser(app, realmId);
-    await tokenFor(elsewhere.userId, ['https://api.other.example.com']);
-    // The sign-in client's default audience is the issuer: QAuth itself, which
-    // makes no receiver its resource server.
-    const issuerOnly = await newUser(app, realmId);
-    await tokenFor(issuerOnly.userId, []);
+      const revoked = await app.inject({
+        method: 'POST',
+        url: '/oauth/revoke',
+        headers: FORM,
+        payload: new URLSearchParams({
+          token: refreshToken,
+          token_type_hint: 'refresh_token',
+          client_id: who.clientId,
+          client_secret: who.secret,
+        }).toString(),
+      });
+      expect(revoked.statusCode, revoked.body).toBe(200);
 
-    for (const userId of [elsewhere.userId, issuerOnly.userId]) {
-      const refused = await addSubject(app, server, streamId, userSubject(userId));
-      expect(refused.statusCode, refused.body).toBe(403);
+      const set = await waitForSet(app, receiver, who.clientId, TOKEN_REVOKED);
+      expectRfc8417Claims(set);
+      // A versioned QAuth identifier, a release candidate until 1.0.0.
+      expect(TOKEN_REVOKED).toMatch(/^urn:qauth:[a-z:-]+:v[1-9][0-9]*(-rc\.(0|[1-9][0-9]*))?$/);
+      expect(set.claims).toMatchObject({
+        jti: await eventIdOf('urn:qauth:event:token.revoked:v1-rc.0', user.userId),
+        sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+        events: {
+          [TOKEN_REVOKED]: {
+            token_type_hint: 'refresh_token',
+            event_timestamp: expect.any(Number),
+          },
+        },
+      });
+    });
+
+    it('refuses to add a user with no consent for and no token from the receiver’s client, and adds one who has', async () => {
+      const { app, realmId } = await boot();
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who);
+      const stranger = await newUser(app, realmId);
+      const consented = await newUser(app, realmId, who.id);
+      // Consented to another client only: still a stranger to this one.
+      const elsewhere = await newReceiver(app, realmId);
+      const otherwise = await newUser(app, realmId, elsewhere.id);
+
+      for (const userId of [stranger.userId, otherwise.userId, randomUUID()]) {
+        const refused = await addSubject(app, who, streamId, userSubject(userId));
+        expect(refused.statusCode, refused.body).toBe(403);
+        expect(refused.headers['content-type']).toMatch(/^application\/problem\+json/);
+        expect(refused.json()).toMatchObject({ status: 403, code: 'forbidden' });
+      }
+      // An unknown user and an unrelated one get the same answer.
+      const unknown = await addSubject(app, who, streamId, userSubject(randomUUID()));
+      const unrelated = await addSubject(app, who, streamId, userSubject(stranger.userId));
+      const comparable = (response: LightMyRequestResponse) =>
+        Object.fromEntries(
+          Object.entries(response.json<Record<string, unknown>>()).filter(
+            ([member]) => member !== 'trace_id'
+          )
+        );
+      expect(comparable(unknown)).toEqual(comparable(unrelated));
+
+      const added = await addSubject(app, who, streamId, userSubject(consented.userId));
+      expect(added.statusCode, added.body).toBe(200);
+      const { rows } = await ownerPool().query<{ event_subject_id: string }>(
+        'SELECT event_subject_id FROM ssf_stream_subjects WHERE stream_id = $1',
+        [streamId]
+      );
+      expect(rows.map((row) => row.event_subject_id)).toEqual([consented.userId]);
+    });
+    /** The event subjects of a stream's subjects. */
+    async function subjectsOf(streamId: string): Promise<string[]> {
+      const { rows } = await ownerPool().query<{ event_subject_id: string }>(
+        'SELECT event_subject_id FROM ssf_stream_subjects WHERE stream_id = $1 ORDER BY 1',
+        [streamId]
+      );
+      return rows.map((row) => row.event_subject_id);
     }
-    const added = await addSubject(app, server, streamId, userSubject(holder.userId));
-    expect(added.statusCode, added.body).toBe(200);
-    expect(await subjectsOf(app, streamId)).toEqual([holder.userId]);
-  });
-});
+
+    /** The delivery of `eventId` to `streamId`, as the queue holds it. */
+    async function deliveryOf(streamId: string, eventId: string) {
+      const { rows } = await ownerPool().query<{
+        status: string;
+        attempt_count: number;
+        last_status_code: number | null;
+      }>(
+        `SELECT status, attempt_count, last_status_code FROM event_deliveries
+         WHERE destination_kind = 'ssf' AND destination_id = $1 AND event_id = $2`,
+        [streamId, eventId]
+      );
+      return rows[0];
+    }
+
+    // Decided 2026-10-31: a user subject ends when its relation ends, by a
+    // sweep, and never before the event that ended it reached the stream.
+    it('ends a user subject by the sweep once the consent is withdrawn and its SET delivered (#540)', async () => {
+      const { app, realmId } = await boot();
+      const who = await newReceiver(app, realmId);
+      const streamId = await createStream(app, who, 'https://flaky.egress.test/events');
+      const user = await newUser(app, realmId, who.id);
+      const added = await addSubject(app, who, streamId, userSubject(user.userId));
+      expect(added.statusCode, added.body).toBe(200);
+      await fanOutStarted(realmId);
+      const sweep = () => app.repositories.ssfStreams.sweepUserSubjects(Date.now());
+
+      // Related through the consent: the sweep keeps the subject.
+      await sweep();
+      expect(await subjectsOf(streamId)).toEqual([user.userId]);
+
+      // The receiver fails for now, so the withdrawal's SET waits, retried.
+      flakyStatus = 503;
+      const withdrawn = await app.inject({
+        method: 'DELETE',
+        url: `/api/consents/${user.consent?.id}`,
+        headers: { authorization: `Bearer ${user.token}` },
+      });
+      expect(withdrawn.statusCode, withdrawn.body).toBeLessThan(300);
+      const eventId = await eventIdOf('urn:qauth:event:consent.revoked:v1-rc.0', user.userId);
+      expect(eventId).toBeDefined();
+      await vi.waitFor(
+        async () => {
+          expect(await deliveryOf(streamId, eventId as string)).toMatchObject({
+            status: 'pending',
+            last_status_code: 503,
+          });
+        },
+        { timeout: 20_000, interval: 200 }
+      );
+
+      // The relation has ended, but the SET about it has not gone out: the
+      // sweep keeps the subject.
+      expect(
+        await app.repositories.ssfStreams.isRelatedUser(realmId, who.id, user.userId, Date.now())
+      ).toBe(false);
+      await sweep();
+      expect(await subjectsOf(streamId)).toEqual([user.userId]);
+
+      // The receiver accepts it now: the SET is delivered, and the next sweep
+      // ends the subject.
+      flakyStatus = 202;
+      const set = await waitForSet(app, flakyReceiver, who.clientId, TOKEN_CLAIMS_CHANGE);
+      expect(set.claims).toMatchObject({
+        jti: eventId,
+        sub_id: { format: 'iss_sub', iss: ISSUER, sub: user.userId },
+      });
+      await vi.waitFor(
+        async () => {
+          expect(await deliveryOf(streamId, eventId as string)).toMatchObject({
+            status: 'delivered',
+          });
+        },
+        { timeout: 20_000, interval: 200 }
+      );
+      await sweep();
+      expect(await subjectsOf(streamId)).toEqual([]);
+    });
+
+    // Decided 2026-10-31: a resource server relates to the users who hold a
+    // live token for it, beside the users of its own client.
+    it('lets a resource server add a user holding a live token for it, and refuses one who does not (#540)', async () => {
+      const { app, realmId } = await boot();
+      const API = `https://api-${randomUUID()}.example.com`;
+      // The resource server: it manages its stream under the issuer, and serves
+      // the API.
+      const server = await newReceiver(app, realmId, { audience: [ISSUER, API] });
+      const streamId = await createStream(app, server);
+      // The client users sign in through, a client of its own.
+      const signIn = await newReceiver(app, realmId);
+      const tokenFor = (userId: string, resource: string[]) =>
+        app.repositories.refreshTokens.create({
+          userId,
+          oauthClientId: signIn.id,
+          tokenHash: app.jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
+          familyCreatedAt: Date.now(),
+          familySessionExpiresAt: null,
+          expiresAt: Date.now() + 3_600_000,
+          resource,
+        });
+
+      const holder = await newUser(app, realmId);
+      await tokenFor(holder.userId, [API]);
+      const elsewhere = await newUser(app, realmId);
+      await tokenFor(elsewhere.userId, ['https://api.other.example.com']);
+      // The sign-in client's default audience is the issuer: QAuth itself, which
+      // makes no receiver its resource server.
+      const issuerOnly = await newUser(app, realmId);
+      await tokenFor(issuerOnly.userId, []);
+
+      for (const userId of [elsewhere.userId, issuerOnly.userId]) {
+        const refused = await addSubject(app, server, streamId, userSubject(userId));
+        expect(refused.statusCode, refused.body).toBe(403);
+      }
+      const added = await addSubject(app, server, streamId, userSubject(holder.userId));
+      expect(added.statusCode, added.body).toBe(200);
+      expect(await subjectsOf(streamId)).toEqual([holder.userId]);
+    });
+  }
+);

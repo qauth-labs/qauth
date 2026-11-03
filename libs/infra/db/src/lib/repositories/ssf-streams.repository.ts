@@ -14,8 +14,7 @@ import type {
 } from '../../types';
 import { oauthConsents } from '../schema/consents';
 import { oauthClients, realms, users } from '../schema/core';
-import { eventDeliveries, eventDeliveryPositions } from '../schema/event-deliveries';
-import { events } from '../schema/events';
+import { eventDeliveries } from '../schema/event-deliveries';
 import { ssfStreams, ssfStreamSubjects } from '../schema/ssf';
 import { refreshTokens } from '../schema/tokens';
 
@@ -359,31 +358,14 @@ export function createSsfStreamsRepository(db: Database): SsfStreamsRepository {
         where ${ssfStreamSubjects.streamId} = ${ssfStreams.id}
           and ${ssfStreamSubjects.eventSubjectType} = 'user'
           and not ${related}
-          -- Every event about the user is behind the realm's SSF fan-out
-          -- position, so none of them can still be matched to this subject:
-          -- the event of the withdrawal that ended the relation included.
-          and not exists (
-            select 1 from ${events}
-            join ${eventDeliveryPositions}
-              on ${eventDeliveryPositions.realmId} = ${events.realmId}
-              and ${eventDeliveryPositions.destinationKind} = ${SSF_DELIVERY_KIND}
-            where ${events.realmId} = ${ssfStreams.realmId}
-              and ${events.subjectType} = 'user'
-              and ${events.subjectId} = ${ssfStreamSubjects.eventSubjectId}
-              and (${events.xid}, ${events.seq})
-                > (${eventDeliveryPositions.xid}, ${eventDeliveryPositions.seq})
-          )
-          -- And none of them waits to be delivered to this stream: held,
-          -- queued or retrying.
-          and not exists (
-            select 1 from ${eventDeliveries}
-            join ${events} on ${events.id} = ${eventDeliveries.eventId}
-            where ${eventDeliveries.destinationKind} = ${SSF_DELIVERY_KIND}
-              and ${eventDeliveries.destinationId} = ${ssfStreams.id}::text
-              and ${eventDeliveries.status} = 'pending'
-              and ${events.subjectType} = 'user'
-              and ${events.subjectId} = ${ssfStreamSubjects.eventSubjectId}
-          )
+          -- And no event about the user can still reach the stream: none is
+          -- past the realm's SSF fan-out position (the event of the
+          -- withdrawal that ended the relation included), and none of the
+          -- stream's deliveries about the user waits (held, queued or
+          -- retrying). A function of migration 0055 reads the event store
+          -- as its owner, so the role that sweeps holds no SELECT on it
+          -- (#498).
+          and not ssf_subject_events_pending(${ssfStreams.id}, ${ssfStreamSubjects.eventSubjectId})
       `);
       return result.rowCount ?? 0;
     },

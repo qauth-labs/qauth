@@ -60,13 +60,14 @@ exits `0`. The runner holds a Postgres advisory lock while it works, so a second
 runner started beside it, for example by every node of a cluster at once, waits
 for the first, then finds nothing to do.
 
-| Exit code | Meaning                                                                                                                                             |
-| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                |
-| `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending. |
-| `2`       | Usage error: an unknown flag, `DATABASE_URL` is not set, or the system-client variables are incomplete or invalid. Nothing was done.                |
-| `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                      |
-| `4`       | Every migration is applied, but the system client set by `SYSTEM_CLIENT_REDIRECT_URI` could not be provisioned. The error names why.                |
+| Exit code | Meaning                                                                                                                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `0`       | The database is current: the run applied the pending migrations, or there were none.                                                                                                             |
+| `1`       | A migration failed. The error names it, and the whole run rolled back: no migration of the run was applied. With `--check`: migrations are pending.                                              |
+| `2`       | Usage error: an unknown flag, `DATABASE_URL` is not set, or the system-client or `DB_USER_*` variables are incomplete or invalid. Nothing was done.                                              |
+| `3`       | The run could not start: the database is unreachable, or the migrations folder cannot be read.                                                                                                   |
+| `4`       | Every migration is applied, but the system client set by `SYSTEM_CLIENT_REDIRECT_URI` could not be provisioned. The error names why.                                                             |
+| `5`       | Every migration is applied, but the grants of the roles' database users named by `DB_USER_*` could not be applied. They are as they were. It wins over `4` when both fail; the errors name both. |
 
 `--check` reports the pending migrations and changes nothing: it takes no lock
 and creates nothing, so a read-only database role can run it.
@@ -1058,10 +1059,12 @@ From this release the [SSF transmitter](/operate/ssf-transmitter/) names a user
 in its SETs under the realm's issuer, so the delivery role reads
 `realms.issuer` ([#540](https://github.com/qauth-labs/qauth/issues/540)). A
 deployment whose delivery role connects as the server's own database user needs
-nothing. One that runs it as a database user of its own, with the grants of
-`eventDeliveryGrantStatements` from `@qauth-labs/infra-db`, gives that user the
-new column before the new version starts, by applying those statements again
-or with the one statement they add:
+nothing, nor does one whose migration runner grants the roles' users
+([below](#each-role-can-connect-as-a-database-user-of-its-own)). One that runs
+it as a database user of its own, with the grants of
+`eventDeliveryGrantStatements` from `@qauth-labs/infra-db` applied by hand,
+gives that user the new column before the new version starts, by applying those
+statements again or with the one statement they add:
 
 ```sql
 GRANT SELECT ("issuer") ON TABLE "realms" TO <delivery_role>;
@@ -1070,6 +1073,29 @@ GRANT SELECT ("issuer") ON TABLE "realms" TO <delivery_role>;
 Nothing checks the grants at boot. Without this one, every SSF delivery
 attempt fails with `permission denied for table realms` and is retried until
 its attempts run out; the delivery role logs `a delivery route threw`.
+
+### Each role can connect as a database user of its own
+
+A split deployment can now give each service role a Postgres user with only
+the grants it needs
+([#498](https://github.com/qauth-labs/qauth/issues/498); ADR-019 Decisions 8
+and 9). Nothing changes until you name the users: with no `DB_USER_*` variable
+set, every role connects as the one user, which owns the tables, as before. To
+split them, create the users, name them to the migration runner and give each
+role's processes their own `DATABASE_URL`, as
+[Topology](/operate/topology/#one-user-per-role) shows. Every runner run then
+applies the grants after its migrations, so a later release that adds a table
+needs no step of yours.
+
+Migration 0055 adds `ssf_subject_events_pending`, a `SECURITY DEFINER` function
+the SSF subject sweep calls instead of reading `events`, so the `api` role's
+user holds no `SELECT` on the event store. `EXECUTE` on it is revoked from
+`PUBLIC`; the grants give it to `api`. The previous release keeps running on
+the new schema: it does not call the function.
+
+A process whose only role is `delivery` no longer runs the default realm's boot
+step, which creates and updates the realm row; its user may not write
+`realms`. A process of any other role runs it, as before.
 
 ### Keep a relying party's `client_credentials` to the scopes it needs
 

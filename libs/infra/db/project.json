@@ -70,6 +70,15 @@
       },
       "description": "Idempotent OAuth-client provisioner, and scope grants for CIMD clients \u2014 pass `-- --manifest=<path> [--rotate]`"
     },
+    "db:grants": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsx src/scripts/grant-database-users.ts",
+        "cwd": "libs/infra/db",
+        "forwardAllArgs": true
+      },
+      "description": "Give each service role's database user exactly the grants of its roles (#498): set DATABASE_URL to the owner of the tables and DB_USER_WEB, DB_USER_API, DB_USER_ADMIN, DB_USER_SIGNER and DB_USER_DELIVERY to the users the operator created, then pass `-- [--check | --print]`. Does nothing when no DB_USER_* is set. The script exits 0 when applied or current, 1 when refused or (with --check) different, 2 on a usage error and 3 when it could not run, but Nx reports every failure as 1: run `pnpm --dir libs/infra/db exec tsx src/scripts/grant-database-users.ts` for the codes."
+    },
     "events:verify-chain": {
       "executor": "nx:run-commands",
       "options": {

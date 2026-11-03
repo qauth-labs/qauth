@@ -57,6 +57,15 @@ services:
       SYSTEM_CLIENT_JWKS: ${SYSTEM_CLIENT_JWKS:-}
       SYSTEM_CLIENT_ID: ${SYSTEM_CLIENT_ID:-system}
       DEFAULT_REALM_NAME: ${DEFAULT_REALM_NAME:-master}
+      # The service roles' database users (#498): with all five set, the
+      # runner gives each exactly the grants of its roles after the
+      # migrations. Blank, as here by default, grants nothing: every service
+      # connects as the one user above, which owns the tables.
+      DB_USER_WEB: ${DB_USER_WEB:-}
+      DB_USER_API: ${DB_USER_API:-}
+      DB_USER_ADMIN: ${DB_USER_ADMIN:-}
+      DB_USER_SIGNER: ${DB_USER_SIGNER:-}
+      DB_USER_DELIVERY: ${DB_USER_DELIVERY:-}
     depends_on:
       postgres:
         condition: service_healthy

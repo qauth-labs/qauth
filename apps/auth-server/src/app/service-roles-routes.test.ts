@@ -11,9 +11,10 @@
  *   autoload registered before the manifest replaced it (pinned below), and
  *   the listing of every route with its roles fails for a route that has none.
  * - Each other role registers exactly its share: `web` the `browser` routes,
- *   `api` the `api` and `meta` routes, and every role `/health`, `/ready`
- *   and @fastify/cors's `OPTIONS *`. No role serves `/metrics` here: it is
- *   on the internal listener (#500).
+ *   `api` the `api` and `meta` routes, and every role `/health` and
+ *   `/ready`. @fastify/cors's `OPTIONS *` belongs to the two with routes,
+ *   `web` and `api`: a process of neither registers no CORS (#498). No role
+ *   serves `/metrics` here: it is on the internal listener (#500).
  * - A route under `/admin` refuses the boot, a plugin's as well as a route
  *   module's (#511): it registers only on the admin listener.
  */
@@ -274,12 +275,17 @@ function operations(routes: readonly RouteOptions[]): Set<string> {
   );
 }
 
+/** The roles that register a route module, and so @fastify/cors (#498). */
+const CORS_ROLES: readonly ServiceRole[] = SERVICE_ROLE_NAMES.filter(
+  (role) => role === 'web' || role === 'api'
+);
+
 /**
  * The roles a route of the pinned set belongs to, from its surface class:
- * @fastify/cors's `OPTIONS *` belongs to every role too.
+ * @fastify/cors's `OPTIONS *` belongs to the roles with routes of their own.
  */
 function expectedRoles(route: RouteOptions): readonly ServiceRole[] {
-  if (route.url === '*') return SERVICE_ROLE_NAMES;
+  if (route.url === '*') return CORS_ROLES;
   switch (route.config?.surface) {
     case 'browser':
       return ['web'];

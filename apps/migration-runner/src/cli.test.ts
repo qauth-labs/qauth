@@ -126,3 +126,61 @@ describe('runRunner with a system client configuration (#631)', () => {
     expect(RUNNER_EXIT.systemClientFailed).toBe(4);
   });
 });
+
+describe('runRunner with database users for the roles (#498)', () => {
+  const env = (extra: Record<string, string>) => ({
+    DATABASE_URL: 'postgresql://u:p@127.0.0.1:1/db',
+    ...extra,
+  });
+
+  it('exits 2 when only some users are named, before reading anything, in both modes', async () => {
+    for (const args of [argv(), argv('--check')]) {
+      const { out, err, io } = capture();
+      // The folder does not exist: reaching it would exit 3, not 2.
+      await expect(
+        runRunner(args, env({ DB_USER_WEB: 'qauth_web' }), '/nonexistent/drizzle', io)
+      ).resolves.toBe(RUNNER_EXIT.usage);
+      expect(out).toEqual([]);
+      expect(err[0]).toMatch(/^Database users: DB_USER_API, DB_USER_ADMIN, .* are not set/);
+      expect(err.at(-1)).toBe('Nothing was done.');
+    }
+  });
+
+  it('exits 2 on a name Postgres would cut short', async () => {
+    const { err, io } = capture();
+    const users = {
+      DB_USER_WEB: 'w'.repeat(64),
+      DB_USER_API: 'a',
+      DB_USER_ADMIN: 'b',
+      DB_USER_SIGNER: 'c',
+      DB_USER_DELIVERY: 'd',
+    };
+    await expect(runRunner(argv(), env(users), '/nonexistent/drizzle', io)).resolves.toBe(
+      RUNNER_EXIT.usage
+    );
+    expect(err[0]).toMatch(/^Database users: DB_USER_WEB is not a usable Postgres role name/);
+  });
+
+  it('does not grant when a migration cannot run', async () => {
+    const { out, err, io } = capture();
+    const users = {
+      DB_USER_WEB: 'qauth_web',
+      DB_USER_API: 'qauth_api',
+      DB_USER_ADMIN: 'qauth_admin',
+      DB_USER_SIGNER: 'qauth_signer',
+      DB_USER_DELIVERY: 'qauth_delivery',
+    };
+    await expect(runRunner(argv(), env(users), '/nonexistent/drizzle', io)).resolves.toBe(
+      RUNNER_EXIT.cannotRun
+    );
+    expect(out).toEqual([]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(/^Cannot run the migrations:/);
+  });
+
+  it('describes the variables and the new exit code in the usage', () => {
+    expect(RUNNER_USAGE).toContain('DB_USER_DELIVERY');
+    expect(RUNNER_USAGE).toContain('Exits 5 when the migrations are applied but the grants');
+    expect(RUNNER_EXIT.grantsFailed).toBe(5);
+  });
+});

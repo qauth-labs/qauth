@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
 import { SERVER_JOBS, serverJobs } from './jobs';
 import {
+  bootsDefaultRealm,
   checkServiceRoles,
   describeServiceRoles,
   internalListenerPlan,
@@ -278,6 +279,17 @@ describe('the jobs of each role', () => {
     ]);
     expect(() => serverJobs(fastify, {}, ['delivery'])).toThrow('read eventRetention');
     expect(() => serverJobs(fastify, {}, ['web'])).toThrow('read events');
+  });
+});
+
+describe('bootsDefaultRealm', () => {
+  it('runs the default realm boot on every process but a delivery-only one (#498)', () => {
+    expect(bootsDefaultRealm(SERVICE_ROLE_NAMES)).toBe(true);
+    for (const role of ['web', 'api', 'admin', 'signer'] as const) {
+      expect(bootsDefaultRealm([role]), role).toBe(true);
+      expect(bootsDefaultRealm([role, 'delivery']), role).toBe(true);
+    }
+    expect(bootsDefaultRealm(['delivery'])).toBe(false);
   });
 });
 

@@ -171,20 +171,100 @@ single-use codes and consent revocation never split across databases.
 ## Database users
 
 ADR-019 gives each role its own Postgres user with only the grants it needs.
-Only the signer's user would read the private keys in `realm_keys`.
+Only the signer's user reads the private keys in `realm_keys`, and only the
+signer's user writes the published keys in `realm_public_keys`.
 
-In this release every role connects with the one `DATABASE_URL`, so every
-process can read and write every table, the key tables included. The KEK,
-which only signer processes hold, keeps the private keys in `realm_keys`
-secret from the others: they are wrapped under it. It does not keep a process
-from writing a key. Any process can store a public key of its own in
-`realm_public_keys`, and every process then verifies tokens with it and
-publishes it in the JWKS. Until each role has its own user, a compromised node
-of any role can sign tokens that verify, split or not. The per-role users and
-the script that grants them are [#498](https://github.com/qauth-labs/qauth/issues/498).
+A single deployment keeps one user. Every role connects with the one
+`DATABASE_URL`, as the owner of the tables, so every process can read and
+write every table, the key tables included. The KEK, which only signer
+processes hold, keeps the private keys in `realm_keys` secret from the
+others: they are wrapped under it. It does not keep a process from writing a
+key. Any process can store a public key of its own in `realm_public_keys`,
+and every process then verifies tokens with it and publishes it in the JWKS.
+While every role connects as that one user, a compromised node of any role can
+sign tokens that verify, split or not.
 
-Some roles already have their grants defined, as statements in
-`@qauth-labs/infra-db` an operator can apply to a user of their own:
+### One user per role
+
+A split deployment gives each role a user of its own
+([#498](https://github.com/qauth-labs/qauth/issues/498)):
+
+1. Create a login user for each role, and keep the owner of the tables for the
+   migration runner. QAuth creates no user and sets no password. Roles that run
+   in one process share one user.
+
+   ```sql
+   CREATE ROLE qauth_web LOGIN PASSWORD '…';
+   CREATE ROLE qauth_api LOGIN PASSWORD '…';
+   CREATE ROLE qauth_admin LOGIN PASSWORD '…';
+   CREATE ROLE qauth_signer LOGIN PASSWORD '…';
+   CREATE ROLE qauth_delivery LOGIN PASSWORD '…';
+   ```
+
+2. Name them to the migration runner, beside its `DATABASE_URL`, which stays
+   the owner's: `DB_USER_WEB`, `DB_USER_API`, `DB_USER_ADMIN`,
+   `DB_USER_SIGNER` and `DB_USER_DELIVERY`. Name the same user for the roles
+   that share one. After its migrations, each run gives every user exactly the
+   grants of its roles, so a table a release adds reaches the roles that use it
+   before they start (see [the migration runner](/operate/docker/#migration-runner)).
+   `pnpm nx run infra-db:db:grants` does the same from a checkout; `--check`
+   reports how the users differ from their grants and changes nothing, and
+   `--print` prints the statements.
+
+3. Give each role's processes a `DATABASE_URL` that connects as its user:
+
+   ```bash
+   # The web nodes
+   SERVICE_ROLES=web
+   DATABASE_URL=postgresql://qauth_web:…@db.internal:5432/qauth
+   # The signer nodes
+   SERVICE_ROLES=signer
+   DATABASE_URL=postgresql://qauth_signer:…@db.internal:5432/qauth
+   ```
+
+With none of the `DB_USER_*` variables set, nothing is granted: that is the
+single deployment above. Once one is set, all five must be.
+
+What the grants give, from the map in
+`libs/infra/db/src/lib/database-users/grants-map.ts`:
+
+| Table                    | Who                                                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------------------------------- |
+| `realm_keys`             | `signer` alone reads and writes it.                                                                  |
+| `realm_public_keys`      | Every role reads it; only `signer` writes it.                                                        |
+| `events`                 | `web` and `api` only insert, and read their own rows through functions; `delivery` reads and prunes. |
+| `audit_logs`             | No role: it has no writer since #458.                                                                |
+| `admin_grants`           | `web`, `api` and `admin` read it; no role writes it.                                                 |
+| The outbox and its queue | `delivery`, with only the columns of `realms`, `oauth_clients` and the stream subjects it reads.     |
+
+No role user holds `TRUNCATE`, `REFERENCES` or `TRIGGER`, owns a table, or can
+create one in the schema (a temporary table, which lasts as long as its own
+session, is Postgres's default for every user): only the owner, the migration
+runner's user, changes the schema.
+
+The run refuses, and changes nothing, when a user:
+
+- does not exist, is a superuser, owns the tables or is a member of their
+  owner;
+- has `REPLICATION`, `CREATEROLE` or `BYPASSRLS`, is a member of
+  `pg_read_all_data`, `pg_write_all_data` or a predefined role that reads,
+  writes or runs the server's files, or may create schemas in the database;
+- would hold other privileges than the map gives it, a sequence included,
+  through `PUBLIC` or through any role it is a member of, one it can only
+  `SET ROLE` to included.
+
+It also refuses while `PUBLIC` may execute a `SECURITY DEFINER` function in the
+schema. It never revokes what `PUBLIC` holds: a grant to `PUBLIC` the map does
+not give is yours to revoke, and the run names it.
+
+A process whose only role is `delivery` skips the default realm's boot step,
+which writes `realms`: on a new database, start another role's process first.
+A process without the signer still cannot sign or set a signed cookie (#497):
+[Service roles](/operate/service-roles/) says which splits work in this
+release.
+
+The statements for some roles are also in `@qauth-labs/infra-db`, for an
+operator who grants by hand; the map gives each role these and more:
 
 | Helper                               | For                                                        |
 | ------------------------------------ | ---------------------------------------------------------- |
@@ -192,11 +272,6 @@ Some roles already have their grants defined, as statements in
 | `eventDeliveryGrantStatements`       | The `delivery` role                                        |
 | `eventRetentionGrantStatements`      | The event retention job                                    |
 | `adminAuditLogWriterGrantStatements` | A role that writes the admin audit log                     |
-
-QAuth creates no database user: the operator does. A role that connects as a
-user of its own needs these grants reapplied when a release adds one, as the
-[upgrade guide](/operate/upgrades/#the-delivery-role-reads-realmsissuer) says
-for 0.2's delivery role.
 
 ## The reverse proxy
 

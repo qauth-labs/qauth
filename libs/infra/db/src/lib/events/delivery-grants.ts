@@ -30,8 +30,9 @@ import { quoteRoleName, type TablePrivilege } from '../role-grants';
  * Nothing else: no key table, no session or token table. The role holds no
  * private key (ADR-019 Decision 9); it asks the signer to sign.
  *
- * QAuth creates no database users: the operator does, and the per-role grants
- * script (#498) applies these statements to the user it is given.
+ * QAuth creates no database users: the operator does. The grants map of #498
+ * (`database-users/grants-map.ts`) gives the `delivery` role these grants,
+ * which `db:grants` and the migration runner apply to its user.
  */
 export const EVENT_DELIVERY_GRANTS: Readonly<Record<string, readonly TablePrivilege[]>> =
   Object.freeze({

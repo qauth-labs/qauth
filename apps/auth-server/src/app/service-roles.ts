@@ -189,6 +189,18 @@ export function holdsSigner(roles: readonly ServiceRole[]): boolean {
 }
 
 /**
+ * Whether a process with `roles` runs the default realm's boot step (#484),
+ * which creates the realm on a fresh database and writes its hosts and
+ * policies: any process that holds a role besides `delivery`. The delivery
+ * role's database user gets its outbox and nothing beyond it (ADR-019
+ * Decision 8, #498), so it may not write `realms`; it needs no realm to
+ * start, and delivers the events of the realms the other roles created.
+ */
+export function bootsDefaultRealm(roles: readonly ServiceRole[]): boolean {
+  return roles.some((role) => role !== 'delivery');
+}
+
+/**
  * Whether `roles` is every role: a single process, which is one trust domain
  * (ADR-019 Decision 9). Any other list splits the roles across processes.
  */

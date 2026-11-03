@@ -1,4 +1,11 @@
 import {
+  applyDatabaseUserGrants,
+  type DatabaseUserAssignment,
+  DatabaseUserGrantsError,
+  databaseUsersFromEnv,
+  describeDatabaseUserGrants,
+} from '@qauth-labs/infra-db/grants';
+import {
   checkMigrations,
   describeDatabaseError,
   describePending,
@@ -35,6 +42,13 @@ export const RUNNER_EXIT = Object.freeze({
    * `SYSTEM_CLIENT_*` environment could not be provisioned (#631).
    */
   systemClientFailed: 4,
+  /**
+   * Every migration is applied, but the grants of the roles' database users
+   * named by the `DB_USER_*` environment could not be applied (#498). They
+   * are as they were before the run. It wins over
+   * {@link RUNNER_EXIT.systemClientFailed} when both fail; stderr names both.
+   */
+  grantsFailed: 5,
 } as const);
 
 export const RUNNER_USAGE =
@@ -55,7 +69,15 @@ export const RUNNER_USAGE =
   '       (default system) and DEFAULT_REALM_NAME (default master) name the row, as on the\n' +
   '       auth server. A realm the auth server has not created yet is reported and\n' +
   '       skipped. Exits 4 when the migrations are applied but the system client could\n' +
-  '       not be provisioned.';
+  '       not be provisioned.\n' +
+  '\n' +
+  '       With DB_USER_WEB, DB_USER_API, DB_USER_ADMIN, DB_USER_SIGNER and DB_USER_DELIVERY\n' +
+  '       set (the database users the operator created for the service roles), a run also\n' +
+  '       gives each of them exactly the grants of its roles once the migrations are\n' +
+  '       applied, as the owner of the tables DATABASE_URL connects as. None of them set\n' +
+  '       is a single deployment, whose one user holds every grant: nothing is granted.\n' +
+  '       Exits 5 when the migrations are applied but the grants could not be, whether\n' +
+  '       or not the system client was provisioned: each failure is reported on stderr.';
 
 export interface RunnerArgs {
   readonly check: boolean;
@@ -140,6 +162,13 @@ export async function runRunner(
     );
     return RUNNER_EXIT.usage;
   }
+  // The roles' database users (#498), read before anything runs too.
+  const databaseUsers = databaseUsersFromEnv(env);
+  if (databaseUsers.configured === 'invalid') {
+    for (const problem of databaseUsers.problems) io.err(`Database users: ${problem}`);
+    io.err('Nothing was done.');
+    return RUNNER_EXIT.usage;
+  }
   const target = {
     connectionString,
     migrationsFolder: args.migrationsFolder ?? defaultMigrationsFolder,
@@ -192,8 +221,41 @@ export async function runRunner(
     return RUNNER_EXIT.cannotRun;
   }
 
-  if (systemClient.configured !== true) return RUNNER_EXIT.current;
-  return provisionTheSystemClient(connectionString, systemClient.realm, systemClient.spec, io);
+  const provisioned =
+    systemClient.configured === true
+      ? await provisionTheSystemClient(connectionString, systemClient.realm, systemClient.spec, io)
+      : RUNNER_EXIT.current;
+  // Granted whether or not the system client was provisioned: the grants are
+  // what lets the roles reach a table this run added.
+  if (databaseUsers.configured !== true) return provisioned;
+  const granted = await grantTheDatabaseUsers(connectionString, databaseUsers.users, io);
+  return granted === RUNNER_EXIT.current ? provisioned : granted;
+}
+
+/**
+ * Issue #498: give each role's database user exactly the grants of its roles,
+ * once the migrations are applied, so a table this release added reaches the
+ * roles that use it before they start.
+ */
+async function grantTheDatabaseUsers(
+  connectionString: string,
+  users: DatabaseUserAssignment,
+  io: RunnerIo
+): Promise<number> {
+  try {
+    const report = await applyDatabaseUserGrants({ connectionString }, users);
+    io.out("Granted each role's database user exactly the grants of its roles:");
+    for (const line of describeDatabaseUserGrants(report)) io.out(`  ${line}`);
+    return RUNNER_EXIT.current;
+  } catch (error) {
+    io.err(
+      error instanceof DatabaseUserGrantsError
+        ? error.message
+        : `The migrations are applied, but the grants could not be: ${describeDatabaseError(error)}`
+    );
+    io.err("The database users' grants are as they were before this run.");
+    return RUNNER_EXIT.grantsFailed;
+  }
 }
 
 /**

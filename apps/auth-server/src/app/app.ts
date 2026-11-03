@@ -98,8 +98,9 @@ import { readinessPlugin, registerRoleReadinessChecks } from './plugins/readines
 import { realmResolverPlugin } from './plugins/realm-resolver';
 import { requestIdPlugin } from './plugins/request-id';
 import { securityHeadersPlugin } from './plugins/security-headers';
-import { routeModulesFor } from './route-manifest';
+import { routeModulesFor, servesOwnRoutes } from './route-manifest';
 import {
+  bootsDefaultRealm,
   checkServiceRoles,
   describeServiceRoles,
   holdsSigner,
@@ -662,11 +663,19 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   );
   routeModules.catch(() => undefined);
 
+  // The roles of this process whose routes CORS answers the preflights of:
+  // the ones with a route module beyond the probes (`web`, `api`). A process
+  // of none of them (`admin`, `signer`, `delivery`) serves only `/health` and
+  // `/ready` on this listener, so it registers no CORS and no `OPTIONS *`: a
+  // preflight gets the 404 of a path no route serves, and looks no realm up,
+  // which a `delivery` process's own database user may not do (#498).
+  const corsRoles = roles.filter(servesOwnRoutes);
+
   // Every route of the app names the roles that register it (#495): the route
   // manifest tags its modules' routes below, and the check after them refuses
   // to boot when a route registered here has no role. @fastify/cors's
-  // `OPTIONS *` belongs to every role this process holds. Collected from the
-  // first plugin on, so no route escapes the check.
+  // `OPTIONS *` belongs to the roles it answers the preflights of. Collected
+  // from the first plugin on, so no route escapes the check.
   const registeredRoutes: RouteOptions[] = [];
   fastify.addHook('onRoute', (route) => {
     if (
@@ -674,7 +683,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
       route.method === 'OPTIONS' &&
       route.url === '*'
     ) {
-      route.config = { ...route.config, serviceRoles: roles };
+      route.config = { ...route.config, serviceRoles: corsRoles };
     }
     registeredRoutes.push(route);
   });
@@ -771,8 +780,9 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // DEFAULT_REALM_ENDPOINT_HOSTS. It runs in an `onReady` hook, so before the
   // server listens, and refuses the boot when the stored issuer differs from
   // JWT_ISSUER, or the realm's passkeys are bound to another RP ID. Registered right after the database so its hook runs before
-  // the job runner starts.
-  if (defaultRealmBoot) {
+  // the job runner starts. A process that holds only `delivery` skips it: its
+  // database user may not write `realms` (ADR-019 Decision 8, #498).
+  if (defaultRealmBoot && bootsDefaultRealm(roles)) {
     await fastify.register(defaultRealmPlugin, defaultRealmBootSettings());
   }
 
@@ -1175,10 +1185,13 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // CORS whatever CORS_ORIGIN holds (OAuth 2.1 -17 §3.1, #930). The plugin
   // marks them from an `onRoute` hook, which is not retroactive, so this
   // position before the routes is load-bearing too (`plugins/cors.ts`).
-  await fastify.register(corsPlugin, {
-    corsOrigin: env.CORS_ORIGIN,
-    production: env.NODE_ENV === 'production',
-  });
+  // Only on a process with routes of its own (`corsRoles` above).
+  if (corsRoles.length > 0) {
+    await fastify.register(corsPlugin, {
+      corsOrigin: env.CORS_ORIGIN,
+      production: env.NODE_ENV === 'production',
+    });
+  }
 
   // RFC 6749 §3.2 (token endpoint) and RFC 7662 §2.1 (introspection)
   // both mandate `application/x-www-form-urlencoded` for request bodies.

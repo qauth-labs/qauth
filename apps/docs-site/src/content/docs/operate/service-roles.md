@@ -41,6 +41,13 @@ A process registers only what its roles use:
 - the jobs placed on its roles. Run every role on at least one node, or its
   jobs never run.
 
+Each role can also connect as a database user of its own, which holds only what
+the role's repositories, boot steps and jobs read and write
+([#498](https://github.com/qauth-labs/qauth/issues/498)). The migration runner
+grants them; [Topology](/operate/topology/#one-user-per-role) shows how. A
+process whose only role is `delivery` then skips the default realm's boot step,
+since its user may not write `realms`.
+
 ## Keys stay on the signer
 
 Only a process whose `SERVICE_ROLES` names `signer`, or is `all`, may hold key
