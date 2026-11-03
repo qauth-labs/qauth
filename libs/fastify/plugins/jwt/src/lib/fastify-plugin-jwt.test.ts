@@ -1686,3 +1686,266 @@ describe('verifyRequestAccessToken policy (#509)', () => {
     }
   });
 });
+
+describe('verifyIdTokenHint (RP-Initiated Logout 1.0 §2, #675)', () => {
+  /** A token the realm's signer signs, so it carries the realm key's `kid`. */
+  function signed(
+    realms: TestRealms,
+    realm: TokenRealm,
+    options: {
+      typ?: string;
+      algorithm?: 'EdDSA' | 'RS256';
+      claims?: Record<string, unknown>;
+    } = {}
+  ): Promise<string> {
+    const now = Math.floor(Date.now() / 1000);
+    return realms.signer.signer.signJws('local', {
+      realmId: realm.id,
+      purpose: 'token_signing',
+      typ: options.typ ?? 'JWT',
+      ...(options.algorithm === undefined ? {} : { algorithm: options.algorithm }),
+      claims: { sub: 'user-1', aud: 'client-1', iat: now, exp: now + 900, ...options.claims },
+    });
+  }
+
+  function expiredClaims(): { iat: number; exp: number } {
+    const now = Math.floor(Date.now() / 1000);
+    return { iat: now - 3600, exp: now - 1800 };
+  }
+
+  async function refused(promise: Promise<unknown>, message?: string): Promise<void> {
+    const error = await promise.then(
+      () => undefined,
+      (caught: unknown) => caught
+    );
+    expect(error).toBeInstanceOf(JWTInvalidError);
+    expect(error).not.toBeInstanceOf(JWTExpiredError);
+    if (message !== undefined) expect((error as Error).message).toContain(message);
+  }
+
+  it('verifies an EdDSA ID token signIdToken made, with its sid', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const idToken = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+        sid: 'session-1',
+      });
+      expect(header(idToken)['alg']).toBe('EdDSA');
+      await expect(app.jwtUtils.verifyIdTokenHint(realms.a, idToken)).resolves.toMatchObject({
+        sub: 'user-1',
+        aud: ['client-1'],
+        sid: 'session-1',
+        expired: false,
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('verifies an RS256 ID token of a realm with an RS256 key, without a sid', async () => {
+    const realms = await createRealms({ rs256: true });
+    const app = await buildTestApp(realms);
+    try {
+      const idToken = await app.jwtUtils.signIdToken(realms.a, {
+        sub: 'user-1',
+        audience: 'client-1',
+      });
+      expect(header(idToken)).toMatchObject({
+        alg: 'RS256',
+        kid: await activeKid(realms, realms.a, 'RS256'),
+      });
+      const hint = await app.jwtUtils.verifyIdTokenHint(realms.a, idToken);
+      expect(hint).toMatchObject({ sub: 'user-1', aud: ['client-1'], expired: false });
+      expect('sid' in hint).toBe(false);
+      // Twice: the second call takes the imported RSA key from the cache.
+      await expect(app.jwtUtils.verifyIdTokenHint(realms.a, idToken)).resolves.toBeDefined();
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('accepts an expired ID token, EdDSA or RS256, with expired: true', async () => {
+    const realms = await createRealms({ rs256: true });
+    const app = await buildTestApp(realms);
+    try {
+      for (const algorithm of ['EdDSA', 'RS256'] as const) {
+        const claims = { ...expiredClaims(), aud: ['client-1', 'client-2'], sid: 'session-1' };
+        const token = await signed(realms, realms.a, { algorithm, claims });
+        await expect(app.jwtUtils.verifyIdTokenHint(realms.a, token)).resolves.toEqual({
+          sub: 'user-1',
+          aud: ['client-1', 'client-2'],
+          sid: 'session-1',
+          iat: claims.iat,
+          exp: claims.exp,
+          expired: true,
+        });
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses another realm's ID token, and a wrong issuer, expired or not", async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      for (const claims of [{}, expiredClaims()]) {
+        // Realm B's keys signed it: realm A has no key of that kid.
+        const fromB = await signed(realms, realms.b, { claims });
+        await refused(app.jwtUtils.verifyIdTokenHint(realms.a, fromB));
+        // Realm B's key, checked under realm A's issuer.
+        await refused(app.jwtUtils.verifyIdTokenHint({ id: realms.b.id, issuer: ISSUER_A }, fromB));
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses a bad signature, expired or not', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const kid = await activeKid(realms, realms.a, 'EdDSA');
+      for (const exp of [undefined, Math.floor(Date.now() / 1000) - 1800]) {
+        // Another key, under realm A's kid and issuer.
+        const forged = await signWithPem(ed25519Pem(), {
+          iss: ISSUER_A,
+          typ: 'JWT',
+          kid,
+          aud: 'client-1',
+          ...(exp === undefined ? {} : { exp }),
+        });
+        await refused(app.jwtUtils.verifyIdTokenHint(realms.a, forged));
+      }
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("refuses an unknown kid, and a kid naming the realm's key of another algorithm", async () => {
+    const realms = await createRealms({ rs256: true });
+    const app = await buildTestApp(realms);
+    try {
+      const unknown = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
+        typ: 'JWT',
+        kid: 'no-such-key',
+      });
+      await refused(
+        app.jwtUtils.verifyIdTokenHint(realms.a, unknown),
+        'no key of this realm verifies it'
+      );
+      const rsaKid = await signWithPem(realms.realmAKey, {
+        iss: ISSUER_A,
+        typ: 'JWT',
+        kid: await activeKid(realms, realms.a, 'RS256'),
+      });
+      await refused(
+        app.jwtUtils.verifyIdTokenHint(realms.a, rsaKid),
+        'no key of this realm verifies it'
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('verifies a kid-less EdDSA ID token with the key kidlessKeyIds names only', async () => {
+    const realms = await createRealms();
+    const legacy = await signWithPem(realms.realmAKey, {
+      iss: ISSUER_A,
+      typ: 'JWT',
+      aud: 'client-1',
+    });
+    const app = await buildTestApp(realms);
+    try {
+      await expect(app.jwtUtils.verifyIdTokenHint(realms.a, legacy)).resolves.toMatchObject({
+        sub: 'user-1',
+        expired: false,
+      });
+    } finally {
+      await app.close();
+    }
+    const strict = await buildTestApp(realms, { kidlessKeyIds: [] });
+    try {
+      await refused(strict.jwtUtils.verifyIdTokenHint(realms.a, legacy));
+    } finally {
+      await strict.close();
+    }
+  });
+
+  it('refuses alg none, HS256 and ES256 before any key is tried', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+      const claims = encode({ iss: ISSUER_A, sub: 'user-1', aud: 'client-1' });
+      const kid = await activeKid(realms, realms.a, 'EdDSA');
+      for (const alg of ['none', 'HS256', 'ES256', 'ML-DSA-65']) {
+        const token = `${encode({ alg, typ: 'JWT', kid })}.${claims}.c2ln`;
+        await refused(
+          app.jwtUtils.verifyIdTokenHint(realms.a, token),
+          'an ID token is signed with RS256 or EdDSA'
+        );
+      }
+      await refused(app.jwtUtils.verifyIdTokenHint(realms.a, 'not-a-jwt'));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses an access token, an ID-JAG, a logout token and a typ-less token, expired or not', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      // Realm A's own key signs them all, under its kid and issuer: only `typ` differs.
+      const kid = await activeKid(realms, realms.a, 'EdDSA');
+      for (const exp of [undefined, Math.floor(Date.now() / 1000) - 1800]) {
+        for (const typ of ['at+jwt', 'oauth-id-jag+jwt', 'logout+jwt', undefined]) {
+          const token = await signWithPem(realms.realmAKey, {
+            iss: ISSUER_A,
+            kid,
+            aud: 'client-1',
+            ...(typ === undefined ? {} : { typ }),
+            ...(exp === undefined ? {} : { exp }),
+          });
+          await refused(app.jwtUtils.verifyIdTokenHint(realms.a, token), 'not an ID token');
+        }
+        // The control: the same token typed `JWT` passes.
+        const idToken = await signWithPem(realms.realmAKey, {
+          iss: ISSUER_A,
+          kid,
+          aud: 'client-1',
+          typ: 'JWT',
+          ...(exp === undefined ? {} : { exp }),
+        });
+        await expect(app.jwtUtils.verifyIdTokenHint(realms.a, idToken)).resolves.toMatchObject({
+          expired: exp !== undefined,
+        });
+      }
+      const accessToken = await app.jwtUtils.signAccessToken(realms.a, {
+        sub: 'user-1',
+        clientId: 'client-1',
+      });
+      await refused(app.jwtUtils.verifyIdTokenHint(realms.a, accessToken), 'not an ID token');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('refuses malformed claims', async () => {
+    const realms = await createRealms();
+    const app = await buildTestApp(realms);
+    try {
+      for (const claims of [{ sub: '' }, { aud: [] }, { aud: 7 }, { sid: 1 }]) {
+        await refused(
+          app.jwtUtils.verifyIdTokenHint(realms.a, await signed(realms, realms.a, { claims })),
+          'malformed claims'
+        );
+      }
+    } finally {
+      await app.close();
+    }
+  });
+});

@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   claimExpiredInteraction,
   eventClientIdOf,
+  eventUserIdOf,
   type ExpiredInteraction,
   expiredInteractionEntries,
   relistExpiredInteraction,
@@ -38,13 +39,13 @@ export interface InteractionExpiryDependencies {
 /** The `interaction.expired` event of one claimed interaction. */
 function expiredEvent(expired: ExpiredInteraction) {
   const { record } = expired;
-  const userId = record?.transaction.userId;
+  const userId = record === null ? null : eventUserIdOf(record);
   const clientId = record === null ? null : eventClientIdOf(record);
   return {
     type: 'urn:qauth:event:interaction.expired:v1-rc.0' as const,
     realm: expired.realmId,
     actor: { type: 'system' as const },
-    ...(userId === undefined ? {} : { subject: { type: 'user' as const, id: userId } }),
+    ...(userId === null ? {} : { subject: { type: 'user' as const, id: userId } }),
     ...(clientId === null ? {} : { client: { id: clientId } }),
     data: {
       interaction: expired.ref,

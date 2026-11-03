@@ -1529,6 +1529,46 @@ describe('repository integration (real Postgres)', () => {
     });
   });
 
+  // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): the document's
+  // post-logout redirect URIs are document-derived like its redirect URIs.
+  describe('oauth_clients — post_logout_redirect_uris', () => {
+    const CIMD_ID = 'https://app.example.com/logout-client.json';
+    const cimdInsert = (realmId: string, postLogoutRedirectUris?: string[]) => ({
+      realmId,
+      clientId: CIMD_ID,
+      clientSecretHash: 'sentinel-hash',
+      name: 'Logout',
+      redirectUris: ['https://app.example.com/cb'],
+      ...(postLogoutRedirectUris === undefined ? {} : { postLogoutRedirectUris }),
+      tokenEndpointAuthMethod: 'none' as const,
+      enabled: true,
+    });
+
+    it('defaults to [] for an insert that does not name it, as an earlier release writes', async () => {
+      const realm = await seedRealm('post-logout-default-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const created = await clients.upsertCimdClient(cimdInsert(realm.id));
+      expect(created.postLogoutRedirectUris).toEqual([]);
+    });
+
+    it('is refreshed by a CIMD re-resolution, and cleared when the document drops it', async () => {
+      const realm = await seedRealm('post-logout-cimd-realm');
+      const clients = createOAuthClientsRepository(db().database.db);
+      const created = await clients.upsertCimdClient(
+        cimdInsert(realm.id, ['https://app.example.com/bye'])
+      );
+      expect(created.postLogoutRedirectUris).toEqual(['https://app.example.com/bye']);
+
+      const changed = await clients.upsertCimdClient(
+        cimdInsert(realm.id, ['https://app.example.com/signed-out'])
+      );
+      expect(changed.postLogoutRedirectUris).toEqual(['https://app.example.com/signed-out']);
+
+      const dropped = await clients.upsertCimdClient(cimdInsert(realm.id));
+      expect(dropped.postLogoutRedirectUris).toEqual([]);
+    });
+  });
+
   // ANT-2026-DR5XI3LV: the suspension column is operator state. The CIMD
   // upsert never names it, so a re-resolution cannot clear it.
   describe('oauth_clients — suspended survives upsertCimdClient', () => {

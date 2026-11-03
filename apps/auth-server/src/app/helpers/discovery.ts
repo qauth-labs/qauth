@@ -320,6 +320,9 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
 
   return {
     ...asMetadata,
+    // OpenID Connect RP-Initiated Logout 1.0 §2.1 (#675): where an app sends
+    // the browser to sign it out. No front-channel logout (ADR-018).
+    end_session_endpoint: `${resolveIssuerIdentifier(input.issuer)}/oauth/end-session`,
     // OIDC Core §5.1 — `sub` is always emitted. `nonce` is echoed in the ID
     // token when the client supplies it (OIDC Core §3.1.3.6). `name` is emitted
     // when the user has a display name set. This list MUST stay consistent with

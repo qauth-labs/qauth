@@ -3,6 +3,7 @@ import type {
   AccessTokenCredential,
   ActClaim,
   ConfirmationClaim,
+  IdTokenHint,
   JWTPayload,
 } from '@qauth-labs/server-jwt';
 import type { RealmJwks, Signer } from '@qauth-labs/server-keys';
@@ -185,6 +186,13 @@ export type Jwks = RealmJwks;
  * Re-exported to avoid apps needing direct dependency on @qauth-labs/server-jwt
  */
 export type { AccessTokenCredential, ActClaim, ConfirmationClaim, HybridSignedToken, JWTPayload };
+
+/**
+ * The claims of a verified `id_token_hint` (OpenID Connect RP-Initiated
+ * Logout 1.0 §2, #675), as {@link JwtUtils.verifyIdTokenHint} returns them.
+ * Re-exported so apps need no direct dependency on @qauth-labs/server-jwt.
+ */
+export type { IdTokenHint };
 
 /**
  * JWT utilities interface
@@ -371,6 +379,21 @@ export interface JwtUtils {
     token: string,
     options?: { audience?: string | string[] }
   ): Promise<JWTPayload>;
+  /**
+   * Verify an `id_token_hint` (OpenID Connect RP-Initiated Logout 1.0 §2,
+   * #675): an ID token of `realm`, expired or not.
+   *
+   * The token verifies only with the realm's `token_signing` key its
+   * `(kid, alg)` names, under RS256 or EdDSA (#309); a token without a `kid`
+   * only under EdDSA, with the keys `kidlessKeyIds` names, as an access token.
+   * Its `iss` MUST be the realm's issuer, and its signed `typ` MUST be `JWT`:
+   * an access token, an ID-JAG or a logout token is refused. An expired token
+   * is accepted with `expired: true` once its signature, issuer and `typ`
+   * verified (§2: the OP SHOULD accept it).
+   *
+   * @throws JWTInvalidError on every refusal, never JWTExpiredError
+   */
+  verifyIdTokenHint(realm: TokenRealm, token: string): Promise<IdTokenHint>;
   /**
    * Extract JWT token from Authorization header
    * @param authHeader - Authorization header value (e.g., "Bearer <token>")

@@ -45,9 +45,12 @@ function subjectCell(definition: EventTypeDefinition): string {
     case 'key':
       return 'the key, `opaque` with its `kid`';
     default:
-      return definition.subject === 'client'
-        ? 'the client, `uri` or `opaque`'
-        : 'the user, `iss_sub`';
+      if (definition.subject === 'client') return 'the client, `uri` or `opaque`';
+      // With a session, see the Subjects section: the user, or the user
+      // and the session the event names.
+      return mapping?.session === undefined
+        ? 'the user, `iss_sub`'
+        : 'the user, `iss_sub` or `complex`';
   }
 }
 
@@ -181,6 +184,10 @@ It carries no \`sub\` and no \`exp\` (SSF 1.0 §4.1.2, §4.1.7). Its header name
 A mapping may fix it instead, as the replay policy does.`,
     `## Subjects`,
     `- A user is \`iss_sub\`: the realm's issuer and the user's id.
+- A user's session is a \`complex\` subject (SSF 1.0 §3.2): \`user\` as above, and \`session\` as
+  \`opaque\` with the session id, the \`sid\` the user's ID tokens carry. A \`user.signed_out\`
+  that ended one session names it so, and a receiver ends that session alone; one that ended every
+  session of the user names the user alone. A stream that added the user receives both.
 - A client is \`uri\` when its \`client_id\` is an absolute URI, as an agent client's Client ID
   Metadata Document URL is, and \`opaque\` with the \`client_id\` otherwise.
 - A key is \`opaque\` with its \`kid\`.

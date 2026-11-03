@@ -7,6 +7,8 @@ import { z } from 'zod';
  * The mapping, which every SET's `sub_id` follows (#540):
  *
  * - a user is `iss_sub`: the realm's issuer and the user's id;
+ * - one session of a user, when a mapping names it (`session`), is `complex`:
+ *   the user as `iss_sub` and the session as `opaque` with its id;
  * - a client is `uri` when its `client_id` is an absolute URI (a Client ID
  *   Metadata Document URL, as agent clients have), and `opaque` with the
  *   `client_id` otherwise;
@@ -191,6 +193,28 @@ export function ssfSubjectOf(subject: EventSubject, issuer: string): SubjectIden
     default:
       return undefined;
   }
+}
+
+/**
+ * The complex subject of one session of a user (SSF 1.0 §3.2, #675): `user`
+ * as `iss_sub` under the realm's issuer, `session` as `opaque` with the
+ * session id, the `sid` the user's ID tokens carry (#549). A receiver can
+ * then end that session alone.
+ *
+ * @param issuer - The realm's issuer, the `iss` of its users' `iss_sub`.
+ */
+export function ssfSessionSubjectOf(
+  userId: string,
+  sessionId: string,
+  issuer: string
+): SubjectIdentifier {
+  // The schema's members are built from a list, so the inferred type names
+  // none of them.
+  return {
+    format: 'complex',
+    user: { format: 'iss_sub', iss: issuer, sub: userId },
+    session: { format: 'opaque', id: sessionId },
+  } as SubjectIdentifier;
 }
 
 /**

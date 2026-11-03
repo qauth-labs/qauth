@@ -17,10 +17,12 @@ import {
   generateRefreshToken,
   hashRefreshToken,
   ID_TOKEN_TYP,
+  type IdTokenSigningAlgorithm,
   type PublishedJwk,
   selectJwksKey,
   verifyAccessToken,
   verifyHybridAccessToken,
+  verifyIdTokenHint,
 } from '@qauth-labs/server-jwt';
 import type { VerificationKey } from '@qauth-labs/server-keys';
 import {
@@ -97,6 +99,13 @@ interface VerifyingKey {
 
 /** The algorithm every access token is signed with. */
 const ACCESS_TOKEN_ALGORITHM = 'EdDSA';
+
+/** The algorithms an ID token is signed with: RS256 when the realm has an RS256 key (#309), else EdDSA. */
+const ID_TOKEN_ALGORITHMS: readonly IdTokenSigningAlgorithm[] = ['RS256', 'EdDSA'];
+
+function isIdTokenAlgorithm(alg: unknown): alg is IdTokenSigningAlgorithm {
+  return ID_TOKEN_ALGORITHMS.some((candidate) => candidate === alg);
+}
 
 /**
  * The key of a realm's verification set that `(kid, alg)` names, or
@@ -207,13 +216,19 @@ export const jwtPlugin = fp<JwtPluginOptions>(
      */
     const importedKeys = new Map<string, Promise<SigningKey>>();
 
-    function importEdKey(realmId: string, key: VerificationKey): Promise<SigningKey> {
-      // The public value is part of the key, so a kid a realm ever reused for
-      // another key would not find the old one.
-      const cacheKey = `${realmId}\u0000${key.kid}\u0000${String(key.publicJwk.x)}`;
+    function importVerifyingKey(
+      realmId: string,
+      key: VerificationKey,
+      alg: IdTokenSigningAlgorithm
+    ): Promise<SigningKey> {
+      // The public value (`x` of an OKP key, `n` of an RSA key) is part of
+      // the key, so a kid a realm ever reused for another key would not find
+      // the old one.
+      const publicValue = String(alg === 'RS256' ? key.publicJwk.n : key.publicJwk.x);
+      const cacheKey = `${realmId}\u0000${alg}\u0000${key.kid}\u0000${publicValue}`;
       let imported = importedKeys.get(cacheKey);
       if (imported === undefined) {
-        imported = importPublicSigningJwk(key.publicJwk, ACCESS_TOKEN_ALGORITHM);
+        imported = importPublicSigningJwk(key.publicJwk, alg);
         // A failed import is not kept, so a later call tries again.
         imported.catch(() => importedKeys.delete(cacheKey));
         if (importedKeys.size >= MAX_IMPORTED_KEYS) {
@@ -251,25 +266,44 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       if (kid !== undefined && typeof kid !== 'string') {
         throw new JWTInvalidError('Invalid JWT token: kid is not a string');
       }
+      const found = await realmKeysFor(realm, ACCESS_TOKEN_ALGORITHM, kid);
+      if (found.keys.length === 0) {
+        throw new JWTInvalidError('Invalid JWT token: no key of this realm verifies it');
+      }
+      return found;
+    }
+
+    /**
+     * The realm's verification keys `(kid, alg)` names, imported. A token
+     * without a `kid` may use the keys {@link JwtPluginOptions.kidlessKeyIds}
+     * names, and only under EdDSA: they are Ed25519 keys (#491). Empty when
+     * none matches; the caller refuses the token then.
+     */
+    async function realmKeysFor(
+      realm: Pick<TokenRealm, 'id'>,
+      alg: IdTokenSigningAlgorithm,
+      kid: string | undefined
+    ): Promise<{ keys: VerifyingKey[]; verificationKeys: readonly VerificationKey[] }> {
       const verificationKeys = await signer.getVerificationKeys(
         SIGNER_CALLER,
         realm.id,
         'token_signing'
       );
       const namedKids =
-        kid === undefined
-          ? verificationKeys.map((key) => key.kid).filter((keyId) => kidlessKeyIds.has(keyId))
-          : [kid];
+        kid !== undefined
+          ? [kid]
+          : alg === 'EdDSA'
+            ? verificationKeys.map((key) => key.kid).filter((keyId) => kidlessKeyIds.has(keyId))
+            : [];
       const candidates = namedKids.flatMap(
-        (keyId) =>
-          verificationKeyFor(verificationKeys, { kid: keyId, alg: ACCESS_TOKEN_ALGORITHM }) ?? []
+        (keyId) => verificationKeyFor(verificationKeys, { kid: keyId, alg }) ?? []
       );
-      if (candidates.length === 0) {
-        throw new JWTInvalidError('Invalid JWT token: no key of this realm verifies it');
-      }
       return {
         keys: await Promise.all(
-          candidates.map(async (key) => ({ kid: key.kid, key: await importEdKey(realm.id, key) }))
+          candidates.map(async (key) => ({
+            kid: key.kid,
+            key: await importVerifyingKey(realm.id, key, alg),
+          }))
         ),
         verificationKeys,
       };
@@ -447,6 +481,34 @@ export const jwtPlugin = fp<JwtPluginOptions>(
       },
       hashRefreshToken(token) {
         return hashRefreshToken(token);
+      },
+      async verifyIdTokenHint(realm, token) {
+        // RP-Initiated Logout 1.0 §2 (#675): an ID token the realm issued,
+        // expired or not. The key is picked as for an access token, by the
+        // header's `(kid, alg)` among the realm's verification keys, so a
+        // retired key verifies within its retention (#492); but an ID token
+        // may be RS256 as well as EdDSA (#309). The header is read unverified
+        // only to pick the key; the lib verifies the signature, the issuer
+        // and the signed `typ` with it.
+        const header = decodeProtectedHeaderUnsafe(token);
+        const alg = header['alg'];
+        if (!isIdTokenAlgorithm(alg)) {
+          throw new JWTInvalidError(
+            'Invalid ID token hint: an ID token is signed with RS256 or EdDSA'
+          );
+        }
+        const kid = header['kid'];
+        if (kid !== undefined && typeof kid !== 'string') {
+          throw new JWTInvalidError('Invalid ID token hint: kid is not a string');
+        }
+        const { keys } = await realmKeysFor(realm, alg, kid);
+        if (keys.length === 0) {
+          throw new JWTInvalidError('Invalid ID token hint: no key of this realm verifies it');
+        }
+        const { value } = await withEachKey(keys, (key) =>
+          verifyIdTokenHint(token, key, { issuer: realm.issuer, algorithms: [alg] })
+        );
+        return value;
       },
       async verifyAccessToken(realm, token, verifyOptions = {}) {
         return verifyRealmAccessToken(realm, token, {

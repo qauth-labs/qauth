@@ -128,7 +128,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
   {
     module: 'interaction-api',
     roles: ['web'],
-    plugins: ['dpop', 'egress', 'password', 'sessions'],
+    plugins: ['dpop', 'egress', 'jwt', 'password', 'sessions'],
     repositories: [
       'adminGrants',
       'authorizationCodes',
@@ -316,6 +316,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'users',
     ],
     load: () => import('./routes/oauth/authorize'),
+  },
+  {
+    module: 'oauth/end-session',
+    prefix: '/oauth',
+    roles: ['web'],
+    plugins: ['egress', 'jwt', 'sessions'],
+    repositories: ['events', 'oauthClients', 'userCredentials', 'users'],
+    load: () => import('./routes/oauth/end-session'),
   },
   {
     module: 'oauth/introspect',

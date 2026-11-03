@@ -145,6 +145,9 @@ export default async function (fastify: FastifyInstance) {
           ? `Dynamically registered (${normalized.softwareId})`
           : 'Dynamically registered client',
         redirectUris: normalized.redirectUris,
+        // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never
+        // redirect after a logout.
+        postLogoutRedirectUris: normalized.postLogoutRedirectUris,
         scopes: normalized.scopes,
         grantTypes: normalized.grantTypes,
         responseTypes: normalized.responseTypes,
@@ -265,6 +268,11 @@ export default async function (fastify: FastifyInstance) {
           : {}),
         client_name: clientName,
         redirect_uris: normalized.redirectUris,
+        // RFC 7591 §3.2.1: the registered metadata, omitted when empty like
+        // the other optional fields below.
+        ...(normalized.postLogoutRedirectUris.length > 0
+          ? { post_logout_redirect_uris: normalized.postLogoutRedirectUris }
+          : {}),
         grant_types: normalized.grantTypes,
         response_types: normalized.responseTypes,
         token_endpoint_auth_method: normalized.tokenEndpointAuthMethod,

@@ -451,6 +451,70 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
     );
   });
 
+  describe('post_logout_redirect_uris (OpenID Connect RP-Initiated Logout 1.0 §3.1, #675)', () => {
+    const registerWith = async (body: Record<string, unknown>) => {
+      const { fastify, ctx, state } = createFastifyStub();
+      await registerRoute(fastify);
+      const result = (await ctx.handler!(
+        {
+          body: dynamicClientRegistrationRequestSchema.parse({
+            redirect_uris: ['https://app.example/cb'],
+            ...body,
+          }),
+          ip: '127.0.0.1',
+          headers: {},
+        },
+        createReply().reply
+      )) as Record<string, unknown>;
+      return { result, state };
+    };
+
+    it('stores the list and echoes it in the response (RFC 7591 §3.2.1)', async () => {
+      const uris = ['https://app.example/signed-out', 'com.example.app:/signed-out'];
+      const { result, state } = await registerWith({ post_logout_redirect_uris: uris });
+      expect(state.createdClients[0].postLogoutRedirectUris).toEqual(uris);
+      expect(result.post_logout_redirect_uris).toEqual(uris);
+    });
+
+    it('stores [] and echoes nothing when the request names none', async () => {
+      const { result, state } = await registerWith({});
+      expect(state.createdClients[0].postLogoutRedirectUris).toEqual([]);
+      expect(result).not.toHaveProperty('post_logout_redirect_uris');
+    });
+
+    it('refuses an entry the redirect URI rule refuses, as invalid_client_metadata, and stores nothing', async () => {
+      const { fastify, ctx, state } = createFastifyStub();
+      await registerRoute(fastify);
+      await expect(
+        ctx.handler!(
+          {
+            body: {
+              redirect_uris: ['https://app.example/cb'],
+              post_logout_redirect_uris: ['https://app.example/bye', 'http://app.example/bye'],
+            },
+            ip: '127.0.0.1',
+            headers: {},
+          },
+          createReply().reply
+        )
+      ).rejects.toBeInstanceOf(InvalidClientMetadataError);
+      expect(state.createdClients).toHaveLength(0);
+    });
+
+    it('bounds the list like redirect_uris at the schema boundary', () => {
+      const uris = (count: number) =>
+        Array.from({ length: count }, (_, i) => `https://app.example/bye/${i}`);
+      expect(
+        dynamicClientRegistrationRequestSchema.safeParse({ post_logout_redirect_uris: uris(20) })
+          .success
+      ).toBe(true);
+      expect(
+        dynamicClientRegistrationRequestSchema.safeParse({ post_logout_redirect_uris: uris(21) })
+          .success
+      ).toBe(false);
+    });
+  });
+
   it('defaults to a standard (non-agent) client when is_agent is omitted', async () => {
     const { fastify, ctx, state } = createFastifyStub();
     await registerRoute(fastify);

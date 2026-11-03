@@ -148,6 +148,27 @@ export function validateRedirectUri(uri: string, customSchemes: readonly string[
 }
 
 /**
+ * OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): a
+ * `post_logout_redirect_uris` entry passes the same rule as a redirect URI
+ * ({@link validateRedirectUri}): the end-session route sends the browser
+ * there, so it clears the bar a redirect URI clears. A refusal is
+ * `invalid_client_metadata`, since `invalid_redirect_uri` names the
+ * `redirect_uris` field (RFC 7591 §3.2.2), and its description names the
+ * field.
+ */
+export function validatePostLogoutRedirectUri(uri: string, customSchemes: readonly string[]): void {
+  try {
+    validateRedirectUri(uri, customSchemes);
+  } catch (err) {
+    if (!(err instanceof InvalidRedirectUriError)) throw err;
+    rejectRegistration(
+      'invalid_client_metadata',
+      `post_logout_redirect_uris: ${err.errorDescription ?? 'invalid URI'}`
+    );
+  }
+}
+
+/**
  * Policy defaults, applied when a dyn-reg request omits fields.
  * We pick conservative defaults: authorization_code + refresh_token,
  * `code` response type, public client (PKCE required).
@@ -169,6 +190,11 @@ export const DYN_REG_DEFAULTS = {
 export interface NormalizedRegistrationRequest {
   clientName: string | null;
   redirectUris: string[];
+  /**
+   * OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): each one checked by
+   * {@link validatePostLogoutRedirectUri}. Empty when the request named none.
+   */
+  postLogoutRedirectUris: string[];
   grantTypes: DynRegGrantType[];
   responseTypes: 'code'[];
   tokenEndpointAuthMethod: 'none' | 'client_secret_basic' | 'client_secret_post';
@@ -202,6 +228,7 @@ export interface NormalizedRegistrationRequest {
  *   requires the `code` response type).
  * - Requires redirect_uris for any user-involving grant.
  * - Validates every redirect_uri per OAuth 2.1 §10.3.
+ * - Validates every post_logout_redirect_uri by the same rule (#675).
  * - Forces `token_endpoint_auth_method=none` for clients that only use
  *   authorization_code (public client posture) when not explicitly
  *   declared as confidential.
@@ -246,6 +273,11 @@ export function validateAndNormalize(
   }
   for (const uri of redirectUris) {
     validateRedirectUri(uri, customRedirectSchemes);
+  }
+
+  const postLogoutRedirectUris = body.post_logout_redirect_uris ?? [];
+  for (const uri of postLogoutRedirectUris) {
+    validatePostLogoutRedirectUri(uri, customRedirectSchemes);
   }
 
   // Scope cap: intersect requested scopes with the realm's allowlist. Per
@@ -316,6 +348,7 @@ export function validateAndNormalize(
   return {
     clientName: body.client_name ?? null,
     redirectUris,
+    postLogoutRedirectUris,
     grantTypes,
     responseTypes,
     tokenEndpointAuthMethod,

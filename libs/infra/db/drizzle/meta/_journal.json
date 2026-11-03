@@ -400,6 +400,13 @@
       "when": 1793694751286,
       "tag": "0056_realm_sandbox_pairing",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1793725363573,
+      "tag": "0057_client_post_logout_redirect_uris",
+      "breakpoints": true
     }
   ]
 }

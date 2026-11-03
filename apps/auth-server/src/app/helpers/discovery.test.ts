@@ -326,6 +326,20 @@ describe('buildOpenIdConfiguration', () => {
 
     expect(oidc['authorization_response_iss_parameter_supported']).toBe(true);
   });
+
+  it('lists end_session_endpoint on the https issuer in the OIDC config only (RP-Initiated Logout 1.0 §2.1, #675)', () => {
+    const oidc = buildOpenIdConfiguration({ issuer: ISSUER });
+    expect(oidc['end_session_endpoint']).toBe(`${ISSUER}/oauth/end-session`);
+    expect(new URL(oidc['end_session_endpoint'] as string).protocol).toBe('https:');
+    // On the issuer as discovery publishes it: no double slash.
+    expect(buildOpenIdConfiguration({ issuer: `${ISSUER}/` })['end_session_endpoint']).toBe(
+      `${ISSUER}/oauth/end-session`
+    );
+    // An OpenID Provider member: the RFC 8414 document does not carry it.
+    expect(buildAuthorizationServerMetadata({ issuer: ISSUER })).not.toHaveProperty(
+      'end_session_endpoint'
+    );
+  });
 });
 
 /**

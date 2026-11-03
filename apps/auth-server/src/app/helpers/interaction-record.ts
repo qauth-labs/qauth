@@ -13,6 +13,7 @@ import {
   INTERACTION_UNANSWERED_TTL_MS,
   REDIS_KEYS,
 } from '../constants';
+import { logoutRequestSchema } from '../schemas/end-session';
 import { authorizeQuerySchema } from '../schemas/oauth';
 
 /**
@@ -22,7 +23,11 @@ import { authorizeQuerySchema } from '../schemas/oauth';
  * - **Id.** 32 CSPRNG bytes, base64url (43 characters), handed to the browser
  *   once. Redis keys the record by the id's SHA-256 ({@link interactionIdHash}),
  *   so the id itself is stored nowhere.
- * - **State.** A bounded snapshot of the validated authorization request, the
+ * - **Purpose.** What the interaction is for: an authorization request at the
+ *   authorization endpoint (`authorization`), or an RP-initiated logout's
+ *   confirmation at the end-session endpoint (`logout`, #675). Each holds its
+ *   own request.
+ * - **State.** A bounded snapshot of the validated request, the
  *   engine transaction (who has been proved, how and when), the browser
  *   session the interaction started for when there was one, the current step
  *   and its personal data, the flow-cookie binding (a hash, `flow-cookie.ts`),
@@ -190,7 +195,11 @@ export type CarriedSession = z.infer<typeof carriedSessionSchema>;
 /** The validated authorization request an interaction is for (ADR-019 Decision 6, #628). */
 export type InteractionRequest = z.infer<typeof authorizeQuerySchema>;
 
-export const interactionRecordSchema = z.strictObject({
+/** The checked logout request a `logout` interaction is for (#675). */
+export type { LogoutRequest } from '../schemas/end-session';
+
+/** What every record holds, whatever its purpose. */
+const recordFields = {
   v: z.literal(INTERACTION_RECORD_VERSION),
   /**
    * The interaction's audit reference: a random UUID that names it in events
@@ -198,12 +207,13 @@ export const interactionRecordSchema = z.strictObject({
    */
   ref: z.uuid(),
   realmId: z.uuid(),
-  purpose: z.literal('authorization'),
-  request: authorizeQuerySchema,
   step: interactionStepSchema,
   personal: stepDataSchema,
   transaction: interactionTransactionSchema,
-  /** The browser session the interaction started for, when there was one (#964). */
+  /**
+   * The browser session the interaction started for, when there was one
+   * (#964). A `logout` interaction always has one: the session it ends.
+   */
   carriedSession: carriedSessionSchema.optional(),
   /**
    * Who the client is, as the step read shows it (#629, ADR-019 Decision 6):
@@ -228,9 +238,43 @@ export const interactionRecordSchema = z.strictObject({
   revision: z.int().min(0).max(1_000_000),
   createdAt: z.int().positive(),
   expiresAt: z.int().positive(),
+};
+
+/** An interaction for an authorization request (#628). */
+const authorizationRecordSchema = z.strictObject({
+  ...recordFields,
+  purpose: z.literal('authorization'),
+  request: authorizeQuerySchema,
 });
 
+/**
+ * An interaction for an RP-initiated logout's confirmation (#675): the
+ * `logout_confirm` step, the checked logout request, and the browser session
+ * it ends (`carriedSession`). The record format is the same version: a server
+ * from before it reads a `logout` record as absent, as any record it cannot
+ * parse.
+ */
+const logoutRecordSchema = z.strictObject({
+  ...recordFields,
+  purpose: z.literal('logout'),
+  request: logoutRequestSchema,
+});
+
+export const interactionRecordSchema = z.discriminatedUnion('purpose', [
+  authorizationRecordSchema,
+  logoutRecordSchema,
+]);
+
 export type InteractionRecord = z.infer<typeof interactionRecordSchema>;
+
+/** A record of an authorization request's interaction. */
+export type AuthorizationInteractionRecord = Extract<
+  InteractionRecord,
+  { purpose: 'authorization' }
+>;
+
+/** A record of a logout confirmation's interaction (#675). */
+export type LogoutInteractionRecord = Extract<InteractionRecord, { purpose: 'logout' }>;
 
 /**
  * The longest `client_id` an event names (the event envelope's `client.id`,
@@ -240,10 +284,25 @@ export type InteractionRecord = z.infer<typeof interactionRecordSchema>;
  */
 export const EVENT_CLIENT_ID_MAX_LENGTH = 255;
 
-/** The record's `client_id` for an event, or `null` when it does not fit one. */
-export function eventClientIdOf(record: Pick<InteractionRecord, 'request'>): string | null {
+/**
+ * The record's `client_id` for an event, or `null` when it names none (a
+ * logout request that named no client) or it does not fit one.
+ */
+export function eventClientIdOf(record: {
+  readonly request: { readonly client_id?: string };
+}): string | null {
   const clientId = record.request.client_id;
-  return clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null;
+  return clientId !== undefined && clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null;
+}
+
+/**
+ * The user an interaction's events name: the one its transaction proved or is
+ * for, or, for a logout, the account of the session it ends (#675).
+ */
+export function eventUserIdOf(record: InteractionRecord): string | null {
+  const proved = record.transaction.userId;
+  if (proved !== undefined) return proved;
+  return record.purpose === 'logout' ? (record.carriedSession?.userId ?? null) : null;
 }
 
 /**

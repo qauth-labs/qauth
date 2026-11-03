@@ -24,7 +24,12 @@ import {
 } from './constants';
 import { eventTypesFor } from './event-types';
 import { type SetClaims, setClaims, verificationSetClaims } from './set';
-import { type EventSubject, ssfSubjectOf, type SubjectIdentifier } from './subjects';
+import {
+  type EventSubject,
+  ssfSessionSubjectOf,
+  ssfSubjectOf,
+  type SubjectIdentifier,
+} from './subjects';
 
 /** A stream as the route lists it for the fan-out. */
 export interface SsfRouteStream {
@@ -162,6 +167,15 @@ function subjectOf(
       if (event.subject === undefined) return undefined;
       // A user is named under the realm's issuer; a realm with none names no user.
       if (event.subject.type === 'user' && issuer === null) return undefined;
+      if (event.subject.type === 'user' && mapping.session !== undefined && issuer !== null) {
+        // A user's event that names one session sends the user and the
+        // session together (SSF 1.0 §3.2, #675); the fan-out matched it on
+        // the user, so every stream that added the user receives it.
+        const session = event.data[mapping.session];
+        if (typeof session === 'string') {
+          return ssfSessionSubjectOf(event.subject.id, session, issuer);
+        }
+      }
       return ssfSubjectOf(event.subject, issuer ?? '');
   }
 }
@@ -224,7 +238,9 @@ function setErrorCode(body: Buffer): string | undefined {
  * - **The SET of a mapped type** (#540). The event the type's mapping names,
  *   with its members, `event_timestamp` and `initiating_entity`; `sub_id` is
  *   the subject the mapping names, a user as `iss_sub` under the realm's
- *   issuer. An event that cannot fill it, such as one without a subject, is
+ *   issuer, or, when the mapping names a session the event carries, a
+ *   `complex` subject of the user and that session (#675). An event that
+ *   cannot fill it, such as one without a subject, is
  *   not sent (`event_not_offered`).
  * - **The SET.** `jti` is the event id and `iat` the event's time, so every
  *   retry sends the same claims; `aud` is the receiver's `client_id`. The

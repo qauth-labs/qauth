@@ -1087,6 +1087,14 @@ const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
           Array.isArray(next) && next.every((uri) => (current as unknown[]).includes(uri)),
         'token-content'
       ),
+      // #675: a list that keeps or narrows where the end-session route may
+      // send the browser is an ordinary write; adding an entry is not.
+      '/postLogoutRedirectUris': unless(
+        '/postLogoutRedirectUris',
+        (next, current) =>
+          Array.isArray(next) && next.every((uri) => (current as unknown[]).includes(uri)),
+        'posture-loosening'
+      ),
       '/tokenEndpointAuthMethod': securityWith('token-content'),
       '/jwks': securityWith('token-content'),
       '/jwks/keys': securityWith('token-content'),
@@ -1166,6 +1174,7 @@ describe('the reserved security cases (#508)', () => {
     expect(names).toEqual(
       expect.arrayContaining([
         'adds a redirect URI',
+        'adds a post-logout redirect URI',
         'sets the token endpoint authentication method to none',
         'replaces the JWKS',
         'moves the keys to a JWKS URI',

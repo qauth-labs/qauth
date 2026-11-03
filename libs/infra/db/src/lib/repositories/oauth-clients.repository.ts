@@ -295,8 +295,8 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
      * Uses a single INSERT ... ON CONFLICT so concurrent authorize requests
      * for the same metadata-document client_id collapse onto one row instead
      * of racing on a find-then-create. On conflict we refresh only the
-     * document-derived fields (name / redirect_uris / grant+response types /
-     * auth method + key set) and bump `updatedAt`; identity columns and the
+     * document-derived fields (name / redirect_uris / post_logout_redirect_uris /
+     * grant+response types / auth method + key set) and bump `updatedAt`; identity columns and the
      * secret sentinel are left as-is. `enabled` can only be narrowed: a row
      * that is disabled when the statement runs stays disabled, whatever
      * `data.enabled` says. `provisioned_by_operator` is always written
@@ -317,6 +317,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
             name: data.name,
             description: data.description,
             redirectUris: data.redirectUris,
+            // #675: document-derived like `redirectUris`; a document that
+            // drops the field clears the list.
+            postLogoutRedirectUris: data.postLogoutRedirectUris ?? [],
             grantTypes: data.grantTypes,
             responseTypes: data.responseTypes,
             tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,

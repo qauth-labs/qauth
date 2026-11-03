@@ -697,3 +697,49 @@ describe('toCimdClientInsert — client JWKS (CIMD §6.2 / RFC 7591 §2, #384)',
     expect(insert.jwksUri).toBeNull();
   });
 });
+
+describe('toCimdClientInsert — post_logout_redirect_uris (OpenID Connect RP-Initiated Logout 1.0 §3.1, #675)', () => {
+  const REALM = 'realm-1';
+  const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
+
+  it('materialises [] when the document names none', () => {
+    const doc = cimdDocumentSchema.parse(validDoc());
+    expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('materialises the URIs a redirect URI may be, verbatim', () => {
+    const uris = ['https://app.example.com/signed-out', 'http://127.0.0.1/signed-out'];
+    const doc = cimdDocumentSchema.parse(validDoc({ post_logout_redirect_uris: uris }));
+    expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).postLogoutRedirectUris).toEqual(
+      uris
+    );
+  });
+
+  it.each([
+    ['plain http to a non-loopback host', 'http://app.example.com/signed-out'],
+    ['a fragment', 'https://app.example.com/signed-out#x'],
+    ['a javascript: scheme', 'javascript:alert(document.domain)'],
+    ['something that is not a URI', 'not a uri'],
+  ])('registers none when one entry has %s, and the client still materialises', (_label, bad) => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ post_logout_redirect_uris: ['https://app.example.com/signed-out', bad] })
+    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.postLogoutRedirectUris).toEqual([]);
+    expect(insert.redirectUris).toEqual(validDoc().redirect_uris);
+  });
+
+  it('reads a list over the bound, or not a list of strings, as absent: the document still parses', () => {
+    const uris = (count: number) =>
+      Array.from({ length: count }, (_, i) => `https://app.example.com/signed-out/${i}`);
+    expect(
+      cimdDocumentSchema.parse(validDoc({ post_logout_redirect_uris: uris(20) }))
+        .post_logout_redirect_uris
+    ).toEqual(uris(20));
+    for (const value of [uris(21), 'https://app.example.com/signed-out', [42], ['']]) {
+      const parsed = cimdDocumentSchema.safeParse(validDoc({ post_logout_redirect_uris: value }));
+      expect(parsed.success).toBe(true);
+      expect(parsed.data?.post_logout_redirect_uris).toBeUndefined();
+    }
+  });
+});

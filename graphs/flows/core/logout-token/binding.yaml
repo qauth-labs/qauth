@@ -1,4 +1,4 @@
-# core.logout bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
+# core.logout-token bound to a running QAuth, for delurio's replay over HTTP (#565, #568). Nothing reads this file yet:
 # delurio's replay drives a browser today, and `request` below is the request template QAuth asks of its replay over
 # HTTP (method, path, headers, and values saved from earlier responses). The shared server binding (#565) gives the
 # server's address, the realms' hosts, the accounts, the seed and how a replay signs in; this file adds the request,
@@ -7,7 +7,7 @@
 # A scenario's `request` is merged over the event's template; a header set to null is left out.
 schema: delurio-graph/0
 kind: binding
-flow: core.logout
+flow: core.logout-token
 extends: ../../../bindings/server.binding.yaml # written by #565
 
 events:

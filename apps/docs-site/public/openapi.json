@@ -6832,6 +6832,271 @@
         }
       }
     },
+    "/oauth/end-session": {
+      "get": {
+        "tags": [
+          "OAuth",
+          "OIDC"
+        ],
+        "description": "OpenID Connect RP-Initiated Logout 1.0 end-session endpoint. A valid id_token_hint that names the browser session (its account by sub, the session by sid) ends that session at once; otherwise a signed-in browser is asked to confirm, and nothing ends until it answers. Goes back to a registered post_logout_redirect_uri with state, or shows a page; an unregistered one gets an information page and never a redirect. A client the operator did not set up is not redirected to before the browser has seen a QAuth page: the signed-out page links to its return URI. Refresh tokens are not revoked here. Parameters in the query.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 8192
+            },
+            "in": "query",
+            "name": "id_token_hint",
+            "required": false,
+            "description": "RP-Initiated Logout 1.0 §2: an ID token this realm issued to the client, expired or not. When it names the browser session (its account by sub, the session by sid), the session ends without a confirmation."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[\\x20-\\x7E]*$"
+            },
+            "in": "query",
+            "name": "client_id",
+            "required": false,
+            "description": "RP-Initiated Logout 1.0 §2: the client asking. With an id_token_hint it must be the hint’s audience."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048,
+              "format": "uri"
+            },
+            "in": "query",
+            "name": "post_logout_redirect_uri",
+            "required": false,
+            "description": "RP-Initiated Logout 1.0 §2: where the browser goes after the logout. Must be one of the client’s registered post_logout_redirect_uris, matched exactly; otherwise QAuth shows an information page and never redirects."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            },
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "description": "RP-Initiated Logout 1.0 §2: an opaque value added to the post_logout_redirect_uri when the browser goes back."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "in": "query",
+            "name": "ui_locales",
+            "required": false,
+            "description": "RP-Initiated Logout 1.0 §2. Accepted and not read."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 256
+            },
+            "in": "query",
+            "name": "logout_hint",
+            "required": false,
+            "description": "RP-Initiated Logout 1.0 §2. Accepted and not read."
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "OAuth",
+          "OIDC"
+        ],
+        "description": "OpenID Connect RP-Initiated Logout 1.0 end-session endpoint. A valid id_token_hint that names the browser session (its account by sub, the session by sid) ends that session at once; otherwise a signed-in browser is asked to confirm, and nothing ends until it answers. Goes back to a registered post_logout_redirect_uri with state, or shows a page; an unregistered one gets an information page and never a redirect. A client the operator did not set up is not redirected to before the browser has seen a QAuth page: the signed-out page links to its return URI. Refresh tokens are not revoked here. Parameters form-encoded in the body. A POST without the session cookie, as a cross-site one, is answered 303 to the same endpoint as a GET with the same parameters, so the browser sends its cookie.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id_token_hint": {
+                    "description": "RP-Initiated Logout 1.0 §2: an ID token this realm issued to the client, expired or not. When it names the browser session (its account by sub, the session by sid), the session ends without a confirmation.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "client_id": {
+                    "description": "RP-Initiated Logout 1.0 §2: the client asking. With an id_token_hint it must be the hint’s audience.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "^[\\x20-\\x7E]*$"
+                  },
+                  "post_logout_redirect_uri": {
+                    "description": "RP-Initiated Logout 1.0 §2: where the browser goes after the logout. Must be one of the client’s registered post_logout_redirect_uris, matched exactly; otherwise QAuth shows an information page and never redirects.",
+                    "type": "string",
+                    "maxLength": 2048,
+                    "format": "uri"
+                  },
+                  "state": {
+                    "description": "RP-Initiated Logout 1.0 §2: an opaque value added to the post_logout_redirect_uri when the browser goes back.",
+                    "type": "string",
+                    "maxLength": 2048
+                  },
+                  "ui_locales": {
+                    "description": "RP-Initiated Logout 1.0 §2. Accepted and not read.",
+                    "type": "string",
+                    "maxLength": 256
+                  },
+                  "logout_hint": {
+                    "description": "RP-Initiated Logout 1.0 §2. Accepted and not read.",
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                }
+              }
+            }
+          }
+        },
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth/end-session/status": {
+      "get": {
+        "tags": [
+          "OAuth",
+          "OIDC"
+        ],
+        "description": "The sign-out status page of RP-initiated logout: whether this browser is still signed in. Takes no parameter.",
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/oauth/introspect": {
       "post": {
         "tags": [
@@ -7040,6 +7305,15 @@
                       "maxLength": 2048
                     }
                   },
+                  "post_logout_redirect_uris": {
+                    "maxItems": 20,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  },
                   "grant_types": {
                     "maxItems": 8,
                     "type": "array",
@@ -7150,6 +7424,12 @@
                       "type": "string"
                     },
                     "redirect_uris": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "post_logout_redirect_uris": {
                       "type": "array",
                       "items": {
                         "type": "string"

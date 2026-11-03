@@ -469,6 +469,18 @@ export const oauthClients = pgTable(
     name: varchar('name', { length: 255 }).notNull(),
     description: text('description'),
     redirectUris: jsonb('redirect_uris').notNull().$type<string[]>(),
+    /**
+     * OpenID Connect RP-Initiated Logout 1.0 §3.1 `post_logout_redirect_uris`
+     * (#675): where the end-session route may send the browser after a
+     * logout. Matched exactly, like {@link oauthClients.redirectUris}, and
+     * each entry passes the same rule as a redirect URI. `[]` never
+     * redirects. The default lets an earlier release's INSERT, which does not
+     * name the column, keep working during a rolling upgrade.
+     */
+    postLogoutRedirectUris: jsonb('post_logout_redirect_uris')
+      .notNull()
+      .default(JSONB_EMPTY_ARRAY)
+      .$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * The scopes the `client_credentials` grant may issue to this client, out
@@ -794,6 +806,12 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_webauthn_allowed_origins_is_array',
       sql`jsonb_typeof(${t.webauthnAllowedOrigins}) = 'array'`
+    ),
+    // #675: a list, so the end-session route's exact match never reads a
+    // string or an object written by hand.
+    check(
+      'oauth_clients_post_logout_redirect_uris_is_array',
+      sql`jsonb_typeof(${t.postLogoutRedirectUris}) = 'array'`
     ),
     // #593: the stored form of a verified domain, so a value written by hand
     // can never reach a screen in any other form. The same expression as

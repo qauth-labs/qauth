@@ -17,6 +17,7 @@ import {
   canonicalSubject,
   canonicalSubjectKey,
   eventSubjectOf,
+  ssfSessionSubjectOf,
   ssfSubjectOf,
   subjectIdentifierSchema,
 } from './subjects';
@@ -85,6 +86,16 @@ describe('subject identifiers (RFC 9493)', () => {
       canonicalSubjectKey({ format: 'iss_sub', iss: ISSUER, sub: 'u1' })
     );
     expect(canonicalSubjectKey({ format: 'opaque', id: 'x' })).toBe('{"format":"opaque","id":"x"}');
+  });
+
+  it('names one session of a user as a complex subject of the user and the session (#675)', () => {
+    const subject = ssfSessionSubjectOf('u1', 'sid-1', ISSUER);
+    expect(subject).toEqual({
+      format: 'complex',
+      user: { format: 'iss_sub', iss: ISSUER, sub: 'u1' },
+      session: { format: 'opaque', id: 'sid-1' },
+    });
+    expect(subjectIdentifierSchema.safeParse(subject).success).toBe(true);
   });
 
   it('maps event subjects to the formats #410 chose, and back', () => {
