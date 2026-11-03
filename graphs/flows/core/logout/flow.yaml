@@ -131,7 +131,9 @@ context:
     initial: any
     say:
       none: 'the browser holds no live session of this realm'
-      hinted: "the browser's session is of the account the valid hint's sub names"
+      hinted: >-
+        the browser's session is of the account the valid hint's sub names, and the client the hint was issued to is
+        known and may be used
       other: 'the browser holds a live session, and no valid hint names its account'
   interactionUi:
     values: [off, on]
