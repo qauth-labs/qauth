@@ -84,8 +84,13 @@ export function createMemoryLadder(
         endUserIp === undefined
           ? undefined
           : known.get(knownKey(realmId, identifierHmac))?.get(endUserIp);
-      const exempt = policy.knownIpMs > 0 && seen !== undefined && at - seen < policy.knownIpMs;
       const state = live(key);
+      // A known IP skips the wait only below its bound (#968), as the Redis script.
+      const exempt =
+        policy.knownIpMs > 0 &&
+        seen !== undefined &&
+        at - seen < policy.knownIpMs &&
+        (state?.failures ?? 0) < policy.knownIpFreeFailures;
       if (!exempt && state !== undefined && state.waitUntil > at) {
         reservations.push({ factor, outcome: 'wait' });
         return { kind: 'wait', retryAfterSeconds: Math.ceil((state.waitUntil - at) / 1000) };

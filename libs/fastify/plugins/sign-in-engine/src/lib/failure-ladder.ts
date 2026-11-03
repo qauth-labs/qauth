@@ -41,7 +41,9 @@ import {
  *   keeps its run. The retention follows the count alone, so it is the same
  *   whether or not an account holds the identifier;
  * - `sign-in-ladder:{<realm id>:<identifier HMAC>}:known-ips`: a sorted set of
- *   end-user IP HMACs, scored by their last successful sign-in.
+ *   end-user IP HMACs, scored by their last successful sign-in. A known IP
+ *   skips the wait only while the run has fewer than `knownIpFreeFailures`
+ *   counted failures, since many clients may share it (#968).
  *
  * The braces are a Redis Cluster hash tag: both keys of an account sit in one
  * slot, so one script may read the one and write the other.
@@ -97,10 +99,13 @@ export interface RedisFailureLadder extends LadderHook {
 /**
  * Reserve an attempt. KEYS: the counter, the known-IP set. ARGV: now,
  * freeFailures, firstWaitMs, maxWaitMs, retentionMs, freeRetentionMs,
- * knownIpMs, the IP's HMAC (empty for none), a new run id. Returns
- * `{0, ms left}` for an attempt inside the wait, `{1, n, run}` for a counted
- * one. A counted attempt keeps the counter `freeRetentionMs` while `n` is
- * below freeFailures and `retentionMs` from then on.
+ * knownIpMs, knownIpFreeFailures, the IP's HMAC (empty for none), a new run
+ * id. Returns `{0, ms left}` for an attempt inside the wait, `{1, n, run}`
+ * for a counted one. A known IP skips the wait only while the run has fewer
+ * than knownIpFreeFailures counted failures; from then on it waits as any
+ * other address does (#968). A counted attempt keeps the counter
+ * `freeRetentionMs` while `n` is below freeFailures and `retentionMs` from
+ * then on.
  *
  * Redis runs scripts on Lua 5.1: numbers are doubles (an epoch in ms is exact
  * well past 2^50), a missing hash field reads as `false`, and a number a
@@ -114,19 +119,20 @@ local longest = tonumber(ARGV[4])
 local retention = tonumber(ARGV[5])
 local freeRetention = tonumber(ARGV[6])
 local knownMs = tonumber(ARGV[7])
-local ip = ARGV[8]
-local exempt = false
-if knownMs > 0 and ip ~= '' then
-  local seen = redis.call('ZSCORE', KEYS[2], ip)
-  if seen and now - tonumber(seen) < knownMs then exempt = true end
-end
+local knownFree = tonumber(ARGV[8])
+local ip = ARGV[9]
 local state = redis.call('HMGET', KEYS[1], 'n', 'until', 'run')
 local n = tonumber(state[1]) or 0
 local waitUntil = tonumber(state[2]) or 0
 local run = state[3]
-if not run then run = ARGV[9] end
-if not exempt and waitUntil > now then
-  return {0, waitUntil - now}
+if not run then run = ARGV[10] end
+if waitUntil > now then
+  local exempt = false
+  if knownMs > 0 and ip ~= '' and n < knownFree then
+    local seen = redis.call('ZSCORE', KEYS[2], ip)
+    if seen and now - tonumber(seen) < knownMs then exempt = true end
+  end
+  if not exempt then return {0, waitUntil - now} end
 end
 n = n + 1
 local wait = 0
@@ -288,6 +294,7 @@ export function createRedisFailureLadder(
         policy.retentionMs,
         policy.freeRetentionMs,
         policy.knownIpMs,
+        policy.knownIpFreeFailures,
         ip,
         newRun,
       ],

@@ -106,20 +106,22 @@ class FakeRedis implements LadderRedis {
   }
 
   private reserve([counter, known]: string[], argv: string[]): unknown {
-    const [now, free, first, longest, retention, freeRetention, knownMs] = argv
-      .slice(0, 7)
+    const [now, free, first, longest, retention, freeRetention, knownMs, knownFree] = argv
+      .slice(0, 8)
       .map(Number);
-    const ip = argv[7];
-    let exempt = false;
-    if (knownMs > 0 && ip !== '') {
-      const seen = this.sets.get(known)?.get(ip);
-      if (seen !== undefined && now - seen < knownMs) exempt = true;
-    }
+    const ip = argv[8];
     const state = this.hashes.get(counter);
     let n = Number(state?.get('n') ?? 0);
     const waitUntil = Number(state?.get('until') ?? 0);
-    const run = state?.get('run') ?? argv[8];
-    if (!exempt && waitUntil > now) return [0, Math.trunc(waitUntil - now)];
+    const run = state?.get('run') ?? argv[9];
+    if (waitUntil > now) {
+      let exempt = false;
+      if (knownMs > 0 && ip !== '' && n < knownFree) {
+        const seen = this.sets.get(known)?.get(ip);
+        if (seen !== undefined && now - seen < knownMs) exempt = true;
+      }
+      if (!exempt) return [0, Math.trunc(waitUntil - now)];
+    }
     n += 1;
     let wait = 0;
     if (n >= free) {
@@ -200,6 +202,15 @@ function setup(policy: LadderPolicy = PASSWORD_LADDER_POLICY) {
     }
     return settled;
   };
+  /** `times` failures a quarter of an hour apart, so no wait holds one back. */
+  const failSpaced = async (times: number, endUserIp?: string) => {
+    const settled = [];
+    for (let i = 0; i < times; i += 1) {
+      settled.push(...(await fail(1, endUserIp)));
+      clock += 15 * 60_000;
+    }
+    return settled;
+  };
   const counter = () => {
     const key = ladderCounterKey(REALM, IDENTIFIER_HMAC, 'password');
     redis.expire(key);
@@ -211,6 +222,7 @@ function setup(policy: LadderPolicy = PASSWORD_LADDER_POLICY) {
     attempt,
     reserved,
     fail,
+    failSpaced,
     counter,
     advance: (ms: number) => {
       clock += ms;
@@ -264,16 +276,73 @@ describe('the Redis failure ladder', () => {
     expect([...redis.sets.keys()]).toEqual([ladderKnownIpsKey(REALM, IDENTIFIER_HMAC)]);
   });
 
-  it('lets a known IP skip the wait while every attempt still counts toward the ceiling', async () => {
+  it('lets a known IP skip the wait below 20 counted failures, every one counted (#968)', async () => {
     const { attempt, fail, reserved, counter } = setup();
     await (await reserved(IP)).settle('success');
-    const settled = await fail(99, IP);
-    expect(counter()?.get('n')).toBe('99');
+    expect(PASSWORD_LADDER_POLICY.knownIpFreeFailures).toBe(20);
+    const settled = await fail(20, IP);
+    expect(counter()?.get('n')).toBe('20');
     expect(settled.every((result) => !result.ceilingReached)).toBe(true);
-    // Another IP still waits.
+    // Another IP has been waiting since the 5th failure.
     expect(await attempt(OTHER_IP)).toMatchObject({ kind: 'wait' });
-    const [hundredth] = await fail(1, IP);
-    expect(hundredth).toEqual({ ceilingReached: true });
+  });
+
+  it('makes a known IP wait from its 20th counted failure on, as any other address (#968)', async () => {
+    const { attempt, fail, reserved, counter, advance } = setup();
+    await (await reserved(IP)).settle('success');
+    await fail(20, IP);
+    for (let n = 20; n < 23; n += 1) {
+      const fromKnown = await attempt(IP);
+      expect(fromKnown).toEqual({ kind: 'wait', retryAfterSeconds: 15 * 60 });
+      expect(await attempt(OTHER_IP)).toEqual(fromKnown);
+      expect(await attempt()).toEqual(fromKnown);
+      // Refused, so not counted.
+      expect(counter()?.get('n')).toBe(String(n));
+      advance(15 * 60_000 - 1);
+      expect(await attempt(IP)).toEqual({ kind: 'wait', retryAfterSeconds: 1 });
+      advance(1);
+      await fail(1, IP);
+    }
+  });
+
+  it('lets a known IP reach the hard ceiling only through the waits (#968)', async () => {
+    const { attempt, reserved, advance } = setup();
+    await (await reserved(IP)).settle('success');
+    let waited = 0;
+    const settled: { ceilingReached: boolean }[] = [];
+    while (settled.length < 100) {
+      const verdict = await attempt(IP);
+      if (verdict.kind === 'wait') {
+        advance(verdict.retryAfterSeconds * 1000);
+        waited += verdict.retryAfterSeconds * 1000;
+        continue;
+      }
+      settled.push(await verdict.settle('failure'));
+    }
+    expect(settled.slice(0, 99).every((result) => !result.ceilingReached)).toBe(true);
+    expect(settled[99]).toEqual({ ceilingReached: true });
+    // The waits the 20th to the 99th failures set, 15 minutes each: 20 hours.
+    expect(waited).toBe(80 * 15 * 60_000);
+  });
+
+  it('counts parallel attempts from a known IP one at a time: past 20 every one waits (#968)', async () => {
+    const { attempt, reserved, counter } = setup();
+    await (await reserved(IP)).settle('success');
+    const verdicts = await Promise.all(Array.from({ length: 50 }, () => attempt(IP)));
+    expect(verdicts.filter((verdict) => verdict.kind === 'reserved')).toHaveLength(20);
+    expect(counter()?.get('n')).toBe('20');
+  });
+
+  it('still clears the run on a success from a known IP, which then skips the wait again (#968)', async () => {
+    const { attempt, fail, reserved, counter, advance } = setup();
+    await (await reserved(IP)).settle('success');
+    await fail(20, IP);
+    expect(await attempt(IP)).toMatchObject({ kind: 'wait' });
+    advance(15 * 60_000);
+    await (await reserved(IP)).settle('success');
+    expect(counter()).toBeUndefined();
+    await fail(20, IP);
+    expect(counter()?.get('n')).toBe('20');
   });
 
   it('forgets a known IP after 30 days', async () => {
@@ -309,12 +378,11 @@ describe('the Redis failure ladder', () => {
   });
 
   it('says nothing is due for a failure whose run a success ended meanwhile', async () => {
-    const { fail, reserved } = setup();
-    // From a known IP, so no wait holds the attempts back.
-    await (await reserved(IP)).settle('success');
-    await fail(99, IP);
-    const hundredth = await reserved(IP);
-    // The owner signs in before the 100th attempt settles: the run ends.
+    const { failSpaced, reserved, advance } = setup();
+    await failSpaced(99);
+    const hundredth = await reserved();
+    // The owner signs in, once the wait the 100th set is over, before the 100th settles: the run ends.
+    advance(15 * 60_000);
     await (await reserved(IP)).settle('success');
     expect(await hundredth.settle('failure')).toEqual({ ceilingReached: false });
   });
@@ -396,11 +464,15 @@ describe('the Redis failure ladder', () => {
     expect(redis.expiries.get(KNOWN_IPS)).toBe(now() + 30 * DAY);
   });
 
-  it('sends both retentions to the script, in its argument order', async () => {
-    // Every time a distinct value, so no two arguments can trade places unseen.
-    const { redis, attempt, now } = setup({ ...PASSWORD_LADDER_POLICY, knownIpMs: 7 * DAY });
+  it('sends both retentions and the known-IP bound to the script, in its argument order', async () => {
+    // Every time and count a distinct value, so no two arguments can trade places unseen.
+    const { redis, attempt, now } = setup({
+      ...PASSWORD_LADDER_POLICY,
+      knownIpMs: 7 * DAY,
+      knownIpFreeFailures: 17,
+    });
     await attempt();
-    const sent = redis.sent.slice(-11);
+    const sent = redis.sent.slice(-12);
     expect(sent).toEqual([
       COUNTER,
       KNOWN_IPS,
@@ -411,6 +483,7 @@ describe('the Redis failure ladder', () => {
       String(30 * DAY),
       String(2 * DAY),
       String(7 * DAY),
+      '17',
       hmacOf('ip', IP),
       expect.stringMatching(/^[A-Za-z0-9_-]{16}$/),
     ]);
