@@ -790,10 +790,12 @@ describe('the consent step of the Interaction API (#629, real containers)', () =
 
   it('shows the RFC 8707 resources of the validated request, never a key the parser did not validate', async () => {
     const jar = await signInWithPassword(server(), EMAIL);
-    // `??resource=system` is the unknown key `?resource` to the query parser.
+    // `??resource=…` is the unknown key `?resource` to the query parser. Its
+    // value is a marker no member of a step read holds (the brand's font is
+    // `system`, so that word would prove nothing).
     const response = await server().inject({
       method: 'GET',
-      url: `/oauth/authorize??resource=system&${new URLSearchParams({
+      url: `/oauth/authorize??resource=unvalidated-marker&${new URLSearchParams({
         response_type: 'code',
         client_id: CLIENT_ID,
         redirect_uri: REDIRECT_URI,
@@ -808,7 +810,7 @@ describe('the consent step of the Interaction API (#629, real containers)', () =
     jar.absorb(response.headers['set-cookie']);
     const step = await read(interactionIdOf(response));
     expect(consentParams(step)['resources']).toEqual(['https://notes-api.example.com/v1']);
-    expect(JSON.stringify(step)).not.toContain('system');
+    expect(JSON.stringify(step)).not.toContain('unvalidated-marker');
   });
 
   it('names the requested resource as the audience over the client default, the client’s audience when there is none, and binds the resources to the code', async () => {
