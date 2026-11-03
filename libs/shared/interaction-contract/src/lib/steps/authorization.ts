@@ -26,12 +26,6 @@ import { EXAMPLE_REDIRECT } from './sign-in';
  */
 const SCOPE_TOKEN_PATTERN = '^[!#-;=?-\\[\\]-~]+$';
 
-/**
- * An audience value: the scope-token alphabet, visible ASCII without `"`, `\`,
- * `<` and `>`, which every URI and URN fits, so no value reads as markup.
- */
-const AUDIENCE_PATTERN = SCOPE_TOKEN_PATTERN;
-
 /** RFC 8628 §6.1: eight characters of the base-20 consonant alphabet, shown as `XXXX-XXXX`. */
 const USER_CODE_PATTERN = '^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$';
 
@@ -93,17 +87,14 @@ export const consent = defineStep({
       audience: {
         type: 'array',
         description:
-          'Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, which becomes the tokens’ `aud`. Absent when the request named resources, which are then the audience, and when the client has none.',
+          'Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, without the QAuth API audiences (`urn:qauth:aud:`, which a user’s token gets only when the request names them), exactly the tokens’ `aud`. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself.',
         minItems: 1,
-        maxItems: 16,
-        items: {
-          type: 'string',
-          minLength: 1,
-          maxLength: 2048,
-          pattern: AUDIENCE_PATTERN,
-          description:
-            'One audience value, as the operator configured it: an absolute URI or another identifier, from the scope-token alphabet without `<` and `>`.',
-        },
+        maxItems: 20,
+        items: displayText(
+          'realm',
+          256,
+          'One audience value, as the operator configured it, at most 256 characters as the token endpoint reads it; no markup or control character.'
+        ),
       },
       agent: object(
         {

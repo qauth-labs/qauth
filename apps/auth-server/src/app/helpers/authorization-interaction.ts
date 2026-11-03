@@ -18,7 +18,11 @@ import {
   decideAuthorization,
 } from './authorization-request';
 import { liveBrowserSession } from './browser-session';
-import { findExceedingAgentScopesForClient, unlistedReservedAudiences } from './client-auth';
+import {
+  findExceedingAgentScopesForClient,
+  unlistedReservedAudiences,
+  userGrantDefaultAudience,
+} from './client-auth';
 import { clientDisplay } from './client-display';
 import { isAgentClient } from './client-resolution';
 import { filterRequestedScopes, forcesLoginPrompt, standardScopeText } from './consent';
@@ -109,11 +113,12 @@ export function identifierPrefill(loginHint: string | undefined): InteractionPer
 /** What the consent step shows, beside the scopes and resources the request comes to. */
 export interface ConsentStepSubject {
   /**
-   * The audience an operator configured for the client
-   * (`oauth_clients.audience`): the tokens' `aud` when the request names no
-   * resource, as `/oauth/token` resolves it.
+   * The tokens' `aud` when the request names no resource, from the audience an
+   * operator configured for the client, as `/oauth/token` resolves it
+   * (`userGrantDefaultAudience`): empty when the tokens are for the client
+   * itself.
    */
-  readonly clientAudience: readonly string[] | null;
+  readonly clientAudience: readonly string[];
   /** Whether the client is an AI agent (`isAgentClient`, fail-closed). */
   readonly agent: boolean;
   /** The realm's `sso_max_lifespan`, in seconds, `null` when it sets none. */
@@ -131,9 +136,9 @@ export interface ConsentStepSubject {
  *   (`standardScopeText`), and whether it is dangerous, by the server's own
  *   classification (`isDangerousScope`). No realm scope catalog exists yet, so
  *   no scope is marked sensitive.
- * - `audience`: the client's configured audience, where the tokens may be
- *   used, when the request names no resource (the resources are the audience
- *   otherwise).
+ * - `audience`: where the tokens may be used when the request names no
+ *   resource, exactly the `aud` `/oauth/token` gives them from the client's
+ *   configured audience (the resources are the audience otherwise).
  * - `agent`: present for an AI agent client (ADR-014 §11): the screen names it
  *   as one in QAuth's words, and says how long it may keep working, from the
  *   realm's `sso_max_lifespan`. Nothing in it comes from the client.
@@ -145,7 +150,7 @@ export function consentStep(
   subject: ConsentStepSubject
 ): InteractionStep | 'invalid_scope' | 'invalid_target' {
   const audience =
-    resources.length === 0 && subject.clientAudience !== null && subject.clientAudience.length > 0
+    resources.length === 0 && subject.clientAudience.length > 0
       ? [...subject.clientAudience]
       : undefined;
   const step = (where: {
@@ -167,8 +172,7 @@ export function consentStep(
       ...(where.audience === undefined ? {} : { audience: [...where.audience] }),
       ...(subject.agent
         ? {
-            agent:
-              subject.ssoMaxLifespan === null ? {} : { max_lifespan: subject.ssoMaxLifespan },
+            agent: subject.ssoMaxLifespan === null ? {} : { max_lifespan: subject.ssoMaxLifespan },
           }
         : {}),
       remember_default: true,
@@ -252,7 +256,7 @@ export async function authorizationInteractionStart(
   // refuses the step, and no error is sent to it.
   const display = clientDisplay(client, { redirectUri: query.redirect_uri });
   const step = consentStep(outcome.scopes, outcome.resources, {
-    clientAudience: client.audience,
+    clientAudience: userGrantDefaultAudience(client),
     agent: isAgentClient(client),
     ssoMaxLifespan: target.realm.ssoMaxLifespan,
   });

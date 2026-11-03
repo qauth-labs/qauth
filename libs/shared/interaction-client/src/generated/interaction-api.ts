@@ -603,7 +603,7 @@ export interface ConsentParams {
   scopes: Array<{
     /** The scope value (RFC 6749 §3.3), from its alphabet without `<` and `>`. A requested scope outside it never reaches this step: the request is refused first. */
     scope: string;
-    /** The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Absent when the catalog has none: the screen shows the scope value. */
+    /** The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Until realms hold a catalog, QAuth’s own text for a scope it defines (`openid`, `profile`, `email`, `offline_access`). Absent when there is none: the screen shows the scope value. */
     text?: string;
     /** Whether the realm flagged the scope as sensitive. */
     sensitive: boolean;
@@ -612,6 +612,13 @@ export interface ConsentParams {
   }>;
   /** Where the tokens may be used: the resource indicators (RFC 8707) of the request. */
   resources: string[];
+  /** Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, without the QAuth API audiences (`urn:qauth:aud:`, which a user’s token gets only when the request names them), exactly the tokens’ `aud`. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself. */
+  audience?: string[];
+  /** Present when the client is an AI agent (ADR-014 §11, ADR-015 Decision 11): the screen says, in QAuth’s own words, that the app is an AI agent and how long it may keep working once allowed. Nothing in it comes from the client. */
+  agent?: {
+    /** The realm’s `sso_max_lifespan`, in seconds: the agent may keep working until the person revokes it, or until this long after they signed in, whichever comes first. Absent when the realm sets none: until the person revokes it. */
+    max_lifespan?: number;
+  };
   /** Whether "remember this decision" starts checked. */
   remember_default: boolean;
 }

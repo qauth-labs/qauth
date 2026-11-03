@@ -170,7 +170,7 @@ beforeEach(() => {
 });
 
 /** A consent step's subject for a client that is no agent and has no audience. */
-const SUBJECT: ConsentStepSubject = { clientAudience: null, agent: false, ssoMaxLifespan: null };
+const SUBJECT: ConsentStepSubject = { clientAudience: [], agent: false, ssoMaxLifespan: null };
 
 describe('identifierPrefill', () => {
   it('pre-fills the identifier with the hint', () => {
@@ -249,22 +249,37 @@ describe('consentStep', () => {
         }) as InteractionStep
       ).params
     ).not.toHaveProperty('audience');
-    // A client with no audience, or an empty one, shows none.
-    for (const clientAudience of [null, []]) {
+    // Tokens for the client itself (no audience, or only QAuth API ones): none shown.
+    expect(
+      (consentStep(['email'], [], { ...SUBJECT, clientAudience: [] }) as InteractionStep).params
+    ).not.toHaveProperty('audience');
+  });
+
+  it('carries any audience the token endpoint gives the token, short of markup (#629)', () => {
+    // `/oauth/token` reads up to 20 entries of up to 256 characters each: the
+    // step carries them all, spaces and quotes included.
+    for (const clientAudience of [
+      ['urn:example:a b'],
+      ['https://api.example.com/"x"'],
+      [`https://api.example.com/${'a'.repeat(256 - 'https://api.example.com/'.length)}`],
+      Array.from({ length: 20 }, (_, i) => `https://api${i}.example.com/`),
+    ]) {
       expect(
-        (consentStep(['email'], [], { ...SUBJECT, clientAudience }) as InteractionStep).params,
-        JSON.stringify(clientAudience)
-      ).not.toHaveProperty('audience');
+        (consentStep(['email'], [], { ...SUBJECT, clientAudience }) as InteractionStep).params[
+          'audience'
+        ],
+        clientAudience.join(' ').slice(0, 80)
+      ).toEqual(clientAudience);
     }
   });
 
   it('is invalid_target for an audience the step cannot carry', () => {
     for (const clientAudience of [
       ['https://api.example.com/<script>'],
-      ['urn:example:a b'],
-      ['https://api.example.com/"x"'],
-      [`https://api.example.com/${'a'.repeat(2048)}`],
-      Array.from({ length: 17 }, (_, i) => `https://api${i}.example.com/`),
+      ['urn:example:\u202Eevil'],
+      [' https://api.example.com/'],
+      [`https://api.example.com/${'a'.repeat(256)}`],
+      Array.from({ length: 21 }, (_, i) => `https://api${i}.example.com/`),
     ]) {
       expect(
         consentStep(['email'], [], { ...SUBJECT, clientAudience }),
@@ -448,6 +463,22 @@ describe('authorizationInteractionStart', () => {
     ).toEqual({
       error: expect.objectContaining({ error: 'invalid_target', state: REQUEST.state, iss: ISS }),
     });
+  });
+
+  it('shows the audience the token gets: no QAuth API audience, which a user token gets only when named (#509)', async () => {
+    const startFor = (audience: string[]) =>
+      authorizationInteractionStart(
+        fastify,
+        { kind: 'consent', scopes: ['email'], resources: [] },
+        REQUEST,
+        targetOf({ audience }) as never,
+        SESSION as never
+      ) as Promise<{ step: InteractionStep }>;
+    const mixed = await startFor(['urn:qauth:aud:account:v1-rc.0', 'https://api.example.com/']);
+    expect(mixed.step.params['audience']).toEqual(['https://api.example.com/']);
+    // Only QAuth API audiences: the token's `aud` is the client id, and none is shown.
+    const reserved = await startFor(['urn:qauth:aud:account:v1-rc.0']);
+    expect(reserved.step.params).not.toHaveProperty('audience');
   });
 
   it('names an agent client as one, with the realm’s maximum lifespan', async () => {

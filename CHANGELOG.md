@@ -1313,8 +1313,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders. Its read names the client through `client` ([#593]), lists the
   requested scopes the client may have (QAuth's own text for `openid`,
   `profile`, `email` and `offline_access`, and a mark on each dangerous one),
-  the resources, or else the audience an operator configured for the client
-  (the new `audience` param), and, for an AI agent, the new `agent` param, from
+  the resources, or else the `aud` the token gets from the audience an operator
+  configured for the client (the new `audience` param), and, for an AI agent,
+  the new `agent` param, from
   which the screen says in QAuth's words that the app is an AI agent and how
   long it may keep working (the realm's `sso_max_lifespan`). "Remember this
   decision" starts checked, and the step's personal data is the identifier the
