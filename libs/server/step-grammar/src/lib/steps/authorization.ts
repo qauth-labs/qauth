@@ -27,6 +27,12 @@ import { accountIdentifier, identifierPersonal } from './shared';
  */
 const SCOPE_TOKEN_PATTERN = '^[!#-;=?-\\[\\]-~]+$';
 
+/**
+ * An audience value: the scope-token alphabet, visible ASCII without `"`, `\`,
+ * `<` and `>`, which every URI and URN fits, so no value reads as markup.
+ */
+const AUDIENCE_PATTERN = SCOPE_TOKEN_PATTERN;
+
 /** RFC 8628 §6.1: eight characters of the base-20 consonant alphabet, shown as `XXXX-XXXX`. */
 const USER_CODE_PATTERN = '^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$';
 
@@ -43,7 +49,7 @@ export const consent = defineStep({
         text: displayText(
           'realm',
           280,
-          'The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Absent when the catalog has none: the screen shows the scope value.'
+          'The consent text the realm’s scope catalog holds for this scope, in the interaction’s locale. Until realms hold a catalog, QAuth’s own text for a scope it defines (`openid`, `profile`, `email`, `offline_access`). Absent when there is none: the screen shows the scope value.'
         ).optional(),
         sensitive: z
           .boolean()
@@ -68,6 +74,25 @@ export const consent = defineStep({
       16,
       'Where the tokens may be used: the resource indicators (RFC 8707) of the request.'
     ),
+    audience: array(
+      matching(z.string().min(1).max(2048), AUDIENCE_PATTERN).meta({
+        description:
+          'One audience value, as the operator configured it: an absolute URI or another identifier, from the scope-token alphabet without `<` and `>`.',
+      }),
+      1,
+      16,
+      'Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, which becomes the tokens’ `aud`. Absent when the request named resources, which are then the audience, and when the client has none.'
+    ).optional(),
+    agent: object(
+      {
+        max_lifespan: integer(
+          1,
+          Number.MAX_SAFE_INTEGER,
+          'The realm’s `sso_max_lifespan`, in seconds: the agent may keep working until the person revokes it, or until this long after they signed in, whichever comes first. Absent when the realm sets none: until the person revokes it.'
+        ).optional(),
+      },
+      'Present when the client is an AI agent (ADR-014 §11, ADR-015 Decision 11): the screen says, in QAuth’s own words, that the app is an AI agent and how long it may keep working once allowed. Nothing in it comes from the client.'
+    ).optional(),
     remember_default: z
       .boolean()
       .meta({ description: 'Whether "remember this decision" starts checked.' }),
