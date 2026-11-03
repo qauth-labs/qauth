@@ -4,7 +4,7 @@
  * may send the browser after a logout. The column is NOT NULL with a `[]`
  * default, so an earlier release's INSERT, which does not name it, keeps
  * working during a rolling upgrade, and every existing client gets `[]`:
- * never redirect.
+ * never redirect. A CHECK keeps it a list, as its sibling list columns are.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -48,9 +48,10 @@ describe('migration 0057 (post-logout redirect URIs)', () => {
     expect(journal.entries[MIGRATION_IDX - 1]?.tag).toBe('0056_realm_sandbox_pairing');
   });
 
-  it('adds one column with an empty-list default an earlier release can insert past, and writes no row', () => {
+  it('adds one column with an empty-list default an earlier release can insert past, held to a list, and writes no row', () => {
     expect(statements).toEqual([
       `ALTER TABLE "oauth_clients" ADD COLUMN "post_logout_redirect_uris" jsonb DEFAULT '[]'::jsonb NOT NULL;`,
+      `ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_post_logout_redirect_uris_is_array" CHECK (jsonb_typeof("oauth_clients"."post_logout_redirect_uris") = 'array');`,
     ]);
   });
 });

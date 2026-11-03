@@ -807,6 +807,12 @@ export const oauthClients = pgTable(
       'oauth_clients_webauthn_allowed_origins_is_array',
       sql`jsonb_typeof(${t.webauthnAllowedOrigins}) = 'array'`
     ),
+    // #675: a list, so the end-session route's exact match never reads a
+    // string or an object written by hand.
+    check(
+      'oauth_clients_post_logout_redirect_uris_is_array',
+      sql`jsonb_typeof(${t.postLogoutRedirectUris}) = 'array'`
+    ),
     // #593: the stored form of a verified domain, so a value written by hand
     // can never reach a screen in any other form. The same expression as
     // `VERIFIED_DOMAIN_PATTERN` in shared-validation.

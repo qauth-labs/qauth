@@ -1,1 +1,2 @@
-ALTER TABLE "oauth_clients" ADD COLUMN "post_logout_redirect_uris" jsonb DEFAULT '[]'::jsonb NOT NULL;
+ALTER TABLE "oauth_clients" ADD COLUMN "post_logout_redirect_uris" jsonb DEFAULT '[]'::jsonb NOT NULL;--> statement-breakpoint
+ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_post_logout_redirect_uris_is_array" CHECK (jsonb_typeof("oauth_clients"."post_logout_redirect_uris") = 'array');

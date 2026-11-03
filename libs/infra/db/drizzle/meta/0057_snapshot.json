@@ -1,5 +1,5 @@
 {
-  "id": "6d06217b-87de-48dd-968e-3d1e9db0bb6f",
+  "id": "346f937d-ab17-47ce-9bca-2c8dda525192",
   "prevId": "d7485091-d118-4d15-ad8a-39c7a5af0fce",
   "version": "7",
   "dialect": "postgresql",
@@ -1922,6 +1922,10 @@
         "oauth_clients_webauthn_allowed_origins_is_array": {
           "name": "oauth_clients_webauthn_allowed_origins_is_array",
           "value": "jsonb_typeof(\"oauth_clients\".\"webauthn_allowed_origins\") = 'array'"
+        },
+        "oauth_clients_post_logout_redirect_uris_is_array": {
+          "name": "oauth_clients_post_logout_redirect_uris_is_array",
+          "value": "jsonb_typeof(\"oauth_clients\".\"post_logout_redirect_uris\") = 'array'"
         },
         "oauth_clients_verified_domain_form": {
           "name": "oauth_clients_verified_domain_form",
