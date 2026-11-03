@@ -6,6 +6,7 @@ import {
   UNSHOWABLE_REDIRECT_URI_CLIENTS_NAMED,
   UNSHOWABLE_REDIRECT_URI_COMMAND,
   UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS,
+  UNSHOWABLE_REDIRECT_URI_WAIT_MS,
   unshowableRedirectUriWarning,
 } from './unshowable-redirect-uris';
 
@@ -120,10 +121,64 @@ describe('logUnshowableRedirectUris (#914)', () => {
     );
   });
 
-  it('quotes a client id or realm name a stored row carries, control characters escaped', () => {
+  it('quotes a client id or realm name a stored row carries, C0 control characters escaped', () => {
     const message = unshowableRedirectUriWarning('ma\nster', 'evil\u001b[2J');
     expect(message).not.toContain('\u001b');
     expect(message).not.toContain('\n');
     expect(message).toContain('"evil\\u001b[2J"');
+  });
+});
+
+describe('logUnshowableRedirectUris when a page of clients waits (#914 review)', () => {
+  it('stops waiting after its bound, says so and lets the boot go on', async () => {
+    vi.useFakeTimers();
+    try {
+      const warn = vi.fn();
+      // A page that never answers, as one queued behind a migration's lock.
+      const findUnshowableRedirectUris = vi.fn(() => new Promise<never>(() => undefined));
+      const done = logUnshowableRedirectUris({
+        clients: { findUnshowableRedirectUris },
+        log: { warn },
+        now: () => 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(UNSHOWABLE_REDIRECT_URI_WAIT_MS - 1);
+      expect(warn).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(done).resolves.toBeUndefined();
+
+      expect(warn.mock.calls).toEqual([
+        [
+          { waitedMs: UNSHOWABLE_REDIRECT_URI_WAIT_MS },
+          `the boot's check of the clients' redirect URIs did not finish within ${UNSHOWABLE_REDIRECT_URI_WAIT_MS} ms; \`${UNSHOWABLE_REDIRECT_URI_COMMAND}\` checks every client`,
+        ],
+      ]);
+      // Bounded well inside Fastify's 10 s onReady limit.
+      expect(UNSHOWABLE_REDIRECT_URI_WAIT_MS).toBeLessThan(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a scan that fails after the boot stopped waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      let fail: (error: Error) => void = () => undefined;
+      const findUnshowableRedirectUris = vi.fn(
+        () => new Promise<never>((_, reject) => (fail = reject))
+      );
+      const done = logUnshowableRedirectUris({
+        clients: { findUnshowableRedirectUris },
+        log: { warn: vi.fn() },
+        now: () => 0,
+      });
+      await vi.advanceTimersByTimeAsync(UNSHOWABLE_REDIRECT_URI_WAIT_MS);
+      await done;
+      // Rejecting now raises no unhandled rejection.
+      fail(new Error('pool closed'));
+      await vi.advanceTimersByTimeAsync(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

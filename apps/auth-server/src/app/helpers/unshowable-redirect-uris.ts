@@ -13,10 +13,12 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
  * users meet the 400. So each boot names them, once per client, with the
  * command that lists them all and says how to replace each URI.
  *
- * The scan stops after {@link UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS}, so a
- * large client table never holds the boot (Fastify bounds an `onReady` hook
- * at 10 s), and then says the list is incomplete. It never refuses the boot:
- * a failed scan is logged and the server serves on.
+ * The scan reads no page after {@link UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS},
+ * so a large client table never holds the boot (Fastify bounds an `onReady`
+ * hook at 10 s), and then says the list is incomplete. A page that waits,
+ * such as on a migration's lock of `oauth_clients`, is not waited for past
+ * {@link UNSHOWABLE_REDIRECT_URI_WAIT_MS}. It never refuses the boot: a scan
+ * that fails or is not waited for is logged and the server serves on.
  */
 
 /** The command that lists every such client, with the fix for each. */
@@ -25,6 +27,12 @@ export const UNSHOWABLE_REDIRECT_URI_COMMAND =
 
 /** How long the boot spends reading clients. */
 export const UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS = 2_000;
+
+/**
+ * How long the boot waits for the scan at most: its budget, and a second
+ * for the page in flight when the budget runs out.
+ */
+export const UNSHOWABLE_REDIRECT_URI_WAIT_MS = UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS + 1_000;
 
 /** How many clients the boot names one by one; the rest are counted. */
 export const UNSHOWABLE_REDIRECT_URI_CLIENTS_NAMED = 20;
@@ -42,8 +50,9 @@ export interface UnshowableRedirectUriWarningDependencies {
 
 /**
  * Logged for each client the boot names. The client id and realm name are
- * quoted as JSON strings: a row stored before #593 may carry control
- * characters, which a log read in a terminal must not receive raw.
+ * quoted as JSON strings: a row written by hand may carry C0 control
+ * characters (ESC included), which a log read in a terminal must not receive
+ * raw. JSON escapes those, not C1 or bidirectional characters.
  */
 export function unshowableRedirectUriWarning(realmName: string, clientId: string): string {
   return (
@@ -52,20 +61,38 @@ export function unshowableRedirectUriWarning(realmName: string, clientId: string
   );
 }
 
+const NOT_WAITED_FOR = Symbol('not waited for');
+
 /** Name every client with a redirect URI the consent screen cannot show, as warnings. */
 export async function logUnshowableRedirectUris(
   deps: UnshowableRedirectUriWarningDependencies
 ): Promise<void> {
   const now = deps.now ?? Date.now;
+  const scanning = deps.clients.findUnshowableRedirectUris({
+    deadline: now() + UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS,
+  });
+  // A scan the boot stopped waiting for may still fail later, unheard.
+  scanning.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const waited = new Promise<typeof NOT_WAITED_FOR>((resolve) => {
+    timer = setTimeout(() => resolve(NOT_WAITED_FOR), UNSHOWABLE_REDIRECT_URI_WAIT_MS);
+  });
   let scan;
   try {
-    scan = await deps.clients.findUnshowableRedirectUris({
-      deadline: now() + UNSHOWABLE_REDIRECT_URI_SCAN_BUDGET_MS,
-    });
+    scan = await Promise.race([scanning, waited]);
   } catch (error) {
     deps.log.warn(
       { error: error instanceof Error ? error.name : 'unknown' },
       `could not check the clients' redirect URIs at boot; \`${UNSHOWABLE_REDIRECT_URI_COMMAND}\` lists the clients with one the consent screen cannot show`
+    );
+    return;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (scan === NOT_WAITED_FOR) {
+    deps.log.warn(
+      { waitedMs: UNSHOWABLE_REDIRECT_URI_WAIT_MS },
+      `the boot's check of the clients' redirect URIs did not finish within ${UNSHOWABLE_REDIRECT_URI_WAIT_MS} ms; \`${UNSHOWABLE_REDIRECT_URI_COMMAND}\` checks every client`
     );
     return;
   }
