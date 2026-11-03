@@ -34,7 +34,8 @@ import {
  *
  * - `sign-in-ladder:{<realm id>:<identifier HMAC>}:<factor>`: a hash of the
  *   run's consecutive counted failures (`n`), until when an attempt waits
- *   (`until`, epoch ms) and the run's id (`run`), kept after the last counted
+ *   (`until`, epoch ms), the run's id (`run`) and, once one came from a known
+ *   IP, how many of them did (`k`, #968), kept after the last counted
  *   failure `freeRetentionMs` while `n` is below `freeFailures` and
  *   `retentionMs` once it is not (#969): a spray that tries each made-up
  *   identifier a few times ages out in 2 days, and an account under attack
@@ -42,8 +43,10 @@ import {
  *   whether or not an account holds the identifier;
  * - `sign-in-ladder:{<realm id>:<identifier HMAC>}:known-ips`: a sorted set of
  *   end-user IP HMACs, scored by their last successful sign-in. A known IP
- *   skips the wait only while the run has fewer than `knownIpFreeFailures`
- *   counted failures, since many clients may share it (#968).
+ *   skips the wait only while fewer than `knownIpFreeFailures` of the run's
+ *   counted failures came from known IPs (the counter's `k`), since many
+ *   clients may share it (#968); failures from other addresses never use
+ *   the bound up.
  *
  * The braces are a Redis Cluster hash tag: both keys of an account sit in one
  * slot, so one script may read the one and write the other.
@@ -101,9 +104,10 @@ export interface RedisFailureLadder extends LadderHook {
  * freeFailures, firstWaitMs, maxWaitMs, retentionMs, freeRetentionMs,
  * knownIpMs, knownIpFreeFailures, the IP's HMAC (empty for none), a new run
  * id. Returns `{0, ms left}` for an attempt inside the wait, `{1, n, run}`
- * for a counted one. A known IP skips the wait only while the run has fewer
- * than knownIpFreeFailures counted failures; from then on it waits as any
- * other address does (#968). A counted attempt keeps the counter
+ * for a counted one. A known IP skips the wait only while fewer than
+ * knownIpFreeFailures of the run's counted failures came from known IPs
+ * (`k`, written only once one has); from then on it waits as any other
+ * address does (#968). A counted attempt keeps the counter
  * `freeRetentionMs` while `n` is below freeFailures and `retentionMs` from
  * then on.
  *
@@ -121,18 +125,19 @@ local freeRetention = tonumber(ARGV[6])
 local knownMs = tonumber(ARGV[7])
 local knownFree = tonumber(ARGV[8])
 local ip = ARGV[9]
-local state = redis.call('HMGET', KEYS[1], 'n', 'until', 'run')
+local known = false
+if knownMs > 0 and ip ~= '' then
+  local seen = redis.call('ZSCORE', KEYS[2], ip)
+  if seen and now - tonumber(seen) < knownMs then known = true end
+end
+local state = redis.call('HMGET', KEYS[1], 'n', 'until', 'run', 'k')
 local n = tonumber(state[1]) or 0
 local waitUntil = tonumber(state[2]) or 0
 local run = state[3]
 if not run then run = ARGV[10] end
-if waitUntil > now then
-  local exempt = false
-  if knownMs > 0 and ip ~= '' and n < knownFree then
-    local seen = redis.call('ZSCORE', KEYS[2], ip)
-    if seen and now - tonumber(seen) < knownMs then exempt = true end
-  end
-  if not exempt then return {0, waitUntil - now} end
+local k = tonumber(state[4]) or 0
+if waitUntil > now and not (known and k < knownFree) then
+  return {0, waitUntil - now}
 end
 n = n + 1
 local wait = 0
@@ -147,6 +152,7 @@ end
 local nextUntil = now + wait
 if nextUntil < waitUntil then nextUntil = waitUntil end
 redis.call('HSET', KEYS[1], 'n', n, 'until', nextUntil, 'run', run)
+if known then redis.call('HINCRBY', KEYS[1], 'k', 1) end
 if n >= free then
   redis.call('PEXPIRE', KEYS[1], retention)
 else
@@ -162,8 +168,9 @@ return {1, n, run}
  * Both act on the reservation's own run only: `clear` ends it, `withdraw`
  * takes this attempt back from it. A run another success already ended, and
  * a run begun since, stay as they are, so a success that settles late never
- * wipes failures counted after it. The IP becomes known either way, the
- * stalest dropped past the cap.
+ * wipes failures counted after it. A withdrawn attempt leaves `k` as it is:
+ * the known-IP bound it used stays used. The IP becomes known either way,
+ * the stalest dropped past the cap.
  */
 export const SETTLE_SUCCESS_SCRIPT = `
 local now = tonumber(ARGV[1])

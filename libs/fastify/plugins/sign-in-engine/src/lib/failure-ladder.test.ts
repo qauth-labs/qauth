@@ -110,18 +110,17 @@ class FakeRedis implements LadderRedis {
       .slice(0, 8)
       .map(Number);
     const ip = argv[8];
+    let knownIp = false;
+    if (knownMs > 0 && ip !== '') {
+      const seen = this.sets.get(known)?.get(ip);
+      if (seen !== undefined && now - seen < knownMs) knownIp = true;
+    }
     const state = this.hashes.get(counter);
     let n = Number(state?.get('n') ?? 0);
     const waitUntil = Number(state?.get('until') ?? 0);
     const run = state?.get('run') ?? argv[9];
-    if (waitUntil > now) {
-      let exempt = false;
-      if (knownMs > 0 && ip !== '' && n < knownFree) {
-        const seen = this.sets.get(known)?.get(ip);
-        if (seen !== undefined && now - seen < knownMs) exempt = true;
-      }
-      if (!exempt) return [0, Math.trunc(waitUntil - now)];
-    }
+    const k = Number(state?.get('k') ?? 0);
+    if (waitUntil > now && !(knownIp && k < knownFree)) return [0, Math.trunc(waitUntil - now)];
     n += 1;
     let wait = 0;
     if (n >= free) {
@@ -129,14 +128,14 @@ class FakeRedis implements LadderRedis {
       wait = doublings >= 40 ? longest : Math.min(first * 2 ** doublings, longest);
     }
     const nextUntil = Math.max(now + wait, waitUntil);
-    this.hashes.set(
-      counter,
-      new Map([
-        ['n', String(n)],
-        ['until', String(nextUntil)],
-        ['run', run],
-      ])
-    );
+    const hash = new Map([
+      ['n', String(n)],
+      ['until', String(nextUntil)],
+      ['run', run],
+    ]);
+    // HSET leaves `k` as it was; HINCRBY adds this attempt when its IP is known.
+    if (state?.has('k') || knownIp) hash.set('k', String(k + (knownIp ? 1 : 0)));
+    this.hashes.set(counter, hash);
     this.expiries.set(counter, now + (n >= free ? retention : freeRetention));
     return [1, n, run];
   }
@@ -295,7 +294,6 @@ describe('the Redis failure ladder', () => {
       const fromKnown = await attempt(IP);
       expect(fromKnown).toEqual({ kind: 'wait', retryAfterSeconds: 15 * 60 });
       expect(await attempt(OTHER_IP)).toEqual(fromKnown);
-      expect(await attempt()).toEqual(fromKnown);
       // Refused, so not counted.
       expect(counter()?.get('n')).toBe(String(n));
       advance(15 * 60_000 - 1);
@@ -331,6 +329,22 @@ describe('the Redis failure ladder', () => {
     const verdicts = await Promise.all(Array.from({ length: 50 }, () => attempt(IP)));
     expect(verdicts.filter((verdict) => verdict.kind === 'reserved')).toHaveLength(20);
     expect(counter()?.get('n')).toBe('20');
+  });
+
+  it('counts only known IPs’ failures toward the bound, in `k` (#968)', async () => {
+    const { attempt, fail, failSpaced, reserved, counter } = setup();
+    await (await reserved(IP)).settle('success');
+    // A guesser elsewhere: no `k` is written.
+    await failSpaced(29, OTHER_IP);
+    await fail(1, OTHER_IP);
+    expect(counter()?.has('k')).toBe(false);
+    expect(await attempt(OTHER_IP)).toMatchObject({ kind: 'wait' });
+    // The owner's known IP still skips the wait for its 20.
+    await fail(20, IP);
+    expect(counter()?.get('n')).toBe('50');
+    expect(counter()?.get('k')).toBe('20');
+    expect(await attempt(IP)).toMatchObject({ kind: 'wait' });
+    expect(counter()?.get('k')).toBe('20');
   });
 
   it('still clears the run on a success from a known IP, which then skips the wait again (#968)', async () => {

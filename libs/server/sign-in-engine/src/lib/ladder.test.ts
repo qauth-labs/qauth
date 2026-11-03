@@ -73,12 +73,12 @@ describe('checkLadderPolicy', () => {
     );
   });
 
-  it('refuses a known-IP bound below the free failures, or not a whole count', () => {
-    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 4 }))).toThrow(
-      /knownIpFreeFailures below freeFailures/
+  it('refuses a known-IP bound that is not a whole count', () => {
+    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: -1 }))).toThrow(
+      /knownIpFreeFailures is not a count/
     );
-    // Equal to the free failures: the exemption skips no wait.
-    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 5 }))).not.toThrow();
+    // 0: the exemption skips no wait.
+    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 0 }))).not.toThrow();
     expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 20.5 }))).toThrow(
       /knownIpFreeFailures/
     );
@@ -88,17 +88,23 @@ describe('checkLadderPolicy', () => {
   });
 
   it('refuses a known-IP bound that skips more than half the waits before the hard ceiling', () => {
-    // Below 56 failures a known IP skips 1,023 s of doubling waits and (B − 15) waits of 15
-    // minutes, and still meets (100 − B) of them before the 100th.
+    // A run's known-IP failures skip at most the B waits of 15 minutes just below the 100th; it
+    // still meets the 1,023 s of doubling waits and (85 − B) waits of 15 minutes before them.
     const tooMany = /skips more than half the waits before the hard ceiling/;
-    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 56 }))).not.toThrow();
-    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 57 }))).toThrow(tooMany);
+    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 43 }))).not.toThrow();
+    expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 44 }))).toThrow(tooMany);
     // At or past the ceiling a known IP would fire the hard action with no wait at all.
     expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 100 }))).toThrow(tooMany);
     expect(() => checkLadderPolicy(policy({ knownIpFreeFailures: 10 ** 12 }))).toThrow(tooMany);
-    // With no hard ceiling there is none to reach.
+    // With no hard ceiling there is none to reach, and with no exemption nothing is skipped.
     expect(() =>
       checkLadderPolicy(policy({ hardCeiling: null, knownIpFreeFailures: 1_000 }))
     ).not.toThrow();
+    expect(() =>
+      checkLadderPolicy(policy({ knownIpMs: 0, hardCeiling: 10, freeRetentionMs: 30 * DAY }))
+    ).not.toThrow();
+    expect(() =>
+      checkLadderPolicy(policy({ knownIpMs: 1, hardCeiling: 10, freeRetentionMs: 30 * DAY }))
+    ).toThrow(tooMany);
   });
 });

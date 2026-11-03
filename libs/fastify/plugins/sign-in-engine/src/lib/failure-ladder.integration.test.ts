@@ -347,6 +347,43 @@ describe('the failure ladder over real Redis and Postgres', () => {
     }
   });
 
+  it('counts only known IPs’ failures toward the bound: a guesser elsewhere cannot keep the owner out (#968)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const bound = PASSWORD_LADDER_POLICY.knownIpFreeFailures;
+    await seed('known-owner@example.com');
+    expect(await attempt('known-owner@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    // A guesser at another address climbs past the bound through the waits.
+    let counted = 0;
+    while (counted < bound + 5) {
+      const result = await attempt('known-owner@example.com', 'wrong', OTHER_IP);
+      if (result.kind === 'refused' && result.reason === 'throttled') {
+        now += result.retryAfterSeconds * 1000;
+        continue;
+      }
+      expect(isRefusedCredential(result)).toBe(true);
+      counted += 1;
+    }
+    expect(isThrottled(await attempt('known-owner@example.com', 'wrong', OTHER_IP))).toBe(true);
+    const run = await counter('known-owner@example.com');
+    expect(run).toMatchObject({ n: String(bound + 5) });
+    expect(run).not.toHaveProperty('k');
+
+    // Inside that wait the owner's known IP is still exempt: a typo, then the right password.
+    expect(isRefusedCredential(await attempt('known-owner@example.com', 'wrong', KNOWN_IP))).toBe(
+      true
+    );
+    expect(await counter('known-owner@example.com')).toMatchObject({
+      n: String(bound + 6),
+      k: '1',
+    });
+    expect(await attempt('known-owner@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    expect(await counter('known-owner@example.com')).toEqual({});
+  });
+
   it('still clears the run on a success from a known IP past its bound, which then skips the wait again (#968)', async (testCtx) => {
     if (!dockerUp) return testCtx.skip();
     const bound = PASSWORD_LADDER_POLICY.knownIpFreeFailures;

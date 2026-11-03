@@ -108,6 +108,51 @@ describe('the in-memory ladder’s known-IP bound (#968, ADR-017 Decision 7)', (
     expect(failures()).toBe(BOUND);
   });
 
+  it('counts only known IPs’ failures toward the bound: another address cannot take the owner’s exemption away', async () => {
+    const { attempt, fail, signIn, advance, failures, reserved } = setup();
+    await signIn(KNOWN);
+    // A guesser elsewhere climbs to 30 failures through the waits.
+    while ((failures() ?? 0) < 30) {
+      const verdict = await attempt(OTHER);
+      if (verdict.kind === 'wait') advance(verdict.retryAfterSeconds * 1000);
+      else await verdict.settle('failure');
+    }
+    expect(await attempt(OTHER)).toMatchObject({ kind: 'wait' });
+    // The owner still skips the wait from the known IP, and signs in: the run ends.
+    await fail(BOUND - 1, KNOWN);
+    expect(failures()).toBe(30 + BOUND - 1);
+    await (await reserved(KNOWN)).settle('success');
+    expect(failures()).toBeUndefined();
+  });
+
+  it('keeps a run that mixes known and other addresses to at least half the waits before the ceiling', async () => {
+    const { attempt, signIn, advance, failures } = setup();
+    await signIn(KNOWN);
+    let waited = 0;
+    const through = async (endUserIp: string, until: number) => {
+      while ((failures() ?? 0) < until) {
+        const verdict = await attempt(endUserIp);
+        if (verdict.kind === 'wait') {
+          advance(verdict.retryAfterSeconds * 1000);
+          waited += verdict.retryAfterSeconds * 1000;
+        } else {
+          await verdict.settle('failure');
+        }
+      }
+    };
+    // The best use of the bound: climb elsewhere, then spend it on the last waits.
+    await through(OTHER, CEILING - BOUND);
+    await through(KNOWN, CEILING);
+    let unknownOnly = 0;
+    let rest = 0;
+    for (let n = 0; n < CEILING; n += 1) {
+      unknownOnly += ladderWaitMs(n, PASSWORD_LADDER_POLICY);
+      if (n < CEILING - BOUND) rest += ladderWaitMs(n, PASSWORD_LADDER_POLICY);
+    }
+    expect(waited).toBe(rest);
+    expect(waited * 2).toBeGreaterThanOrEqual(unknownOnly);
+  });
+
   it('still clears the run on a success, after which a known IP skips the wait again', async () => {
     const { attempt, fail, signIn, advance, failures } = setup();
     await signIn(KNOWN);
