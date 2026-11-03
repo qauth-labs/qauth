@@ -1,4 +1,3 @@
-import { SandboxPairingError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance } from 'fastify';
 import {
@@ -25,8 +24,6 @@ import {
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
-import { SandboxCeilingError } from './helpers/api-request-errors';
-import { updateRealmPolicies } from './helpers/realm-policy-update';
 import type { RealmRow } from './helpers/request-realm';
 import {
   createSandboxRealm,
@@ -57,6 +54,21 @@ const HOST_SANDBOX = 'sandbox.live.example.com';
 const ALICE = 'alice@example.com';
 const BOB = 'bob@example.com';
 const CAROL = 'carol@example.com';
+
+/**
+ * The server's own helpers, imported after its boot. The harness resets the
+ * module registry when it boots a server, so a class imported at the top of
+ * this file is not the class the server throws, and a helper imported there
+ * would not recognise the server's errors (`instanceof`). An error of a
+ * library is matched by its `name` instead.
+ */
+async function serverModules() {
+  const [{ SandboxCeilingError }, { updateRealmPolicies }] = await Promise.all([
+    import('./helpers/api-request-errors'),
+    import('./helpers/realm-policy-update'),
+  ]);
+  return { SandboxCeilingError, updateRealmPolicies };
+}
 
 interface World {
   readonly app: FastifyInstance;
@@ -278,6 +290,7 @@ describe('the paired sandbox realm (#554)', () => {
 
   it('refuses the development ceiling on the sandbox in the policy update (422 sandbox_ceiling) and in the database', async () => {
     const { app, live, sandbox } = await setUp();
+    const { SandboxCeilingError, updateRealmPolicies } = await serverModules();
     const before = await app.policyStore.get(sandbox.id);
     if (!before) throw new Error('the sandbox has no policies');
 
@@ -336,7 +349,7 @@ describe('the paired sandbox realm (#554)', () => {
         name: `refused-${rule}`,
         issuer: `https://${host}`,
       });
-      await expect(attempt).rejects.toBeInstanceOf(SandboxPairingError);
+      await expect(attempt).rejects.toMatchObject({ name: 'SandboxPairingError' });
       await expect(attempt).rejects.toMatchObject({ rule });
       expect(await app.repositories.realms.findByName(`refused-${rule}`)).toBeUndefined();
       expect(await app.repositories.realms.findByHost(host)).toBeUndefined();
@@ -355,7 +368,7 @@ describe('the paired sandbox realm (#554)', () => {
         name: 'other-sandbox',
         issuer: `https://${host}`,
       });
-      await expect(attempt).rejects.toBeInstanceOf(UniqueConstraintError);
+      await expect(attempt).rejects.toMatchObject({ name: 'UniqueConstraintError' });
       await expect(attempt).rejects.toMatchObject({ constraint: 'realm_hosts_pkey' });
     }
     expect(await app.repositories.realms.findSandboxOf(other.id)).toBeUndefined();
@@ -365,7 +378,7 @@ describe('the paired sandbox realm (#554)', () => {
     const { app, live } = await setUp();
 
     const deleted = app.repositories.realms.delete(live.id);
-    await expect(deleted).rejects.toBeInstanceOf(SandboxPairingError);
+    await expect(deleted).rejects.toMatchObject({ name: 'SandboxPairingError' });
     await expect(deleted).rejects.toMatchObject({ rule: 'live_realm_has_sandbox' });
     expect(await app.repositories.realms.findById(live.id)).toBeDefined();
   });
