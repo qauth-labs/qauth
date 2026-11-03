@@ -612,7 +612,7 @@ export interface ConsentParams {
   }>;
   /** Where the tokens may be used: the resource indicators (RFC 8707) of the request. */
   resources: string[];
-  /** Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, without the QAuth API audiences (`urn:qauth:aud:`, which a user’s token gets only when the request names them), exactly the tokens’ `aud`. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself. */
+  /** Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, exactly the tokens’ `aud`. For any client but the system client it leaves out the QAuth API audiences (`urn:qauth:aud:`), which a user’s token then gets only when the request names them. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself. */
   audience?: string[];
   /** Present when the client is an AI agent (ADR-014 §11, ADR-015 Decision 11): the screen says, in QAuth’s own words, that the app is an AI agent and how long it may keep working once allowed. Nothing in it comes from the client. */
   agent?: {

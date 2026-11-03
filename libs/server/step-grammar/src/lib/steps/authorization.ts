@@ -76,7 +76,7 @@ export const consent = defineStep({
       ),
       1,
       20,
-      'Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, without the QAuth API audiences (`urn:qauth:aud:`, which a user’s token gets only when the request names them), exactly the tokens’ `aud`. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself.'
+      'Where the tokens may be used when the request named no resource indicator: the audience an operator configured for the client, exactly the tokens’ `aud`. For any client but the system client it leaves out the QAuth API audiences (`urn:qauth:aud:`), which a user’s token then gets only when the request names them. Absent when the request named resources, which are then the audience, and when the tokens are for the client itself.'
     ).optional(),
     agent: object(
       {
