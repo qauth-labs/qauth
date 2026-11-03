@@ -7,7 +7,11 @@ import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contra
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { AuthorizeQuery } from '../schemas/oauth';
-import type { AuthorizationErrorParams } from './authorization-error';
+import {
+  type AuthorizationErrorParams,
+  type ClientOriginLike,
+  isOperatorProvisionedClient,
+} from './authorization-error';
 import {
   type AuthorizationOutcome,
   type AuthorizationTarget,
@@ -29,7 +33,8 @@ import {
 } from './interaction-record';
 import { interactionCancelRedirect } from './interaction-redirect';
 import { buildRedirectUrl } from './oauth-redirect';
-import { buildRealmUrl } from './realm-url';
+import { RESUME_PATH_PREFIX, stashAuthorizationError } from './pending-authorization';
+import { buildRealmUrl, type RealmUrlSource } from './realm-url';
 import { requestRealm } from './request-realm';
 import { isDangerousScope } from './step-up';
 import { emitUserEvent } from './user-events';
@@ -221,6 +226,26 @@ async function transactionSession(
 }
 
 /**
+ * Where the browser goes with an authorization error decided when an
+ * interaction finished: the client's `redirect_uri` for a client an operator
+ * provisioned, and otherwise the issuer page that shows the error with a link
+ * to the client (`/ui/resume/<handle>`), as `/oauth/authorize` answers it
+ * (`sendAuthorizationError`, RFC 9700 §4.11.2). The answer endpoint returns
+ * no HTML, so the page is one redirect away.
+ */
+async function errorDestination(
+  fastify: FastifyInstance,
+  realm: RealmUrlSource,
+  client: ClientOriginLike,
+  redirectUri: string,
+  params: AuthorizationErrorParams
+): Promise<string> {
+  if (isOperatorProvisionedClient(client)) return buildRedirectUrl(redirectUri, params);
+  const handle = await stashAuthorizationError(fastify, redirectUri, params);
+  return buildRealmUrl(realm, `${RESUME_PATH_PREFIX}${handle}`);
+}
+
+/**
  * Finish the authorization request of an interaction that just finished
  * (#628): check it again as the endpoint checks it (the client may have been
  * disabled since, or its redirect URI removed), decide it for the session the
@@ -228,9 +253,9 @@ async function transactionSession(
  *
  * - the client's `redirect_uri` with the code, `state` and `iss` (RFC 9207),
  *   minted by `mintAuthorizationCode` under the consent and the session;
- * - the client's `redirect_uri` with an error, `state` and `iss`. The person
- *   has interacted with QAuth, so it is a redirect, as a cancel's
- *   `access_denied` is;
+ * - the client's `redirect_uri` with an error, `state` and `iss`, for a client
+ *   an operator provisioned; for any other client, the issuer page that shows
+ *   the error ({@link errorDestination}), as the endpoint answers it;
  * - the ceremony page of the request's next interaction, when the person must
  *   act again: a consent after the sign-in, or a sign-in again when the session
  *   ended meanwhile.
@@ -247,7 +272,15 @@ export async function finishAuthorization(
 ): Promise<string> {
   const query = finished.request;
   const checked = await checkAuthorizationRequest(fastify, request, query);
-  if (checked.kind === 'refused') return buildRedirectUrl(query.redirect_uri, checked.params);
+  if (checked.kind === 'refused') {
+    return errorDestination(
+      fastify,
+      requestRealm(request),
+      checked.client,
+      query.redirect_uri,
+      checked.params
+    );
+  }
   const { target } = checked;
   const session = await transactionSession(fastify, target.realm.id, finished.transaction);
   const outcome = await decideAuthorization(fastify, request, target, query, session);
@@ -255,7 +288,13 @@ export async function finishAuthorization(
     case 'code':
       return outcome.location;
     case 'error':
-      return buildRedirectUrl(query.redirect_uri, outcome.params);
+      return errorDestination(
+        fastify,
+        target.realm,
+        target.client,
+        query.redirect_uri,
+        outcome.params
+      );
     case 'sign_in':
     case 'consent': {
       const start = authorizationInteractionStart(outcome, query, target.iss, session);
@@ -263,7 +302,13 @@ export async function finishAuthorization(
         // `authorizationInteractionStart` answers an error only for a consent,
         // which is always for a session.
         if (session !== null) await recordUnshowableConsent(request, target, session, start.error);
-        return buildRedirectUrl(query.redirect_uri, start.error);
+        return errorDestination(
+          fastify,
+          target.realm,
+          target.client,
+          query.redirect_uri,
+          start.error
+        );
       }
       const next = await continueInteraction(request, reply, finished.continuation, {
         request: query,

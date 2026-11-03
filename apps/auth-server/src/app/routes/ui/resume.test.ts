@@ -23,6 +23,7 @@ import {
   isPendingAuthorizationHandle,
   redirectToLoginWithPendingAuthorization,
   RESUME_PATH_PREFIX,
+  stashAuthorizationError,
   stashPendingAuthorization,
 } from '../../helpers/pending-authorization';
 import loginRoute from './login';
@@ -392,6 +393,78 @@ describe('GET /ui/resume/:handle', () => {
 
     expect(state.redirected).toBeUndefined();
     expect(state.statusCode).toBe(400);
+  });
+});
+
+describe('GET /ui/resume/:handle — the error of an untrusted client (#628)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const REDIRECT_URI = 'https://app.example.com/callback';
+  const ERROR = {
+    error: 'invalid_scope',
+    error_description: 'requested scope exceeds the agent scope mode for this client',
+    state: 'xyz',
+    iss: 'https://auth.example.com',
+  };
+
+  it('shows the error on the issuer, once, with a link carrying the whole response', async () => {
+    const { fastify, ctx } = makeFastify();
+    await resumeRoute(fastify);
+    const handle = await stashAuthorizationError(fastify, REDIRECT_URI, ERROR);
+    expect(isPendingAuthorizationHandle(handle)).toBe(true);
+
+    const { reply, state } = createReply();
+    await ctx.get!({ params: { handle }, headers: {}, ip: '127.0.0.1' }, reply);
+
+    expect(state.redirected).toBeUndefined();
+    expect(state.statusCode).toBe(400);
+    expect(state.headers['Cache-Control']).toBe('no-store');
+    const body = String(state.body);
+    expect(body).toContain('Sign-in not completed');
+    expect(body).toContain('invalid_scope');
+    expect(body).toContain('Continue to app.example.com');
+    expect(body).toContain(
+      'https://app.example.com/callback?error=invalid_scope&amp;error_description='
+    );
+
+    // Single-use: the second read is the expired page.
+    const second = createReply();
+    await ctx.get!({ params: { handle }, headers: {}, ip: '127.0.0.1' }, second.reply);
+    expect(String(second.state.body)).toContain('This sign-in request has expired');
+  });
+
+  it('is not an authorize URL to the login round-trip', async () => {
+    const { fastify } = makeFastify();
+    const handle = await stashAuthorizationError(fastify, REDIRECT_URI, ERROR);
+
+    expect(await consumePendingAuthorization(fastify, handle)).toBeNull();
+  });
+
+  it('shows nothing for a poisoned error record', async () => {
+    const { fastify, ctx, store } = makeFastify();
+    await resumeRoute(fastify);
+    const handle = 'G'.repeat(43);
+    store.set(`pending-authz:${handle}`, {
+      value: { error: { redirectUri: 'not a url', params: ERROR }, createdAt: Date.now() },
+      ttl: 600,
+    });
+
+    const { reply, state } = createReply();
+    await ctx.get!({ params: { handle }, headers: {}, ip: '127.0.0.1' }, reply);
+
+    expect(state.statusCode).toBe(400);
+    expect(String(state.body)).toContain('This sign-in request has expired');
+  });
+
+  it('refuses an error response too large to park', async () => {
+    const { fastify } = makeFastify();
+
+    await expect(
+      stashAuthorizationError(fastify, REDIRECT_URI, {
+        ...ERROR,
+        state: 's'.repeat(PENDING_AUTHORIZATION_MAX_URL_BYTES),
+      })
+    ).rejects.toBeInstanceOf(InvalidRequestError);
   });
 });
 

@@ -315,20 +315,3 @@ export function agentPersistenceLine(ssoMaxLifespanSeconds: number | null): stri
     `${describeDuration(ssoMaxLifespanSeconds)} after you signed in, whichever comes first.`
   );
 }
-
-/**
- * Extract the host (with its port) of a redirect URI, for the issuer page an
- * authorization error is shown on instead of a redirect
- * (`helpers/authorization-error.ts`), so the user sees where the link goes.
- * Returns the raw value if it can't be parsed (so the page still shows
- * *something* rather than hiding it). The consent screen does not use it: it
- * shows where the code goes from `clientDisplay` (`helpers/client-display.ts`,
- * #593), which also tells a loopback redirect apart as "this device".
- */
-export function redirectHost(redirectUri: string): string {
-  try {
-    return new URL(redirectUri).host || redirectUri;
-  } catch {
-    return redirectUri;
-  }
-}

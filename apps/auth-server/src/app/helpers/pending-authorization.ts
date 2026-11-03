@@ -2,8 +2,11 @@ import { randomBytes } from 'node:crypto';
 
 import { InvalidRequestError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { z } from 'zod';
 
 import { PENDING_AUTHORIZATION_MAX_URL_BYTES, PENDING_AUTHORIZATION_TTL_MS } from '../constants';
+import type { AuthorizationErrorParams } from './authorization-error';
+import { buildRedirectUrl } from './oauth-redirect';
 
 /**
  * Pending-authorization stash (qauth-labs/qauth#316 follow-up).
@@ -123,6 +126,39 @@ interface PendingAuthorization {
   createdAt: number;
   [key: string]: unknown;
 }
+
+/**
+ * The other record a handle may hold (#628): the authorization error an
+ * interaction of a client no operator provisioned finished with, which
+ * `/ui/resume` shows on the issuer instead of redirecting it (RFC 9700
+ * §4.11.2, `helpers/authorization-error.ts`).
+ */
+interface PendingAuthorizationError {
+  error: { redirectUri: string; params: AuthorizationErrorParams };
+  /** Mint time (epoch ms), for diagnostics; expiry is enforced by the Redis TTL. */
+  createdAt: number;
+  [key: string]: unknown;
+}
+
+/** What a stored error record must hold to be shown: re-checked on read. */
+const storedErrorSchema = z.object({
+  redirectUri: z.string().refine((value) => URL.canParse(value)),
+  params: z.object({
+    error: z.string().min(1),
+    error_description: z.string().optional(),
+    state: z.string().optional(),
+    iss: z.string().min(1),
+  }),
+});
+
+/** What a handle resumes: the authorize request, or the error to show for it. */
+export type PendingResume =
+  | { readonly kind: 'authorize'; readonly authorizeUrl: string }
+  | {
+      readonly kind: 'error';
+      readonly redirectUri: string;
+      readonly params: AuthorizationErrorParams;
+    };
 
 /** Cheap shape guard so a junk path segment never reaches Redis. */
 export function isPendingAuthorizationHandle(value: unknown): value is string {
@@ -246,11 +282,27 @@ export async function consumePendingAuthorization(
   fastify: FastifyInstance,
   handle: unknown
 ): Promise<string | null> {
+  const pending = await consumePendingResume(fastify, handle);
+  return pending?.kind === 'authorize' ? pending.authorizeUrl : null;
+}
+
+/**
+ * Burn a handle and return what it resumes: the authorize URL
+ * ({@link stashPendingAuthorization}) or the error to show
+ * ({@link stashAuthorizationError}); `null` for a missing, expired, used or
+ * malformed handle, and for a record that fails its re-check.
+ */
+export async function consumePendingResume(
+  fastify: FastifyInstance,
+  handle: unknown
+): Promise<PendingResume | null> {
   if (!isPendingAuthorizationHandle(handle)) return null;
   const key = `${PENDING_AUTHORIZATION_KEY_PREFIX}${handle}`;
-  let record: PendingAuthorization | null;
+  let record: (PendingAuthorization | PendingAuthorizationError) | null;
   try {
-    record = await fastify.sessionUtils.getSession<PendingAuthorization>(key);
+    record = await fastify.sessionUtils.getSession<
+      PendingAuthorization | PendingAuthorizationError
+    >(key);
     await fastify.sessionUtils.deleteSession(key);
   } catch (error) {
     fastify.log.warn(
@@ -260,13 +312,51 @@ export async function consumePendingAuthorization(
     return null;
   }
   if (!record) return null;
+  if (record['error'] !== undefined) {
+    // Re-validate on read: show nothing a server-written record would not hold.
+    const stored = storedErrorSchema.safeParse(record['error']);
+    if (!stored.success) {
+      fastify.log.warn(
+        { key },
+        'pending authorization held a malformed error; refusing to show it'
+      );
+      return null;
+    }
+    return { kind: 'error', ...stored.data };
+  }
   // Re-validate on read: never redirect to anything but our own authorize path.
-  const normalized = normalizeInternalAuthorizeUrl(record.authorizeUrl);
+  const normalized = normalizeInternalAuthorizeUrl(record['authorizeUrl']);
   if (normalized === null) {
     fastify.log.warn({ key }, 'pending authorization held a non-authorize URL; refusing to resume');
     return null;
   }
-  return normalized;
+  return { kind: 'authorize', authorizeUrl: normalized };
+}
+
+/**
+ * Park the authorization error an interaction finished with, for a client no
+ * operator provisioned (#628), and return the handle `/ui/resume` shows it
+ * under. An interaction ends at the answer endpoint, which never returns HTML
+ * (ADR-019 Decision 6), so the error page is a redirect away: the handle is
+ * unguessable, single-use and short-lived, as the stash's, and the page only
+ * offers the link a legitimate client would get one click later.
+ *
+ * @throws InvalidRequestError when the error response is over
+ *   {@link PENDING_AUTHORIZATION_MAX_URL_BYTES}
+ */
+export async function stashAuthorizationError(
+  fastify: FastifyInstance,
+  redirectUri: string,
+  params: AuthorizationErrorParams
+): Promise<string> {
+  assertPendingAuthorizationSize(buildRedirectUrl(redirectUri, params));
+  const handle = randomBytes(HANDLE_BYTES).toString('base64url');
+  await fastify.sessionUtils.setSession<PendingAuthorizationError>(
+    `${PENDING_AUTHORIZATION_KEY_PREFIX}${handle}`,
+    { error: { redirectUri, params }, createdAt: Date.now() },
+    Math.floor(PENDING_AUTHORIZATION_TTL_MS / 1000)
+  );
+  return handle;
 }
 
 /**

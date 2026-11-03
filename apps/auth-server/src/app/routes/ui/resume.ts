@@ -2,8 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import { sendAuthorizationErrorPage } from '../../helpers/authorization-error';
 import { html, render } from '../../helpers/html';
-import { consumePendingAuthorization } from '../../helpers/pending-authorization';
+import { consumePendingResume } from '../../helpers/pending-authorization';
 
 /**
  * Resume a pending authorization request (qauth-labs/qauth#316 follow-up).
@@ -23,6 +24,11 @@ import { consumePendingAuthorization } from '../../helpers/pending-authorization
  *
  * The handle is burned on read, so a login URL recovered from browser history
  * or a screen recording cannot be replayed.
+ *
+ * A handle may also hold the authorization error an interaction of a client
+ * no operator provisioned finished with (#628, `INTERACTION_UI_ENABLED`): the
+ * answer endpoint redirects here, and the error is shown on the issuer as
+ * `/oauth/authorize` shows it, never redirected (RFC 9700 §4.11.2).
  */
 
 /**
@@ -102,7 +108,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'Resume a pending authorization request after login. The handle is single-use and resolves ONLY to an authorize URL this server minted. Issue #316.',
+          'Resume a pending authorization request after login. The handle is single-use and resolves ONLY to an authorize URL this server minted (#316), or to the authorization error an interaction of a client no operator provisioned finished with, shown on the issuer rather than redirected (#628).',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
         params: z.object({ handle: z.string() }),
@@ -112,10 +118,10 @@ export default async function (fastify: FastifyInstance) {
     async (request, reply) => {
       const { handle } = request.params as { handle: string };
 
-      const authorizeUrl = await consumePendingAuthorization(fastify, handle);
+      const pending = await consumePendingResume(fastify, handle);
 
       reply.header('Cache-Control', 'no-store');
-      if (!authorizeUrl) {
+      if (!pending) {
         // Missing / expired / replayed — all indistinguishable. Never a 500,
         // never a redirect to anything derived from the request.
         reply.header('Content-Type', 'text/html; charset=utf-8');
@@ -123,10 +129,17 @@ export default async function (fastify: FastifyInstance) {
         return reply.send(expiredPage(reply.cspNonce.style));
       }
 
+      if (pending.kind === 'error') {
+        // The error an interaction of an untrusted client finished with (#628):
+        // its redirect URI passed the endpoint's checks when the interaction
+        // finished, and the page only links to it.
+        return sendAuthorizationErrorPage(reply, pending.redirectUri, pending.params);
+      }
+
       // `/oauth/authorize` re-validates client_id, redirect_uri, scope, PKCE
       // and step-up from scratch, exactly as on a first visit — resuming grants
       // nothing that a fresh authorize request would not.
-      return reply.redirect(authorizeUrl, 302);
+      return reply.redirect(pending.authorizeUrl, 302);
     }
   );
 }
