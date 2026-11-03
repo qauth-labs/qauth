@@ -3,7 +3,7 @@ title: Docker Guide
 description: Running QAuth with Docker Compose — production and development, service details, and troubleshooting.
 sidebar:
   order: 1
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-03'
 ---
 
 This guide covers the Docker setup for QAuth: **production** (prod build, no watch) and **development** (dev image, Compose Watch + `nx serve --watch`).
@@ -56,9 +56,8 @@ openssl genpkey -algorithm Ed25519 -out private.pem
 openssl pkey -in private.pem -pubout -out public.pem
 ```
 
-See the [Keys guide](/operate/keys/) for RS256 and ML-DSA key generation, and a
-pitfall (`openssl genrsa` emits the wrong private-key format) that wastes an
-afternoon if you hit it.
+See the [Keys guide](/operate/keys/) for RS256 and ML-DSA key generation, and
+why to generate PKCS#8 keys with `openssl genpkey`.
 
 ### 2. Configure Environment
 
@@ -85,7 +84,8 @@ MCowBQYDK2VwAyEA...
 
 JWT_ISSUER=http://localhost:3000
 
-# The key-encryption key: openssl rand -base64 32. Keep a copy with your backups.
+# The key-encryption key: openssl rand -base64 32. Back it up apart from the
+# database backups: losing it loses every stored key.
 KEK=...
 ```
 
@@ -297,7 +297,8 @@ The main authentication API server.
 
 - **Port**: 3000 (mapped to host)
 - **Health Check**: `GET /ready` in `docker-compose.yml`: the container is
-  `healthy` once Postgres, Redis and the KEK answer. The image's own
+  `healthy` once Postgres, Redis, the KEK and the event delivery queue
+  answer. The image's own
   `HEALTHCHECK` calls `GET /health`, liveness only, for a runtime that
   restarts an unhealthy container.
 - **Metrics**: `GET /internal/metrics` on the internal listener,
@@ -828,8 +829,10 @@ EGRESS_ALLOWLIST_PATH=/etc/qauth/egress-allowlist.json
 ```
 
 `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are gone:
-set to any value, they stop the boot with a message that names
-`EGRESS_ALLOWLIST_PATH`. Tests reach a local fixture server through the
+set to a value that is not blank, they stop the boot with a message that names
+`EGRESS_ALLOWLIST_PATH`. `docker-compose.yml` still forwards both, blank by
+default, only so that a value left in `.env` reaches that check
+([the upgrade to 0.2](/operate/upgrades/#the-private-address-switches-are-gone)). Tests reach a local fixture server through the
 test-only `createTestEgressClient` instead.
 
 ### Wallet federation (OID4VP, T4)
@@ -930,9 +933,9 @@ Ensure your JWT keys in `.env`:
 - Include the `-----BEGIN/END-----` lines
 - Are properly quoted with double quotes
 - Have no extra whitespace
-- Are **PKCS#8** for private keys (`-----BEGIN PRIVATE KEY-----`), not PKCS#1
-  (`-----BEGIN RSA PRIVATE KEY-----`) — see the [Keys guide](/operate/keys/)
-  if you generated an RS256 key with `openssl genrsa`.
+- Are **PKCS#8** for private keys (`-----BEGIN PRIVATE KEY-----`). The key
+  boot step also reads an RSA key in PKCS#1, but a 0.1 release refuses it —
+  see the [Keys guide](/operate/keys/#pem-keys-pkcs8-recommended).
 
 ### Build Failures
 
