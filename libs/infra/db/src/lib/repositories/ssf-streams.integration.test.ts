@@ -34,6 +34,7 @@ import type {
   NewSsfStream,
   SsfStreamsRepository,
 } from '../../types';
+import { applyDatabaseUserGrants } from '../database-users/apply';
 import { eventDeliveryGrantStatements } from '../events/delivery-grants';
 import { createEventDeliveriesRepository } from './event-deliveries.repository';
 import { createEventsRepository } from './events.repository';
@@ -694,13 +695,26 @@ describe('SSF streams integration (real Postgres)', () => {
     expect(await related(theirs, otherRealm, otherServer.id)).toBe(true);
   });
 
-  // Decided 2026-10-31: a user subject ends when its relation ends, by a
-  // sweep, once no event about the user can still reach the stream.
-  it('sweeps a user subject once its relation has ended and nothing about the user can still reach the stream (#540)', async () => {
+  /** The repositories the sweep scenario below runs its steps through. */
+  interface SweepActors {
+    /** Creates the streams, adds their subjects and sweeps them: `api`'s. */
+    readonly streams: SsfStreamsRepository;
+    /** Writes the events about the users: `api`'s. */
+    readonly store: EventsRepository;
+    /** Fans the events out to the streams: `delivery`'s. */
+    readonly queue: EventDeliveriesRepository;
+  }
+
+  /**
+   * Decided 2026-10-31: a user subject ends when its relation ends, by a
+   * sweep, once no event about the user can still reach the stream (#540).
+   * Run as the owner below, and as the roles' own database users (#498).
+   */
+  async function sweepScenario(actors: SweepActors): Promise<void> {
     const { realmId, receiver, stream } = await streamOf();
     // A second receiver's stream in the same realm.
     const otherReceiver = await client(realmId);
-    const otherStream = await streams.create(newStream(realmId, otherReceiver.id));
+    const otherStream = await actors.streams.create(newStream(realmId, otherReceiver.id));
     if (!otherStream) throw new Error('no stream');
     const other = { stream: otherStream };
     const consent = (userId: string) =>
@@ -726,7 +740,7 @@ describe('SSF streams integration (real Postgres)', () => {
       key: string,
       eventSubject: { type: string; id: string } | null
     ) =>
-      streams.addSubject(
+      actors.streams.addSubject(
         streamId,
         { subjectKey: key, subject: { format: 'opaque', id: key }, eventSubject, verified: true },
         100
@@ -751,7 +765,7 @@ describe('SSF streams integration (real Postgres)', () => {
       },
     ];
     const signedOut = (userId: string) =>
-      store.emitInOwnTransaction({
+      actors.store.emitInOwnTransaction({
         type: SIGNED_OUT,
         realm: realmId,
         actor: { type: 'user', id: userId },
@@ -759,12 +773,12 @@ describe('SSF streams integration (real Postgres)', () => {
         data: {},
       });
     // The realm's fan-out position, then events it reads past.
-    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    await actors.queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
     await signedOut(pending);
     const deliveredEvent = await signedOut(delivered);
     // Delivered to this stream, still pending on the other one only.
     const elsewhereEvent = await signedOut(pendingElsewhere);
-    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    await actors.queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
     await pool().query(
       `UPDATE event_deliveries SET status = 'delivered', finished_at = $3
        WHERE (event_id = $1 OR (event_id = $2 AND destination_id = $4))`,
@@ -785,13 +799,13 @@ describe('SSF streams integration (real Postgres)', () => {
 
     // Only the unrelated users nothing waits on: never a related one, one with
     // an event to fan out or a delivery pending, a client or an unplaced one.
-    expect(await streams.sweepUserSubjects(NOW)).toBe(5);
+    expect(await actors.streams.sweepUserSubjects(NOW)).toBe(5);
     expect(await kept(stream.id)).toEqual(['client', 'unplaced', related, pending, unread].sort());
     // The other stream's receiver is not related to its user either; its
     // delivery is still pending there.
     expect(await kept(other.stream.id)).toEqual([pendingElsewhere]);
     // Repeating it deletes nothing new.
-    expect(await streams.sweepUserSubjects(NOW)).toBe(0);
+    expect(await actors.streams.sweepUserSubjects(NOW)).toBe(0);
 
     // Once the pending delivery finishes and the fan-out reads the last
     // event, those subjects end too.
@@ -799,14 +813,18 @@ describe('SSF streams integration (real Postgres)', () => {
       `UPDATE event_deliveries SET status = 'failed', finished_at = $1 WHERE status = 'pending'`,
       [NOW]
     );
-    await queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
+    await actors.queue.fanOut({ kinds: [SSF_DELIVERY_KIND], destinations, now: NOW });
     await pool().query(
       `UPDATE event_deliveries SET status = 'delivered', finished_at = $1 WHERE status = 'pending'`,
       [NOW]
     );
-    expect(await streams.sweepUserSubjects(NOW)).toBe(3);
+    expect(await actors.streams.sweepUserSubjects(NOW)).toBe(3);
     expect(await kept(stream.id)).toEqual(['client', 'unplaced', related].sort());
     expect(await kept(other.stream.id)).toEqual([]);
+  }
+
+  it('sweeps a user subject once its relation has ended and nothing about the user can still reach the stream (#540)', async () => {
+    await sweepScenario({ streams, store, queue });
   });
 
   it('reads a type rule: the client as the subject, no subject filter, or one client only (#540)', async () => {
@@ -970,6 +988,74 @@ describe('SSF streams integration (real Postgres)', () => {
       );
       await streams.removeSubject(stream.id, 'user');
       expect(await deliveryStreams.hasSubject(stream.id, { type: 'user', id: 'u1' })).toBe(false);
+    });
+  });
+
+  describe("under the roles' own database users (#498)", () => {
+    const USERS = {
+      web: 'qauth_ssf_web',
+      api: 'qauth_ssf_api',
+      admin: 'qauth_ssf_admin',
+      signer: 'qauth_ssf_signer',
+      delivery: 'qauth_ssf_outbox',
+    } as const;
+    const rolePools = new Map<string, Pool>();
+    let actors: SweepActors;
+
+    function rolePool(user: string): Pool {
+      const found = rolePools.get(user);
+      if (found === undefined) throw new Error(`no pool for ${user}`);
+      return found;
+    }
+
+    beforeAll(async () => {
+      if (!dockerUp || !ctx) return;
+      for (const user of Object.values(USERS)) {
+        await pool().query(`CREATE ROLE ${user} LOGIN PASSWORD '${user}'`);
+        const url = new URL(ctx.connectionString);
+        url.username = user;
+        url.password = user;
+        rolePools.set(user, new Pool({ connectionString: url.toString(), max: 2 }));
+      }
+      await applyDatabaseUserGrants({ connectionString: ctx.connectionString }, USERS);
+      const api = drizzle(rolePool(USERS.api)) as unknown as Database;
+      const delivery = drizzle(rolePool(USERS.delivery)) as unknown as Database;
+      actors = {
+        streams: createSsfStreamsRepository(api),
+        store: createEventsRepository(api),
+        queue: createEventDeliveriesRepository(delivery),
+      };
+    });
+
+    afterAll(async () => {
+      await Promise.all([...rolePools.values()].map((rolePool) => rolePool.end()));
+    });
+
+    it('sweeps as api, which reads the event store only through the function of 0055', async () => {
+      await sweepScenario(actors);
+    });
+
+    it('keeps the event store from api, and the function from every other role', async () => {
+      const api = rolePool(USERS.api);
+      for (const table of ['events', 'event_delivery_positions']) {
+        await expect(api.query(`SELECT 1 FROM ${table} LIMIT 1`), table).rejects.toMatchObject({
+          code: '42501',
+        });
+      }
+      const { rows } = await api.query<{ pending: boolean }>(
+        `SELECT ssf_subject_events_pending($1, $2) AS pending`,
+        [randomUUID(), randomUUID()]
+      );
+      expect(rows).toEqual([{ pending: false }]);
+      for (const user of [USERS.web, USERS.admin, USERS.signer, USERS.delivery]) {
+        await expect(
+          rolePool(user).query(`SELECT ssf_subject_events_pending($1, $2)`, [
+            randomUUID(),
+            randomUUID(),
+          ]),
+          user
+        ).rejects.toMatchObject({ code: '42501' });
+      }
     });
   });
 });
