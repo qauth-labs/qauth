@@ -296,7 +296,7 @@ describe('renderSummary', () => {
     );
     const row = summary.split('\n').find((line) => line.startsWith('| high '));
 
-    expect(row).toContain("| `pkg\\\\\\|name` | `1.0.0\\\\` |");
+    expect(row).toContain('| `pkg\\\\\\|name` | `1.0.0\\\\` |');
     expect(row).toContain('| 1, e.g. `.>a\\\\\\|b` |');
     expect(cellBoundaries(row)).toBe(7);
   });
