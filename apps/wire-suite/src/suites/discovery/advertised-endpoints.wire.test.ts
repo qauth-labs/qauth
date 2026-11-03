@@ -12,19 +12,26 @@ const { baseUrl } = wireConfig();
  * method the endpoint serves, and a request that carries no credential and no
  * valid parameters, so nothing is created. Every one must reach a route —
  * answer with the endpoint's own refusal or document — and none may answer as
- * a path that does not exist, or fail.
+ * a path that does not exist, or fail. The answer is JSON unless the probe
+ * names another type: a browser endpoint answers a page.
  */
-const PROBES: Record<string, { readonly method: 'GET' | 'POST'; readonly body?: string }> = {
+const PROBES: Record<
+  string,
+  { readonly method: 'GET' | 'POST'; readonly body?: string; readonly contentType?: RegExp }
+> = {
   authorization_endpoint: { method: 'GET' },
   token_endpoint: { method: 'POST', body: 'grant_type=' },
   introspection_endpoint: { method: 'POST', body: 'token=wire-suite-not-a-token' },
   revocation_endpoint: { method: 'POST', body: 'token=wire-suite-not-a-token' },
   userinfo_endpoint: { method: 'GET' },
+  // RP-Initiated Logout 1.0 §2 (#675): a browser without a session, and no
+  // parameter, gets the signed-out page; nothing ends.
+  end_session_endpoint: { method: 'GET', contentType: /^text\/html/i },
   jwks_uri: { method: 'GET' },
 };
 
 /** Registration takes JSON (RFC 7591 §3.1); an empty object registers nothing. */
-const REGISTRATION_PROBE = { method: 'POST', body: '{}' } as const;
+const REGISTRATION_PROBE: (typeof PROBES)[string] = { method: 'POST', body: '{}' };
 
 /** The URL members of a discovery document: every `*_endpoint` and `jwks_uri`. */
 function endpointMembers(document: Record<string, unknown>): [string, string][] {
@@ -36,10 +43,15 @@ function endpointMembers(document: Record<string, unknown>): [string, string][] 
     });
 }
 
+function probeOf(member: string): (typeof PROBES)[string] {
+  const known = member === 'registration_endpoint' ? REGISTRATION_PROBE : PROBES[member];
+  expect(known, `no probe for the advertised ${member}`).toBeDefined();
+  return known as (typeof PROBES)[string];
+}
+
 async function probe(member: string, url: string): Promise<Response> {
   const isRegistration = member === 'registration_endpoint';
-  const known = isRegistration ? REGISTRATION_PROBE : PROBES[member];
-  expect(known, `no probe for the advertised ${member}`).toBeDefined();
+  const known = probeOf(member);
   return fetch(url, {
     method: known.method,
     redirect: 'manual',
@@ -80,7 +92,9 @@ describe.each([
       const context = `${member} ${url} answered ${response.status}: ${text.slice(0, 300)}`;
       expect(response.status, context).not.toBe(404);
       expect(response.status, context).toBeLessThan(500);
-      expect(response.headers.get('content-type') ?? '', context).toMatch(/json/i);
+      expect(response.headers.get('content-type') ?? '', context).toMatch(
+        probeOf(member).contentType ?? /json/i
+      );
     }
   });
 });
