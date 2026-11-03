@@ -41,6 +41,7 @@ function prelude(user: string): string[] {
     `REVOKE ALL ON ALL SEQUENCES IN SCHEMA "public" FROM "${user}"`,
     `REVOKE ALL ON ALL ROUTINES IN SCHEMA "public" FROM "${user}"`,
     `REVOKE CREATE ON SCHEMA "public" FROM "${user}"`,
+    `GRANT USAGE ON SCHEMA "public" TO "${user}"`,
     `REVOKE ALL ON ALL TABLES IN SCHEMA "drizzle" FROM "${user}"`,
     `REVOKE ALL ON SCHEMA "drizzle" FROM "${user}"`,
     `GRANT USAGE ON SCHEMA "drizzle" TO "${user}"`,

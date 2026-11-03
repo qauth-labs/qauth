@@ -86,6 +86,9 @@ export function databaseUserGrantStatements(
       `REVOKE ALL ON ALL SEQUENCES IN SCHEMA "public" FROM ${grantee}`,
       `REVOKE ALL ON ALL ROUTINES IN SCHEMA "public" FROM ${grantee}`,
       `REVOKE CREATE ON SCHEMA "public" FROM ${grantee}`,
+      // USAGE is PUBLIC's by default since Postgres 15; granted here too, for
+      // a database whose owner took it from PUBLIC.
+      `GRANT USAGE ON SCHEMA "public" TO ${grantee}`,
       `REVOKE ALL ON ALL TABLES IN SCHEMA ${quoted(MIGRATIONS_SCHEMA)} FROM ${grantee}`,
       `REVOKE ALL ON SCHEMA ${quoted(MIGRATIONS_SCHEMA)} FROM ${grantee}`,
       `GRANT USAGE ON SCHEMA ${quoted(MIGRATIONS_SCHEMA)} TO ${grantee}`,
