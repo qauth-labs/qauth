@@ -6,7 +6,8 @@
  * admin registered, that is the domain the admin set on it:
  * `oauth_clients.verified_domain`. Setting it is an admin operation
  * (`clients.update`, `qauth:admin:security`, ADR-019 Decision 7); until the
- * admin API ships it is the operator's `db:seed-oauth-clients` manifest.
+ * admin API ships it is the operator's `db:seed-oauth-clients` manifest, or
+ * `db:set-client-verified-domain` for an existing client (#914).
  *
  * The stored form is the one the screens show: a DNS name of at least two
  * labels, lower case, in its ASCII (punycode) form, with no port, no trailing
