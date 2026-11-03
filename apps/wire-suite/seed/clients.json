@@ -9,6 +9,7 @@
       "response_types": ["code"],
       "scopes": ["openid", "profile", "email", "offline_access", "wire:read"],
       "redirect_uris": ["http://127.0.0.1:9/wire-suite/callback"],
+      "post_logout_redirect_uris": ["http://127.0.0.1:9/wire-suite/signed-out"],
       "require_pkce": true,
       "token_endpoint_auth_method": "client_secret_basic"
     }
