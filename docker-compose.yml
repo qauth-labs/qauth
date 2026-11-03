@@ -96,7 +96,8 @@ services:
       # file must be mounted here too, for example as a Compose secret: add
       #   secrets: [qauth_kek]
       # to this service, a top-level
-      #   secrets: { qauth_kek: { file: ./qauth-kek } }
+      #   secrets: { qauth_kek: { file: ${HOME}/qauth-secrets/qauth-kek } }
+      # (a file outside this checkout, as operate/keys makes it)
       # and KEK_PATH=/run/secrets/qauth_kek in .env.
       KEK_PROVIDER: ${KEK_PROVIDER:-}
       KEK: ${KEK:-}

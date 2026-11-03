@@ -64,17 +64,20 @@ lives. The default, `local`, reads `KEK` or `KEK_PATH`.
 **Make one.** The KEK is the standard base64 of exactly 32 random bytes:
 
 ```bash
-(umask 077 && openssl rand -base64 32 > qauth-kek)
+mkdir -p -m 700 ~/qauth-secrets
+(umask 077 && openssl rand -base64 32 > ~/qauth-secrets/qauth-kek)
 ```
 
 Set `KEK_PATH` to the file, or `KEK` to its content. `KEK_PATH` wins when both
 are set. The server warns when group or others can read or write the file.
 Hex and base64url values are refused.
 
-`umask 077` keeps the file its owner's alone from the start. Keep it out of
-any git checkout. In a container the server reads the file as its own user,
-uid `1001` in QAuth's image. A Compose secret from a file is the host file,
-with its owner and mode, so give it to that user: `sudo chown 1001 qauth-kek`.
+`umask 077` keeps the file its owner's alone from the start. Keep it in a
+directory of its own, outside any git checkout and apart from the database
+backups. In a container the server reads the file as its own user, uid `1001`
+in QAuth's image. A Compose secret from a file is the host file, with its
+owner and mode, so give it to that user:
+`sudo chown 1001 ~/qauth-secrets/qauth-kek`.
 
 **Where it goes.** Only a process whose `SERVICE_ROLES` holds `signer`, or is
 `all`, receives the KEK. Any other process refuses to boot when it finds one
