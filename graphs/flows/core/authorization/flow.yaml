@@ -300,7 +300,7 @@ states:
         say: >-
           an answer, a cancel or a read names an interaction of this request that already finished, such as a
           replayed or a second form post
-        source: apps/auth-server/src/app/helpers/interaction.ts:290
+        source: apps/auth-server/src/app/helpers/interaction.ts:291
 
   resolvingRealm:
     title: Find the realm of the host
@@ -472,7 +472,7 @@ states:
       - guard: overAgentCap and finishing
         target: invalid_scope.agent_scope_mode_exceeded_after_sign_in
         say: 'an agent scope is above the cap, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:268
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:269
       - guard: overAgentCap and operatorClient
         target: invalid_scope.agent_scope_mode_exceeded
         say: 'an agent scope is above the cap, for a client an operator provisioned'
@@ -493,7 +493,7 @@ states:
       - guard: audienceUnlisted and finishing
         target: invalid_target.unlisted_reserved_audience_after_sign_in
         say: 'a resource names a QAuth API audience the client does not list, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:268
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:269
       - guard: audienceUnlisted and operatorClient
         target: invalid_target.unlisted_reserved_audience
         say: 'a resource names a QAuth API audience the client does not list, for a client an operator provisioned'
@@ -562,7 +562,7 @@ states:
           target: code_issued.after_sign_in
           effect: [mintCode]
           say: 'the code is stored, for the request whose interaction finished'
-          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:266
+          source: apps/auth-server/src/app/helpers/authorization-interaction.ts:267
         - target: code_issued
           effect: [mintCode]
           say: 'the code is stored'
@@ -612,7 +612,7 @@ states:
       - guard: finishing
         target: continuingToSignIn
         say: 'the request is decided at the finish of an interaction: the next interaction continues it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:270
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:271
       - guard: pages
         target: parkingRequest
         say: 'INTERACTION_UI_ENABLED is off'
@@ -641,15 +641,15 @@ states:
       - guard: scopesUnshowable and finishing
         target: invalid_scope.consent_not_shown_after_sign_in
         say: 'the consent step cannot show the scopes, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:273
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
       - guard: resourcesUnshowable and finishing
         target: invalid_target.consent_not_shown_after_sign_in
         say: 'the consent step cannot show the resources, decided when the interaction finished'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:273
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
       - guard: scopesUnshowable and operatorClient
         target: invalid_scope.consent_not_shown
         say: 'the consent step cannot show the scopes, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:130
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:131
       - guard: scopesUnshowable
         target: invalid_scope.consent_not_shown_shown
         say: 'the consent step cannot show the scopes, for a client no operator provisioned'
@@ -657,7 +657,7 @@ states:
       - guard: resourcesUnshowable and operatorClient
         target: invalid_target.consent_not_shown
         say: 'the consent step cannot show the resources, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:132
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:133
       - guard: resourcesUnshowable
         target: invalid_target.consent_not_shown_shown
         say: 'the consent step cannot show the resources, for a client no operator provisioned'
@@ -665,7 +665,7 @@ states:
       - guard: finishing
         target: continuingToConsent
         say: 'the consent step can show the request, which an interaction just finished: the next one continues it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:279
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:280
       - target: startingConsent
         say: 'the consent step can show the request'
         source: apps/auth-server/src/app/routes/oauth/authorize.ts:181
@@ -723,7 +723,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:472
+        source: apps/auth-server/src/app/helpers/interaction.ts:473
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -745,7 +745,7 @@ states:
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large
         say: 'the request is over 16 KiB, or the record over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:472
+        source: apps/auth-server/src/app/helpers/interaction.ts:473
       FAIL.server:
         target: server_error.interaction_store
         say: 'the interaction store fails'
@@ -810,7 +810,7 @@ states:
       cancelAuthorization: the cancel has ended the interaction, its record deleted and its secret out of the flow
       cookie; the request it held is checked again as the endpoint checks it, as a finish is, so a client disabled, or
       a redirect URI removed, since the interaction started gets no redirect.
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:306
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:307
     always:
       - guard: "since == 'clientGone'"
         target: invalid_request.client_changed
@@ -822,7 +822,7 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-request.ts:228
       - target: access_denied.cancelled
         say: 'the request still passes'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:307
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:308
 
   # The answer that finishes an interaction (POST /interaction/v1-rc.0/{id}/answer).
 
@@ -834,7 +834,7 @@ states:
       interaction's secret leaves the flow cookie. Only now is the request decided again: the code is never minted
       while the interaction can still be answered, and a finish the sweep beat issues none. For a sign-in, the answer
       also carries the new session cookie, and the user's last sign-in and user.signed_in are recorded.
-    source: apps/auth-server/src/app/helpers/interaction.ts:762
+    source: apps/auth-server/src/app/helpers/interaction.ts:763
     invoke: { external: interactionStore }
     on:
       DONE:
@@ -844,11 +844,11 @@ states:
       FAIL.expired:
         target: interaction_expired.finished_late
         say: 'the expiry sweep claimed the interaction first'
-        source: apps/auth-server/src/app/helpers/interaction.ts:770
+        source: apps/auth-server/src/app/helpers/interaction.ts:771
       FAIL.sessionEnded:
         target: interaction_expired.session_ended
         say: 'the session the sign-in started has ended since, such as by a sign-out in another tab'
-        source: apps/auth-server/src/app/helpers/interaction.ts:766
+        source: apps/auth-server/src/app/helpers/interaction.ts:767
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails; the turn is given back'
@@ -860,7 +860,7 @@ states:
       checkAuthorizationRequest on the request the record holds: the client may have been deleted, disabled or
       changed since the interaction started. A refusal is thrown, so nothing is sent to a redirect URI the client no
       longer holds.
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:260
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:261
     always:
       - guard: "since == 'clientGone'"
         target: invalid_request.client_changed
@@ -872,14 +872,14 @@ states:
         source: apps/auth-server/src/app/helpers/authorization-request.ts:228
       - target: findingTransactionSession
         say: 'the request still passes'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:263
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:264
 
   findingTransactionSession:
     title: Find the session the interaction holds
     description: >-
       By its sid, not by the cookie, which the answer is only now setting: live, its user's, and its account still
       allowed to use it (liveBrowserSession, the cookie path's rules).
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:263
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:264
     always:
       - guard: "finishSession == 'unusable'"
         target: signInNeeded
@@ -888,25 +888,25 @@ states:
         source: apps/auth-server/src/app/helpers/browser-session.ts:178
       - target: checkingAgentCap
         say: 'the session is live: the request is decided again for it'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:264
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:265
 
   continuingToSignIn:
     title: Continue the request in a new sign-in interaction
     description: >-
       continueInteraction: as a new interaction, but within the finished one's absolute expiry (one request, one
       lifetime) and on the flow secrets the finish left.
-    source: apps/auth-server/src/app/helpers/interaction.ts:518
+    source: apps/auth-server/src/app/helpers/interaction.ts:519
     invoke: { external: interactionStore }
     on:
       DONE:
         target: atSignInCeremony
         effect: [openInteraction]
         say: 'the next interaction is stored'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:283
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:284
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:472
+        source: apps/auth-server/src/app/helpers/interaction.ts:473
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
@@ -915,18 +915,18 @@ states:
   continuingToConsent:
     title: Continue the request in a consent interaction
     description: As continuingToSignIn, at the consent step, for the session the finished interaction holds.
-    source: apps/auth-server/src/app/helpers/interaction.ts:518
+    source: apps/auth-server/src/app/helpers/interaction.ts:519
     invoke: { external: interactionStore }
     on:
       DONE:
         target: atConsentCeremony
         effect: [openInteraction]
         say: 'the next interaction is stored'
-        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:283
+        source: apps/auth-server/src/app/helpers/authorization-interaction.ts:284
       FAIL.tooLarge:
         target: invalid_request.authorization_too_large_after_sign_in
         say: 'the record of the next interaction is over 32 KiB'
-        source: apps/auth-server/src/app/helpers/interaction.ts:472
+        source: apps/auth-server/src/app/helpers/interaction.ts:473
       FAIL.server:
         target: server_error.interaction_store_after_sign_in
         say: 'the interaction store fails'
@@ -1062,7 +1062,7 @@ states:
       The record is gone once the interaction finished, so a replayed answer issues no second code, and an id is never
       answered again.
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:290
+    source: apps/auth-server/src/app/helpers/interaction.ts:291
     response:
       status: 410
       headers:
@@ -1079,7 +1079,7 @@ states:
     title: Refuse a finish the expiry sweep beat
     description: The sweep reports the interaction expired; nothing is issued.
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:770
+    source: apps/auth-server/src/app/helpers/interaction.ts:771
     response:
       status: 410
       headers:
@@ -1096,7 +1096,7 @@ states:
     title: Refuse a finish whose session ended since
     description: Nothing is written; the turn is given back (#963).
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:766
+    source: apps/auth-server/src/app/helpers/interaction.ts:767
     response:
       status: 410
       headers:
@@ -1112,7 +1112,7 @@ states:
     type: final
     title: Refuse a finish or a cancel whose client or redirect URI no longer passes
     redirect: never
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:260
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:261
     response:
       status: 400
       headers:
@@ -1128,7 +1128,7 @@ states:
     type: final
     title: Refuse a finish or a cancel whose client may no longer use the endpoint
     redirect: never
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:260
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:261
     response:
       status: 400
       headers:
@@ -1144,7 +1144,7 @@ states:
     type: final
     title: Refuse a next interaction too large to hold
     redirect: never
-    source: apps/auth-server/src/app/helpers/interaction.ts:472
+    source: apps/auth-server/src/app/helpers/interaction.ts:473
     response:
       status: 400
       headers:
@@ -1191,7 +1191,7 @@ states:
     title: Tell the client an agent scope is above its cap, once the person signed in
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:268
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:269
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1205,7 +1205,7 @@ states:
     title: Tell the client it named an audience it does not list, once the person signed in
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:268
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:269
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1219,7 +1219,7 @@ states:
     title: Tell the client the consent step cannot show its scopes, once the person signed in
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:273
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1233,7 +1233,7 @@ states:
     title: Tell the client the consent step cannot show its resources, once the person signed in
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:273
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:274
     response:
       status: '303 for a form post; 200 for a JSON answer'
       headers:
@@ -1425,7 +1425,7 @@ states:
     title: Tell the client the consent step cannot show its scopes
     redirect: error
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:130
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:131
     response:
       status: 302
       headers:
@@ -1446,7 +1446,7 @@ states:
     title: Tell the client the consent step cannot show its resources
     redirect: error
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:132
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:133
     response:
       status: 302
       headers:
@@ -1570,7 +1570,7 @@ states:
       and a record of 32 KiB.
     redirect: never
     code: invalid_request
-    source: apps/auth-server/src/app/helpers/interaction.ts:472
+    source: apps/auth-server/src/app/helpers/interaction.ts:473
     response:
       status: 400
       headers:
@@ -1665,7 +1665,7 @@ assertions:
     say: >-
       A code is minted only once the interaction has ended: never while it can still be answered, so a finish that the
       expiry sweep beat, or a replayed answer, issues none
-    source: apps/auth-server/src/app/helpers/interaction.ts:767
+    source: apps/auth-server/src/app/helpers/interaction.ts:768
   - id: no-code-without-consent
     never: 'codeMinted and consentMissing'
     say: 'A code is minted only under a stored or administrative consent that covers the request'
@@ -1679,7 +1679,7 @@ assertions:
     say: >-
       No code is minted above the agent cap, for an audience the client does not list, or for a client that no longer
       passes the checks when its interaction finishes
-    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:260
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:261
   - id: shown-not-redirected-before-any-page
     never: >-
       provisioning == 'selfService' and state in ['invalid_request.malformed_dpop_jkt', 'login_required.no_session',
