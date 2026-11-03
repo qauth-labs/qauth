@@ -23,6 +23,7 @@ vi.mock('../../config/env', () => ({
     AUTHORIZE_RATE_LIMIT: 60,
     AUTHORIZE_RATE_LIMIT_LENIENT: 600,
     AUTHORIZE_RATE_WINDOW: 60,
+    REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
 
@@ -118,15 +119,20 @@ import {
   describeErrors,
 } from '@qauth-labs/shared-interaction-contract/src/testing/schema-validator';
 
-import { createBrowserSessionFixture } from '../../testing/browser-sessions';
+import {
+  type BrowserSessionFixture,
+  createBrowserSessionFixture,
+} from '../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
 import { REDIS_KEYS } from '../constants';
 import { CONSENT_STEP } from '../helpers/authorization-interaction';
+import { END_SESSION_STATUS_PATH, LOGOUT_CONFIRM_STEP } from '../helpers/end-session';
 import {
   IDENTIFIER_STEP,
   type InteractionRequest,
   type InteractionStep,
+  type LogoutRequest,
 } from '../helpers/interaction-record';
 import { interactionIdHash } from '../helpers/interaction-record';
 import { answerRouteNotFound } from '../helpers/request-bounds';
@@ -201,6 +207,13 @@ const COMPLETE_ROUND = {
 
 let app: FastifyInstance;
 let updateLastLogin: ReturnType<typeof vi.fn>;
+/** The browser sessions of the app under test (#675's logout cases sign in with them). */
+let sessions: BrowserSessionFixture;
+/** The clients the logout cases resolve, by `client_id`: a test may change them. */
+const logoutClients = new Map<string, Record<string, unknown>>();
+
+/** The browser session a logout interaction ends. */
+const LOGOUT_SID = '44444444-4444-4444-8444-444444444444';
 
 /**
  * The app under test. `rateLimit` registers `@fastify/rate-limit` before the
@@ -213,6 +226,11 @@ async function buildApp(
     readonly step?: InteractionStep;
     /** The client display data the interaction starts with (the consent step's, #629). */
     readonly client?: ClientDisplay;
+    /**
+     * Start a logout's confirm step for this request instead (#675), for the
+     * session {@link LOGOUT_SID} of {@link USER_ID}.
+     */
+    readonly logout?: LogoutRequest;
   } = {}
 ): Promise<FastifyInstance> {
   const instance = Fastify({ logger: false });
@@ -222,7 +240,7 @@ async function buildApp(
   await instance.register(errorHandler);
   instance.setNotFoundHandler(answerRouteNotFound);
   supplyRequestRealm(instance, REALM);
-  const sessions = createBrowserSessionFixture();
+  sessions = createBrowserSessionFixture();
   instance.decorate(
     'redis',
     createMemoryInteractionRedis(sessions.redis) as unknown as FastifyInstance['redis']
@@ -231,7 +249,15 @@ async function buildApp(
   instance.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
   updateLastLogin = vi.fn(async () => undefined);
   instance.decorate('repositories', {
-    users: { updateLastLogin },
+    users: {
+      updateLastLogin,
+      findById: vi.fn(async (realmId: string, id: string) => ({ id, realmId, enabled: true })),
+    },
+    oauthClients: {
+      findByClientId: vi.fn(async (_realmId: string, clientId: string) =>
+        logoutClients.get(clientId)
+      ),
+    },
     userCredentials: {},
     adminGrants: {},
   } as unknown as FastifyInstance['repositories']);
@@ -242,7 +268,15 @@ async function buildApp(
     // A route of another surface, which CORS answers: the check's control.
     scope.get('/api-route', { config: { surface: 'api' } }, async () => ({ ok: true }));
     scope.post('/start', { config: { surface: 'browser' } }, async (request, reply) => {
-      const { startInteraction } = await import('../helpers/interaction');
+      const { startInteraction, startLogoutInteraction } = await import('../helpers/interaction');
+      if (options.logout !== undefined) {
+        return startLogoutInteraction(request, reply, {
+          request: options.logout,
+          step: { name: LOGOUT_CONFIRM_STEP, params: {}, alternatives: [] },
+          personal: { accounts: [{ identifier: 'alice@example.com', current: true }] },
+          carriedSession: { userId: USER_ID, sid: LOGOUT_SID },
+        });
+      }
       return startInteraction(request, reply, {
         request: {
           ...AUTHORIZE_REQUEST,
@@ -862,6 +896,214 @@ describe('the consent answer (#629)', () => {
     }
     expect(finishConsent).not.toHaveBeenCalled();
     expect((await browser.read(id)).csrf).toBe(csrf);
+  });
+});
+
+describe('the logout confirm answer (RP-Initiated Logout 1.0 §2, #675)', () => {
+  const RETURN_URI = 'https://notes.example.com/signed-out';
+  const STATE = 'af0ifjsldkj';
+  const STATUS_PAGE = `${ORIGIN}${END_SESSION_STATUS_PATH}`;
+  const LOGOUT_REQUEST: LogoutRequest = {
+    client_id: 'notes-app',
+    post_logout_redirect_uri: RETURN_URI,
+    state: STATE,
+  };
+  /** The client the logout request named, as the resolver returns it. */
+  const NOTES = {
+    id: 'row-notes',
+    clientId: 'notes-app',
+    name: 'Notes',
+    enabled: true,
+    suspended: false,
+    postLogoutRedirectUris: [RETURN_URI],
+    environment: 'production',
+    metadata: null,
+    dynamicRegisteredAt: null,
+  };
+
+  beforeEach(async () => {
+    logoutClients.clear();
+    logoutClients.set('notes-app', { ...NOTES });
+    await app.close();
+    app = await buildApp({ logout: LOGOUT_REQUEST });
+  });
+
+  /** A browser signed in as {@link USER_ID} in session {@link LOGOUT_SID}, at the confirm step. */
+  async function atConfirm(): Promise<{ browser: Browser; id: string; csrf: string }> {
+    const browser = new Browser();
+    const { cookie } = await sessions.signIn({
+      sid: LOGOUT_SID,
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
+    const eq = cookie.indexOf('=');
+    browser.cookies.set(cookie.slice(0, eq), cookie.slice(eq + 1));
+    const id = await browser.start();
+    const { csrf, step } = await browser.read(id);
+    expect(step).toBe(LOGOUT_CONFIRM_STEP);
+    return { browser, id, csrf };
+  }
+
+  function formAnswer(csrf: string, decision: string): string {
+    return `type=${encodeURIComponent(LOGOUT_CONFIRM_STEP)}&csrf=${csrf}&decision=${decision}`;
+  }
+
+  /** The data of the one event of `type`. */
+  function eventData(type: string): unknown {
+    const calls = vi.mocked(emitUserEvent).mock.calls.filter(([, t]) => t === type);
+    expect(calls, type).toHaveLength(1);
+    return calls[0]?.[2];
+  }
+
+  function expectEnded(browser: Browser): void {
+    expect(sessions.service.revoke).toHaveBeenCalledOnce();
+    expect(sessions.service.revoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        realmId: REALM.id,
+        sid: LOGOUT_SID,
+        userId: USER_ID,
+        reason: 'sign_out',
+        actor: { type: 'user', id: USER_ID },
+      })
+    );
+    expect(sessions.service.revokeAllForUser).not.toHaveBeenCalled();
+    expect(sessions.service.sessions.has(LOGOUT_SID)).toBe(false);
+    expect(browser.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(eventData('urn:qauth:event:user.signed_out:v1-rc.0')).toEqual({ sid: LOGOUT_SID });
+  }
+
+  function expectNothingEnded(browser: Browser, reason: string): void {
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.service.sessions.has(LOGOUT_SID)).toBe(true);
+    expect(browser.cookies.has(SESSION_COOKIE_NAME)).toBe(true);
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_out:v1-rc.0');
+    expect(eventData('urn:qauth:event:user.sign_out_failed:v1-rc.0')).toEqual({ reason });
+  }
+
+  it('a confirmed logout ends the session the step was started for, clears its cookie and goes back with state (RP-Initiated Logout 1.0 §3)', async () => {
+    const { browser, id, csrf } = await atConfirm();
+    const response = await browser.send(id, 'answer', formAnswer(csrf, 'logout'));
+
+    expect(response.statusCode, response.body).toBe(303);
+    expect(response.headers.location).toBe(`${RETURN_URI}?state=${STATE}`);
+    expect(engine.advance).not.toHaveBeenCalled();
+    expectEnded(browser);
+    expect(browser.cookies.has(FLOW_COOKIE)).toBe(false);
+  });
+
+  it('a confirmed logout_all ends the same session, answered as JSON', async () => {
+    const { browser, id, csrf } = await atConfirm();
+    const response = await browser.send(id, 'answer', {
+      type: LOGOUT_CONFIRM_STEP,
+      csrf,
+      decision: 'logout_all',
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({
+      result: 'redirect',
+      location: `${RETURN_URI}?state=${STATE}`,
+    });
+    expectEnded(browser);
+  });
+
+  it('a confirmed logout without a return URI goes to the status page', async () => {
+    await app.close();
+    app = await buildApp({ logout: {} });
+    const { browser, id, csrf } = await atConfirm();
+    const response = await browser.send(id, 'answer', formAnswer(csrf, 'logout'));
+
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(STATUS_PAGE);
+    expectEnded(browser);
+  });
+
+  it('stay ends nothing and goes back to the app: declined', async () => {
+    const { browser, id, csrf } = await atConfirm();
+    const response = await browser.send(id, 'answer', formAnswer(csrf, 'stay'));
+
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(`${RETURN_URI}?state=${STATE}`);
+    expectNothingEnded(browser, 'declined');
+  });
+
+  it('a cancel ends nothing and goes back to the app: declined', async () => {
+    const { browser, id, csrf } = await atConfirm();
+    const response = await browser.send(id, 'cancel', `csrf=${csrf}`);
+
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(`${RETURN_URI}?state=${STATE}`);
+    expectNothingEnded(browser, 'declined');
+  });
+
+  it('a session that ended meanwhile is no_session, and the browser still goes back', async () => {
+    const { browser, id, csrf } = await atConfirm();
+    sessions.service.sessions.delete(LOGOUT_SID);
+    const response = await browser.send(id, 'answer', formAnswer(csrf, 'logout'));
+
+    expect(response.statusCode).toBe(303);
+    expect(response.headers.location).toBe(`${RETURN_URI}?state=${STATE}`);
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_out:v1-rc.0');
+    expect(eventData('urn:qauth:event:user.sign_out_failed:v1-rc.0')).toEqual({
+      reason: 'no_session',
+    });
+  });
+
+  const CLIENT_CHANGES: [string, () => void][] = [
+    ['deleted', () => logoutClients.delete('notes-app')],
+    ['disabled', () => logoutClients.set('notes-app', { ...NOTES, enabled: false })],
+    ['suspended', () => logoutClients.set('notes-app', { ...NOTES, suspended: true })],
+    [
+      'no longer registering the URI',
+      () => logoutClients.set('notes-app', { ...NOTES, postLogoutRedirectUris: [] }),
+    ],
+  ];
+
+  it.each(CLIENT_CHANGES)(
+    'checks the return URI again: a client %s since sends a confirmed logout to the status page, never the app (RP-Initiated Logout 1.0 §3)',
+    async (_label, change) => {
+      const { browser, id, csrf } = await atConfirm();
+      change();
+      const response = await browser.send(id, 'answer', formAnswer(csrf, 'logout'));
+      expect(response.statusCode).toBe(303);
+      expect(response.headers.location).toBe(STATUS_PAGE);
+      expectEnded(browser);
+    }
+  );
+
+  it.each(CLIENT_CHANGES)(
+    'checks the return URI again: a client %s since sends a cancel to the status page',
+    async (_label, change) => {
+      const { browser, id, csrf } = await atConfirm();
+      change();
+      const response = await browser.send(id, 'cancel', `csrf=${csrf}`);
+      expect(response.statusCode).toBe(303);
+      expect(response.headers.location).toBe(STATUS_PAGE);
+      expectNothingEnded(browser, 'declined');
+    }
+  );
+
+  it('refuses a malformed answer with 400 invalid_answer, and the step and its CSRF value stay', async () => {
+    const { browser, id, csrf } = await atConfirm();
+    for (const body of [
+      { type: LOGOUT_CONFIRM_STEP, csrf, decision: 'maybe' },
+      { type: LOGOUT_CONFIRM_STEP, csrf },
+      { type: LOGOUT_CONFIRM_STEP, csrf, decision: 'logout', redirect_uri: 'https://evil.example' },
+      { type: CONSENT_STEP, csrf, decision: 'allow' },
+    ]) {
+      const response = await browser.send(id, 'answer', body);
+      expect(response.statusCode, JSON.stringify(body)).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'invalid_answer' });
+    }
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    const again = await browser.read(id);
+    expect(again.step).toBe(LOGOUT_CONFIRM_STEP);
+    expect(again.csrf).toBe(csrf);
+    // The turn stayed: the answer still ends the session.
+    const response = await browser.send(id, 'answer', formAnswer(csrf, 'logout'));
+    expect(response.statusCode).toBe(303);
+    expectEnded(browser);
   });
 });
 

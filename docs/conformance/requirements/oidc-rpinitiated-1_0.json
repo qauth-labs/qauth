@@ -1,0 +1,172 @@
+{
+  "specId": "oidc-rpinitiated-1_0",
+  "note": "Hand-authored. `quote` is verbatim from https://openid.net/specs/openid-connect-rpinitiated-1_0.html with line wrapping removed and nothing else changed (reference titles shown on hover are left out, as in the other OpenID specs' rows).",
+  "requirements": [
+    {
+      "id": "rpinitiated-2-get-and-post",
+      "section": "2",
+      "level": "MUST",
+      "quote": "OpenID Providers MUST support the use of the HTTP GET and POST methods defined in RFC 7231 [RFC7231] at the Logout Endpoint.",
+      "applies": "apps/auth-server/src/app/routes/oauth/end-session.ts — GET and POST /oauth/end-session share one handler: the query of a GET, the form body of a POST.",
+      "status": "covered",
+      "evidenceMatch": "takes the parameters in the query of a GET and the form body of a POST"
+    },
+    {
+      "id": "rpinitiated-2-client-id-matches-hint",
+      "section": "2",
+      "level": "MUST",
+      "quote": "When both client_id and id_token_hint are present, the OP MUST verify that the Client Identifier matches the one used when issuing the ID Token.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (checkEndSessionRequest) — a client_id that is not among the verified hint's aud is refused with an information page (client_id_mismatch); nothing ends.",
+      "status": "covered",
+      "evidenceMatch": "refuses a client_id that is not the hint.s aud"
+    },
+    {
+      "id": "rpinitiated-2-return-uri-registered",
+      "section": "2",
+      "level": "MUST",
+      "quote": "The value MUST have been previously registered with the OP, either using the post_logout_redirect_uris Registration parameter or via another mechanism.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (isRegisteredReturnUri) — post_logout_redirect_uri must be one of the named client's post_logout_redirect_uris; otherwise the request is refused (post_logout_redirect_uri_not_registered).",
+      "status": "covered",
+      "evidenceMatch": "refuses an unregistered post_logout_redirect_uri"
+    },
+    {
+      "id": "rpinitiated-2-state-returned",
+      "section": "2",
+      "level": "OPTIONAL",
+      "quote": "state: OPTIONAL. Opaque value used by the RP to maintain state between the logout request and the callback to the endpoint specified by the post_logout_redirect_uri parameter. If included in the logout request, the OP passes this value back to the RP using the state parameter when redirecting the User Agent back to the RP.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (returnLocation) — state is added to the registered return URI's query, on the immediate redirect and after the confirm step.",
+      "status": "covered",
+      "evidenceMatch": "goes back with state"
+    },
+    {
+      "id": "rpinitiated-2-ui-locales-no-error",
+      "section": "2",
+      "level": "SHOULD NOT",
+      "quote": "An error SHOULD NOT result if some or all of the requested locales are not supported by the OpenID Provider.",
+      "applies": "apps/auth-server/src/app/schemas/end-session.ts — ui_locales is accepted, bounded and not read.",
+      "status": "covered",
+      "evidenceMatch": "accepts ui_locales"
+    },
+    {
+      "id": "rpinitiated-2-hint-issuer-validated",
+      "section": "2",
+      "level": "MUST",
+      "quote": "When an id_token_hint parameter is present, the OP MUST validate that it was the issuer of the ID Token.",
+      "applies": "libs/server/jwt/src/lib/id-token-hint.ts and apps/auth-server/src/app/helpers/end-session.ts (verifiedHint) — the hint verifies with the realm's token keys, its iss must be the realm's issuer and its typ an ID token's; one that does not verify counts as no hint.",
+      "status": "covered",
+      "evidenceMatch": "verified with the realm keys and issuer|another realm's ID token, and a wrong issuer"
+    },
+    {
+      "id": "rpinitiated-2-expired-hint-accepted",
+      "section": "2",
+      "level": "SHOULD",
+      "quote": "The OP SHOULD accept ID Tokens when the RP identified by the ID Token's aud claim and/or sid claim has a current session or had a recent session at the OP, even when the exp time has passed.",
+      "applies": "libs/server/jwt/src/lib/id-token-hint.ts — an expired hint is accepted with expired: true, whatever its age; the signature, issuer and typ checks stand.",
+      "status": "covered",
+      "evidenceMatch": "accepts an expired"
+    },
+    {
+      "id": "rpinitiated-2-stale-sid-suspect",
+      "section": "2",
+      "level": "SHOULD",
+      "quote": "If the ID Token's sid claim does not correspond to the RP's current session or a recent session at the OP, the OP SHOULD treat the logout request as suspect, and MAY decline to act upon it.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (answerEndSession) — the hint's sid is not compared with the browser session.",
+      "status": "waived",
+      "reason": "A valid hint ends the browser's session at once when its sub is the session's account, whatever its sid. The hint is the app's own ID token for that account, and ending a session is the safe direction: at worst the person signs in again. A sid of another session does not make the request suspect today.",
+      "decision": "graphs/flows/core/logout/flow.yaml",
+      "revisit": "never"
+    },
+    {
+      "id": "rpinitiated-2-ask-whether-to-log-out",
+      "section": "2",
+      "level": "SHOULD",
+      "quote": "At the Logout Endpoint, the OP SHOULD ask the End-User whether to log out of the OP as well.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (answerEndSession) — asked only where the MUST below applies.",
+      "status": "waived",
+      "reason": "When a valid hint names the account of the browser's session, the session ends without a question: the app that holds the person's ID token asked for it, and a second question at QAuth after the app's own sign-out is friction with no gain. Every other signed-in request is asked.",
+      "decision": "graphs/flows/core/logout/flow.yaml",
+      "revisit": "never"
+    },
+    {
+      "id": "rpinitiated-2-must-ask-without-matching-hint",
+      "section": "2",
+      "level": "MUST",
+      "quote": "Furthermore, the OP MUST ask the End-User this question if an id_token_hint was not provided or if the supplied ID Token does not belong to the current OP session with the RP and/or currently logged in End-User.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (answerEndSession) — with no valid hint naming the session's account, a signed-in browser gets the logout_confirm step and nothing ends until the person answers.",
+      "status": "covered",
+      "evidenceMatch": "asks the person to confirm"
+    },
+    {
+      "id": "rpinitiated-2-yes-logs-out",
+      "section": "2",
+      "level": "MUST",
+      "quote": "If the End-User says \"yes\", then the OP MUST log out the End-User.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (finishLogout) — the logout and logout_all answers of the Interaction API end the session the step was started for.",
+      "status": "covered",
+      "evidenceMatch": "a confirmed logout"
+    },
+    {
+      "id": "rpinitiated-2_1-end-session-endpoint",
+      "section": "2.1",
+      "level": "MUST",
+      "quote": "This OpenID Provider Metadata parameter MUST be included in the Server's discovery responses when RP-Initiated Logout and Discovery are supported:",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts (buildOpenIdConfiguration) — end_session_endpoint is <issuer>/oauth/end-session in /.well-known/openid-configuration.",
+      "status": "covered",
+      "evidenceMatch": "end_session_endpoint"
+    },
+    {
+      "id": "rpinitiated-2_1-end-session-endpoint-https",
+      "section": "2.1",
+      "level": "MUST",
+      "quote": "This URL MUST use the https scheme and MAY contain port, path, and query parameter components.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — the endpoint is on the realm's issuer, an https URL in production.",
+      "status": "covered",
+      "evidenceMatch": "end_session_endpoint on the https issuer"
+    },
+    {
+      "id": "rpinitiated-3-no-redirect-without-legitimacy",
+      "section": "3",
+      "level": "MUST NOT",
+      "quote": "An id_token_hint carring an ID Token for the RP is also RECOMMENDED when requesting post-logout redirection; if it is not supplied with post_logout_redirect_uri, the OP MUST NOT perform post-logout redirection unless the OP has other means of confirming the legitimacy of the post-logout redirection target.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (checkEndSessionRequest) — without a valid hint the request must name its client with client_id, and the URI must be one that client registered; a return URI with no client is refused (post_logout_redirect_uri_without_client).",
+      "status": "covered",
+      "evidenceMatch": "refuses a return URI without any client"
+    },
+    {
+      "id": "rpinitiated-3-exact-match",
+      "section": "3",
+      "level": "MUST NOT",
+      "quote": "The OP also MUST NOT perform post-logout redirection if the post_logout_redirect_uri value supplied does not exactly match one of the previously registered post_logout_redirect_uris values.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (isRegisteredReturnUri, logoutReturnLocation) — an exact string match, checked on the request and again when the confirm step is answered.",
+      "status": "covered",
+      "evidenceMatch": "refuses an unregistered post_logout_redirect_uri|checks the return URI again"
+    },
+    {
+      "id": "rpinitiated-3_1-post-logout-redirect-uris",
+      "section": "3.1",
+      "level": "OPTIONAL",
+      "quote": "post_logout_redirect_uris: OPTIONAL. Array of URLs supplied by the RP to which it MAY request that the End-User's User Agent be redirected using the post_logout_redirect_uri parameter after a logout has been performed.",
+      "applies": "apps/auth-server/src/app/routes/oauth/register.ts, helpers/dynamic-client-registration.ts, helpers/cimd.ts — registered through dynamic registration and client metadata documents under the redirect URI rule; a client with none never gets a redirect.",
+      "status": "covered",
+      "evidenceMatch": "post_logout_redirect_uris"
+    },
+    {
+      "id": "rpinitiated-4-failed-validation-not-used",
+      "section": "4",
+      "level": "MUST",
+      "quote": "If any of the validation procedures defined in this specification fail, any operations requiring the information that failed to correctly validate MUST be aborted and the information that failed to validate MUST NOT be used.",
+      "applies": "apps/auth-server/src/app/helpers/end-session.ts (verifiedHint) — a hint that does not verify names no client and no account.",
+      "status": "covered",
+      "evidenceMatch": "counts a hint that does not verify as absent"
+    },
+    {
+      "id": "rpinitiated-4-no-redirect-on-error",
+      "section": "4",
+      "level": "MUST NOT",
+      "quote": "As described in Section 3, when the OP detects errors in the RP-Initiated Logout request, the OP MUST not perform post-logout redirection to an RP.",
+      "applies": "apps/auth-server/src/app/helpers/end-session-pages.ts — a refused request gets a 400 information page and no Location; a malformed one a 400 problem document.",
+      "status": "covered",
+      "evidenceMatch": "with no Location"
+    }
+  ]
+}

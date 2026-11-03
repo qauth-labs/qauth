@@ -123,6 +123,19 @@
       "increment": 5,
       "sealed": false,
       "scopeNote": "Rows cover the SET claims QAuth's SSF transmitter sends (§2.2) and their explicit typing (§2.3), registered with the security-event mapping of #540. Other sections are unwritten, so the spec stays unsealed."
+    },
+    {
+      "id": "oidc-rpinitiated-1_0",
+      "name": "OpenID Connect RP-Initiated Logout 1.0",
+      "url": "https://openid.net/specs/openid-connect-rpinitiated-1_0.html",
+      "aliases": [
+        "OpenID Connect RP-Initiated Logout 1.0",
+        "OIDC RP-Initiated Logout 1.0",
+        "RP-Initiated Logout 1.0"
+      ],
+      "increment": 6,
+      "sealed": true,
+      "scopeNote": "The end-session endpoint of #675: the request parameters and their checks (§2), end_session_endpoint in discovery (§2.1), the redirect back to a registered URI (§3), the post_logout_redirect_uris client metadata (§3.1) and the error handling (§4). Rows cover the OP's obligations in those sections; the RP's own (the parameters it is RECOMMENDED to send, the URI schemes it SHOULD register) have none. Sections 5 and later are considerations no test cites, so the spec is sealed."
     }
   ]
 }
