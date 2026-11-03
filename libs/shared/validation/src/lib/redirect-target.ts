@@ -90,3 +90,38 @@ export function redirectTarget(redirectUri: string): RedirectTarget | undefined 
   if (scheme.length > DISPLAY_SCHEME_MAX_LENGTH || !DISPLAY_SCHEME.test(scheme)) return undefined;
   return { target: 'app', scheme };
 }
+
+/**
+ * Why {@link redirectTarget} cannot describe a redirect URI (#914):
+ *
+ * - `unparseable` — the URI does not parse as a URL;
+ * - `ip_literal` — a web URI whose host is an IPv6 address that is not
+ *   loopback;
+ * - `host` — a web URI whose host is not a DNS name of valid labels (an
+ *   underscore, an empty label, a label over 63 characters or with a hyphen
+ *   at either end) or is longer than {@link DISPLAY_HOST_MAX_LENGTH};
+ * - `scheme` — a private-use scheme longer than
+ *   {@link DISPLAY_SCHEME_MAX_LENGTH} characters.
+ */
+export type RedirectTargetRefusal = 'unparseable' | 'ip_literal' | 'host' | 'scheme';
+
+/**
+ * Why a redirect URI cannot be described as a {@link RedirectTarget}, for an
+ * operator who must replace it (#914). It follows {@link redirectTarget}, so
+ * the two never disagree on which URIs fail.
+ *
+ * @returns `undefined` when {@link redirectTarget} describes the URI.
+ */
+export function redirectTargetRefusal(redirectUri: string): RedirectTargetRefusal | undefined {
+  if (redirectTarget(redirectUri) !== undefined) return undefined;
+  let url: URL;
+  try {
+    url = new URL(redirectUri);
+  } catch {
+    return 'unparseable';
+  }
+  if (url.protocol === 'https:' || url.protocol === 'http:') {
+    return url.hostname.startsWith('[') ? 'ip_literal' : 'host';
+  }
+  return 'scheme';
+}
