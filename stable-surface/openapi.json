@@ -8244,7 +8244,7 @@
         "tags": [
           "UI"
         ],
-        "description": "Resume a pending authorization request after login. The handle is single-use and resolves ONLY to an authorize URL this server minted (#316), or to the authorization error an interaction of a client no operator provisioned finished with, shown on the issuer rather than redirected (#628).",
+        "description": "Resume a pending authorization request after login. The handle is single-use and resolves ONLY to an authorize URL this server minted. Issue #316.",
         "parameters": [
           {
             "schema": {

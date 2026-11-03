@@ -1,5 +1,6 @@
 import type { FastifyReply } from 'fastify';
 
+import { redirectHost } from './consent';
 import { html, render, safe, safeUrl } from './html';
 import { type AuthorizationResponseParams, buildRedirectUrl } from './oauth-redirect';
 
@@ -35,24 +36,6 @@ export type AuthorizationErrorParams = Extract<AuthorizationResponseParams, { er
  */
 export function isOperatorProvisionedClient(client: ClientOriginLike): boolean {
   return client.provisionedByOperator === true;
-}
-
-/**
- * The host (with its port) of a redirect URI, for the issuer page an
- * authorization error is shown on instead of a redirect, so the user sees
- * where the link goes. Returns the raw value if it can't be parsed (so the
- * page still shows *something* rather than hiding it). The consent screen does
- * not use it: it shows where the code goes from `clientDisplay`
- * (`helpers/client-display.ts`, #593), which also tells a loopback redirect
- * apart as "this device". It lives here, not in `helpers/consent.ts`, so the
- * page `/ui/resume` shows (#628) reaches none of the consent screen's imports.
- */
-function redirectHost(redirectUri: string): string {
-  try {
-    return new URL(redirectUri).host || redirectUri;
-  } catch {
-    return redirectUri;
-  }
 }
 
 function untrustedRedirectPage(location: string, params: AuthorizationErrorParams): string {
@@ -114,26 +97,12 @@ export function sendAuthorizationError(
   redirectUri: string,
   params: AuthorizationErrorParams
 ): FastifyReply {
+  const location = buildRedirectUrl(redirectUri, params);
   if (isOperatorProvisionedClient(client)) {
-    return reply.redirect(buildRedirectUrl(redirectUri, params), 302);
+    return reply.redirect(location, 302);
   }
-  return sendAuthorizationErrorPage(reply, redirectUri, params);
-}
-
-/**
- * Show an authorization error on the issuer rather than redirect it: the page
- * {@link sendAuthorizationError} answers for a client no operator
- * provisioned, with the destination host and a link carrying the full error
- * response. `/ui/resume` shows it too, for the error an interaction of such a
- * client finished with (#628).
- */
-export function sendAuthorizationErrorPage(
-  reply: FastifyReply,
-  redirectUri: string,
-  params: AuthorizationErrorParams
-): FastifyReply {
   reply.code(400);
   reply.header('Content-Type', 'text/html; charset=utf-8');
   reply.header('Cache-Control', 'no-store');
-  return reply.send(untrustedRedirectPage(buildRedirectUrl(redirectUri, params), params));
+  return reply.send(untrustedRedirectPage(location, params));
 }

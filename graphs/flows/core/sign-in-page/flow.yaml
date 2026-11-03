@@ -260,7 +260,7 @@ states:
       RESUME:
         target: resumeResolvingRealm
         say: 'GET /ui/resume/<handle> arrives for a handle this walk did not sign in for'
-        source: apps/auth-server/src/app/routes/ui/resume.ts:106
+        source: apps/auth-server/src/app/routes/ui/resume.ts:100
 
   # GET /ui/login
 
@@ -654,7 +654,7 @@ states:
       RESUME:
         target: resumeResolvingRealm
         say: 'the browser follows the redirect to GET /ui/resume/<handle>'
-        source: apps/auth-server/src/app/routes/ui/resume.ts:106
+        source: apps/auth-server/src/app/routes/ui/resume.ts:100
 
   # GET /ui/resume/{handle}
 
@@ -695,24 +695,23 @@ states:
       and deleted at once, before its value is looked at, so a handle resumes once; the value is then checked again to
       be this server's own /oauth/authorize URL. Every miss that reaches the handler, a store failure included, is the
       same 400 page: a distinct answer would tell which handles ever existed, and there is no safe place to redirect
-      to. A handle may instead hold the error an interaction of a client no operator provisioned finished with (#628),
-      which the GET shows once on the issuer; core.authorization draws it, as its `_after_sign_in_shown` exits.
-    source: apps/auth-server/src/app/routes/ui/resume.ts:121
+      to.
+    source: apps/auth-server/src/app/routes/ui/resume.ts:115
     invoke: { external: pendingAuthorizationStore }
     on:
       DONE:
         - guard: handleSpent
           target: bad_request.handle_spent
           say: 'the handle names no live authorization request'
-          source: apps/auth-server/src/app/routes/ui/resume.ts:124
+          source: apps/auth-server/src/app/routes/ui/resume.ts:118
         - target: authorization_resumed
           effect: [burnHandle]
           say: 'the handle is deleted, and its authorize URL read back'
-          source: apps/auth-server/src/app/helpers/pending-authorization.ts:306
+          source: apps/auth-server/src/app/helpers/pending-authorization.ts:254
       FAIL.store:
         target: bad_request.handle_spent
         say: 'the store cannot be read or the handle not deleted, which is answered as a spent handle, never a 500'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:307
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:255
 
   # Exits
 
@@ -722,7 +721,7 @@ states:
     description: >-
       /oauth/authorize then checks the client, the redirect URI, the scopes, PKCE and the step-up from scratch, as on
       a first visit, now with the new session: resuming grants nothing a fresh request would not.
-    source: apps/auth-server/src/app/routes/ui/resume.ts:142
+    source: apps/auth-server/src/app/routes/ui/resume.ts:129
     response:
       status: 302
       headers:
@@ -889,7 +888,7 @@ states:
       Unknown, malformed (of 1 to 100 characters), expired and already resumed handles answer the same, and so does a
       store that cannot read or delete the handle, with no link and no redirect: the user starts again from the
       application, which still holds the PKCE verifier.
-    source: apps/auth-server/src/app/routes/ui/resume.ts:129
+    source: apps/auth-server/src/app/routes/ui/resume.ts:123
     response:
       status: 400
       headers:
@@ -1103,4 +1102,4 @@ assertions:
     say: >-
       A handle is deleted before its authorize URL is used, so a later resume finds nothing; two resumes of one live
       handle at the same instant can both resume (out of view)
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:306
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:254

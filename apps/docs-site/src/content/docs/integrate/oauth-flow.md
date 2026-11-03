@@ -890,10 +890,7 @@ QAuth returns standard OAuth error codes (RFC 6749 §5.2):
 > issuer before any QAuth page is shown (for example `login_required` for an
 > unauthenticated `prompt=none`) is rendered on an issuer page, with HTTP 400
 > and a link that carries the full error response to the redirect URI, instead
-> of a 302. With `INTERACTION_UI_ENABLED` on, an error decided when the
-> sign-in interaction finishes follows the same rule: the answer sends the
-> browser to `/ui/resume/{handle}` on the issuer, which shows that page once.
-> An owner who changes the redirect URIs of an operator-provisioned
+> of a 302. An owner who changes the redirect URIs of an operator-provisioned
 > client through `PATCH /api/clients/{id}` removes that trust.
 
 | Code                      | Meaning                                                                                                                                                                                                                  |

@@ -453,11 +453,11 @@ states:
       - guard: overAgentCapShown
         target: invalid_scope.agent_scope_mode_exceeded_shown
         say: 'an agent scope is above the cap, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
       - guard: overAgentCap
         target: invalid_scope.agent_scope_mode_exceeded
         say: 'an agent scope is above the cap, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:118
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
       - target: showDescribingClient
         say: 'no agent scope is above the cap'
         source: apps/auth-server/src/app/routes/ui/consent.ts:512
@@ -492,11 +492,11 @@ states:
       - guard: audienceUnlistedShown
         target: invalid_target.unlisted_reserved_audience_shown
         say: 'a resource names a QAuth API audience the client does not list, for a client no operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:135
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
       - guard: audienceUnlisted
         target: invalid_target.unlisted_reserved_audience
         say: 'a resource names a QAuth API audience the client does not list, for a client an operator provisioned'
-        source: apps/auth-server/src/app/helpers/authorization-error.ts:118
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:102
       - target: bindingScopes
         say: 'every QAuth API audience among the resources is one the client lists'
         source: apps/auth-server/src/app/helpers/client-auth.ts:682
@@ -919,27 +919,27 @@ states:
       Every sign-in redirect of this flow runs here: the rebuilt authorize URL is checked against 16 KiB, stored under a
       single-use handle for ten minutes, and the browser is sent to /ui/login with /ui/resume/<handle> as its return_to.
       A stale cookie was already cleared, and a disabled user's session already ended, before this step.
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:383
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:293
     always:
       - guard: requestTooLarge
         target: invalid_request.authorization_too_large
         say: 'the rebuilt request is over 16 KiB'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:260
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:224
       - guard: noSession
         target: sign_in_required.no_session
         say: 'the request is parked, for a request with no session'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:398
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
       - guard: staleSession
         target: sign_in_required.stale_session
         say: 'the request is parked, for a stale cookie'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:398
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
       - guard: accountDisabled
         target: sign_in_required.account_disabled
         say: "the request is parked, for a disabled user's session"
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:398
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
       - target: sign_in_required.fresh_login
         say: 'the request is parked, for a step-up'
-        source: apps/auth-server/src/app/helpers/pending-authorization.ts:398
+        source: apps/auth-server/src/app/helpers/pending-authorization.ts:308
 
   code_issued:
     type: final
@@ -986,7 +986,7 @@ states:
     title: Show, rather than redirect, the agent-cap error of a client no operator provisioned
     redirect: never
     code: invalid_scope
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
     response:
       status: 400
       headers:
@@ -1041,7 +1041,7 @@ states:
     title: Show, rather than redirect, the unlisted-audience error of a client no operator provisioned
     redirect: never
     code: invalid_target
-    source: apps/auth-server/src/app/helpers/authorization-error.ts:135
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
     response:
       status: 400
       headers:
@@ -1055,7 +1055,7 @@ states:
     type: final
     title: Send the browser to sign in, then back to the authorization request
     redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:405
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:315
     response:
       status: 302
       headers:
@@ -1104,7 +1104,7 @@ states:
     title: Refuse a request too large to park for the sign-in
     description: A stale cookie is cleared in the same response.
     redirect: never
-    source: apps/auth-server/src/app/helpers/pending-authorization.ts:261
+    source: apps/auth-server/src/app/helpers/pending-authorization.ts:225
     response:
       status: 400
       body:

@@ -8,24 +8,18 @@ const {
   liveBrowserSession,
   continueInteraction,
   emitUserEvent,
-  stashAuthorizationError,
 } = vi.hoisted(() => ({
   checkAuthorizationRequest: vi.fn(),
   decideAuthorization: vi.fn(),
   liveBrowserSession: vi.fn(),
   continueInteraction: vi.fn(),
   emitUserEvent: vi.fn(),
-  stashAuthorizationError: vi.fn(),
 }));
 
 vi.mock('./authorization-request', () => ({ checkAuthorizationRequest, decideAuthorization }));
 vi.mock('./browser-session', () => ({ liveBrowserSession }));
 vi.mock('./interaction', () => ({ continueInteraction }));
 vi.mock('./user-events', () => ({ emitUserEvent }));
-vi.mock('./pending-authorization', () => ({
-  RESUME_PATH_PREFIX: '/ui/resume/',
-  stashAuthorizationError,
-}));
 
 import { testRealm } from '../../testing/request-realm';
 import {
@@ -67,17 +61,7 @@ const SESSION = {
   authTime: 1_700_000_000_000,
 } as const;
 
-const TARGET = {
-  realm: REALM,
-  iss: ISS,
-  client: { clientId: 'notes-app', provisionedByOperator: true },
-};
-/** The same request for a client that registered itself (open DCR, CIMD, a developer). */
-const SELF_SERVICE_TARGET = {
-  ...TARGET,
-  client: { clientId: 'notes-app', provisionedByOperator: false },
-};
-const HANDLE = 'h'.repeat(43);
+const TARGET = { realm: REALM, iss: ISS, client: { clientId: 'notes-app' } };
 
 /** The request of a cancel, on the realm's host. */
 const realmRequest = { realm: REALM } as unknown as FastifyRequest;
@@ -99,7 +83,6 @@ beforeEach(() => {
   checkAuthorizationRequest.mockResolvedValue({ kind: 'checked', target: TARGET });
   liveBrowserSession.mockResolvedValue(SESSION);
   continueInteraction.mockResolvedValue({ id: NEXT_ID, expiresAt: 1_700_000_900_000 });
-  stashAuthorizationError.mockResolvedValue(HANDLE);
 });
 
 describe('identifierPrefill', () => {
@@ -252,7 +235,7 @@ describe('finishAuthorization', () => {
     });
 
     const location = new URL(
-      await finishAuthorization(fastify, realmRequest, reply, finished({ amr: [] }))
+      await finishAuthorization(fastify, request, reply, finished({ amr: [] }))
     );
 
     expect(location.searchParams.get('error')).toBe('invalid_request');
@@ -321,72 +304,12 @@ describe('finishAuthorization', () => {
 
     expect(location.searchParams.get('error')).toBe('invalid_scope');
     expect(continueInteraction).not.toHaveBeenCalled();
-    expect(stashAuthorizationError).not.toHaveBeenCalled();
     expect(emitUserEvent).toHaveBeenCalledWith(
       request,
       'urn:qauth:event:authorization.failed:v1-rc.0',
       { error: 'invalid_scope', reason: 'consent_step_unshowable' },
       { realmId: REALM.id, userId: 'user-1', clientId: 'notes-app', actor: 'user' }
     );
-  });
-});
-
-describe('finishAuthorization — a client no operator provisioned (RFC 9700 §4.11.2)', () => {
-  const ERROR = { error: 'invalid_scope', state: REQUEST.state, iss: ISS };
-
-  it('shows the error on the issuer: a resume handle, never the redirect URI', async () => {
-    checkAuthorizationRequest.mockResolvedValue({ kind: 'checked', target: SELF_SERVICE_TARGET });
-    decideAuthorization.mockResolvedValue({ kind: 'error', params: ERROR });
-
-    const location = await finishAuthorization(fastify, request, reply, finished({ amr: [] }));
-
-    expect(location).toBe(`${REALM.issuer}/ui/resume/${HANDLE}`);
-    expect(stashAuthorizationError).toHaveBeenCalledWith(fastify, REQUEST.redirect_uri, ERROR);
-  });
-
-  it('shows the error of a request the checks now refuse', async () => {
-    checkAuthorizationRequest.mockResolvedValue({
-      kind: 'refused',
-      client: SELF_SERVICE_TARGET.client,
-      params: { error: 'invalid_request', state: REQUEST.state, iss: ISS },
-    });
-
-    const location = await finishAuthorization(fastify, realmRequest, reply, finished({ amr: [] }));
-
-    expect(location).toBe(`${REALM.issuer}/ui/resume/${HANDLE}`);
-    expect(stashAuthorizationError.mock.calls[0]?.[2]).toMatchObject({ error: 'invalid_request' });
-  });
-
-  it('shows the error when the consent the request needs cannot be shown', async () => {
-    checkAuthorizationRequest.mockResolvedValue({ kind: 'checked', target: SELF_SERVICE_TARGET });
-    decideAuthorization.mockResolvedValue({
-      kind: 'consent',
-      scopes: ['odd<scope'],
-      resources: [],
-    });
-
-    const location = await finishAuthorization(
-      fastify,
-      request,
-      reply,
-      finished({ userId: 'user-1', sid: 'sid-1', amr: ['pwd'] })
-    );
-
-    expect(location).toBe(`${REALM.issuer}/ui/resume/${HANDLE}`);
-    expect(stashAuthorizationError.mock.calls[0]?.[2]).toMatchObject({ error: 'invalid_scope' });
-  });
-
-  it('still redirects with the code: only an error is shown', async () => {
-    checkAuthorizationRequest.mockResolvedValue({ kind: 'checked', target: SELF_SERVICE_TARGET });
-    decideAuthorization.mockResolvedValue({
-      kind: 'code',
-      location: 'https://notes.example.com/callback?code=c0de&iss=x',
-    });
-
-    expect(await finishAuthorization(fastify, request, reply, finished({ amr: [] }))).toBe(
-      'https://notes.example.com/callback?code=c0de&iss=x'
-    );
-    expect(stashAuthorizationError).not.toHaveBeenCalled();
   });
 });
 
