@@ -80,6 +80,7 @@ import { requestRealm } from './helpers/request-realm';
 import { giveSystemClientsTheDeveloperAudience } from './helpers/system-client-boot';
 import { isJtiRevoked } from './helpers/token-revocation';
 import { createUnavailableSigner } from './helpers/unavailable-signer';
+import { logUnshowableRedirectUris } from './helpers/unshowable-redirect-uris';
 import {
   assertStoredVerifierKeyMatchesChain,
   provisionedVerifierMaterial,
@@ -788,6 +789,23 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
           'Gave the system client the developer API audience'
         );
       }
+    });
+  }
+
+  // Clients stored before #593 with a redirect URI the consent screen cannot
+  // show (#914): each boot of a process that serves the screen names them,
+  // with the command that lists them all. Bounded, and never refuses the
+  // boot; after the default realm's step.
+  if (
+    defaultRealmBoot &&
+    roles.includes('web') &&
+    hasRepository(fastify.repositories, 'oauthClients')
+  ) {
+    fastify.addHook('onReady', async () => {
+      await logUnshowableRedirectUris({
+        clients: fastify.repositories.oauthClients,
+        log: fastify.log,
+      });
     });
   }
 
