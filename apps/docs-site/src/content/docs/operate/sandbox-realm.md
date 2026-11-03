@@ -49,9 +49,10 @@ created. A client is always held to the stricter of its own environment and the 
 - a sandbox client set to `staging` or `production` keeps its own profile.
 
 The ceiling can be tightened to `production`, and set back to `staging`. It can never be
-`development`: a realm policy update that asks for it is refused with `422` and the problem type
-[`sandbox_ceiling`](/reference/problem-types/#sandbox-ceiling), and the database refuses the value
-whoever writes it.
+`development`: the database refuses the value whoever writes it, and the server's realm policy
+update answers a request for it with `422` and the problem type
+[`sandbox_ceiling`](/reference/problem-types/#sandbox-ceiling). The admin API operation that updates
+a realm's policies, which calls that update, is #517.
 
 ## Tokens
 
@@ -71,6 +72,7 @@ hold for every writer, a hand-written SQL statement included:
 | A live realm has at most one sandbox.                                              | the unique index `idx_realms_sandbox_of_realm_id`       |
 | A realm is not its own sandbox.                                                    | the CHECK `realms_sandbox_not_self`                     |
 | A sandbox has no sandbox.                                                          | the trigger `realms_sandbox_pairing`                    |
+| A sandbox's live realm exists before the sandbox, not later in the same statement. | the trigger, and the foreign key                        |
 | The operator realm is no sandbox and has none.                                     | the CHECK `realms_sandbox_not_operator` and the trigger |
 | The pairing is set when the sandbox is created and never changes.                  | the trigger                                             |
 | A sandbox's ceiling is never `development`.                                        | the CHECK `realms_sandbox_ceiling`                      |
@@ -81,6 +83,11 @@ default realm is also the operator realm, has none either. A sandbox needs a liv
 next to the operator realm
 ([ADR-019 Decision 1](/reference/records/adr/019-deployment-topology-and-trust-boundaries/)).
 
+One check reads rows other than the one written: moving the operator flag onto a realm looks for
+that realm's sandbox. In a `REPEATABLE READ` transaction it looks in the transaction's snapshot,
+which a sandbox committed in the meantime is not in. Move the operator flag by hand only under
+`READ COMMITTED`, as the server does, under its realm provisioning lock.
+
 ## Creating a sandbox
 
 The server creates a sandbox in one transaction: the realm and its primary host from the issuer you
@@ -89,9 +96,10 @@ keys. Either all of it is stored, or none of it.
 
 The admin API operation that creates a sandbox and reads the pairing comes with the realm lifecycle
 operations (#694). Creating a realm is a security operation. Until that operation ships, a sandbox
-is created only from the server's code (`createSandboxRealm`). The realm representation of the admin
-API (#517) shows the pairing as two read-only fields: `sandboxOf`, the live realm's id on a sandbox,
-and `sandbox`, the sandbox's id on a live realm; each is `null` otherwise.
+is created only from the server's code (`createSandboxRealm`). The admin API's realm representation
+(#517) is to show the pairing as two read-only fields: `sandboxOf`, the live realm's id on a sandbox,
+and `sandbox`, the sandbox's id on a live realm; each is `null` otherwise. The server already reads
+both (`sandboxPairingOf`).
 
 Moving settings from the sandbox to the live realm goes through the realm file's diff, where fields
 that describe the sandbox's environment (its ceiling, `http` redirect URIs, test upstreams, test

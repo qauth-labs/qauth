@@ -1,6 +1,12 @@
 import { SandboxPairingError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
 import type { FastifyInstance } from 'fastify';
+import {
+  type CompactJWSHeaderParameters,
+  CompactSign,
+  decodeProtectedHeader,
+  importPKCS8,
+} from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -50,11 +56,14 @@ const HOST_LIVE = 'live.example.com';
 const HOST_SANDBOX = 'sandbox.live.example.com';
 const ALICE = 'alice@example.com';
 const BOB = 'bob@example.com';
+const CAROL = 'carol@example.com';
 
 interface World {
   readonly app: FastifyInstance;
   readonly operator: RealmRow;
   readonly live: RealmRow;
+  /** The live realm's token signing key (PKCS#8 PEM), which the test holds. */
+  readonly liveTokenKey: string;
   readonly sandbox: RealmRow;
   readonly deps: SandboxRealmDependencies;
 }
@@ -96,8 +105,10 @@ describe('the paired sandbox realm (#554)', () => {
       { name: 'live', issuer: `https://${HOST_LIVE}`, enabled: true },
       HOST_LIVE
     );
-    // A realm signs its tokens only with its own keys (#491).
-    await provisionRealmKeys(app, 'live');
+    // A realm signs its tokens only with its own keys (#491). The test holds
+    // the live realm's token key, to sign a token that differs in one claim.
+    const liveTokenKey = (await generateJwtPem()).privateKey;
+    await provisionRealmKeys(app, 'live', { tokenSigningKeyPem: liveTokenKey });
     // The live realm's own policies, which the sandbox must not copy.
     const livePolicies = await app.policyStore.get(live.id);
     await app.policyStore.update(
@@ -117,7 +128,7 @@ describe('the paired sandbox realm (#554)', () => {
       issuer: `https://${HOST_SANDBOX}`,
     });
 
-    world = { app, operator, live, sandbox: created.realm, deps };
+    world = { app, operator, live, liveTokenKey, sandbox: created.realm, deps };
     return world;
   }
 
@@ -209,7 +220,7 @@ describe('the paired sandbox realm (#554)', () => {
     expect(atLive.statusCode, atLive.body).toBe(200);
   });
 
-  it("refuses a sandbox token at the live realm's guard, because the issuer differs", async () => {
+  it("refuses a sandbox token at the live realm's guard: its issuer and its keys are the sandbox's", async () => {
     const { app } = await setUp();
     await registerPasswordAccount(app, BOB, E2E_PASSWORD, { host: HOST_SANDBOX });
     const signedIn = await login(app, HOST_SANDBOX, BOB);
@@ -234,6 +245,35 @@ describe('the paired sandbox realm (#554)', () => {
       });
       expect(atLive.statusCode, `${url}: ${atLive.body}`).toBe(401);
     }
+  });
+
+  it("refuses, at the live realm's guard, a token of the live realm's own key that names the sandbox's issuer", async () => {
+    const { app, liveTokenKey } = await setUp();
+    await registerPasswordAccount(app, CAROL, E2E_PASSWORD, { host: HOST_LIVE });
+    const signedIn = await login(app, HOST_LIVE, CAROL);
+    expect(signedIn.statusCode, signedIn.body).toBe(200);
+    const token = signedIn.json<{ access_token: string }>().access_token;
+
+    // The live realm's token, signed again with the live realm's own key: the
+    // same header and claims, `iss` alone set to the value given.
+    const key = await importPKCS8(liveTokenKey, 'EdDSA');
+    const withIssuer = (iss: string) =>
+      new CompactSign(Buffer.from(JSON.stringify({ ...decodeJwtClaims(token), iss })))
+        .setProtectedHeader(decodeProtectedHeader(token) as CompactJWSHeaderParameters)
+        .sign(key);
+    const atLive = async (bearer: string) =>
+      app.inject({
+        method: 'GET',
+        url: '/api/clients',
+        headers: { host: HOST_LIVE, authorization: `Bearer ${bearer}` },
+      });
+
+    // Under the live issuer the key and the claims pass the guard...
+    const asLive = await atLive(await withIssuer(`https://${HOST_LIVE}`));
+    expect(asLive.statusCode, asLive.body).toBe(200);
+    // ...and under the sandbox's issuer, nothing else changed, they do not.
+    const asSandbox = await atLive(await withIssuer(`https://${HOST_SANDBOX}`));
+    expect(asSandbox.statusCode, asSandbox.body).toBe(401);
   });
 
   it('refuses the development ceiling on the sandbox in the policy update (422 sandbox_ceiling) and in the database', async () => {
