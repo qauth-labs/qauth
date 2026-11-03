@@ -43,8 +43,9 @@ import {
   readInteractionStep,
   refuseForbidden,
 } from '../helpers/interaction';
-import type { InteractionStep } from '../helpers/interaction-record';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
+import { InteractionExpiredError } from '../helpers/interaction-expired';
+import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
 import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
@@ -216,8 +217,15 @@ async function requireRealmOrigin(request: FastifyRequest, rule: OriginRule): Pr
 /**
  * The step read of a view: the contract's `Interaction`, with the client's
  * display data for a step that names its client (the consent step, #629).
+ *
+ * @throws InteractionExpiredError for a consent step whose record holds no
+ *   client, which no server of #629 writes: the contract requires `client`
+ *   there, and the person must see who the client is (ADR-019 Decision 6)
  */
 function stepRead(view: InteractionView) {
+  if (view.step.name === CONSENT_STEP && view.client === undefined) {
+    throw new InteractionExpiredError();
+  }
   return {
     ...interactionStepView(view.step),
     csrf: view.csrf,
@@ -414,6 +422,9 @@ function decideConsent(
   answer: { readonly fields: unknown; readonly encoding: AnswerEncoding },
   answered: (consent: AnsweredConsent) => void
 ): InteractionDecision {
+  // A consent record from before #629 holds no client: the person was never
+  // shown who it is, so nothing is decided for it (`stepRead`).
+  if (state.client === undefined) throw new InteractionExpiredError();
   const read = readAnswer(state.step, answer);
   const { decision, remember } = read.answer as { decision: 'allow' | 'deny'; remember: boolean };
   answered({ step: state.step, answer: { decision, remember } });

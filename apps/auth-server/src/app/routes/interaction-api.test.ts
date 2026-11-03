@@ -121,12 +121,14 @@ import {
 import { createBrowserSessionFixture } from '../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
 import { supplyRequestRealm, testRealm } from '../../testing/request-realm';
+import { REDIS_KEYS } from '../constants';
 import { CONSENT_STEP } from '../helpers/authorization-interaction';
 import {
   IDENTIFIER_STEP,
   type InteractionRequest,
   type InteractionStep,
 } from '../helpers/interaction-record';
+import { interactionIdHash } from '../helpers/interaction-record';
 import { answerRouteNotFound } from '../helpers/request-bounds';
 import { SESSION_COOKIE_NAME } from '../helpers/session-cookie';
 import { emitUserEvent } from '../helpers/user-events';
@@ -706,14 +708,29 @@ describe('the consent answer (#629)', () => {
     expect(validateInteraction(read), describeErrors(validateInteraction)).toBe(true);
   });
 
-  it('reads a record that holds no client without one', async () => {
-    // Every consent interaction starts with its client since #629; a record
-    // written before it (the optional member joined record version 2) reads
-    // as it was stored, with no client made up.
-    await app.close();
-    app = await buildApp({ step: CONSENT });
+  it('refuses to read or decide a consent record that holds no client', async () => {
+    // Every consent interaction starts with its client since #629. A consent
+    // record without one (the optional member joined record version 2) was
+    // never shown with its client: it reads as expired and decides nothing.
     const browser = new Browser();
-    expect(await browser.read(await browser.start())).not.toHaveProperty('client');
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const key = REDIS_KEYS.INTERACTION(REALM.id, interactionIdHash(id));
+    const stored = JSON.parse((await app.redis.get(key)) as string) as Record<string, unknown>;
+    delete stored['client'];
+    await app.redis.set(key, JSON.stringify(stored));
+
+    const read = await app.inject({ method: 'GET', url: `${INTERACTION_API_PREFIX}/${id}` });
+    expect(read.statusCode).toBe(410);
+    expect(read.json()).toMatchObject({ code: 'interaction_expired' });
+    const answer = await browser.send(id, 'answer', {
+      type: CONSENT_STEP,
+      csrf,
+      decision: 'allow',
+    });
+    expect(answer.statusCode).toBe(410);
+    expect(answer.json()).toMatchObject({ code: 'interaction_expired' });
+    expect(finishConsent).not.toHaveBeenCalled();
 
     // A step that names no client, the identifier step, meets the contract without one.
     await app.close();

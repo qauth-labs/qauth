@@ -171,6 +171,8 @@ export interface InteractionState {
   /** The sign-in engine's transaction, `null` before its first round (#616). */
   readonly signInTransaction: SignInTransaction | null;
   readonly revision: number;
+  /** Who the client is, as the step read showed it (#629): the consent step's. */
+  readonly client?: ClientDisplay;
 }
 
 /** Who an answer proved, for {@link InteractionDecision} `authenticated`. */
@@ -759,6 +761,8 @@ async function settleAnswer(
       transaction: taken.transaction,
       signInTransaction: taken.signInTransaction,
       revision: taken.revision,
+      // Written only by `createInteraction`, from `clientDisplay`'s output.
+      ...(taken.client === undefined ? {} : { client: taken.client as unknown as ClientDisplay }),
     })
   );
   // The engine may take a while (a password hash): an interaction that
