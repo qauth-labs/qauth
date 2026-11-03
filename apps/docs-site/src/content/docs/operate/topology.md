@@ -112,16 +112,16 @@ account and developer APIs. It refuses the browser-session endpoints with
 only on the realm's primary host.
 
 Keep endpoint hosts on the internal network: the reference proxy configuration
-answers `421` for them. No route removes an endpoint host yet. To remove one,
-delete its row; each node may answer it for 30 seconds more, from its host
-cache:
+answers `421` for them. No route removes an endpoint host yet. To remove one:
 
-```sql
-DELETE FROM realm_hosts WHERE host = 'auth.internal.example' AND kind = 'endpoint';
-```
+1. Take it out of `DEFAULT_REALM_ENDPOINT_HOSTS` on every node and restart
+   them. Every boot adds the listed hosts again, so this comes first.
+2. Delete its row. Each node may answer it for 30 seconds more, from its host
+   cache:
 
-Then take it out of `DEFAULT_REALM_ENDPOINT_HOSTS`, or the next boot adds it
-again.
+   ```sql
+   DELETE FROM realm_hosts WHERE host = 'auth.internal.example' AND kind = 'endpoint';
+   ```
 
 ## Service roles and mutual TLS
 
@@ -138,17 +138,20 @@ picked by `SERVICE_ROLES`:
 
 The default, `all`, runs every role in one process. That is one trust domain:
 the key separation below protects keys only once the roles run on separate
-nodes. [Service roles](/operate/service-roles/) gives the details.
+nodes, and guards against forged tokens only once each role has its own
+[database user](#database-users). [Service roles](/operate/service-roles/)
+gives the details.
 
 - **Keys stay on the signer.** Only a process that holds `signer` receives the
   KEK and the private key variables; any other process refuses to boot with
   one. A process without the signer verifies tokens with each realm's published
   keys, which it reads without a KEK.
 - **The internal listener.** A second HTTP server of each process, on
-  `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1` and `3443` by default), serves
-  what only other parts of the deployment call: the metrics to a scraper, and
-  the signer service to the other roles. It is not routed by host, and the
-  public port serves none of its paths.
+  `INTERNAL_HOST` and `INTERNAL_PORT` (`127.0.0.1` and `3443` by default),
+  serves what only other parts of the deployment call: today the metrics, to
+  a scraper, and once the signer service below ships, signing, to the other
+  roles. It is not routed by host, and the public port serves none of its
+  paths.
 - **Mutual TLS.** While the roles are split, the internal listener speaks
   mutual TLS 1.3 only, with the certificates in `INTERNAL_TLS_CERT_PATH`,
   `INTERNAL_TLS_KEY_PATH` and `INTERNAL_TLS_CA_PATH`. `INTERNAL_PEER_ROLES`
@@ -171,10 +174,14 @@ ADR-019 gives each role its own Postgres user with only the grants it needs.
 Only the signer's user would read the private keys in `realm_keys`.
 
 In this release every role connects with the one `DATABASE_URL`, so every
-process can read every table, `realm_keys` included. The key separation
-therefore rests on the KEK, which only signer processes hold: the private
-keys in `realm_keys` are wrapped under it. The per-role users and the script
-that grants them are [#498](https://github.com/qauth-labs/qauth/issues/498).
+process can read and write every table, the key tables included. The KEK,
+which only signer processes hold, keeps the private keys in `realm_keys`
+secret from the others: they are wrapped under it. It does not keep a process
+from writing a key. Any process can store a public key of its own in
+`realm_public_keys`, and every process then verifies tokens with it and
+publishes it in the JWKS. Until each role has its own user, a compromised node
+of any role can sign tokens that verify, split or not. The per-role users and
+the script that grants them are [#498](https://github.com/qauth-labs/qauth/issues/498).
 
 Some roles already have their grants defined, as statements in
 `@qauth-labs/infra-db` an operator can apply to a user of their own:
@@ -218,7 +225,7 @@ configuration is not yet a working front for browser sign-in.
 
 The operator realm is the realm whose admins administer the deployment: its
 admins manage every realm, by grant, its service accounts automate the admin
-API, and the admin console is its client.
+API, and the admin console, once it ships, will be its client.
 
 In **simple mode**, one realm on one host, the default realm is also the
 operator realm. Its first boot marks it so (`realms.is_operator`), and a
@@ -227,8 +234,8 @@ one-host deployment needs no second realm, host or issuer for administration.
 Adding a second realm splits the two, in the **operator-realm split**. The
 default realm keeps its host and its issuer, which are permanent. The operator
 realm becomes a realm of its own, on a host of its own, and the operator's
-admins and the admin console sign in there. Since no second realm can be added
-in this release, the split cannot happen yet; the
+admins sign in there, as the admin console will. Since no second realm can be
+added in this release, the split cannot happen yet; the
 [upgrade guide](/operate/upgrades/#the-operator-realm) will give its steps
 with the realm lifecycle operations. Keep a host free for the operator realm,
 so that it can get its DNS name and certificate then.

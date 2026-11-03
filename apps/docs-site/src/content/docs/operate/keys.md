@@ -52,7 +52,8 @@ gets these keys at its first boot:
 | `data_at_rest`  | A256GCM   | Always                 | Never: it encrypts the realm's secrets           |
 
 The OID4VP request-signing key exists only when the key boot step imports it
-from `OID4VP_VERIFIER_SIGNING_KEY`. Another realm gets its keys with
+from `OID4VP_VERIFIER_SIGNING_KEY`. A key a realm lacks, such as an RS256 key
+for an upgraded realm, is added with
 [`auth-server:keys:create`](#adding-a-key-auth-serverkeyscreate).
 
 ## The KEK
@@ -63,13 +64,17 @@ lives. The default, `local`, reads `KEK` or `KEK_PATH`.
 **Make one.** The KEK is the standard base64 of exactly 32 random bytes:
 
 ```bash
-openssl rand -base64 32 > qauth-kek
-chmod 600 qauth-kek
+(umask 077 && openssl rand -base64 32 > qauth-kek)
 ```
 
 Set `KEK_PATH` to the file, or `KEK` to its content. `KEK_PATH` wins when both
 are set. The server warns when group or others can read or write the file.
 Hex and base64url values are refused.
+
+`umask 077` keeps the file its owner's alone from the start. Keep it out of
+any git checkout. In a container the server reads the file as its own user,
+uid `1001` in QAuth's image. A Compose secret from a file is the host file,
+with its owner and mode, so give it to that user: `sudo chown 1001 qauth-kek`.
 
 **Where it goes.** Only a process whose `SERVICE_ROLES` holds `signer`, or is
 `all`, receives the KEK. Any other process refuses to boot when it finds one
@@ -223,8 +228,7 @@ it has not seen, and nobody signs in again:
   less than the longest lifetime of a token it signed. An access token lives at
   most a day (`ACCESS_TOKEN_LIFESPAN` is capped at 86400 seconds), so 14 days
   covers every token.
-- A key rotates every **90 days** by default, and the operator can change the
-  period.
+- A key rotates every **90 days**.
 - Both keys of a hybrid pair rotate together. The cookie key and the
   data-at-rest key rotate the same way: the new key signs or encrypts, and the
   old one only verifies or decrypts until it is retired.

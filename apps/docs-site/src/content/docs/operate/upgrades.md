@@ -85,8 +85,12 @@ runner again.
 ### 3. Start the new version
 
 ```bash
-docker compose up -d auth-server
+docker compose up -d --build auth-server
 ```
+
+`--build` builds the new version's image first: without it, Compose starts the
+image it built for the old version. Rebuild `developer-portal` the same way when
+you run it.
 
 At boot the auth server compares the database with the migrations of its own
 release. When the database lacks some, the server waits for the migration
@@ -116,7 +120,9 @@ QAuth's history, at the end of this page.
 Take the backup of [step 1](#1-back-up-the-database) before anything else.
 There is no way back from 0.2 to 0.1 but to restore that backup: every write
 made after it is lost. Keep the 0.1 release's environment, its key variables
-included, beside the backup: a restored 0.1 deployment needs them again.
+included: a restored 0.1 deployment needs them again. Keep it apart from the
+database backups, as you keep the KEK: the key variables hold the private keys
+in the clear, and 0.2 goes on signing with them.
 :::
 
 0.2 brings the deployment topology of
@@ -138,7 +144,7 @@ no action. This section says what does, in order.
 ### The upgrade, step by step
 
 1. **Back up the database** ([step 1](#1-back-up-the-database)). Keep the 0.1
-   environment with it.
+   environment apart from it, as you keep the KEK.
 2. **Make a KEK and keep it apart from the database.** Run
    `openssl rand -base64 32`. Set the output as `KEK`, or put it in a file and
    set `KEK_PATH`. Store a copy where your database backups are not. See
@@ -213,12 +219,12 @@ new in 0.2 among them.
 
 These settings change meaning:
 
-| Setting                                                                                                                                             | In 0.2                                                                                                                   |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `JWT_ISSUER`                                                                                                                                        | The default realm's permanent issuer. A later boot with another value refuses to start.                                  |
-| `JWT_PRIVATE_KEY`, `JWT_RS256_PRIVATE_KEY`, `JWT_MLDSA_PRIVATE_KEY`, `SESSION_COOKIE_SECRET`, `OID4VP_VERIFIER_SIGNING_KEY` and their `_PATH` forms | Optional. Read only by the key boot step, which imports them into the key store or replaces a stored key with a new one. |
-| `METRICS_ENABLED`                                                                                                                                   | Serves the metrics at `GET /internal/metrics` on the internal listener, never on the public port.                        |
-| `OID4VP_RESPONSE_KEY_SECRET`                                                                                                                        | Read only to open wallet request states written by 0.1, which expire within 15 minutes.                                  |
+| Setting                                                                                                                                             | In 0.2                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ISSUER`                                                                                                                                        | The default realm's permanent issuer. A later boot with another value refuses to start.                                                                                                                                                           |
+| `JWT_PRIVATE_KEY`, `JWT_RS256_PRIVATE_KEY`, `JWT_MLDSA_PRIVATE_KEY`, `SESSION_COOKIE_SECRET`, `OID4VP_VERIFIER_SIGNING_KEY` and their `_PATH` forms | Optional. The key boot step imports them into the key store, where a new value replaces the stored key. `JWT_PRIVATE_KEY` or `JWT_PUBLIC_KEY` also picks the key that verifies 0.1's tokens without a `kid` ([below](#remove-the-key-variables)). |
+| `METRICS_ENABLED`                                                                                                                                   | Serves the metrics at `GET /internal/metrics` on the internal listener, never on the public port.                                                                                                                                                 |
+| `OID4VP_RESPONSE_KEY_SECRET`                                                                                                                        | Read only to open wallet request states written by 0.1, which expire within 15 minutes.                                                                                                                                                           |
 
 `CIMD_ALLOW_PRIVATE_ADDRESSES` and `ID_JAG_ALLOW_PRIVATE_ADDRESSES` are removed.
 
@@ -240,10 +246,12 @@ issued token, registered client and enrolled passkey depends on them.
 - **A trailing slash.** The realm stores the issuer without it, and its
   discovery documents and tokens name it that way. Each boot warns
   `JWT_ISSUER ends with a slash: ... remove the slash`. 0.1 named the issuer
-  with the slash in its tokens, so a relying party that compares `iss` with
-  the slashed form must drop the slash. Upgrade such a deployment all at once,
-  not node by node: in a mixed fleet each release refuses the other's access
-  tokens until they expire.
+  with the slash in its tokens, and 0.2 checks `iss` against the stored form.
+  So 0.2 refuses every access token issued before the upgrade: a client gets
+  `401` until it uses its refresh token, which still works, or signs in again.
+  A relying party that compares `iss` with the slashed form must drop the
+  slash. Upgrade such a deployment all at once, not node by node: in a mixed
+  fleet each release refuses the other's access tokens until they expire.
 - **A path.** `https://example.com/auth` keeps working: the issuer keeps its
   path, and only the host routes requests to the realm. Each boot warns that
   `JWT_ISSUER has a path`. A new realm's issuer is an origin with no path, and
@@ -307,9 +315,11 @@ default provider, `KEK_PROVIDER=local`, reads it from `KEK` or `KEK_PATH`.
 **Make one.** The KEK is the base64 of 32 random bytes:
 
 ```bash
-openssl rand -base64 32 > qauth-kek
-chmod 600 qauth-kek
+(umask 077 && openssl rand -base64 32 > qauth-kek)
 ```
+
+`umask 077` keeps the file its owner's alone from the start. Keep it out of
+any git checkout. [Keys](/operate/keys/#the-kek) says how a container reads it.
 
 Set `KEK_PATH` to the file, or `KEK` to its content. `KEK_PATH` wins when both
 are set, and the server warns when group or others can read the file. Give it
@@ -392,7 +402,9 @@ curl -fsS "$ISSUER/.well-known/jwks.json"
   An imported key's `kid` is `JWT_RS256_KID` or `JWT_MLDSA_KID` when set, and
   otherwise the RFC 7638 thumbprint of its public key.
 - An access token issued before the upgrade still introspects `active: true`,
-  and a refresh token issued before it still rotates.
+  and a refresh token issued before it still rotates. With a slashed
+  `JWT_ISSUER`, only the refresh token does
+  ([The issuer becomes permanent](#the-issuer-becomes-permanent)).
 - Each endpoint host answers. With Compose, from the portal's container:
 
   ```bash
