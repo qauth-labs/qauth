@@ -30,7 +30,7 @@ import {
   problemCodeFor,
   type ProblemDocument,
 } from '../api-conventions/problem';
-import { UnprocessableContentError } from '../helpers/api-request-errors';
+import { SandboxCeilingError, UnprocessableContentError } from '../helpers/api-request-errors';
 
 /**
  * How a route answers an error (ADR-019 Decision 7, #506, #513):
@@ -350,7 +350,7 @@ export function problemDocument(
     ? projectValidationDetails(error.validation)
     : error instanceof WeakPasswordError
       ? (error.feedback ?? []).map((message) => ({ pointer: '/password', message }))
-      : error instanceof UnprocessableContentError
+      : error instanceof UnprocessableContentError || error instanceof SandboxCeilingError
         ? error.fields.map(({ pointer, message }) => ({ pointer, message }))
         : [];
   if (errors.length > 0) document.errors = errors;

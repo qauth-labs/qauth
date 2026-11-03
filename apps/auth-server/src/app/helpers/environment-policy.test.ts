@@ -105,6 +105,26 @@ describe('environment-policy — resolveEnvironmentPolicy (effective profile)', 
     expect(resolveEnvironmentPolicy(undefined, undefined).environment).toBe('production');
   });
 
+  it('a sandbox realm (ceiling staging) runs a client set to development as staging (#554)', () => {
+    // A sandbox realm is created with the `staging` ceiling, and the database
+    // keeps it from ever being `development` (ADR-019 Decision 11).
+    const sandbox = { maxEnvironmentLaxity: 'staging', sandboxOfRealmId: 'live-realm-id' };
+    const policy = resolveEnvironmentPolicy({ environment: 'development' }, sandbox);
+    expect(policy).toBe(ENVIRONMENT_PROFILES.staging);
+    expect(policy.environment).toBe('staging');
+    // What only development relaxes stays shut in the sandbox.
+    expect(policy.staticApiKeysAllowed).toBe(false);
+    expect(policy.localhostRedirectAllowed).toBe(false);
+    expect(policy.pkceRequired).toBe(true);
+    // A staging or production client keeps its own profile there.
+    expect(resolveEnvironmentPolicy({ environment: 'staging' }, sandbox)).toBe(
+      ENVIRONMENT_PROFILES.staging
+    );
+    expect(resolveEnvironmentPolicy({ environment: 'production' }, sandbox)).toBe(
+      ENVIRONMENT_PROFILES.production
+    );
+  });
+
   it('realm ceiling caps a laxer client: realm=production forces client=development to production', () => {
     const policy = resolveEnvironmentPolicy(
       { environment: 'development' },

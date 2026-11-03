@@ -48,6 +48,31 @@ export class UnprocessableContentError extends Error {
 }
 
 /**
+ * A realm policy update that would give a sandbox realm the `development`
+ * environment ceiling (ADR-019 Decision 11, issue #554): `422`, the
+ * `sandbox_ceiling` problem document, whose `errors` name the ceiling's
+ * field. A sandbox's ceiling is `staging` or stricter, so the developer
+ * portal's flow test console works there and nothing laxer does.
+ */
+export class SandboxCeilingError extends Error {
+  readonly statusCode = 422;
+  readonly code = 'SANDBOX_CEILING';
+  readonly fields: readonly UnprocessableField[] = [
+    {
+      pointer: '/posture/maxEnvironmentLaxity',
+      message: 'posture.maxEnvironmentLaxity of a sandbox realm is staging or production',
+    },
+  ];
+
+  constructor(
+    message = "A sandbox realm's environment ceiling is staging or production, never development."
+  ) {
+    super(message);
+    this.name = 'SandboxCeilingError';
+  }
+}
+
+/**
  * A `PATCH` body sent as another media type than
  * `application/merge-patch+json`: `415`, the `unsupported_media_type` problem
  * document. An update of the account and developer APIs is a JSON Merge

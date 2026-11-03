@@ -3,9 +3,14 @@ import {
   PolicyValidationError,
   type RealmPolicySnapshot,
 } from '@qauth-labs/fastify-plugin-realm-policy';
+import { SandboxPairingError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 
-import { UnprocessableContentError, type UnprocessableField } from './api-request-errors';
+import {
+  SandboxCeilingError,
+  UnprocessableContentError,
+  type UnprocessableField,
+} from './api-request-errors';
 
 /** The message of a realm policy update the schema or a rule refuses. */
 export const REALM_POLICIES_REFUSED_MESSAGE = 'The realm policies are not valid.';
@@ -33,8 +38,15 @@ export function unprocessablePolicyField(issue: PolicyIssue): UnprocessableField
  * other error of the store passes through as it is. The admin API's realm
  * policy update (#517) calls this.
  *
+ * A sandbox realm's ceiling is never `development` (ADR-019 Decision 11,
+ * #554): the database refuses it whoever writes the policies, and an update
+ * that asks for it is answered with a {@link SandboxCeilingError} (422,
+ * `sandbox_ceiling`). Nothing is changed.
+ *
  * @throws UnprocessableContentError when the patch or the document it gives
  *   is refused, by its schema or a rule, such as the mail transport's
+ * @throws SandboxCeilingError when the realm is a sandbox realm and the
+ *   update sets its environment ceiling to `development`
  */
 export async function updateRealmPolicies(
   fastify: Pick<FastifyInstance, 'policyStore'>,
@@ -50,6 +62,9 @@ export async function updateRealmPolicies(
         error.issues.map(unprocessablePolicyField),
         REALM_POLICIES_REFUSED_MESSAGE
       );
+    }
+    if (error instanceof SandboxPairingError && error.rule === 'ceiling') {
+      throw new SandboxCeilingError();
     }
     throw error;
   }

@@ -3,6 +3,9 @@ import {
   extractConstraintName,
   isUniqueConstraintError,
   NotFoundError,
+  pgErrorCodeOf,
+  SandboxPairingError,
+  type SandboxPairingRule,
   UniqueConstraintError,
 } from '@qauth-labs/shared-errors';
 import {
@@ -45,9 +48,13 @@ type RealmPolicyColumnKey =
  * A new realm. Its policies are left out (#516), the four column-backed
  * fields among them: a new realm stores the repository's policy seed, and
  * only `writePolicies` writes them afterwards, so nothing the policy store did
- * not parse reaches the row's policies.
+ * not parse reaches the row's policies. So is the sandbox pairing (#554):
+ * only `createSandboxWithPrimaryHost` sets it, and nothing changes it.
  */
-export type NewRealm = Omit<InferInsertModel<typeof realms>, RealmPolicyColumnKey>;
+export type NewRealm = Omit<
+  InferInsertModel<typeof realms>,
+  RealmPolicyColumnKey | 'sandboxOfRealmId'
+>;
 /**
  * Fields a realm update may change. The passkey RP ID columns are left out on
  * purpose (#467, #553): `setWebAuthnRpId` writes the RP ID, refusing it once
@@ -146,6 +153,49 @@ function withoutPolicyColumns<T extends object>(data: T): T {
   return copy as T;
 }
 
+/** The database constraint behind each rule (migration 0056). */
+const SANDBOX_RULE_BY_CONSTRAINT: Readonly<Record<string, SandboxPairingRule>> = {
+  idx_realms_sandbox_of_realm_id: 'one_sandbox',
+  realms_sandbox_of_sandbox: 'sandbox_of_sandbox',
+  realms_sandbox_of_operator: 'operator',
+  realms_sandbox_not_operator: 'operator',
+  realms_sandbox_not_self: 'self',
+  realms_sandbox_pairing_permanent: 'permanent',
+  realms_sandbox_ceiling: 'ceiling',
+};
+
+/** The foreign key from a sandbox to its live realm (`ON DELETE RESTRICT`). */
+const SANDBOX_OF_REALM_FK = 'realms_sandbox_of_realm_id_realms_id_fk';
+
+/**
+ * Throw a {@link SandboxPairingError} when `error` is a violation of a rule
+ * of the paired sandbox realm; return otherwise, for the caller to map the
+ * error further. A violation of {@link SANDBOX_OF_REALM_FK} is the caller's
+ * to read: on a delete it is a live realm whose sandbox exists, on an insert
+ * a live realm that does not exist.
+ */
+function throwIfSandboxRule(error: unknown): void {
+  const code = pgErrorCodeOf(error);
+  if (code !== '23505' && code !== '23514') return;
+  const constraint = extractConstraintName(error);
+  if (constraint === undefined) return;
+  const rule = Object.hasOwn(SANDBOX_RULE_BY_CONSTRAINT, constraint)
+    ? SANDBOX_RULE_BY_CONSTRAINT[constraint]
+    : undefined;
+  if (rule !== undefined) throw new SandboxPairingError(rule, error);
+}
+
+/**
+ * A copy of `data` without the sandbox pairing, which only
+ * `createSandboxWithPrimaryHost` writes, even for a caller the types do not
+ * bind.
+ */
+function withoutSandboxPairing<T extends object>(data: T): T {
+  const copy = { ...data } as Record<string, unknown>;
+  delete copy['sandboxOfRealmId'];
+  return copy as T;
+}
+
 /** Options of {@link createRealmsRepository}. */
 export interface RealmsRepositoryOptions {
   /**
@@ -154,6 +204,12 @@ export interface RealmsRepositoryOptions {
    */
   readonly seeds?: RealmPolicySeeds;
 }
+
+/**
+ * The environment ceiling a sandbox realm is created with (ADR-019 Decision
+ * 11): the laxest one a sandbox may have, so the flow test console works.
+ */
+export const SANDBOX_ENVIRONMENT_CEILING = 'staging' as const;
 
 /** Constraint behind a duplicate host: `host` is the primary key of `realm_hosts`. */
 const REALM_HOSTS_PKEY = 'realm_hosts_pkey';
@@ -228,6 +284,33 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
   ): Promise<RealmWithHost>;
 
   /**
+   * Create the paired sandbox realm of `liveRealmId` and its primary host, in
+   * one transaction (ADR-019 Decision 11, issue #554): a realm in its own
+   * right, under the rules of {@link createWithPrimaryHost}, paired with the
+   * live realm for good, and with the environment ceiling `staging` whatever
+   * the policy seed says, so the developer portal's flow test console works
+   * there. It gets the repository's seeds for its other policies, and copies
+   * nothing from the live realm.
+   *
+   * @throws NotFoundError if there is no realm `liveRealmId`
+   * @throws SandboxPairingError if the live realm already has a sandbox
+   *   (`one_sandbox`), is a sandbox itself (`sandbox_of_sandbox`) or is the
+   *   operator realm (`operator`)
+   * @throws InvalidRealmHostError, BadRequestError and UniqueConstraintError
+   *   as {@link createWithPrimaryHost} does: a host is unique across every
+   *   realm, the live realm's included
+   */
+  createSandboxWithPrimaryHost(
+    liveRealmId: string,
+    data: NewRealmWithIssuer,
+    primaryHost: string,
+    tx?: DbClient
+  ): Promise<RealmWithHost>;
+
+  /** The paired sandbox realm of `liveRealmId`, if it has one (#554). */
+  findSandboxOf(liveRealmId: string, tx?: DbClient): Promise<Realm | undefined>;
+
+  /**
    * Give a realm its issuer and its primary host, in one transaction (#484).
    *
    * Each is written only where the realm has none yet, so a second call with
@@ -283,6 +366,8 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    * @throws NotFoundError if the realm does not exist
    * @throws UniqueConstraintError if another realm is the operator realm
    *   (`idx_realms_one_operator`)
+   * @throws SandboxPairingError (`operator`) if the realm is a sandbox realm
+   *   or has one (#554)
    */
   setOperator(realmId: string, isOperator: boolean, tx?: DbClient): Promise<Realm>;
 
@@ -328,6 +413,8 @@ export interface RealmsRepository extends BaseRepository<Realm, NewRealm, Update
    *   its counter is no longer `expectedVersion`
    * @throws BadRequestError if the allowlist holds a `qauth:` scope
    * @throws TypeError if the document lacks a column-backed field
+   * @throws SandboxPairingError (`ceiling`) if the realm is a sandbox realm
+   *   and the document sets its environment ceiling to `development` (#554)
    */
   writePolicies(
     realmId: string,
@@ -540,7 +627,9 @@ export function createRealmsRepository(
    * none (counter 0) until the boot step fills them.
    */
   function seeded<T extends NewRealm>(data: T): T & RealmPolicyColumnsOfRow {
-    const row: T & Partial<RealmPolicyColumnsOfRow> = withoutPolicyColumns(data);
+    const row: T & Partial<RealmPolicyColumnsOfRow> = withoutSandboxPairing(
+      withoutPolicyColumns(data)
+    );
     for (const [key, value] of Object.entries(retentionSeeds) as [
       keyof EventRetentionPolicy,
       number,
@@ -689,6 +778,56 @@ export function createRealmsRepository(
       }
     },
 
+    async createSandboxWithPrimaryHost(
+      liveRealmId: string,
+      data: NewRealmWithIssuer,
+      primaryHost: string,
+      tx?: DbClient
+    ): Promise<RealmWithHost> {
+      const host = normaliseRealmHost(primaryHost, 'primary');
+      assertIssuerOnPrimaryHost(data.issuer, host);
+      // The seeds, then the pairing and the ceiling, which no seed overrides:
+      // a sandbox never exists without them. `staging` is a value the policy
+      // schema takes for the field, so the row's policies stay valid.
+      const row = {
+        ...seeded(data),
+        sandboxOfRealmId: liveRealmId,
+        maxEnvironmentLaxity: SANDBOX_ENVIRONMENT_CEILING,
+      };
+      const invoker = tx ?? defaultDb;
+      try {
+        // A savepoint inside an outer transaction, as in createWithPrimaryHost.
+        return await invoker.transaction(async (innerTx) => {
+          const [realm] = await innerTx.insert(realms).values(row).returning();
+          const [realmHost] = await innerTx
+            .insert(realmHosts)
+            .values({ host, realmId: realm.id, kind: 'primary' })
+            .returning();
+          return { realm, host: realmHost };
+        });
+      } catch (error) {
+        throwIfSandboxRule(error);
+        // On an insert, the pairing's foreign key fails only for a live
+        // realm that does not exist.
+        if (
+          pgErrorCodeOf(error) === '23503' &&
+          extractConstraintName(error) === SANDBOX_OF_REALM_FK
+        ) {
+          throw new NotFoundError('Realm', liveRealmId);
+        }
+        rethrowUnique(error, REALM_HOSTS_PKEY);
+      }
+    },
+
+    async findSandboxOf(liveRealmId: string, tx?: DbClient): Promise<Realm | undefined> {
+      const [realm] = await (tx ?? defaultDb)
+        .select()
+        .from(realms)
+        .where(eq(realms.sandboxOfRealmId, liveRealmId))
+        .limit(1);
+      return realm;
+    },
+
     async assignIssuer(
       realmId: string,
       issuer: string,
@@ -771,6 +910,8 @@ export function createRealmsRepository(
         }
         return realm;
       } catch (error) {
+        // The operator realm is no sandbox and has none (#554).
+        throwIfSandboxRule(error);
         if (isUniqueConstraintError(error)) {
           throw new UniqueConstraintError(
             extractConstraintName(error) || 'idx_realms_one_operator',
@@ -871,18 +1012,25 @@ export function createRealmsRepository(
       }
       const { columns, members } = splitRealmPolicies(write.document);
       assertDynamicRegistrationScopes(columns);
-      const [realm] = await (tx ?? defaultDb)
-        .update(realms)
-        .set({
-          ...columns,
-          policies: members,
-          policySchemaVersion: write.schemaVersion,
-          policiesVersion: write.expectedVersion + 1,
-          updatedAt: Date.now(),
-        })
-        .where(and(eq(realms.id, realmId), eq(realms.policiesVersion, write.expectedVersion)))
-        .returning();
-      return realm;
+      try {
+        const [realm] = await (tx ?? defaultDb)
+          .update(realms)
+          .set({
+            ...columns,
+            policies: members,
+            policySchemaVersion: write.schemaVersion,
+            policiesVersion: write.expectedVersion + 1,
+            updatedAt: Date.now(),
+          })
+          .where(and(eq(realms.id, realmId), eq(realms.policiesVersion, write.expectedVersion)))
+          .returning();
+        return realm;
+      } catch (error) {
+        // A sandbox's ceiling is never `development` (#554): the CHECK
+        // `realms_sandbox_ceiling` refuses it, whoever writes the policies.
+        throwIfSandboxRule(error);
+        throw error;
+      }
     },
 
     async listPolicyRecords(tx?: DbClient): Promise<RealmPolicyRecord[]> {
@@ -954,7 +1102,8 @@ export function createRealmsRepository(
     async update(id: string, data: UpdateRealm, tx?: DbClient): Promise<Realm> {
       // The policies are the policy store's alone (#516), even for a caller
       // the types do not bind.
-      const changes = withoutPolicyColumns(data);
+      // The sandbox pairing is set at creation alone (#554).
+      const changes = withoutSandboxPairing(withoutPolicyColumns(data));
       assertEventRetention(changes);
       assertSsoLimits(changes);
       const invoker = tx ?? defaultDb;
@@ -990,11 +1139,28 @@ export function createRealmsRepository(
      * @param id - Realm ID
      * @param tx - Optional transaction client
      * @returns True if deleted, false if not found
+     * @throws SandboxPairingError (`live_realm_has_sandbox`) if the realm is a
+     *   live realm whose sandbox exists: delete the sandbox first
      */
     async delete(id: string, tx?: DbClient): Promise<boolean> {
       const invoker = tx ?? defaultDb;
-      const [realm] = await invoker.delete(realms).where(eq(realms.id, id)).returning();
-      return !!realm;
+      try {
+        const [realm] = await invoker.delete(realms).where(eq(realms.id, id)).returning();
+        return !!realm;
+      } catch (error) {
+        // A live realm is not deleted while its sandbox exists (#554): the
+        // sandbox's foreign key is `ON DELETE RESTRICT`, which PostgreSQL
+        // answers with `23001` (restrict_violation); `23503` would be a
+        // `NO ACTION` foreign key's answer, should the key ever become one.
+        const code = pgErrorCodeOf(error);
+        if (
+          (code === '23001' || code === '23503') &&
+          extractConstraintName(error) === SANDBOX_OF_REALM_FK
+        ) {
+          throw new SandboxPairingError('live_realm_has_sandbox', error);
+        }
+        throw error;
+      }
     },
   };
 }

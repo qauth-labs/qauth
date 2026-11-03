@@ -34,6 +34,7 @@ import {
   answerRouteNotFound,
   answerUnknownRouteBeforeBody,
 } from '../app/helpers/request-bounds';
+import type { SandboxRealmTransaction } from '../app/helpers/sandbox-realm';
 import type { InternalRouteModule } from '../app/internal/route-manifest';
 
 /**
@@ -132,7 +133,21 @@ export async function startE2eInfrastructure(): Promise<E2eInfrastructure> {
 const defaultRealmReboots = new WeakMap<FastifyInstance, () => Promise<unknown>>();
 
 /** Per booted server: run the key boot step for a realm, by name, with no key variables. */
-const realmKeyBoots = new WeakMap<FastifyInstance, (realmName: string) => Promise<unknown>>();
+const realmKeyBoots = new WeakMap<
+  FastifyInstance,
+  (realmName: string, tokenSigningKeyPem: string | undefined) => Promise<unknown>
+>();
+
+/** Options of {@link provisionRealmKeys}. */
+export interface ProvisionRealmKeysOptions {
+  /**
+   * An Ed25519 private key (PKCS#8 PEM) the realm signs its tokens with, as
+   * `JWT_PRIVATE_KEY` gives the default realm its key: for a test that signs
+   * a token with the realm's own key, such as one that changes a single
+   * claim (#554). Without it, the realm's token key is generated.
+   */
+  readonly tokenSigningKeyPem?: string;
+}
 
 /**
  * Give a realm the server created after its boot (`realms.createWithPrimaryHost`)
@@ -140,12 +155,45 @@ const realmKeyBoots = new WeakMap<FastifyInstance, (realmName: string) => Promis
  * included (#485): the server signs a realm's tokens only with that realm's
  * keys (#491), and creating a realm row creates none.
  */
-export async function provisionRealmKeys(app: FastifyInstance, realmName: string): Promise<void> {
+export async function provisionRealmKeys(
+  app: FastifyInstance,
+  realmName: string,
+  options: ProvisionRealmKeysOptions = {}
+): Promise<void> {
   const boot = realmKeyBoots.get(app);
   if (boot === undefined) {
     throw new Error('provisionRealmKeys: the server was not booted by bootAuthServer');
   }
-  await boot(realmName);
+  await boot(realmName, options.tokenSigningKeyPem);
+}
+
+/** The key variables of a realm given keys after boot: none, or its token key. */
+function provisionedKeySettings(tokenSigningKeyPem: string | undefined) {
+  return tokenSigningKeyPem === undefined
+    ? {}
+    : { ed25519: { privateKey: { value: tokenSigningKeyPem, variables: ['JWT_PRIVATE_KEY'] } } };
+}
+
+/** Per booted server: give a realm its standard keys inside a caller's transaction. */
+const realmKeyProvisions = new WeakMap<
+  FastifyInstance,
+  (realmName: string, tx: SandboxRealmTransaction) => Promise<unknown>
+>();
+
+/**
+ * The `provisionKeys` of `createSandboxRealm` for a server {@link bootAuthServer}
+ * booted (#554): the key boot step for the new realm with no key variables,
+ * run over the caller's transaction with the server's KEK, so the realm and
+ * its keys commit together.
+ */
+export function realmKeyProvisioner(
+  app: FastifyInstance
+): (realm: { readonly name: string }, tx: SandboxRealmTransaction) => Promise<unknown> {
+  const provision = realmKeyProvisions.get(app);
+  if (provision === undefined) {
+    throw new Error('realmKeyProvisioner: the server was not booted by bootAuthServer');
+  }
+  return (realm, tx) => provision(realm.name, tx);
 }
 
 /** Per booted server: rotate a realm's token keys, by name, with the server's KEK and database. */
@@ -601,7 +649,11 @@ export async function bootAuthServer(
     // server rewrites `process.env`.
     const bootEnvironment = { ...process.env };
     const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
-    const bootRealmKeys = (realmName: string, withVariables: boolean) =>
+    const bootRealmKeys = (
+      realmName: string,
+      withVariables: boolean,
+      tokenSigningKeyPem?: string
+    ) =>
       bootRealmKeysWithKekEnv(
         {
           db: server.db,
@@ -629,7 +681,7 @@ export async function bootAuthServer(
                       },
                     }),
               }
-            : {},
+            : provisionedKeySettings(tokenSigningKeyPem),
         }
       );
     // Read now: a later boot of another server rewrites `process.env`.
@@ -660,7 +712,22 @@ export async function bootAuthServer(
         );
       }
     });
-    realmKeyBoots.set(server, (realmName) => bootRealmKeys(realmName, false));
+    realmKeyBoots.set(server, (realmName, tokenSigningKeyPem) =>
+      bootRealmKeys(realmName, false, tokenSigningKeyPem)
+    );
+    realmKeyProvisions.set(server, (realmName, tx) =>
+      bootRealmKeysWithKekEnv(
+        {
+          db: tx,
+          kekEnv: bootEnvironment,
+          warn: () => undefined,
+          enabledSignatureAlgorithms: env.enabledSignatureAlgorithms,
+          hybridSigning: env.HYBRID_SIGNING_ENABLED,
+          log: quiet,
+        },
+        { realmName, environmentKeys: {} }
+      )
+    );
     const keyDependencies = {
       db: server.db,
       kekEnv: bootEnvironment,

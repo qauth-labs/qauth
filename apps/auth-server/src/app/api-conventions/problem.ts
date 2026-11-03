@@ -396,6 +396,13 @@ export const PROBLEM_CODES = {
     description:
       'The new password does not meet the password policy. `reasons` lists why (`too_short`, `too_long`, `blocklisted`, `too_weak`), and `errors` carries a message for each, then any feedback, under `/password`.',
   },
+  sandbox_ceiling: {
+    status: 422,
+    type: 'sandbox-ceiling',
+    title: 'Sandbox ceiling',
+    description:
+      'The realm is a sandbox realm, whose environment ceiling is staging or production, never development. `errors` names `/posture/maxEnvironmentLaxity`.',
+  },
   precondition_required: {
     status: 428,
     type: 'precondition-required',

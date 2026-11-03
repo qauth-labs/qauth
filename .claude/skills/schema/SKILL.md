@@ -138,6 +138,12 @@ repository's host methods. At most one realm has `is_operator = true`.
 The auth-server's boot step (#484) fills the default realm's issuer and primary
 host from `JWT_ISSUER` (`assignIssuer` for a realm from before 0025) under
 `lockProvisioning`, and marks it the operator realm when none is.
+`realms.sandbox_of_realm_id` (migration 0056, #554) pairs a sandbox realm with
+its live realm: one sandbox per live realm (unique index), set only by
+`createSandboxWithPrimaryHost` and permanent, never a sandbox's sandbox or the
+operator realm's (trigger `realms_sandbox_pairing`), never a `development`
+ceiling on a sandbox (CHECK `realms_sandbox_ceiling`), and a live realm with a
+sandbox cannot be deleted (`ON DELETE RESTRICT`).
 `realms.webauthn_rp_id` is the realm's passkey RP ID setting (migrations 0028
 and 0034, #467, #553): NULL means the primary host, a value is an opted-in
 parent domain; `resolveRpId(realm)` (`@qauth-labs/shared-validation`) reads it.
