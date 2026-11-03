@@ -130,9 +130,10 @@ const REGISTRATIONS: Readonly<Record<RedirectUriSource, string>> = {
 };
 
 /**
- * Quoted as a JSON string: a client id, realm name or URI stored before
- * #593 may carry control characters, which this prints escaped rather than
- * sends to the operator's terminal.
+ * Quoted as a JSON string: a client id, realm name or URI written by hand may
+ * carry C0 control characters (ESC included), which this prints escaped
+ * rather than sends to the operator's terminal. JSON escapes those, not C1
+ * or bidirectional characters.
  */
 function quoted(value: string): string {
   return JSON.stringify(value);
