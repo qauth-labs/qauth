@@ -720,30 +720,26 @@ describe('toCimdClientInsert — post_logout_redirect_uris (OpenID Connect RP-In
     ['a fragment', 'https://app.example.com/signed-out#x'],
     ['a javascript: scheme', 'javascript:alert(document.domain)'],
     ['something that is not a URI', 'not a uri'],
-  ])('refuses the whole document when one entry has %s', (_label, bad) => {
+  ])('registers none when one entry has %s, and the client still materialises', (_label, bad) => {
     const doc = cimdDocumentSchema.parse(
       validDoc({ post_logout_redirect_uris: ['https://app.example.com/signed-out', bad] })
     );
-    let thrown: unknown;
-    try {
-      toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(InvalidClientError);
-    expect((thrown as InvalidClientError).errorDescription).toMatch(
-      /^CIMD document refused: invalid_client_metadata: post_logout_redirect_uris: /
-    );
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.postLogoutRedirectUris).toEqual([]);
+    expect(insert.redirectUris).toEqual(validDoc().redirect_uris);
   });
 
-  it('bounds the list like redirect_uris', () => {
+  it('reads a list over the bound, or not a list of strings, as absent: the document still parses', () => {
     const uris = (count: number) =>
       Array.from({ length: count }, (_, i) => `https://app.example.com/signed-out/${i}`);
     expect(
-      cimdDocumentSchema.safeParse(validDoc({ post_logout_redirect_uris: uris(20) })).success
-    ).toBe(true);
-    expect(
-      cimdDocumentSchema.safeParse(validDoc({ post_logout_redirect_uris: uris(21) })).success
-    ).toBe(false);
+      cimdDocumentSchema.parse(validDoc({ post_logout_redirect_uris: uris(20) }))
+        .post_logout_redirect_uris
+    ).toEqual(uris(20));
+    for (const value of [uris(21), 'https://app.example.com/signed-out', [42], ['']]) {
+      const parsed = cimdDocumentSchema.safeParse(validDoc({ post_logout_redirect_uris: value }));
+      expect(parsed.success).toBe(true);
+      expect(parsed.data?.post_logout_redirect_uris).toBeUndefined();
+    }
   });
 });

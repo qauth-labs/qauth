@@ -1,11 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
-import {
-  InvalidClientError,
-  InvalidClientMetadataError,
-  InvalidRedirectUriError,
-} from '@qauth-labs/shared-errors';
+import { InvalidClientError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -71,11 +67,17 @@ export const cimdDocumentSchema = z.object({
   redirect_uris: z.array(z.string().min(1).max(2048)).min(1).max(20),
   /**
    * OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): where the end-session
-   * route may send the browser after a logout. Bounded like `redirect_uris`;
-   * materialisation refuses the document for an entry the redirect URI rule
-   * refuses. Absent ⇒ `[]` ⇒ never redirect.
+   * route may send the browser after a logout. Bounded like `redirect_uris`,
+   * but never at the cost of the document: the field is optional and newer
+   * than the documents already served, so one that is not a list of at most
+   * 20 bounded strings reads as absent, as does one with an entry the redirect
+   * URI rule refuses (at materialisation). Absent ⇒ `[]` ⇒ never redirect.
    */
-  post_logout_redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
+  post_logout_redirect_uris: z
+    .array(z.string().min(1).max(2048))
+    .max(20)
+    .optional()
+    .catch(undefined),
   scope: z.string().max(2048).optional(),
   /**
    * RFC 7591 §2 tolerance: `grant_types` / `response_types` /
@@ -205,24 +207,21 @@ function assertRegistrableRedirectUris(uris: readonly string[]): void {
 }
 
 /**
- * The same refusal for the document's `post_logout_redirect_uris` (#675),
- * checked by {@link validatePostLogoutRedirectUri}: the redirect URI rule,
- * which Dynamic Client Registration applies to the same field. Its
- * description keeps DCR's `invalid_client_metadata: post_logout_redirect_uris: …`
- * code and text.
+ * The document's `post_logout_redirect_uris` (#675) as the client registers
+ * them: every entry must pass {@link validatePostLogoutRedirectUri}, the
+ * redirect URI rule Dynamic Client Registration applies to the same field.
+ * Unlike `redirect_uris`, one entry it refuses does not refuse the document:
+ * the field is optional, and a client whose document served before QAuth read
+ * it must keep resolving. The client then registers none, and the end-session
+ * route never redirects for it.
  */
-function assertRegistrablePostLogoutRedirectUris(uris: readonly string[]): void {
-  for (const uri of uris) {
-    try {
-      validatePostLogoutRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
-    } catch (err) {
-      const detail =
-        err instanceof InvalidClientMetadataError
-          ? `${err.message}: ${err.errorDescription ?? ''}`
-          : 'invalid_client_metadata';
-      throw new InvalidClientError(`CIMD document refused: ${detail}`);
-    }
+function registrablePostLogoutRedirectUris(uris: readonly string[]): string[] {
+  try {
+    for (const uri of uris) validatePostLogoutRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
+  } catch {
+    return [];
   }
+  return [...uris];
 }
 
 export interface CimdClientInsert {
@@ -454,9 +453,11 @@ export function toCimdClientInsert(
   // materialised from them included.
   assertRegistrableRedirectUris(doc.redirect_uris);
   const redirectUris = [...doc.redirect_uris];
-  // The same bar for where the end-session route may send the browser (#675).
-  const postLogoutRedirectUris = [...(doc.post_logout_redirect_uris ?? [])];
-  assertRegistrablePostLogoutRedirectUris(postLogoutRedirectUris);
+  // The same bar for where the end-session route may send the browser (#675),
+  // short of refusing the document.
+  const postLogoutRedirectUris = registrablePostLogoutRedirectUris(
+    doc.post_logout_redirect_uris ?? []
+  );
 
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted
