@@ -149,6 +149,7 @@ const REALM_POLICIES = {
 /** A client, as the client cases meet it. */
 const CLIENT_STATE = {
   redirectUris: ['https://app.example/callback'],
+  postLogoutRedirectUris: ['https://app.example/signed-out'],
   tokenEndpointAuthMethod: 'private_key_jwt',
   jwks: {
     keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU' }],
@@ -376,12 +377,25 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'clients.update',
     ['token-content', 'posture-loosening'],
     `${ADR_019}, #518, #632`,
-    'Change a client: its redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, environment or agent-type fields.',
+    'Change a client: its redirect URIs, post-logout redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, environment or agent-type fields.',
     [
       clientCase(
         'adds a redirect URI',
         { redirectUris: ['https://app.example/callback', 'https://other.example/callback'] },
         ['token-content']
+      ),
+      // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): no token goes
+      // there, but a new entry widens where the end-session route sends the
+      // browser.
+      clientCase(
+        'adds a post-logout redirect URI',
+        {
+          postLogoutRedirectUris: [
+            'https://app.example/signed-out',
+            'https://other.example/signed-out',
+          ],
+        },
+        ['posture-loosening']
       ),
       clientCase(
         'sets the token endpoint authentication method to none',

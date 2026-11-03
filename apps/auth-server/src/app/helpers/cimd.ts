@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 
 import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
-import { InvalidClientError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
+import {
+  InvalidClientError,
+  InvalidClientMetadataError,
+  InvalidRedirectUriError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -15,7 +19,7 @@ import {
   CLIENT_JWKS_URI_MAX_LENGTH,
   clientJwkSetSchema,
 } from './client-jwks';
-import { validateRedirectUri } from './dynamic-client-registration';
+import { validatePostLogoutRedirectUri, validateRedirectUri } from './dynamic-client-registration';
 import { egressGet } from './egress-get';
 
 /**
@@ -65,6 +69,13 @@ export const cimdDocumentSchema = z.object({
   client_id: z.string().min(1).max(2048),
   client_name: z.string().min(1).max(255),
   redirect_uris: z.array(z.string().min(1).max(2048)).min(1).max(20),
+  /**
+   * OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): where the end-session
+   * route may send the browser after a logout. Bounded like `redirect_uris`;
+   * materialisation refuses the document for an entry the redirect URI rule
+   * refuses. Absent ⇒ `[]` ⇒ never redirect.
+   */
+  post_logout_redirect_uris: z.array(z.string().min(1).max(2048)).max(20).optional(),
   scope: z.string().max(2048).optional(),
   /**
    * RFC 7591 §2 tolerance: `grant_types` / `response_types` /
@@ -193,6 +204,27 @@ function assertRegistrableRedirectUris(uris: readonly string[]): void {
   }
 }
 
+/**
+ * The same refusal for the document's `post_logout_redirect_uris` (#675),
+ * checked by {@link validatePostLogoutRedirectUri}: the redirect URI rule,
+ * which Dynamic Client Registration applies to the same field. Its
+ * description keeps DCR's `invalid_client_metadata: post_logout_redirect_uris: …`
+ * code and text.
+ */
+function assertRegistrablePostLogoutRedirectUris(uris: readonly string[]): void {
+  for (const uri of uris) {
+    try {
+      validatePostLogoutRedirectUri(uri, env.REDIRECT_URI_CUSTOM_SCHEMES);
+    } catch (err) {
+      const detail =
+        err instanceof InvalidClientMetadataError
+          ? `${err.message}: ${err.errorDescription ?? ''}`
+          : 'invalid_client_metadata';
+      throw new InvalidClientError(`CIMD document refused: ${detail}`);
+    }
+  }
+}
+
 export interface CimdClientInsert {
   realmId: string;
   clientId: string;
@@ -200,6 +232,8 @@ export interface CimdClientInsert {
   name: string;
   description: string;
   redirectUris: string[];
+  /** OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never redirect. */
+  postLogoutRedirectUris: string[];
   grantTypes: CimdGrantType[];
   responseTypes: 'code'[];
   /**
@@ -420,6 +454,9 @@ export function toCimdClientInsert(
   // materialised from them included.
   assertRegistrableRedirectUris(doc.redirect_uris);
   const redirectUris = [...doc.redirect_uris];
+  // The same bar for where the end-session route may send the browser (#675).
+  const postLogoutRedirectUris = [...(doc.post_logout_redirect_uris ?? [])];
+  assertRegistrablePostLogoutRedirectUris(postLogoutRedirectUris);
 
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted
@@ -468,6 +505,7 @@ export function toCimdClientInsert(
     name: doc.client_name,
     description: 'CIMD client (client_id metadata document)',
     redirectUris,
+    postLogoutRedirectUris,
     grantTypes,
     responseTypes,
     tokenEndpointAuthMethod: usesPrivateKeyJwt ? 'private_key_jwt' : 'none',

@@ -697,3 +697,53 @@ describe('toCimdClientInsert — client JWKS (CIMD §6.2 / RFC 7591 §2, #384)',
     expect(insert.jwksUri).toBeNull();
   });
 });
+
+describe('toCimdClientInsert — post_logout_redirect_uris (OpenID Connect RP-Initiated Logout 1.0 §3.1, #675)', () => {
+  const REALM = 'realm-1';
+  const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
+
+  it('materialises [] when the document names none', () => {
+    const doc = cimdDocumentSchema.parse(validDoc());
+    expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('materialises the URIs a redirect URI may be, verbatim', () => {
+    const uris = ['https://app.example.com/signed-out', 'http://127.0.0.1/signed-out'];
+    const doc = cimdDocumentSchema.parse(validDoc({ post_logout_redirect_uris: uris }));
+    expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).postLogoutRedirectUris).toEqual(
+      uris
+    );
+  });
+
+  it.each([
+    ['plain http to a non-loopback host', 'http://app.example.com/signed-out'],
+    ['a fragment', 'https://app.example.com/signed-out#x'],
+    ['a javascript: scheme', 'javascript:alert(document.domain)'],
+    ['something that is not a URI', 'not a uri'],
+  ])('refuses the whole document when one entry has %s', (_label, bad) => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ post_logout_redirect_uris: ['https://app.example.com/signed-out', bad] })
+    );
+    let thrown: unknown;
+    try {
+      toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(InvalidClientError);
+    expect((thrown as InvalidClientError).errorDescription).toMatch(
+      /^CIMD document refused: invalid_client_metadata: post_logout_redirect_uris: /
+    );
+  });
+
+  it('bounds the list like redirect_uris', () => {
+    const uris = (count: number) =>
+      Array.from({ length: count }, (_, i) => `https://app.example.com/signed-out/${i}`);
+    expect(
+      cimdDocumentSchema.safeParse(validDoc({ post_logout_redirect_uris: uris(20) })).success
+    ).toBe(true);
+    expect(
+      cimdDocumentSchema.safeParse(validDoc({ post_logout_redirect_uris: uris(21) })).success
+    ).toBe(false);
+  });
+});

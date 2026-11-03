@@ -42,3 +42,29 @@ describe('client_credentials_scopes rows (#891)', () => {
     expect(dropsClientCredentialsScopes({ clientCredentialsScopes: null }, listed)).toBe(false);
   });
 });
+
+describe('post_logout_redirect_uris rows (#675)', () => {
+  const spec = (overrides: Record<string, unknown> = {}): ClientSpec =>
+    clientSpecSchema.parse({
+      client_id: 'notes-app',
+      name: 'Notes',
+      grant_types: ['authorization_code'],
+      redirect_uris: ['https://notes.example.com/callback'],
+      ...overrides,
+    });
+
+  it('writes the list on a new client and on a rotation', () => {
+    const entry = spec({ post_logout_redirect_uris: ['https://notes.example.com/bye'] });
+    expect(buildInsert('realm-id', entry, 'hash').postLogoutRedirectUris).toEqual([
+      'https://notes.example.com/bye',
+    ]);
+    expect(buildUpdate(entry, 'hash').postLogoutRedirectUris).toEqual([
+      'https://notes.example.com/bye',
+    ]);
+  });
+
+  it('writes [] for an entry without one, so a rotation clears a list the manifest dropped', () => {
+    expect(buildInsert('realm-id', spec(), 'hash').postLogoutRedirectUris).toEqual([]);
+    expect(buildUpdate(spec(), 'hash').postLogoutRedirectUris).toEqual([]);
+  });
+});

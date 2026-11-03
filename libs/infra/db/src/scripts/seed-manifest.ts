@@ -77,6 +77,16 @@ const verifiedDomainZ = z.string().transform((value, ctx) => {
   }
 });
 
+/**
+ * One redirect URI: a URL the consent screen can show where the code goes to
+ * (ADR-019 Decision 6, #593). A post-logout redirect URI (#675) passes the
+ * same rule.
+ */
+const redirectUriZ = z.url().refine((uri) => redirectTarget(uri) !== undefined, {
+  error: (issue) =>
+    `"${String(issue.input)}": the consent screen cannot show where this redirect URI goes: name a DNS host of valid labels, an IPv4 address or a loopback address, or a scheme of at most 64 characters`,
+});
+
 export const clientSpecSchema = z
   .object({
     client_id: z.string().min(1).max(255),
@@ -102,14 +112,12 @@ export const clientSpecSchema = z
     audience: z.array(z.string().min(1)).nullable().optional(),
     // Each one a URI the consent screen can show where the code goes to
     // (ADR-019 Decision 6, #593), as every registration path requires.
-    redirect_uris: z
-      .array(
-        z.url().refine((uri) => redirectTarget(uri) !== undefined, {
-          error: (issue) =>
-            `"${String(issue.input)}": the consent screen cannot show where this redirect URI goes: name a DNS host of valid labels, an IPv4 address or a loopback address, or a scheme of at most 64 characters`,
-        })
-      )
-      .optional(),
+    redirect_uris: z.array(redirectUriZ).optional(),
+    // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): where the
+    // end-session route may send the browser after a logout, matched exactly.
+    // Each entry passes the redirect URI rule. Omitted ⇒ `[]` ⇒ never
+    // redirect.
+    post_logout_redirect_uris: z.array(redirectUriZ).optional(),
     require_pkce: z.boolean().optional(),
     token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
     // ADR-007 §2: classify a seeded client as an autonomous AI agent.

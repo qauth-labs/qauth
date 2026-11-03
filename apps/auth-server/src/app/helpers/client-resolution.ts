@@ -60,6 +60,12 @@ export interface ResolvedClient {
    */
   dpopBoundAccessTokens: boolean;
   redirectUris: string[];
+  /**
+   * OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): where the end-session
+   * route may send the browser after a logout, matched exactly; `[]` never
+   * redirects.
+   */
+  postLogoutRedirectUris: string[];
   tokenEndpointAuthMethod: string;
   /**
    * RFC 7591 §2 key set of a `private_key_jwt` client (#384), inline or by
@@ -182,6 +188,7 @@ const CIMD_REFRESHED_FIELDS = [
   'name',
   'description',
   'redirectUris',
+  'postLogoutRedirectUris',
   'grantTypes',
   'responseTypes',
   'tokenEndpointAuthMethod',

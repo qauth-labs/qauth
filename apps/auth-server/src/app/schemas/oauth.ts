@@ -708,6 +708,10 @@ export const dynamicClientRegistrationRequestSchema = z.object({
   // Every array goes through `boundedArray`: its length is checked before any
   // element, so the caller cannot choose how many issues the request produces.
   redirect_uris: boundedArray(z.array(z.string().min(1).max(2048)), 20).optional(),
+  // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): where the end-session
+  // route may send the browser after a logout. Bounded like `redirect_uris`;
+  // the handler checks each entry by the redirect URI rule.
+  post_logout_redirect_uris: boundedArray(z.array(z.string().min(1).max(2048)), 20).optional(),
   grant_types: boundedArray(
     z.array(
       z.enum([
@@ -767,6 +771,8 @@ export const dynamicClientRegistrationResponseSchema = z.object({
   client_secret_expires_at: z.number().int().nonnegative().optional(),
   client_name: z.string().optional(),
   redirect_uris: z.array(z.string()).optional(),
+  /** Echoed when the client registered at least one (#675). */
+  post_logout_redirect_uris: z.array(z.string()).optional(),
   grant_types: z.array(z.string()),
   response_types: z.array(z.string()),
   token_endpoint_auth_method: z.string(),

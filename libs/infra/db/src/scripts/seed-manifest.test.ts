@@ -95,6 +95,10 @@ describe('manifestSchema', () => {
   it.each([
     ['a field the document owns', { name: 'Example' }],
     ['a redirect URI', { redirect_uris: ['https://client.example.com/cb'] }],
+    [
+      'a post-logout redirect URI (#675)',
+      { post_logout_redirect_uris: ['https://client.example.com/bye'] },
+    ],
     ['a secret', { client_secret: 'x' }],
     ['ID-JAG targets (#434)', { id_jag_targets: ['https://as.partner.example'] }],
   ])('refuses a CIMD entry carrying %s', (_label, extra) => {
@@ -342,6 +346,40 @@ describe('isCimdClientIdShape', () => {
           ],
         }).success
       ).toBe(false);
+    });
+  });
+
+  describe('post_logout_redirect_uris (#675)', () => {
+    const logoutClient = (uris?: string[]) => ({
+      realm: 'master',
+      clients: [
+        {
+          client_id: 'notes',
+          name: 'Notes',
+          grant_types: ['authorization_code'],
+          redirect_uris: ['https://notes.example.com/cb'],
+          ...(uris === undefined ? {} : { post_logout_redirect_uris: uris }),
+        },
+      ],
+    });
+
+    it('accepts URIs a redirect URI may be, and leaves the list out when omitted', () => {
+      const uris = ['https://notes.example.com/bye', 'com.example.notes:/bye'];
+      expect(
+        manifestSchema.parse(logoutClient(uris)).clients?.[0].post_logout_redirect_uris
+      ).toEqual(uris);
+      expect(
+        manifestSchema.parse(logoutClient()).clients?.[0].post_logout_redirect_uris
+      ).toBeUndefined();
+    });
+
+    it.each([
+      ['a URI the consent screen cannot show', 'https://notes_app.example.com/bye'],
+      ['a relative reference', '/bye'],
+    ])('refuses %s, naming it', (_label, uri) => {
+      const result = manifestSchema.safeParse(logoutClient(['https://notes.example.com/bye', uri]));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0].path).toEqual(['clients', 0, 'post_logout_redirect_uris', 1]);
     });
   });
 

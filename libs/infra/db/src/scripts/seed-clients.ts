@@ -217,6 +217,8 @@ export function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash:
     name: spec.name,
     description: spec.description ?? null,
     redirectUris: spec.redirect_uris ?? [],
+    // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never redirect after a logout.
+    postLogoutRedirectUris: spec.post_logout_redirect_uris ?? [],
     scopes: spec.scopes ?? [],
     // #891: the scopes `client_credentials` may issue, out of `scopes`; NULL =
     // any of them. De-duplicated like the passkey origins.
@@ -266,6 +268,8 @@ export function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     name: spec.name,
     description: spec.description ?? null,
     redirectUris: spec.redirect_uris ?? [],
+    // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never redirect after a logout.
+    postLogoutRedirectUris: spec.post_logout_redirect_uris ?? [],
     scopes: spec.scopes ?? [],
     // Removed from the manifest ⇒ NULL ⇒ any scope of `scopes` again (#891).
     clientCredentialsScopes: clientCredentialsScopesOf(spec),

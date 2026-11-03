@@ -1,7 +1,11 @@
 import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
 import { describe, expect, it, vi } from 'vitest';
 
-import { validateAndNormalize, validateRedirectUri } from './dynamic-client-registration';
+import {
+  registrationSchemaError,
+  validateAndNormalize,
+  validateRedirectUri,
+} from './dynamic-client-registration';
 
 /** `REDIRECT_URI_CUSTOM_SCHEMES` unset: the default. */
 const NO_CUSTOM_SCHEMES: readonly string[] = [];
@@ -372,5 +376,64 @@ describe('validateAndNormalize', () => {
     );
     expect(n.isPublic).toBe(false);
     expect(n.tokenEndpointAuthMethod).toBe('client_secret_basic');
+  });
+});
+
+describe('post_logout_redirect_uris (OpenID Connect RP-Initiated Logout 1.0 §3.1, #675)', () => {
+  const allowedScopes = ['openid'];
+  const register = (postLogoutRedirectUris?: string[], customSchemes = NO_CUSTOM_SCHEMES) =>
+    validateAndNormalize(
+      {
+        redirect_uris: ['https://app.example/cb'],
+        ...(postLogoutRedirectUris === undefined
+          ? {}
+          : { post_logout_redirect_uris: postLogoutRedirectUris }),
+      },
+      allowedScopes,
+      customSchemes
+    );
+
+  it('registers none when the request names none', () => {
+    expect(register().postLogoutRedirectUris).toEqual([]);
+  });
+
+  it('registers the URIs a redirect URI may be, verbatim', () => {
+    const uris = ['https://app.example/bye', 'http://127.0.0.1/bye', 'com.example.app:/bye'];
+    expect(register(uris).postLogoutRedirectUris).toEqual(uris);
+  });
+
+  it('carries the deployment custom schemes through (#774)', () => {
+    expect(register(['myapp:/bye'], ['myapp']).postLogoutRedirectUris).toEqual(['myapp:/bye']);
+    expect(() => register(['myapp:/bye'])).toThrow(InvalidClientMetadataError);
+  });
+
+  it.each([
+    ['plain http to a non-loopback host', 'http://app.example/bye'],
+    ['a fragment', 'https://app.example/bye#x'],
+    ['a URI the consent screen cannot show', 'https://app_x.example/bye'],
+    ['javascript:', 'javascript:alert(1)'],
+    ['a relative reference', '/bye'],
+    ['a line break', 'https://app.example/b\nye'],
+  ])('refuses %s as invalid_client_metadata naming the field', (_label, uri) => {
+    let caught: unknown;
+    try {
+      register(['https://app.example/bye', uri]);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(InvalidClientMetadataError);
+    expect((caught as InvalidClientMetadataError).errorDescription).toMatch(
+      /^post_logout_redirect_uris: /
+    );
+  });
+});
+
+describe('registrationSchemaError and post_logout_redirect_uris (#675)', () => {
+  it('answers invalid_client_metadata for a schema refusal under post_logout_redirect_uris', () => {
+    expect(
+      registrationSchemaError([
+        { instancePath: '/post_logout_redirect_uris/0', message: 'Too big' },
+      ])
+    ).toBeInstanceOf(InvalidClientMetadataError);
   });
 });
