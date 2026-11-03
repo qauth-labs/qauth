@@ -53,9 +53,9 @@ export const consent = defineStep({
             'Whether the scope is dangerous (`write:*`, `agent:admin`, `agent:exec`): it always needs consent and a fresh sign-in.',
         }),
       }),
-      1,
+      0,
       64,
-      'The scopes asked for, in the order the screen lists them.'
+      'The scopes asked for, in the order the screen lists them. Empty when the request asks for none, as a client of a CIMD document often does: the screen then names the client and where the code goes, and says that no scope was asked for.'
     ),
     resources: array(
       declared(

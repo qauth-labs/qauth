@@ -5,6 +5,7 @@ import { defineStep } from '../grammar';
 import {
   base64url,
   constant,
+  displayText,
   EMPTY_OBJECT,
   host,
   integer,
@@ -28,11 +29,23 @@ import {
  * `recovery_code` and `select_account` only by the Interaction API.
  */
 
+/** The identifier step's personal data: the request's `login_hint` as a prefill (#628). */
+const identifierPrefill = object(
+  {
+    login_hint: displayText(
+      'declared',
+      254,
+      "The authorization request's `login_hint` (OpenID Connect Core 1.0 §3.1.2.1), for the screen to pre-fill the identifier field with (#628). The client chose it, so it is only a suggestion: the person answers the step with it or with another identifier, and the server checks that answer as it checks any other. Absent when the request carried none or one that is no display value, and after an account switch."
+    ).optional(),
+  },
+  'What the screen pre-fills the identifier field with.'
+);
+
 export const identifier = defineStep({
   name: 'identifier',
   transports: ['interaction', 'fipa'],
   params: EMPTY_OBJECT,
-  personal: EMPTY_OBJECT,
+  personal: identifierPrefill,
   answer: object({ login_hint: loginHint }),
   errors: [],
   amr: [],

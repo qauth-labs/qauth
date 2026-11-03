@@ -67,8 +67,8 @@ export const LOG_REDACT_PATHS = [
  * Fastify's request log line carries `req.url` verbatim — path AND query
  * string — and pino's path-based `redact` works on object keys, so a bearer
  * secret that arrives as a query parameter would reach the sink in the clear
- * even though `LOG_REDACT_PATHS` names it. QAuth puts these secrets in a
- * query string:
+ * even though `LOG_REDACT_PATHS` names it. QAuth puts these secrets, and one
+ * piece of personal data, in a query string:
  *
  * - `code`: an upstream provider's authorization code, which the provider sends
  *   the browser back with to an AuthMethod's callback,
@@ -91,6 +91,12 @@ export const LOG_REDACT_PATHS = [
  *   the request line; with the account's password it verifies the account
  *   until it is used or expires (a day by default). Censored on every path,
  *   so a link pasted onto a wrong path is censored too.
+ * - `login_hint`: the identifier a client may name in an authorization request
+ *   (OpenID Connect Core 1.0 §3.1.2.1, #628), usually the person's email
+ *   address. No bearer value, but personal data: the interaction that offers
+ *   it as the identifier step's pre-fill keeps it in the step's personal data,
+ *   readable only by the browser that holds the flow cookie, and the log is
+ *   held to the same rule.
  *
  * Names are matched case-sensitively, as query parameter names are, and in
  * every spelling the route would accept: Fastify's querystring parser
@@ -119,6 +125,7 @@ export const LOG_REDACTED_QUERY_PARAMETERS = [
   'access_token',
   'response_code',
   'token',
+  'login_hint',
 ] as const;
 
 /**
@@ -189,8 +196,10 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
 /**
  * An interaction id in a path of the Interaction API (#592, ADR-019 Decision
  * 6): the segment after `/interaction/<version>/`, as in
- * `/interaction/v1-rc.0/<id>/answer`. The id is a secret: with it the
- * ceremony app's server reads the current step, so it never reaches a log.
+ * `/interaction/v1-rc.0/<id>/answer`, or after the ceremony page's
+ * `/ui/interaction/`, where `/oauth/authorize` sends the browser (#628). The
+ * id is a secret: with it the ceremony app's server reads the current step,
+ * so it never reaches a log.
  *
  * - Matched anywhere in the URL, so a path quoted inside a query value is
  *   censored too, and with each `/` plain or percent-encoded (`%2F`), as a
@@ -202,7 +211,7 @@ const REDACTED_QUERY_VALUE_PATTERN = new RegExp(
  */
 const SLASH = '(?:/|%2[Ff])';
 const INTERACTION_ID_IN_PATH_PATTERN = new RegExp(
-  `(${SLASH}interaction${SLASH}v[1-9][0-9]*(?:-rc\\.(?:0|[1-9][0-9]*))?${SLASH}(?:\\.?${SLASH})*)` +
+  `(${SLASH}(?:interaction${SLASH}v[1-9][0-9]*(?:-rc\\.(?:0|[1-9][0-9]*))?|ui${SLASH}interaction)${SLASH}(?:\\.?${SLASH})*)` +
     `(?!(?:openapi\\.json|wallet)(?:${SLASH}|[?#&]|$))` +
     `(?:(?!%2[Ff])[^/?#&])+`,
   'g'
@@ -234,8 +243,9 @@ export function redactLoggedUrl(url: string): string {
   return keepsAnInteractionSegment(redacted) ? LOG_REDACT_CENSOR : redacted;
 }
 
-/** An Interaction API path prefix in a decoded URL, wherever it is. */
-const INTERACTION_PREFIX_ANYWHERE = /\/interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?\//g;
+/** An Interaction API or ceremony page path prefix in a decoded URL, wherever it is. */
+const INTERACTION_PREFIX_ANYWHERE =
+  /\/(?:interaction\/v[1-9][0-9]*(?:-rc\.(?:0|[1-9][0-9]*))?|ui\/interaction)\//g;
 
 /** The segments an Interaction API path may hold besides the censored id. */
 const NAMED_INTERACTION_SEGMENTS: ReadonlySet<string> = new Set([

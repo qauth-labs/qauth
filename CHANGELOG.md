@@ -1245,10 +1245,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint's; the step read, which the ceremony app's server makes for every
   browser, counts per interaction. The engine shares the legacy sign-in forms'
   per-account failure ladder. The redirect comes from the interaction record
-  and the realm, never the request; until the authorization endpoint starts
-  interactions and mints their codes ([#628]), a finished sign-in redirects to
-  the client with `error=server_error`. The interaction record is now version
-  2 (an interaction of the previous release reads as expired).
+  and the realm, never the request; a finished sign-in goes on with its
+  authorization request ([#628]). The interaction record is now version 2 (an
+  interaction of the previous release reads as expired).
+
+- **`/oauth/authorize` can start an interaction** ([#628], ADR-019 Decision 6).
+  With the new, temporary `INTERACTION_UI_ENABLED` switch on (default off),
+  where the endpoint sent the person to `/ui/login` or `/ui/consent` it now
+  creates an interaction holding the validated request, at most 16 KiB, and
+  redirects to the ceremony page `/ui/interaction/{id}` with the id only, so no
+  URL carries the request's parameters again (a 2048-character `state` no
+  longer makes a long `Location`). An interaction is created only after every
+  check that needs no user, `client_id`, `redirect_uri` and PKCE included,
+  and the endpoint runs those checks and its decision unchanged in both modes:
+  a request refused today is refused the same way. When the sign-in finishes,
+  the request is checked and decided again for the session the interaction
+  holds, and only then is the code minted (`mintAuthorizationCode`, under the
+  consent and the session) and the browser sent to the client with `code`,
+  `state` and `iss`; a consent it still needs starts a consent interaction, and
+  an error is redirected to the client. A finish the expiry sweep beat, and a
+  replayed answer, issue no code. `prompt=none` starts no interaction. The
+  consent step can be shown but not yet answered ([#629]): until then the person
+  can cancel, which redirects with `error=access_denied` once the request is
+  checked again, as a finish is. The endpoint takes
+  `login_hint` (OpenID Connect Core 1.0 §3.1.2.1, at most 254 bytes in UTF-8,
+  longer is `invalid_request`), which the identifier step offers as its
+  pre-fill, in the step's personal data; the request log censors it, and the
+  interaction id of the ceremony page path. The flow graph `core.authorization`
+  draws the endpoint in both modes.
 
 - **Security operations, defined by effect, as an enforced classification**
   ([#508], ADR-019 Decision 7). The eleven effect tags (`credential-path`,
@@ -2791,6 +2815,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#616]: https://github.com/qauth-labs/qauth/issues/616
 [#627]: https://github.com/qauth-labs/qauth/issues/627
 [#628]: https://github.com/qauth-labs/qauth/issues/628
+[#629]: https://github.com/qauth-labs/qauth/issues/629
 [#631]: https://github.com/qauth-labs/qauth/issues/631
 [#633]: https://github.com/qauth-labs/qauth/issues/633
 [#634]: https://github.com/qauth-labs/qauth/issues/634

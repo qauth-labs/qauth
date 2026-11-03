@@ -161,6 +161,15 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: 'How long, in seconds, a browser sign-in ceremony and its flow cookie live, counted from the request that starts it (one whose first step nobody answers ends after 10 minutes); from 60 to 7200.',
   },
   {
+    name: 'INTERACTION_UI_ENABLED',
+    tier: 'experimental',
+    role: 'deployment',
+    owner: 'sessions',
+    default: 'false',
+    since: '0.2.0',
+    docs: 'Temporary: have `/oauth/authorize` start an interaction where a person must sign in or consent, and redirect to the ceremony page `/ui/interaction/{id}` with that id only, instead of the `/ui/login` and `/ui/consent` pages; the cut-over to the ceremony app removes the switch.',
+  },
+  {
     name: 'SESSION_RETENTION_DAYS',
     tier: 'advanced',
     role: 'deployment',

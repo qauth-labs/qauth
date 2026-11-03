@@ -130,23 +130,52 @@ export async function resolveBrowserSession(
     return null;
   }
 
-  const user = await fastify.repositories.users.findById(session.realmId, session.userId);
-  if (!user || accountCredentialRefusal(user, session.createdAt) !== null) {
-    // The account behind the session is gone or disabled, or was disabled
-    // after the session began (#748) — end the session so the cookie cannot
-    // keep using it, and treat it as no sign-in.
-    await endBrowserSession(
-      fastify,
-      session.realmId,
-      session.sid,
-      'admin',
-      SYSTEM_ACTOR,
-      session.userId
-    );
+  if (!(await keepUsableSession(fastify, session))) {
     clearSessionCookie(reply);
     return null;
   }
   return session;
+}
+
+/**
+ * Whether the account behind a live session may still use it. One that is
+ * gone or disabled, or was disabled after the session began (#748), may not:
+ * the session is ended, so nothing can keep using it, and the caller treats it
+ * as no sign-in.
+ */
+async function keepUsableSession(
+  fastify: FastifyInstance,
+  session: BrowserSession
+): Promise<boolean> {
+  const user = await fastify.repositories.users.findById(session.realmId, session.userId);
+  if (user && accountCredentialRefusal(user, session.createdAt) === null) return true;
+  await endBrowserSession(
+    fastify,
+    session.realmId,
+    session.sid,
+    'admin',
+    SYSTEM_ACTOR,
+    session.userId
+  );
+  return false;
+}
+
+/**
+ * The browser session `sid` of `realmId`, by its id rather than by the
+ * request's cookie, while it is live, belongs to `userId` and its account may
+ * still use it ({@link resolveBrowserSession}'s rules); `null` otherwise. For
+ * the session an interaction's transaction holds (#628), which the browser's
+ * cookie may not name yet: the answer that created it sets that cookie.
+ */
+export async function liveBrowserSession(
+  fastify: FastifyInstance,
+  realmId: string,
+  sid: string,
+  userId: string
+): Promise<BrowserSession | null> {
+  const session = await fastify.sessionService.get({ realmId, sid });
+  if (!session || session.userId !== userId) return null;
+  return (await keepUsableSession(fastify, session)) ? session : null;
 }
 
 /**

@@ -220,6 +220,7 @@ describe('the display rule (ADR-019 Decision 6)', () => {
         'ConsentParams.resources.items',
         'DeviceConfirmPersonalData.network.name',
         'DeviceConfirmPersonalData.user_agent',
+        'IdentifierPersonalData.login_hint',
       ].sort()
     );
   });

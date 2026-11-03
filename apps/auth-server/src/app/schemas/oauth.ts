@@ -53,6 +53,33 @@ export const maxAgeParamSchema = z
   )
   .optional();
 
+/**
+ * The longest `login_hint` the authorization endpoint takes, in bytes of
+ * UTF-8 (#628): the longest identifier the sign-in takes (ADR-017 Decision 3),
+ * an email address of at most 254 bytes.
+ */
+export const LOGIN_HINT_MAX_BYTES = 254;
+
+/**
+ * OpenID Connect Core 1.0 §3.1.2.1 `login_hint` (#628): a hint at the
+ * identifier the person signs in with, at most {@link LOGIN_HINT_MAX_BYTES}
+ * bytes in UTF-8; a longer one is refused with `invalid_request`. With
+ * `INTERACTION_UI_ENABLED` on, it pre-fills the identifier step: its personal
+ * data, never its params. Nothing is checked or looked up with it: the person
+ * still answers the identifier step, and may answer it with another one.
+ */
+export const loginHintParamSchema = z
+  .string()
+  .max(LOGIN_HINT_MAX_BYTES)
+  .refine((value) => Buffer.byteLength(value, 'utf8') <= LOGIN_HINT_MAX_BYTES, {
+    message: `login_hint is longer than ${LOGIN_HINT_MAX_BYTES} bytes`,
+  })
+  .optional()
+  .meta({
+    description:
+      'OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it.',
+  });
+
 /* -------------------------------------------------------------------------- */
 /*        Grant-type, token-type and client-assertion URNs (one place)        */
 /* -------------------------------------------------------------------------- */
@@ -277,6 +304,8 @@ export const authorizeQuerySchema = z.object({
   resource: resourceParamSchema,
   // RFC 9449 §10 (#480): the thumbprint of the DPoP key to bind the code to.
   dpop_jkt: dpopJktParamSchema,
+  // OIDC Core §3.1.2.1 (#628): pre-fills the identifier step of an interaction.
+  login_hint: loginHintParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;

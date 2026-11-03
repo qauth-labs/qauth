@@ -296,14 +296,35 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists the bearer values that ride in a query string', () => {
+  it('lists the bearer values that ride in a query string, and login_hint (#628)', () => {
     expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual([
       'code',
       'id_token',
       'access_token',
       'response_code',
       'token',
+      'login_hint',
     ]);
+  });
+
+  it('censors the login_hint of an authorization request (#628)', () => {
+    expect(
+      redactLoggedUrl('/oauth/authorize?client_id=c&login_hint=alice%40example.com&state=s')
+    ).toBe(`/oauth/authorize?client_id=c&login_hint=${LOG_REDACT_CENSOR}&state=s`);
+  });
+
+  it('censors the interaction id of the ceremony page path (#628)', () => {
+    const id = 'aW50ZXJhY3Rpb24taWQtb2YtMzItcmFuZG9tLWJ5dGU';
+    expect(redactLoggedUrl(`/ui/interaction/${id}`)).toBe(`/ui/interaction/${LOG_REDACT_CENSOR}`);
+    expect(redactLoggedUrl(`/ui/interaction/${id}?x=1`)).toBe(
+      `/ui/interaction/${LOG_REDACT_CENSOR}?x=1`
+    );
+    expect(redactLoggedUrl(`/ui/x?next=%2Fui%2Finteraction%2F${id}`)).toBe(
+      `/ui/x?next=%2Fui%2Finteraction%2F${LOG_REDACT_CENSOR}`
+    );
+    for (const url of [`/ui/interaction/%2E/${id}`, `/ui/%69nteraction/${id}`]) {
+      expect(redactLoggedUrl(url), url).not.toContain(id);
+    }
   });
 
   it('censors an id_token or access_token a form_post bounce carried into a callback URL (#599)', () => {

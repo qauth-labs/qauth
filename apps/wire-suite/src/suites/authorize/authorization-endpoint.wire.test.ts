@@ -112,6 +112,29 @@ describe('[GET /oauth/authorize] RFC 6749 §4.1.2.1 — a request whose client o
   });
 });
 
+describe('[GET /oauth/authorize] OIDC Core 1.0 §3.1.2.1 — login_hint, at most 254 bytes', () => {
+  // 127 two-byte characters: 254 bytes of UTF-8, the longest identifier the
+  // sign-in takes; one more character makes 255.
+  const longestHint = 'é'.repeat(127);
+
+  it('takes a login_hint of 254 bytes and sends the browser to sign in (§3.1.2.1)', async () => {
+    const { params } = authorizationRequest({ login_hint: longestHint });
+
+    const response = await call('GET /oauth/authorize', { query: params });
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get('location') ?? '', baseUrl);
+    expect(location.pathname, 'a sign-in page of the issuer, not the client').toMatch(/^\/ui\//);
+    expect(location.searchParams.get('error')).toBeNull();
+  });
+
+  it('refuses a login_hint over 254 bytes with 400 invalid_request, without redirecting (§3.1.2.1)', async () => {
+    const { params } = authorizationRequest({ login_hint: `${longestHint}a` });
+
+    await expectRefusedWithoutRedirect(await call('GET /oauth/authorize', { query: params }));
+  });
+});
+
 describe('[GET /oauth/authorize] RFC 9207 §2 — iss on every authorization response', () => {
   it('adds the iss equal to the published issuer to a login_required error under prompt=none (§2, §2.3; OIDC Core 1.0 §3.1.2.1)', async () => {
     const request = authorizationRequest({ prompt: 'none' });

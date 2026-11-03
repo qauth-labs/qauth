@@ -27,6 +27,11 @@ import { env } from '../../config/env';
 import { accountPoliciesOf } from '../helpers/account-policies';
 import { UnsupportedMediaTypeError } from '../helpers/api-request-errors';
 import {
+  cancelAuthorization,
+  CONSENT_STEP,
+  finishAuthorization,
+} from '../helpers/authorization-interaction';
+import {
   answerInteraction,
   cancelInteraction,
   type InteractionDecision,
@@ -38,10 +43,6 @@ import {
 } from '../helpers/interaction';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
-import {
-  interactionCancelRedirect,
-  interactionFinishRedirect,
-} from '../helpers/interaction-redirect';
 import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
@@ -74,7 +75,9 @@ import { emitUserEvent } from '../helpers/user-events';
  * form post gets `303 See Other` to the ceremony page of the interaction,
  * where the next step is read, or to the final redirect: the page needs no
  * JavaScript. Both targets are built from the interaction record and the
- * realm row, never from the request (`helpers/interaction-redirect.ts`).
+ * realm row, never from the request (`helpers/interaction-redirect.ts`), once
+ * the authorization request it holds is checked again
+ * (`helpers/authorization-interaction.ts`, #628).
  *
  * Every response is `Cache-Control: no-store`, sends no CORS header (the
  * routes are on the `browser` surface, which the CORS plugin never answers)
@@ -384,6 +387,12 @@ async function decideAnswer(
   },
   state: InteractionState
 ): Promise<InteractionDecision> {
+  if (state.step.name === CONSENT_STEP) {
+    // The consent step is shown, and cancelled, but not answered yet: the
+    // consent answer and the stored decision it makes are #629. The person
+    // can cancel, which sends the client `access_denied`.
+    throw new InvalidAnswerError('This step cannot be answered yet.');
+  }
   try {
     readInteractionAnswer(state.step, answer.fields, answer.encoding);
   } catch (error) {
@@ -638,8 +647,11 @@ export default async function (fastify: FastifyInstance) {
               { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
           }
+          // The authorization request goes on (#628): the code, minted only
+          // now that the interaction has ended, or the request's next
+          // interaction (a consent after the sign-in).
           return respond(request, reply, parsed.encoding, {
-            location: interactionFinishRedirect(realm, result.request),
+            location: await finishAuthorization(fastify, request, reply, result),
           });
         }
       }
@@ -680,7 +692,7 @@ export default async function (fastify: FastifyInstance) {
         return respond(request, reply, parsed.encoding, { location: ceremonyPageUrl(request) });
       }
       return respond(request, reply, parsed.encoding, {
-        location: interactionCancelRedirect(requestRealm(request), result.request),
+        location: await cancelAuthorization(fastify, request, result.request),
       });
     }
   );

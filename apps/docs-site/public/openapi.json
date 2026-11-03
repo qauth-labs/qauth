@@ -6618,6 +6618,16 @@
             "name": "dpop_jkt",
             "required": false,
             "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "in": "query",
+            "name": "login_hint",
+            "required": false,
+            "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it."
           }
         ],
         "x-qauth-stability": "stable",
@@ -6755,6 +6765,11 @@
                   "dpop_jkt": {
                     "type": "string",
                     "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
+                  },
+                  "login_hint": {
+                    "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it.",
+                    "type": "string",
+                    "maxLength": 254
                   }
                 },
                 "required": [
@@ -14116,6 +14131,16 @@
             "name": "dpop_jkt",
             "required": false,
             "description": "RFC 9449 §10: the base64url SHA-256 JWK thumbprint of the DPoP key to bind the authorization code to. Read only when the server has DPoP on."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 254
+            },
+            "in": "query",
+            "name": "login_hint",
+            "required": false,
+            "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it."
           }
         ],
         "x-qauth-stability": "stable",

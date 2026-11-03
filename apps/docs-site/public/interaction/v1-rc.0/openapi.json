@@ -1342,7 +1342,11 @@
                     "summary": "urn:qauth:ia:identifier:v1-rc.0",
                     "value": {
                       "step": "urn:qauth:ia:identifier:v1-rc.0",
-                      "data": {}
+                      "data": {
+                        "urn:qauth:ia:identifier:v1-rc.0": {
+                          "login_hint": "alice@example.com"
+                        }
+                      }
                     }
                   },
                   "password": {
@@ -4444,7 +4448,17 @@
       },
       "IdentifierPersonalData": {
         "type": "object",
-        "properties": {},
+        "description": "What the screen pre-fills the identifier field with.",
+        "properties": {
+          "login_hint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 254,
+            "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+            "x-qauth-display": "declared",
+            "description": "The authorization request's `login_hint` (OpenID Connect Core 1.0 §3.1.2.1), for the screen to pre-fill the identifier field with (#628). The client chose it, so it is only a suggestion: the person answers the step with it or with another identifier, and the server checks that answer as it checks any other. Absent when the request carried none or one that is no display value, and after an account switch."
+          }
+        },
         "additionalProperties": false
       },
       "PasswordParams": {
@@ -5579,8 +5593,8 @@
         "properties": {
           "scopes": {
             "type": "array",
-            "description": "The scopes asked for, in the order the screen lists them.",
-            "minItems": 1,
+            "description": "The scopes asked for, in the order the screen lists them. Empty when the request asks for none, as a client of a CIMD document often does: the screen then names the client and where the code goes, and says that no scope was asked for.",
+            "minItems": 0,
             "maxItems": 64,
             "items": {
               "type": "object",

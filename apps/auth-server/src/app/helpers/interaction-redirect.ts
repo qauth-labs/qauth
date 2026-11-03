@@ -3,11 +3,12 @@ import { buildRedirectUrl } from './oauth-redirect';
 import { realmIssuer, type RealmUrlSource } from './realm-url';
 
 /**
- * WHERE AN INTERACTION ENDS (#616, ADR-019 Decision 6): the final redirect of
- * the Interaction API, built from the interaction record (the authorization
+ * WHERE A CANCELLED INTERACTION ENDS (#616, ADR-019 Decision 6): the final
+ * redirect of a cancel, built from the interaction record (the authorization
  * request it holds, validated when the interaction was created) and the realm
- * row (its issuer), never from the request. No field of an answer or a cancel
- * reaches it.
+ * row (its issuer), never from the request. No field of a cancel reaches it.
+ * A finished interaction goes on with its authorization request instead
+ * (`helpers/authorization-interaction.ts`, #628).
  */
 
 /** `state` as the authorization request carried it, when it carried one. */
@@ -26,27 +27,6 @@ export function interactionCancelRedirect(
 ): string {
   return buildRedirectUrl(request.redirect_uri, {
     error: 'access_denied',
-    ...stateOf(request),
-    iss: realmIssuer(realm),
-  });
-}
-
-/**
- * The redirect of a finished interaction: the person signed in.
- *
- * Issuing the authorization code is the authorization endpoint's part, which
- * starts interactions in #628 and mints the code once the interaction
- * finishes (`mintAuthorizationCode`). Until then no interaction is created by
- * a production route, and a finished one answers the client with
- * `error=server_error`, its `state` and `iss`: never a code this route did
- * not check consent for. The browser keeps the session the sign-in created.
- */
-export function interactionFinishRedirect(
-  realm: RealmUrlSource,
-  request: InteractionRequest
-): string {
-  return buildRedirectUrl(request.redirect_uri, {
-    error: 'server_error',
     ...stateOf(request),
     iss: realmIssuer(realm),
   });
