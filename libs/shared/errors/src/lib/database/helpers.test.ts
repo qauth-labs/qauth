@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { extractConstraintName, isUniqueConstraintError } from './helpers';
+import { extractConstraintName, isUniqueConstraintError, pgErrorCodeOf } from './helpers';
 
 /** A real pg unique-violation error as the driver exposes it. */
 const pgUniqueViolation = {
@@ -94,5 +94,21 @@ describe('extractConstraintName', () => {
   it('returns undefined when there is no pg error in the chain', () => {
     expect(extractConstraintName(new Error('plain'))).toBeUndefined();
     expect(extractConstraintName(null)).toBeUndefined();
+  });
+});
+
+describe('pgErrorCodeOf', () => {
+  it('returns the SQLSTATE of a pg error nested under .cause', () => {
+    const checkViolation = {
+      ...pgUniqueViolation,
+      code: '23514',
+      constraint: 'realms_sandbox_ceiling',
+    };
+    expect(pgErrorCodeOf(new Error('wrapped', { cause: checkViolation }))).toBe('23514');
+  });
+
+  it('returns undefined when there is no pg error in the chain', () => {
+    expect(pgErrorCodeOf(new Error('plain'))).toBeUndefined();
+    expect(pgErrorCodeOf(undefined)).toBeUndefined();
   });
 });

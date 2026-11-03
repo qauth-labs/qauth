@@ -70,3 +70,13 @@ export function isUniqueConstraintError(error: unknown): boolean {
 export function extractConstraintName(error: unknown): string | undefined {
   return findPgError(error)?.constraint;
 }
+
+/**
+ * The SQLSTATE of the PostgreSQL error behind `error`, unwrapping drizzle's
+ * wrapper as {@link isUniqueConstraintError} does, or `undefined` when the
+ * chain holds none. `23514` is a check violation (a CHECK, or a trigger that
+ * raises one), `23503` a foreign key violation.
+ */
+export function pgErrorCodeOf(error: unknown): string | undefined {
+  return findPgError(error)?.code;
+}
