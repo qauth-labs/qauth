@@ -1,7 +1,3 @@
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
-import path from 'node:path';
-
 import {
   requireDockerOrSkip,
   startPostgresContainer,
@@ -11,9 +7,22 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  ADMIN_LISTENER_ENVIRONMENT,
+  adminCallHeaders,
+  signBoundAccessToken,
+} from '../testing/admin-dpop';
+import { fixturePluginImporter, fixturePluginMethod } from '../testing/auth-method-plugins';
+import {
+  createDatabaseUsers,
+  databaseUrlAs,
+  grantDatabaseUsers,
+  PERMISSION_ERROR,
+} from '../testing/database-users';
+import {
   allowConsentScreen,
   baseEnvironment,
   bootAuthServer,
+  type BootAuthServerOptions,
   type BootedAuthServer,
   E2E_PASSWORD,
   E2E_REALM_NAME,
@@ -25,6 +34,8 @@ import {
   signInWithPassword,
 } from '../testing/e2e-harness';
 import { SIGNER_LISTENER, SIGNER_SERVICE } from '../testing/service-role-env';
+import { API_FAMILY_AUDIENCES } from './api-conventions/families';
+import { ADMIN_SCOPE_LIST } from './helpers/admin-scopes';
 import { serverJobs } from './jobs';
 import { SERVICE_ROLE_NAMES, type ServiceRole } from './service-roles';
 
@@ -36,8 +47,13 @@ import { SERVICE_ROLE_NAMES, type ServiceRole } from './service-roles';
  * role's database user exactly the grants of the map
  * (`libs/infra/db/src/lib/database-users/grants-map.ts`). Then each role
  * boots on its own user, its boot steps included, answers `/ready`, runs
- * each of its jobs once and serves its routes; a permission error anywhere
- * fails the suite, which is how the map was filled.
+ * each of its jobs once and serves its routes: `web` the sign-in, the
+ * authorization and the consents; `api` the token, introspection, userinfo,
+ * revocation and registration endpoints, the discovery documents and the
+ * developer and account APIs; `admin` its admin API on the admin listener.
+ * A permission error anywhere fails the suite, which is how the map was
+ * filled. The SSF transmitter's streams on `api` and its deliveries on
+ * `delivery` run under their own users in `ssf-security-events.integration.test.ts`.
  *
  * A process without the signer cannot sign or set a signed cookie until the
  * signer service is reachable (#497), so the routes that need one run on a
@@ -49,9 +65,6 @@ import { SERVICE_ROLE_NAMES, type ServiceRole } from './service-roles';
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
-
-const DB_LIB = path.resolve(process.cwd(), 'libs/infra/db');
-const TSX_CLI = createRequire(path.join(DB_LIB, 'package.json')).resolve('tsx/cli');
 
 /** Each role's own user. */
 const USERS: Readonly<Record<ServiceRole, string>> = {
@@ -74,9 +87,11 @@ const CLIENT_SECRET = 'roles-app-secret-of-sufficient-length-42';
 const REDIRECT_URI = 'https://app.example.com/callback';
 const SCOPES = ['openid', 'email'];
 const MACHINE_CLIENT_ID = 'roles-machine';
+const DEVELOPER = '/developer/v1-rc.0';
+const ACCOUNT = '/account/v1-rc.0';
 
-/** What Postgres logs and answers when a user lacks a privilege. */
-const PERMISSION_ERROR = /permission denied|insufficient_privilege|"code":"42501"/;
+/** The admin process's one AuthMethod plugin, for its plugin operations (#600). */
+const PLUGIN_PACKAGE = '@example/qauth-plugin-corp-sso';
 
 interface RoleProcess {
   readonly server: BootedAuthServer;
@@ -113,21 +128,44 @@ describe('each service role on a database user of its own (#498)', () => {
     // The owner's deployment: it creates the default realm and its keys, and
     // the fixtures below. Its pool connects as the owner of the tables.
     fixture = await bootAuthServer(baseEnvironment(infra, jwt));
-    for (const user of [...Object.values(USERS), WEB_SIGNER, API_SIGNER]) {
-      await fixture.app.dbPool.query(`CREATE ROLE ${user} LOGIN PASSWORD '${user}'`);
-    }
+    await createDatabaseUsers(fixture.app.dbPool, [
+      ...Object.values(USERS),
+      WEB_SIGNER,
+      API_SIGNER,
+    ]);
     // Each run names the five roles; a user it does not name keeps its
     // grants. The last two give a role's user and the signer's one user.
-    await grant(USERS);
-    await grant({ ...USERS, web: WEB_SIGNER, signer: WEB_SIGNER });
-    await grant({ ...USERS, api: API_SIGNER, signer: API_SIGNER });
+    const owner = infra.postgres.connectionString;
+    await grantDatabaseUsers(owner, USERS);
+    await grantDatabaseUsers(owner, { ...USERS, web: WEB_SIGNER, signer: WEB_SIGNER });
+    await grantDatabaseUsers(owner, { ...USERS, api: API_SIGNER, signer: API_SIGNER });
 
     // The signer first, as a deployment starts it. One at a time: each boot
     // sets the process environment its app reads.
     await boot('signer', ['signer'], USERS.signer);
     await boot('web', ['web'], USERS.web);
     await boot('api', ['api'], USERS.api);
-    await boot('admin', ['admin'], USERS.admin);
+    // With its admin API on (#511) and one plugin to administer (#600).
+    await boot(
+      'admin',
+      ['admin'],
+      USERS.admin,
+      {
+        ...ADMIN_LISTENER_ENVIRONMENT,
+        AUTH_METHOD_PLUGINS: PLUGIN_PACKAGE,
+        PLUGIN_API_ENABLED: 'true',
+      },
+      {
+        adminListener: async () => ({}),
+        authMethodPlugins: {
+          importPackage: fixturePluginImporter({
+            [PLUGIN_PACKAGE]: {
+              authMethod: fixturePluginMethod({ type: 'corp_sso', id: 'corp' }),
+            },
+          }),
+        },
+      }
+    );
     await boot('delivery', ['delivery'], USERS.delivery);
     await boot('web+signer', ['web', 'signer'], WEB_SIGNER);
     await boot('api+signer', ['api', 'signer'], API_SIGNER);
@@ -143,51 +181,24 @@ describe('each service role on a database user of its own (#498)', () => {
     if (!dockerUp) ctx.skip();
   });
 
-  /** The suite's database URL, connecting as `user`. */
-  function urlFor(user: string): string {
-    if (!infra) throw new Error('infrastructure not started');
-    const url = new URL(infra.postgres.connectionString);
-    url.username = user;
-    url.password = user;
-    return url.toString();
-  }
-
-  /** Run `db:grants` as an operator runs it, as the owner of the tables. */
-  async function grant(users: Readonly<Record<ServiceRole, string>>): Promise<void> {
-    if (!infra) throw new Error('infrastructure not started');
-    const child = spawn(process.execPath, [TSX_CLI, 'src/scripts/grant-database-users.ts'], {
-      cwd: DB_LIB,
-      env: {
-        PATH: process.env['PATH'] ?? '',
-        DATABASE_URL: infra.postgres.connectionString,
-        DB_USER_WEB: users.web,
-        DB_USER_API: users.api,
-        DB_USER_ADMIN: users.admin,
-        DB_USER_SIGNER: users.signer,
-        DB_USER_DELIVERY: users.delivery,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let output = '';
-    child.stdout.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-    child.stderr.on('data', (chunk: Buffer) => (output += chunk.toString('utf8')));
-    const code = await new Promise<number | null>((resolve, reject) => {
-      child.on('error', reject);
-      child.on('close', resolve);
-    });
-    if (code !== 0) throw new Error(`db:grants exited ${String(code)}:\n${output}`);
-  }
-
   /**
-   * Boot `roles` on `user`: a process with the signer keeps the key
-   * variables and serves the signer; one without it gets the signer
-   * service's settings instead, as a split deployment has them.
+   * Boot `roles` on `user`, with `extra` in its environment: a process with
+   * the signer keeps the key variables and serves the signer; one without it
+   * gets the signer service's settings instead, as a split deployment has
+   * them.
    */
-  async function boot(name: string, roles: readonly ServiceRole[], user: string): Promise<void> {
+  async function boot(
+    name: string,
+    roles: readonly ServiceRole[],
+    user: string,
+    extra: Record<string, string> = {},
+    options: Omit<BootAuthServerOptions, 'logStream'> = {}
+  ): Promise<void> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
     const base: Record<string, string> = {
       ...baseEnvironment(infra, jwt),
-      DATABASE_URL: urlFor(user),
+      ...extra,
+      DATABASE_URL: databaseUrlAs(infra.postgres.connectionString, user),
       SERVICE_ROLES: roles.join(','),
     };
     const withoutKeys = Object.fromEntries(
@@ -198,6 +209,7 @@ describe('each service role on a database user of its own (#498)', () => {
       : { ...withoutKeys, ...SIGNER_SERVICE };
     const log: string[] = [];
     const server = await bootAuthServer(environment, {
+      ...options,
       logStream: { write: (line) => void log.push(line) },
     });
     processes.set(name, { server, roles, log });
@@ -207,6 +219,14 @@ describe('each service role on a database user of its own (#498)', () => {
     const found = processes.get(name);
     if (found === undefined) throw new Error(`no process ${name}`);
     return found.server.app;
+  }
+
+  /** The default realm, as the owner's fixture process reads it. */
+  async function defaultRealm(): Promise<{ id: string; issuer: string }> {
+    if (!fixture) throw new Error('no fixture');
+    const realm = await fixture.app.repositories.realms.findByName(E2E_REALM_NAME);
+    if (!realm?.issuer) throw new Error('the default realm was not booted');
+    return { id: realm.id, issuer: realm.issuer };
   }
 
   /** The suite's acceptance criterion: no process logged a permission error. */
@@ -399,6 +419,154 @@ describe('each service role on a database user of its own (#498)', () => {
     for (const url of ['/.well-known/openid-configuration', '/.well-known/jwks.json']) {
       const response = await api.inject({ method: 'GET', url });
       expect(response.statusCode, `${url}: ${response.body}`).toBe(200);
+    }
+    expectNoPermissionError();
+  });
+
+  it('serves the developer and account APIs on api alone, on its own user', async () => {
+    if (!fixture) throw new Error('no fixture');
+    const realm = await defaultRealm();
+    // Signing in mints a token, which needs the signer.
+    const email = 'developer@example.test';
+    const userId = await registerPasswordAccount(role('api+signer'), email);
+    const login = await role('api+signer').inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email, password: E2E_PASSWORD },
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    const portal = json<{ access_token: string }>(login).access_token;
+
+    const api = role('api');
+    const call = (
+      method: 'GET' | 'POST' | 'DELETE',
+      url: string,
+      token: string,
+      payload?: object
+    ) =>
+      api.inject({
+        method,
+        url,
+        headers: { authorization: `Bearer ${token}` },
+        ...(payload === undefined ? {} : { payload }),
+      });
+
+    const created = await call('POST', '/api/clients', portal, {
+      name: 'Roles developer app',
+      redirectUris: ['https://developer.example.com/callback'],
+      scopes: ['openid'],
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+    expect(created.statusCode, created.body).toBe(201);
+    const clientRowId = json<{ id: string }>(created).id;
+    expect((await call('GET', `${DEVELOPER}/clients`, portal)).statusCode).toBe(200);
+
+    // Static API keys are for a development client in a development realm.
+    await fixture.app.dbPool.query(
+      `UPDATE oauth_clients SET environment = 'development' WHERE id = $1`,
+      [clientRowId]
+    );
+    await fixture.app.dbPool.query(
+      `UPDATE realms SET max_environment_laxity = 'development' WHERE id = $1`,
+      [realm.id]
+    );
+    api.realmHostCache.clear();
+    const keys = `${DEVELOPER}/clients/${clientRowId}/api-keys`;
+    const minted = await call('POST', keys, portal, { name: 'roles key' });
+    expect(minted.statusCode, minted.body).toBe(201);
+    expect((await call('GET', keys, portal)).statusCode).toBe(200);
+    const revoked = await call('DELETE', `${keys}/${json<{ id: string }>(minted).id}`, portal);
+    expect(revoked.statusCode, revoked.body).toBe(200);
+
+    // The account API, with a token the account console's backend holds.
+    await fixture.app.repositories.oauthConsents.upsertGrant(realm.id, userId, clientRowId, [
+      'openid',
+    ]);
+    const account = await fixture.app.jwtUtils.signAccessToken(
+      { id: realm.id },
+      { sub: userId, clientId: 'account-console', aud: API_FAMILY_AUDIENCES.account }
+    );
+    const consents = await call('GET', `${ACCOUNT}/consents`, account);
+    expect(consents.statusCode, consents.body).toBe(200);
+    const [consent] = json<{ items: { id: string }[] }>(consents).items;
+    if (consent === undefined) throw new Error('the account API listed no consent');
+    const withdrawn = await call('DELETE', `${ACCOUNT}/consents/${consent.id}`, account);
+    expect(withdrawn.statusCode, withdrawn.body).toBe(204);
+    expectNoPermissionError();
+  });
+
+  it('serves the admin API on admin alone, on its own user, through the admin pipeline', async () => {
+    if (!fixture) throw new Error('no fixture');
+    const realm = await defaultRealm();
+    const adminApi = processes.get('admin')?.server.admin;
+    if (adminApi === undefined) throw new Error('the admin listener was not booted');
+    // An administrator of the realm, and a DPoP-bound admin token the
+    // signer minted for them (#520).
+    const userId = (await fixture.app.repositories.users.create({ realmId: realm.id })).id;
+    await fixture.app.repositories.adminGrants.create({
+      userId,
+      role: { kind: 'built-in', name: 'security-admin' },
+      targetRealmId: realm.id,
+      createdBy: null,
+    });
+    const token = await signBoundAccessToken(fixture.app, realm, {
+      sub: userId,
+      clientId: 'admin-console',
+      aud: API_FAMILY_AUDIENCES.admin,
+      scope: ADMIN_SCOPE_LIST.join(' '),
+    });
+    const send = async (
+      method: 'GET' | 'POST',
+      url: string,
+      payload?: object,
+      headers: Record<string, string> = {}
+    ) =>
+      adminApi.inject({
+        method,
+        url,
+        headers: { ...(await adminCallHeaders(token, method, url)), ...headers },
+        ...(payload === undefined ? {} : { payload }),
+      });
+
+    const plugins = `/admin/v1-rc.0/realms/${realm.id}/plugins`;
+    const listed = await send('GET', plugins);
+    expect(listed.statusCode, listed.body).toBe(200);
+    const one = await send('GET', `${plugins}/corp`);
+    expect(one.statusCode, one.body).toBe(200);
+
+    const approvals = `/admin/v1-rc.0/realms/${realm.id}/approvals`;
+    const filed = await send('POST', approvals, {
+      operation: 'plugins.enable',
+      params: { plugin: 'corp' },
+      body: { version: 0 },
+    });
+    expect(filed.statusCode, filed.body).toBe(201);
+    const approvalId = json<{ id: string }>(filed).id;
+    const read = await send('GET', `${approvals}/${approvalId}`);
+    expect(read.statusCode, read.body).toBe(200);
+    const cancelled = await send('POST', `${approvals}/${approvalId}/cancel`, undefined, {
+      'if-match': '"pending.0"',
+    });
+    expect(cancelled.statusCode, cancelled.body).toBe(200);
+    expect(cancelled.json()).toMatchObject({ status: 'cancelled' });
+
+    // The pipeline audited every call, in the admin user's transactions.
+    const { rows } = await fixture.app.dbPool.query<{ count: number }>(
+      'SELECT count(*)::int AS count FROM admin_audit_log WHERE realm_id = $1',
+      [realm.id]
+    );
+    expect(rows[0]?.count).toBeGreaterThan(0);
+    expectNoPermissionError();
+  });
+
+  it('answers a CORS preflight on a process with no routes of its own as a path no route serves', async () => {
+    for (const name of ['admin', 'signer', 'delivery']) {
+      const preflight = await role(name).inject({
+        method: 'OPTIONS',
+        url: '/oauth/token',
+        headers: { origin: 'https://app.example.com', 'access-control-request-method': 'POST' },
+      });
+      expect(preflight.statusCode, `${name}: ${preflight.body}`).toBe(404);
     }
     expectNoPermissionError();
   });
