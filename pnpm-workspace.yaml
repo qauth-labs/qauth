@@ -27,6 +27,30 @@ minimumReleaseAgeExclude:
   # unredacted. keys-aws-kms passes the KMS client no logger, so the tree was not
   # exposed. Published 2026-10-30T23:11:40Z: remove after 2026-11-06T23:12Z.
   - '@smithy/core@3.38.1'
+# Advisories accepted rather than fixed (#795). CI's dependency audit runs
+# `pnpm audit --audit-level high` on every pull request, on main and once a day,
+# and fails on any high or critical advisory on any path, development tooling
+# included; moderate and low ones go to the job summary. An advisory listed
+# here leaves both the gate and the summary, so it belongs here only when no
+# release fixes it on a line the tree can take: fix what can be fixed, usually
+# with a floor in `overrides` below. Each entry says why it is safe to keep and
+# until when; on that date fix it, or renew it with a fresh reason. Remove an
+# entry as soon as a fix can land. `pnpm audit --ignore <id>` writes an entry
+# into this file as well, with no reason beside it: give it one, or edit the
+# list by hand.
+auditConfig:
+  ignoreGhsas:
+    # deepmerge <=4.3.1, low: mergeObject() lets a source object with a
+    # `__proto__` key poison the prototype of the result. No patched release
+    # exists (4.3.1, March 2023, is the last). Reached through html-to-text
+    # 9.0.5 (its last release), which @react-email/render calls to turn an
+    # email into plain text, and through jest-config under @nx/jest (tooling).
+    # html-to-text merges only option objects: its defaults, react-email's
+    # constant `wordwrap` and selector list, and the caller's options, which
+    # libs/server/email never passes. The email's HTML is parsed, not merged,
+    # so no request data reaches deepmerge. Until a patched deepmerge is
+    # published, or 2027-02-03, whichever comes first.
+    - GHSA-gcqx-w48m-w2h4
 # Workspace deps are linked into consumers as injected (hard-linked) COPIES
 # rather than symlinks. Required for `pnpm deploy`: from pnpm 10 a deploy is
 # only self-contained when the workspace injects, and `--legacy` instead emits
@@ -151,8 +175,10 @@ overrides:
   # `qs` nowhere, so neither the array-limit bypass nor the isBuffer DoS is
   # reachable from shipped code.
   # Floored anyway so `pnpm audit` stays clean and a future real dependent
-  # cannot land on a vulnerable line unnoticed.
-  qs: '>=6.16.0'
+  # cannot land on a vulnerable line unnoticed. 6.16.1 fixes GHSA-6pq8-jhm2-2vcw
+  # (stringify with arrayFormat 'comma' throws on an element whose own toString
+  # is not callable). Bounded to the 6.x line both consumers request.
+  qs: '>=6.16.1 <7'
   esbuild: '>=0.28.2'
   # GHSA-jggr-w7fw-pc2j: stack exhaustion copying deeply nested values, patched
   # in 4.1.0 (adds a maxDepth, default 1000). Reaches the tree only via
@@ -185,11 +211,13 @@ overrides:
   find-my-way: '>=9.7.0'
   # GHSA-8r9p-f939-6h3c and GHSA-q3jh-wrc6-jgq8, patched in 1.16.1: credential
   # headers kept on a cross-origin redirect, through an unescaped
-  # sensitiveHeaders regex or array-form headers. Dev only: the sole consumer is
-  # http-proxy 1.18.1 (its last release, asking for '^1.0.0') under
-  # http-server, which @nx/web uses to serve built apps locally. Bounded to the
-  # 1.x line.
-  follow-redirects: '>=1.16.1 <2'
+  # sensitiveHeaders regex or array-form headers. GHSA-mrwp-f3q8-3g9p (high),
+  # patched in 1.16.2: a sensitiveHeaders array from another realm was
+  # discarded, and custom credential headers followed the redirect. Dev only:
+  # the sole consumer is http-proxy 1.18.1 (its last release, asking for
+  # '^1.0.0') under http-server, which @nx/web uses to serve built apps
+  # locally. Bounded to the 1.x line.
+  follow-redirects: '>=1.16.2 <2'
   form-data: '>=4.0.6'
   # GHSA-4hxc-9384-m385, fixed in 1.15.9; 1.15.11 is the floor. SELECTOR: the
   # 1.x consumer is unstorage 1.x under astro (the docs-site build), which asks
@@ -214,6 +242,19 @@ overrides:
   # version, never to the version you happen to have.
   js-yaml: '>=4.3.1 <5'
   postcss: '>=8.5.18'
+  # SHIPPED: the developer portal's SSR server runs seroval on every
+  # server-function request and response (via @tanstack/router-core,
+  # start-client-core and start-server-core, which all ask for '^1.6.7').
+  # 1.6.10 fixes GHSA-9wx9-5pv9-3349 (script injection through RegExp sources
+  # in serialized output) and 1.6.11 GHSA-f86p-h4j2-7qgj (code injection through
+  # a typed array's own constructor property). A floor rather than a TanStack
+  # bump: the locked suite already accepts 1.6.11 and simply held 1.6.9.
+  # seroval-plugins moves with it, as TanStack ships the two in lockstep.
+  # Bounded to the 1.6 line and selected on it: 1.7 changes what serialize
+  # accepts (it now throws on streams and async iterables), so moving there is
+  # a change of its own, and a dependent that asks for 1.7 is left alone.
+  'seroval@1.6': '>=1.6.11 <1.7'
+  'seroval-plugins@1.6': '>=1.6.11 <1.7'
   # GHSA-rj75-hqrm-r3gf (CVE-2026-104844): quadratic parse of flat selectors
   # such as `.a.a.a...`, patched only in 7.1.6 — the 6.x line ends at 6.1.4
   # with no backport, so this is deliberately blanket across majors. The 6.x

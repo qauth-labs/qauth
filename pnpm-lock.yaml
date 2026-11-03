@@ -299,17 +299,19 @@ overrides:
   baseline-browser-mapping: '>=2.11.0'
   sharp: '>=0.35.5 <0.36'
   http-cache-semantics: '>=4.3.0 <5'
-  qs: '>=6.16.0'
+  qs: '>=6.16.1 <7'
   esbuild: '>=0.28.2'
   fast-copy: '>=4.1.0 <5'
   fast-uri: '>=3.1.9 <4'
   find-my-way: '>=9.7.0'
-  follow-redirects: '>=1.16.1 <2'
+  follow-redirects: '>=1.16.2 <2'
   form-data: '>=4.0.6'
   h3@1: '>=1.15.11 <2'
   nanoid: '>=3.3.18 <4'
   js-yaml: '>=4.3.1 <5'
   postcss: '>=8.5.18'
+  seroval@1.6: '>=1.6.11 <1.7'
+  seroval-plugins@1.6: '>=1.6.11 <1.7'
   postcss-selector-parser: '>=7.1.6 <8'
   source-map-js: '>=1.2.2 <2'
   protobufjs: '>=7.6.5 <8'
@@ -7440,8 +7442,8 @@ packages:
   fnv1a-64@0.1.2:
     resolution: {integrity: sha512-mJbcILTPybAR1jdOwt/lVv8N2cffeJFFP+gVbSAwLEx1ujXH27RpPd8Rokec/KX9c76UYIB6Co+H4lQzxPnJfA==}
 
-  follow-redirects@1.16.1:
-    resolution: {integrity: sha512-FNvFGzoMLWmE6Yj9spb/zjd7yiNCHiAW9/Tg9CXrQ8wuu32HtlJOwWO11OJafl5FfY3DxTdQ0vj42zU1kvv5jg==}
+  follow-redirects@1.16.2:
+    resolution: {integrity: sha512-/kVP2U8z596Ia0gwFrwyIeo74ta5aVmSeU1FfAUMAmcEP5EP7zydmag3SLiN64NaRKef3lxsq7i/g7ltJQDGow==}
     engines: {node: '>=4.0'}
     peerDependencies:
       debug: '*'
@@ -8977,8 +8979,8 @@ packages:
     resolution: {integrity: sha512-+Owyggi9IxT1ePKGafcI87ubSmxol6smwJ+RAHDQlx9+9cPwFWDiKFFCPuWhr9ignlGpZ9vDQLw67N4dcTVFEA==}
     engines: {node: '>=20'}
 
-  qs@6.16.0:
-    resolution: {integrity: sha512-h6fhOIaRrID2CbEY2fqs+7t+UXZo+MLAnU5gRIq85uFtdiUPCdsApMlHhXogKVM4HM2DVbIjGNTTYH2OcmP1vA==}
+  qs@6.17.0:
+    resolution: {integrity: sha512-5LK5BZ2XDHMvcUJaf0CQ5HL3aVgKbpklvByC7qLSxYkfE8COEEbJg5xCHWCTqzqi0Gs4Jn5Mv5v3R38W6edscA==}
     engines: {node: '>=0.6'}
 
   quick-format-unescaped@4.0.4:
@@ -9244,14 +9246,14 @@ packages:
     engines: {node: '>=10'}
     hasBin: true
 
-  seroval-plugins@1.6.9:
-    resolution: {integrity: sha512-kiDK/Tb8IWZ61WEU8pA2PDmAuw37gKph9Y77OZlD56mg0Y2g0Bg7gZ1HeHhs5d40w+nRoUq/wj08V26ilbez9g==}
+  seroval-plugins@1.6.12:
+    resolution: {integrity: sha512-+reiwp/lYxiyctSrdvX7OQ1YLrcbWYgBiZrhSFL+V43b0/DGRLNVSDyZINbQe+tWplPOI2fw2dPrdv6hcc09kQ==}
     engines: {node: '>=10'}
     peerDependencies:
-      seroval: ^1.0
+      seroval: '>=1.6.11 <1.7'
 
-  seroval@1.6.9:
-    resolution: {integrity: sha512-UeEzHwAK+yl0YLbsvROV1t5yMYEwZZ0CfKYxDvUgS2fO9Vxdf8djqVIB+OuVpuawRNPqw68LE1Du/GMsW2ZPqA==}
+  seroval@1.6.12:
+    resolution: {integrity: sha512-CqbIVfk/7GL3ITwZI55lcPbpQbjHZ2DD5cUj4iH7E9YsCfHNJV1mx7yNp86Z84w5IpmkZZS/2s5vPOWmVWSdQg==}
     engines: {node: '>=10'}
 
   set-cookie-parser@2.7.2:
@@ -14208,8 +14210,8 @@ snapshots:
     dependencies:
       '@tanstack/history': 1.162.5
       cookie-es: 3.1.1
-      seroval: 1.6.9
-      seroval-plugins: 1.6.9(seroval@1.6.9)
+      seroval: 1.6.12
+      seroval-plugins: 1.6.12(seroval@1.6.12)
 
   '@tanstack/router-generator@1.167.45(supports-color@8.1.1)':
     dependencies:
@@ -14266,7 +14268,7 @@ snapshots:
       '@tanstack/router-core': 1.171.38
       '@tanstack/start-fn-stubs': 1.162.0
       '@tanstack/start-storage-context': 1.167.40
-      seroval: 1.6.9
+      seroval: 1.6.12
 
   '@tanstack/start-fn-stubs@1.162.0': {}
 
@@ -14285,7 +14287,7 @@ snapshots:
       lightningcss: 1.33.0
       pathe: 2.0.3
       picomatch: 4.0.7
-      seroval: 1.6.9
+      seroval: 1.6.12
       source-map: 0.7.6
       srvx: 1.0.5
       tinyglobby: 0.2.17
@@ -14316,7 +14318,7 @@ snapshots:
       '@tanstack/start-storage-context': 1.167.40
       cookie-es: 3.1.1
       fetchdts: 0.2.0
-      seroval: 1.6.9
+      seroval: 1.6.12
 
   '@tanstack/start-storage-context@1.167.40':
     dependencies:
@@ -16074,7 +16076,7 @@ snapshots:
 
   fnv1a-64@0.1.2: {}
 
-  follow-redirects@1.16.1(debug@4.4.3(supports-color@8.1.1)):
+  follow-redirects@1.16.2(debug@4.4.3(supports-color@8.1.1)):
     optionalDependencies:
       debug: 4.4.3(supports-color@8.1.1)
 
@@ -16467,7 +16469,7 @@ snapshots:
   http-proxy@1.18.1(debug@4.4.3(supports-color@8.1.1)):
     dependencies:
       eventemitter3: 4.0.7
-      follow-redirects: 1.16.1(debug@4.4.3(supports-color@8.1.1))
+      follow-redirects: 1.16.2(debug@4.4.3(supports-color@8.1.1))
       requires-port: 1.0.0
     transitivePeerDependencies:
       - debug
@@ -18259,7 +18261,7 @@ snapshots:
     dependencies:
       hookified: 2.2.0
 
-  qs@6.16.0:
+  qs@6.17.0:
     dependencies:
       es-define-property: 1.0.1
       side-channel: 1.1.1
@@ -18602,11 +18604,11 @@ snapshots:
 
   semver@7.8.5: {}
 
-  seroval-plugins@1.6.9(seroval@1.6.9):
+  seroval-plugins@1.6.12(seroval@1.6.12):
     dependencies:
-      seroval: 1.6.9
+      seroval: 1.6.12
 
-  seroval@1.6.9: {}
+  seroval@1.6.12: {}
 
   set-cookie-parser@2.7.2: {}
 
@@ -18866,7 +18868,7 @@ snapshots:
       formidable: 3.5.4
       methods: 1.1.2
       mime: 2.6.0
-      qs: 6.16.0
+      qs: 6.17.0
     transitivePeerDependencies:
       - supports-color
 
@@ -19146,7 +19148,7 @@ snapshots:
 
   union@0.5.0:
     dependencies:
-      qs: 6.16.0
+      qs: 6.17.0
 
   unist-util-find-after@5.0.0:
     dependencies:
