@@ -456,9 +456,11 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
-    # Ready, not only alive (#500): `/ready` answers 200 once Postgres, Redis
-    # and the KEK answer, and 503 naming the check that fails. `/health` is
-    # liveness, and answers 200 whatever the dependencies do.
+    # Ready, not only alive (#500): `/ready` answers 200 once Postgres, Redis,
+    # the KEK and the event delivery queue answer, and 503 naming the check
+    # that fails. `/health` is liveness, and answers 200 whatever the
+    # dependencies do. Both answer on any host, so this localhost call needs
+    # no endpoint host.
     healthcheck:
       test:
         [
