@@ -79,6 +79,15 @@ context:
     say:
       'true': 'this client address has used up its end-session requests for the window'
       'false': 'the address is under its end-session limit'
+  method:
+    values: [get, postWithCookie, postWithoutCookie]
+    initial: any
+    say:
+      get: 'the request is a GET'
+      postWithCookie: 'the request is a POST, and the browser sent its session cookie'
+      postWithoutCookie: >-
+        the request is a POST without the session cookie: the browser withholds a SameSite=Lax cookie from a cross-site
+        POST, so it cannot tell whether it is signed in
   params:
     values: [wellFormed, malformed]
     initial: any
@@ -248,6 +257,9 @@ states:
       - guard: "params == 'malformed'"
         target: validation_error.params
         say: 'a parameter is repeated or over its bound'
+      - guard: "method == 'postWithoutCookie'"
+        target: resent.as_get
+        say: 'a POST came without the session cookie: it is sent again as a GET, which carries the cookie'
       - target: verifyingHint
         say: 'the parameters pass the schema'
 
@@ -741,6 +753,19 @@ states:
         Cache-Control: no-store
       body: '"You are still signed in."'
 
+  resent.as_get:
+    type: final
+    title: Send a POST without the session cookie again as a GET
+    description: >-
+      A top-level GET carries the SameSite=Lax session cookie that a cross-site POST does not. Nothing is checked,
+      recorded or ended on this leg; the GET is checked as any other.
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: '<issuer>/oauth/end-session?<the validated parameters, as the POST carried them>'
+        Cache-Control: no-store
+
   # Exits: refused requests, each an info page that ends nothing and never redirects
 
   invalid_request.client_mismatch:
@@ -928,6 +953,9 @@ assertions:
   - id: no-step-without-a-session
     never: "interactionOpen and account == 'none'"
     say: 'The confirm step is shown only to a browser that is signed in'
+  - id: a-post-without-the-cookie-ends-nothing
+    never: "state == 'resent.as_get' and (sessionEnded or interactionOpen)"
+    say: 'A POST without the session cookie is only sent again as a GET: it ends nothing and starts nothing'
   - id: misdirected-is-not-counted
     never: "state == 'too_many_requests.end_session_limit' and host != 'realm'"
     say: 'A request for a host QAuth does not answer for is refused before the rate limiter counts it'

@@ -3,7 +3,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { END_SESSION_BODY_LIMIT_BYTES } from '../../constants';
-import { answerEndSession, answerEndSessionStatus } from '../../helpers/end-session';
+import { answerEndSession, answerEndSessionStatus, resendAsGet } from '../../helpers/end-session';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { type EndSessionParams, endSessionParamsSchema } from '../../schemas/end-session';
 
@@ -14,7 +14,9 @@ import { type EndSessionParams, endSessionParamsSchema } from '../../schemas/end
  * `helpers/end-session.ts`; the flow graph is `graphs/flows/core/logout`.
  *
  * Both methods share one handler: §2 has the OP support the query of a GET
- * and the form body of a POST alike. Browser routes: they read and clear the
+ * and the form body of a POST alike. A POST that arrives without the session
+ * cookie, as a cross-site POST does (the cookie is `SameSite=Lax`), is sent
+ * again as a GET with the same parameters (`resendAsGet`). Browser routes: they read and clear the
  * session cookie, on the realm's own host (#486). Their budget is the
  * authorization endpoint's, per client address and realm, with its
  * environment-aware cap (ADR-008 §5).
@@ -54,7 +56,7 @@ export default async function (fastify: FastifyInstance) {
     '/end-session',
     {
       schema: {
-        description: `${description} Parameters form-encoded in the body.`,
+        description: `${description} Parameters form-encoded in the body. A POST without the session cookie, as a cross-site one, is answered 303 to the same endpoint as a GET with the same parameters, so the browser sends its cookie.`,
         tags: ['OAuth', 'OIDC'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400, 429],
@@ -65,8 +67,12 @@ export default async function (fastify: FastifyInstance) {
       // unauthenticated body at the edge, as the authorization endpoint does.
       bodyLimit: END_SESSION_BODY_LIMIT_BYTES,
     },
-    async (request, reply) =>
-      answerEndSession(fastify, request, reply, request.body as EndSessionParams)
+    async (request, reply) => {
+      const params = request.body as EndSessionParams;
+      return (
+        resendAsGet(request, reply, params) ?? answerEndSession(fastify, request, reply, params)
+      );
+    }
   );
   app.get(
     '/end-session/status',

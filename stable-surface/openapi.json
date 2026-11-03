@@ -6589,7 +6589,7 @@
           "OAuth",
           "OIDC"
         ],
-        "description": "OpenID Connect RP-Initiated Logout 1.0 end-session endpoint. A valid id_token_hint that names the account of the browser session ends that session at once; otherwise a signed-in browser is asked to confirm, and nothing ends until it answers. Goes back to a registered post_logout_redirect_uri with state, or shows a page; an unregistered one gets an information page and never a redirect. Refresh tokens are not revoked here. Parameters form-encoded in the body.",
+        "description": "OpenID Connect RP-Initiated Logout 1.0 end-session endpoint. A valid id_token_hint that names the account of the browser session ends that session at once; otherwise a signed-in browser is asked to confirm, and nothing ends until it answers. Goes back to a registered post_logout_redirect_uri with state, or shows a page; an unregistered one gets an information page and never a redirect. Refresh tokens are not revoked here. Parameters form-encoded in the body. A POST without the session cookie, as a cross-site one, is answered 303 to the same endpoint as a GET with the same parameters, so the browser sends its cookie.",
         "requestBody": {
           "required": true,
           "content": {

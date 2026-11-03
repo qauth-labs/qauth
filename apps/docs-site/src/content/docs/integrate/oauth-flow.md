@@ -666,7 +666,11 @@ so a hybrid ID-JAG would be unverifiable at exactly the party that must verify i
 `GET` or `POST /oauth/end-session` signs the browser out of QAuth at an app's
 request, then sends it back to the app (OpenID Connect RP-Initiated Logout 1.0).
 Discovery lists it as `end_session_endpoint`. The app sends the browser there
-with a link, a redirect or a form post. It is not an API call.
+with a link, a redirect or a form post. It is not an API call. The session
+cookie is `SameSite=Lax`, so a browser leaves it out of a form post from
+another site; such a POST is answered `303` to the same endpoint as a `GET`
+with the same parameters, which carries the cookie. A large `id_token_hint`
+then travels in the URL, so prefer `GET`.
 
 ```text
 https://auth.example.com/oauth/end-session

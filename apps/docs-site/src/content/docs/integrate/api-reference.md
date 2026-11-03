@@ -548,6 +548,9 @@ browser here. **Parameters** (query, or form-encoded body): `id_token_hint`,
 - **`400`** HTML information page, never a redirect: `client_id` is not the
   hint's audience, a `post_logout_redirect_uri` comes with no client named, or
   the client does not register it exactly, or the client is disabled.
+- A `POST` without the session cookie (the cookie is `SameSite=Lax`, so a
+  cross-site form post leaves it out): **`303`** to the same endpoint as a
+  `GET` with the same parameters.
 - **`400`** `validation_error` for a repeated or over-long parameter; **`429`**
   over the authorization endpoint's rate limit.
 

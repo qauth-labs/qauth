@@ -492,6 +492,43 @@ export async function cancelLogout(
   return location;
 }
 
+/** The parameters a POST carries over to its GET, in order. */
+const END_SESSION_PARAMETERS = [
+  'id_token_hint',
+  'client_id',
+  'post_logout_redirect_uri',
+  'state',
+  'ui_locales',
+  'logout_hint',
+] as const satisfies readonly (keyof EndSessionParams)[];
+
+/**
+ * A `POST /oauth/end-session` the browser sent without its session cookie, as
+ * it sends a cross-site POST: the cookie is `SameSite=Lax`, so the request
+ * cannot tell whether the browser is signed in. It is sent again as a `GET`
+ * with the same validated parameters, which a top-level navigation sends the
+ * cookie with. Nothing is checked, recorded or ended on this leg. `undefined`
+ * when the POST carries the cookie, and is answered as it is.
+ */
+export function resendAsGet(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  params: EndSessionParams
+): FastifyReply | undefined {
+  if (readCookie(request, SESSION_COOKIE_NAME) !== undefined) return undefined;
+  const query = new URLSearchParams();
+  for (const name of END_SESSION_PARAMETERS) {
+    const value = params[name];
+    if (value !== undefined) query.set(name, value);
+  }
+  const search = query.toString();
+  const location = buildRealmUrl(
+    requestRealm(request),
+    search === '' ? END_SESSION_PATH : `${END_SESSION_PATH}?${search}`
+  );
+  return reply.header('Cache-Control', 'no-store').redirect(location, 303);
+}
+
 /**
  * The status page (`GET /oauth/end-session/status`): whether this browser is
  * still signed in. It takes no parameter, so nobody can make it say anything
