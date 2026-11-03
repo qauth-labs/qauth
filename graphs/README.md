@@ -184,7 +184,7 @@ or an answer of QAuth's own), with the OAuth `code` on an error redirect and wha
 `carries`, all three on the state itself. A value that changes per request is written in
 words (`the request id`); a value a client branches on is written exactly.
 
-From `flows/core/logout`, with three of its body fields left out:
+From `flows/core/logout-token`, with three of its body fields left out:
 
 ```yaml
 invalid_token.missing_token:

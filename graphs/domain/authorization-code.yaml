@@ -1,13 +1,13 @@
 # The hand-written overlay of AuthorizationCode, the authorization_codes table. The entity and its fields are generated
-# from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal actions core.logout,
-# core.consent-page and core.consent invoke. The token flow (#609) adds consume and the examples.
+# from the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the internal actions
+# core.logout-token, core.consent-page and core.consent invoke. The token flow (#609) adds consume and the examples.
 schema: delurio-graph/0
 kind: domain
 id: qauth
 
 actions:
   AuthorizationCode.invalidateForUser:
-    # internal: invoked by core.logout, with no route and no actor policy
+    # internal: invoked by core.logout-token, with no route and no actor policy
     source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:154
     body:
       type: object

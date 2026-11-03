@@ -13,7 +13,7 @@ import {
  * `POST /auth/logout` checks its header twice: this schema first (400), then
  * the handler's own read of the token (401). The schema's `^Bearer .+$` lets
  * through a header that holds more than one token, so the handler's 401 is
- * reachable over HTTP (graphs/flows/core/logout, `invalid_token.missing_token`).
+ * reachable over HTTP (graphs/flows/core/logout-token, `invalid_token.missing_token`).
  */
 describe('logoutHeadersSchema', () => {
   it('lets through a Bearer header that holds more than one token, for the handler to refuse', () => {

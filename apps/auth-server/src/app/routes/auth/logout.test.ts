@@ -682,7 +682,7 @@ describe('POST /auth/logout', () => {
   );
 
   it('stops at a failed write: the steps before it stay done, none after it runs, and the failure is recorded', async () => {
-    // The writes are not one transaction (graphs/flows/core/logout): a store
+    // The writes are not one transaction (graphs/flows/core/logout-token): a store
     // failure part way answers 500 with the sessions ended and the codes spent.
     const { fastify, ctx } = createFastifyStub();
     const storeDown = new Error('connection terminated');

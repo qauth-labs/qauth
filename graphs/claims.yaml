@@ -8,14 +8,19 @@ schema: delurio-graph/0
 kind: claims
 
 operations:
-  POST /auth/logout: { flow: [logout] }
+  POST /auth/logout: { flow: [logout-token] }
+  GET /oauth/end-session: { flow: [logout] }
+  POST /oauth/end-session: { flow: [logout] }
+  GET /oauth/end-session/status: { flow: [logout] }
   POST /auth/login: { flow: [sign-in-token] }
   GET /ui/login: { flow: [sign-in-page] }
   POST /ui/login: { flow: [sign-in-page] }
   GET /ui/resume/{handle}: { flow: [sign-in-page] }
   GET /ui/consent: { flow: [consent-page] }
   POST /ui/consent: { flow: [consent-page] }
-  GET /interaction/v1-rc.0/{interactionId}: { flow: [consent] }
-  POST /interaction/v1-rc.0/{interactionId}/answer: { flow: [consent] }
+  GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout] }
+  GET /interaction/v1-rc.0/{interactionId}/personal: { flow: [consent, logout] }
+  POST /interaction/v1-rc.0/{interactionId}/answer: { flow: [consent, logout] }
+  POST /interaction/v1-rc.0/{interactionId}/cancel: { flow: [authorization, logout] }
   POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/enable: { flow: [plugin-enable] }
   POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable: { flow: [plugin-enable] }

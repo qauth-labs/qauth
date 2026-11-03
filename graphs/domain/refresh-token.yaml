@@ -1,7 +1,7 @@
 # The hand-written overlay of RefreshToken, the refresh_tokens table. The entity and its fields are generated from
 # the Drizzle schema (#563); an overlay only adds to them (#564). This one adds the examples and the internal actions
-# the flows invoke: core.sign-in-token creates a token and core.logout revokes them. The token flow (#609) adds rotate
-# and revokeFamily.
+# the flows invoke: core.sign-in-token creates a token and core.logout-token revokes them. The token flow (#609) adds
+# rotate and revokeFamily.
 schema: delurio-graph/0
 kind: domain
 id: qauth
@@ -47,14 +47,14 @@ entities:
 
 actions:
   RefreshToken.revokeAllForUser:
-    # internal: invoked by core.logout, with no route and no actor policy
+    # internal: invoked by core.logout-token, with no route and no actor policy
     source: libs/infra/db/src/lib/repositories/refresh-tokens.repository.ts:406
     body:
       type: object
       required: [userId]
       properties:
         userId: { type: string, format: uuid }
-        reason: { type: [string, 'null'], maxLength: 255 } # core.logout passes logout
+        reason: { type: [string, 'null'], maxLength: 255 } # core.logout-token passes logout
     sideEffects:
       - >-
         every RefreshToken of the user that is not revoked and has not expired, at every client, gets revoked = true,

@@ -1,42 +1,70 @@
-# POST /auth/logout as the code works today (capture mode, #674): the only logout QAuth has, and the baseline that
-# RP-initiated logout (end_session_endpoint) replaces. It has no screens. The states run in the order the server
-# runs them: the realm resolver and the rate limiter (onRequest hooks), the header schema, then the handler.
+# RP-initiated logout (#675; OpenID Connect RP-Initiated Logout 1.0; ADR-017 phase F0, ADR-018 §3, ADR-019 Decision 4):
+# the browser's sign-out. An app sends the person to QAuth's end-session route to sign out, and QAuth sends them back
+# to a URL the app registered. Written before the code (status: proposed), as ADR-021 Decision 4 asks of a new core
+# flow, so it carries no source anchors. It replaces the baseline that #674 captured here: that graph, of the
+# portal's POST /auth/logout, is now graphs/flows/core/logout-token, and keeps its own rules until ADR-017 F1c removes
+# the route.
 #
-# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the caller sees.
-#   Every 401 is RFC 6750's invalid_token, carried in WWW-Authenticate; the body is the error handler's RFC 9457
-#   problem document (apps/auth-server/src/app/plugins/error-handler.ts, #513), since this route is not an OAuth
-#   protocol endpoint. A client branches on its `code`; the `detail` wording may change.
-# - A named guard of delurio-graph/0 is a bare expression and cannot carry `source:`, so each guard is written on the
-#   transition it decides, and that transition's `source:` is the line of the check.
-# - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions live in the
-#   session service (Postgres, with the cache in front), the access token denylist lives in the cache, and the event
-#   store has its own writer (ADR-019 Decision 8). The two database writes are domain actions (graphs/domain/).
+# - The walk runs from GET or POST /oauth/end-session through the confirm step (logout_confirm) of the Interaction API
+#   to the response, and covers the sign-out status page the step ends on when the app registered nowhere to return.
+#   The checks an answer or a cancel passes before its turn is taken are the Interaction API's own (#616): see
+#   outOfView.
+# - Each exit is a final state named <outcome>.<cause> or <error>.<cause>, with the response the browser gets. An
+#   exit with `redirect: success` sends the browser to the app's post_logout_redirect_uri with state (§3); every other
+#   exit is a page or an answer of QAuth's own (`redirect: never`). A refused request gets an HTML info page, never a
+#   redirect. An error the error handler answers is an RFC 9457 problem document.
+# - The request checks run in a fixed order and each refuses on its own, so one variable (returnTo) says which of the
+#   return checks fails first, if any, as core.consent does with allowGate.
+# - `invoke: { external }` names a store the domain graph holds no entity for: the browser sessions (the session
+#   service: Postgres, with the cache in front), the interaction store (#592) and the event store, which has its own
+#   writer (ADR-019 Decision 8).
 schema: delurio-graph/0
 kind: flow
 id: core.logout
-status: captured
+status: proposed
 domain: qauth
-title: Sign out with an access token
+title: Sign the browser out at an app's request, and send it back to the app
 summary: >-
-  The developer portal's server, or any caller holding the token /auth/login minted, posts it as a Bearer token.
-  QAuth accepts it even when it has expired, as long as QAuth signed it. It ends the user's browser sessions,
-  invalidates their unredeemed authorization codes, revokes their refresh tokens at every client and on every
-  device, denylists the token when it is still live, and records the sign-out. It refuses any other token with 401.
+  An app sends the browser to /oauth/end-session with an id_token_hint, its client_id, a post_logout_redirect_uri and
+  state, all optional. QAuth checks the hint's signature and issuer and accepts it expired. A return URI must be one
+  the app registered, matched exactly, for the client the hint or client_id names; otherwise QAuth shows an info page,
+  ends nothing and never redirects. When the hint names the account of the browser's session, that session ends at
+  once: its rows, its cookie and its registry rows go, and the session's end reaches the back-channel logout of its
+  apps. In every other case a browser that is signed in gets the logout_confirm step, and nothing ends until the person
+  answers it. The person signs out of this account or of every account on the browser, or stays signed in; either way
+  the browser goes back to the app's registered URI with state, or to the sign-out status page.
 
 scope:
-  shows: POST /auth/logout from the request to the response, in the order the server runs its checks
+  shows: >-
+    GET and POST /oauth/end-session from the request to the response; the logout_confirm interaction from its start
+    through the step reads, the answer and the cancel; and GET /oauth/end-session/status
   world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
   outOfView:
-    - 'a store failure while the token is checked (the system client lookup, the user lookup) answers 500 before
-      anything is ended'
-    - 'a failure to record a refused sign-out (user.sign_out_failed) turns that refusal into a 500'
-    - "Fastify's own refusals before the header check, such as an empty body sent as application/json (400)"
-    - 'the four causes of a 421 (a malformed host, an unknown host, a disabled realm, a realm with no issuer) give
-      one answer and are drawn as one exit'
-    - 'a token with no jti, minted before the claim existed, is not denylisted'
-    - 'a token whose sub is empty or not a UUID: QAuth never mints one for the portal'
-    - 'with RATE_LIMIT_ENABLED=false the logout limit is not applied'
-    - 'the effects are not one transaction: a failure part way leaves the steps before it done'
+    - 'the checks an answer or a cancel passes before its turn is taken, unchanged from #616: the same origin (403,
+      request.csrf_rejected), the media type (415), the body bound (413), the flow cookie that binds the interaction
+      (410 interaction_expired), the CSRF value of the current step view (403), and the turn (an answer another answer
+      beat gets the step as it now is); a cancel that names anything but its CSRF value is refused with 400'
+    - 'the refusals of the reads: an id that names no live interaction answers 410 interaction_expired; the
+      personal-data read answers 410 without the flow cookie that binds the interaction and 403 from another origin;
+      both reads have their own rate limits (#616)'
+    - 'several accounts on one browser (ADR-019 Decision 3, #548): the session cookie names one session today, so the
+      step lists one account and logout_all ends the same session as logout; once #548 lists several, logout ends only
+      the account the request is for and logout_all every account the cookie lists'
+    - "the delivery of back-channel logout (#624): ending a session takes its registry rows, the clients it served, and
+      hands them to the session service's listeners, where #624 queues each logout token; until #624 ships no logout
+      token is sent. The event user.signed_out carries the session's sid, so its CAEP session-revoked SET names the
+      user and the session together"
+    - 'refresh tokens: this route revokes none (an app revokes its own at /oauth/revoke before it sends the browser
+      here, ADR-017 F0); POST /auth/logout, core.logout-token, still revokes every one of the user'
+    - 'the realm resolver and the rate limit of the status page, which refuse as those of the end-session route do'
+    - 'a store failure while the request is checked (the client, the session, the user) answers 500 before anything is
+      ended, and a failure to record the event of a refusal turns that refusal into a 500'
+    - 'ui_locales and logout_hint are accepted and not read; a parameter repeated, or longer than its bound, fails the
+      schema'
+    - 'a session cookie that does not verify, or names an ended session, is cleared by the read that finds it so, as
+      every page that reads the cookie clears it, and counts as no session'
+    - 'a browser whose cookie names a later session of the same account when the answer comes: the session the step
+      was started for is the one that ends'
 
 context:
   host:
@@ -49,603 +77,855 @@ context:
     values: [false, true]
     initial: any
     say:
-      'true': 'this client address has used up its logout requests for the window'
-      'false': 'the address is under its logout limit'
-  header:
-    values: [bearer, invalid, notOneToken]
+      'true': 'this client address has used up its end-session requests for the window'
+      'false': 'the address is under its end-session limit'
+  params:
+    values: [wellFormed, malformed]
     initial: any
     say:
-      bearer: 'the Authorization header is Bearer and one token'
-      invalid: 'the Authorization header is missing, or does not match ^Bearer .+$'
-      notOneToken: 'the header matches ^Bearer .+$ but is not two parts split by one space, such as Bearer a b'
-  signature:
-    values: [valid, invalid]
+      wellFormed: 'every parameter is given at most once and within its bound; the POST body is a form'
+      malformed: 'a parameter is repeated or over its bound, or the POST body is not a form'
+  hint:
+    values: [absent, valid, expired, invalid]
     initial: any
     say:
-      valid: "QAuth signed the token, for the issuer of this realm's tokens"
-      invalid: 'the token is no JWT, its signature or issuer does not verify, or it is live and its typ or claims do not verify'
-  expired:
-    values: [false, true]
-    initial: any
-    say: { 'true': 'the token has expired', 'false': 'the token has not expired' }
-  issuedFor:
-    values: [portal, otherClient, delegated, otherAudience]
-    initial: any
-    say:
-      portal: 'the token is the one /auth/login mints for the developer portal'
-      otherClient: 'the token was issued to another client'
-      delegated: 'the token carries an act claim: it acts for an agent'
-      otherAudience: 'the token was issued to the system client for another audience'
-  subject:
-    values: [user, deleted, otherRealm, reenabled]
+      absent: 'the request carries no id_token_hint'
+      valid: >-
+        an ID token this realm issued: its signature verifies with a key of the realm's token keys (EdDSA or RS256), its
+        iss is the realm's issuer, its typ is an ID token's, and it has not expired
+      expired: 'as valid, except that its exp has passed: it is accepted (RP-Initiated Logout 1.0 §2)'
+      invalid: >-
+        anything else: not a JWT, another algorithm, no key of this realm verifies it, another issuer, an access token
+        or another token type, or malformed claims; it counts as no hint
+  clientGate:
+    values: [consistent, mismatch]
     initial: any
     say:
-      user: "the token's subject is a user of this realm"
-      deleted: "the token's subject names no user any more"
-      otherRealm: "the token's subject is a user of another realm"
-      reenabled: "the token's subject is a user of this realm, disabled after the token was minted and enabled again since"
-  dpopBound:
-    values: [false, true]
+      consistent: "client_id is absent, or it is the valid hint's aud"
+      mismatch: 'client_id and the aud of a valid hint name different clients (§2: the OP MUST verify they match)'
+  # the return checks, in their order: which fails first, if any
+  returnTo:
+    values: [none, registered, noClient, unregistered, clientUnusable]
     initial: any
     say:
-      'true': 'the token is bound to a DPoP key (cnf)'
-      'false': 'the token is bound to no key'
-  ownSession:
-    values: [false, true]
+      none: 'the request carries no post_logout_redirect_uri'
+      registered: >-
+        post_logout_redirect_uri is, exactly, one of the post_logout_redirect_uris of the client the valid hint's aud or
+        client_id names, and that client may be used
+      noClient: 'post_logout_redirect_uri is given, and neither client_id nor a valid hint names a client'
+      unregistered: >-
+        post_logout_redirect_uri is given, and the client named is unknown or does not register exactly that URI (a
+        client that registered none never gets a redirect)
+      clientUnusable: 'post_logout_redirect_uri is given, and the client named is disabled or suspended'
+  account:
+    values: [none, hinted, other]
     initial: any
     say:
-      'true': "the request carries the session cookie of one of the user's browser sessions"
-      'false': "the request carries no session cookie of the user's"
-  sessionsEnded: { values: [false, true], initial: false }
-  codesInvalidated: { values: [false, true], initial: false }
-  refreshTokensRevoked: { values: [false, true], initial: false }
+      none: 'the browser holds no live session of this realm'
+      hinted: "the browser's session is of the account the valid hint's sub names"
+      other: 'the browser holds a live session, and no valid hint names its account'
+  interactionUi:
+    values: [off, on]
+    initial: any
+    say:
+      'on': 'INTERACTION_UI_ENABLED is on: the ceremony app draws the step'
+      'off': 'INTERACTION_UI_ENABLED is off (the default): the end-session route draws the step as a plain form'
+  decision:
+    values: [logout, logoutAll, stay, malformed]
+    initial: any
+    say:
+      logout: 'the person signs out of the account the request is for'
+      logoutAll: 'the person signs out of every account on the browser'
+      stay: 'the person stays signed in'
+      malformed: >-
+        the answer does not pass the step grammar: no decision, another one, or a member beyond type, csrf and decision
+  recheck:
+    values: [kept, lost]
+    initial: any
+    say:
+      kept: 'when the step is answered, the client still registers the return URI and may be used'
+      lost: >-
+        when the step is answered, the client is gone, disabled or suspended, or no longer registers the return URI
+  sessionAtFinish:
+    values: [live, ended]
+    initial: any
+    say:
+      live: 'the session the step was started for is still live when the step is answered'
+      ended: 'it ended meanwhile: a sign-out in another tab, a revoke, or its own end'
+  sessionEnded: { values: [false, true], initial: false }
+  confirmed: { values: [false, true], initial: false }
+  interactionOpen: { values: [false, true], initial: false }
+
+guards:
+  hintValid: "hint in ['valid', 'expired']"
+  canReturn: "returnTo == 'registered'"
+  canReturnAtFinish: "returnTo == 'registered' and recheck == 'kept'"
+  declined: "decision == 'stay'"
 
 effects:
-  endSessions: { set: { sessionsEnded: true } }
-  invalidateCodes: { set: { codesInvalidated: true } }
-  revokeRefreshTokens: { set: { refreshTokensRevoked: true } }
+  endSession: { set: { sessionEnded: true } }
+  confirm: { set: { confirmed: true } }
+  openInteraction: { set: { interactionOpen: true } }
+  finishInteraction: { set: { interactionOpen: false } }
 
 failures:
-  # each effect fails only on a store error; the catch block records user.sign_out_failed and rethrows
-  endingSessions: { from: browserSessionStore, server: [server_error] }
-  invalidatingCodes: { from: AuthorizationCode.invalidateForUser, server: [server_error] }
-  revokingRefreshTokens: { from: RefreshToken.revokeAllForUser, server: [server_error] }
-  revokingAccessToken: { from: accessTokenDenylist, server: [server_error] }
+  recordingNoSession: { from: eventStore, server: [server_error] }
+  endingSession: { from: browserSessionStore, server: [server_error] }
   recordingSignOut: { from: eventStore, server: [server_error] }
+  startingConfirm: { from: interactionStore, server: [server_error] }
+  takingFinish:
+    from: interactionStore
+    expired: [interaction_expired]
+    server: [server_error]
+  takingCancel:
+    from: interactionStore
+    expired: [interaction_expired]
+    server: [server_error]
+  endingConfirmedSession: { from: browserSessionStore, server: [server_error] }
+  recordingConfirmedSignOut: { from: eventStore, server: [server_error] }
+  recordingNoSessionAtFinish: { from: eventStore, server: [server_error] }
+  recordingDecline: { from: eventStore, server: [server_error] }
 
-# The main story: the portal's server signs a user out with the live token /auth/login gave it.
+# The main story: an app sends a signed-in browser here with a live ID token of its account and a registered return
+# URI; the session ends at once and the browser goes back to the app with state.
 main:
   given:
     host: realm
     overLimit: false
-    header: bearer
-    signature: valid
-    expired: false
-    issuedFor: portal
-    subject: user
-    dpopBound: false
-    ownSession: false
-  events: [LOGOUT, DONE, DONE, DONE, DONE, DONE]
+    params: wellFormed
+    hint: valid
+    clientGate: consistent
+    returnTo: registered
+    account: hinted
+    interactionUi: 'off'
+    decision: logout
+    recheck: kept
+    sessionAtFinish: live
+  events: [END_SESSION, DONE, DONE]
 
 initial: idle
 states:
   idle:
-    title: Wait for a logout request
-    source: apps/auth-server/src/app/routes/auth/logout.ts:41
+    title: Wait for an end-session request
     on:
-      LOGOUT:
+      END_SESSION:
         target: resolvingRealm
-        say: 'POST /auth/logout arrives'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:42
+        say: 'GET /oauth/end-session with a query, or POST /oauth/end-session with a form, arrives'
+      STATUS:
+        target: readingStatus
+        say: 'GET /oauth/end-session/status arrives'
 
   resolvingRealm:
     title: Find the realm of the host
     description: >-
-      The realm resolver's onRequest hook, before any route code. /auth/logout is an api route, so it answers on a
-      realm's endpoint hosts too. A request refused here is never counted by the rate limiter.
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
+      The realm resolver's onRequest hook, before any route code. /oauth/end-session is a browser route, served on the
+      realm's own host. A request refused here is never counted by the rate limiter.
     always:
       - guard: "host == 'unknown'"
         target: misdirected_request.host
         say: 'the host names no enabled realm with an issuer'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
       - target: rateLimiting
         say: 'the request has its realm'
-        source: apps/auth-server/src/app/plugins/realm-resolver.ts:169
 
   rateLimiting:
-    title: Count the request against the logout limit
+    title: Count the request against the end-session limit
     description: LOGOUT_RATE_LIMIT requests per LOGOUT_RATE_WINDOW seconds, for each client address and realm.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:57
     always:
       - guard: overLimit
-        target: too_many_requests.logout_limit
-        say: 'the address has used up its logout requests'
-        source: apps/auth-server/src/app/plugins/rate-limit.ts:25
-      - target: validatingHeader
+        target: too_many_requests.end_session_limit
+        say: 'the address has used up its end-session requests'
+      - target: validatingParams
         say: 'the address is under its limit'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:58
 
-  validatingHeader:
-    title: Check the Authorization header against the schema
-    source: apps/auth-server/src/app/routes/auth/logout.ts:50
+  validatingParams:
+    title: Check the parameters against the schema
+    description: >-
+      id_token_hint, client_id, post_logout_redirect_uri, state, ui_locales and logout_hint, each optional and each a
+      single bounded string, in the query of a GET or the form body of a POST (§2: the OP MUST support both).
     always:
-      - guard: "header == 'invalid'"
-        target: validation_error.authorization
-        say: 'the header is missing or does not match ^Bearer .+$'
-        source: apps/auth-server/src/app/schemas/auth.ts:167
-      - target: readingToken
-        say: 'the header matches the schema'
-        source: apps/auth-server/src/app/schemas/auth.ts:164
+      - guard: "params == 'malformed'"
+        target: validation_error.params
+        say: 'a parameter is repeated or over its bound'
+      - target: verifyingHint
+        say: 'the parameters pass the schema'
 
-  readingToken:
-    title: Read the token from the header
+  verifyingHint:
+    title: Verify the id_token_hint, and accept it expired
     description: >-
-      The handler splits the header on single spaces and takes the token only when there are exactly two parts and
-      the first is Bearer. The schema lets through a header such as "Bearer a b", which this refuses.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:74
+      With the realm's token keys and issuer, as the realm's ID tokens are signed. A hint that does not verify is
+      logged and counts as no hint: it names no client and no account, and the request goes on without it.
     always:
-      - guard: "header == 'notOneToken'"
-        target: invalid_token.missing_token
-        say: 'the header holds no single token'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:76
-      - target: verifyingToken
-        say: 'the header holds one token'
-        source: libs/server/jwt/src/lib/header-utils.ts:24
+      - target: checkingClient
+        say: 'the hint is read, or counted as absent'
 
-  verifyingToken:
-    title: Verify the token, and accept it expired
-    description: >-
-      The EdDSA signature, then the issuer (the one this realm's tokens carry), then the expiry, in that order. A
-      token that fails only on its expiry is
-      accepted, however long ago it expired: its claims are decoded without the typ and claim-shape checks a live
-      token goes through. Unlike requireJwt, this route does not read the revocation denylist, so a token revoked
-      earlier still signs its user out.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:94
+  checkingClient:
+    title: Check client_id against the hint
     always:
-      - guard: "signature == 'invalid'"
-        target: invalid_token.unverified
-        say: 'the token does not verify'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:102
-      - guard: expired
-        target: checkingManagementToken
-        say: 'the token has expired, but QAuth signed it: its claims are read anyway'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:96
-      - target: checkingManagementToken
-        say: 'the token verifies'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:94
+      - guard: "clientGate == 'mismatch' and hintValid"
+        target: invalid_request.client_mismatch
+        say: "client_id is not the hint's audience; user.sign_out_failed (client_id_mismatch) is recorded"
+      - target: checkingReturn
+        say: 'client_id is absent or matches'
 
-  checkingManagementToken:
-    title: Accept only the portal's own token
+  checkingReturn:
+    title: Check the return URI against the client's registration
     description: >-
-      assertManagementToken with requireActiveUser false, so a disabled user may still sign out. It checks the client,
-      the act claim and the audience, in this order, and looks no user up: the route does that below, in its realm.
-      For this release only, a token that has not expired may carry the system client's id as its whole audience,
-      as a portal token minted before #524 does, so a sign-out during the rolling upgrade still ends access.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:116
+      Only when the request carries post_logout_redirect_uri. The client is the one the valid hint's aud names, else
+      the one client_id names; its post_logout_redirect_uris are matched exactly, as strings (§3.1). A refusal records
+      user.sign_out_failed with its reason and shows the info page; nothing ends and the browser is never redirected.
     always:
-      - guard: "issuedFor == 'otherClient'"
-        target: invalid_token.not_management_client
-        say: "the token's client_id is not the system client's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:84
-      - guard: "issuedFor == 'delegated'"
-        target: invalid_token.delegated
-        say: 'the token acts for an agent'
-        source: apps/auth-server/src/app/helpers/management-token.ts:88
-      - guard: "issuedFor == 'otherAudience'"
-        target: invalid_token.wrong_audience
-        say: "the token's audience is not exactly the developer API's (#524), nor, on a live token, the system client's id"
-        source: apps/auth-server/src/app/helpers/management-token.ts:105
-      - target: checkingBinding
-        say: "the token is the portal's"
-        source: apps/auth-server/src/app/helpers/management-token.ts:107
+      - guard: "returnTo == 'noClient'"
+        target: invalid_request.return_without_client
+        say: 'no client is named; user.sign_out_failed (post_logout_redirect_uri_without_client) is recorded'
+      - guard: "returnTo == 'unregistered'"
+        target: invalid_request.return_not_registered
+        say: 'the client does not register the URI; user.sign_out_failed (post_logout_redirect_uri_not_registered)'
+      - guard: "returnTo == 'clientUnusable'"
+        target: invalid_request.return_client_unusable
+        say: 'the client is disabled or suspended; user.sign_out_failed (client_unusable) is recorded'
+      - target: findingSession
+        say: 'there is no return URI, or it is registered'
 
-  checkingBinding:
-    title: Refuse a DPoP-bound token
-    description: RFC 9449 §7.2. The route reads a Bearer token, and a DPoP-bound token is never one.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:122
+  findingSession:
+    title: Find the browser's session
+    description: >-
+      The session cookie, read as every page reads it (resolveBrowserSession): a cookie of this realm that names a live
+      session of a usable account.
     always:
-      - guard: dpopBound
-        target: invalid_token.dpop_bound
-        say: 'the token is bound to a DPoP key'
-        source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:75
-      - target: findingUser
-        say: 'the token is bound to no key'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:123
+      - guard: "account == 'none'"
+        target: recordingNoSession
+        say: 'the browser holds no live session: nothing to end'
+      - guard: "account == 'hinted' and hintValid"
+        target: endingSession
+        say: "the valid hint names the session's account: no confirmation is asked"
+      - target: startingConfirm
+        say: 'no valid hint names the account of the session: the person is asked'
 
-  findingUser:
-    title: Find the token's user in this realm
-    description: >-
-      Looked up in the realm of the request (#489), so a user of another realm is no user here, refused exactly as
-      a deleted one is.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:134
-    always:
-      - guard: "subject == 'reenabled'"
-        target: invalid_token.issued_before_disablement
-        say: >-
-          the account was disabled after the token was minted and is enabled again: the token must not sign the
-          owner out of the sessions started since (#748)
-        source: apps/auth-server/src/app/routes/auth/logout.ts:145
-      - guard: "subject != 'user'"
-        target: invalid_token.subject_not_a_user
-        say: 'the subject names no user of this realm: deleted since the token was minted, or a user of another realm'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:135
-      - target: endingSessions
-        say: 'the subject is a user of this realm'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:138
-
-  endingSessions:
-    title: End the user's browser sessions
-    description: >-
-      Every live hosted browser session of the user, found by the user in Postgres rather than through a cookie or a
-      per-user index in Redis (#912) and revoked in one transaction by the session service, so that none of them can
-      obtain a new authorization code once the codes are invalidated. The cookie of the request is cleared when it
-      names one of them.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:154
-    invoke: { external: browserSessionStore }
-    on:
-      DONE:
-        target: invalidatingCodes
-        effect: [endSessions]
-        say: 'the sessions are ended'
-        source: apps/auth-server/src/app/helpers/browser-session.ts:244
-      FAIL.server:
-        target: server_error.store
-        say: 'the session store fails'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:208
-
-  invalidatingCodes:
-    title: Invalidate the user's unredeemed authorization codes
-    description: >-
-      Before the refresh tokens, because a code redeemed after that sweep would mint a refresh token that survives
-      the logout. It waits for a redemption in flight, which holds its code row until its refresh token is
-      committed.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:180
-    invoke: { action: AuthorizationCode.invalidateForUser }
-    on:
-      DONE:
-        target: revokingRefreshTokens
-        effect: [invalidateCodes]
-        say: 'the codes are spent'
-        source: libs/infra/db/src/lib/repositories/authorization-codes.repository.ts:154
-      FAIL.server:
-        target: server_error.store
-        say: 'the database fails'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:208
-
-  revokingRefreshTokens:
-    title: Revoke every active refresh token of the user
-    description: At every client and on every device, with the reason logout.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:184
-    invoke: { action: RefreshToken.revokeAllForUser }
-    on:
-      DONE:
-        - guard: expired
-          target: recordingSignOut
-          effect: [revokeRefreshTokens]
-          say: 'the token has expired, so it is already inert and is not denylisted'
-          source: apps/auth-server/src/app/routes/auth/logout.ts:189
-        - target: revokingAccessToken
-          effect: [revokeRefreshTokens]
-          say: 'the refresh tokens are revoked and the token is still live'
-          source: apps/auth-server/src/app/routes/auth/logout.ts:189
-      FAIL.server:
-        target: server_error.store
-        say: 'the database fails'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:208
-
-  revokingAccessToken:
-    title: Denylist the token of this request
-    description: >-
-      Its jti, for the rest of its lifetime, as /oauth/revoke does for a token presented to it; otherwise it would
-      keep working at the management API until it expires.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:190
-    invoke: { external: accessTokenDenylist }
-    on:
-      DONE:
-        target: recordingSignOut
-        say: 'the token is denylisted'
-        source: apps/auth-server/src/app/helpers/token-revocation.ts:30
-      FAIL.server:
-        target: server_error.store
-        say: 'the cache fails'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:208
-
-  recordingSignOut:
-    title: Record the sign-out
-    description:
-      The event urn:qauth:event:user.signed_out:v1-rc.0. A failed write fails the request, after everything
-      above has ended.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:194
+  recordingNoSession:
+    title: Record that there was nothing to end
+    description: user.sign_out_failed with reason no_session, for the client the request named.
     invoke: { external: eventStore }
     on:
       DONE:
-        - guard: ownSession
-          target: signed_out.cookie_cleared
-          say: "the request's own session was one of those ended"
-          source: apps/auth-server/src/app/routes/auth/logout.ts:172
-        - target: signed_out
-          say: 'the event is recorded'
-          source: apps/auth-server/src/app/routes/auth/logout.ts:204
+        - guard: canReturn
+          target: nothing_to_end.returned
+          say: 'the request carries a registered return URI'
+        - target: nothing_to_end.page
+          say: 'there is nowhere to return'
       FAIL.server:
-        target: server_error.store
+        target: server_error.event_store
         say: 'the event store fails'
-        source: apps/auth-server/src/app/routes/auth/logout.ts:208
 
-  signed_out:
-    type: final
-    title: The user is signed out
-    source: apps/auth-server/src/app/routes/auth/logout.ts:204
+  endingSession:
+    title: End the browser's session
+    description: >-
+      The session service revokes the one session, reason sign_out, by its user: its row is marked revoked in Postgres,
+      a tombstone covers its cache entry, its registry rows and unredeemed codes go with it, and its side record is
+      dropped. The listeners hear of it with the clients it served (back-channel logout, #624). Every other session of
+      the user stays, and no refresh token is revoked. The response clears the session cookie.
+    invoke: { external: browserSessionStore }
+    on:
+      DONE:
+        target: recordingSignOut
+        effect: [endSession]
+        say: 'the session is ended'
+      FAIL.server:
+        target: server_error.session_store
+        say: 'the session store fails'
+
+  recordingSignOut:
+    title: Record the sign-out
+    description: user.signed_out with the ended session's sid, for the user and the client the request named.
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        - guard: canReturn
+          target: signed_out.returned
+          say: 'the request carries a registered return URI'
+        - target: signed_out.page
+          say: 'there is nowhere to return'
+      FAIL.server:
+        target: server_error.event_store
+        say: 'the event store fails, after the session ended'
+
+  # The confirm step (logout_confirm) of the Interaction API
+
+  startingConfirm:
+    title: Start the logout_confirm interaction
+    description: >-
+      An interaction record (#592) of purpose logout, holding the checked request (the client, the return URI and
+      state, never the hint), the logout_confirm step, the browser session it is for (carried in, as #964 records one)
+      and, when the request named a client, the client's display data; interaction.created is recorded with purpose
+      logout. A new secret in the __Host-qauth_flow cookie binds it to this browser. Nothing has ended.
+    invoke: { external: interactionStore }
+    on:
+      DONE:
+        - guard: "interactionUi == 'on'"
+          target: atConfirmCeremony
+          effect: [openInteraction]
+          say: 'the interaction is stored, and the ceremony app draws the step'
+        - target: showingConfirmPage
+          effect: [openInteraction]
+          say: 'the interaction is stored, and the route draws the step itself'
+      FAIL.server:
+        target: server_error.interaction_store
+        say: 'the interaction store fails'
+
+  atConfirmCeremony:
+    title: Send the browser to the ceremony page of the confirm step
+    description: The redirect carries the interaction id and nothing else.
     response:
-      status: 200
-      body: { success: true, message: Successfully logged out }
+      status: 303
+      headers:
+        Location: '<issuer>/ui/interaction/<the interaction id, 43 base64url characters>'
+        Set-Cookie: >-
+          __Host-qauth_flow=<the browser's interaction secrets, this one's added>; Path=/; HttpOnly; SameSite=Lax
+        Cache-Control: no-store
+    on:
+      READ:
+        target: showingStep
+        say: 'the ceremony page reads the step by the interaction id'
 
-  signed_out.cookie_cleared:
-    type: final
-    title: The user is signed out, and the request's session cookie is cleared
-    source: apps/auth-server/src/app/routes/auth/logout.ts:173
+  showingConfirmPage:
+    title: Show the confirm step as a plain form
+    description: >-
+      While INTERACTION_UI_ENABLED is off there is no ceremony app, so the route draws the step itself: the account it
+      signs out, the app that asked when the request named one, and three buttons that post the answer to the
+      Interaction API with the step's CSRF value. It needs no JavaScript.
     response:
       status: 200
       headers:
-        Set-Cookie:
-          '__Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when
-          SESSION_COOKIE_SECURE is on'
-      body: { success: true, message: Successfully logged out }
+        Content-Type: text/html; charset=utf-8
+        Set-Cookie: >-
+          __Host-qauth_flow=<the browser's interaction secrets, this one's added>; Path=/; HttpOnly; SameSite=Lax
+        Cache-Control: no-store
+        Content-Security-Policy: "the server-rendered pages' nonce-based policy"
+      body: >-
+        "Sign out?", the account's identifier, the app's display name marked as declared when the request named one,
+        and a form to POST /interaction/v1-rc.0/<id>/answer with csrf and the buttons Sign out (decision logout), Sign
+        out of all accounts (logout_all) and Stay signed in (stay)
+    on:
+      ANSWER:
+        target: checkingAnswer
+        say: 'the person presses a button: the form posts the answer'
+
+  showingStep:
+    title: Return the confirm step
+    description: The step read needs the interaction id only and holds no personal data.
+    response:
+      status: 200
+      headers:
+        Content-Type: application/json; charset=utf-8
+        Cache-Control: no-store
+      body:
+        step: 'urn:qauth:ia:logout_confirm:v1-rc.0'
+        params: '{}'
+        alternatives: '[]'
+        csrf: 'the CSRF value of this step view, for one answer'
+        client: 'the client display, when the request named a client'
+        brand: "the realm's brand"
+        expiresAt: 'when the interaction expires'
+    on:
+      READ_PERSONAL:
+        target: showingPersonal
+        say: 'the ceremony page reads the personal data, with the flow cookie'
+      ANSWER:
+        target: checkingAnswer
+        say: 'the person answers, with the CSRF value of this view; the answer takes the turn'
+      CANCEL:
+        target: takingCancel
+        say: 'the person cancels, with the CSRF value of this view'
+
+  showingPersonal:
+    title: Return the confirm step's personal data
+    description: Only to the browser whose flow cookie binds the interaction, and never from another origin.
+    response:
+      status: 200
+      headers:
+        Content-Type: application/json; charset=utf-8
+        Cache-Control: no-store
+      body: >-
+        { accounts: [{ identifier, current: true }] }: the account the session is of, by the identifier it signed in
+        with
+    on:
+      READ:
+        target: showingStep
+        say: 'the ceremony page reads the step again'
+      ANSWER:
+        target: checkingAnswer
+        say: 'the person answers, with the CSRF value of the step view'
+      CANCEL:
+        target: takingCancel
+        say: 'the person cancels, with the CSRF value of the step view'
+
+  checkingAnswer:
+    title: Check the answer against the step's grammar
+    description: >-
+      { type: urn:qauth:ia:logout_confirm:v1-rc.0, csrf, decision: logout | logout_all | stay }, nothing else. A refusal
+      gives the turn back; the step and its CSRF value stay.
+    always:
+      - guard: "decision == 'malformed'"
+        target: invalid_answer.grammar
+        say: 'the answer does not pass the step grammar'
+      - target: takingFinish
+        say: 'the answer passes the grammar'
+
+  takingFinish:
+    title: End the interaction before anything is decided
+    description: >-
+      As every finish (#616): the record is deleted unless the expiry sweep claimed it first, the interaction's secret
+      leaves the flow cookie, and interaction.answered (outcome finished) is recorded. Only now is the decision read.
+    invoke: { external: interactionStore }
+    on:
+      DONE:
+        target: readingDecision
+        effect: [finishInteraction]
+        say: 'the interaction is over'
+      FAIL.expired:
+        target: interaction_expired.finished_late
+        say: 'the expiry sweep claimed the interaction first'
+      FAIL.server:
+        target: server_error.interaction_store_at_finish
+        say: 'the interaction store fails; the turn is given back'
+
+  readingDecision:
+    title: Read the decision
+    description: >-
+      The return URI is checked again first: the client is resolved and its registration matched as at the start, so a
+      client deleted, disabled or suspended since, or one that dropped the URI, gets no redirect.
+    always:
+      - guard: declined
+        target: recordingDecline
+        say: 'the person stays signed in'
+      - guard: "sessionAtFinish == 'ended'"
+        target: recordingNoSessionAtFinish
+        say: 'the person signs out, and the session has already ended'
+      - target: endingConfirmedSession
+        effect: [confirm]
+        say: 'the person signs out (logout, or logout_all, which ends the same one session today)'
+
+  endingConfirmedSession:
+    title: End the session the step was started for
+    description: >-
+      As endingSession, by the session's user. The response clears the session cookie when it still names this
+      session.
+    invoke: { external: browserSessionStore }
+    on:
+      DONE:
+        target: recordingConfirmedSignOut
+        effect: [endSession]
+        say: 'the session is ended'
+      FAIL.server:
+        target: server_error.session_store_at_finish
+        say: 'the session store fails'
+
+  recordingConfirmedSignOut:
+    title: Record the sign-out
+    description: user.signed_out with the ended session's sid.
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        - guard: canReturnAtFinish
+          target: signed_out.confirmed_returned
+          say: 'the client still registers the return URI'
+        - target: signed_out.confirmed_page
+          say: 'there is nowhere to return, or no longer'
+      FAIL.server:
+        target: server_error.event_store_at_finish
+        say: 'the event store fails, after the session ended'
+
+  recordingNoSessionAtFinish:
+    title: Record that there was nothing left to end
+    description: user.sign_out_failed with reason no_session.
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        - guard: canReturnAtFinish
+          target: nothing_to_end.finish_returned
+          say: 'the client still registers the return URI'
+        - target: nothing_to_end.finish_page
+          say: 'there is nowhere to return, or no longer'
+      FAIL.server:
+        target: server_error.event_store_at_finish
+        say: 'the event store fails'
+
+  takingCancel:
+    title: Cancel the interaction
+    description: >-
+      POST /interaction/v1-rc.0/{id}/cancel: the record is deleted unless the expiry sweep claimed it first, its secret
+      leaves the flow cookie, and interaction.cancelled (reason user) is recorded. A cancel is a decision to stay.
+    invoke: { external: interactionStore }
+    on:
+      DONE:
+        target: recordingDecline
+        effect: [finishInteraction]
+        say: 'the interaction is cancelled'
+      FAIL.expired:
+        target: interaction_expired.cancelled_late
+        say: 'the expiry sweep claimed the interaction first'
+      FAIL.server:
+        target: server_error.interaction_store_at_finish
+        say: 'the interaction store fails; the turn is given back'
+
+  recordingDecline:
+    title: Record that the person stayed signed in
+    description: user.sign_out_failed with reason declined. Nothing ends.
+    invoke: { external: eventStore }
+    on:
+      DONE:
+        - guard: canReturnAtFinish
+          target: stayed.returned
+          say: 'the client still registers the return URI: the app has signed the person out of itself'
+        - target: stayed.page
+          say: 'there is nowhere to return, or no longer'
+      FAIL.server:
+        target: server_error.event_store_at_finish
+        say: 'the event store fails'
+
+  # The sign-out status page (GET /oauth/end-session/status)
+
+  readingStatus:
+    title: Read whether the browser is still signed in
+    description: >-
+      The page the confirm step ends on when there is nowhere to return. It takes no parameter, so nobody can make it
+      say anything but the truth about this browser.
+    always:
+      - guard: "account == 'none'"
+        target: status.signed_out
+        say: 'the browser holds no live session'
+      - target: status.signed_in
+        say: 'the browser holds a live session'
+
+  # Exits: back to the app
+
+  signed_out.returned:
+    type: final
+    title: Send the browser back to the app, signed out
+    redirect: success
+    carries: [state]
+    response: &returnedSignedOut
+      status: 303
+      headers:
+        Location: 'post_logout_redirect_uri, with state added to its query when the request had one'
+        Set-Cookie: >-
+          __Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when SESSION_COOKIE_SECURE is
+          on
+        Cache-Control: no-store
+
+  nothing_to_end.returned:
+    type: final
+    title: Send the browser back to the app; it was not signed in
+    redirect: success
+    carries: [state]
+    response: &returned
+      status: 303
+      headers:
+        Location: 'post_logout_redirect_uri, with state added to its query when the request had one'
+        Cache-Control: no-store
+
+  # Exits: QAuth's own pages
+
+  signed_out.page:
+    type: final
+    title: Show that the browser is signed out
+    redirect: never
+    response:
+      status: 200
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Set-Cookie: >-
+          __Host-qauth_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0, with Secure when SESSION_COOKIE_SECURE is
+          on
+        Cache-Control: no-store
+      body: '"You are signed out."'
+
+  nothing_to_end.page:
+    type: final
+    title: Show that the browser is signed out; it was not signed in
+    redirect: never
+    response: &signedOutPage
+      status: 200
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Cache-Control: no-store
+      body: '"You are signed out."'
+
+  # Exits: the answer and the cancel, as the Interaction API answers them
+
+  signed_out.confirmed_returned:
+    type: final
+    title: Send the browser back to the app after the person signed out
+    redirect: success
+    carries: [state]
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, post_logout_redirect_uri with state added when the request had one'
+        Set-Cookie: >-
+          __Host-qauth_session cleared when it names the ended session; __Host-qauth_flow without the finished
+          interaction's secret
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  signed_out.confirmed_page:
+    type: final
+    title: Send the browser to the status page after the person signed out
+    redirect: never
+    response:
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, <issuer>/oauth/end-session/status'
+        Set-Cookie: >-
+          __Host-qauth_session cleared when it names the ended session; __Host-qauth_flow without the finished
+          interaction's secret
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  nothing_to_end.finish_returned:
+    type: final
+    title: Send the browser back to the app; its session had already ended
+    redirect: success
+    carries: [state]
+    response: &answerReturned
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, post_logout_redirect_uri with state added when the request had one'
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  nothing_to_end.finish_page:
+    type: final
+    title: Send the browser to the status page; its session had already ended
+    redirect: never
+    response: &answerStatusPage
+      status: '303 for a form post; 200 for a JSON answer'
+      headers:
+        Location: 'for a form post, <issuer>/oauth/end-session/status'
+        Set-Cookie: "__Host-qauth_flow without the finished interaction's secret"
+        Cache-Control: no-store
+      body: 'for a JSON answer, { result: redirect, location: the same URL }'
+
+  stayed.returned:
+    type: final
+    title: Send the browser back to the app, still signed in to QAuth
+    description: >-
+      The app asked to sign the person out and has signed them out of itself; the person chose to stay signed in to
+      QAuth, so the app gets its browser back with state and nothing ended here.
+    redirect: success
+    carries: [state]
+    response: *answerReturned
+
+  stayed.page:
+    type: final
+    title: Send the browser to the status page, still signed in
+    redirect: never
+    response: *answerStatusPage
+
+  status.signed_out:
+    type: final
+    title: Say that the browser is signed out
+    redirect: never
+    response: *signedOutPage
+
+  status.signed_in:
+    type: final
+    title: Say that the browser is still signed in
+    redirect: never
+    response:
+      status: 200
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Cache-Control: no-store
+      body: '"You are still signed in."'
+
+  # Exits: refused requests, each an info page that ends nothing and never redirects
+
+  invalid_request.client_mismatch:
+    type: final
+    title: Refuse a client_id that is not the hint's audience
+    redirect: never
+    response: &refusedPage
+      status: 400
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Cache-Control: no-store
+      body: >-
+        the info page: "This sign-out request is not valid. You are still signed in; nothing was changed.", with the
+        request id
+    code: client_id_mismatch
+
+  invalid_request.return_without_client:
+    type: final
+    title: Refuse a return URI when no client is named
+    redirect: never
+    response: *refusedPage
+    code: post_logout_redirect_uri_without_client
+
+  invalid_request.return_not_registered:
+    type: final
+    title: Refuse a return URI the client did not register
+    redirect: never
+    response: *refusedPage
+    code: post_logout_redirect_uri_not_registered
+
+  invalid_request.return_client_unusable:
+    type: final
+    title: Refuse a return URI of a disabled or suspended client
+    redirect: never
+    response: *refusedPage
+    code: client_unusable
+
+  # Exits: errors the error handler answers
 
   misdirected_request.host:
     type: final
     title: Refuse a host QAuth does not answer for
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:164
+    redirect: never
     response:
       status: 421
       body:
         type: https://docs.qauth.dev/reference/problem-types/#misdirected-request
-        title: Misdirected request
         status: 421
-        detail: This server does not answer for the requested host
-        instance: /auth/logout
         code: misdirected_request
         trace_id: the request id
 
-  too_many_requests.logout_limit:
+  too_many_requests.end_session_limit:
     type: final
-    title: Refuse a request over the logout limit
-    source: apps/auth-server/src/app/plugins/rate-limit.ts:25
+    title: Refuse a request over the end-session limit
+    redirect: never
     response:
       status: 429
       headers:
-        x-ratelimit-limit: LOGOUT_RATE_LIMIT
-        x-ratelimit-remaining: '0'
-        x-ratelimit-reset: the seconds until the window resets
-        retry-after: the same seconds
+        retry-after: the seconds until the window resets
       body:
         type: https://docs.qauth.dev/reference/problem-types/#too-many-requests
-        title: Too many requests
         status: 429
-        detail: 'Rate limit exceeded, retry in {the rest of the window, such as 1 minute}'
-        instance: /auth/logout
         code: too_many_requests
         trace_id: the request id
 
-  validation_error.authorization:
+  validation_error.params:
     type: final
-    title: Refuse a missing or malformed Authorization header
-    source: apps/auth-server/src/app/schemas/auth.ts:167
+    title: Refuse parameters the schema does not accept
+    redirect: never
     response:
       status: 400
       body:
         type: https://docs.qauth.dev/reference/problem-types/#validation-error
-        title: Validation error
         status: 400
-        detail: The request is not valid.
-        instance: /auth/logout
         code: validation_error
         trace_id: the request id
-        errors:
-          - pointer: /authorization
-            message: "the schema's message, such as: Authorization header must be in format: Bearer <token>"
 
-  invalid_token.missing_token:
+  invalid_answer.grammar:
     type: final
-    title: Refuse a header that holds no single token
-    source: apps/auth-server/src/app/routes/auth/logout.ts:79
+    title: Refuse an answer the step grammar does not accept
+    description: The turn is given back; the step and its CSRF value stay.
+    redirect: never
     response:
-      status: 401
+      status: 400
       headers:
-        WWW-Authenticate: 'Bearer realm="OAuth"'
+        Content-Type: application/problem+json
+        Cache-Control: no-store
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#unauthorized
-        title: Unauthorized
-        status: 401
-        detail: 'Missing or invalid Authorization header. Expected format: "Bearer <token>"'
-        instance: /auth/logout
-        code: unauthorized
+        type: https://docs.qauth.dev/reference/problem-types/#invalid-answer
+        status: 400
+        code: invalid_answer
         trace_id: the request id
 
-  invalid_token.unverified:
+  interaction_expired.finished_late:
     type: final
-    title: Refuse a token that does not verify
-    description: >-
-      A bad signature, a malformed token, another issuer, or a live token with the wrong typ or malformed claims.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:102
-    response:
-      status: 401
+    title: Refuse an answer the expiry sweep beat
+    description: The sweep reports the interaction expired; nothing ends.
+    redirect: never
+    code: interaction_expired
+    response: &expired
+      status: 410
       headers:
-        WWW-Authenticate: 'Bearer realm="OAuth", error="invalid_token", error_description="<the body''s error>"'
+        Content-Type: application/problem+json
+        Cache-Control: no-store
       body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: 'Invalid JWT token, or Invalid JWT token: <why>'
-        instance: /auth/logout
-        code: invalid_access_token
+        type: https://docs.qauth.dev/reference/problem-types/#interaction-expired
+        status: 410
+        code: interaction_expired
         trace_id: the request id
 
-  invalid_token.not_management_client:
+  interaction_expired.cancelled_late:
     type: final
-    title: Refuse a token issued to another client
-    source: apps/auth-server/src/app/helpers/management-token.ts:85
-    response:
-      status: 401
-      headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="Access token was not issued for
-          the management API"'
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: Access token was not issued for the management API
-        instance: /auth/logout
-        code: invalid_access_token
-        trace_id: the request id
+    title: Refuse a cancel the expiry sweep beat
+    redirect: never
+    code: interaction_expired
+    response: *expired
 
-  invalid_token.delegated:
+  server_error.event_store:
     type: final
-    title: Refuse a token that acts for an agent
-    source: apps/auth-server/src/app/helpers/management-token.ts:89
-    response:
-      status: 401
-      headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="A delegated access token cannot
-          use the management API"'
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: A delegated access token cannot use the management API
-        instance: /auth/logout
-        code: invalid_access_token
-        trace_id: the request id
-
-  invalid_token.wrong_audience:
-    type: final
-    title: Refuse a token for another audience
-    source: apps/auth-server/src/app/helpers/management-token.ts:106
-    response:
-      status: 401
-      headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="Access token audience does not
-          match the management API"'
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: Access token audience does not match the management API
-        instance: /auth/logout
-        code: invalid_access_token
-        trace_id: the request id
-
-  invalid_token.dpop_bound:
-    type: final
-    title: Refuse a DPoP-bound token sent as a Bearer token
-    source: libs/fastify/plugins/jwt/src/lib/fastify-plugin-jwt.ts:76
-    response:
-      status: 401
-      headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="A DPoP-bound access token cannot
-          be used as a Bearer token"'
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: A DPoP-bound access token cannot be used as a Bearer token
-        instance: /auth/logout
-        code: invalid_access_token
-        trace_id: the request id
-
-  invalid_token.subject_not_a_user:
-    type: final
-    title: Refuse a token that names no user of this realm
-    source: apps/auth-server/src/app/routes/auth/logout.ts:136
-    response:
-      status: 401
-      headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not an active
-          user"'
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: Access token subject is not an active user
-        instance: /auth/logout
-        code: invalid_access_token
-        trace_id: the request id
-
-  invalid_token.issued_before_disablement:
-    type: final
-    title: Refuse a token minted before the account was last disabled, once it is enabled again
-    description: >-
-      Answered exactly as a token that names no user (#748); only the event's reason, issued_before_disablement,
-      tells them apart. While the account is still disabled, its user signs out as any other.
-    source: apps/auth-server/src/app/routes/auth/logout.ts:146
-    response:
-      status: 401
-      headers:
-        WWW-Authenticate:
-          'Bearer realm="OAuth", error="invalid_token", error_description="Access token subject is not an active
-          user"'
-      body:
-        type: https://docs.qauth.dev/reference/problem-types/#invalid-access-token
-        title: Invalid access token
-        status: 401
-        detail: Access token subject is not an active user
-        instance: /auth/logout
-        code: invalid_access_token
-        trace_id: the request id
-
-  server_error.store:
-    type: final
-    title: Fail on a store error
-    description: >-
-      The steps before the failing one stay done. The body says nothing of the failure, in any NODE_ENV; its
-      trace_id finds the log line.
-    source: apps/auth-server/src/app/plugins/error-handler.ts:604
-    response:
+    title: Fail on an event store error
+    description: A session ended before the failure stays ended.
+    redirect: never
+    response: &serverError
       status: 500
       body:
         type: https://docs.qauth.dev/reference/problem-types/#internal-error
-        title: Internal error
         status: 500
-        instance: /auth/logout
         code: internal_error
         trace_id: the request id
 
+  server_error.session_store:
+    type: final
+    title: Fail on a session store error
+    redirect: never
+    response: *serverError
+
+  server_error.interaction_store:
+    type: final
+    title: Fail on an interaction store error at the start
+    redirect: never
+    response: *serverError
+
+  server_error.interaction_store_at_finish:
+    type: final
+    title: Fail on an interaction store error at the answer or the cancel
+    description: The turn is given back; the step stays and can be answered again.
+    redirect: never
+    response: *serverError
+
+  server_error.session_store_at_finish:
+    type: final
+    title: Fail on a session store error after the interaction finished
+    redirect: never
+    response: *serverError
+
+  server_error.event_store_at_finish:
+    type: final
+    title: Fail on an event store error after the interaction finished
+    redirect: never
+    response: *serverError
+
 assertions:
-  - id: only-the-portals-token-ends-access
-    never:
-      "state in ['endingSessions', 'invalidatingCodes', 'revokingRefreshTokens', 'revokingAccessToken',
-      'recordingSignOut', 'signed_out', 'signed_out.cookie_cleared'] and (host != 'realm' or overLimit or header !=
-      'bearer' or signature != 'valid' or issuedFor != 'portal' or subject != 'user' or dpopBound)"
-    say:
-      "Nothing is ended unless the request carries the portal's own token, signed by QAuth and bound to no key, for a
-      user of this realm"
-    source: apps/auth-server/src/app/routes/auth/logout.ts:116
-  - id: signed-by-qauth-is-never-unverified
-    never: "state == 'invalid_token.unverified' and signature == 'valid'"
-    say: 'A token QAuth signed is never refused as unverified, however long ago it expired'
-    source: apps/auth-server/src/app/routes/auth/logout.ts:96
-  - id: codes-before-refresh-tokens
-    never: "state == 'revokingRefreshTokens' and not (sessionsEnded and codesInvalidated)"
-    say:
-      'The refresh tokens are swept only after the browser sessions are ended and the unredeemed codes are spent, so
-      no code redeemed later mints a refresh token that survives the logout'
-    source: apps/auth-server/src/app/routes/auth/logout.ts:180
-  - id: signed-out-means-ended
-    never:
-      "state in ['signed_out', 'signed_out.cookie_cleared'] and not (sessionsEnded and codesInvalidated and
-      refreshTokensRevoked)"
-    say: 'A 200 answer means the browser sessions, the unredeemed codes and the refresh tokens have all been ended'
-    source: apps/auth-server/src/app/routes/auth/logout.ts:204
-  - id: expired-token-not-denylisted
-    never: "state == 'revokingAccessToken' and expired"
-    say: 'An expired token is never written to the denylist'
-    source: apps/auth-server/src/app/routes/auth/logout.ts:189
+  - id: nothing-ends-unless-the-hint-or-the-person-says-so
+    never: "sessionEnded and not ((hintValid and account == 'hinted') or confirmed)"
+    say: >-
+      A session ends only when a valid hint names its account or the person confirmed the sign-out: a request with no
+      valid hint, such as a cross-site image tag, ends nothing
+  - id: a-refused-request-ends-nothing
+    never: >-
+      state in ['invalid_request.client_mismatch', 'invalid_request.return_without_client',
+      'invalid_request.return_not_registered', 'invalid_request.return_client_unusable'] and (sessionEnded or
+      interactionOpen)
+    say: 'A refused request ends no session and starts no interaction'
+  - id: back-only-to-a-registered-uri
+    never: >-
+      (state in ['signed_out.returned', 'nothing_to_end.returned'] and returnTo != 'registered') or (state in
+      ['signed_out.confirmed_returned', 'nothing_to_end.finish_returned', 'stayed.returned'] and not
+      canReturnAtFinish)
+    say: >-
+      The browser goes back only to a URI the client registered, matched exactly, while the client may still be used;
+      with none registered it is never redirected
+  - id: staying-ends-nothing
+    never: "state in ['stayed.returned', 'stayed.page'] and sessionEnded"
+    say: 'A person who stays signed in, or cancels, keeps the session'
+  - id: no-step-without-a-session
+    never: "interactionOpen and account == 'none'"
+    say: 'The confirm step is shown only to a browser that is signed in'
   - id: misdirected-is-not-counted
-    never: "state == 'too_many_requests.logout_limit' and host != 'realm'"
+    never: "state == 'too_many_requests.end_session_limit' and host != 'realm'"
     say: 'A request for a host QAuth does not answer for is refused before the rate limiter counts it'
-    source: apps/auth-server/src/app/plugins/realm-resolver.ts:141
