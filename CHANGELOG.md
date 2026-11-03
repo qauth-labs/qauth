@@ -1102,19 +1102,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against a double submit. A user switch ends the interaction and starts a new
   one for the same request at the identifier step, with nothing proved carried
   over and the request's absolute expiry kept. "Not you?", a switch at any step
-  but the account chooser, also signs the browser out of the account the
-  interaction is for, as a sign-out by that account: the browser session a
-  sign-in during the interaction started ([#896]) or, while nobody has signed in
-  during it, the session the browser was already signed in with when
-  `/oauth/authorize` started the interaction, for a consent or a sign-in the
-  client asked for again, which the interaction records as carried in ([#964]);
-  and the session the browser's cookie names when it is a later one of the same
+  but the account chooser, also signs the browser out of the account the screen
+  shows, and of no other, as a sign-out by that account; its label says that it
+  signs out. The account shown is the one a sign-in during the interaction
+  proved, the user a consent is for or, while nobody has signed in during it,
+  the account the identifier the person gave names. Its sessions that end: the
+  one a sign-in during the interaction started ([#896]); the session the
+  browser was already signed in with when `/oauth/authorize` started the
+  interaction, for a consent or a sign-in the client asked for again, which the
+  interaction records as carried in, when it is that account's ([#964]); and
+  the session the browser's cookie names when it is a later one of the same
   account (a sign-in again in another tab). It clears the cookie when it names
   one of them, and `interaction.cancelled` records it with `sessionEnded: true`,
-  about that account. A cookie session of another user stays, and when the
-  cookie keys cannot be read only the sessions the interaction holds end. "Use
-  another account", the switch at the account chooser, ends no session: the
-  accounts it lists stay signed in. An unknown, expired or finished
+  about that account. Another account's session stays, and when the cookie
+  keys cannot be read only the sessions the interaction holds end. "Use another
+  account", the switch at the account chooser, ends no session: the accounts it
+  lists stay signed in. An unknown, expired or finished
   interaction and a wrong cookie get one
   `interaction_expired` answer (410), the same bytes whatever the cause, and so
   does a finish after the session its sign-in started has ended, by a sign-out
