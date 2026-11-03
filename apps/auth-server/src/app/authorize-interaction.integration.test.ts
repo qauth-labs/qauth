@@ -418,11 +418,14 @@ describe('/oauth/authorize starts an interaction (#628, real containers)', () =>
     ).toBe(410);
     const consent = await read(next);
     expect(consent.step).toBe(CONSENT);
+    // A step read keys each step's params by the step's name.
     expect(consent.params).toMatchObject({
-      scopes: [
-        { scope: 'openid', dangerous: false },
-        { scope: 'email', dangerous: false },
-      ],
+      [CONSENT]: {
+        scopes: [
+          { scope: 'openid', dangerous: false },
+          { scope: 'email', dangerous: false },
+        ],
+      },
     });
 
     // The consent answer is #629's: refused until then, with the step kept.
