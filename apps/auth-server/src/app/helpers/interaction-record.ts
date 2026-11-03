@@ -68,7 +68,7 @@ const INTERACTION_ID_PATTERN = /^[A-Za-z0-9_-]{43}$/;
  * of the alternatives. The optional `carriedSession` (#964) joined version 2
  * without a new version: a record without it reads as before, and a server
  * from before it reads a record that holds it as absent, as any record it
- * cannot parse.
+ * cannot parse. The optional `client` (#629) joined version 2 the same way.
  */
 export const INTERACTION_RECORD_VERSION = 2;
 
@@ -205,6 +205,13 @@ export const interactionRecordSchema = z.strictObject({
   transaction: interactionTransactionSchema,
   /** The browser session the interaction started for, when there was one (#964). */
   carriedSession: carriedSessionSchema.optional(),
+  /**
+   * Who the client is, as the step read shows it (#629, ADR-019 Decision 6):
+   * the contract's `ClientDisplay`, computed from the auth server's own
+   * records (`clientDisplay`, #593) when the interaction started, for a step
+   * that names its client, the consent step. Only the server writes it.
+   */
+  client: stepDataSchema.optional(),
   /** The SHA-256 (base64url) of the flow secret the record is bound to. */
   flowBinding: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
   /**

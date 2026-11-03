@@ -19,6 +19,7 @@ import {
   isScopeSubset,
   type OAuthClientLike,
   type OAuthConsentLike,
+  standardScopeText,
 } from './consent';
 
 function client(overrides: Partial<OAuthClientLike> = {}): OAuthClientLike {
@@ -378,5 +379,34 @@ describe('describeScope', () => {
 
   it('falls back to raw scope', () => {
     expect(describeScope('write:widgets')).toBe('write:widgets');
+  });
+
+  it('falls back to the scope itself for a scope named after an Object.prototype member', () => {
+    // A lookup through the prototype chain would describe `constructor` as
+    // the source text of `Object`.
+    expect(describeScope('constructor')).toBe('constructor');
+  });
+});
+
+describe('standardScopeText (#629)', () => {
+  it('is QAuth’s own text for the four scopes it defines', () => {
+    expect(standardScopeText('openid')).toBe('Verify your identity');
+    expect(standardScopeText('profile')).toBe('View your basic profile information');
+    expect(standardScopeText('email')).toBe('View your email address');
+    expect(standardScopeText('offline_access')).toBe(
+      'Keep you signed in when you are not using the app'
+    );
+  });
+
+  it('is undefined for any other scope: the consent step then carries no text', () => {
+    expect(standardScopeText('write:widgets')).toBeUndefined();
+    expect(standardScopeText('Email')).toBeUndefined();
+    expect(standardScopeText('')).toBeUndefined();
+  });
+
+  it('reads own members only: Object.prototype names have no text', () => {
+    for (const scope of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      expect(standardScopeText(scope), scope).toBeUndefined();
+    }
   });
 });

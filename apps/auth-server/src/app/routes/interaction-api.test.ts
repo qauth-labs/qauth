@@ -92,6 +92,14 @@ const finishAuthorization = vi.hoisted(() =>
  */
 const cancelAuthorization = vi.hoisted(() => vi.fn());
 
+/**
+ * Where an answered consent step's request goes (#629): the code redirect,
+ * decided by `finishConsent`, which `authorization-interaction.test.ts` covers;
+ * here a stand-in that answers one fixed location.
+ */
+const CONSENT_LOCATION = 'https://notes.example.com/callback?code=c0n5ent&state=af0ifjsldkj';
+const finishConsent = vi.hoisted(() => vi.fn());
+
 vi.mock('../helpers/authorization-interaction', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../helpers/authorization-interaction')>();
   const { interactionCancelRedirect } = await import('../helpers/interaction-redirect');
@@ -100,8 +108,15 @@ vi.mock('../helpers/authorization-interaction', async (importOriginal) => {
     async (_fastify: unknown, request: FastifyRequest, cancelled: InteractionRequest) =>
       interactionCancelRedirect(requestRealm(request), cancelled)
   );
-  return { ...actual, finishAuthorization, cancelAuthorization };
+  return { ...actual, finishAuthorization, cancelAuthorization, finishConsent };
 });
+
+import type { ClientDisplay } from '@qauth-labs/shared-interaction-client';
+import { INTERACTION_OPENAPI } from '@qauth-labs/shared-interaction-contract';
+import {
+  componentValidator,
+  describeErrors,
+} from '@qauth-labs/shared-interaction-contract/src/testing/schema-validator';
 
 import { createBrowserSessionFixture } from '../../testing/browser-sessions';
 import { createMemoryInteractionRedis } from '../../testing/interaction-redis';
@@ -194,6 +209,8 @@ async function buildApp(
     readonly rateLimit?: boolean;
     readonly clientId?: string;
     readonly step?: InteractionStep;
+    /** The client display data the interaction starts with (the consent step's, #629). */
+    readonly client?: ClientDisplay;
   } = {}
 ): Promise<FastifyInstance> {
   const instance = Fastify({ logger: false });
@@ -230,6 +247,7 @@ async function buildApp(
           client_id: options.clientId ?? AUTHORIZE_REQUEST.client_id,
         },
         step: options.step ?? { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
+        ...(options.client === undefined ? {} : { client: options.client }),
       });
     });
     await scope.register(interactionApi);
@@ -306,6 +324,8 @@ beforeEach(async () => {
   engine.advance.mockReset();
   finishAuthorization.mockClear();
   cancelAuthorization.mockClear();
+  finishConsent.mockReset();
+  finishConsent.mockResolvedValue(CONSENT_LOCATION);
   app = await buildApp();
 });
 
@@ -579,34 +599,6 @@ describe('the answer, through the engine (#616)', () => {
     expect(eventTypes()).toContain('urn:qauth:event:user.signed_in:v1-rc.0');
   });
 
-  it('refuses an answer to the consent step, and keeps the step and its CSRF value (#628)', async () => {
-    await app.close();
-    app = await buildApp({
-      step: {
-        name: CONSENT_STEP,
-        params: {
-          scopes: [{ scope: 'openid', sensitive: false, dangerous: false }],
-          resources: [],
-          remember_default: true,
-        },
-        alternatives: [],
-      },
-    });
-    const browser = new Browser();
-    const id = await browser.start();
-    const { csrf } = await browser.read(id);
-    const response = await browser.send(id, 'answer', {
-      type: CONSENT_STEP,
-      csrf,
-      decision: 'allow',
-    });
-    expect(response.statusCode).toBe(400);
-    expect(response.json()).toMatchObject({ code: 'invalid_answer' });
-    expect(engine.advance).not.toHaveBeenCalled();
-    expect(finishAuthorization).not.toHaveBeenCalled();
-    expect((await browser.read(id)).csrf).toBe(csrf);
-  });
-
   it('throttles with 429 and Retry-After, and keeps the step and its CSRF value', async () => {
     engine.advance.mockResolvedValueOnce({
       kind: 'refused',
@@ -663,6 +655,196 @@ describe('the answer, through the engine (#616)', () => {
     });
     expect(response.statusCode, response.body).toBe(200);
     expect(engine.advance).toHaveBeenLastCalledWith(null, null, expect.anything());
+  });
+});
+
+describe('the consent answer (#629)', () => {
+  /** The consent step the interaction holds: what the person saw. */
+  const CONSENT: InteractionStep = {
+    name: CONSENT_STEP,
+    params: {
+      scopes: [
+        { scope: 'openid', text: 'Verify your identity', sensitive: false, dangerous: false },
+        { scope: 'email', text: 'View your email address', sensitive: false, dangerous: false },
+      ],
+      resources: [],
+      remember_default: true,
+    },
+    alternatives: [],
+  };
+
+  /** Who the client is, as `clientDisplay` computed it when the consent started. */
+  const CLIENT_DISPLAY: ClientDisplay = {
+    kind: 'admin_registered',
+    verifiedDomain: {
+      host: 'notes.example.com',
+      registrableDomain: 'example.com',
+      sharedHosting: false,
+    },
+    redirect: { target: 'host', host: 'notes.example.com' },
+    declaredName: 'Notes',
+    newClient: false,
+  };
+
+  const validateInteraction = componentValidator(INTERACTION_OPENAPI).schema('Interaction');
+
+  beforeEach(async () => {
+    await app.close();
+    app = await buildApp({ step: CONSENT, client: CLIENT_DISPLAY });
+  });
+
+  it('reads the consent step with the client’s display data, as the contract’s Interaction', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const read = await browser.read(id);
+
+    expect(read).toMatchObject({
+      step: CONSENT_STEP,
+      params: { [CONSENT_STEP]: CONSENT.params },
+      client: CLIENT_DISPLAY,
+    });
+    expect(validateInteraction(read), describeErrors(validateInteraction)).toBe(true);
+  });
+
+  it('reads a record that holds no client without one', async () => {
+    // Every consent interaction starts with its client since #629; a record
+    // written before it (the optional member joined record version 2) reads
+    // as it was stored, with no client made up.
+    await app.close();
+    app = await buildApp({ step: CONSENT });
+    const browser = new Browser();
+    expect(await browser.read(await browser.start())).not.toHaveProperty('client');
+
+    // A step that names no client, the identifier step, meets the contract without one.
+    await app.close();
+    app = await buildApp();
+    const other = new Browser();
+    const identifier = await other.read(await other.start());
+    expect(identifier).not.toHaveProperty('client');
+    expect(validateInteraction(identifier), describeErrors(validateInteraction)).toBe(true);
+  });
+
+  it('finishes the interaction on a JSON allow, and answers where finishConsent sends the browser', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const response = await browser.send(id, 'answer', {
+      type: CONSENT_STEP,
+      csrf,
+      decision: 'allow',
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(response.json()).toEqual({ result: 'redirect', location: CONSENT_LOCATION });
+    // No engine round: the step grammar reads the answer, and the grant is
+    // decided once the interaction has ended, for the step it held.
+    expect(engine.advance).not.toHaveBeenCalled();
+    expect(finishAuthorization).not.toHaveBeenCalled();
+    expect(finishConsent).toHaveBeenCalledOnce();
+    expect(finishConsent.mock.calls[0]?.[3]).toMatchObject({
+      request: { client_id: AUTHORIZE_REQUEST.client_id, state: AUTHORIZE_REQUEST.state },
+      transaction: { amr: [] },
+      continuation: { secrets: [], expiresAt: expect.any(Number) },
+      step: CONSENT,
+      // "Remember" is false unless the answer says otherwise.
+      answer: { decision: 'allow', remember: false },
+    });
+    // The interaction is over: its secret left the flow cookie.
+    expect(browser.cookies.has(FLOW_COOKIE)).toBe(false);
+    expect(eventTypes()).toContain('urn:qauth:event:interaction.answered:v1-rc.0');
+  });
+
+  it('answers a form post that remembers the decision with 303 to the location', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const response = await browser.send(
+      id,
+      'answer',
+      `type=${encodeURIComponent(CONSENT_STEP)}&csrf=${csrf}&decision=allow&remember=true`
+    );
+
+    expect(response.statusCode, response.body).toBe(303);
+    expect(response.headers.location).toBe(CONSENT_LOCATION);
+    expect(finishConsent).toHaveBeenCalledOnce();
+    expect(finishConsent.mock.calls[0]?.[3]).toMatchObject({
+      step: CONSENT,
+      answer: { decision: 'allow', remember: true },
+    });
+  });
+
+  it('hands a deny to finishConsent, which decides it', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    const response = await browser.send(id, 'answer', {
+      type: CONSENT_STEP,
+      csrf,
+      decision: 'deny',
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(finishConsent.mock.calls[0]?.[3]).toMatchObject({
+      answer: { decision: 'deny', remember: false },
+    });
+  });
+
+  it('signs nobody in: no last-login update and no user.signed_in event', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    await browser.send(id, 'answer', { type: CONSENT_STEP, csrf, decision: 'allow' });
+
+    expect(finishConsent).toHaveBeenCalledOnce();
+    expect(updateLastLogin).not.toHaveBeenCalled();
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_in:v1-rc.0');
+    expect(browser.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+  });
+
+  it('refuses an answer that names a scope or a resource, and keeps the step and its CSRF value', async () => {
+    // The grant is the scope set the interaction holds: no answer member can
+    // add to it, so the grammar refuses any member beside its own.
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    for (const extra of [
+      { scope: 'openid email write:notes' },
+      { scopes: ['write:notes'] },
+      { resource: 'https://evil.example/' },
+    ]) {
+      const response = await browser.send(id, 'answer', {
+        type: CONSENT_STEP,
+        csrf,
+        decision: 'allow',
+        ...extra,
+      });
+      expect(response.statusCode, JSON.stringify(extra)).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'invalid_answer' });
+    }
+    const form = await browser.send(
+      id,
+      'answer',
+      `type=${encodeURIComponent(CONSENT_STEP)}&csrf=${csrf}&decision=allow&scope=write%3Anotes`
+    );
+    expect(form.statusCode).toBe(400);
+    expect(finishConsent).not.toHaveBeenCalled();
+    const again = await browser.read(id);
+    expect(again.step).toBe(CONSENT_STEP);
+    expect(again.csrf).toBe(csrf);
+  });
+
+  it('refuses a decision that is neither allow nor deny, and a missing one', async () => {
+    const browser = new Browser();
+    const id = await browser.start();
+    const { csrf } = await browser.read(id);
+    for (const decision of ['maybe', 'ALLOW', '', true, undefined]) {
+      const response = await browser.send(id, 'answer', { type: CONSENT_STEP, csrf, decision });
+      expect(response.statusCode, String(decision)).toBe(400);
+      expect(response.json()).toMatchObject({ code: 'invalid_answer' });
+    }
+    expect(finishConsent).not.toHaveBeenCalled();
+    expect((await browser.read(id)).csrf).toBe(csrf);
   });
 });
 

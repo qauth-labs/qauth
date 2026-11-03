@@ -170,7 +170,13 @@ export default async function (fastify: FastifyInstance) {
     outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' | 'consent' }>,
     browserSession: BrowserSession | null
   ) => {
-    const start = authorizationInteractionStart(outcome, query, target.iss, browserSession);
+    const start = await authorizationInteractionStart(
+      fastify,
+      outcome,
+      query,
+      target,
+      browserSession
+    );
     if ('error' in start) {
       // Only a consent, which is always for a session, can be refused here.
       if (browserSession !== null) {
