@@ -400,14 +400,17 @@ describe('each service role on a database user of its own (#498)', () => {
     expectNoPermissionError();
   });
 
-  it('refuses a wrong password and registers a client on api alone, on its own user', async () => {
-    const api = role('api');
-    const login = await api.inject({
+  it('refuses a wrong password, and registers a client on api alone, on its own user', async () => {
+    // The failure ladder keys its counts with the realm's cookie key, which
+    // a process without the signer cannot read yet (#497): api + signer.
+    const login = await role('api+signer').inject({
       method: 'POST',
       url: '/auth/login',
       payload: { email: EMAIL, password: 'not-the-password-of-this-account' },
     });
     expect(login.statusCode, login.body).toBe(401);
+
+    const api = role('api');
 
     const registered = await api.inject({
       method: 'POST',
@@ -598,6 +601,13 @@ describe('each service role on a database user of its own (#498)', () => {
       }),
     });
     expect(token.statusCode, token.body).toBe(503);
+    // The legacy login's failure ladder needs the realm's cookie key.
+    const login = await role('api').inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: EMAIL, password: 'not-the-password-of-this-account' },
+    });
+    expect(login.statusCode, login.body).toBe(503);
 
     const web = role('web');
     expect((await web.inject({ method: 'GET', url: '/ui/login' })).statusCode).toBe(503);
