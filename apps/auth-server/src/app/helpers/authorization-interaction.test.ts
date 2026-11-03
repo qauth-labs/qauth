@@ -153,13 +153,13 @@ describe('authorizationInteractionStart', () => {
   it('starts a sign-in asked for again over the session the browser holds, and records it as carried in (#964)', () => {
     // `max_age`, `prompt=login` or a dangerous scope: the person signs in
     // again, as anyone, so the session is no subject of the transaction.
-    expect(authorizationInteractionStart({ kind: 'sign_in' }, REQUEST, ISS, SESSION as never)).toEqual(
-      {
-        step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
-        personal: {},
-        carriedSession: { userId: 'user-1', sid: 'sid-1' },
-      }
-    );
+    expect(
+      authorizationInteractionStart({ kind: 'sign_in' }, REQUEST, ISS, SESSION as never)
+    ).toEqual({
+      step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
+      personal: {},
+      carriedSession: { userId: 'user-1', sid: 'sid-1' },
+    });
   });
 
   it('starts a consent for the session: its user, sid and authentication time, carried in (#964)', () => {
