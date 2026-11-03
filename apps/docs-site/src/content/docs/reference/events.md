@@ -303,7 +303,7 @@ The sign-in engine accepted an answer to one step of a sign-in: the identifier, 
 
 ### user.signed_out v1-rc.0
 
-A person signed out, and QAuth ended their sessions.
+A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), or every session of the user at `POST /auth/logout`.
 
 - Identifier: `urn:qauth:event:user.signed_out:v1-rc.0`
 - Category: `user` · Severity: `info` · Since: v0.2.0
@@ -311,7 +311,9 @@ A person signed out, and QAuth ended their sessions.
 - Schema: [user.signed_out.v1-rc.0.json](/schemas/events/user.signed_out.v1-rc.0.json)
 - Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/session-revoked` ([SSF events](/reference/ssf-events/))
 
-`data` has no members: the envelope carries the event.
+| Member | Type | Required | Meaning                                                                                                                                                                                  |
+| ------ | ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sid`  | UUID | no       | The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` does. |
 
 ### user.sign_out_failed v1-rc.0
 
@@ -824,12 +826,12 @@ A browser ceremony began: the server created an interaction and bound it to the 
 - Subject: `user`, when known
 - Schema: [interaction.created.v1-rc.0.json](/schemas/events/interaction.created.v1-rc.0.json)
 
-| Member        | Type                                     | Required | Meaning                                                                                                                                        |
-| ------------- | ---------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `interaction` | UUID                                     | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds. |
-| `purpose`     | one of `authorization`, or a later value | yes      | `authorization`: an authorization request at the authorization endpoint. The set may grow in a minor release.                                  |
-| `step`        | string                                   | yes      | The first step the ceremony asks for.                                                                                                          |
-| `replaces`    | UUID                                     | no       | For an interaction that a user switch started: the interaction it replaces, which ended with it. Nothing proved in that one carries over.      |
+| Member        | Type                                               | Required | Meaning                                                                                                                                                                                                              |
+| ------------- | -------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `interaction` | UUID                                               | yes      | The interaction: a random reference the server gave it, which links the events of one interaction. Never the interaction id the browser holds.                                                                       |
+| `purpose`     | one of `authorization`, `logout`, or a later value | yes      | `authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). The set may grow in a minor release. |
+| `step`        | string                                             | yes      | The first step the ceremony asks for.                                                                                                                                                                                |
+| `replaces`    | UUID                                               | no       | For an interaction that a user switch started: the interaction it replaces, which ended with it. Nothing proved in that one carries over.                                                                            |
 
 ### interaction.answered v1-rc.0
 

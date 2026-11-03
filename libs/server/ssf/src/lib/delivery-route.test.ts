@@ -22,6 +22,7 @@ import {
   type SsfStreamSource,
 } from './delivery-route';
 import { ssfEventsSupported } from './event-types';
+import { subjectIdentifierSchema } from './subjects';
 
 const REALM = '0192a000-0000-7000-8000-000000000001';
 const OTHER_REALM = '0192a000-0000-7000-8000-000000000002';
@@ -389,6 +390,38 @@ describe('the SETs of mapped event types (#540)', () => {
         [CAEP_SESSION_REVOKED]: { event_timestamp: SECONDS, initiating_entity: 'user' },
       },
     });
+  });
+
+  // A sign-out at the end-session endpoint ends one session and names it
+  // beside the user (SSF 1.0 §3.2, #675): a receiver ends that session alone.
+  it('sends a sign-out that ended one session about the user and the session, as a complex subject', async () => {
+    const SID = '0192a000-0000-7000-8000-0000000000d1';
+    const { outcome, claims, hasSubject } = await signed(
+      event(userSignedOut.type, { data: { sid: SID } })
+    );
+    expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    // Matched on the user: a stream that added the user receives it.
+    expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+    expect(claims).toMatchObject({
+      sub_id: {
+        format: 'complex',
+        user: { format: 'iss_sub', iss: ISSUER, sub: USER },
+        session: { format: 'opaque', id: SID },
+      },
+      events: {
+        [CAEP_SESSION_REVOKED]: { event_timestamp: SECONDS, initiating_entity: 'user' },
+      },
+    });
+    // The SET's subject is one a receiver could add itself.
+    expect(subjectIdentifierSchema.safeParse(claims?.['sub_id']).success).toBe(true);
+  });
+
+  it('sends nothing about a session for a realm with no issuer', async () => {
+    const { outcome } = await signed(
+      event(userSignedOut.type, { data: { sid: '0192a000-0000-7000-8000-0000000000d1' } }),
+      { issuer: null }
+    );
+    expect(outcome).toEqual({ ok: false, errorClass: 'event_not_offered', retry: false });
   });
 
   it('sends an operator’s switch of an account as RISC account-disabled and account-enabled about the user (#748)', async () => {

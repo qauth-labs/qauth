@@ -285,6 +285,25 @@ describe('parseEvent', () => {
     expect(() => parseEvent(event(overrides))).toThrow(where);
   });
 
+  // A sign-out names the one session it ended, or none when it ended every
+  // session of the user (#675).
+  it('reads the session a sign-out ended, and refuses one that is not a UUID', () => {
+    const { id, time, realm, subject } = EXAMPLE_EVENT;
+    const signedOut = (data: Record<string, unknown>) => ({
+      id,
+      type: 'urn:qauth:event:user.signed_out:v1-rc.0',
+      time,
+      realm,
+      category: 'user',
+      subject,
+      data,
+    });
+    const sid = '0192f3a4-5b6c-7d8e-9f01-23456789abcd';
+    expect(parseEvent(signedOut({ sid })).data).toEqual({ sid });
+    expect(parseEvent(signedOut({})).data).toEqual({});
+    expect(() => parseEvent(signedOut({ sid: 'not-a-session' }))).toThrow('/data/sid');
+  });
+
   it('refuses a subject on a type that has none', () => {
     const { id, time, realm, category, client } = EXAMPLE_EVENT;
     const revocation = {

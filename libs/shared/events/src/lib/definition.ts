@@ -82,6 +82,16 @@ export interface SsfEventMapping {
   /** What names the subject; `subject` when absent. */
   readonly subject?: SsfSubjectSource;
   /**
+   * The data member holding the browser session a user's event is about, a
+   * `sessions` row id (the `sid` ID tokens carry, #549). When the event
+   * carries it, `sub_id` is a complex subject (SSF 1.0 §3.2): `user` as
+   * `iss_sub` under the realm's issuer and `session` as `opaque` with its
+   * value, so a receiver can end that session alone. Without it the subject
+   * is the user alone. Streams that added the user receive the event either
+   * way: a complex subject matches through its `user` member.
+   */
+  readonly session?: string;
+  /**
    * Send it only to the stream of the event's own client (the envelope's
    * `client`), never to another receiver that added the same subject: the
    * event tells of the user's dealings with that one client.

@@ -6,6 +6,7 @@ import {
   FIRST_RELEASE,
   identifierHmac,
   reason,
+  recordId,
   signInMethod,
   stepName,
   verifierProfile,
@@ -75,14 +76,19 @@ export const userSignedOut = defineEventType({
   name: 'user.signed_out',
   version: 1,
   rc: 0,
-  description: 'A person signed out, and QAuth ended their sessions.',
+  description:
+    'A person signed out, and QAuth ended their browser sessions: the one session the relying party named at the end-session endpoint (OpenID Connect RP-Initiated Logout 1.0), or every session of the user at `POST /auth/logout`.',
   category: 'user',
   severity: 'info',
   since: FIRST_RELEASE,
   subject: 'user',
-  data: z.strictObject({}),
+  data: z.strictObject({
+    sid: recordId(
+      'The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` does.'
+    ).optional(),
+  }),
   security: true,
-  ssf: { event: CAEP_SESSION_REVOKED },
+  ssf: { event: CAEP_SESSION_REVOKED, session: 'sid' },
 });
 
 export const userSignOutFailed = defineEventType({

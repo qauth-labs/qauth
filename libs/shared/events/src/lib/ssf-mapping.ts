@@ -249,7 +249,14 @@ function dataMember(
 
 /** The JSON type of a data member's values, when it is a string or an object. */
 function dataKind(schema: z.ZodType): 'string' | 'object' | undefined {
-  if (schema instanceof z.ZodString || schema instanceof z.ZodEnum) return 'string';
+  // A string format such as `z.uuid()` is a string too, though not a ZodString.
+  if (
+    schema instanceof z.ZodString ||
+    schema instanceof z.ZodStringFormat ||
+    schema instanceof z.ZodEnum
+  ) {
+    return 'string';
+  }
   if (schema instanceof z.ZodLiteral) {
     return [...schema.values].every((value) => typeof value === 'string') ? 'string' : undefined;
   }
@@ -325,6 +332,23 @@ export function validateSsfMapping(definition: EventTypeDefinition): string[] {
     }
   } else if (subject !== 'subject' && subject !== 'client' && subject !== 'key') {
     problems.push('ssf.subject must be subject, client or key');
+  }
+  if (mapping.session !== undefined) {
+    // The session joins the user in a complex subject: only a user's event,
+    // named by its own subject, has a user to join it to.
+    if (subject !== 'subject' || definition.subject !== 'user') {
+      problems.push('ssf.session needs ssf.subject "subject" and a type whose subject is a user');
+    }
+    const session =
+      typeof mapping.session === 'string' ? dataMember(definition, mapping.session) : undefined;
+    if (session === undefined) {
+      problems.push(
+        `ssf.session: data.${String(mapping.session)} is not a member of the type's data`
+      );
+    } else if (dataKind(session.schema) !== 'string') {
+      // The session is an `opaque` identifier, a string.
+      problems.push(`ssf.session: data.${mapping.session} is not a string`);
+    }
   }
   if (mapping.clientOnly !== undefined && mapping.clientOnly !== true) {
     problems.push('ssf.clientOnly is true or absent');

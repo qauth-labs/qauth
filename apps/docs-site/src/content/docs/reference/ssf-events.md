@@ -42,6 +42,10 @@ A mapping may fix it instead, as the replay policy does.
 ## Subjects
 
 - A user is `iss_sub`: the realm's issuer and the user's id.
+- A user's session is a `complex` subject (SSF 1.0 §3.2): `user` as above, and `session` as
+  `opaque` with the session id, the `sid` the user's ID tokens carry. A `user.signed_out`
+  that ended one session names it so, and a receiver ends that session alone; one that ended every
+  session of the user names the user alone. A stream that added the user receives both.
 - A client is `uri` when its `client_id` is an absolute URI, as an agent client's Client ID
   Metadata Document URL is, and `opaque` with the `client_id` otherwise.
 - A key is `opaque` with its `kid`.
@@ -68,7 +72,7 @@ whole rule.
 
 | QAuth event type                                                          | SSF event                                                 | Subject                               | Delivered to                                                | Members besides `event_timestamp`                                                                                                                              |
 | ------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`user.signed_out`](/reference/events/#usersigned_out-v1-rc0)             | `session-revoked` (CAEP 1.0 §3.1)                         | the user, `iss_sub`                   | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
+| [`user.signed_out`](/reference/events/#usersigned_out-v1-rc0)             | `session-revoked` (CAEP 1.0 §3.1)                         | the user, `iss_sub` or `complex`      | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
 | [`user.disabled`](/reference/events/#userdisabled-v1-rc0)                 | `account-disabled` (RISC 1.0 §2.3)                        | the user, `iss_sub`                   | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
 | [`user.enabled`](/reference/events/#userenabled-v1-rc0)                   | `account-enabled` (RISC 1.0 §2.4)                         | the user, `iss_sub`                   | every stream that added the subject                         | `initiating_entity` from the actor                                                                                                                             |
 | [`consent.revoked`](/reference/events/#consentrevoked-v1-rc0)             | `token-claims-change` (CAEP 1.0 §3.2)                     | the user, `iss_sub`                   | the stream of the event’s client, when it added the subject | `claims`: `{"scope":""}`; `initiating_entity` from the actor                                                                                                   |

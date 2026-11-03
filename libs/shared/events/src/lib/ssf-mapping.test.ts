@@ -280,6 +280,46 @@ describe('the SSF rule of the registry (#540)', () => {
     expect(validate([withMapping({ event: CAEP_SESSION_REVOKED })])).toEqual([]);
   });
 
+  // A session joins the user in a complex subject (#675): only a user's own
+  // event, with the session as a string, can name one.
+  it('keeps a session to a user event whose data holds it as a string', () => {
+    expect(validate([withMapping({ event: CAEP_SESSION_REVOKED, session: 'note' })])).toEqual([]);
+    expect(validate([withMapping({ event: CAEP_SESSION_REVOKED, session: 'label' })])).toEqual([]);
+    // A string format, as a session id's UUID is, is a string.
+    expect(
+      validate([
+        securityType({
+          data: z.strictObject({ sid: z.uuid().optional().describe('A session.') }),
+          ssf: { event: CAEP_SESSION_REVOKED, session: 'sid' },
+        }),
+      ])
+    ).toEqual([]);
+    expect(
+      validate([withMapping({ event: CAEP_SESSION_REVOKED, session: 'missing' })]).join('\n')
+    ).toContain("ssf.session: data.missing is not a member of the type's data");
+    expect(
+      validate([withMapping({ event: CAEP_SESSION_REVOKED, session: 'rebound' })]).join('\n')
+    ).toContain('ssf.session: data.rebound is not a string');
+    expect(
+      validate([
+        securityType({
+          subject: 'client',
+          ssf: { event: CAEP_SESSION_REVOKED, clientOnly: true, session: 'note' },
+        }),
+      ]).join('\n')
+    ).toContain('ssf.session needs ssf.subject "subject" and a type whose subject is a user');
+    expect(
+      validate([
+        withMapping({
+          event: CAEP_SESSION_REVOKED,
+          subject: 'client',
+          clientOnly: true,
+          session: 'note',
+        }),
+      ]).join('\n')
+    ).toContain('ssf.session needs ssf.subject "subject" and a type whose subject is a user');
+  });
+
   it('fails a subject mapping for a type whose subject is not a user or a client', () => {
     expect(validate([securityType({ subject: 'api_key' })]).join('\n')).toContain(
       'ssf.subject "subject" needs a type whose subject is a user or a client'
@@ -296,6 +336,14 @@ describe('the mapping table of #540', () => {
 
   it('maps sign-out to CAEP session-revoked', () => {
     expect(eventOf('urn:qauth:event:user.signed_out:v1-rc.0')).toBe(CAEP_SESSION_REVOKED);
+  });
+
+  // A sign-out that ended one session names it beside the user (#675).
+  it('names the ended session of a sign-out by its sid', () => {
+    const signedOut = getEventType(
+      'urn:qauth:event:user.signed_out:v1-rc.0'
+    ) as EventTypeDefinition;
+    expect(ssfMappingOf(signedOut)?.session).toBe('sid');
   });
 
   it('maps consent withdrawal to CAEP token-claims-change', () => {
