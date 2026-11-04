@@ -291,6 +291,12 @@ and ships a reference nginx configuration. In short:
   address.
 - Answer `404` on the public side for `/metrics` and `/internal/*`.
 - Make the auth server reachable only through the proxy.
+- List the ceremony app server's egress addresses in `CEREMONY_APP_PEERS`,
+  with `CEREMONY_APP_PEER_RATE_LIMIT`, when that server reads the current step
+  of the Interaction API for every browser. The step read counts per address,
+  so without the list everyone signing in shares the server's one address
+  bucket. A listed address's reads count per interaction instead. The auth
+  server takes the address from `request.ip`, as `TRUST_PROXY` resolves it.
 
 The reference ceremony app has not shipped: until it does, the auth server
 renders `/ui/*` itself and needs its session cookie there, so the reference

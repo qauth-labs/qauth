@@ -133,6 +133,20 @@
 >   private, loopback or link-local host is reached only when the operator lists it in
 >   `SMTP_ALLOWED_HOSTS`, and a cloud metadata address never. STARTTLS is required unless the
 >   operator sets `SMTP_ALLOW_PLAINTEXT`. Neither switch is a realm setting.
+>
+> **Amended 2026-11-04** with the maintainer's decision of 2026-11-02 on the step read's rate limit
+> (#982). Decision 6 has the ceremony app's server read the current step for every browser, so the
+> read counted per interaction, and one address could spend a fresh count on each random
+> well-formed id.
+>
+> - Decision 6: the step read counts per realm and address, at the authorization endpoint's budget,
+>   unless its TCP peer (`request.ip`, no other forwarded header) is one of the ceremony app
+>   server's egress addresses, which the operator lists in `CEREMONY_APP_PEERS`. A listed peer's
+>   read counts per interaction, under `CEREMONY_APP_PEER_RATE_LIMIT` reads a minute. The two are
+>   set together, as ADR-017 Decision 7 has `FIRST_PARTY_BACKEND_PEERS` and its cap; the list is
+>   empty by default. It applies to the step read only: the personal read, the answer and the
+>   cancel carry the flow cookie, which the proxy strips from requests to the ceremony app, so only
+>   the browser makes them, and they count per address.
 
 ## Context
 
