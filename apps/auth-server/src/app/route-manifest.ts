@@ -137,6 +137,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'oauthConsents',
       'realms',
       'sessions',
+      'userAttributes',
       'userCredentials',
       'users',
     ],
