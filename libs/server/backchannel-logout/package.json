@@ -6,10 +6,10 @@
   "dependencies": {
     "@qauth-labs/server-egress": "workspace:*",
     "@qauth-labs/server-event-delivery": "workspace:*",
-    "@qauth-labs/shared-events": "workspace:*",
     "tslib": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/shared-events": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "jose": "catalog:",
