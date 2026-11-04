@@ -35,7 +35,9 @@ interface Harness {
   readonly claims: string[];
   readonly sent: { to: string; mail: unknown; baseUrl: string }[];
   readonly errors: { details: Record<string, unknown>; message: string }[];
-  /** Run every background task started so far. */
+  /** The background tasks that rejected, by their label, with the error's message. */
+  readonly failed: { label: string; message: string }[];
+  /** Run every background task started so far; a rejection lands in `failed`, as the real tasks log it. */
   settle(): Promise<void>;
 }
 
@@ -45,13 +47,16 @@ function harness(
     account?: MailAccount;
     knownIp?: boolean;
     claim?: boolean;
+    /** The transport refuses every mail, as the providers do: an answer, not a throw. */
+    transportRefuses?: boolean;
   } = {}
 ): Harness {
   const reserved: SendCapRequest[] = [];
   const claims: string[] = [];
   const sent: Harness['sent'] = [];
   const errors: Harness['errors'] = [];
-  const tasks: (() => Promise<unknown>)[] = [];
+  const failed: Harness['failed'] = [];
+  const tasks: { task: () => Promise<unknown>; label: string }[] = [];
   const caps: SendCapStore = {
     async reserve(request) {
       reserved.push(request);
@@ -68,6 +73,9 @@ function harness(
       claims.push(`claim:${input.kind}:${input.addressHmac}`);
       return options.claim ?? true;
     },
+    async releaseNotice(input) {
+      claims.push(`release:${input.kind}:${input.addressHmac}`);
+    },
   };
   const deps: CappedMailerDependencies = {
     caps,
@@ -80,12 +88,15 @@ function harness(
     realmOf: async (realmId) => (realmId === REALM.id ? REALM : undefined),
     mail: {
       sendEngineMail: vi.fn(async (_realmId, to, mail, context) => {
+        if (options.transportRefuses === true) {
+          return { success: false, error: `550 mailbox ${to} unavailable` };
+        }
         sent.push({ to, mail, baseUrl: context.baseUrl });
         return { success: true, messageId: 'm' };
       }),
       canSend: vi.fn(async () => true),
     },
-    tasks: { run: (task) => void tasks.push(task) },
+    tasks: { run: (task, label) => void tasks.push({ task, label }) },
     log: { error: (details, message) => void errors.push({ details, message }) },
     mockSends: true,
   };
@@ -95,8 +106,14 @@ function harness(
     claims,
     sent,
     errors,
+    failed,
     async settle() {
-      while (tasks.length > 0) await (tasks.shift() as () => Promise<unknown>)();
+      while (tasks.length > 0) {
+        const { task, label } = tasks.shift() as (typeof tasks)[number];
+        await task().catch((error: unknown) =>
+          failed.push({ label, message: error instanceof Error ? error.message : String(error) })
+        );
+      }
     },
   };
 }
@@ -396,6 +413,69 @@ describe('the engine mail and its send caps (#637)', () => {
       identifier: ADDRESS,
     });
     expect(claimed.sent).toEqual([]);
+  });
+
+  it('gives the day’s password-disabled notice back and rejects when the transport refuses it', async () => {
+    const h = harness({ transportRefuses: true });
+
+    const told = createCappedMailer(h.deps).passwordDisabledNotices.passwordDisabled({
+      realmId: REALM.id,
+      userId: 'u',
+      identifier: ADDRESS,
+    });
+
+    // The rejection is what raises the hard action's alert; it names no address.
+    await expect(told).rejects.toThrow('the mail transport refused the message');
+    await told.catch((error: Error) => expect(error.message).not.toContain(ADDRESS));
+    expect(h.claims).toEqual([
+      `claim:password_disabled:id-${ADDRESS.length}`,
+      `mint:reset:id-${ADDRESS.length}`,
+      `release:password_disabled:id-${ADDRESS.length}`,
+    ]);
+  });
+
+  it('gives the ceiling notice’s claim back when it does not go out, so the next refusal tries again', async () => {
+    const h = harness({
+      decision: { kind: 'refused', tier: 'ceiling', retryAfterMs: 1000, alert: true },
+      account: { enabled: true, verified: true },
+      transportRefuses: true,
+    });
+
+    const outcome = await createCappedMailer(h.deps).sendCode(requestFrom('192.0.2.7'), {
+      realm: REALM,
+      address: ADDRESS,
+      mail: CODE_MAIL,
+      flow: 'reset',
+    });
+    await h.settle();
+
+    expect(outcome).toEqual({ kind: 'capped', retryAfterSeconds: 1 });
+    expect(h.claims).toEqual([
+      `claim:send_ceiling:id-${ADDRESS.length}`,
+      `mint:reset:id-${ADDRESS.length}`,
+      `release:send_ceiling:id-${ADDRESS.length}`,
+    ]);
+    expect(h.failed).toEqual([
+      {
+        label: 'the send-ceiling notice was not sent',
+        message: 'engine mail: the mail transport refused the message',
+      },
+    ]);
+  });
+
+  it('logs a mailed code the transport refused, after the same answer', async () => {
+    const h = harness({ transportRefuses: true });
+
+    const outcome = await createCappedMailer(h.deps).sendCode(requestFrom('192.0.2.7'), {
+      realm: REALM,
+      address: ADDRESS,
+      mail: CODE_MAIL,
+      flow: 'reset',
+    });
+    await h.settle();
+
+    expect(outcome).toEqual({ kind: 'accepted', passSpent: false });
+    expect(h.failed.map((failure) => failure.label)).toEqual(['a mailed code was not sent']);
   });
 
   it('asks the realm’s transport whether the notice can go out, a mock counting only outside production', async () => {

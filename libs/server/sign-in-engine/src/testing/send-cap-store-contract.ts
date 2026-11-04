@@ -343,6 +343,23 @@ export function describeSendCapStore(
       expect(await claim('send_ceiling')).toBe(true);
     });
 
+    it('gives a released notice back at once, and only that one', async (context) => {
+      const { store, realmId } = await setup(context);
+      const mark = (kind: 'send_ceiling' | 'password_disabled') => ({
+        realmId,
+        addressHmac: 'address-victim',
+        kind,
+      });
+
+      expect(await store.claimNotice(mark('send_ceiling'))).toBe(true);
+      expect(await store.claimNotice(mark('password_disabled'))).toBe(true);
+      await store.releaseNotice(mark('send_ceiling'));
+
+      expect(await store.claimNotice(mark('send_ceiling'))).toBe(true);
+      expect(await store.claimNotice(mark('send_ceiling'))).toBe(false);
+      expect(await store.claimNotice(mark('password_disabled'))).toBe(false);
+    });
+
     it('keeps the realms apart', async (context) => {
       const { send, request, store } = await setup(context);
       await spread(send, P.ceiling.limit);

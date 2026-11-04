@@ -192,6 +192,16 @@ export interface SendCapStore {
     readonly addressHmac: string;
     readonly kind: OnceANoticeKind;
   }): Promise<boolean>;
+  /**
+   * Give back a claim whose notice was not sent (the pass not minted, the
+   * transport refused the mail), so the next refusal or disable can send it
+   * rather than the owner waiting out the interval.
+   */
+  releaseNotice(input: {
+    readonly realmId: string;
+    readonly addressHmac: string;
+    readonly kind: OnceANoticeKind;
+  }): Promise<void>;
 }
 
 function checkWindow(window: SendWindow, name: string): void {

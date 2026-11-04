@@ -13,6 +13,7 @@ import {
   createRedisSendCaps,
   isKnownEndUserIp,
   type MailPassFlow,
+  type OnceANoticeKind,
   type PasswordDisabledNotices,
   retryAfterSeconds,
   SEND_CAP_POLICY,
@@ -161,8 +162,46 @@ function contextOf(realm: MailRealm): EngineMailContext {
 
 /** The engine's mail over explicit dependencies; {@link createEngineMailer} wires the process's. */
 export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer {
-  const send = (realm: MailRealm, address: string, mail: EngineMail) =>
-    deps.mail.sendEngineMail(realm.id, address, mail, contextOf(realm));
+  /**
+   * Send one mail, rejecting when the transport refused it: the providers
+   * answer a refusal rather than throw, and a refusal must reach the
+   * background task's log and the hard action's alert. The error names no
+   * address (a provider's message may).
+   */
+  async function send(realm: MailRealm, address: string, mail: EngineMail): Promise<void> {
+    const result = await deps.mail.sendEngineMail(realm.id, address, mail, contextOf(realm));
+    if (!result.success) throw new Error('engine mail: the mail transport refused the message');
+  }
+
+  /**
+   * An address's once-a-day notice, with a fresh pass: sent only under the
+   * day's claim. A notice that does not go out (the pass not minted, the
+   * transport refused the mail) gives its claim back and rejects, so the
+   * caller's alert fires and the next refusal or disable tries again rather
+   * than the owner going a day without a pass.
+   */
+  async function sendOnceADay(
+    realm: MailRealm,
+    address: string,
+    notice: { readonly addressHmac: string; readonly kind: OnceANoticeKind },
+    passFlow: MailPassFlow,
+    mailOf: (pass: string) => EngineMail
+  ): Promise<void> {
+    const mark = { realmId: realm.id, ...notice };
+    if (!(await deps.caps.claimNotice(mark))) return;
+    try {
+      const pass = await deps.caps.mintPass({
+        realmId: realm.id,
+        addressHmac: notice.addressHmac,
+        flow: passFlow,
+      });
+      await send(realm, address, mailOf(pass));
+    } catch (error) {
+      // Best effort: a release that fails leaves the claim to run out.
+      await deps.caps.releaseNotice(mark).catch(() => undefined);
+      throw error;
+    }
+  }
 
   /** A known IP of a verified, enabled account: the exemption from every per-address tier. */
   async function knownIpOfVerifiedAccount(
@@ -198,15 +237,12 @@ export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer
     } else {
       return;
     }
-    const realmId = realm.id;
-    if (!(await deps.caps.claimNotice({ realmId, addressHmac, kind: 'send_ceiling' }))) return;
-    const pass = await deps.caps.mintPass({ realmId, addressHmac, flow: passFlow });
-    await send(realm, address, {
+    await sendOnceADay(realm, address, { addressHmac, kind: 'send_ceiling' }, passFlow, (pass) => ({
       template: 'send_ceiling',
       flow: passFlow,
       pass,
       passExpiresInSeconds: PASS_TTL_SECONDS,
-    });
+    }));
   }
 
   return Object.freeze({
@@ -266,15 +302,17 @@ export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer
         const realm = await deps.realmOf(realmId);
         if (realm === undefined) throw new Error('the realm of a disabled password is gone');
         const addressHmac = await deps.digests.identifierDigest({ realmId, identifier });
-        if (!(await deps.caps.claimNotice({ realmId, addressHmac, kind: 'password_disabled' }))) {
-          return;
-        }
-        const pass = await deps.caps.mintPass({ realmId, addressHmac, flow: 'reset' });
-        await send(realm, identifier, {
-          template: 'password_disabled',
-          pass,
-          passExpiresInSeconds: PASS_TTL_SECONDS,
-        });
+        await sendOnceADay(
+          realm,
+          identifier,
+          { addressHmac, kind: 'password_disabled' },
+          'reset',
+          (pass) => ({
+            template: 'password_disabled',
+            pass,
+            passExpiresInSeconds: PASS_TTL_SECONDS,
+          })
+        );
       },
     }),
   });

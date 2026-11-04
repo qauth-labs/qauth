@@ -171,5 +171,9 @@ export function createMemorySendCaps(
         now()
       );
     },
+
+    async releaseNotice(input: { realmId: string; addressHmac: string; kind: OnceANoticeKind }) {
+      marks.delete([input.realmId, 'notice', input.kind, input.addressHmac].join(':'));
+    },
   };
 }

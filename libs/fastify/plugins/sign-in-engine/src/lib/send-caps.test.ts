@@ -5,6 +5,7 @@ import {
   CLAIM_MARK_SCRIPT,
   createRedisSendCaps,
   mailPassHash,
+  RELEASE_MARK_SCRIPT_SHA,
   RESERVE_SEND_SCRIPT,
   RESERVE_SEND_SCRIPT_SHA,
   sendCapKey,
@@ -219,5 +220,24 @@ describe('createRedisSendCaps (#637)', () => {
     expect(RESERVE_SEND_SCRIPT_SHA).toMatch(/^[0-9a-f]{40}$/);
     expect(CLAIM_MARK_SCRIPT).not.toMatch(/\buntil\b/);
     expect(RESERVE_SEND_SCRIPT).not.toMatch(/\blocal until\b/);
+  });
+
+  it('releases a notice through its own script, on the claim’s key', async () => {
+    const redis = fakeRedis(1);
+    const store = createRedisSendCaps(redis, { now: () => NOW });
+
+    await store.releaseNotice({
+      realmId: REALM,
+      addressHmac: 'address-hmac',
+      kind: 'password_disabled',
+    });
+    expect(redis.calls[0]?.sha).toBe(RELEASE_MARK_SCRIPT_SHA);
+    expect(redis.calls[0]?.keys).toEqual([
+      sendCapKey(REALM, 'notice', 'password_disabled', 'address-hmac'),
+    ]);
+    expect(redis.calls[0]?.args).toEqual([]);
+    await expect(
+      store.releaseNotice({ realmId: REALM, addressHmac: 'a:b', kind: 'send_ceiling' })
+    ).rejects.toThrow('out of shape');
   });
 });

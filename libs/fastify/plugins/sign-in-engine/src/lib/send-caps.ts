@@ -207,9 +207,15 @@ redis.call('SET', KEYS[1], string.format('%.0f', now + ttl), 'PX', ttl)
 return 1
 `;
 
+/** Give a mark back. KEYS: the mark. Returns the number of marks removed. */
+export const RELEASE_MARK_SCRIPT = `
+return redis.call('DEL', KEYS[1])
+`;
+
 const sha1 = (script: string) => createHash('sha1').update(script).digest('hex');
 export const RESERVE_SEND_SCRIPT_SHA = sha1(RESERVE_SEND_SCRIPT);
 export const CLAIM_MARK_SCRIPT_SHA = sha1(CLAIM_MARK_SCRIPT);
+export const RELEASE_MARK_SCRIPT_SHA = sha1(RELEASE_MARK_SCRIPT);
 
 /** What a key part may hold: a realm id or an HMAC, so no caller can splice another key. */
 const KEY_PART = /^[A-Za-z0-9_-]{1,64}$/;
@@ -222,6 +228,26 @@ function part(value: string, what: string): string {
 /** A send-cap key of the realm, under the realm's hash tag. */
 export function sendCapKey(realmId: string, ...parts: string[]): string {
   return `${SEND_CAPS_KEY_PREFIX}:{${part(realmId, 'a realm id')}}:${parts.join(':')}`;
+}
+
+/** An address's once-a-day notice of one kind. */
+interface NoticeMark {
+  readonly realmId: string;
+  readonly addressHmac: string;
+  readonly kind: OnceANoticeKind;
+}
+
+/** The key of a notice's mark. */
+function noticeKey(input: NoticeMark): string {
+  if (input.kind !== 'send_ceiling' && input.kind !== 'password_disabled') {
+    throw new Error('send caps: not a once-a-day notice');
+  }
+  return sendCapKey(
+    input.realmId,
+    'notice',
+    input.kind,
+    part(input.addressHmac, 'an address HMAC')
+  );
 }
 
 /** The SHA-256 of a pass, base64url: what the store and an interaction keep in its place. */
@@ -416,28 +442,25 @@ export function createRedisSendCaps(
       return { passHash, addressHmac, flow };
     },
 
-    async claimNotice(input: {
-      readonly realmId: string;
-      readonly addressHmac: string;
-      readonly kind: OnceANoticeKind;
-    }): Promise<boolean> {
-      if (input.kind !== 'send_ceiling' && input.kind !== 'password_disabled') {
-        throw new Error('send caps: not a once-a-day notice');
-      }
-      const key = sendCapKey(
-        input.realmId,
-        'notice',
-        input.kind,
-        part(input.addressHmac, 'an address HMAC')
-      );
+    async claimNotice(input: NoticeMark): Promise<boolean> {
       const reply = await run(
         CLAIM_MARK_SCRIPT,
         CLAIM_MARK_SCRIPT_SHA,
-        [key],
+        [noticeKey(input)],
         [now(), policy.noticeIntervalMs],
         'a notice claim'
       );
       return Number(reply) === 1;
+    },
+
+    async releaseNotice(input: NoticeMark): Promise<void> {
+      await run(
+        RELEASE_MARK_SCRIPT,
+        RELEASE_MARK_SCRIPT_SHA,
+        [noticeKey(input)],
+        [],
+        'a notice release'
+      );
     },
   });
 }
