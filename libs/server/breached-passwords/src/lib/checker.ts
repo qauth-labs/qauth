@@ -2,7 +2,7 @@ import type { BreachListSource } from '@qauth-labs/shared-validation';
 
 import { passwordSha1 } from './digest';
 import { type BreachCheckFailureReason, isBreachLookupError } from './errors';
-import type { ReloadableBreachList } from './local-list';
+import type { ReloadableBreachList } from './operator-list';
 import type { BreachRangeLookup } from './range-lookup';
 
 /** A source that checks something: every {@link BreachListSource} but `off`. */

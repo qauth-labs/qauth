@@ -23,7 +23,7 @@ export {
   type LocalBreachList,
   parseLocalBreachList,
   type ReloadableBreachList,
-} from './lib/local-list';
+} from './lib/operator-list';
 export {
   BREACH_RANGE_LIMITS,
   BREACH_RANGE_PREFIX_LENGTH,

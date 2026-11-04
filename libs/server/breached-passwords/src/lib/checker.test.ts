@@ -2,12 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { type BreachCheckOutcome, createBreachedPasswordChecker } from './checker';
 import { passwordSha1 } from './digest';
-import { BreachLookupError,type BreachLookupFailureReason } from './errors';
+import { BreachLookupError, type BreachLookupFailureReason } from './errors';
 import {
   type LocalBreachList,
   parseLocalBreachList,
   type ReloadableBreachList,
-} from './local-list';
+} from './operator-list';
 import type { BreachRangeLookup } from './range-lookup';
 
 const BREACHED = 'password';

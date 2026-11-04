@@ -62,7 +62,7 @@ describe('the breach check reaches the network through the egress client only (#
   it('ships no source that imports a network module or calls fetch', () => {
     const files = shippedSources(SOURCE_ROOT);
     expect(files.map((file) => relative(SOURCE_ROOT, file))).toEqual(
-      expect.arrayContaining(['index.ts', 'lib/range-lookup.ts', 'lib/local-list.ts'])
+      expect.arrayContaining(['index.ts', 'lib/range-lookup.ts', 'lib/operator-list.ts'])
     );
     const offenders = Object.fromEntries(
       files
