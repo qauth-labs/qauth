@@ -52,10 +52,11 @@ scope:
     - 'several accounts on one browser (ADR-019 Decision 3, #548): the session cookie names one session today, so the
       step lists one account and logout_all ends the same session as logout; once #548 lists several, logout ends only
       the account the request is for and logout_all every account the cookie lists'
-    - "the delivery of back-channel logout (#624): ending a session takes its registry rows, the clients it served, and
-      hands them to the session service's listeners, where #624 queues each logout token; until #624 ships no logout
-      token is sent. The event user.signed_out carries the session's sid, so its CAEP session-revoked SET names the
-      user and the session together"
+    - "the delivery of back-channel logout (core.backchannel-logout, #624): the transaction that ends the session takes
+      its registry rows, the clients it served, and queues one user.client_session_ended event per client, which the
+      delivery role sends to each client that registered a backchannel_logout_uri as a logout token. The event
+      user.signed_out carries the session's sid, so its CAEP session-revoked SET names the user and the session
+      together"
     - 'refresh tokens: this route revokes none (an app revokes its own at /oauth/revoke before it sends the browser
       here, ADR-017 F0); POST /auth/logout, core.logout-token, still revokes every one of the user'
     - 'the realm resolver and the rate limit of the status page, which refuse as those of the end-session route do'
@@ -350,8 +351,8 @@ states:
     description: >-
       The session service revokes the one session, reason sign_out, by its user: its row is marked revoked in Postgres,
       a tombstone covers its cache entry, its registry rows and unredeemed codes go with it, and its side record is
-      dropped. The listeners hear of it with the clients it served (back-channel logout, #624). Every other session of
-      the user stays, and no refresh token is revoked. The response clears the session cookie.
+      dropped. One back-channel logout notice per client it served is queued in the same transaction (#624). Every
+      other session of the user stays, and no refresh token is revoked. The response clears the session cookie.
     invoke: { external: browserSessionStore }
     on:
       DONE:
