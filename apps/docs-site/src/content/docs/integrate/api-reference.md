@@ -394,6 +394,28 @@ account) and is only reachable under the `issuer-scoped-claim` strategy; every
 other failure renders one uniform refusal. See
 [Wallet sign-in](/integrate/wallet-login/#account-linking-238).
 
+### `GET /auth/pass`
+
+The page a mailed pass link opens: `<issuer>/auth/pass?pass=<43-char base64url>`,
+where `<issuer>` is the issuer of the account's realm. The send-ceiling notice
+and the password-disabled notice carry it. The pass is single use, bound to the
+address it was mailed to and valid 24 hours. It takes one reset or registration
+start on the hosted pages past every per-address send cap; the code that start
+mails is still required.
+
+Opening the link does not spend the pass: it starts an interaction in this
+browser, with a flow cookie of its own, that holds the pass's hash, and answers
+`303` to the interaction's ceremony page, whose path names the interaction id
+and nothing else. Only the start the interaction carries spends the pass, so a
+mail gateway's link scanner or a browser prefetch spends nothing. A reset starts at the `password_reset` step, a
+registration at the `identifier` step. Until the hosted reset and registration
+are built, the interaction can be read but not answered.
+
+**Query**: `pass` — the mailed pass. A missing, malformed, unknown, used or
+expired pass, or one of another realm, gets one `400` HTML page and no
+interaction. Every answer carries `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`, and the request log censors the `pass` value.
+
 ---
 
 ## OAuth 2.1
