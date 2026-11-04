@@ -7,19 +7,30 @@ export * from './lib/interaction-transport';
 export * from './lib/password-attempts';
 export * from './lib/password-hard-action';
 export * from './lib/password-verifier';
+export * from './lib/send-caps';
 // What the auth server works with, from the engine library it may not import.
 export {
   type AuditSink,
   type CompletedSignIn,
   type LadderPolicy,
+  type MailPassBinding,
+  type MailPassFlow,
   type MfaPolicyReader,
   NO_SECOND_FACTOR_POLICY,
+  type OnceANoticeKind,
   PASSWORD_LADDER_POLICY,
   type PasswordHardAction,
   readSignInTransaction,
+  retryAfterSeconds,
   type RoundAnswer,
   type RoundContext,
   type RoundResult,
+  SEND_CAP_POLICY,
+  type SendCapDecision,
+  type SendCapPolicy,
+  type SendCapRefusingTier,
+  type SendCapRequest,
+  type SendCapStore,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInAuditRecord,
   type SignInEngine,
