@@ -130,13 +130,16 @@ Redis cache configuration.
 
 Password hashing and validation configuration.
 
-| Variable               | Type   | Default | Description                                                             |
-| ---------------------- | ------ | ------- | ----------------------------------------------------------------------- |
-| `PASSWORD_MIN_LENGTH`  | number | `15`    | Min length (8-64), the seed of a new realm's `password.minLength`       |
-| `PASSWORD_MIN_SCORE`   | number | `2`     | Min strength score (0-4), the seed of a new realm's `password.minScore` |
-| `PASSWORD_MEMORY_COST` | number | `65536` | Argon2 memory cost (KB)                                                 |
-| `PASSWORD_TIME_COST`   | number | `3`     | Argon2 iterations                                                       |
-| `PASSWORD_PARALLELISM` | number | `4`     | Argon2 parallelism                                                      |
+| Variable                      | Type   | Default | Description                                                                                   |
+| ----------------------------- | ------ | ------- | --------------------------------------------------------------------------------------------- |
+| `PASSWORD_MIN_LENGTH`         | number | `15`    | Min length (8-64), the seed of a new realm's `password.minLength`                             |
+| `PASSWORD_MIN_SCORE`          | number | `2`     | Min strength score (0-4), the seed of a new realm's `password.minScore`                       |
+| `PASSWORD_BREACH_LIST_SOURCE` | enum   | `off`   | `off`, `local` or `k_anonymity`, the seed of a new realm's `password.breachListSource` (#635) |
+| `BREACHED_PASSWORD_LIST_PATH` | string | -       | The operator's local breach list (SHA-1 per line); loaded at boot, reloaded on `SIGHUP`       |
+| `BREACHED_PASSWORD_RANGE_URL` | string | -       | The k-anonymity range lookup's https URL; the five-character SHA-1 prefix is appended         |
+| `PASSWORD_MEMORY_COST`        | number | `65536` | Argon2 memory cost (KB)                                                                       |
+| `PASSWORD_TIME_COST`          | number | `3`     | Argon2 iterations                                                                             |
+| `PASSWORD_PARALLELISM`        | number | `4`     | Argon2 parallelism                                                                            |
 
 ### authEnvSchema
 
@@ -201,7 +204,7 @@ failed-login throttling: `LOG_PRETTY`, `REQUEST_ID_HEADER`, `METRICS_ENABLED`,
 `FAILED_LOGIN_TRACKING_ENABLED`, `FAILED_LOGIN_MAX_ATTEMPTS`,
 `FAILED_LOGIN_WINDOW`, `FAILED_LOGIN_LOCKOUT_DURATION`. (`LOG_LEVEL` itself lives
 in `baseEnvSchema`.) The four `FAILED_LOGIN_*` keys, `PASSWORD_MIN_LENGTH`,
-`PASSWORD_MIN_SCORE` and
+`PASSWORD_MIN_SCORE`, `PASSWORD_BREACH_LIST_SOURCE` and
 `REQUIRE_VERIFIED_ACCOUNT` are `realm-seed` keys: they seed a new realm's
 `bruteForce`, `password` and `accounts` policies, and the auth server reads a
 realm's own policies from the realm row (#528).

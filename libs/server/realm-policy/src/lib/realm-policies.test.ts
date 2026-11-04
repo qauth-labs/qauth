@@ -32,7 +32,7 @@ const TABLE_DEFAULTS: RealmPolicies = {
     adminAccessTokenLifespanSeconds: 600,
   },
   accounts: { requireVerifiedAccount: true },
-  password: { minLength: 15, minScore: 2 },
+  password: { minLength: 15, minScore: 2, breachListSource: 'off' },
   bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
   registration: {
     dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
@@ -509,7 +509,12 @@ describe('diffPolicies', () => {
     let caught: unknown;
     try {
       diffPolicies(TABLE_DEFAULTS, {
-        password: { minLength: 15, minScore: 2, maxAgeDays: 'hunter2-hunter2' },
+        password: {
+          minLength: 15,
+          minScore: 2,
+          breachListSource: 'off',
+          maxAgeDays: 'hunter2-hunter2',
+        },
       });
     } catch (error) {
       caught = error;

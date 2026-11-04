@@ -166,6 +166,12 @@ services:
       PASSWORD_PARALLELISM: ${PASSWORD_PARALLELISM:-4}
       PASSWORD_MIN_SCORE: ${PASSWORD_MIN_SCORE:-2}
       PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-15}
+      PASSWORD_BREACH_LIST_SOURCE: ${PASSWORD_BREACH_LIST_SOURCE:-off}
+      # Breach list (#635): the local list's path inside the container (mount
+      # the file read-only; SIGHUP reloads it) and the k-anonymity range
+      # lookup's https URL. Blank is unset.
+      BREACHED_PASSWORD_LIST_PATH:
+      BREACHED_PASSWORD_RANGE_URL:
       # Client-secret checks beyond this many waiting Argon2 jobs answer 503
       # with Retry-After at once instead of queueing.
       PASSWORD_HASH_QUEUE_LIMIT: ${PASSWORD_HASH_QUEUE_LIMIT:-32}
