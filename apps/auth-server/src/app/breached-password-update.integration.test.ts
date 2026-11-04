@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -91,10 +90,16 @@ const AUTHORIZE_REQUEST = {
   resource: undefined,
 };
 
-/** The SHA-1 of a password as the list file holds it: 40 uppercase hex characters. */
-function sha1Of(password: string): string {
-  return createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
-}
+/**
+ * The SHA-1 digests of the listed passwords, as the list file holds them: 40
+ * uppercase hex characters, written out as test vectors.
+ */
+const LISTED_DIGESTS = {
+  password: '5BAA61E4C9B93F3F0682250B6CF8331B7EE68FD8',
+  [LISTED_PASSWORD]: 'A0E0899D8318F7892920FE14CD72B00343B94BDB',
+  'correct horse battery staple': 'ABF7AAD6438836DBE526AA231ABDE2D0EEF74D42',
+  [LISTED_NEW_PASSWORD]: '404008EECA915EDABA0049F93051BADC6B310BAC',
+} as const;
 
 /** Start an interaction at the identifier step, as the authorization endpoint does (#628). */
 async function startRoute(app: FastifyInstance): Promise<void> {
@@ -249,10 +254,10 @@ describe('the breach list and the forced password update (#635, real containers)
     await writeFile(
       listPath,
       [
-        sha1Of('password'),
-        `${sha1Of(LISTED_PASSWORD)}:42`,
-        sha1Of('correct horse battery staple'),
-        sha1Of(LISTED_NEW_PASSWORD),
+        LISTED_DIGESTS.password,
+        `${LISTED_DIGESTS[LISTED_PASSWORD]}:42`,
+        LISTED_DIGESTS['correct horse battery staple'],
+        LISTED_DIGESTS[LISTED_NEW_PASSWORD],
         '',
       ].join('\n'),
       'utf8'

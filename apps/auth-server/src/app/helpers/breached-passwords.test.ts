@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,8 +12,16 @@ import { createServerBreachedPasswords } from './breached-passwords';
 const REALM = testRealm({ id: 'realm-1', name: 'northwind' });
 const LISTED = 'correct horse battery staple';
 const UNLISTED = 'a quiet violet tram crosses nine rivers';
-const sha1 = (password: string) =>
-  createHash('sha1').update(password, 'utf8').digest('hex').toUpperCase();
+/** The SHA-1 digests of the two passwords, written out as test vectors. */
+const DIGESTS: Record<string, string> = {
+  [LISTED]: 'ABF7AAD6438836DBE526AA231ABDE2D0EEF74D42',
+  [UNLISTED]: '06285A265590D5E03A68C9C983E3E829D401C284',
+};
+const sha1 = (password: string): string => {
+  const digest = DIGESTS[password];
+  if (digest === undefined) throw new Error('no test vector for this password');
+  return digest;
+};
 
 let directory: string;
 let listPath: string;
