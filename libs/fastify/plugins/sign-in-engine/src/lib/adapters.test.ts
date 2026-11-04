@@ -30,6 +30,10 @@ import {
   END_USER_IP_HMAC_LABEL,
   IDENTIFIER_HMAC_LABEL,
 } from './identifier-digest';
+import {
+  createRepositoryPasswordUpdates,
+  type PasswordUpdateRepositories,
+} from './password-updates';
 import { createArgon2PasswordVerifier } from './password-verifier';
 
 const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
@@ -44,6 +48,7 @@ function stubStores(
     passkeys: { realmId: string; disabledAt?: number | null }[];
     grants: unknown[];
     disabledAt: number | null;
+    actions: string[];
   }> = {}
 ) {
   const state = {
@@ -54,6 +59,7 @@ function stubStores(
     passkeys: [] as { realmId: string; disabledAt?: number | null }[],
     grants: [] as unknown[],
     disabledAt: null as number | null,
+    actions: [] as string[],
     ...overrides,
   };
   const calls: string[] = [];
@@ -107,6 +113,12 @@ function stubStores(
         return state.grants;
       },
     },
+    userRequiredActions: {
+      listForUser: async (realmId, userId) => {
+        calls.push(`actions:${realmId}:${userId}`);
+        return state.actions.map((action) => ({ action }));
+      },
+    },
   };
   return { repos, calls };
 }
@@ -149,11 +161,31 @@ describe('the repository account directory', () => {
         { type: 'password', disabled: false },
         { type: 'passkey', disabled: false },
       ],
+      requiredActions: [],
     });
     const { repos: none } = stubStores({ user: undefined });
     expect(
       await createRepositoryAccountDirectory(none, log()).findByUserId(REALM, USER)
     ).toBeNull();
+  });
+
+  it('reads the pending required actions of the proved account (#635)', async () => {
+    const { repos, calls } = stubStores({
+      actions: ['update_password', 'setup_mfa', 'no_such_action', 'update_password'],
+    });
+    const errors = log();
+    const account = await createRepositoryAccountDirectory(repos, errors).findByUserId(REALM, USER);
+    expect(account?.requiredActions).toEqual(['update_password', 'setup_mfa']);
+    expect(calls).toContain(`actions:${REALM}:${USER}`);
+    // An action the engine does not know is reported, never a reason to drop the others.
+    expect(errors.error).toHaveBeenCalledWith(
+      { userId: USER },
+      'unknown required action on a user'
+    );
+    // None is read before a factor proved the account.
+    const before = stubStores({ actions: ['update_password'] });
+    await createRepositoryAccountDirectory(before.repos, log()).findByIdentifier(REALM, IDENTIFIER);
+    expect(before.calls.some((call) => call.startsWith('actions:'))).toBe(false);
   });
 
   it('reads the proved account as unverified while its password credential is (#638)', async () => {
@@ -516,6 +548,127 @@ describe('the repository address verifier (#638)', () => {
   });
 });
 
+describe('the repository password updates (#635)', () => {
+  function stubUpdates(
+    overrides: Partial<{
+      credential:
+        | { id: string; userId: string; credentialData: Record<string, unknown> }
+        | undefined;
+      user: { id: string; enabled: boolean } | undefined;
+    }> = {}
+  ) {
+    const state = {
+      credential: {
+        id: 'cred-1',
+        userId: USER,
+        credentialData: { password_hash: 'old-hash', email_verified: true, extra: 'kept' },
+      } as { id: string; userId: string; credentialData: Record<string, unknown> } | undefined,
+      user: { id: USER, enabled: true } as { id: string; enabled: boolean } | undefined,
+      ...overrides,
+    };
+    const calls: string[] = [];
+    const written: Record<string, unknown>[] = [];
+    const repos: PasswordUpdateRepositories<string> = {
+      userCredentials: {
+        findByRealmProviderSub: async (realmId, providerType, externalSub, tx) => {
+          calls.push(`credential:${realmId}:${providerType}:${externalSub}:${tx}`);
+          return state.credential;
+        },
+        updateCredentialData: async (id, data, tx) => {
+          calls.push(`update:${id}:${tx}`);
+          written.push(data);
+        },
+        clearDisabledAt: async (realmId, providerType, externalSub, tx) => {
+          calls.push(`clear:${realmId}:${providerType}:${externalSub}:${tx}`);
+        },
+      },
+      users: {
+        findById: async (realmId, id, tx) => {
+          calls.push(`user:${realmId}:${id}:${tx}`);
+          return state.user;
+        },
+      },
+      userRequiredActions: {
+        remove: async (realmId, userId, action, tx) => {
+          calls.push(`remove:${realmId}:${userId}:${action}:${tx}`);
+          return true;
+        },
+      },
+    };
+    const transaction = async <T>(work: (tx: string) => Promise<T>) => work('tx-1');
+    const hash = vi.fn(async (password: string) => `hash(${password})`);
+    const updates = createRepositoryPasswordUpdates(repos, transaction, {
+      minLength: async () => 15,
+      check: async ({ password }) => ({ kind: 'accepted', password, normalization: 'nfc' }),
+      hash,
+    });
+    return { updates, calls, written, hash };
+  }
+  const input = {
+    realmId: REALM,
+    userId: USER,
+    identifier: IDENTIFIER,
+    password: 'a new password of some length',
+    normalization: 'nfc' as const,
+  };
+
+  it('writes the new hash, clears the mark and the required action, in one transaction', async () => {
+    const { updates, calls, written, hash } = stubUpdates();
+    expect(await updates.replace(input)).toEqual({ kind: 'replaced' });
+    expect(hash).toHaveBeenCalledWith(input.password);
+    expect(calls).toEqual([
+      `credential:${REALM}:password:${IDENTIFIER}:tx-1`,
+      `user:${REALM}:${USER}:tx-1`,
+      'update:cred-1:tx-1',
+      `clear:${REALM}:password:${IDENTIFIER}:tx-1`,
+      `remove:${REALM}:${USER}:update_password:tx-1`,
+    ]);
+    expect(written).toEqual([
+      {
+        password_hash: `hash(${input.password})`,
+        email_verified: true,
+        password_normalization: 'nfc',
+        extra: 'kept',
+      },
+    ]);
+  });
+
+  it("writes nothing for another user's credential, none, or a disabled user", async () => {
+    for (const [overrides, reason] of [
+      [
+        { credential: { id: 'cred-2', userId: 'someone-else', credentialData: {} } },
+        'subject_mismatch',
+      ],
+      [{ credential: undefined }, 'subject_mismatch'],
+      [{ user: undefined }, 'subject_mismatch'],
+      [{ user: { id: USER, enabled: false } }, 'account_disabled'],
+    ] as const) {
+      const { updates, written, calls } = stubUpdates(overrides);
+      expect(await updates.replace(input)).toEqual({ kind: 'refused', reason });
+      expect(written).toEqual([]);
+      expect(calls.filter((call) => !/^(credential|user):/.test(call))).toEqual([]);
+    }
+  });
+
+  it('throws, writing nothing, for a credential whose data cannot be read', async () => {
+    const { updates, written } = stubUpdates({
+      credential: { id: 'cred-1', userId: USER, credentialData: { password_hash: 42 } },
+    });
+    await expect(updates.replace(input)).rejects.toThrow(/malformed credential_data/);
+    expect(written).toEqual([]);
+  });
+
+  it('reads the policy through the given reader', async () => {
+    const { updates } = stubUpdates();
+    expect(await updates.minLength(REALM)).toBe(15);
+    expect(await updates.check({ realmId: REALM, identifier: IDENTIFIER, password: 'x' })).toEqual({
+      kind: 'accepted',
+      password: 'x',
+      normalization: 'nfc',
+    });
+  });
+});
+
 describe('audit events', () => {
   const HMAC = 'h'.repeat(43);
 
@@ -535,6 +688,23 @@ describe('audit events', () => {
       { outcome: 'refused', step: 'email_code', reason: 'locked_out', userId: USER },
       { outcome: 'refused', step: 'email_code', reason: 'send_capped', userId: USER },
       { outcome: 'ended', step: 'email_code', reason: 'code_burned', userId: USER },
+      { outcome: 'passed', step: 'new_password', userId: USER },
+      { outcome: 'refused', step: 'new_password', reason: 'password_rejected', userId: USER },
+      { outcome: 'refused', step: 'new_password', reason: 'password_breached', userId: USER },
+      {
+        outcome: 'unchecked',
+        step: 'password',
+        reason: 'breach_check_failed',
+        failure: 'lookup_failed',
+        userId: USER,
+      },
+      {
+        outcome: 'unchecked',
+        step: 'new_password',
+        reason: 'breach_check_failed',
+        failure: 'list_not_loaded',
+        userId: USER,
+      },
     ];
     for (const record of records) {
       const event = signInAuditEvent(record);
@@ -551,6 +721,17 @@ describe('audit events', () => {
     expect(signInAuditEvent(records[4])).toEqual({
       type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
       data: { method: 'password', reason: 'email_not_verified' },
+      userId: USER,
+    });
+    // A breach-list check that could not be made (#635).
+    expect(signInAuditEvent(records[17])).toEqual({
+      type: 'urn:qauth:event:user.password_breach_check_failed:v1-rc.0',
+      data: { step: STEP_URNS.password, reason: 'lookup_failed' },
+      userId: USER,
+    });
+    expect(signInAuditEvent(records[15])).toEqual({
+      type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      data: { method: 'password', reason: 'password_rejected' },
       userId: USER,
     });
   });

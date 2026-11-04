@@ -7,20 +7,21 @@ mapping of the engine's audit records onto registered events, and a plugin that 
 server with one engine. The app may not import a `scope:server` library, so it reaches the engine
 through this one, which re-exports the types it needs.
 
-| Export                               | What                                                                                                                                |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `createRepositoryAccountDirectory`   | Before the password: its credential and users row only. After a proof: every password and passkey credential and the admin grants   |
-| `createArgon2PasswordVerifier`       | Argon2id through the server's hasher, and the dummy verification, which fails only as a real one does and always costs one Argon2id |
-| `createCookieSecretIdentifierDigest` | The identifier's keyed HMAC, under a key derived with HKDF from the realm's `cookie_hmac` secret and a label of its own             |
-| `createCookieSecretEmailCodeDigest`  | An emailed code's keyed HMAC over the realm, its salt and the code (#638), under the same derivation with a label of its own        |
-| `createRepositoryAddressVerifier`    | Marks a password credential's address verified, and its email attribute, in one database transaction, for an enabled subject only   |
-| `signInAuditEvent`                   | An audit record as `user.sign_in_step_passed` or `user.sign_in_failed`, with the user as subject once resolved and the HMAC before  |
-| `signInEnginePlugin`                 | Decorates `fastify.signInEngine` with an engine built from its options; in production only with a `ladder` hook                     |
-| `createRedisFailureLadder`           | The per-account failure ladder (#615) in Redis: one script reserves an attempt before its check; no key holds an address            |
-| `createPasswordHardAction`           | The ladder's hard action at 100 failures: mark the password disabled, alert the operator, notify the owner; only while armed        |
-| `createHardActionArming`             | Whether the hard action is armed in a realm: the hosted reset (#642) on and the owner's notice (#637) sendable, asked every call    |
-| `createPasswordAttempts`             | The ladder as the legacy login routes use it: reserve before the password, settle after, a store error as one error type            |
-| `END_USER_IP_HMAC_LABEL`             | The HKDF label of the end-user IP digest the ladder keeps known IPs under                                                           |
+| Export                               | What                                                                                                                                                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createRepositoryAccountDirectory`   | Before the password: its credential and users row only. After a proof: every password and passkey credential, the admin grants and the pending required actions (#635)                               |
+| `createArgon2PasswordVerifier`       | Argon2id through the server's hasher, and the dummy verification, which fails only as a real one does and always costs one Argon2id                                                                  |
+| `createCookieSecretIdentifierDigest` | The identifier's keyed HMAC, under a key derived with HKDF from the realm's `cookie_hmac` secret and a label of its own                                                                              |
+| `createCookieSecretEmailCodeDigest`  | An emailed code's keyed HMAC over the realm, its salt and the code (#638), under the same derivation with a label of its own                                                                         |
+| `createRepositoryAddressVerifier`    | Marks a password credential's address verified, and its email attribute, in one database transaction, for an enabled subject only                                                                    |
+| `createRepositoryPasswordUpdates`    | The forced password update (#635): the realm's policy, and one transaction that writes the new hash, clears the disabled mark and the `update_password` required action, for an enabled subject only |
+| `signInAuditEvent`                   | An audit record as `user.sign_in_step_passed`, `user.sign_in_failed` or `user.password_breach_check_failed`, with the user as subject once resolved and the HMAC before                              |
+| `signInEnginePlugin`                 | Decorates `fastify.signInEngine` with an engine built from its options; in production only with a `ladder` hook                                                                                      |
+| `createRedisFailureLadder`           | The per-account failure ladder (#615) in Redis: one script reserves an attempt before its check; no key holds an address                                                                             |
+| `createPasswordHardAction`           | The ladder's hard action at 100 failures: mark the password disabled, alert the operator, notify the owner; only while armed                                                                         |
+| `createHardActionArming`             | Whether the hard action is armed in a realm: the hosted reset (#642) on and the owner's notice (#637) sendable, asked every call                                                                     |
+| `createPasswordAttempts`             | The ladder as the legacy login routes use it: reserve before the password, settle after, a store error as one error type                                                                             |
+| `END_USER_IP_HMAC_LABEL`             | The HKDF label of the end-user IP digest the ladder keeps known IPs under                                                                                                                            |
 
 Nothing registers the plugin yet: the transports do, the Interaction API's answer route (#616)
 and the FiPA endpoint (#646), and they emit the mapped events with the server's event writer.

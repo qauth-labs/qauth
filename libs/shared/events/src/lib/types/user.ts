@@ -72,6 +72,31 @@ export const userSignInStepPassed = defineEventType({
   }),
 });
 
+/**
+ * A breach-list check of a password that could not be made (#635, ADR-020
+ * §3): the realm's local list was not loaded, or the range lookup failed or
+ * was refused. A failed check never blocks a sign-in, a password update or a
+ * registration, so the password was taken as not listed; this event is the
+ * record of that.
+ */
+export const userPasswordBreachCheckFailed = defineEventType({
+  name: 'user.password_breach_check_failed',
+  version: 1,
+  rc: 0,
+  description:
+    "QAuth could not check a password against the realm's breach list (the local list was not loaded, or the range lookup failed or was refused) and took it as not listed: a failed check never blocks a sign-in, a password update or a registration. The subject is the account whose password it was, when one exists.",
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    step: stepName(
+      'The sign-in step whose password was checked: the password, or a new password. Absent for a registration through `POST /auth/register`.'
+    ).optional(),
+    reason: reason(),
+  }),
+});
+
 export const userSignedOut = defineEventType({
   name: 'user.signed_out',
   version: 1,
@@ -201,6 +226,7 @@ export const USER_EVENT_TYPES = [
   userSignedIn,
   userSignInFailed,
   userSignInStepPassed,
+  userPasswordBreachCheckFailed,
   userSignedOut,
   userClientSessionEnded,
   userSignOutFailed,

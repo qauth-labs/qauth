@@ -7,12 +7,17 @@ export * from './lib/identifier-digest';
 export * from './lib/interaction-transport';
 export * from './lib/password-attempts';
 export * from './lib/password-hard-action';
+export * from './lib/password-updates';
 export * from './lib/password-verifier';
 export * from './lib/send-caps';
 // What the auth server works with, from the engine library it may not import.
 export {
   type AddressVerifier,
   type AuditSink,
+  BREACH_CHECK_FAILURES,
+  type BreachCheckFailure,
+  type BreachCheckVerdict,
+  type BreachedPasswordCheck,
   type CompletedSignIn,
   EMAIL_CODE_LADDER_POLICY,
   type EmailCodeDependencies,
@@ -24,11 +29,17 @@ export {
   type MailPassBinding,
   type MailPassFlow,
   type MfaPolicyReader,
+  type NewPasswordCheck,
+  NO_BREACH_CHECK,
   NO_SECOND_FACTOR_POLICY,
   type OnceANoticeKind,
   PASSWORD_LADDER_POLICY,
   type PasswordHardAction,
+  type PasswordReplacement,
+  type PasswordUpdates,
   readSignInTransaction,
+  REQUIRED_ACTIONS,
+  type RequiredAction,
   retryAfterSeconds,
   type RoundAnswer,
   type RoundContext,
