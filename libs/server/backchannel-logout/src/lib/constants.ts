@@ -27,6 +27,15 @@ export const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backcha
 export const LOGOUT_TOKEN_LIFETIME_SECONDS = 120;
 
 /**
+ * How far back the delivery role starts a realm it fans out for this route
+ * for the first time, or again after the realm had no client with a URI: one
+ * day. A notice is written only for a client with a URI, so one committed
+ * before the role first listed the realm (the role was down, or had not
+ * polled yet) is meant for delivery and is sent late rather than lost.
+ */
+export const BACKCHANNEL_LOGOUT_BACKFILL_MS = 24 * 60 * 60 * 1000;
+
+/**
  * The event a session revocation writes for each client to notify, in its
  * own transaction: `user.client_session_ended` of `@qauth-labs/shared-events`.
  */

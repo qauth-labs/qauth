@@ -110,6 +110,8 @@ describe('createBackchannelLogoutRoute (OpenID Connect Back-Channel Logout 1.0, 
     const { route } = setup();
 
     expect(route.kind).toBe('backchannel_logout');
+    // A notice committed before the role first listed the realm is not lost.
+    expect(route.backfillMs).toBe(24 * 60 * 60 * 1000);
     expect(await route.destinations()).toEqual([
       {
         id: CLIENT_ROW,

@@ -124,6 +124,22 @@ function checkDestination(destination: EventDeliveryDestination, kinds: Readonly
   checkRealmId(destination.realmId, 'fanOut');
 }
 
+/** The longest backfill window of a fan-out (`EventFanOutRequest.backfillMs`): 30 days. */
+export const FAN_OUT_BACKFILL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * The event types a backfilled position may start at: every type the
+ * destinations take, or `null` when one of them takes every type.
+ */
+function backfillTypes(destinations: readonly EventDeliveryDestination[]): string[] | null {
+  const types = new Set<string>();
+  for (const destination of destinations) {
+    if (destination.types === undefined) return null;
+    destination.types.forEach((type) => types.add(type));
+  }
+  return [...types];
+}
+
 function checkCount(value: number, min: number, max: number, what: string): number {
   if (!Number.isSafeInteger(value) || value < min || value > max) {
     throw new TypeError(`eventDeliveries: ${what} must be an integer from ${min} to ${max}`);
@@ -317,7 +333,8 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
     kind: string,
     destinations: readonly EventDeliveryDestination[],
     pageSize: number,
-    now: number
+    now: number,
+    backfillMs: number | undefined
   ): Promise<PageOutcome> {
     return db.transaction(
       async (tx): Promise<PageOutcome> => {
@@ -340,13 +357,39 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
           );
 
         // A realm seen for the first time starts at the horizon: its
-        // destinations receive what is committed from now on.
+        // destinations receive what is committed from now on. A kind with a
+        // backfill window starts just before the realm's first event of its
+        // destinations' types inside the window instead. That event is below
+        // the horizon, so every transaction still open, whose events may
+        // commit later, is above the start and is read in turn.
         if (!position) {
-          await tx.execute(sql`
-            insert into ${eventDeliveryPositions} (realm_id, destination_kind, xid, seq, updated_at)
-            select ${realmId}::uuid, ${kind}, pg_snapshot_xmin(pg_current_snapshot()), 0, ${now}
-            on conflict (realm_id, destination_kind) do nothing
-          `);
+          if (backfillMs === undefined) {
+            await tx.execute(sql`
+              insert into ${eventDeliveryPositions} (realm_id, destination_kind, xid, seq, updated_at)
+              select ${realmId}::uuid, ${kind}, pg_snapshot_xmin(pg_current_snapshot()), 0, ${now}
+              on conflict (realm_id, destination_kind) do nothing
+            `);
+          } else {
+            const types = backfillTypes(destinations);
+            await tx.execute(sql`
+              insert into ${eventDeliveryPositions} (realm_id, destination_kind, xid, seq, updated_at)
+              select ${realmId}::uuid, ${kind},
+                coalesce("first"."xid", "horizon"."xmin"),
+                coalesce("first"."seq" - 1, 0), ${now}
+              from (select pg_snapshot_xmin(pg_current_snapshot()) as "xmin") as "horizon"
+              left join lateral (
+                select ${events.xid} as "xid", ${events.seq} as "seq"
+                from ${events}
+                where ${events.realmId} = ${realmId}
+                  and ${events.time} >= ${now - backfillMs}
+                  and ${events.xid} < "horizon"."xmin"
+                  ${types === null ? sql`` : sql`and ${events.type} = any(${sql.param(types)}::text[])`}
+                order by ${events.xid}, ${events.seq}
+                limit 1
+              ) as "first" on true
+              on conflict (realm_id, destination_kind) do nothing
+            `);
+          }
           return { kind: 'started' };
         }
 
@@ -453,6 +496,11 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         checkKind(kind, 'fanOut');
         kinds.add(kind);
       }
+      const backfill = new Map<string, number>();
+      for (const [kind, ms] of Object.entries(request.backfillMs ?? {})) {
+        checkKind(kind, 'fanOut');
+        backfill.set(kind, checkCount(ms, 0, FAN_OUT_BACKFILL_MAX_MS, `backfillMs.${kind}`));
+      }
       // One stream per realm and kind: its destinations and its position.
       const streams = new Map<
         string,
@@ -506,7 +554,14 @@ export function createEventDeliveriesRepository(db: Database): EventDeliveriesRe
         const destinations = streams.get(`${realmId}:${kind}`)?.destinations ?? [];
         let pages = 0;
         for (;;) {
-          const page = await fanOutPage(realmId, kind, destinations, pageSize, now);
+          const page = await fanOutPage(
+            realmId,
+            kind,
+            destinations,
+            pageSize,
+            now,
+            backfill.get(kind)
+          );
           if (page.kind === 'busy') {
             result.skippedRealms += 1;
             break;

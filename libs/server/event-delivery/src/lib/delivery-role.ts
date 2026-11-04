@@ -22,6 +22,7 @@ import type {
   DestinationTypeRule,
   EventSubjectRef,
 } from './types';
+import { ROUTE_BACKFILL_MAX_MS } from './types';
 
 /**
  * THE DELIVERY ROLE (ADR-019 Decision 8, issue #460).
@@ -342,6 +343,8 @@ class Runner implements DeliveryRole {
   readonly kinds: readonly string[];
   readonly settings: DeliverySettings;
 
+  /** The backfill window of each route that sets one, by kind. */
+  private readonly backfillMs: Readonly<Record<string, number>>;
   private readonly store: DeliveryStore;
   private readonly routes: ReadonlyMap<string, DeliveryRoute>;
   private readonly signer: DeliverySigner;
@@ -383,10 +386,25 @@ class Runner implements DeliveryRole {
       if (routes.has(route.kind)) {
         throw new TypeError(`delivery role: two routes have the kind "${route.kind}"`);
       }
+      if (
+        route.backfillMs !== undefined &&
+        (!Number.isSafeInteger(route.backfillMs) ||
+          route.backfillMs < 0 ||
+          route.backfillMs > ROUTE_BACKFILL_MAX_MS)
+      ) {
+        throw new TypeError(
+          `delivery role: the backfill of route "${route.kind}" must be an integer from 0 to ${ROUTE_BACKFILL_MAX_MS} milliseconds`
+        );
+      }
       routes.set(route.kind, route);
     }
     this.routes = routes;
     this.kinds = Object.freeze([...routes.keys()]);
+    const backfill: Record<string, number> = {};
+    for (const route of routes.values()) {
+      if (route.backfillMs !== undefined) backfill[route.kind] = route.backfillMs;
+    }
+    this.backfillMs = Object.freeze(backfill);
     this.settings = resolveDeliverySettings(options.settings);
     this.store = options.store;
     this.signer = options.signer;
@@ -454,6 +472,7 @@ class Runner implements DeliveryRole {
       destinations,
       now: this.clock.now(),
       pageSize: this.settings.fanOutPageSize,
+      ...(Object.keys(this.backfillMs).length === 0 ? {} : { backfillMs: this.backfillMs }),
     });
     if (result.deliveries > 0) void this.fill();
     return result.more;

@@ -6,6 +6,7 @@ import type {
 } from '@qauth-labs/server-event-delivery';
 
 import {
+  BACKCHANNEL_LOGOUT_BACKFILL_MS,
   BACKCHANNEL_LOGOUT_DELIVERY_KIND,
   BACKCHANNEL_LOGOUT_EGRESS_PURPOSE,
   CLIENT_SESSION_ENDED_EVENT,
@@ -99,7 +100,10 @@ function stringMember(data: Readonly<Record<string, unknown>>, name: string): st
  *   `user.client_session_ended` event per client the session served that has
  *   a `backchannel_logout_uri`, in its own transaction. The route lists those
  *   clients, each taking only the events that name it (`typeRules.clientId`),
- *   so the fan-out writes one delivery per client and session.
+ *   so the fan-out writes one delivery per client and session. A realm the
+ *   role fans out for the first time starts a day back
+ *   ({@link BACKCHANNEL_LOGOUT_BACKFILL_MS}), so a notice committed before
+ *   the role listed it is sent late rather than lost.
  * - **Checked again at send time.** A delivery may wait in the queue, retried
  *   for hours: before each attempt the route reads the client as it is now.
  *   A deleted client, a disabled or suspended one, a removed URI, or a client
@@ -129,6 +133,9 @@ export function createBackchannelLogoutRoute(
 
   return {
     kind: BACKCHANNEL_LOGOUT_DELIVERY_KIND,
+    // Every notice is written for a client with a URI: one committed before
+    // the role first listed the realm is sent late, not lost.
+    backfillMs: BACKCHANNEL_LOGOUT_BACKFILL_MS,
 
     async destinations(): Promise<RouteDestination[]> {
       const clients = await options.clients.listDestinations();
