@@ -186,18 +186,21 @@ describe('the verifier key never reaches the published JWKS (#377)', () => {
     }
   });
 
-  it('publishes only the EdDSA token key it was configured with', async () => {
+  it('publishes only its EdDSA keys: the token key it was configured with and the event key', async () => {
     // The control that makes the two assertions above non-vacuous in the other
     // direction: the set is not empty and not accidentally filtered — it holds
-    // exactly the key type QAuth signs its own tokens with.
+    // exactly the key type QAuth signs its own tokens with, and the event key
+    // that signs logout tokens (#624), Ed25519 as well.
     const server = await bootWithVerifierIdentity();
 
     try {
       const { keys } = await server.app.jwtUtils.getJwks(server.realm);
 
-      expect((keys as unknown as Array<Record<string, unknown>>).map((key) => key['kty'])).toEqual([
-        'OKP',
-      ]);
+      expect(
+        (keys as unknown as Array<Record<string, unknown>>).map(
+          (key) => `${String(key['kty'])}/${String(key['crv'])}`
+        )
+      ).toEqual(['OKP/Ed25519', 'OKP/Ed25519']);
     } finally {
       await server.close();
     }

@@ -45,7 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Discovery lists `backchannel_logout_supported` and
   `backchannel_logout_session_supported`. The realm JWKS lists the
   `event_signing` keys after the token keys, so a relying party verifies the
-  token at `jwks_uri`. The `delivery` role's database user reads the client
+  token at `jwks_uri`. **Upgrading from 0.1.x (relying parties and resource
+  servers):** the event key is a second Ed25519 key in the realm JWKS. A token
+  issued before the upgrade carries no `kid`, so a verifier that picks a key
+  without one finds two and refuses the token (`jose`:
+  `ERR_JWKS_MULTIPLE_MATCHING_KEYS`, whose candidates the caller may try)
+  until it expires; the client then gets a new token, which names its key.
+  QAuth's own verification is unchanged. The `delivery` role's database user reads the client
   columns the route needs, and the role loads the egress plugin. New
   libraries `@qauth-labs/server-backchannel-logout` and
   `@qauth-labs/fastify-plugin-backchannel-logout`; conformance rows in

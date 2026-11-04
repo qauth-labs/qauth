@@ -428,6 +428,16 @@ cache, so a rotation through the store will change nothing for a relying party
 that follows the rule. A key replaced through its variable leaves the JWKS at
 once: such a relying party refuses the old key's tokens within 5 minutes.
 
+The JWKS lists the realm's event keys too, after its token keys: they sign
+[back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout). In a
+realm that signs with Ed25519, that makes two Ed25519 keys. A token issued by
+0.1 names no `kid`, so a library that picks a key without one finds both and
+refuses the token (`jose`: `ERR_JWKS_MULTIPLE_MATCHING_KEYS`, whose candidates
+the caller may try in turn). After the upgrade to 0.2, a relying party may
+therefore refuse such a token until it expires, at most the longest access
+token lifetime: the client then uses its refresh token or signs in again, and
+its new token names its key.
+
 ## Key formats
 
 ### PEM keys: PKCS#8 recommended
