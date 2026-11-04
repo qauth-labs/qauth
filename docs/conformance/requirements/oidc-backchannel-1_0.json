@@ -70,9 +70,9 @@
       "section": "2.4",
       "level": "REQUIRED",
       "quote": "iss REQUIRED. Issuer Identifier, as specified in Section 2 of [OpenID.Core].",
-      "applies": "libs/server/keys (signEventToken) — the signer adds the realm issuer as iss; the delivery role cannot set it.",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — the signer adds the realm issuer as iss and refuses a caller's iss; the delivery role cannot set it.",
       "status": "covered",
-      "evidenceMatch": "passes every check"
+      "evidenceMatch": "signs a logout token for the delivery role"
     },
     {
       "id": "backchannel-2_4-aud",
@@ -142,9 +142,9 @@
       "section": "2.4",
       "level": "MUST",
       "quote": "A Logout Token MUST be signed and MAY also be encrypted.",
-      "applies": "libs/server/keys (signEventToken) — signed by the signer role with the realm's event_signing key, published in the realm JWKS; never encrypted. The delivery code holds no key (key-isolation.test.ts).",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — signed by the signer role with the realm's event_signing key, which the realm JWKS publishes; never encrypted. The signer holds the token to its kind (event-token-claims.ts), and the delivery code holds no key (key-isolation.test.ts).",
       "status": "covered",
-      "evidenceMatch": "passes every check"
+      "evidenceMatch": "signs a logout token for the delivery role"
     },
     {
       "id": "backchannel-2_4-same-keys-as-id-tokens",
@@ -198,9 +198,9 @@
       "section": "2.6",
       "level": "MUST NOT",
       "quote": "Additionally, an alg with the value none MUST NOT be used for Logout Tokens.",
-      "applies": "libs/server/keys — the signer signs with an asymmetric key of the event_signing purpose; it has no unsigned mode.",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts — the signer signs with an asymmetric event_signing key; it has no unsigned mode.",
       "status": "covered",
-      "evidenceMatch": "passes every check"
+      "evidenceMatch": "signs a logout token for the delivery role"
     },
     {
       "id": "backchannel-2_6-rp-validation",

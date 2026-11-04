@@ -25,6 +25,7 @@ import {
 } from './data-at-rest';
 import { openKeyMaterial } from './envelope';
 import { KeyDecryptionError } from './errors';
+import { eventTokenClaimsProblem } from './event-token-claims';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
@@ -644,6 +645,13 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         );
       }
       const claims = resolveClaims(fields['claims']);
+      if (purpose === 'event_signing') {
+        // The realm JWKS publishes these keys, for logout tokens (#624): the
+        // signer holds each event token to its kind, so a caller cannot have
+        // them sign an access token's claims (eventTokenClaimsProblem).
+        const problem = eventTokenClaimsProblem(typ, claims, Math.floor(now() / 1000));
+        if (problem !== undefined) throw new SignerRequestRefusedError('INVALID_CLAIMS', problem);
+      }
 
       const issuer = await realmIssuer(realmId);
       const record = await activeKey(realmId, purpose, algorithm);

@@ -221,6 +221,29 @@ function accessToken(realmId = REALM_A, overrides: Partial<SignJwsRequest> = {})
   return { realmId, purpose: 'token_signing', typ: 'at+jwt', claims: CLAIMS, ...overrides };
 }
 
+/**
+ * An event token the signer accepts for `typ` (#624): it holds each event
+ * token to its kind, so access-token claims are refused.
+ */
+function eventToken(
+  realmId = REALM_A,
+  typ: 'secevent+jwt' | 'logout+jwt' = 'logout+jwt'
+): SignJwsRequest {
+  const iat = Math.floor(NOW / 1000);
+  const claims =
+    typ === 'logout+jwt'
+      ? {
+          aud: 'rp',
+          iat,
+          exp: iat + 120,
+          jti: 'logout-1',
+          events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
+          sid: 'session-1',
+        }
+      : { jti: 'set-1', iat, aud: 'receiver', events: { 'urn:example:event': {} } };
+  return { realmId, purpose: 'event_signing', typ, claims };
+}
+
 function webhook(overrides: Partial<SignWebhookRequest> = {}): SignWebhookRequest {
   return {
     realmId: REALM_A,
@@ -436,6 +459,81 @@ describe('signJws', () => {
     });
   });
 
+  describe('logout tokens and the event token kinds (OpenID Connect Back-Channel Logout 1.0, #624)', () => {
+    const NOW_SECONDS = Math.floor(NOW / 1000);
+    const logoutToken = {
+      aud: 'rp',
+      iat: NOW_SECONDS,
+      exp: NOW_SECONDS + 120,
+      jti: '0192a000-0000-7000-8000-0000000000dd',
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
+      sub: 'user-1',
+      sid: 'session-1',
+    };
+    const sign = (signer: Signer, claims: Record<string, unknown>, typ = 'logout+jwt') =>
+      signer.signJws('delivery', { realmId: REALM_A, purpose: 'event_signing', typ, claims });
+
+    it('signs a logout token for the delivery role with an event key the realm JWKS publishes, the realm issuer as iss, typed logout+jwt (§2.4, §2.6)', async () => {
+      const { signer, keys } = await setup();
+
+      const token = await sign(signer, logoutToken);
+
+      const kid = activeKid(keys, REALM_A, 'event_signing');
+      // Signed with an asymmetric key, never alg none (§2.6), typed (§2.4).
+      expect(decodeProtectedHeader(token)).toEqual({ alg: 'EdDSA', kid, typ: 'logout+jwt' });
+      // iss is the realm's issuer, which the delivery role cannot set (§2.4).
+      expect(decodeJwt(token)).toEqual({ iss: ISSUER_A, ...logoutToken });
+      const jwks = await signer.getJwks('local', REALM_A);
+      const jwk = jwks.keys.find((key) => key.kid === kid);
+      if (jwk === undefined) throw new Error('the realm JWKS lacks the event key');
+      const verified = await compactVerify(token, await importJWK(jwk as JWK, 'EdDSA'));
+      expect(verified.protectedHeader.typ).toBe('logout+jwt');
+    });
+
+    it.each([
+      ['an access token grant', { ...logoutToken, scope: 'admin' }],
+      ['a client_id', { ...logoutToken, client_id: 'rp' }],
+      ['a nonce', { ...logoutToken, nonce: 'n' }],
+      ['no events', { ...logoutToken, events: undefined }],
+      ['another event', { ...logoutToken, events: { 'urn:other': {} } }],
+      ['a second event', { ...logoutToken, events: { ...logoutToken.events, 'urn:other': {} } }],
+      ['no sub and no sid', { ...logoutToken, sub: undefined, sid: undefined }],
+      ['an aud list', { ...logoutToken, aud: ['rp', 'api'] }],
+      ['a lifetime over two minutes', { ...logoutToken, exp: NOW_SECONDS + 121 }],
+      ['an exp before its iat', { ...logoutToken, exp: NOW_SECONDS - 1 }],
+      [
+        'an iat far from the signer clock',
+        { ...logoutToken, iat: NOW_SECONDS - 3600, exp: NOW_SECONDS - 3500 },
+      ],
+    ])('refuses a logout token with %s', async (_label, claims) => {
+      const { signer } = await setup();
+      await expect(sign(signer, JSON.parse(JSON.stringify(claims)))).rejects.toMatchObject({
+        reason: 'INVALID_CLAIMS',
+      });
+    });
+
+    it.each([
+      ['a sub', { sub: 'user-1' }],
+      ['an exp', { exp: NOW_SECONDS + 60 }],
+      ['a scope', { scope: 'admin' }],
+    ])(
+      'refuses a Security Event Token with %s, which an access token would carry',
+      async (_label, extra) => {
+        const { signer } = await setup();
+        const set = {
+          jti: 'j',
+          iat: NOW_SECONDS,
+          aud: 'receiver',
+          events: { 'urn:e': {} },
+          ...extra,
+        };
+        await expect(sign(signer, set, 'secevent+jwt')).rejects.toMatchObject({
+          reason: 'INVALID_CLAIMS',
+        });
+      }
+    );
+  });
+
   it('accepts the realm id in any case', async () => {
     const { signer } = await setup();
 
@@ -483,7 +581,11 @@ describe('signJws', () => {
     ] as const)('%s signs %s', async (purpose, typ) => {
       const { signer } = await setup();
 
-      const token = await signer.signJws('local', accessToken(REALM_A, { purpose, typ }));
+      const request =
+        purpose === 'event_signing'
+          ? eventToken(REALM_A, typ)
+          : accessToken(REALM_A, { purpose, typ });
+      const token = await signer.signJws('local', request);
 
       expect(decodeProtectedHeader(token).typ).toBe(typ);
     });
@@ -813,10 +915,7 @@ describe('the key cache', () => {
     const { signer, unwrap } = await setup({ signer: { keyCacheSize: 1 } });
 
     await signer.signJws('local', accessToken());
-    await signer.signJws(
-      'local',
-      accessToken(REALM_A, { purpose: 'event_signing', typ: 'logout+jwt' })
-    );
+    await signer.signJws('local', eventToken(REALM_A, 'logout+jwt'));
     await signer.signJws('local', accessToken());
 
     expect(unwrap).toHaveBeenCalledTimes(3);
@@ -2046,7 +2145,7 @@ describe('caller policy', () => {
 
   it('lets delivery sign event tokens and not access tokens; api the other way round', async () => {
     const { signer } = await setup();
-    const logout = accessToken(REALM_A, { purpose: 'event_signing', typ: 'logout+jwt' });
+    const logout = eventToken(REALM_A, 'logout+jwt');
 
     await expect(signer.signJws('delivery', logout)).resolves.toEqual(expect.any(String));
     await expect(signer.signJws('delivery', accessToken())).rejects.toBeInstanceOf(
