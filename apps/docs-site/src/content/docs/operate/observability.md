@@ -217,11 +217,44 @@ does not depend on the realm's `bruteForce` policy: a realm whose lock is off
   disabled (`user_credentials.disabled_at`), the owner is notified and the
   operator alerted with the `error` log `password disabled by the failure
   ladder`. It is armed only while the realm's hosted password reset is on and
-  the deployment can send the notice; neither ships yet, so today every
+  the deployment can send the password-disabled notice; the hosted reset does
+  not ship yet, so today every
   failure from the 100th on only logs the warning `password failure ladder reached its hard
   ceiling; the hard action is unarmed, so the password stays usable`, with the
   realm and the user. A mark found while the hard action is unarmed is
   ignored, and the next successful sign-in clears it and logs a warning.
+
+### Per-address send caps
+
+Every code the sign-in engine mails (a verification, confirmation or
+recovery code) is counted in Redis before it is sent (ADR-017 Decision 5).
+The tiers are fixed, not configurable, and count unknown addresses too:
+
+| Tier                          | Limit             | At the limit                                   |
+| ----------------------------- | ----------------- | ---------------------------------------------- |
+| Address and end-user IP       | 3/15 min, 10/24 h | the same answer; the mail quietly dropped      |
+| Address and FiPA client       | 10/24 h           | `429` with `Retry-After`                       |
+| Address (the ceiling)         | 30/24 h           | `429` with `Retry-After`, the operator alerted |
+| Address, after a first factor | 30/24 h           | `429` with `Retry-After`                       |
+| End-user IP                   | 10/h              | `429` with `Retry-After`                       |
+| FiPA client                   | 1,000/h           | `429` with `Retry-After`                       |
+
+- **Known IPs.** An end-user IP the failure ladder knows for a verified
+  account skips every per-address tier. A code mailed after a correct first
+  factor skips the ceiling and counts on its own 30 per 24 hours.
+- **The ceiling.** The first refusal at an address's ceiling logs
+  `an address met the per-address send ceiling` at `error`, with the realm
+  and the address's keyed HMAC (never the address), once per address per
+  24 hours. It also mails the account, at most once a day, a notice with a
+  single-use link (`GET /auth/pass`), valid 24 hours, that takes one reset
+  past the per-address tiers; a registration start at an address with no
+  account mails that address a registration link instead. The mailed code is
+  still required. A realm cannot switch the notice off.
+- **No address in Redis.** The keys start `send-caps:{<realm id>}:` and hold
+  the address and the end-user IP as the same keyed HMACs as the ladder's.
+  A pass is kept only as its SHA-256 hash.
+- **Fail closed.** A Redis error, or a call slower than 2 s, fails the start
+  rather than mailing uncounted.
 
 ## Health and Readiness
 
