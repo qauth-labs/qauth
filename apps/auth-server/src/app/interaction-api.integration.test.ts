@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -36,7 +37,10 @@ import {
  * 403 before the engine runs (spied on the repository and the hasher the
  * engine uses); a used value and the value of another step are refused; a
  * cross-site request is refused; a plain HTML form signs in over HTTP and ends
- * in 303; and no request field moves the redirect.
+ * in 303; and no request field moves the redirect. It also proves #982's: a
+ * caller whose address is not in CEREMONY_APP_PEERS spends one address budget
+ * on step reads, random ids included, and a listed peer's reads each keep the
+ * budget of their interaction.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -217,14 +221,24 @@ describe('the Interaction API (#616, real containers)', () => {
     await infra?.teardown();
   });
 
-  beforeEach(async (ctx) => {
-    if (!dockerUp) ctx.skip();
+  /**
+   * Boot the server, with `extra` over the base environment, and listen on
+   * 127.0.0.1, the address every request of the suite comes from. A server
+   * already booted is closed first.
+   */
+  async function boot(extra: Record<string, string> = {}): Promise<void> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
-    server = await bootAuthServer(baseEnvironment(infra, jwt), { routes: startRoute });
+    await server?.close();
+    server = await bootAuthServer({ ...baseEnvironment(infra, jwt), ...extra }, { routes: startRoute });
     await resetE2eState(server.app);
     await provisionClient(server.app, await registerPasswordAccount(server.app, EMAIL));
     await server.app.listen({ port: 0, host: '127.0.0.1' });
     port = (server.app.server.address() as AddressInfo).port;
+  }
+
+  beforeEach(async (ctx) => {
+    if (!dockerUp) ctx.skip();
+    await boot();
   }, 120_000);
 
   afterEach(async () => {
@@ -454,4 +468,49 @@ describe('the Interaction API (#616, real containers)', () => {
     expect(location.searchParams.get('state')).toBe(AUTHORIZE_REQUEST.state);
     expect(location.searchParams.get('iss')).toBe(ORIGIN);
   });
+
+  /** A step read with no cookie, as the ceremony app's server makes it, from 127.0.0.1. */
+  function stepRead(id: string): Promise<Answer> {
+    return new Browser(port).send('GET', `${INTERACTION_API_PREFIX}/${id}`);
+  }
+
+  /** A well-formed interaction id no interaction has. */
+  const randomId = () => randomBytes(32).toString('base64url');
+
+  it('counts an unlisted caller per address: random well-formed ids reach 429 (#982)', async () => {
+    // No CEREMONY_APP_PEERS, as by default: 127.0.0.1 is not listed.
+    const id = await new Browser(port).start();
+    const first = await stepRead(id);
+    expect(first.status, first.body).toBe(200);
+    const budget = Number(first.headers['x-ratelimit-limit']);
+    expect(budget).toBeGreaterThan(1);
+    for (let n = 1; n < budget; n += 1) {
+      const unknown = await stepRead(randomId());
+      expect(unknown.status, unknown.body).toBe(410);
+    }
+    const refused = await stepRead(randomId());
+    expect(refused.status).toBe(429);
+    expect(refused.headers['retry-after']).toBeDefined();
+    // One bucket for the address: its read of a real interaction too.
+    expect((await stepRead(id)).status).toBe(429);
+  });
+
+  it("counts a listed peer's reads per interaction, each under the peer cap (#982)", async () => {
+    await boot({ CEREMONY_APP_PEERS: '127.0.0.1', CEREMONY_APP_PEER_RATE_LIMIT: '3' });
+    const first = await new Browser(port).start();
+    const second = await new Browser(port).start();
+    for (let n = 0; n < 3; n += 1) {
+      const read = await stepRead(first);
+      expect(read.status, read.body).toBe(200);
+      expect(read.headers['x-ratelimit-limit']).toBe('3');
+    }
+    expect((await stepRead(first)).status).toBe(429);
+    expect((await stepRead(second)).status).toBe(200);
+    // No address bucket: each id the peer reads starts a budget of its own.
+    for (let n = 0; n < 10; n += 1) {
+      const unknown = await stepRead(randomId());
+      expect(unknown.status, unknown.body).toBe(410);
+      expect(unknown.headers['x-ratelimit-remaining']).toBe('2');
+    }
+  }, 120_000);
 });
