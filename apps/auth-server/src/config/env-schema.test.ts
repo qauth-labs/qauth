@@ -214,3 +214,53 @@ describe('the admin listener address, base URL and DPoP', () => {
     ).toContain('an absolute http or https URL');
   });
 });
+
+/**
+ * The ceremony app server's addresses and their cap (#982) are set together,
+ * as ADR-017 Decision 7 has FIRST_PARTY_BACKEND_PEERS and its cap.
+ */
+describe('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT', () => {
+  const env = (extra: Record<string, string>) => ({
+    DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
+    JWT_ISSUER: 'https://auth.example.com',
+    EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
+    EMAIL_BASE_URL: 'https://auth.example.com',
+    ...extra,
+  });
+  const ceremonyIssues = (extra: Record<string, string>) => {
+    const result = envSchema.safeParse(env(extra));
+    return result.success
+      ? []
+      : result.error.issues.filter((issue) => String(issue.path[0]).startsWith('CEREMONY_APP_'));
+  };
+
+  it('boots with neither, as by default, or with both', () => {
+    expect(ceremonyIssues({})).toEqual([]);
+    expect(
+      ceremonyIssues({ CEREMONY_APP_PEERS: '10.0.4.12', CEREMONY_APP_PEER_RATE_LIMIT: '600' })
+    ).toEqual([]);
+    const parsed = envSchema.parse(
+      env({ CEREMONY_APP_PEERS: '10.0.4.12, 10.0.5.0/28', CEREMONY_APP_PEER_RATE_LIMIT: '600' })
+    );
+    expect(parsed.CEREMONY_APP_PEERS).toEqual(['10.0.4.12', '10.0.5.0/28']);
+    expect(parsed.CEREMONY_APP_PEER_RATE_LIMIT).toBe(600);
+  });
+
+  it('refuses the list alone, with a message that names both settings', () => {
+    const issues = ceremonyIssues({ CEREMONY_APP_PEERS: '10.0.4.12' });
+    expect(issues.map((issue) => issue.path.join('.'))).toEqual(['CEREMONY_APP_PEER_RATE_LIMIT']);
+    expect(issues[0].message).toContain('CEREMONY_APP_PEERS');
+    expect(issues[0].message).toContain('CEREMONY_APP_PEER_RATE_LIMIT');
+  });
+
+  it('refuses the cap alone, or with an empty list, with a message that names both settings', () => {
+    for (const extra of [
+      { CEREMONY_APP_PEER_RATE_LIMIT: '600' },
+      { CEREMONY_APP_PEERS: '', CEREMONY_APP_PEER_RATE_LIMIT: '600' },
+    ]) {
+      const issues = ceremonyIssues(extra);
+      expect(issues.map((issue) => issue.path.join('.'))).toEqual(['CEREMONY_APP_PEERS']);
+      expect(issues[0].message).toContain('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT');
+    }
+  });
+});

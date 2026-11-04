@@ -89,7 +89,14 @@ export {
   type PluginsEnv,
   pluginsEnvSchema,
 } from './plugins';
-export { type RateLimitEnv, rateLimitEnvSchema } from './rate-limit';
+export {
+  type CeremonyAppPeerEnv,
+  type CeremonyAppPeerProblem,
+  ceremonyAppPeerProblems,
+  parseCeremonyAppPeers,
+  type RateLimitEnv,
+  rateLimitEnvSchema,
+} from './rate-limit';
 export { parseRealmEndpointHosts } from './realm-endpoint-hosts';
 export {
   parseRedirectUriCustomSchemes,
