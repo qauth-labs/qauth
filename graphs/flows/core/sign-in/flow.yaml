@@ -17,6 +17,13 @@
 #   correct password (PRO-15, #638), which flows/core/account-verification draws: an emailed code that proves the
 #   address and is never a factor. Passkeys (#651) and TOTP (#653) are step handlers that later issues register;
 #   until then a sign-in that needs one of them is answered with a redirect.
+# - The breach-list check and the forced password update (#635; ADR-017 Decision 4 rule 8 and Decision 8, ADR-018 §3,
+#   ADR-020 §3): a right password is checked against the realm's breach list (password.breachListSource) before the
+#   subject is fixed, since QAuth keeps only its hash. A listed password, or an update_password required action an
+#   admin or the person's "this wasn't me" left on the account, asks for a new password after every factor the sign-in
+#   needs and before any session or code. The password alone never sets a new one: a factor beyond it comes first, or,
+#   on an account whose only factor is its password, a code mailed to its address, as a reset asks for one. A check
+#   that fails never blocks the sign-in. The CER issue adds the screens (ui.yaml).
 # - A round that ends in a step keeps the transaction live: the next round's answer is a new event from that state. A
 #   refused round (`throttled`, `lockedOut`, `unavailable`, `requestRefused`, `botChallengeDue`, `answerRefused`)
 #   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
@@ -37,7 +44,9 @@ summary: >-
   after one Argon2id verification and the 500 ms floor. A correct password fixes the subject; an account whose
   address is not proved yet then verifies it with an emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says; the sign-in
   completes when the account's strongest bound factor and the MFA policy are met, and the transport then mints the
-  session or the code. A different identifier in a later round ends the transaction.
+  session or the code. A right password on the realm's breach list, or an update the account owes, first asks for a
+  new password, after a mailed code when the password is the account's only factor. A different identifier in a later
+  round ends the transaction.
 
 scope:
   shows: >-
@@ -58,6 +67,19 @@ scope:
       the send caps, its ladder, its expiry and its burn. An engine built without email codes, which no transport of
       the auth server is, refuses an unverified account under REQUIRE_VERIFIED_ACCOUNT like a wrong password instead'
     - 'the per-transaction budgets of the FiPA auth_session (#647): rounds and failures per step'
+    - "the forced update's screens, which the CER issue adds as this flow's ui.yaml; and the legacy /auth/login and
+      /ui/login, which keep their own rules (flows/core/sign-in-token, flows/core/sign-in-page) and check no breach
+      list until the browser sign-in runs on this engine (#709)"
+    - 'the second factor an account has, which it answers before the forced update (TOTP, #653): until its step exists
+      the engine answers a redirect; an account with a passkey proves it by the downgrade rule before the update (#651)'
+    - "how the breach list is checked: the operator's local list (BREACHED_PASSWORD_LIST_PATH), loaded at boot and
+      reloaded on SIGHUP, matched by the password's SHA-1; or a k-anonymity range lookup through the egress client to
+      the operator's host (BREACHED_PASSWORD_RANGE_URL), which carries the first five hex characters of that SHA-1 and
+      nothing else of the password"
+    - "the rounds of the forced update's new password: each runs rules 3 to 8 again first, as drawn above, and this
+      graph draws what follows them"
+    - 'the required actions other than update_password (setup_mfa, setup_passkey, complete_profile): the steps of
+      PRO-28 and PRO-29'
     - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
       round of its own'
     - "a password answer outside the password step's answer schema (an empty password, one over 256 UTF-16 code units)
@@ -103,6 +125,7 @@ context:
       - passwordDisabled
       - disabled
       - unverified
+      - passwordAndSecondFactor
     initial: any
     say:
       unknown: 'no account in the realm holds the identifier'
@@ -118,6 +141,9 @@ context:
       unverified: >-
         an enabled account with a password whose primary identity, its address, is not proven yet: it is verified
         inline after its correct password
+      passwordAndSecondFactor: >-
+        an enabled, verified account with a password and a second factor (TOTP, #653), which the MFA policy may or may
+        not ask for
   password:
     values: [right, wrong]
     initial: any
@@ -139,6 +165,34 @@ context:
         neither the realm nor the client requires a second factor for this account: the default until the policy has
         its storage (Foundations, the admin console)
       required: 'the realm or the client requires a second factor, or requires one for admins and the account is one'
+  # The realm's breach-list source (password.breachListSource, #635), and what checking the right password found.
+  breachList:
+    values: [off, notListed, listed, failed]
+    initial: any
+    say:
+      off: 'the realm checks no breach list: password.breachListSource is off, the default'
+      notListed: "the realm checks a breach list, the operator's local list or a range lookup, and the password is not on it"
+      listed: "the password is on the realm's breach list"
+      failed: >-
+        the realm checks a breach list and the check fails: no list is loaded or configured, or the lookup fails or
+        the egress client refuses it
+  # Whether the account holds an update_password required action: an admin asked for one, or the person reported a
+  # sign-in that was not theirs (#635; the admin API of #700 and the account console of #689 write it).
+  updateRequested:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the account holds no update_password required action'
+      'true': 'the account holds an update_password required action'
+  # The new password the person answers the forced update with, as the policy and the breach list judge it.
+  newPassword:
+    values: [accepted, rejected, listed, checkFailed]
+    initial: any
+    say:
+      accepted: "the realm's password policy accepts it, and it is not on the realm's breach list or the realm checks none"
+      rejected: 'the password policy refuses it: too short, too long, a whole blocklisted word, or too weak'
+      listed: "it is on the realm's breach list"
+      checkFailed: "the policy accepts it and the breach-list check fails: it is accepted, the failure recorded"
   # The checks of rules 3 to 5 run in a fixed order and each refuses on its own, so one variable says which of them a
   # round fails first, if any; the ladder's check is the last before the password is verified.
   gate:
@@ -182,6 +236,14 @@ context:
   auditedByHmac: { values: [false, true], initial: false }
   # the inline verification marked the account's address verified, in this transaction
   addressVerified: { values: [false, true], initial: false }
+  # the transaction holds that the right password was on the breach list: it must be replaced before completing
+  breachedHeld: { values: [false, true], initial: false }
+  # a code mailed for the forced update proved the account's mailbox, in this transaction
+  mailboxProved: { values: [false, true], initial: false }
+  # a breach-list check that failed was counted on the metric and recorded in the audit log
+  breachFailureRecorded: { values: [false, true], initial: false }
+  # the forced update wrote the new password and cleared the update_password required action
+  passwordUpdated: { values: [false, true], initial: false }
 
 guards:
   limited: "gate == 'limited'"
@@ -202,6 +264,14 @@ guards:
   unverified: "account == 'unverified'"
   passkeyBound: "account == 'passwordAndPasskey'"
   mfaRequired: "mfa == 'required'"
+  breachListChecked: "breachList != 'off'"
+  passwordListed: "breachList == 'listed'"
+  breachCheckFailed: "breachList == 'failed'"
+  updateDue: "(breachedHeld or updateRequested) and not passwordUpdated"
+  secondFactorBound: "account == 'passwordAndSecondFactor'"
+  mailboxShown: 'addressVerified or mailboxProved'
+  newPasswordRejected: "newPassword == 'rejected'"
+  newPasswordListed: "newPassword == 'listed'"
 
 effects:
   # each round starts with nothing done
@@ -231,6 +301,10 @@ effects:
   auditByHmac: { set: { auditedByHmac: true } }
   waitFloor: { set: { floorWaited: true } }
   verifyAddress: { set: { addressVerified: true } }
+  holdBreached: { set: { breachedHeld: true } }
+  recordBreachFailure: { set: { breachFailureRecorded: true } }
+  proveMailbox: { set: { mailboxProved: true } }
+  updatePassword: { set: { passwordUpdated: true } }
 
 failures:
   readingPolicy: { from: mfaPolicy, store: [unavailable] }
@@ -242,6 +316,22 @@ failures:
     throttled: [sendCapped, lockedOut]
     ended: [burned, ended]
     invalid: [answerRefused]
+    store: [unavailable]
+  checkingBreachList:
+    from: breachList
+    lookup: [not_configured, list_not_loaded, lookup_blocked, lookup_failed, bad_response]
+  confirmingMailbox:
+    from: core.account-verification
+    throttled: [sendCapped, lockedOut]
+    ended: [burned, ended]
+    invalid: [answerRefused]
+    store: [unavailable]
+  checkingNewBreachList:
+    from: breachList
+    lookup: [not_configured, list_not_loaded, lookup_blocked, lookup_failed, bad_response]
+  writingPassword:
+    from: passwordUpdates
+    ended: [account_disabled, subject_mismatch]
     store: [unavailable]
 
 # The main story: a browser ceremony with no login_hint; the person types the identifier, then the right password of an
@@ -255,6 +345,8 @@ main:
     mfa: notRequired
     gate: open
     differentIdentifier: false
+    breachList: 'off'
+    updateRequested: false
   events: [ROUND, DONE, IDENTIFIER, DONE, PASSWORD, DONE, DONE, DONE]
 
 initial: idle
@@ -428,7 +520,7 @@ states:
       against a dummy hash, so every outcome costs one verification. Every refusal is the same: the password step
       again with invalid_credentials. A disabled user is refused after its password checked out, and nothing about it
       changes. An unverified account's right password proves it, whatever REQUIRE_VERIFIED_ACCOUNT says: rule 8
-      verifies its address.
+      verifies its address. A right password is then checked against the realm's breach list, when it names one.
     always:
       - guard: noUsablePassword
         target: passwordRefused
@@ -446,17 +538,52 @@ states:
         say: >-
           the password is right and the user is disabled: refused like a wrong password, audited as account_disabled
           under the identifier HMAC; no subject is fixed and the user is not changed
+      - guard: breachListChecked
+        target: checkingBreachList
+        effect: [verifyHash]
+        say: "the password is right: the attempt settles as a success, and the realm's breach list is checked"
       - target: readingProvenAccount
         effect: [verifyHash, fixSubject]
         say: >-
-          the password is right: the attempt settles as a success, the subject is fixed, auth_time is now, and
-          the step is audited with the user as its subject
+          the password is right and the realm checks no breach list: the attempt settles as a success, the subject is
+          fixed, auth_time is now, and the step is audited with the user as its subject; nothing is checked or sent
+          anywhere
+
+  checkingBreachList:
+    title: Check the right password against the realm's breach list
+    description: >-
+      Only now, once the password proved the account: QAuth keeps only its hash, so the check runs when the person
+      types the password. The SHA-1 of the password against the operator's local list, or its first five hex
+      characters to the operator's k-anonymity range host through the egress client; nothing else of the password
+      leaves the server. A check that fails never blocks the sign-in: it is counted on the metric, recorded in the
+      audit log, and the sign-in goes on as for a password that is not listed.
+    invoke: { external: breachList }
+    on:
+      DONE:
+        - guard: passwordListed
+          target: readingProvenAccount
+          effect: [fixSubject, holdBreached]
+          say: >-
+            the password is listed: the subject is fixed, and the transaction holds that the password must be replaced
+            before the sign-in completes
+        - guard: "breachList == 'notListed'"
+          target: readingProvenAccount
+          effect: [fixSubject]
+          say: 'the password is not on the list: the subject is fixed'
+      FAIL.lookup:
+        guard: breachCheckFailed
+        target: readingProvenAccount
+        effect: [fixSubject, recordBreachFailure]
+        say: >-
+          the list is not loaded or configured, or the lookup fails: the failure is counted and audited, and the
+          subject is fixed as for a password not on the list
 
   readingProvenAccount:
     title: Read the whole account the password proved
     description: >-
-      Every factor bound to it, disabled ones included, and whether it holds an admin role in the realm: what the
-      downgrade rule and the MFA policy need, read only once a factor proved the account.
+      Every factor bound to it, disabled ones included, whether it holds an admin role in the realm, and its pending
+      required actions: what the downgrade rule, the MFA policy and the forced update need, read only once a factor
+      proved the account.
     invoke: { external: accountDirectory }
     on:
       DONE:
@@ -491,9 +618,8 @@ states:
       - guard: unverified
         target: verifyingAccount
         say: "the account's address is not proved yet: it is verified inline"
-      - target: completed
-        effect: [waitFloor]
-        say: 'every rule is met'
+      - target: checkingPasswordUpdate
+        say: 'every factor the sign-in needs is proved'
 
   verifyingAccount:
     title: Verify the account's address with an emailed code
@@ -504,9 +630,9 @@ states:
     invoke: { flow: core.account-verification }
     on:
       DONE:
-        target: completed
-        effect: [verifyAddress, waitFloor]
-        say: "the address is verified: every rule is met, and the amr is the password's alone"
+        target: checkingPasswordUpdate
+        effect: [verifyAddress]
+        say: "the address is verified, and the amr is the password's alone"
       FAIL.throttled:
         target: verificationThrottled
         effect: [waitFloor]
@@ -523,6 +649,119 @@ states:
         target: unavailable
         effect: [waitFloor]
         say: 'the send caps, the ladder or the database fail'
+
+  checkingPasswordUpdate:
+    title: Ask whether the password must be replaced first (rule 8)
+    description: >-
+      After every factor the sign-in needs and the address verified, before any session or code: the password the
+      person typed is on the realm's breach list, or the account holds an update_password required action. The person
+      then chooses a new password, and the password alone never sets one (ADR-017 Decision 4 rule 8, decided
+      2026-10-23): a second factor the account has comes first, and on an account whose only factor is its password a
+      code mailed to its address. A code this transaction already took for that mailbox, to verify its address, counts:
+      no second code is mailed.
+    always:
+      - guard: updateDue and mailboxShown
+        target: offeringNewPassword
+        effect: [waitFloor]
+        say: 'the code that verified the address in this transaction proved the mailbox: the new password is asked for'
+      - guard: updateDue and secondFactorBound
+        target: redirected
+        effect: [waitFloor]
+        say: >-
+          the account has a second factor: it is asked for before the update; until the TOTP step exists (#653), the
+          engine answers a redirect
+      - guard: updateDue
+        target: confirmingMailbox
+        say: "the password is the account's only factor: a code is mailed to its address first, as a reset asks"
+      - target: completed
+        effect: [waitFloor]
+        say: 'no update is due: every rule is met'
+
+  confirmingMailbox:
+    title: Prove the account's mailbox with an emailed code before the update
+    description: >-
+      The code rounds of flows/core/account-verification, with the purpose recovery and 8 digits, as a reset asks for
+      one: the send caps, the email-code ladder, the 10 minutes, the burn at the 5th wrong answer. A right code proves
+      the mailbox and adds no amr value; without it no new password is asked for, and no session or code is issued.
+    invoke: { flow: core.account-verification }
+    on:
+      DONE:
+        target: offeringNewPassword
+        effect: [proveMailbox, waitFloor]
+        say: 'the code is right: the mailbox is proved, and the new password is asked for'
+      FAIL.throttled:
+        target: verificationThrottled
+        effect: [waitFloor]
+        say: "the send caps or the email-code ladder's wait refuse the round"
+      FAIL.ended:
+        target: verificationEnded
+        effect: [waitFloor]
+        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
+      FAIL.invalid:
+        target: answerRefused
+        effect: [waitFloor]
+        say: 'the code is not of the offered length'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send caps, the ladder or the database fail'
+
+  checkingNewPassword:
+    title: Check the new password against the realm's password policy
+    description: >-
+      The one password policy (ADR-017 Decision 8, #634): the length as typed, NFC, the realm's minimum length, the
+      whole-password blocklist with the address and the service and realm names as context words, and the score floor.
+    always:
+      - guard: newPasswordRejected
+        target: newPasswordRefused
+        effect: [waitFloor]
+        say: 'the policy refuses it: the step again with password_rejected and its reasons, audited under the subject'
+      - target: checkingNewBreachList
+        say: 'the policy accepts it'
+
+  checkingNewBreachList:
+    title: Check the new password against the realm's breach list
+    description: >-
+      The same check as the presented password's, on the new password in NFC, when the realm names a source. A listed
+      one is refused as blocklisted. A check that fails accepts it: counted on the metric and recorded in the audit
+      log.
+    invoke: { external: breachList }
+    on:
+      DONE:
+        - guard: newPasswordListed
+          target: newPasswordRefused
+          effect: [waitFloor]
+          say: 'the new password is listed: refused as blocklisted, audited under the subject'
+        - guard: "newPassword == 'accepted'"
+          target: writingPassword
+          say: 'the new password is not on the list, or the realm checks none'
+      FAIL.lookup:
+        guard: "newPassword == 'checkFailed'"
+        target: writingPassword
+        effect: [recordBreachFailure]
+        say: 'the check fails: counted and audited, and the new password is accepted'
+
+  writingPassword:
+    title: Replace the password and clear the required action
+    description: >-
+      In one database transaction, for the subject's enabled account only: the password credential's Argon2id hash of
+      the new password in NFC with its normalisation marker, a disabled mark of the failure ladder cleared, and the
+      account's update_password required action removed. The step joins the transaction's verified steps with no amr
+      value, and is audited as passed under the subject.
+    invoke: { external: passwordUpdates }
+    on:
+      DONE:
+        target: completed
+        effect: [updatePassword, waitFloor]
+        say: 'the password is replaced: every rule is met'
+      FAIL.ended:
+        target: verificationEnded
+        effect: [waitFloor]
+        say: 'the account was disabled or lost its password credential since the read: nothing is written'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails: nothing is written, and the step is asked for again by the next round'
 
   # Steps: the round ends, the transaction stays live, and the next round answers from here.
 
@@ -625,6 +864,60 @@ states:
         effect: [newRound, answerMalformed]
         say: 'the next round carries an answer whose login_hint is not an identifier'
 
+  offeringNewPassword:
+    title: Ask for a new password
+    description: >-
+      The new_password step with the purpose update_required, the realm's minimum length and the longest password
+      accepted; the personal data is the transaction's identifier. No session and no code is issued before it is set.
+    response:
+      kind: step
+      body:
+        current:
+          step: new_password
+          params:
+            purpose: update_required
+            min_length: "the realm's password.minLength"
+            max_length: 256
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringNewPassword
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer: the same step'
+      NEW_PASSWORD:
+        target: checkingNewPassword
+        effect: [newRound]
+        say: 'the person types a new password'
+
+  newPasswordRefused:
+    title: Ask for a new password again
+    description: >-
+      The same step with password_rejected and the reasons: too_short, too_long, blocklisted (a whole dictionary or
+      context word, or a password on the realm's breach list) or too_weak.
+    response:
+      kind: step
+      body:
+        current:
+          step: new_password
+          params:
+            purpose: update_required
+            min_length: "the realm's password.minLength"
+            max_length: 256
+            reasons: 'why the new password was refused'
+          error: password_rejected
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringNewPassword
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer'
+      NEW_PASSWORD:
+        target: checkingNewPassword
+        effect: [newRound]
+        say: 'the person types another new password'
+
   # Exits
 
   completed:
@@ -647,9 +940,9 @@ states:
     type: final
     title: Continue elsewhere
     description: >-
-      A rule after the first factor needs a step that does not exist yet or that the transport cannot serve. The FiPA
-      endpoint answers redirect_to_web; the Interaction API ends the interaction. The transaction ends with it, and
-      nothing is minted.
+      A rule after the first factor needs a step that does not exist yet or that the transport cannot serve, the forced
+      update's included. The FiPA endpoint answers redirect_to_web; the Interaction API ends the interaction. The
+      transaction ends with it, and nothing is minted.
     response:
       kind: redirect
       body: { reason: step_not_available, transaction: null }
@@ -796,7 +1089,7 @@ assertions:
     never: >-
       state in ['offeringIdentifier', 'offeringPassword', 'passwordRefused', 'completed', 'redirected', 'ended', 'throttled', 'lockedOut',
       'requestRefused', 'botChallengeDue', 'answerRefused', 'unavailable', 'verificationThrottled',
-      'verificationEnded'] and not floorWaited
+      'verificationEnded', 'offeringNewPassword', 'newPasswordRefused'] and not floorWaited
     say: >-
       Every round answers no earlier than 500 ms after it arrived: those that resolve an identifier or carry a
       credential, as ADR-017 Decision 7 asks, and every other one, so that no answer is timed apart
@@ -804,3 +1097,32 @@ assertions:
     never: "state in ['passwordRefused', 'lockedOut', 'ended'] and not subjectFixed and not auditedByHmac"
     say: >-
       While no user is proven, the audit names the person only by the identifier HMAC, never by the identifier itself
+  - id: no-completion-while-an-update-is-due
+    never: "state == 'completed' and (breachedHeld or updateRequested) and not passwordUpdated"
+    say: >-
+      A sign-in whose password is on the breach list, or whose account holds an update_password required action,
+      completes only once a new password is set: no session and no code before it
+  - id: the-password-alone-never-sets-a-new-one
+    never: "state in ['offeringNewPassword', 'newPasswordRefused', 'writingPassword'] and not mailboxShown"
+    say: >-
+      A new password is asked for only after a proof beyond the password: here, a code that proved the account's
+      mailbox in this transaction; a second factor the account has is asked for first and, until its step exists,
+      answers a redirect
+  - id: the-new-password-passes-the-checks
+    never: "passwordUpdated and newPassword in ['rejected', 'listed']"
+    say: "A new password the policy refuses or the realm's breach list holds is never written"
+  - id: a-failed-check-never-blocks
+    never: "breachCheckFailed and state in ['passwordRefused', 'lockedOut'] and subjectFixed"
+    say: >-
+      A breach-list check that fails never refuses a right password: the subject is fixed and the sign-in goes on, as
+      for a password that is not listed
+  - id: every-failed-check-is-recorded
+    never: "breachCheckFailed and subjectFixed and not breachFailureRecorded"
+    say: "A breach-list check that fails is counted on the metric and recorded in the audit log"
+  - id: nothing-changes-with-the-setting-off
+    never: >-
+      breachList == 'off' and not updateRequested and state in ['checkingBreachList', 'confirmingMailbox',
+      'offeringNewPassword', 'newPasswordRefused', 'writingPassword']
+    say: >-
+      With password.breachListSource off and no update_password required action, the sign-in is the one drawn before
+      #635: nothing is checked or sent, and no new password is asked for

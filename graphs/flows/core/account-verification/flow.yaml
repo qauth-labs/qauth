@@ -47,7 +47,9 @@ scope:
     - 'a transport that does not serve email_code (a FiPA client that did not list it): the engine answers a redirect'
     - "the purposes recovery (#642) and verify_account at registration (#640), with 8 digits, and the FiPA endpoint's
       per-client confirm_sign_in after the password (PRO-22), which the Interaction API never offers: the same code
-      rules, other flows"
+      rules, other flows. The forced password update of flows/core/sign-in (#635) runs these rounds with the purpose
+      recovery and 8 digits, to prove the mailbox of an account whose only factor is its password; its right code
+      marks the address verified all the same, which it already is"
     - "the send caps' tiers (#637): which of them answers quietly (the step, the mail dropped) and which answers 429;
       the mail is dispatched after the answer is built, so sent, dropped and not sent look alike"
     - 'a failure to settle the ladder reservation: reported, and it changes no answer'
