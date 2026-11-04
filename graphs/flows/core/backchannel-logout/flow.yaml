@@ -20,12 +20,13 @@ domain: qauth
 title: Tell each app a browser session signed in to that the session ended
 summary: >-
   A browser session ends: the person signs out at an app (RP-initiated logout) or at POST /auth/logout, an admin
-  revokes it, a key is retired in an emergency, or it lapses. Every caller ends sessions through endSessionsAndNotify,
+  revokes it, a key is retired in an emergency, or it lapses. Every caller ends sessions through the session service,
   and in the transaction that marks a session revoked and takes the clients it served, QAuth writes one
-  user.client_session_ended event per client to the event store: the notices cannot be lost once the end commits,
+  user.client_session_ended event per client with a backchannel_logout_uri to the event store: the notices cannot be
+  lost once the end commits,
   and the end never waits for them. The delivery role fans each event out to its client when the client registered a
   backchannel_logout_uri, and delivers it at least once: it reads the client again, has the signer role sign a logout
-  token (typ logout+jwt, with iss, aud, iat, a two-minute exp, a fresh jti, the back-channel logout event, sub and
+  token (typ logout+jwt, with iss, aud, iat, a two-minute exp, a jti every retry keeps, the back-channel logout event, sub and
   sid, and no nonce), and POSTs it as the logout_token form field through the egress client, which checks the
   destination's addresses again. A 2xx delivers it; a failure that may pass is retried on the delivery role's
   schedule; any other answer ends the delivery as failed. A failed delivery is recorded and counted, and changes
@@ -33,14 +34,14 @@ summary: >-
 
 scope:
   shows: >-
-    the end of browser sessions through endSessionsAndNotify, the notices it queues, and the delivery of one logout
+    the end of browser sessions through the session service, the notices it queues, and the delivery of one logout
     token to one app, from the fan-out through every attempt to its last
   world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
   outOfView:
     - "who ends a session and what the caller answers: RP-initiated logout (core.logout), POST /auth/logout
       (core.logout-token), the expiry sweep (idle and expired sessions), and the account's sign out everywhere, an
       admin's revocation and the emergency retirement of a key once their routes land; each ends sessions through
-      endSessionsAndNotify, and each pairs it with the token revocation it owes"
+      the session service, and each pairs it with the token revocation it owes"
     - "the delivery role's own mechanics (#460): the poll, the lease of a claimed row, a node that stops mid-attempt
       (the row comes due again, so a token may arrive twice and the app drops the repeat by sid), the backoff and the
       attempt limit (EVENT_DELIVERY_MAX_ATTEMPTS, EVENT_DELIVERY_RETRY_*), and the delivery history and metrics"
@@ -57,8 +58,8 @@ context:
     values: [some, none]
     initial: any
     say:
-      some: 'the session had signed the person in to at least one app'
-      none: 'the session never got as far as an app'
+      some: 'the session had signed the person in to at least one app with a backchannel_logout_uri'
+      none: 'the session never got as far as an app, or none of its apps registered a backchannel_logout_uri'
   # The client, when the delivery role fans the event out.
   uriAtFanOut:
     values: [registered, none]
@@ -174,10 +175,11 @@ states:
   endingSessions:
     title: End the sessions, and queue a notice for each client they served
     description: >-
-      endSessionsAndNotify, through the session service: one session, a user's sessions, or a realm's in batches. One
-      transaction locks the sessions, marks them revoked with the reason, deletes their registry rows (the clients
-      each one served), spends their unredeemed codes, and writes one user.client_session_ended event per session and
-      client to the event store, the outbox: the event names the user, the client and the session's sid. Then the
+      The session service's revocation: one session, a user's sessions, or a realm's in batches. One transaction
+      locks the sessions, marks them revoked with the reason, deletes their registry rows (the clients each one
+      served), spends their unredeemed codes, and writes one user.client_session_ended event per session and client
+      that has a backchannel_logout_uri to the event store, the outbox: the event names the user, the client and the
+      session's sid. Then the
       cache entries are tombstoned and the session service's listeners hear of the end.
     invoke: { external: browserSessionStore }
     on:
@@ -185,7 +187,7 @@ states:
         - guard: servedNone
           target: nothingToNotify
           effect: [endSessions]
-          say: 'the session ends; it served no app, so nothing is queued'
+          say: 'the session ends; it served no app with a backchannel_logout_uri, so nothing is queued'
         - target: queued
           effect: [endSessions, queueNotices]
           say: 'the session ends and its notices are queued, in the same commit'
@@ -253,8 +255,8 @@ states:
   signing:
     title: Have the signer role sign the logout token
     description: >-
-      The claims are aud (the client_id), iat (now), exp (two minutes later, Back-Channel Logout 1.0 §4), jti (fresh
-      for every attempt), events with the http://schemas.openid.net/event/backchannel-logout member set to {}, sub
+      The claims are aud (the client_id), iat (now), exp (two minutes later, Back-Channel Logout 1.0 §4), jti (the
+      delivery's id, the same on every retry of it, so an app can tell a retry it already acted on), events with the http://schemas.openid.net/event/backchannel-logout member set to {}, sub
       (the user's id, as the ID tokens name the user) and sid (the session). There is no nonce. The route hands them to
       the delivery role's signer handle with typ logout+jwt; the signer adds iss, the realm's issuer, and signs with
       the realm's event_signing key, which the realm JWKS publishes. The route holds no key.
