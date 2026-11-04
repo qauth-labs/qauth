@@ -296,7 +296,7 @@ describe('percentEncodingTolerantPattern', () => {
 });
 
 describe('redactLoggedUrl', () => {
-  it('lists the bearer values that ride in a query string, login_hint (#628) and the end-session hints (#675)', () => {
+  it('lists the bearer values that ride in a query string, login_hint (#628), the end-session hints (#675) and the mailed pass (#637)', () => {
     expect(LOG_REDACTED_QUERY_PARAMETERS).toEqual([
       'code',
       'id_token',
@@ -306,7 +306,13 @@ describe('redactLoggedUrl', () => {
       'login_hint',
       'id_token_hint',
       'logout_hint',
+      'pass',
     ]);
+  });
+
+  it('censors the mailed pass a notice link carries (#637)', () => {
+    const pass = 'p'.repeat(43);
+    expect(redactLoggedUrl(`/auth/pass?pass=${pass}`)).not.toContain(pass);
   });
 
   it('censors the id_token_hint and logout_hint of an end-session request (#675)', () => {

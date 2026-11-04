@@ -217,6 +217,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/auth/logout'),
   },
   {
+    module: 'auth/mail-pass',
+    prefix: '/auth',
+    roles: ['web'],
+    plugins: ['sessions'],
+    repositories: ['events', 'userCredentials', 'users'],
+    load: () => import('./routes/auth/mail-pass'),
+  },
+  {
     module: 'auth/register',
     prefix: '/auth',
     roles: ['api'],

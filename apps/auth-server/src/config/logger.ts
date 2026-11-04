@@ -131,6 +131,9 @@ export const LOG_REDACTED_QUERY_PARAMETERS = [
   // login_hint does.
   'id_token_hint',
   'logout_hint',
+  // The mailed pass (#637): it takes one reset or registration start past
+  // the per-address send tiers, so its link is a bearer value.
+  'pass',
 ] as const;
 
 /**
