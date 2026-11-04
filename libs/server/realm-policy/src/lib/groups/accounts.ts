@@ -24,7 +24,7 @@ export const ACCOUNTS_POLICY_GROUP = {
     environmentBound: false,
     doc: {
       summary:
-        'Whether an account must be verified before a password sign-in succeeds; an unverified account is refused with the answer a wrong password gets.',
+        "Whether the legacy login routes (`POST /auth/login`, `POST /ui/login`) refuse an unverified account's right password with the answer a wrong password gets; the Interaction API verifies such an account inline with an emailed code, whatever this says.",
       link: groupDocsLink('accounts'),
     },
   }),

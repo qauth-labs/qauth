@@ -17,7 +17,8 @@ const engine = createSignInEngine({
   passwords, // PasswordVerifier: Argon2id, and the dummy hash
   policy: NO_SECOND_FACTOR_POLICY, // MfaPolicyReader: read on every round
   identifierDigest, // the identifier's keyed HMAC
-  requireVerifiedAccount: true, // REQUIRE_VERIFIED_ACCOUNT
+  requireVerifiedAccount: true, // REQUIRE_VERIFIED_ACCOUNT: decides only without emailCodes
+  emailCodes: { digest, addresses }, // the inline verification of an unverified account (#638)
   hooks: { ladder }, // limits, request, botChallenge: later issues fill them; ladder: #615
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [], // the steps later issues add
@@ -30,6 +31,7 @@ const result = await engine.advance(transaction, answer, {
   serves, // the steps this transport can serve; every step by default
   receivedAt, // the request's arrival, for the timing floor
   audit, // where the round's audit records go
+  sendCode, // the capped sender of email codes (#637), bound to the request
 });
 ```
 
@@ -44,8 +46,8 @@ const result = await engine.advance(transaction, answer, {
 
 The transaction it returns is the one to keep for the next round; `signInTransactionSchema` checks
 it when it is read back. It holds the realm and the client it is for, when round 0 began, the
-identifier, the subject, the verified steps and `auth_time`, and never a policy, an answer or an
-account's state. A completed sign-in, a redirect and a transaction that ended return `null` in its
+identifier, the subject, the verified steps, `auth_time` and the salt and keyed HMAC of an email
+code it mailed, and never a policy, an answer, a code or an account's state. A completed sign-in, a redirect and a transaction that ended return `null` in its
 place, so nothing completes twice. Every other refusal returns the transaction as far as the round
 took it: an identifier the round fixed stays, nothing it refused is in it.
 
@@ -79,14 +81,16 @@ authentication, run before the call). The first unmet rule produces the answer.
 7. After a first factor (rule 8): the downgrade rule (the transaction must prove the account's
    strongest bound factor; a disabled factor still counts as bound), then the MFA policy just read
    (a policy that requires a second factor needs `mfa` in the `amr`). A rule no registered step can
-   meet answers `redirect`.
+   meet answers `redirect`: an account that lacks the second factor the policy requires gets the
+   set-up step, never a code. Then, with `emailCodes`, an account whose address is not verified yet
+   is verified inline: see [The email code](#the-email-code).
 8. Complete (rule 9).
 
 ## What holds for every round
 
 - **The same answer for every account until a factor succeeds.** An unknown identifier, a
-  password-only, passkey-only, disabled or locked account and an unverified one under
-  `REQUIRE_VERIFIED_ACCOUNT` get the same offer and the same error, in body and in timing; no
+  password-only, passkey-only, disabled or locked account and an unverified one get the same offer
+  and the same error, in body and in timing; no
   account is read before a credential is answered, and then only what the password needs (the
   whole account is read once a factor proved it). Every refused password costs one Argon2id
   verification (against a dummy hash when there is no usable password). `login_hint` changes no
@@ -108,8 +112,8 @@ authentication, run before the call). The first unmet rule produces the answer.
   without a `ladder` hook.
 - **A disabled user is never changed.** It gets the ordinary invalid-credentials answer, and no
   subject is fixed, so no transport can mint for it. The engine checks this for every factor step,
-  not only the password: a step that proves a disabled account (or an unverified one under the
-  gate) is refused like a wrong answer.
+  not only the password: a step that proves a disabled account (or, in an engine built without
+  `emailCodes`, an unverified one under the gate) is refused like a wrong answer.
 - **Try another way.** Before a factor succeeds, a step's alternatives are what every account is
   offered; after one, the account's remaining usable methods that can meet the rules. An email
   code can never be registered as a sign-in step.
@@ -136,6 +140,37 @@ stays usable, and a sign-in that proves it calls `clearIgnoredMark`. Neither cal
 answer: a failure is reported through `onUnavailable`. `src/testing/memory-ladder.ts` is an
 in-memory ladder with the same rules, for tests.
 
+## The email code
+
+With `emailCodes` (#638; ADR-017 Decisions 5 and 8), the correct password of an account whose
+address is not verified yet proves it, whatever `REQUIRE_VERIFIED_ACCOUNT` says, and rule 8 then
+verifies the address before the sign-in completes. The flow is graphed in
+[`graphs/flows/core/account-verification/flow.yaml`](../../../graphs/flows/core/account-verification/flow.yaml).
+
+- The engine draws a 6-digit code from the CSPRNG (`crypto.randomInt`; 8 digits for recovery and
+  registration, which later issues add), mails it through the round's `sendCode` and offers
+  `email_code` with the purpose `verify_account`. A send cap that answers 429 refuses the round as
+  `throttled`, and nothing is held. The Interaction API never offers `confirm_sign_in`.
+- The transaction holds the code only as its keyed HMAC (`emailCodes.digest`) under a salt of its
+  own; an answer is digested and compared HMAC to HMAC in constant time. No audit record, answer
+  or transaction holds a code.
+- A code lives 10 minutes (`EMAIL_CODE_TTL_MS`), works once and belongs to its transaction. The
+  transaction's 5th wrong answer burns it and ends the transaction (`code_burned`). An answer with
+  no `otp` asks for a new code, one minute after the last at the earliest; the new code keeps the
+  count of wrong answers.
+- Every code answered within its time is reserved first on the ladder's `email_code` counter
+  (`EMAIL_CODE_LADDER_POLICY`): the identifier HMAC's key with a counter of its own, across
+  transactions, for addresses with and without an account. From 5 wrong codes the next attempt
+  waits, 1 second and doubling up to 15 minutes; inside a wait an answer is refused (`locked_out`)
+  and neither compared nor counted. It has no hard stop and never suppresses mail, and a right code
+  outside a wait is accepted and clears the counter. The engine hands it no end-user IP: an
+  account whose address is not proved has no owner whose IPs are known.
+- A right code marks the address verified (`emailCodes.addresses`) and is recorded among the
+  verified steps: it adds no `amr` value, never counts toward `mfa` and moves no `auth_time`.
+
+An engine built without `emailCodes` keeps the gate: an unverified account's right password is
+refused like a wrong one under `REQUIRE_VERIFIED_ACCOUNT`, and signs in while it is off.
+
 ## Audit records
 
 Each processed step writes one record through the round's `audit` sink: `passed`, `refused` or
@@ -158,8 +193,8 @@ use it, its params and personal data, and how it verifies an answer the step gra
 read. A first factor may be `discoverable` (a passkey that names the account by itself): it is
 offered before any identifier, and after the password once one is held. A handler refuses a
 disabled account itself, settling its ladder as a failure. Passkeys (#651) and TOTP (#653) come this
-way; `totp` only as a second factor. An `email_code` step is refused when the engine is built: the
-email code (#638) is never an authenticator.
+way; `totp` only as a second factor. An `email_code` step handler is refused when the engine is
+built: the email code is the engine's own, and never an authenticator.
 
 ## Known gaps, for the issues that follow
 
