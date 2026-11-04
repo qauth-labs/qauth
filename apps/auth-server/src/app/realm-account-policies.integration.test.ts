@@ -256,7 +256,7 @@ describe('account policies read from the realm row (#528, real containers)', () 
     for (const realmId of [defaultId, betaId]) {
       const { policies } = (await app.policyStore.get(realmId)) ?? {};
       expect(policies?.accounts).toEqual({ requireVerifiedAccount: true });
-      expect(policies?.password).toEqual({ minLength: 15, minScore: 2 });
+      expect(policies?.password).toEqual({ minLength: 15, minScore: 2, breachListSource: 'off' });
       expect(policies?.bruteForce).toEqual({
         enabled: true,
         maxAttempts: 5,

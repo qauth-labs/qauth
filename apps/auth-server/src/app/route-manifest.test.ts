@@ -57,6 +57,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   ssf: 'ssf',
   egress: 'egress',
   passwordAttempts: 'failureLadder',
+  breachedPasswords: 'breachedPasswords',
 };
 
 /** What the files reached from one module read. */

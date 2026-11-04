@@ -55,6 +55,7 @@ import {
   type AuthMethodPluginTestSupport,
   loadDeploymentAuthMethodPlugins,
 } from './helpers/auth-method-plugins';
+import { createServerBreachedPasswords } from './helpers/breached-passwords';
 import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
 import { createEngineMailer } from './helpers/engine-mail';
@@ -938,6 +939,27 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         : { allowlistPath: env.EGRESS_ALLOWLIST_PATH }),
       ...(egressClientFactory === undefined ? {} : { createClient: egressClientFactory }),
     });
+  }
+
+  // The breach list of new and presented passwords (#635, ADR-020 §3):
+  // `fastify.breachedPasswords`. The operator's local list
+  // (BREACHED_PASSWORD_LIST_PATH) is loaded here, once per process, and again
+  // on SIGHUP; the range lookup (BREACHED_PASSWORD_RANGE_URL) goes through
+  // the egress client above. Each realm chooses its source
+  // (`password.breachListSource`, `off` by default), and a check that fails
+  // never blocks a sign-in or a registration.
+  if (plugins.has('breachedPasswords')) {
+    fastify.decorate(
+      'breachedPasswords',
+      await createServerBreachedPasswords(fastify, {
+        ...(env.BREACHED_PASSWORD_LIST_PATH === undefined
+          ? {}
+          : { listPath: env.BREACHED_PASSWORD_LIST_PATH }),
+        ...(env.BREACHED_PASSWORD_RANGE_URL === undefined
+          ? {}
+          : { rangeUrl: env.BREACHED_PASSWORD_RANGE_URL }),
+      })
+    );
   }
 
   // DPoP-bound tokens (RFC 9449; ADR-014 §3, ADR-017 phase F3, #480): the

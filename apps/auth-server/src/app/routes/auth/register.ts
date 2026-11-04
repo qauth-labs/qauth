@@ -246,6 +246,29 @@ export default async function (fastify: FastifyInstance) {
         throw new BadRequestError(`Invalid realmId: ${realmId}`);
       }
 
+      // The realm's breach list (#635, ADR-020 §3; `password.breachListSource`,
+      // off by default), for the password in the form it is stored: one on
+      // the list is refused as `blocklisted`, before anything is hashed or
+      // written. A check that cannot be made lets the registration through and
+      // is recorded (the metric, a warning and the event). Like the policy
+      // above it does not depend on the address.
+      const breach = await fastify.breachedPasswords.check(realm, checked.password);
+      if (breach.kind === 'listed') {
+        throw new WeakPasswordError(
+          'Password does not meet the password policy',
+          ['This password appears in a list of passwords exposed in data breaches'],
+          ['blocklisted']
+        );
+      }
+      if (breach.kind === 'failed') {
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.password_breach_check_failed:v1-rc.0',
+          { reason: breach.reason },
+          { realmId: realm.id, userId: null, actor: 'user' }
+        );
+      }
+
       // From here on the address decides the outcome, and the caller must not
       // be able to tell which. Everything up to the transaction runs the same
       // on both paths, the expensive hash included. The hash is of the

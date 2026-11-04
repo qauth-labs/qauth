@@ -175,13 +175,15 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
 export const CORE_REPOSITORIES: readonly RepositoryName[] = ['realms', 'realmPublicKeys'];
 
 /**
- * The plugins another plugin needs: the JWT plugin reads `fastify.dpop`, and
- * the failure ladder's hard action tells the owner through the mail service
- * (`fastify.emailService`, #637).
+ * The plugins another plugin needs: the JWT plugin reads `fastify.dpop`, the
+ * failure ladder's hard action tells the owner through the mail service
+ * (`fastify.emailService`, #637), and the breach list's range lookup goes
+ * through the egress client (`fastify.egress`, #635).
  */
 const PLUGIN_DEPENDENCIES: Readonly<Partial<Record<RolePlugin, readonly RolePlugin[]>>> = {
   jwt: ['dpop'],
   failureLadder: ['email'],
+  breachedPasswords: ['egress'],
 };
 
 /** The repositories a plugin reads through `fastify.repositories`. */

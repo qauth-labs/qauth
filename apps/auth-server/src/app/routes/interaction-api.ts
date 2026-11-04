@@ -4,6 +4,7 @@ import {
   createCheckedSignInEngine,
   createRepositoryAccountDirectory,
   createRepositoryAddressVerifier,
+  createRepositoryPasswordUpdates,
   type EmailCodeSender,
   interactionPersonalView,
   interactionStepView,
@@ -410,7 +411,8 @@ interface InteractionEngines {
  * request: counted on every send cap that applies and, unless a tier stops
  * it, mailed after the answer is built. A code after the password skips the
  * per-address ceiling, so it never meets the ceiling notice whose pass the
- * flow names; the flow is the registration this verification completes.
+ * flow names; the flow is the registration a verification completes, or the
+ * reset a forced password update's recovery code stands for (#635).
  */
 function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailCodeSender {
   return async (mail) => {
@@ -425,7 +427,7 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
         code: mail.code,
         expiresInSeconds: mail.expiresInSeconds,
       },
-      flow: 'register',
+      flow: mail.purpose === 'recovery' ? 'reset' : 'register',
       afterFirstFactor: mail.afterFirstFactor,
     });
     return outcome.kind === 'capped'
@@ -443,6 +445,12 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * an emailed code (#638, ADR-017 Decision 8): `REQUIRE_VERIFIED_ACCOUNT` no
  * longer decides the Interaction API's answer, and an unverified account
  * never completes a sign-in here without its code.
+ *
+ * Both check a right password against the realm's breach list and ask for a
+ * new one before completing when it is listed or the account holds an
+ * `update_password` required action (#635, ADR-020 §3): after the account's
+ * second factor, or after an 8-digit recovery code to its address. The new
+ * password meets the realm's password policy and the breach list too.
  */
 function createInteractionEngines(fastify: FastifyInstance): InteractionEngines {
   const mailer = createEngineMailer(fastify);
@@ -459,6 +467,41 @@ function createInteractionEngines(fastify: FastifyInstance): InteractionEngines 
       fastify.log
     ),
   };
+  const realmOf = async (realmId: string) => {
+    const realm = await fastify.repositories.realms.findById(realmId);
+    if (realm === undefined) throw new Error('a password update for a realm that does not exist');
+    return realm;
+  };
+  const passwordUpdates = createRepositoryPasswordUpdates(
+    {
+      userCredentials: fastify.repositories.userCredentials,
+      users: fastify.repositories.users,
+      userRequiredActions: fastify.repositories.userRequiredActions,
+    },
+    (work) => fastify.db.transaction(work),
+    {
+      minLength: async (realmId) =>
+        accountPoliciesOf(fastify, await realmOf(realmId)).passwordMinLength,
+      // The one password policy (#634), as registration checks it: NFC, the
+      // minimum length, the blocklist with the address and the service and
+      // realm names as context words, and the score floor.
+      check: async ({ realmId, identifier, password }) => {
+        const realm = await realmOf(realmId);
+        const policies = accountPoliciesOf(fastify, realm);
+        const checked = fastify.passwordValidators
+          .forPolicy({ minLength: policies.passwordMinLength, minScore: policies.passwordMinScore })
+          .check(password, {
+            email: identifier,
+            serviceName: policies.serviceName,
+            realmName: realm.name,
+          });
+        return checked.valid
+          ? { kind: 'accepted', password: checked.password, normalization: checked.normalization }
+          : { kind: 'rejected', reasons: checked.reasons };
+      },
+      hash: (password) => fastify.passwordHasher.hashPassword(password),
+    }
+  );
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(
@@ -466,6 +509,7 @@ function createInteractionEngines(fastify: FastifyInstance): InteractionEngines 
           users: fastify.repositories.users,
           userCredentials: fastify.repositories.userCredentials,
           adminGrants: fastify.repositories.adminGrants,
+          userRequiredActions: fastify.repositories.userRequiredActions,
         },
         fastify.log,
         { hardActionArmed: ladder.hardActionArmed }
@@ -476,6 +520,8 @@ function createInteractionEngines(fastify: FastifyInstance): InteractionEngines 
       identifierDigest: ladder.identifierDigest,
       requireVerifiedAccount,
       emailCodes,
+      breachCheck: fastify.breachedPasswords.engine,
+      passwordUpdates,
       hooks: { ladder: ladder.ladder },
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>

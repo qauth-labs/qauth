@@ -269,8 +269,14 @@ async function buildApp(
     },
     userCredentials: {},
     adminGrants: {},
+    userRequiredActions: {},
   } as unknown as FastifyInstance['repositories']);
   instance.decorate('passwordHasher', {} as FastifyInstance['passwordHasher']);
+  // The breach list (#635): every realm here checks nothing.
+  instance.decorate('breachedPasswords', {
+    check: async () => ({ kind: 'off' }),
+    engine: { check: async () => ({ kind: 'off' }) },
+  } as FastifyInstance['breachedPasswords']);
   await instance.register(async (scope) => {
     // As `app.ts` registers it: CORS for every origin, before the routes.
     await scope.register(corsPlugin, { corsOrigin: SPA_ORIGIN, production: false });
