@@ -13,8 +13,10 @@
 #   limiters (PRO-13, #636), the request checks of the transport (#628, #665) and the bot challenge (PRO-19, #643). The
 #   per-account ladder (PRO-12, #615) is a hook too; its reservation is the last thing before a password is verified,
 #   so that every verified credential was reserved first.
-# - Only the identifier and password steps exist here. Passkeys (#651), TOTP (#653) and the email code (#638) are step
-#   handlers that later issues register; until then a sign-in that needs one of them is answered with a redirect.
+# - The identifier and password steps exist here, and the inline verification of an unverified account after its
+#   correct password (PRO-15, #638), which flows/core/account-verification draws: an emailed code that proves the
+#   address and is never a factor. Passkeys (#651) and TOTP (#653) are step handlers that later issues register;
+#   until then a sign-in that needs one of them is answered with a redirect.
 # - A round that ends in a step keeps the transaction live: the next round's answer is a new event from that state. A
 #   refused round (`throttled`, `lockedOut`, `unavailable`, `requestRefused`, `botChallengeDue`, `answerRefused`)
 #   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
@@ -31,11 +33,11 @@ summary: >-
   the round is for. The engine reads the realm's and the client's MFA policy, runs the hooks of the limiters, the
   request checks and the bot challenge, takes the identifier from the request's login_hint or from an answer, and asks
   for the password. Until a factor succeeds, every answer is the same for every account: an unknown identifier, a
-  password-only, passkey-only, disabled or locked account and an unverified one under REQUIRE_VERIFIED_ACCOUNT all get
-  the password step again with invalid_credentials, after one Argon2id verification and the 500 ms floor. A correct
-  password fixes the subject; the sign-in completes when the account's strongest bound factor and the MFA policy are
-  met, and the transport then mints the session or the code. A different identifier in a later round ends the
-  transaction.
+  password-only, passkey-only, disabled or locked account all get the password step again with invalid_credentials,
+  after one Argon2id verification and the 500 ms floor. A correct password fixes the subject; an account whose
+  address is not proved yet then verifies it with an emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says; the sign-in
+  completes when the account's strongest bound factor and the MFA policy are met, and the transport then mints the
+  session or the code. A different identifier in a later round ends the transaction.
 
 scope:
   shows: >-
@@ -50,8 +52,11 @@ scope:
       captcha step (#643), the ladder's waits, counts and disable ceiling (#615); with no hook registered, each one lets
       the round through"
     - 'the steps later issues add through the step-handler interface: passkeys and passkey-first (#651), TOTP (#653),
-      the email code and inline verification (#638), registration (#640), reset (#642), recovery codes (#649); until
-      then the downgrade rule and an MFA policy that requires a second factor answer a redirect'
+      registration (#640), reset (#642), recovery codes (#649); until then the downgrade rule and an MFA policy that
+      requires a second factor answer a redirect'
+    - 'the rounds of the inline verification, drawn by flows/core/account-verification: the code, its mail through
+      the send caps, its ladder, its expiry and its burn. An engine built without email codes, which no transport of
+      the auth server is, refuses an unverified account under REQUIRE_VERIFIED_ACCOUNT like a wrong password instead'
     - 'the per-transaction budgets of the FiPA auth_session (#647): rounds and failures per step'
     - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
       round of its own'
@@ -110,7 +115,9 @@ context:
         an enabled account whose password the ladder's hard action disabled (user_credentials.disabled_at, #615): it
         is unusable, and still bound
       disabled: 'an account whose users.enabled is false, with a password'
-      unverified: 'an enabled account with a password whose primary identity is not proven yet'
+      unverified: >-
+        an enabled account with a password whose primary identity, its address, is not proven yet: it is verified
+        inline after its correct password
   password:
     values: [right, wrong]
     initial: any
@@ -121,8 +128,8 @@ context:
     values: [true, false]
     initial: any
     say:
-      'true': 'REQUIRE_VERIFIED_ACCOUNT is on, the default'
-      'false': 'REQUIRE_VERIFIED_ACCOUNT=false'
+      'true': 'REQUIRE_VERIFIED_ACCOUNT is on, the default; an unverified account is verified inline'
+      'false': 'REQUIRE_VERIFIED_ACCOUNT=false; an unverified account is verified inline all the same'
   # The realm's and the client's MFA policy as the engine reads it on this round, never from the transaction.
   mfa:
     values: [notRequired, required]
@@ -173,6 +180,8 @@ context:
   answerIgnored: { values: [false, true], initial: false }
   # the audit record of this round named the person by the identifier HMAC, not by a user id
   auditedByHmac: { values: [false, true], initial: false }
+  # the inline verification marked the account's address verified, in this transaction
+  addressVerified: { values: [false, true], initial: false }
 
 guards:
   limited: "gate == 'limited'"
@@ -190,7 +199,7 @@ guards:
   noUsablePassword: "account in ['unknown', 'passkeyOnly', 'passwordDisabled']"
   wrongPassword: "password == 'wrong'"
   userDisabled: "account == 'disabled'"
-  unverifiedUnderTheGate: "account == 'unverified' and requireVerified"
+  unverified: "account == 'unverified'"
   passkeyBound: "account == 'passwordAndPasskey'"
   mfaRequired: "mfa == 'required'"
 
@@ -221,12 +230,19 @@ effects:
   fixSubject: { set: { subjectFixed: true } }
   auditByHmac: { set: { auditedByHmac: true } }
   waitFloor: { set: { floorWaited: true } }
+  verifyAddress: { set: { addressVerified: true } }
 
 failures:
   readingPolicy: { from: mfaPolicy, store: [unavailable] }
   reservingAttempt: { from: ladder, store: [unavailable] }
   readingAccount: { from: accountDirectory, store: [unavailable] }
   readingProvenAccount: { from: accountDirectory, store: [unavailable] }
+  verifyingAccount:
+    from: core.account-verification
+    throttled: [sendCapped, lockedOut]
+    ended: [burned, ended]
+    invalid: [answerRefused]
+    store: [unavailable]
 
 # The main story: a browser ceremony with no login_hint; the person types the identifier, then the right password of an
 # enabled, verified, password-only account, with no second factor required.
@@ -411,7 +427,8 @@ states:
       With no usable password (no account, a passkey-only account, a disabled password) the answer is verified
       against a dummy hash, so every outcome costs one verification. Every refusal is the same: the password step
       again with invalid_credentials. A disabled user is refused after its password checked out, and nothing about it
-      changes.
+      changes. An unverified account's right password proves it, whatever REQUIRE_VERIFIED_ACCOUNT says: rule 8
+      verifies its address.
     always:
       - guard: noUsablePassword
         target: passwordRefused
@@ -429,13 +446,6 @@ states:
         say: >-
           the password is right and the user is disabled: refused like a wrong password, audited as account_disabled
           under the identifier HMAC; no subject is fixed and the user is not changed
-      - guard: unverifiedUnderTheGate
-        target: passwordRefused
-        effect: [verifyHash, auditByHmac, waitFloor]
-        say: >-
-          the password is right, the account is unverified, and REQUIRE_VERIFIED_ACCOUNT is on: refused like a wrong
-          password (ANT-2026-SPEMY9GU), audited as email_not_verified under the identifier HMAC; PRO-15 (#638)
-          verifies it inline instead
       - target: readingProvenAccount
         effect: [verifyHash, fixSubject]
         say: >-
@@ -463,8 +473,9 @@ states:
     description: >-
       The downgrade rule: the transaction must prove the account's strongest bound factor (a passkey above a password),
       and a disabled factor still counts as bound. Then the MFA policy just read: when it requires a second factor, the
-      transaction's amr must carry mfa. The step that would meet either rule is a later issue's; until it exists, the
-      engine answers a redirect.
+      transaction's amr must carry mfa, and an account with no usable second factor gets the set-up step, never a
+      code. Then an address not proved yet is verified inline. The step that would meet the first two is a later
+      issue's; until it exists, the engine answers a redirect.
     always:
       - guard: passkeyBound
         target: redirected
@@ -473,10 +484,44 @@ states:
       - guard: mfaRequired
         target: redirected
         effect: [waitFloor]
-        say: 'the policy requires a second factor, and no second-factor step exists yet (#653)'
+        say: >-
+          the policy requires a second factor, and no second-factor step exists yet (#653): the set-up step, which a
+          later issue builds, and never a code
+      - guard: unverified
+        target: verifyingAccount
+        say: "the account's address is not proved yet: it is verified inline"
       - target: completed
         effect: [waitFloor]
         say: 'every rule is met'
+
+  verifyingAccount:
+    title: Verify the account's address with an emailed code
+    description: >-
+      flows/core/account-verification, round by round: a 6-digit code mailed to the transaction's identifier through
+      the send caps, asked for with the email_code step and the purpose verify_account. A right code marks the
+      address verified and adds no amr value; the sign-in then goes on with the rules after it.
+    invoke: { flow: core.account-verification }
+    on:
+      DONE:
+        target: completed
+        effect: [verifyAddress, waitFloor]
+        say: "the address is verified: every rule is met, and the amr is the password's alone"
+      FAIL.throttled:
+        target: verificationThrottled
+        effect: [waitFloor]
+        say: "the send caps or the email-code ladder's wait refuse the round"
+      FAIL.ended:
+        target: verificationEnded
+        effect: [waitFloor]
+        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
+      FAIL.invalid:
+        target: answerRefused
+        effect: [waitFloor]
+        say: 'the code is not of the offered length'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send caps, the ladder or the database fail'
 
   # Steps: the round ends, the transaction stays live, and the next round answers from here.
 
@@ -549,8 +594,8 @@ states:
   passwordRefused:
     title: Ask for the password again
     description: >-
-      The same answer for an unknown identifier, a wrong password, a passkey-only account, a disabled password, a
-      disabled user and an unverified account under the gate, in body and in timing.
+      The same answer for an unknown identifier, a wrong password, a passkey-only account, a disabled password and a
+      disabled user, in body and in timing.
     response:
       kind: step
       body:
@@ -614,6 +659,26 @@ states:
     description: >-
       One subject per transaction: a different identifier, or a factor of another user once one is proven, ends it.
       The transport discards it; the FiPA endpoint answers invalid_session.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  verificationThrottled:
+    type: final
+    title: Refuse a round of the inline verification for the send caps or the email-code ladder
+    description: >-
+      The same 429 for every address at the send caps; inside the email-code ladder's wait the answer is neither
+      compared nor counted. The transaction and a code it holds stay.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the send cap's or the email-code ladder's" }
+
+  verificationEnded:
+    type: final
+    title: End the transaction for a burned code or an account that changed
+    description: >-
+      Audited under the subject, as code_burned or as the account's change. The Interaction API starts the sign-in
+      again; the email-code ladder counts on across transactions.
     response:
       kind: refused
       body: { reason: transaction_ended, transaction: null }
@@ -687,9 +752,11 @@ assertions:
       account the identifier may name, and for none; login_hint changes it for no account
   - id: no-completion-without-a-usable-enabled-account
     never: >-
-      state == 'completed' and (noUsablePassword or wrongPassword or userDisabled or unverifiedUnderTheGate)
+      state == 'completed' and (noUsablePassword or wrongPassword or userDisabled or (unverified and not
+      addressVerified))
     say: >-
-      A sign-in completes only for an enabled account, its right password and, under the gate, a verified account
+      A sign-in completes only for an enabled account, its right password and a verified address, whatever
+      REQUIRE_VERIFIED_ACCOUNT says
   - id: disabled-user-never-gets-a-subject
     never: "subjectFixed and account == 'disabled'"
     say: 'A disabled user is answered as a wrong password: no subject is fixed, so no transport mints anything for it'
@@ -727,7 +794,8 @@ assertions:
   - id: every-round-waits-the-floor
     never: >-
       state in ['offeringIdentifier', 'offeringPassword', 'passwordRefused', 'completed', 'redirected', 'ended', 'throttled', 'lockedOut',
-      'requestRefused', 'botChallengeDue', 'answerRefused', 'unavailable'] and not floorWaited
+      'requestRefused', 'botChallengeDue', 'answerRefused', 'unavailable', 'verificationThrottled',
+      'verificationEnded'] and not floorWaited
     say: >-
       Every round answers no earlier than 500 ms after it arrived: those that resolve an identifier or carry a
       credential, as ADR-017 Decision 7 asks, and every other one, so that no answer is timed apart

@@ -1,0 +1,559 @@
+# The inline verification of an account's address (PRO-15, #638; ADR-017 Decisions 4, 5 and 8, ADR-020 §3): after a
+# correct password, an account whose address is not proved yet gets the email_code step, whatever
+# REQUIRE_VERIFIED_ACCOUNT says. Written before the code (status: proposed), as ADR-021 Decision 4 asks of a new core
+# flow. The sign-in engine (flows/core/sign-in) invokes it at rule 8; the CER issue adds the screens (ui.yaml).
+#
+# - Like the sign-in engine, this flow has no screen and no HTTP route of its own: a transport calls the engine once a
+#   round, and every round runs the sign-in's rules up to rule 8 first (the policy, the limiters, the request checks,
+#   the bot challenge, the identifier, the account read again). So an exit here is the engine's answer, as data, named
+#   in camelCase; a step state ends the round with the transaction live, and the next round's answer is a new event
+#   from it.
+# - An emailed code proves control of a mailbox. It is never a sign-in factor: it adds no amr value, never counts
+#   toward mfa, never moves auth_time and raises no acr (ADR-017 Decision 5; NIST SP 800-63B-4 §3.1.3.1 does not allow
+#   email as an authenticator).
+# - The code: 6 digits from a CSPRNG (8 at registration and recovery, #640 and #642), kept in the transaction only as
+#   its keyed HMAC with a salt of its own, compared in constant time, valid 10 minutes, single use, bound to the
+#   transaction, and burned at the 5th wrong answer of the transaction; a resend never resets that count.
+# - Across transactions, a counter of wrong codes per identifier HMAC (the password ladder's key, a counter of its
+#   own) applies the ladder of PRO-12 (#615) from 5 wrong codes: an attempt inside its wait is refused, neither
+#   verified nor counted. It has no hard stop, never suppresses mail, and accepts a correct code outside a wait.
+schema: delurio-graph/0
+kind: flow
+id: core.account-verification
+status: proposed
+domain: qauth
+title: Verify an account's address after its correct password
+summary: >-
+  A correct password proved an account whose address is not proved yet. The engine mails a 6-digit code to the
+  transaction's identifier through the capped sender of PRO-14 and asks for it. A right code, answered outside the
+  email-code ladder's wait and within 10 minutes, marks the address verified, and the sign-in goes on with no amr
+  added. A wrong code is refused and counted, in the transaction and on the ladder; the 5th wrong answer of a
+  transaction burns the code and ends the transaction. An answer without a code asks for a new one, once a minute.
+
+scope:
+  shows: >-
+    the email_code step with the purpose verify_account, from the first code after a correct password to the address
+    marked verified, round by round
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before rule 8, drawn by flows/core/sign-in: the transport's checks, the MFA policy, the
+      limiters, the request checks, the bot challenge, the identifier, and the account read again, which ends the
+      transaction for an account that is gone, of another user or disabled since"
+    - 'an MFA policy that requires a second factor the account lacks: the engine answers the set-up step before this
+      flow starts (today a redirect, until #653 adds one), never a code; a second factor the account has is asked for
+      after this flow (#653)'
+    - 'an account whose primary identity is a passkey or a wallet, or a transaction with no identifier: there is no
+      address to prove, and the engine never starts this flow'
+    - 'a transport that does not serve email_code (a FiPA client that did not list it): the engine answers a redirect'
+    - "the purposes recovery (#642) and verify_account at registration (#640), with 8 digits, and the FiPA endpoint's
+      per-client confirm_sign_in after the password (PRO-22), which the Interaction API never offers: the same code
+      rules, other flows"
+    - "the send caps' tiers (#637): which of them answers quietly (the step, the mail dropped) and which answers 429;
+      the mail is dispatched after the answer is built, so sent, dropped and not sent look alike"
+    - 'a failure to settle the ladder reservation: reported, and it changes no answer'
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+    - "a rotation of the realm's cookie key while a code is live: the code's HMAC and the identifier's change with
+      it, so the right code is refused once and a new code works"
+
+context:
+  # The send caps' answer to a code about to be mailed: accepted (sent, or quietly dropped) or a 429 tier.
+  sendCaps:
+    values: [accepted, capped]
+    initial: any
+    say:
+      accepted: 'the send caps let the code through, or drop its mail quietly at the address-and-IP tier'
+      capped: 'a tier that answers 429 is full: the per-IP, the per-client or the after-first-factor cap'
+  # Whether the transaction's code has passed its 10 minutes when a code is answered.
+  codeAge:
+    values: [live, expired]
+    initial: any
+    say:
+      live: 'the code was issued less than 10 minutes ago'
+      expired: 'the code was issued 10 minutes ago or more'
+  # Whether a minute has passed since the last code was issued, when a new one is asked for.
+  resendDue:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the last code was issued less than a minute ago'
+      'true': 'a minute or more has passed since the last code was issued'
+  # The email-code ladder of the identifier HMAC, across transactions, when a code is answered.
+  ladder:
+    values: [open, inWait]
+    initial: any
+    say:
+      open: 'the identifier is outside a wait of the email-code ladder'
+      inWait: 'fewer than its wait has passed since the identifier counted 5 or more wrong codes in a row'
+  # Whether the account changed between the round's read and the write.
+  accountChanged:
+    values: [false, true]
+    initial: any
+    say:
+      'false': "the account is the subject's, enabled, with its password credential"
+      'true': 'the account was disabled or lost its password credential since the round read it'
+  # The wrong answers this transaction counted before the round's answer. A resend never resets it.
+  wrongAnswers:
+    values: [zero, one, two, three, four, five]
+    initial: zero
+  # a wrong answer was counted in this transaction: from then on the count never goes back
+  answeredWrong: { values: [false, true], initial: false }
+  # the transaction holds a live code's salt and HMAC, never the code
+  codeHeld: { values: [false, true], initial: false }
+  # this round asked the capped sender to mail a code, dispatched after the answer
+  mailQueued: { values: [false, true], initial: false }
+  # this round reserved an attempt on the email-code ladder, which counts it as a failure until it settles
+  attemptReserved: { values: [false, true], initial: false }
+  # this round compared an answered code with the held HMAC, in constant time
+  codeCompared: { values: [false, true], initial: false }
+  # this round wrote an audit record of the step
+  audited: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # the address is marked verified: the password credential's email_verified and the email attribute's verified flag
+  addressVerified: { values: [false, true], initial: false }
+  # a code added an amr value or moved auth_time: never
+  factorClaimed: { values: [false, true], initial: false }
+
+guards:
+  capped: "sendCaps == 'capped'"
+  expired: "codeAge == 'expired'"
+  inWait: "ladder == 'inWait'"
+  changed: 'accountChanged'
+  resendNotDue: 'not resendDue'
+  wrongFifth: "wrongAnswers == 'four'"
+  wrongZero: "wrongAnswers == 'zero'"
+  wrongOne: "wrongAnswers == 'one'"
+  wrongTwo: "wrongAnswers == 'two'"
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      mailQueued: false
+      attemptReserved: false
+      codeCompared: false
+      audited: false
+      floorWaited: false
+  holdCode: { set: { codeHeld: true } }
+  queueMail: { set: { mailQueued: true } }
+  reserveAttempt: { set: { attemptReserved: true } }
+  compareCode: { set: { codeCompared: true } }
+  audit: { set: { audited: true } }
+  waitFloor: { set: { floorWaited: true } }
+  countFirst: { set: { wrongAnswers: one, answeredWrong: true } }
+  countSecond: { set: { wrongAnswers: two, answeredWrong: true } }
+  countThird: { set: { wrongAnswers: three, answeredWrong: true } }
+  countFourth: { set: { wrongAnswers: four, answeredWrong: true } }
+  countFifth: { set: { wrongAnswers: five, answeredWrong: true } }
+  consumeCode: { set: { codeHeld: false } }
+  markVerified: { set: { addressVerified: true } }
+  # what another transaction or the clock may have changed by the next answer
+  moveOn: { havoc: [sendCaps, codeAge, ladder] }
+
+failures:
+  issuingCode: { from: sendCaps, store: [unavailable] }
+  reservingCodeAttempt: { from: ladder, store: [unavailable] }
+  reservingWrongAttempt: { from: ladder, store: [unavailable] }
+  markingVerified: { from: accountDirectory, store: [unavailable] }
+
+# The main story: the person reads the code from the mail and types it within ten minutes, outside any wait.
+main:
+  given:
+    sendCaps: accepted
+    codeAge: live
+    resendDue: false
+    ladder: open
+    accountChanged: false
+  events: [DONE, RIGHT_CODE, DONE, DONE]
+
+initial: issuingCode
+states:
+  issuingCode:
+    title: Issue a code and ask the capped sender to mail it
+    description: >-
+      Six digits from a CSPRNG, and a salt of its own. The send caps of PRO-14 count the request before anything is
+      kept, with the code after a correct first factor, so it skips the per-address ceiling and counts toward its own
+      cap. An accepted code replaces the transaction's code, if any, by its salt and HMAC, and keeps the count of
+      wrong answers; its mail is dispatched after the answer is built. A capped one keeps nothing new.
+    invoke: { external: sendCaps }
+    on:
+      DONE:
+        - guard: capped
+          target: sendCapped
+          effect: [audit, waitFloor]
+          say: >-
+            a tier that answers 429 is full: nothing is mailed, a code the transaction held stays, send_capped is
+            audited, and the floor is waited out
+        - target: offeringCode
+          effect: [holdCode, queueMail, waitFloor]
+          say: 'the code is accepted: its HMAC is kept, its mail queued, and the floor is waited out'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send-cap store fails: nothing is mailed or kept; the floor is waited out'
+
+  takingAnswer:
+    title: Take the round's answer to the email_code step
+    description: >-
+      The step grammar has read it against the offered params: an otp of exactly the offered length, or none, which
+      asks for a new code. An answer to another step is ignored, as every eager answer is.
+    always:
+      - guard: expired
+        target: codeExpired
+        effect: [audit, waitFloor]
+        say: >-
+          the code has passed its 10 minutes: refused with code_expired, audited, neither compared nor counted
+      - target: reservingCodeAttempt
+        say: 'the code is live'
+
+  checkingResend:
+    title: Ask whether a new code is due
+    description: A new code may be asked for one minute after the last one, and the send caps still count it.
+    always:
+      - guard: resendNotDue
+        target: offeringCode
+        effect: [waitFloor]
+        say: 'less than a minute has passed: the same step, nothing mailed, and the floor is waited out'
+      - target: issuingCode
+        say: 'a new code is due; the count of wrong answers stays'
+
+  reservingCodeAttempt:
+    title: Reserve the answer on the email-code ladder
+    description: >-
+      The ladder hook of PRO-12 with the email-code counter, keyed on the identifier HMAC: one atomic operation reads
+      the wait, refuses an attempt inside it, and otherwise counts the attempt as a failure until it settles. A store
+      error refuses the round before the code is compared.
+    invoke: { external: ladder }
+    on:
+      DONE:
+        - guard: inWait
+          target: lockedOut
+          effect: [audit, waitFloor]
+          say: 'the identifier is inside a wait: refused, neither compared nor counted, audited as locked_out'
+        - target: comparingCode
+          effect: [reserveAttempt]
+          say: 'the attempt is reserved'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the ladder store fails; nothing is compared'
+
+  comparingCode:
+    title: Compare the answer with the held code, in constant time
+    description: >-
+      The answer's HMAC under the code's salt against the held one, in constant time. The right code settles the
+      reservation as a success, which clears the email-code counter and no other: never the password's.
+    always:
+      - target: markingVerified
+        effect: [compareCode]
+        say: 'the code is right: the reservation settles as a success'
+
+  comparingWrongCode:
+    title: Compare a wrong answer with the held code, in constant time
+    description: >-
+      The answer's HMAC differs from the held one: the reservation settles as a failure, and the transaction counts
+      one wrong answer more. The 5th burns the code.
+    always:
+      - guard: wrongFifth
+        target: burned
+        effect: [compareCode, countFifth, audit, waitFloor]
+        say: >-
+          the 5th wrong answer of the transaction: the code is burned, the transaction ends, and code_burned is
+          audited under the subject
+      - guard: wrongZero
+        target: codeRefused
+        effect: [compareCode, countFirst, audit, waitFloor]
+        say: 'the first wrong answer: refused with invalid_credentials, audited as invalid_code'
+      - guard: wrongOne
+        target: codeRefused
+        effect: [compareCode, countSecond, audit, waitFloor]
+        say: 'the second wrong answer: refused alike'
+      - guard: wrongTwo
+        target: codeRefused
+        effect: [compareCode, countThird, audit, waitFloor]
+        say: 'the third wrong answer: refused alike'
+      - target: codeRefused
+        effect: [compareCode, countFourth, audit, waitFloor]
+        say: 'the fourth wrong answer: refused alike; the next wrong one burns the code'
+
+  markingVerified:
+    title: Mark the address verified
+    description: >-
+      In one database transaction, the password credential's email_verified and the email attribute's verified flag,
+      for the subject's enabled account only. The same person proved the password and the mailbox, so every
+      credential stays. A store error refuses the round: the code stays live, and the same code may be answered again.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: changed
+          target: ended
+          effect: [audit, waitFloor]
+          say: 'the account was disabled or changed since the read: nothing is written, and the transaction ends'
+        - target: verified
+          effect: [consumeCode, markVerified, audit]
+          say: >-
+            the address is verified: the code is consumed, email_code joins the transaction's verified steps with no
+            amr, and the step is audited as passed under the subject
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails: nothing is written, and the code stays live'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringCode:
+    title: Ask for the code
+    description: >-
+      The params say why the code was sent, how many digits it has, how long it stays valid and when another may be
+      asked for; the personal data is the address it went to, the transaction's identifier.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: verify_account
+            length: 6
+            expires_in: 'the seconds the code has left, at most 600'
+            resend_after: 'the seconds until another code may be asked for, at most 60'
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringCode
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer: the same step, nothing mailed'
+      RIGHT_CODE:
+        target: takingAnswer
+        effect: [newRound]
+        say: 'the person types the code from the mail'
+      WRONG_CODE:
+        target: takingWrongAnswer
+        effect: [newRound]
+        say: 'the person types another code'
+      RESEND:
+        target: checkingResend
+        effect: [newRound, moveOn]
+        say: 'the person asks for a new code: an answer with no otp'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the otp is not of the offered length: refused as invalid_answer, nothing compared or counted'
+
+  codeRefused:
+    title: Ask for the code again
+    description: The same step with invalid_credentials; the code stays, and so does the count of wrong answers.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: verify_account
+            length: 6
+            expires_in: 'the seconds the code has left, at most 600'
+            resend_after: 'the seconds until another code may be asked for, at most 60'
+          error: invalid_credentials
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringCode
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer'
+      RIGHT_CODE:
+        target: takingAnswer
+        effect: [newRound, moveOn]
+        say: 'the person types the right code'
+      WRONG_CODE:
+        target: takingWrongAnswer
+        effect: [newRound, moveOn]
+        say: 'the person types another wrong code'
+      RESEND:
+        target: checkingResend
+        effect: [newRound, moveOn]
+        say: 'the person asks for a new code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the otp is not of the offered length'
+
+  codeExpired:
+    title: Say the code has expired
+    description: >-
+      The same step with code_expired: nothing was compared or counted. A new code is one resend away, once its
+      minute has passed, which it has.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: verify_account
+            length: 6
+            expires_in: 600
+            resend_after: 0
+          error: code_expired
+        alternatives: []
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: codeExpired
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer: the same step and its error, nothing audited'
+      RESEND:
+        target: issuingCode
+        effect: [newRound, moveOn]
+        say: 'the person asks for a new code'
+      RIGHT_CODE:
+        target: takingAnswer
+        effect: [newRound]
+        say: 'the person types the expired code again'
+      WRONG_CODE:
+        target: takingWrongAnswer
+        effect: [newRound]
+        say: 'the person types another code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the otp is not of the offered length'
+
+  takingWrongAnswer:
+    title: Take a wrong answer to the email_code step
+    description: As takingAnswer, for an answer that is not the held code.
+    always:
+      - guard: expired
+        target: codeExpired
+        effect: [audit, waitFloor]
+        say: 'the code has passed its 10 minutes: refused with code_expired, neither compared nor counted'
+      - target: reservingWrongAttempt
+        say: 'the code is live'
+
+  reservingWrongAttempt:
+    title: Reserve a wrong answer on the email-code ladder
+    description: As reservingCodeAttempt, for an answer that is not the held code.
+    invoke: { external: ladder }
+    on:
+      DONE:
+        - guard: inWait
+          target: lockedOut
+          effect: [audit, waitFloor]
+          say: 'the identifier is inside a wait: refused, neither compared nor counted'
+        - target: comparingWrongCode
+          effect: [reserveAttempt]
+          say: 'the attempt is reserved'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the ladder store fails; nothing is compared'
+
+  # Exits
+
+  verified:
+    type: final
+    title: Go on with the sign-in, the address verified
+    description: >-
+      The engine goes on with rule 8: a second factor the MFA policy requires and the account has (#653), else the
+      sign-in completes. The completed sign-in's amr is the password's alone and its auth_time the password's.
+    response:
+      kind: continue
+      body:
+        verified: 'the transaction verified email_code with purpose verify_account; it adds no amr value'
+        amr: '["pwd"]'
+        authTime: 'when the password was verified, unchanged'
+
+  sendCapped:
+    type: final
+    title: Refuse the round for the send caps
+    description: >-
+      The same 429 for every address. The transaction stays as far as the round took it: a code it held stays live.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the send cap's" }
+
+  lockedOut:
+    type: final
+    title: Refuse the answer inside the email-code ladder's wait
+    description: Neither compared nor counted; the transaction and its code stay.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the ladder's" }
+
+  burned:
+    type: final
+    title: Burn the code and end the transaction
+    description: >-
+      Five wrong answers in one transaction are its budget for codes. The transport discards the transaction; the
+      Interaction API starts the sign-in again, and the email-code ladder counts on across transactions.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  ended:
+    type: final
+    title: End the transaction for an account that changed
+    description: The account was disabled or changed between the round's read and the write; nothing was written.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  answerRefused:
+    type: final
+    title: Refuse a malformed answer
+    description: A fault of the request, audited as invalid_answer; the transaction and its code stay.
+    response:
+      kind: refused
+      body: { reason: invalid_answer }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: >-
+      The send caps, the ladder or the database cannot be reached: fail closed. The transaction stays as far as the
+      round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: no-verification-inside-a-wait
+    never: "state == 'verified' and ladder == 'inWait'"
+    say: 'A code answered inside a wait of the email-code ladder never verifies the address'
+  - id: no-verification-after-ten-minutes
+    never: "state == 'verified' and codeAge == 'expired'"
+    say: 'A code works only within its 10 minutes'
+  - id: reserve-before-compare
+    never: 'codeCompared and not attemptReserved'
+    say: 'Every compared code was reserved on the email-code ladder first'
+  - id: refusals-compare-nothing
+    never: "state in ['codeExpired', 'lockedOut', 'sendCapped', 'answerRefused'] and codeCompared"
+    say: 'An expired code, an answer inside a wait, a capped send and a malformed answer compare no code'
+  - id: the-fifth-wrong-answer-burns
+    never: "wrongAnswers == 'five' and state != 'burned'"
+    say: 'The fifth wrong answer of a transaction burns the code and ends the transaction'
+  - id: a-resend-never-resets-the-count
+    never: "answeredWrong and wrongAnswers == 'zero'"
+    say: 'Once a wrong answer is counted, no resend and no new code sets the count back'
+  - id: nothing-mailed-when-capped
+    never: "state == 'sendCapped' and mailQueued"
+    say: 'A send the caps refuse mails nothing'
+  - id: a-code-is-never-a-factor
+    never: 'factorClaimed'
+    say: 'A verified code adds no amr value, never counts toward mfa and never moves auth_time'
+  - id: the-address-is-verified-only-by-its-code
+    never: "addressVerified and state != 'verified'"
+    say: 'The address is marked verified only by a right code, on the way to the verified exit'
+  - id: a-consumed-code-is-gone
+    never: "state == 'verified' and codeHeld"
+    say: 'A code works once: the verified exit leaves no code in the transaction'
+  - id: every-refusal-is-audited
+    never: "state in ['codeRefused', 'lockedOut', 'sendCapped', 'burned', 'ended', 'answerRefused'] and not audited"
+    say: >-
+      Every refused or ended answer writes an audit record under the subject; so does an expired code answered, while
+      a round with no answer that finds the code expired only says so
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringCode', 'codeRefused', 'codeExpired', 'sendCapped', 'lockedOut', 'burned', 'ended',
+      'answerRefused', 'unavailable'] and not floorWaited
+    say: 'Every round that ends here answers no earlier than 500 ms after it arrived'
