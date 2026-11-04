@@ -60,6 +60,14 @@ describe('the grants map (#498)', () => {
     }
   });
 
+  it("lets the sign-in engine read and delete a user's required actions, and others only add (#635)", () => {
+    expect(TABLE_GRANTS['user_required_actions']).toEqual({
+      web: ['SELECT', 'INSERT', 'DELETE'],
+      api: ['SELECT', 'INSERT'],
+      admin: ['SELECT', 'INSERT'],
+    });
+  });
+
   it('gives realm_keys to the signer alone', () => {
     expect(TABLE_GRANTS['realm_keys']).toEqual({
       signer: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],

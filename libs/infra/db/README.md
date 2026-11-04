@@ -290,6 +290,10 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `fanOut({ kinds, destinations, now })` writes the rows for the events after each position, one per realm and route kind, and moves the position on, one stream at a time per node. It touches only the positions of the `kinds` the caller serves.
   - `dueDestinations(kinds, now)`, `claim({ picks, now, leaseMs, maxAttempts })`, `record(claim, outcome, now)` and `release(claims, now)` run the claims.
   - `minOffered(realmId)` returns the lowest position every destination has finished, for the retention job (#536).
+- **`createUserRequiredActionsRepository(db)`**: The actions users must take at their next sign-in (#635): `user_required_actions`, one row per user and action. The admin API and the account console's "this wasn't me" add them; the sign-in engine reads a user's pending actions and removes each once it is done.
+  - `add({ realmId, userId, action, source }, tx?)` requires `action` of the user and returns `true` when it wrote a row, `false` when the user already owed it (the first row, with its `source` and `createdAt`, is kept). It throws `NotFoundError` when the realm has no such user, so no caller attaches an action to another realm's user.
+  - `listForUser(realmId, userId, tx?)` returns `{ action, source, createdAt }[]`, oldest first.
+  - `remove(realmId, userId, action, tx?)` returns whether it deleted a row.
 - **`createSsfStreamsRepository(db)`**: The streams of the Shared Signals Framework transmitter (#410): `ssf_streams`, one per receiver and realm, and the subjects each receiver added (`ssf_stream_subjects`).
   - `create`, `find`, `list`, `update`, `remove` and `setStatus` name the realm and the receiver's client row, so a receiver reaches only its own stream; `create` returns `null` when the receiver already has one.
   - `addSubject(streamId, subject, maxSubjects)` returns `added`, `present`, `full`, or `missing` for a stream deleted meanwhile (the count and the insert run under the stream's row lock); `removeSubject` and `listSubjects` complete the set.
@@ -845,6 +849,7 @@ libs/infra/db/
 - **users**: Pure identity anchor. Since migration 0011 (ADR-002, #230) it carries **no** `email`, `email_normalized` or `password_hash` — all credential data lives in `user_credentials`
 - **user_credentials**: One row per authentication method per user (`password`, `wallet`, …), keyed by `(realm_id, provider_type, external_sub)` — the sole duplicate-registration guard
 - **user_attributes**: Normalized claims (email, name, …) with a source and verification state; resolved in the ADR-002 trust order `wallet > oidc_* > self_reported`
+- **user_required_actions**: What a user must do at the next sign-in (#635, migration 0059): `update_password`, `setup_mfa`, `setup_passkey` or `complete_profile`, with who asked (`admin` or `user_report`). One row per `(user_id, action)`; the user must belong to the row's realm (`(user_id, realm_id)` → `users`), and the user's or the realm's deletion deletes the rows
 - **oauth_clients**: OAuth 2.1 client registrations with PKCE support
 
 ### Token Tables

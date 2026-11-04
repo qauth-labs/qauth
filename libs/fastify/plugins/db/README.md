@@ -125,7 +125,8 @@ For type-safe database operations with proper error handling, use the repository
 // The plugin decorates `fastify.repositories` — there are no singleton
 // repository exports on @qauth-labs/infra-db. Available keys: users, realms,
 // userCredentials, userAttributes, emailVerificationTokens, oauthClients,
-// oauthConsents, refreshTokens, authorizationCodes, auditLogs, apiKeys.
+// oauthConsents, refreshTokens, authorizationCodes, auditLogs, apiKeys,
+// userRequiredActions.
 import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
 // Get user by ID

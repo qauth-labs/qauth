@@ -28,4 +28,5 @@ export * from './sessions.repository';
 export * from './ssf-streams.repository';
 export * from './user-attributes.repository';
 export * from './user-credentials.repository';
+export * from './user-required-actions.repository';
 export * from './users.repository';

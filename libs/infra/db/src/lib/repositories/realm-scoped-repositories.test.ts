@@ -15,6 +15,7 @@ import { createRealmAuthMethodPluginsRepository } from './realm-auth-method-plug
 import { createRefreshTokensRepository } from './refresh-tokens.repository';
 import { createSessionsRepository } from './sessions.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
+import { createUserRequiredActionsRepository } from './user-required-actions.repository';
 import { createUsersRepository } from './users.repository';
 
 /**
@@ -72,6 +73,14 @@ export function requiredRealmArgument(db: DbClient): void {
   const adminGrants = createAdminGrantsRepository(db);
   const adminRoles = createAdminRolesRepository(db);
   const realmPlugins = createRealmAuthMethodPluginsRepository(db);
+  const requiredActions = createUserRequiredActionsRepository(db);
+
+  // @ts-expect-error a user's required actions are those of a realm (#635)
+  void requiredActions.listForUser(ID);
+  // @ts-expect-error a required action is removed in a realm (#635)
+  void requiredActions.remove(ID, 'update_password');
+  // @ts-expect-error a required action is added for a user of a realm (#635)
+  void requiredActions.add({ userId: ID, action: 'update_password', source: 'admin' });
 
   // @ts-expect-error a plugin's state is a realm's (#600)
   void realmPlugins.find('corp');
@@ -291,6 +300,24 @@ const CALLS: readonly RealmScopedCall[] = [
     'userCredentials.clearDisabledAt',
     (db) =>
       createUserCredentialsRepository(db).clearDisabledAt(REALM_ID, 'password', 'a@example.com'),
+  ],
+  [
+    'userRequiredActions.add',
+    (db) =>
+      createUserRequiredActionsRepository(db).add({
+        realmId: REALM_ID,
+        userId: ID,
+        action: 'update_password',
+        source: 'admin',
+      }),
+  ],
+  [
+    'userRequiredActions.listForUser',
+    (db) => createUserRequiredActionsRepository(db).listForUser(REALM_ID, ID),
+  ],
+  [
+    'userRequiredActions.remove',
+    (db) => createUserRequiredActionsRepository(db).remove(REALM_ID, ID, 'update_password'),
   ],
   [
     'refreshTokens.findByTokenHash',

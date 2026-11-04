@@ -414,6 +414,13 @@
       "when": 1793777996986,
       "tag": "0058_client_backchannel_logout",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1793800686327,
+      "tag": "0059_user_required_actions",
+      "breakpoints": true
     }
   ]
 }
