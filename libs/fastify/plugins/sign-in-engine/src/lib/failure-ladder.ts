@@ -355,3 +355,48 @@ export function createRedisFailureLadder(
   };
   return Object.freeze(ladder);
 }
+
+/** What {@link isKnownEndUserIp} needs of the Redis client (ioredis), by shape. */
+export interface KnownIpRedis {
+  zscore(key: string, member: string): Promise<string | null>;
+}
+
+/** What {@link isKnownEndUserIp} asks about. */
+export interface KnownIpQuery {
+  readonly realmId: string;
+  readonly identifierHmac: string;
+  /** The end-user IP's keyed HMAC, as the ladder keeps it (`END_USER_IP_HMAC_LABEL`). */
+  readonly endUserIpHmac: string;
+  /** How long a successful sign-in keeps an IP known. The password ladder's by default. */
+  readonly knownIpMs?: number;
+  /** The clock, in epoch ms. `Date.now` by default. */
+  readonly now?: () => number;
+  /** How long the Redis call may take. {@link LADDER_REDIS_TIMEOUT_MS} by default. */
+  readonly timeoutMs?: number;
+}
+
+/**
+ * Whether an end-user IP is a known IP of the identifier (ADR-017 Decision 7):
+ * one a successful sign-in came from within `knownIpMs`, as the ladder's
+ * settle recorded it. The send caps (#637) read it to exempt such a request
+ * from every per-address tier. It reads one score and writes nothing.
+ *
+ * Any error or timeout rejects, so the caller fails closed: a send cap that
+ * cannot tell refuses no one an exemption it did not prove.
+ */
+export async function isKnownEndUserIp(redis: KnownIpRedis, query: KnownIpQuery): Promise<boolean> {
+  const { realmId, identifierHmac, endUserIpHmac } = query;
+  if (!KEY_PART.test(realmId) || !KEY_PART.test(identifierHmac) || !KEY_PART.test(endUserIpHmac)) {
+    throw new Error('sign-in ladder: a realm id or an HMAC out of shape');
+  }
+  const knownIpMs = query.knownIpMs ?? PASSWORD_LADDER_POLICY.knownIpMs;
+  if (knownIpMs <= 0) return false;
+  const score = await bounded(
+    redis.zscore(ladderKnownIpsKey(realmId, identifierHmac), endUserIpHmac),
+    query.timeoutMs ?? LADDER_REDIS_TIMEOUT_MS,
+    'known IP'
+  );
+  if (score === null) return false;
+  const lastSignIn = Number(score);
+  return Number.isFinite(lastSignIn) && lastSignIn > (query.now ?? Date.now)() - knownIpMs;
+}

@@ -12,6 +12,7 @@ export * from './lib/send-caps';
 export {
   type AuditSink,
   type CompletedSignIn,
+  type IdentifierDigest,
   type LadderPolicy,
   type MailPassBinding,
   type MailPassFlow,
