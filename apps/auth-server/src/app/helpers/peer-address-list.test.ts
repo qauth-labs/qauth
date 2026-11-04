@@ -36,7 +36,25 @@ describe('createPeerAddressList', () => {
     expect(empty.has('127.0.0.1')).toBe(false);
   });
 
-  it('refuses an entry that is not an address or a range', () => {
+  it('never matches an IPv4 client against an IPv6 range that covers the mapped prefix', () => {
+    for (const range of ['::/0', '::/64', '::ffff:0:0/80']) {
+      const v6 = createPeerAddressList([range]);
+      expect(v6.has('203.0.113.9'), range).toBe(false);
+      expect(v6.has('::ffff:203.0.113.9'), range).toBe(false);
+    }
+    expect(createPeerAddressList(['::/0']).has('2001:db8::1')).toBe(true);
+  });
+
+  it('reads an IPv4-mapped entry as its IPv4 address or range', () => {
+    const mapped = createPeerAddressList(['::ffff:198.51.100.9', '::ffff:10.0.4.0/120']);
+    expect(mapped.has('198.51.100.9')).toBe(true);
+    expect(mapped.has('::ffff:198.51.100.9')).toBe(true);
+    expect(mapped.has('10.0.4.200')).toBe(true);
+    expect(mapped.has('10.0.5.1')).toBe(false);
+  });
+
+  it('refuses an entry that is not an address or a range, or carries a zone id', () => {
     expect(() => createPeerAddressList(['uniquelocal'])).toThrow(/uniquelocal/);
+    expect(() => createPeerAddressList(['fe80::1%eth0'])).toThrow(/fe80::1%eth0/);
   });
 });

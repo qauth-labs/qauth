@@ -6,8 +6,9 @@ import { isAddressOrCidr } from './base';
  * Parse `CEREMONY_APP_PEERS` (#982): a comma-separated list of IP addresses
  * and CIDR ranges, in the form `TRUST_PROXY` takes them, without its named
  * ranges (`loopback`, `linklocal`, `uniquelocal`), which would list every
- * private address rather than one server's. Unset or empty gives the empty
- * list: no address is a listed peer.
+ * private address rather than one server's, and without a zone id, which the
+ * match could not honour. Unset or empty gives the empty list: no address is
+ * a listed peer.
  */
 export function parseCeremonyAppPeers(
   raw: string | undefined,
@@ -17,11 +18,11 @@ export function parseCeremonyAppPeers(
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
-  const invalid = entries.filter((entry) => !isAddressOrCidr(entry));
+  const invalid = entries.filter((entry) => entry.includes('%') || !isAddressOrCidr(entry));
   if (invalid.length > 0) {
     ctx.addIssue({
       code: 'custom',
-      message: `CEREMONY_APP_PEERS entries must be IP addresses or CIDR ranges, such as 10.0.4.12 or 10.0.4.0/28; invalid: ${invalid.join(', ')}`,
+      message: `CEREMONY_APP_PEERS entries must be IP addresses or CIDR ranges without a zone id, such as 10.0.4.12 or 10.0.4.0/28; invalid: ${invalid.join(', ')}`,
     });
     return z.NEVER;
   }
