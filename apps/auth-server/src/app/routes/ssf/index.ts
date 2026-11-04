@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 
-import { EVENT_TOKEN_ALGORITHM } from '@qauth-labs/fastify-plugin-signer';
 import {
   addSubjectRequestSchema,
   assertTransmitterMembers,
@@ -185,11 +184,11 @@ export default async function (fastify: FastifyInstance) {
     security: BEARER,
   };
 
-  // The transmitter's own JWKS: the realm's active and retired SET
-  // verification keys (the Ed25519 `event_signing` keys, ADR-019 Decision 9),
-  // never a compromised one, no token key and no RS256 `event_signing` key,
-  // which signs logout tokens and is in the realm JWKS (#624). The realm JWKS
-  // holds no SET key (d-1026-09). Public, as every JWKS is: no
+  // The transmitter's own JWKS (d-1026-09): the realm's active and retired
+  // SET verification keys (`event_signing`, ADR-019 Decision 9), never a
+  // compromised one. They are published apart from the realm JWKS, so a
+  // verifier that reads the realm JWKS and skips the `typ` check cannot take
+  // a SET-signed token for an access token. Public, as every JWKS is: no
   // receiver token. The `onRequest` hook above answers 404 for a realm that
   // does not run the transmitter. A key store that cannot be read fails the
   // request; the realm JWKS does not depend on it.
@@ -199,16 +198,18 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'meta' },
       schema: {
         description:
-          'The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. It holds no token key and no logout-token key; the realm JWKS at `/.well-known/jwks.json` holds none of these keys.',
+          'The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.',
         tags: TAGS,
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [404],
       },
     },
     async (request, reply) => {
-      const keys = (
-        await fastify.signer.getVerificationKeys('api', requestRealm(request).id, 'event_signing')
-      ).filter((key) => key.algorithm === EVENT_TOKEN_ALGORITHM['secevent+jwt']);
+      const keys = await fastify.signer.getVerificationKeys(
+        'api',
+        requestRealm(request).id,
+        'event_signing'
+      );
       reply
         .header('Cache-Control', JWKS_CACHE_CONTROL)
         .header('Content-Type', 'application/jwk-set+json; charset=utf-8');
