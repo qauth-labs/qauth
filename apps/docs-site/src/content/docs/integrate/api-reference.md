@@ -743,12 +743,15 @@ authorization request goes on (#628): it is checked and decided again for the ne
 client gets its code, or the next interaction starts; a cancel checks the request again before the
 client gets `error=access_denied`. Every answer is `Cache-Control: no-store`, sends no CORS header, and every
 error is a problem document without `detail` or `instance`; a throttled sign-in is `429` with
-`Retry-After`. Rate limits count per address and route, except the step read's: an answer that
-carries a credential (a password, a one-time or recovery code, a passkey response, a device's user
-code) counts against the sign-in form's limit (`LOGIN_RATE_LIMIT` per `LOGIN_RATE_WINDOW`), as one
-sign-in form post does; any other answer and the cancel count against the authorization endpoint's
-(`AUTHORIZE_RATE_LIMIT` per `AUTHORIZE_RATE_WINDOW`), as does the personal read. The step read counts
-per interaction, since the ceremony app's server reads it for every browser.
+`Retry-After`. Rate limits count per address and route: an answer that carries a credential (a
+password, a one-time or recovery code, a passkey response, a device's user code) counts against the
+sign-in form's limit (`LOGIN_RATE_LIMIT` per `LOGIN_RATE_WINDOW`), as one sign-in form post does;
+any other answer and the cancel count against the authorization endpoint's (`AUTHORIZE_RATE_LIMIT`
+per `AUTHORIZE_RATE_WINDOW`), as do the personal read and the step read. The ceremony app's server
+reads the step for every browser, so a step read from one of its addresses that the operator lists
+in `CEREMONY_APP_PEERS` counts per interaction instead, under `CEREMONY_APP_PEER_RATE_LIMIT` reads
+a minute. With the list empty, as by default, every person signing in through that server shares
+its one address bucket.
 
 ---
 
