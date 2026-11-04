@@ -82,8 +82,9 @@ authentication, run before the call). The first unmet rule produces the answer.
    strongest bound factor; a disabled factor still counts as bound), then the MFA policy just read
    (a policy that requires a second factor needs `mfa` in the `amr`). A rule no registered step can
    meet answers `redirect`: an account that lacks the second factor the policy requires gets the
-   set-up step, never a code. Then, with `emailCodes`, an account whose address is not verified yet
-   is verified inline: see [The email code](#the-email-code).
+   set-up step, never a code. With `emailCodes`, an account whose address is not verified yet is
+   verified inline before the second factor is asked for, or before completing when none is: see
+   [The email code](#the-email-code).
 8. Complete (rule 9).
 
 ## What holds for every round
