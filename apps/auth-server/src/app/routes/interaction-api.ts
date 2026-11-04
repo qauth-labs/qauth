@@ -55,6 +55,7 @@ import { InteractionExpiredError } from '../helpers/interaction-expired';
 import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
 import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
+import { createPeerAddressList, type PeerAddressList } from '../helpers/peer-address-list';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../helpers/request-realm';
@@ -297,17 +298,49 @@ function interactionIdOf(request: FastifyRequest): string {
   return (request.params as { interactionId: string }).interactionId;
 }
 
+/** The window of `CEREMONY_APP_PEER_RATE_LIMIT`, which counts per minute. */
+const CEREMONY_APP_PEER_WINDOW_MS = 60_000;
+
+/** The ceremony app server's addresses (`CEREMONY_APP_PEERS`, #982), read once. */
+let ceremonyAppPeerList: PeerAddressList | undefined;
+
+/** {@link ceremonyAppPeerList}, built from the env on first use. */
+function ceremonyAppPeers(): PeerAddressList {
+  ceremonyAppPeerList ??= createPeerAddressList(env.CEREMONY_APP_PEERS);
+  return ceremonyAppPeerList;
+}
+
 /**
- * The step read's rate-limit key: the realm and the interaction, by the id's
- * hash, as the record is kept. The ceremony app's server reads the step for
- * every browser (ADR-019 Decision 6), so the caller's address would put every
- * person signing in behind one bucket. A junk id, which never reaches Redis,
- * counts per realm and address, through {@link realmRateLimitKey}.
+ * Whether a step read counts per interaction (#982): its id is well formed
+ * and its TCP peer, `request.ip`, is one of the ceremony app server's
+ * addresses the operator listed (`CEREMONY_APP_PEERS`). No forwarded header
+ * is read for it beyond what `TRUST_PROXY` already resolves into
+ * `request.ip`.
  */
-export function interactionReadRateLimitKey(request: FastifyRequest): string {
-  const id = interactionIdOf(request);
-  if (!isInteractionId(id)) return realmRateLimitKey(request);
-  return `${request.realm?.id ?? ''}:interaction:${interactionIdHash(id)}`;
+export function readsPerInteraction(
+  request: FastifyRequest,
+  peers: PeerAddressList = ceremonyAppPeers()
+): boolean {
+  return isInteractionId(interactionIdOf(request)) && peers.has(request.ip);
+}
+
+/**
+ * The step read's rate-limit key (#982). The ceremony app's server reads the
+ * step for every browser (ADR-019 Decision 6), so its address would put every
+ * person signing in behind one bucket: a read from one of its listed
+ * addresses ({@link readsPerInteraction}) counts per realm and interaction,
+ * by the id's hash, as the record is kept, under
+ * `CEREMONY_APP_PEER_RATE_LIMIT`. Every other read, and a junk id, which
+ * never reaches Redis, counts per realm and address through
+ * {@link realmRateLimitKey}, at the authorization endpoint's budget: one
+ * address cannot spend a fresh bucket on each random id.
+ */
+export function interactionReadRateLimitKey(
+  request: FastifyRequest,
+  peers: PeerAddressList = ceremonyAppPeers()
+): string {
+  if (!readsPerInteraction(request, peers)) return realmRateLimitKey(request);
+  return `${request.realm?.id ?? ''}:interaction:${interactionIdHash(interactionIdOf(request))}`;
 }
 
 /**
@@ -626,11 +659,18 @@ export default async function (fastify: FastifyInstance) {
       lenientMax: env.AUTHORIZE_RATE_LIMIT_LENIENT,
       strictMax: env.AUTHORIZE_RATE_LIMIT,
     });
+  // A step read in two budgets (#982): one from a listed ceremony app peer
+  // counts per interaction under CEREMONY_APP_PEER_RATE_LIMIT, per minute;
+  // any other counts per address at the authorization endpoint's budget. See
+  // interactionReadRateLimitKey.
   const stepReadRateLimit = {
-    max: authorizeMax,
-    timeWindow: env.AUTHORIZE_RATE_WINDOW * 1000,
-    // Per interaction, not per address: see interactionReadRateLimitKey.
     keyGenerator: interactionReadRateLimitKey,
+    max: (request: FastifyRequest) =>
+      readsPerInteraction(request)
+        ? (env.CEREMONY_APP_PEER_RATE_LIMIT ?? authorizeMax(request))
+        : authorizeMax(request),
+    timeWindow: (request: FastifyRequest) =>
+      readsPerInteraction(request) ? CEREMONY_APP_PEER_WINDOW_MS : env.AUTHORIZE_RATE_WINDOW * 1000,
   };
   const personalReadRateLimit = {
     max: authorizeMax,

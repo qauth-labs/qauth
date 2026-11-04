@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import rateLimit from '@fastify/rate-limit';
 import {
   CEREMONY_PAGE_PREFIX,
@@ -23,6 +25,10 @@ vi.mock('../../config/env', () => ({
     AUTHORIZE_RATE_LIMIT: 60,
     AUTHORIZE_RATE_LIMIT_LENIENT: 600,
     AUTHORIZE_RATE_WINDOW: 60,
+    // The ceremony app server's address (#982): its step reads count per
+    // interaction, three a minute each; inject's own 127.0.0.1 is not listed.
+    CEREMONY_APP_PEERS: ['198.51.100.7'],
+    CEREMONY_APP_PEER_RATE_LIMIT: 3,
     REDIRECT_URI_CUSTOM_SCHEMES: [] as string[],
   },
 }));
@@ -140,12 +146,15 @@ import { SESSION_COOKIE_NAME } from '../helpers/session-cookie';
 import { emitUserEvent } from '../helpers/user-events';
 import { corsPlugin } from '../plugins/cors';
 import errorHandler from '../plugins/error-handler';
+import { createPeerAddressList } from '../helpers/peer-address-list';
 import interactionApi, {
   ANSWER_BODY_LIMIT,
   carriesCredential,
   checkAnswerBodySize,
   comesFromRealmOrigin,
+  interactionReadRateLimitKey,
   parseAnswerForm,
+  readsPerInteraction,
   WEBAUTHN_CREATE_BODY_LIMIT,
 } from './interaction-api';
 
@@ -1248,14 +1257,47 @@ describe('the rate limits (#616)', () => {
     expect(engine.advance).not.toHaveBeenCalled();
   });
 
-  it('counts the step read per interaction, not per caller address', async () => {
+  /** A step read from `remoteAddress`, as the ceremony app's server or any caller makes it. */
+  const read = (id: string, remoteAddress = '127.0.0.1') =>
+    app.inject({ method: 'GET', url: `${INTERACTION_API_PREFIX}/${id}`, remoteAddress });
+  /** A well-formed interaction id no interaction has. */
+  const randomId = () => randomBytes(32).toString('base64url');
+
+  it('counts an unlisted caller per address, so random well-formed ids reach 429 (#982)', async () => {
+    const id = await new Browser().start();
+    for (let n = 0; n < 60; n += 1) expect((await read(randomId())).statusCode).toBe(410);
+    expect((await read(randomId())).statusCode).toBe(429);
+    // The address's one bucket: a real interaction too, and a listed peer's
+    // or another address's reads are apart.
+    expect((await read(id)).statusCode).toBe(429);
+    expect((await read(id, '203.0.113.9')).statusCode).toBe(200);
+    expect((await read(id, '198.51.100.7')).statusCode).toBe(200);
+  });
+
+  it("counts a listed peer's reads per interaction, each under the peer cap (#982)", async () => {
     const first = await new Browser().start();
     const second = await new Browser().start();
-    const read = (id: string) =>
-      app.inject({ method: 'GET', url: `${INTERACTION_API_PREFIX}/${id}` });
-    for (let n = 0; n < 60; n += 1) expect((await read(first)).statusCode).toBe(200);
-    expect((await read(first)).statusCode).toBe(429);
-    expect((await read(second)).statusCode).toBe(200);
+    for (let n = 0; n < 3; n += 1) {
+      expect((await read(first, '198.51.100.7')).statusCode).toBe(200);
+    }
+    expect((await read(first, '198.51.100.7')).statusCode).toBe(429);
+    expect((await read(second, '198.51.100.7')).statusCode).toBe(200);
+    // No address bucket: more reads than the address budget, each of its own
+    // interaction, are never refused.
+    for (let n = 0; n < 61; n += 1) {
+      const unknown = await read(randomId(), '::ffff:198.51.100.7');
+      expect(unknown.statusCode).toBe(410);
+      expect(unknown.headers['x-ratelimit-remaining']).toBe('2');
+    }
+    // The unlisted address's budget is untouched.
+    expect((await read(first)).statusCode).toBe(200);
+  });
+
+  it('counts a listed peer per address for a junk id (#982)', async () => {
+    for (let n = 0; n < 60; n += 1) {
+      expect((await read('junk', '198.51.100.7')).statusCode).not.toBe(429);
+    }
+    expect((await read('junk', '198.51.100.7')).statusCode).toBe(429);
   });
 });
 
@@ -1331,6 +1373,32 @@ describe('no CORS (#616)', () => {
 });
 
 describe('the parts (#616)', () => {
+  it('keys a step read per interaction only from a listed peer and for a well-formed id (#982)', () => {
+    const peers = createPeerAddressList(['198.51.100.7', '2001:db8:1:2::/64']);
+    const id = randomBytes(32).toString('base64url');
+    const request = (interactionId: string, ip: string) =>
+      ({ params: { interactionId }, ip, realm: { id: REALM.id } }) as unknown as FastifyRequest;
+    const perInteraction = `${REALM.id}:interaction:${interactionIdHash(id)}`;
+
+    expect(interactionReadRateLimitKey(request(id, '198.51.100.7'), peers)).toBe(perInteraction);
+    expect(interactionReadRateLimitKey(request(id, '2001:db8:1:2::9'), peers)).toBe(
+      perInteraction
+    );
+    expect(readsPerInteraction(request(id, '198.51.100.7'), peers)).toBe(true);
+
+    expect(interactionReadRateLimitKey(request(id, '203.0.113.9'), peers)).toBe(
+      `${REALM.id}:203.0.113.9`
+    );
+    expect(interactionReadRateLimitKey(request('junk', '198.51.100.7'), peers)).toBe(
+      `${REALM.id}:198.51.100.7`
+    );
+    expect(readsPerInteraction(request('junk', '198.51.100.7'), peers)).toBe(false);
+    // With no peer listed, as by default, every read counts per address.
+    expect(interactionReadRateLimitKey(request(id, '198.51.100.7'), createPeerAddressList([]))).toBe(
+      `${REALM.id}:198.51.100.7`
+    );
+  });
+
   it('tells an answer that carries a credential, as JSON or as a form post', () => {
     for (const name of ['password', 'otp', 'recovery_code', 'webauthn_response', 'user_code']) {
       expect(carriesCredential({ type: 'x', csrf: 'y', [name]: 'z' }), name).toBe(true);
