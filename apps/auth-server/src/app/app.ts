@@ -56,6 +56,7 @@ import {
 } from './helpers/auth-method-plugins';
 import { type DefaultRealmBootSettings, emailBaseUrlWarning } from './helpers/default-realm-boot';
 import { verifyResourceRequestProof } from './helpers/dpop';
+import { createEngineMailer } from './helpers/engine-mail';
 import type { EventLogQueueLimits } from './helpers/event-log-queue';
 import {
   createEventTelemetry,
@@ -974,10 +975,16 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // login routes reserve each attempt on it before a password is read, over
   // the cache plugin's Redis, keyed on HMACs derived from the realm's cookie
   // key. Any error of it refuses the attempt before a credential is checked.
-  // Its hard action writes `userCredentials`, which every login route that
-  // needs the plugin reads anyway (the route manifest lists it).
+  // Its hard action writes `userCredentials`, and its notice to the owner
+  // (#637) reads `users` and `realms`, which every login route that needs the
+  // plugin reads anyway (the route manifest lists them). The notice goes
+  // through the engine's mail, which reads the mail service when it sends:
+  // the plugin brings the email plugin with it (`service-roles.ts`).
   if (plugins.has('failureLadder')) {
-    fastify.decorate('passwordAttempts', createServerPasswordAttempts(fastify));
+    fastify.decorate(
+      'passwordAttempts',
+      createServerPasswordAttempts(fastify, createEngineMailer(fastify).passwordDisabledNotices)
+    );
   }
 
   if (plugins.has('pkce')) {

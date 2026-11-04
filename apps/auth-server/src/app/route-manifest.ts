@@ -128,13 +128,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
   {
     module: 'interaction-api',
     roles: ['web'],
-    plugins: ['dpop', 'egress', 'jwt', 'password', 'sessions'],
+    plugins: ['dpop', 'egress', 'email', 'jwt', 'password', 'sessions'],
     repositories: [
       'adminGrants',
       'authorizationCodes',
       'events',
       'oauthClients',
       'oauthConsents',
+      'realms',
       'sessions',
       'userCredentials',
       'users',

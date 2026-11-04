@@ -8,7 +8,9 @@ import {
   END_USER_IP_HMAC_LABEL,
   type HardActionArming,
   type HardActionArmingSources,
+  type IdentifierDigest,
   type PasswordAttempts,
+  type PasswordDisabledNotices,
   type PasswordHardAction,
   type RedisFailureLadder,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
@@ -70,10 +72,32 @@ function cookieRingSecrets(fastify: FastifyInstance): DigestSecretSource {
   };
 }
 
+/** The keyed HMACs of a process, under the realm's cookie key (ADR-017 Decision 7). */
+export interface ServerDigests {
+  /** The identifier's HMAC: the ladder's and the send caps' account key. */
+  readonly identifierDigest: IdentifierDigest;
+  /** The end-user IP's HMAC: how the ladder keeps an IP known, and the send caps key one. */
+  readonly ipDigest: IdentifierDigest;
+}
+
+/**
+ * The identifier and end-user IP digests of this process, over its cookie
+ * key ring: the failure ladder (#615) and the send caps (#637) key the same
+ * account by the same HMAC, so a known IP the ladder recorded is the one a
+ * send cap exempts.
+ */
+export function createServerDigests(fastify: FastifyInstance): ServerDigests {
+  const secrets = cookieRingSecrets(fastify);
+  return {
+    identifierDigest: createCookieSecretIdentifierDigest(secrets, 'local'),
+    ipDigest: createCookieSecretIdentifierDigest(secrets, 'local', END_USER_IP_HMAC_LABEL),
+  };
+}
+
 /** The parts of the per-account failure ladder (#615) every password route of a process shares. */
 export interface ServerLadderParts {
   /** The identifier's HMAC under the realm's cookie key, the ladder's account key. */
-  readonly identifierDigest: ReturnType<typeof createCookieSecretIdentifierDigest>;
+  readonly identifierDigest: IdentifierDigest;
   readonly ladder: RedisFailureLadder;
   readonly hardAction: PasswordHardAction;
   readonly hardActionArmed: HardActionArming;
@@ -87,28 +111,32 @@ export interface ServerLadderParts {
  * cookie key, so one run of failures counts across them.
  *
  * The hard action is never armed yet: it needs the owner's hosted password
- * reset (#642), the only way back from the disable, and the notice that tells
- * the owner (#637), and neither exists. So the ladder counts and makes
- * attempts wait, the 100th consecutive failure only logs a warning, and a
- * disabled mark is ignored and cleared by the next successful sign-in.
+ * reset (#642), the only way back from the disable, and it does not exist.
+ * The notice that tells the owner (`notices`, #637) is wired, so the hard
+ * action arms once the reset is on and the realm can send it. Until then the
+ * ladder counts and makes attempts wait, the 100th consecutive failure only
+ * logs a warning, and a disabled mark is ignored and cleared by the next
+ * successful sign-in.
  *
  * A rotation of the realm's cookie key changes every digest: every account's
  * run of failures and known IPs start afresh within a minute of it.
+ *
+ * @param notices - the owner's password-disabled notice (`createEngineMailer`)
  */
-export function createServerLadderParts(fastify: FastifyInstance): ServerLadderParts {
-  const secrets = cookieRingSecrets(fastify);
+export function createServerLadderParts(
+  fastify: FastifyInstance,
+  notices: PasswordDisabledNotices
+): ServerLadderParts {
+  const { identifierDigest, ipDigest } = createServerDigests(fastify);
   // One source for the arming and for the notice the hard action sends.
   const arming: HardActionArmingSources = {
     // The hosted reset (#642) is not built: nothing can turn it on.
     hostedReset: () => false,
-    // No notice template (#637) yet: the deployment cannot tell the owner.
-    notices: undefined,
+    notices,
   };
   return {
-    identifierDigest: createCookieSecretIdentifierDigest(secrets, 'local'),
-    ladder: createRedisFailureLadder(fastify.redis, {
-      ipDigest: createCookieSecretIdentifierDigest(secrets, 'local', END_USER_IP_HMAC_LABEL),
-    }),
+    identifierDigest,
+    ladder: createRedisFailureLadder(fastify.redis, { ipDigest }),
     hardAction: createPasswordHardAction({
       credentials: fastify.repositories.userCredentials,
       arming,
@@ -122,6 +150,9 @@ export function createServerLadderParts(fastify: FastifyInstance): ServerLadderP
  * The failure ladder of this process as the legacy login routes use it
  * (`fastify.passwordAttempts`), over {@link createServerLadderParts}.
  */
-export function createServerPasswordAttempts(fastify: FastifyInstance): PasswordAttempts {
-  return createPasswordAttempts({ ...createServerLadderParts(fastify), log: fastify.log });
+export function createServerPasswordAttempts(
+  fastify: FastifyInstance,
+  notices: PasswordDisabledNotices
+): PasswordAttempts {
+  return createPasswordAttempts({ ...createServerLadderParts(fastify, notices), log: fastify.log });
 }
