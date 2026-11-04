@@ -1,15 +1,26 @@
 import { createHmac } from 'node:crypto';
 
+import {
+  createPasswordPolicyValidator,
+  type PasswordNormalization,
+} from '@qauth-labs/shared-validation';
+
 import type {
   AccountDirectory,
   AddressVerification,
   AddressVerifier,
   BoundFactor,
+  BreachCheckVerdict,
+  BreachedPasswordCheck,
   EmailCodeDigest,
   IdentifierDigest,
   MfaPolicy,
   MfaPolicyReader,
+  NewPasswordCheck,
+  PasswordReplacement,
+  PasswordUpdates,
   PasswordVerifier,
+  RequiredAction,
   SignInAccount,
   SignInAuditRecord,
   SignInCandidate,
@@ -57,6 +68,8 @@ export interface FakeAccount {
   readonly password: SignInCandidate['password'];
   /** Every other bound factor: passkeys, TOTP. */
   readonly others: readonly BoundFactor[];
+  /** The required actions it holds (#635); none when absent. */
+  readonly requiredActions?: readonly RequiredAction[];
 }
 
 /** An account directory over a map of normalised identifiers, recording each read. */
@@ -88,7 +101,93 @@ export class FakeDirectory implements AccountDirectory {
           : [{ type: 'password' as const, disabled: account.password.disabled }]),
         ...account.others,
       ],
+      requiredActions: [...(account.requiredActions ?? [])],
     };
+  }
+}
+
+/**
+ * A breach list over a set of passwords (#635), recording every password it
+ * was asked about. `failure` makes every check fail with it; `throws` makes
+ * the port throw.
+ */
+export class FakeBreachList implements BreachedPasswordCheck {
+  readonly checked: { readonly realmId: string; readonly password: string }[] = [];
+  failure: Extract<BreachCheckVerdict, { kind: 'failed' }>['failure'] | undefined;
+  throws = false;
+  off = false;
+
+  constructor(readonly listed: Set<string> = new Set()) {}
+
+  async check(input: { readonly realmId: string; readonly password: string }): Promise<BreachCheckVerdict> {
+    this.checked.push(Object.freeze({ ...input }));
+    if (this.throws) throw new Error('fake breach list: down');
+    if (this.off) return { kind: 'off' };
+    if (this.failure !== undefined) return { kind: 'failed', failure: this.failure };
+    return this.listed.has(input.password) ? { kind: 'listed' } : { kind: 'not_listed' };
+  }
+}
+
+/**
+ * The forced update's ports over a {@link FakeDirectory} (#635): the real
+ * password policy at `minLength`, and a replacement that rewrites the
+ * account's hash and clears its `update_password` required action.
+ */
+export class FakePasswordUpdates implements PasswordUpdates {
+  readonly checks: string[] = [];
+  readonly replaced: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly identifier: string;
+    readonly password: string;
+    readonly normalization: PasswordNormalization;
+  }[] = [];
+
+  constructor(
+    readonly directory: FakeDirectory,
+    public minimum = 15
+  ) {}
+
+  async minLength(): Promise<number> {
+    return this.minimum;
+  }
+
+  async check(input: {
+    readonly realmId: string;
+    readonly identifier: string;
+    readonly password: string;
+  }): Promise<NewPasswordCheck> {
+    this.checks.push(input.password);
+    const checked = createPasswordPolicyValidator({ minLength: this.minimum }).check(
+      input.password,
+      { email: input.identifier }
+    );
+    return checked.valid
+      ? { kind: 'accepted', password: checked.password, normalization: checked.normalization }
+      : { kind: 'rejected', reasons: checked.reasons };
+  }
+
+  async replace(input: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly identifier: string;
+    readonly password: string;
+    readonly normalization: PasswordNormalization;
+  }): Promise<PasswordReplacement> {
+    const account = this.directory.accounts.get(input.identifier);
+    if (account === undefined || account.userId !== input.userId || account.password === null) {
+      return { kind: 'refused', reason: 'subject_mismatch' };
+    }
+    if (!account.enabled) return { kind: 'refused', reason: 'account_disabled' };
+    this.replaced.push(Object.freeze({ ...input }));
+    this.directory.accounts.set(input.identifier, {
+      ...account,
+      password: { disabled: false, hash: fakeHash(input.password), normalization: input.normalization },
+      requiredActions: (account.requiredActions ?? []).filter(
+        (action) => action !== 'update_password'
+      ),
+    });
+    return { kind: 'replaced' };
   }
 }
 
