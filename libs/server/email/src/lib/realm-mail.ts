@@ -7,6 +7,7 @@ import type {
   VerificationLink,
 } from '../types';
 import { createEmailService } from './email-service';
+import type { EngineMail, EngineMailContext } from './engine-mail/registry';
 import { createEmailProvider, formatMailbox, type MailTransport } from './provider-factory';
 import type { SmtpConnectionPolicy } from './smtp-destination';
 
@@ -103,6 +104,30 @@ export interface RealmEmailService {
     to: string,
     options?: Partial<EmailOptions>
   ): Promise<EmailResult>;
+
+  /**
+   * Send one of the engine's mails (PRO-14, #637) for the realm `realmId`,
+   * through its transport, from its sender: a template of the registry with
+   * its data, rendered with `context` (the realm's issuer and brand).
+   *
+   * @throws RealmMailUnavailableError when the realm cannot send mail
+   * @throws EngineMailError when the data does not fit the template
+   */
+  sendEngineMail(
+    realmId: string,
+    to: string,
+    mail: EngineMail,
+    context: EngineMailContext
+  ): Promise<EmailResult>;
+
+  /**
+   * Whether the realm `realmId` can send mail now: it exists and its
+   * transport has what it sends with. A `mock` transport sends nothing, so it
+   * answers `false` unless `mockSends` says a mock counts (a test or a
+   * development stack). Never throws for a realm that cannot send; an error
+   * reading the realm's policies rejects, so a caller fails closed.
+   */
+  canSend(realmId: string, options?: { readonly mockSends?: boolean }): Promise<boolean>;
 }
 
 /** What {@link createRealmMailService} takes. */
@@ -271,6 +296,28 @@ export function createRealmMailService(options: RealmMailServiceOptions): RealmE
       mailOptions?: Partial<EmailOptions>
     ): Promise<EmailResult> {
       return (await serviceOf(realmId)).sendAccountExistsEmail(to, mailOptions);
+    },
+
+    async sendEngineMail(
+      realmId: string,
+      to: string,
+      mail: EngineMail,
+      context: EngineMailContext
+    ): Promise<EmailResult> {
+      return (await serviceOf(realmId)).sendEngineMail(to, mail, context);
+    },
+
+    async canSend(realmId: string, canOptions?: { readonly mockSends?: boolean }) {
+      const read = await source.read(realmId);
+      if (read === undefined) return false;
+      if (read.mail.provider === 'mock') return canOptions?.mockSends === true;
+      try {
+        await serviceOf(realmId);
+        return true;
+      } catch (error) {
+        if (error instanceof RealmMailUnavailableError) return false;
+        throw error;
+      }
     },
   };
 }

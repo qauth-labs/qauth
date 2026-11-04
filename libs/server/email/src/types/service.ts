@@ -1,3 +1,4 @@
+import type { EngineMail, EngineMailContext } from '../lib/engine-mail/registry';
 import type { EmailOptions, EmailResult } from './core';
 
 /**
@@ -66,4 +67,19 @@ export interface EmailService {
    * @returns Promise resolving to email result
    */
   sendAccountExistsEmail(to: string, options?: Partial<EmailOptions>): Promise<EmailResult>;
+
+  /**
+   * Send one of the engine's mails (PRO-14, #637): a template of the registry
+   * (`engine-mail/registry.ts`) with its data, rendered with the realm's
+   * brand, every link starting at the realm's issuer.
+   *
+   * It applies no send cap: the engine's capped sender decides whether a mail
+   * goes out before it calls this.
+   *
+   * @param to - Recipient email address
+   * @param mail - The template and its data
+   * @param context - The realm's issuer and brand
+   * @throws EngineMailError when the data does not fit the template
+   */
+  sendEngineMail(to: string, mail: EngineMail, context: EngineMailContext): Promise<EmailResult>;
 }

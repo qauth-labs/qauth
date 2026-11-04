@@ -1,4 +1,5 @@
 export * from './lib/email-service';
+export * from './lib/engine-mail';
 export * from './lib/format-duration';
 export * from './lib/provider-factory';
 export * from './lib/providers';
