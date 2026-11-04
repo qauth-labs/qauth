@@ -192,7 +192,7 @@ context:
       accepted: "the realm's password policy accepts it, and it is not on the realm's breach list or the realm checks none"
       rejected: 'the password policy refuses it: too short, too long, a whole blocklisted word, or too weak'
       listed: "it is on the realm's breach list"
-      checkFailed: "the policy accepts it and the breach-list check fails: it is accepted, the failure recorded"
+      checkFailed: 'the policy accepts it and the breach-list check fails: it is accepted, the failure recorded'
   # The checks of rules 3 to 5 run in a fixed order and each refuses on its own, so one variable says which of them a
   # round fails first, if any; the ladder's check is the last before the password is verified.
   gate:
@@ -267,7 +267,7 @@ guards:
   breachListChecked: "breachList != 'off'"
   passwordListed: "breachList == 'listed'"
   breachCheckFailed: "breachList == 'failed'"
-  updateDue: "(breachedHeld or updateRequested) and not passwordUpdated"
+  updateDue: '(breachedHeld or updateRequested) and not passwordUpdated'
   secondFactorBound: "account == 'passwordAndSecondFactor'"
   mailboxShown: 'addressVerified or mailboxProved'
   newPasswordRejected: "newPassword == 'rejected'"
@@ -1117,8 +1117,8 @@ assertions:
       A breach-list check that fails never refuses a right password: the subject is fixed and the sign-in goes on, as
       for a password that is not listed
   - id: every-failed-check-is-recorded
-    never: "breachCheckFailed and subjectFixed and not breachFailureRecorded"
-    say: "A breach-list check that fails is counted on the metric and recorded in the audit log"
+    never: 'breachCheckFailed and subjectFixed and not breachFailureRecorded'
+    say: 'A breach-list check that fails is counted on the metric and recorded in the audit log'
   - id: nothing-changes-with-the-setting-off
     never: >-
       breachList == 'off' and not updateRequested and state in ['checkingBreachList', 'confirmingMailbox',
