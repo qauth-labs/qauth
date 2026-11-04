@@ -22,7 +22,7 @@ const interactionRef = () =>
   );
 
 /** Why an interaction began. */
-export const INTERACTION_PURPOSES = ['authorization', 'logout'] as const;
+export const INTERACTION_PURPOSES = ['authorization', 'logout', 'mailed_pass'] as const;
 
 /** What one processed answer led to. */
 export const INTERACTION_ANSWER_OUTCOMES = ['next_step', 'authenticated', 'finished'] as const;
@@ -43,7 +43,7 @@ export const interactionCreated = defineEventType({
   data: z.strictObject({
     interaction: interactionRef(),
     purpose: extensibleEnum(INTERACTION_PURPOSES).describe(
-      '`authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). The set may grow in a minor release.'
+      '`authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). `mailed_pass`: the reset or registration start a mailed pass link carries (#637). The set may grow in a minor release.'
     ),
     step: stepName('The first step the ceremony asks for.'),
     replaces: recordId(

@@ -21,6 +21,7 @@ import {
 import { interactionCsrf, matchesInteractionCsrf, mintCsrfKey } from './interaction-csrf';
 import { InteractionExpiredError } from './interaction-expired';
 import {
+  type AnswerableInteractionRecord,
   type CarriedSession,
   deleteInteraction,
   eventClientIdOf,
@@ -40,8 +41,10 @@ import {
   type InteractionTransaction,
   isInteractionId,
   type LogoutRequest,
+  type MailedPassRequest,
   mintInteractionId,
   readInteractionRecord,
+  requestClientIdOf,
   returnInteractionTurn,
   SELECT_ACCOUNT_STEP,
   takeInteractionTurn,
@@ -307,8 +310,18 @@ export type InteractionSwitchResult =
   /** The new interaction: its id, for the redirect to its ceremony page. */
   | { readonly kind: 'switched'; readonly id: string; readonly expiresAt: number };
 
-/** Why a request was refused: logged, never answered. */
-type RefusalReason = 'malformed' | 'unknown' | 'expired' | 'binding' | 'session_ended';
+/**
+ * Why a request was refused: logged, never answered. `not_answerable`: an
+ * answer, a cancel or a user switch at an interaction a mailed pass opened
+ * (#637), which only its start (#642, #644) will answer.
+ */
+type RefusalReason =
+  | 'malformed'
+  | 'unknown'
+  | 'expired'
+  | 'binding'
+  | 'session_ended'
+  | 'not_answerable';
 
 /** Why a request at an interaction was forbidden (#616): logged, never answered. */
 export type ForbiddenReason = 'origin' | 'csrf';
@@ -355,9 +368,10 @@ function lifetimeMs(): number {
 
 /** The step view of a record. */
 function viewOf(record: InteractionRecord): InteractionView {
+  const clientId = requestClientIdOf(record);
   return {
     step: record.step,
-    ...(record.request.client_id === undefined ? {} : { clientId: record.request.client_id }),
+    ...(clientId === undefined ? {} : { clientId }),
     // Written only by `createInteraction`, from `clientDisplay`'s output.
     ...(record.client === undefined ? {} : { client: record.client as unknown as ClientDisplay }),
     expiresAt: record.expiresAt,
@@ -388,8 +402,8 @@ async function emitInteractionEvent<Type extends RegisteredEventType>(
 }
 
 /** A record found by id, not yet checked against the flow cookie. */
-interface Located {
-  readonly record: InteractionRecord;
+interface Located<Record extends InteractionRecord = InteractionRecord> {
+  readonly record: Record;
   readonly idHash: string;
 }
 
@@ -405,7 +419,7 @@ async function locate(request: FastifyRequest, id: unknown): Promise<Located> {
 }
 
 /** A located record and the flow secret of this browser that binds it. */
-interface Bound extends Located {
+interface Bound<Record extends InteractionRecord = InteractionRecord> extends Located<Record> {
   readonly secret: string;
   readonly secrets: readonly string[];
 }
@@ -420,6 +434,22 @@ async function locateBound(request: FastifyRequest, id: unknown): Promise<Bound>
 }
 
 /**
+ * {@link locateBound}, for an answer or a cancel: an interaction a mailed pass
+ * opened (#637) is refused both until the start it carries is built (#642,
+ * #644), after the binding is checked and before its turn is taken, so it
+ * stays as it was.
+ */
+async function locateAnswerable(
+  request: FastifyRequest,
+  id: unknown
+): Promise<Bound<AnswerableInteractionRecord>> {
+  const bound = await locateBound(request, id);
+  const { record } = bound;
+  if (record.purpose === 'mailed_pass') refuse(request, 'not_answerable');
+  return { ...bound, record };
+}
+
+/**
  * Take the turn of the interaction a bound request located, then read the
  * record again and check that it is still the state at `revision` and the
  * binding the request was checked against: burn first, then bind. `null` when
@@ -427,17 +457,20 @@ async function locateBound(request: FastifyRequest, id: unknown): Promise<Bound>
  * interaction moved on or ended (a turn taken for a later state is given
  * back).
  */
-async function takeBound(
+async function takeBound<Record extends InteractionRecord>(
   request: FastifyRequest,
-  bound: Bound,
+  bound: Bound<Record>,
   revision: number = bound.record.revision
-): Promise<InteractionRecord | null> {
+): Promise<Record | null> {
   const { redis } = request.server;
   const { realmId, ref, flowBinding } = bound.record;
   const turn = await takeInteractionTurn(redis, request.log, realmId, bound.idHash);
   if (turn === null) return null;
   const current = await readInteractionRecord(redis, request.log, realmId, bound.idHash);
-  if (current === null || current.ref !== ref) return null;
+  // The same reference is the same interaction, whose purpose never changes.
+  if (current === null || current.ref !== ref || current.purpose !== bound.record.purpose) {
+    return null;
+  }
   if (interactionDeadline(current) <= Date.now()) {
     // The turn stays taken; the sweep audits the expiry.
     refuse(request, 'expired');
@@ -448,7 +481,7 @@ async function takeBound(
     }
     return null;
   }
-  return current;
+  return current as Record;
 }
 
 /** The input of {@link startInteraction}. */
@@ -493,7 +526,8 @@ export interface StartedInteraction {
 /** What an interaction is for, and the request it holds. */
 type InteractionTarget =
   | { readonly purpose: 'authorization'; readonly request: InteractionRequest }
-  | { readonly purpose: 'logout'; readonly request: LogoutRequest };
+  | { readonly purpose: 'logout'; readonly request: LogoutRequest }
+  | { readonly purpose: 'mailed_pass'; readonly request: MailedPassRequest };
 
 /** The input of {@link createInteraction}. */
 interface CreateInteractionInput extends Omit<StartInteractionInput, 'request'> {
@@ -617,6 +651,38 @@ export async function startLogoutInteraction(
   });
 }
 
+/** The input of {@link startMailedPassInteraction}. */
+export interface StartMailedPassInteractionInput {
+  /** The start the pass is for, and its hash: never the pass. */
+  readonly request: MailedPassRequest;
+  /** The first step: the start's path marker. */
+  readonly step: InteractionStep;
+}
+
+/**
+ * Start the interaction a mailed pass link opens (#637, ADR-017 Decision 5):
+ * an interaction of purpose `mailed_pass`, in the request's realm, bound to
+ * this browser by a flow secret of its own, as {@link startInteraction} binds
+ * one. It holds the pass's hash for the start it carries; opening the link
+ * does not spend the pass, only that start does. It names no client, and its
+ * transaction is empty.
+ *
+ * Until the reset (#642) and registration (#644) starts exist, its step can
+ * be read and nothing can answer it: an answer, a cancel or a user switch is
+ * refused as at an expired interaction, and it ends at its deadline.
+ */
+export async function startMailedPassInteraction(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  input: StartMailedPassInteractionInput
+): Promise<StartedInteraction> {
+  return createInteraction(request, reply, {
+    step: input.step,
+    target: { purpose: 'mailed_pass', request: input.request },
+    secrets: readFlowSecrets(request),
+  });
+}
+
 /**
  * Start the next interaction of an authorization request whose interaction
  * just finished (#628), on the same reply: when finishing the request needs
@@ -724,7 +790,7 @@ export async function answerInteraction(
   answer: InteractionAnswerTarget,
   decide: (state: InteractionState) => Promise<InteractionDecision>
 ): Promise<InteractionAnswerResult> {
-  const bound = await locateBound(request, answer.id);
+  const bound = await locateAnswerable(request, answer.id);
   let revision: number;
   if ('csrf' in answer) {
     if (!matchesInteractionCsrf(bound.record, answer.csrf)) {
@@ -842,7 +908,7 @@ async function signInSessionIsLive(
 }
 
 /** What the engine sees of a record whose turn an answer took. */
-function stateOf(taken: InteractionRecord): InteractionState {
+function stateOf(taken: AnswerableInteractionRecord): InteractionState {
   const fields = {
     step: taken.step,
     personal: taken.personal,
@@ -865,7 +931,7 @@ function stateOf(taken: InteractionRecord): InteractionState {
 
 /** The result of an answer that finished `taken`, by its purpose. */
 function finishedOf(
-  taken: InteractionRecord,
+  taken: AnswerableInteractionRecord,
   transaction: InteractionTransaction,
   continuation: InteractionContinuation
 ): InteractionFinished {
@@ -893,7 +959,7 @@ async function settleAnswer(
   request: FastifyRequest,
   reply: FastifyReply,
   bound: Bound,
-  taken: InteractionRecord,
+  taken: AnswerableInteractionRecord,
   decide: (state: InteractionState) => Promise<InteractionDecision>,
   settled: Settlement
 ): Promise<InteractionAnswerResult> {
@@ -1079,7 +1145,7 @@ export async function cancelInteraction(
   id: unknown,
   proof?: { readonly csrf: unknown }
 ): Promise<InteractionCancelResult> {
-  const bound = await locateBound(request, id);
+  const bound = await locateAnswerable(request, id);
   if (proof !== undefined && !matchesInteractionCsrf(bound.record, proof.csrf)) {
     await refuseForbidden(request, 'csrf', bound.record);
   }

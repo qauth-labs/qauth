@@ -24,9 +24,9 @@ import { authorizeQuerySchema } from '../schemas/oauth';
  *   once. Redis keys the record by the id's SHA-256 ({@link interactionIdHash}),
  *   so the id itself is stored nowhere.
  * - **Purpose.** What the interaction is for: an authorization request at the
- *   authorization endpoint (`authorization`), or an RP-initiated logout's
- *   confirmation at the end-session endpoint (`logout`, #675). Each holds its
- *   own request.
+ *   authorization endpoint (`authorization`), an RP-initiated logout's
+ *   confirmation at the end-session endpoint (`logout`, #675), or the start a
+ *   mailed pass carries (`mailed_pass`, #637). Each holds its own request.
  * - **State.** A bounded snapshot of the validated request, the
  *   engine transaction (who has been proved, how and when), the browser
  *   session the interaction started for when there was one, the current step
@@ -260,9 +260,39 @@ const logoutRecordSchema = z.strictObject({
   request: logoutRequestSchema,
 });
 
+/** The starts a mailed pass takes past the per-address send tiers (#637). */
+export const MAILED_PASS_FLOWS = ['reset', 'register'] as const;
+
+/**
+ * What a `mailed_pass` interaction holds (#637): the start its pass is for,
+ * and the pass's hash (`mailPassHash`, base64url SHA-256), never the pass.
+ * The start (#642, #644) hands the hash to the send caps, which spend it.
+ */
+export const mailedPassRequestSchema = z.strictObject({
+  flow: z.enum(MAILED_PASS_FLOWS),
+  passHash: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+});
+
+export type MailedPassRequest = z.infer<typeof mailedPassRequestSchema>;
+
+/**
+ * An interaction a mailed pass link opened (#637, ADR-017 Decision 5): the
+ * link of a send-ceiling or password-disabled notice starts it in the
+ * browser that opened it, with its own flow cookie, and holds the pass for
+ * the reset or registration start it carries. It names no client. The
+ * record format is the same version: a server from before it reads a
+ * `mailed_pass` record as absent, as any record it cannot parse.
+ */
+const mailedPassRecordSchema = z.strictObject({
+  ...recordFields,
+  purpose: z.literal('mailed_pass'),
+  request: mailedPassRequestSchema,
+});
+
 export const interactionRecordSchema = z.discriminatedUnion('purpose', [
   authorizationRecordSchema,
   logoutRecordSchema,
+  mailedPassRecordSchema,
 ]);
 
 export type InteractionRecord = z.infer<typeof interactionRecordSchema>;
@@ -276,6 +306,22 @@ export type AuthorizationInteractionRecord = Extract<
 /** A record of a logout confirmation's interaction (#675). */
 export type LogoutInteractionRecord = Extract<InteractionRecord, { purpose: 'logout' }>;
 
+/** A record of an interaction a mailed pass link opened (#637). */
+export type MailedPassInteractionRecord = Extract<InteractionRecord, { purpose: 'mailed_pass' }>;
+
+/** A record an answer, a cancel or a user switch may act on: not a mailed pass's (#637). */
+export type AnswerableInteractionRecord = Exclude<InteractionRecord, MailedPassInteractionRecord>;
+
+/** What {@link requestClientIdOf} reads: a record's request, or one shaped like it. */
+type RequestHolder = {
+  readonly request: { readonly client_id?: string } | MailedPassRequest;
+};
+
+/** The client the record's request names, if any: a mailed pass's names none. */
+export function requestClientIdOf(record: RequestHolder): string | undefined {
+  return 'client_id' in record.request ? record.request.client_id : undefined;
+}
+
 /**
  * The longest `client_id` an event names (the event envelope's `client.id`,
  * the `events.client_id` column). A registered client's id always fits; a
@@ -286,12 +332,11 @@ export const EVENT_CLIENT_ID_MAX_LENGTH = 255;
 
 /**
  * The record's `client_id` for an event, or `null` when it names none (a
- * logout request that named no client) or it does not fit one.
+ * logout request that named no client, a mailed pass's) or it does not fit
+ * one.
  */
-export function eventClientIdOf(record: {
-  readonly request: { readonly client_id?: string };
-}): string | null {
-  const clientId = record.request.client_id;
+export function eventClientIdOf(record: RequestHolder): string | null {
+  const clientId = requestClientIdOf(record);
   return clientId !== undefined && clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null;
 }
 

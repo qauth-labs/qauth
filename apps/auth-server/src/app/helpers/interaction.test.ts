@@ -42,6 +42,7 @@ import {
   readInteractionPersonalData,
   readInteractionStep,
   startInteraction,
+  startMailedPassInteraction,
   switchInteractionUser,
 } from './interaction';
 import {
@@ -202,6 +203,13 @@ async function buildHarness(): Promise<Harness> {
       ...(body.carriedSession === undefined ? {} : { carriedSession: body.carriedSession }),
     });
   });
+  // As the landing of a mailed pass link starts one (#637).
+  app.post('/start-mailed-pass', async (request, reply) =>
+    startMailedPassInteraction(request, reply, {
+      request: { flow: 'reset', passHash: 'h'.repeat(43) },
+      step: { name: stepUrn('password_reset'), params: {}, alternatives: [] },
+    })
+  );
   app.get(`${INTERACTION_API_PREFIX}/:id`, async (request) =>
     readInteractionStep(request, (request.params as { id: string }).id)
   );
@@ -2250,5 +2258,73 @@ describe('expiry of an unanswered interaction (#592)', () => {
         data: { interaction: createdRef(), step: CONSENT_STEP.name },
       }),
     ]);
+  });
+});
+
+describe('an interaction a mailed pass link opened (#637)', () => {
+  const PASSWORD_RESET: InteractionStep = {
+    name: stepUrn('password_reset'),
+    params: {},
+    alternatives: [],
+  };
+
+  async function startMailedPass(browser: Browser): Promise<string> {
+    const response = await browser.request('POST', '/start-mailed-pass');
+    expect(response.statusCode, response.body).toBe(200);
+    return (response.json() as { id: string }).id;
+  }
+
+  it('holds the pass’s hash for its start, names no client, and binds this browser', async () => {
+    const owner = new Browser();
+    const id = await startMailedPass(owner);
+
+    expect(owner.cookies.has(FLOW_COOKIE)).toBe(true);
+    const record = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    expect(record).toMatchObject({
+      purpose: 'mailed_pass',
+      request: { flow: 'reset', passHash: 'h'.repeat(43) },
+      step: PASSWORD_RESET,
+      transaction: { amr: [] },
+    });
+    const read = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(read.statusCode).toBe(200);
+    expect(read.json()).toMatchObject({ step: PASSWORD_RESET, revision: 0 });
+    expect(read.json()).not.toHaveProperty('clientId');
+    const created = vi
+      .mocked(emitUserEvent)
+      .mock.calls.find(([, type]) => type === 'urn:qauth:event:interaction.created:v1-rc.0');
+    expect(created?.[2]).toMatchObject({ purpose: 'mailed_pass', step: PASSWORD_RESET.name });
+    expect(created?.[3]).toMatchObject({ clientId: null });
+  });
+
+  it('refuses its own browser an answer, a cancel and a switch until its start exists, and stays as it was', async () => {
+    const owner = new Browser();
+    const id = await startMailedPass(owner);
+    const csrf = await owner.csrf(id);
+
+    for (const response of [
+      await owner.answer(id, 0, { kind: 'step', step: PASSWORD_STEP }),
+      await owner.answerWithCsrf(id, csrf, { kind: 'step', step: PASSWORD_STEP }),
+      await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/cancel`),
+      await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/csrf-cancel`, { csrf }),
+      await owner.request('POST', `${INTERACTION_API_PREFIX}/${id}/switch`),
+    ]) {
+      expect(response.statusCode).toBe(410);
+      expect(response.json()).toMatchObject({ code: 'interaction_expired' });
+    }
+    expect(harness.decided).toHaveLength(0);
+    // Its turn was never taken: the record and its revision are as they were.
+    const turn = await takeInteractionTurn(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    expect(turn).toBe(0);
   });
 });

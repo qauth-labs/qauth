@@ -97,7 +97,8 @@ function maximalEnvironment(): Record<string, string> {
  * is a `meta` route). The page the verification mail links to,
  * `GET /auth/verify`, is one; `POST /auth/verify` beside it is the JSON API.
  * So are the end-session endpoint and its status page (#675), which read and
- * clear the session cookie.
+ * clear the session cookie, and the landing of a mailed pass link (#637),
+ * which sets the flow cookie of the interaction it starts.
  */
 function isBrowserSessionRoute(route: RouteOptions): boolean {
   const { url } = route;
@@ -113,7 +114,8 @@ function isBrowserSessionRoute(route: RouteOptions): boolean {
     url === '/consents' ||
     url.startsWith('/consents/') ||
     url === '/auth/link/wallet' ||
-    url.startsWith('/auth/link/wallet/')
+    url.startsWith('/auth/link/wallet/') ||
+    url === '/auth/pass'
   );
 }
 

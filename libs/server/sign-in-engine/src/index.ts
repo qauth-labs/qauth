@@ -64,6 +64,21 @@ export type {
   RoundResult,
 } from './lib/round';
 export {
+  checkSendCapPolicy,
+  type MailPassBinding,
+  type MailPassFlow,
+  type OnceANoticeKind,
+  retryAfterSeconds,
+  SEND_CAP_POLICY,
+  SEND_CAP_REFUSING_TIERS,
+  type SendCapDecision,
+  type SendCapPolicy,
+  type SendCapRefusingTier,
+  type SendCapRequest,
+  type SendCapStore,
+  type SendWindow,
+} from './lib/send-caps';
+export {
   type AnyStepHandler,
   type ProvedAccount,
   STEP_ROLES,

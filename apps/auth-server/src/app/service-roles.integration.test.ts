@@ -109,6 +109,8 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /oauth/end-session',
   'POST /oauth/end-session',
   'GET /oauth/end-session/status',
+  // The landing of a mailed pass link (#637).
+  'GET /auth/pass',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */

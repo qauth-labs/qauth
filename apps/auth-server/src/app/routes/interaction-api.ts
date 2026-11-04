@@ -39,6 +39,7 @@ import {
   LOGOUT_CONFIRM_STEP,
   type LogoutDecision,
 } from '../helpers/end-session';
+import { createEngineMailer } from '../helpers/engine-mail';
 import {
   answerInteraction,
   cancelInteraction,
@@ -368,7 +369,10 @@ interface InteractionEngines {
  * account run of failures counts across every front door.
  */
 function createInteractionEngines(fastify: FastifyInstance): InteractionEngines {
-  const ladder = createServerLadderParts(fastify);
+  const ladder = createServerLadderParts(
+    fastify,
+    createEngineMailer(fastify).passwordDisabledNotices
+  );
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(

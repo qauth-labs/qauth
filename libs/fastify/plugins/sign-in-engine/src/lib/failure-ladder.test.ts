@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   createRedisFailureLadder,
+  isKnownEndUserIp,
   LADDER_MAX_KNOWN_IPS,
   ladderCounterKey,
   ladderKnownIpsKey,
@@ -598,5 +599,62 @@ describe('the Redis failure ladder', () => {
     await ladder.reset({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, factor: 'password' });
     expect(counter()).toBeUndefined();
     expect(await attempt()).toMatchObject({ kind: 'reserved' });
+  });
+});
+
+describe('isKnownEndUserIp (#637)', () => {
+  const REALM = '9a1f6a1e-5a5b-4c1a-9a7e-3d1c1c2b0a01';
+  const NOW = Date.UTC(2026, 10, 4);
+  const query = (scores: Map<string, string>) => ({
+    redis: {
+      zscore: vi.fn(async (key: string, member: string) => scores.get(`${key} ${member}`) ?? null),
+    },
+    key: ladderKnownIpsKey(REALM, 'id-hmac'),
+  });
+
+  it('knows an IP a sign-in came from within the password ladder’s 30 days', async () => {
+    const scores = new Map<string, string>();
+    const { redis, key } = query(scores);
+    scores.set(`${key} ip-hmac`, String(NOW - PASSWORD_LADDER_POLICY.knownIpMs + 1));
+    scores.set(`${key} old-ip`, String(NOW - PASSWORD_LADDER_POLICY.knownIpMs));
+    const ask = (endUserIpHmac: string) =>
+      isKnownEndUserIp(redis, {
+        realmId: REALM,
+        identifierHmac: 'id-hmac',
+        endUserIpHmac,
+        now: () => NOW,
+      });
+
+    expect(await ask('ip-hmac')).toBe(true);
+    expect(await ask('old-ip')).toBe(false);
+    expect(await ask('other-ip')).toBe(false);
+  });
+
+  it('knows no IP when the exemption is off, and refuses a key part out of shape', async () => {
+    const { redis } = query(new Map());
+    expect(
+      await isKnownEndUserIp(redis, {
+        realmId: REALM,
+        identifierHmac: 'id-hmac',
+        endUserIpHmac: 'ip',
+        knownIpMs: 0,
+      })
+    ).toBe(false);
+    expect(redis.zscore).not.toHaveBeenCalled();
+    await expect(
+      isKnownEndUserIp(redis, { realmId: REALM, identifierHmac: 'a:b', endUserIpHmac: 'ip' })
+    ).rejects.toThrow(/out of shape/);
+  });
+
+  it('rejects when Redis does not answer in time, so the caller fails closed', async () => {
+    const redis = { zscore: vi.fn(() => new Promise<never>(() => undefined)) };
+    await expect(
+      isKnownEndUserIp(redis, {
+        realmId: REALM,
+        identifierHmac: 'id-hmac',
+        endUserIpHmac: 'ip',
+        timeoutMs: 5,
+      })
+    ).rejects.toThrow(/timed out/);
   });
 });

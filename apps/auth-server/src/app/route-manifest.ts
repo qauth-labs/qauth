@@ -128,13 +128,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
   {
     module: 'interaction-api',
     roles: ['web'],
-    plugins: ['dpop', 'egress', 'jwt', 'password', 'sessions'],
+    plugins: ['dpop', 'egress', 'email', 'jwt', 'password', 'sessions'],
     repositories: [
       'adminGrants',
       'authorizationCodes',
       'events',
       'oauthClients',
       'oauthConsents',
+      'realms',
       'sessions',
       'userCredentials',
       'users',
@@ -214,6 +215,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     plugins: ['jwt', 'sessions'],
     repositories: ['authorizationCodes', 'events', 'oauthClients', 'refreshTokens', 'users'],
     load: () => import('./routes/auth/logout'),
+  },
+  {
+    module: 'auth/mail-pass',
+    prefix: '/auth',
+    roles: ['web'],
+    plugins: ['sessions'],
+    repositories: ['events', 'userCredentials', 'users'],
+    load: () => import('./routes/auth/mail-pass'),
   },
   {
     module: 'auth/register',

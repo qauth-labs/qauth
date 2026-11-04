@@ -8,6 +8,7 @@ import type {
   EmailServiceConfig,
   VerificationLink,
 } from '../types';
+import { type EngineMail, type EngineMailContext, renderEngineMail } from './engine-mail/registry';
 import { formatDuration } from './format-duration';
 import { AccountExistsEmail } from './templates/account-exists-email';
 import { renderEmail, renderEmailText } from './templates/render';
@@ -112,6 +113,15 @@ export function createEmailService(
         html,
         from: options?.from || defaultFrom,
       });
+    },
+
+    async sendEngineMail(
+      to: string,
+      mail: EngineMail,
+      context: EngineMailContext
+    ): Promise<EmailResult> {
+      const { subject, html, text } = await renderEngineMail(mail, context);
+      return provider.sendEmail({ to, subject, html, text, from: defaultFrom });
     },
   };
 }

@@ -153,10 +153,11 @@
         },
         "purpose": {
           "type": "string",
-          "description": "`authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). The set may grow in a minor release.",
+          "description": "`authorization`: an authorization request at the authorization endpoint. `logout`: an RP-initiated logout at the end-session endpoint, which asks the person to confirm (#675). `mailed_pass`: the reset or registration start a mailed pass link carries (#637). The set may grow in a minor release.",
           "x-extensible-enum": [
             "authorization",
-            "logout"
+            "logout",
+            "mailed_pass"
           ]
         },
         "step": {
