@@ -168,7 +168,8 @@ services:
       PASSWORD_MIN_LENGTH: ${PASSWORD_MIN_LENGTH:-15}
       PASSWORD_BREACH_LIST_SOURCE: ${PASSWORD_BREACH_LIST_SOURCE:-off}
       # Breach list (#635): the local list's path inside the container (mount
-      # the file read-only; SIGHUP reloads it) and the k-anonymity range
+      # the file read-only; a changed file is loaded again within 30 seconds)
+      # and the k-anonymity range
       # lookup's https URL. Blank is unset.
       BREACHED_PASSWORD_LIST_PATH:
       BREACHED_PASSWORD_RANGE_URL:

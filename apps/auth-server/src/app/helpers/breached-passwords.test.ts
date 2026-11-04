@@ -84,23 +84,25 @@ describe("the server's breach check (#635)", () => {
     await close();
   });
 
-  it('loads the list again on SIGHUP, and stops listening once closed', async () => {
-    const before = process.listenerCount('SIGHUP');
+  it('loads the list again once its file changes, and stops watching once closed', async () => {
     const { fastify, close, log } = stub('local');
-    const breached = await createServerBreachedPasswords(fastify, { listPath });
-    expect(process.listenerCount('SIGHUP')).toBe(before + 1);
+    const breached = await createServerBreachedPasswords(fastify, { listPath, pollIntervalMs: 20 });
     await writeFile(listPath, `${sha1(LISTED)}\n${sha1(UNLISTED)}\n`);
-    process.emit('SIGHUP');
-    await vi.waitFor(() =>
-      expect(log.info).toHaveBeenCalledWith(
-        { trigger: 'SIGHUP', size: 2 },
-        'breached-password list loaded'
-      )
+    await vi.waitFor(
+      () =>
+        expect(log.info).toHaveBeenCalledWith(
+          { trigger: 'change', size: 2 },
+          'breached-password list loaded'
+        ),
+      { timeout: 5_000 }
     );
     expect(await breached.check(REALM, UNLISTED)).toEqual({ kind: 'listed', source: 'local' });
     await close();
-    expect(process.listenerCount('SIGHUP')).toBe(before);
+    // Once closed, a change is no longer read.
+    const loads = log.info.mock.calls.length;
     await writeFile(listPath, `${sha1(LISTED)}:3\n`);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(log.info.mock.calls.length).toBe(loads);
   });
 
   it('fails open, counted and logged, when the list did not load at boot', async () => {
@@ -129,11 +131,9 @@ describe("the server's breach check (#635)", () => {
     await close();
   });
 
-  it('answers not_configured for a source the deployment did not set up, and adds no SIGHUP listener', async () => {
-    const before = process.listenerCount('SIGHUP');
+  it('answers not_configured for a source the deployment did not set up', async () => {
     const { fastify, close } = stub('k_anonymity');
     const breached = await createServerBreachedPasswords(fastify, {});
-    expect(process.listenerCount('SIGHUP')).toBe(before);
     expect(await breached.check(REALM, LISTED)).toEqual({
       kind: 'failed',
       source: 'k_anonymity',

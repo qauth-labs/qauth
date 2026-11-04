@@ -1,3 +1,5 @@
+import { type Stats, unwatchFile, watchFile } from 'node:fs';
+
 import {
   type BreachCheckOutcome,
   type BreachCheckResult,
@@ -37,19 +39,28 @@ export interface ServerBreachedPasswords {
   readonly engine: BreachedPasswordCheck;
 }
 
+/** How often the local list's file is checked for a change: every 30 seconds. */
+export const BREACH_LIST_POLL_INTERVAL_MS = 30_000;
+
 /** What the deployment provides: `BREACHED_PASSWORD_LIST_PATH` and `BREACHED_PASSWORD_RANGE_URL`. */
 export interface BreachedPasswordsConfig {
   readonly listPath?: string;
   readonly rangeUrl?: string;
+  /** How often the list's file is checked for a change; {@link BREACH_LIST_POLL_INTERVAL_MS} by default. */
+  readonly pollIntervalMs?: number;
 }
 
 /**
  * Build the process's breach check (#635).
  *
- * - With `listPath`, the local list is loaded now, at boot, and again on each
- *   `SIGHUP`, without a restart. A load that fails is logged and keeps the
- *   list in use (none, at boot): every check of a realm whose source is
- *   `local` then fails as `list_not_loaded`, which never blocks a sign-in.
+ * - With `listPath`, the local list is loaded now, at boot, and again, without
+ *   a restart, once its file changes (its modification time, size or inode,
+ *   so a file renamed into place counts), checked every
+ *   {@link BREACH_LIST_POLL_INTERVAL_MS}. A file watch, not a signal: the
+ *   image runs the server under `tsx`, which relays SIGINT and SIGTERM only. A
+ *   load that fails is logged and keeps the list in use (none, at boot): every
+ *   check of a realm whose source is `local` then fails as `list_not_loaded`,
+ *   which never blocks a sign-in.
  * - With `rangeUrl`, the range lookup goes through `fastify.egress` (ADR-019
  *   Decision 8), as an operator destination, with the realm's name.
  * - Every result but `off` is counted on `qauth_breached_password_checks_total`;
@@ -74,14 +85,27 @@ export async function createServerBreachedPasswords(
     onResult: (result) => recordBreachCheck(fastify, result),
   });
 
-  if (localList !== undefined) {
+  if (config.listPath !== undefined && localList !== undefined) {
+    const path = config.listPath;
     await reloadBreachList(fastify, localList, 'boot');
-    const onSighup = () => {
-      void reloadBreachList(fastify, localList, 'SIGHUP');
+    const onChange = (current: Stats, previous: Stats) => {
+      if (
+        current.mtimeMs === previous.mtimeMs &&
+        current.size === previous.size &&
+        current.ino === previous.ino
+      ) {
+        return;
+      }
+      void reloadBreachList(fastify, localList, 'change');
     };
-    process.on('SIGHUP', onSighup);
+    // Not persistent: the watch never keeps the process alive.
+    watchFile(
+      path,
+      { interval: config.pollIntervalMs ?? BREACH_LIST_POLL_INTERVAL_MS, persistent: false },
+      onChange
+    );
     fastify.addHook('onClose', async () => {
-      process.off('SIGHUP', onSighup);
+      unwatchFile(path, onChange);
     });
   }
 
@@ -110,7 +134,7 @@ export async function createServerBreachedPasswords(
 async function reloadBreachList(
   fastify: FastifyInstance,
   list: ReloadableBreachList,
-  trigger: 'boot' | 'SIGHUP'
+  trigger: 'boot' | 'change'
 ): Promise<void> {
   const result = await list.reload();
   if (result.loaded) {

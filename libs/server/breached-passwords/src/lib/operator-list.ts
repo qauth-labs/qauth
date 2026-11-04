@@ -229,7 +229,7 @@ export interface ReloadableBreachList {
    * the first success) and says why. Never rejects.
    *
    * Calls made while a load runs share that load and its result, so a burst
-   * of `SIGHUP`s reads the file once.
+   * of changes to the file reads it once.
    */
   reload(): Promise<BreachListReloadResult>;
 }
@@ -237,7 +237,7 @@ export interface ReloadableBreachList {
 /**
  * The reloadable local list at `path`. Nothing is read until the first
  * {@link ReloadableBreachList.reload}: the auth server calls it at boot, and
- * again on `SIGHUP`.
+ * again when the file changes.
  */
 export function createReloadableBreachList(path: string): ReloadableBreachList {
   let list: LocalBreachList | null = null;

@@ -37,7 +37,11 @@ const localList = env.BREACHED_PASSWORD_LIST_PATH
   ? createReloadableBreachList(env.BREACHED_PASSWORD_LIST_PATH)
   : undefined;
 await localList?.reload(); // at boot; a failure leaves no list, and `local` checks fail
-process.on('SIGHUP', () => void localList?.reload()); // a failed reload keeps the list in use
+// When the file changes, load it again (the auth server polls it with `watchFile`);
+// a failed reload keeps the list in use.
+if (env.BREACHED_PASSWORD_LIST_PATH) {
+  watchFile(env.BREACHED_PASSWORD_LIST_PATH, { persistent: false }, () => void localList?.reload());
+}
 
 const checker = createBreachedPasswordChecker({
   localList,

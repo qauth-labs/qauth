@@ -944,7 +944,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // The breach list of new and presented passwords (#635, ADR-020 §3):
   // `fastify.breachedPasswords`. The operator's local list
   // (BREACHED_PASSWORD_LIST_PATH) is loaded here, once per process, and again
-  // on SIGHUP; the range lookup (BREACHED_PASSWORD_RANGE_URL) goes through
+  // when the file changes; the range lookup (BREACHED_PASSWORD_RANGE_URL) goes through
   // the egress client above. Each realm chooses its source
   // (`password.breachListSource`, `off` by default), and a check that fails
   // never blocks a sign-in or a registration.

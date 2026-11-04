@@ -135,7 +135,7 @@ Password hashing and validation configuration.
 | `PASSWORD_MIN_LENGTH`         | number | `15`    | Min length (8-64), the seed of a new realm's `password.minLength`                             |
 | `PASSWORD_MIN_SCORE`          | number | `2`     | Min strength score (0-4), the seed of a new realm's `password.minScore`                       |
 | `PASSWORD_BREACH_LIST_SOURCE` | enum   | `off`   | `off`, `local` or `k_anonymity`, the seed of a new realm's `password.breachListSource` (#635) |
-| `BREACHED_PASSWORD_LIST_PATH` | string | -       | The operator's local breach list (SHA-1 per line); loaded at boot, reloaded on `SIGHUP`       |
+| `BREACHED_PASSWORD_LIST_PATH` | string | -       | The operator's local breach list (SHA-1 per line); loaded at boot, reloaded when it changes   |
 | `BREACHED_PASSWORD_RANGE_URL` | string | -       | The k-anonymity range lookup's https URL; the five-character SHA-1 prefix is appended         |
 | `PASSWORD_MEMORY_COST`        | number | `65536` | Argon2 memory cost (KB)                                                                       |
 | `PASSWORD_TIME_COST`          | number | `3`     | Argon2 iterations                                                                             |

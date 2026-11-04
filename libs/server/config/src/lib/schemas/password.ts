@@ -66,8 +66,8 @@ export const passwordEnvSchema = z.object({
   /**
    * The operator's local breach list (#635): one SHA-1 of a breached password
    * per line, 40 hex characters, optionally followed by `:<count>`. The server
-   * loads it at boot, and a `SIGHUP` loads it again without a restart; a load
-   * that fails keeps the list in use. Unset or blank: no local list, and a
+   * loads it at boot, and again without a restart within 30 seconds of the
+   * file changing; a load that fails keeps the list in use. Unset or blank: no local list, and a
    * realm whose source is `local` gets a failed check, which never blocks a
    * sign-in.
    */

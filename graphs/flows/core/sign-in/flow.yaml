@@ -73,7 +73,7 @@ scope:
     - 'the second factor an account has, which it answers before the forced update (TOTP, #653): until its step exists
       the engine answers a redirect; an account with a passkey proves it by the downgrade rule before the update (#651)'
     - "how the breach list is checked: the operator's local list (BREACHED_PASSWORD_LIST_PATH), loaded at boot and
-      reloaded on SIGHUP, matched by the password's SHA-1; or a k-anonymity range lookup through the egress client to
+      again when its file changes, matched by the password's SHA-1; or a k-anonymity range lookup through the egress client to
       the operator's host (BREACHED_PASSWORD_RANGE_URL), which carries the first five hex characters of that SHA-1 and
       nothing else of the password"
     - "the rounds of the forced update's new password: each runs rules 3 to 8 again first, as drawn above, and this

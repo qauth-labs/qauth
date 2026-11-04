@@ -64,7 +64,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: null,
     since: '0.2.0',
-    docs: 'A file of SHA-1 digests of breached passwords, one per line as 40 hex characters with an optional `:count` (the form the Have I Been Pwned downloader writes), that realms whose `password.breachListSource` is `local` check passwords against; loaded at boot, loaded again without a restart on `SIGHUP`, and kept as it was when a reload fails; unset, there is no local list, and a realm that names `local` gets a failed check, which never blocks a sign-in.',
+    docs: 'A file of SHA-1 digests of breached passwords, one per line as 40 hex characters with an optional `:count` (the form the Have I Been Pwned downloader writes), that realms whose `password.breachListSource` is `local` check passwords against; loaded at boot, loaded again without a restart within 30 seconds of the file changing, and kept as it was when a reload fails; unset, there is no local list, and a realm that names `local` gets a failed check, which never blocks a sign-in.',
   },
   {
     name: 'BREACHED_PASSWORD_RANGE_URL',
