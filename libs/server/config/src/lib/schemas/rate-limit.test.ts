@@ -45,8 +45,10 @@ describe('rateLimitEnvSchema CEREMONY_APP_PEER_RATE_LIMIT', () => {
     rateLimitEnvSchema.parse(raw === undefined ? {} : { CEREMONY_APP_PEER_RATE_LIMIT: raw })
       .CEREMONY_APP_PEER_RATE_LIMIT;
 
-  it('has no default', () => {
+  it('has no default, and reads blank as unset', () => {
     expect(cap(undefined)).toBeUndefined();
+    expect(cap('')).toBeUndefined();
+    expect(cap(' ')).toBeUndefined();
   });
 
   it('takes a positive whole number of reads per minute', () => {

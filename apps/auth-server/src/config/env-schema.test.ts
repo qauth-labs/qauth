@@ -246,11 +246,21 @@ describe('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT', () => {
     expect(parsed.CEREMONY_APP_PEER_RATE_LIMIT).toBe(600);
   });
 
-  it('refuses the list alone, with a message that names both settings', () => {
-    const issues = ceremonyIssues({ CEREMONY_APP_PEERS: '10.0.4.12' });
-    expect(issues.map((issue) => issue.path.join('.'))).toEqual(['CEREMONY_APP_PEER_RATE_LIMIT']);
-    expect(issues[0].message).toContain('CEREMONY_APP_PEERS');
-    expect(issues[0].message).toContain('CEREMONY_APP_PEER_RATE_LIMIT');
+  it('refuses the list alone, or with a blank cap, with a message that names both settings', () => {
+    for (const extra of [
+      { CEREMONY_APP_PEERS: '10.0.4.12' },
+      { CEREMONY_APP_PEERS: '10.0.4.12', CEREMONY_APP_PEER_RATE_LIMIT: '' },
+    ] as Record<string, string>[]) {
+      const issues = ceremonyIssues(extra);
+      expect(issues.map((issue) => issue.path.join('.'))).toEqual(['CEREMONY_APP_PEER_RATE_LIMIT']);
+      expect(issues[0].message).toContain('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT');
+    }
+  });
+
+  it('boots with both blank, as a compose file that passes them through unset does', () => {
+    expect(ceremonyIssues({ CEREMONY_APP_PEERS: '', CEREMONY_APP_PEER_RATE_LIMIT: '' })).toEqual(
+      []
+    );
   });
 
   it('refuses the cap alone, or with an empty list, with a message that names both settings', () => {
