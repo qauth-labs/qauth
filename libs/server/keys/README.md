@@ -183,7 +183,7 @@ const keys = createKeyFactory({
   hybridSigning: cryptoEnv.HYBRID_SIGNING_ENABLED,
 });
 
-await keys.provisionRealmKeys(realmId); // token_signing, event_signing, cookie_hmac, data_at_rest
+await keys.provisionRealmKeys(realmId); // token_signing, event_signing (Ed25519 and RS256), cookie_hmac, data_at_rest
 const [webhook] = await keys.createKey({
   realmId,
   purpose: 'webhook_signing',
@@ -218,7 +218,9 @@ and both rows share one `pair_id`.
 
 `provisionRealmKeys` creates a realm's standard keys in one transaction: all of them or none. It
 skips a purpose that already holds an active key of its default algorithm (with hybrid signing on,
-both keys of the `token_signing` pair), so it can run at every boot. It refuses a realm that holds
+both keys of the `token_signing` pair), and creates a key of each algorithm the purpose also
+provisions (`alsoProvisioned`: the RS256 `event_signing` key that signs logout tokens, #624) that it
+lacks, so it can run at every boot. It refuses a realm that holds
 only one half of that pair. Two calls for one realm must not run at once: a caller on several nodes
 serializes them, as the boot step's advisory lock does (#485). Both functions take an outer
 transaction (`tx`) so a realm and its keys can be created together.
@@ -412,12 +414,15 @@ What the signer guarantees:
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 
-- **The realm JWKS holds both signing purposes** (#624, d-1104-06). It lists the `token_signing`
-  keys, then the `event_signing` keys (`REALM_JWKS_PURPOSES`): a relying party verifies a logout
-  token against the realm's `jwks_uri` (OpenID Connect Back-Channel Logout 1.0 §2.6). The SSF
-  transmitter serves the `event_signing` keys again at its own `jwks_uri`, from
-  `getVerificationKeys`. A verifier tells the token kinds apart by `typ`; QAuth's own verifiers
-  resolve keys by purpose and never read the realm JWKS.
+- **Each event key signs one kind of event token** (#624). A realm holds two `event_signing`
+  keys: the Ed25519 one signs Security Event Tokens, the RS256 one logout tokens, in the algorithm
+  ID tokens are signed with (`EVENT_TOKEN_ALGORITHM`); the signer refuses an event token in the
+  other algorithm. The realm JWKS lists the `token_signing` keys, then the RS256 `event_signing`
+  keys (`isRealmJwksKey`): a relying party verifies a logout token against the realm's `jwks_uri`
+  (OpenID Connect Back-Channel Logout 1.0 §2.6). It lists no SET key, so a SET never verifies
+  against it (d-1026-09); the SSF transmitter serves the Ed25519 keys at its own `jwks_uri`, from
+  `getVerificationKeys`. QAuth's own verifiers resolve keys by purpose and never read the realm
+  JWKS.
 
 - **No key leaves it.** No operation returns a private key, a key object or symmetric material,
   except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A webhook secret

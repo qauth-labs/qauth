@@ -119,11 +119,13 @@ describe('bootRealmKeys — first boot after the upgrade', () => {
     expect(result.generated.map((key) => `${key.purpose}/${key.algorithm}`).sort()).toEqual([
       'data_at_rest/A256GCM',
       'event_signing/EdDSA',
+      'event_signing/RS256',
     ]);
     expect(inventory(store)).toEqual([
       'cookie_hmac/HS256',
       'data_at_rest/A256GCM',
       'event_signing/EdDSA',
+      'event_signing/RS256',
       'token_signing/EdDSA',
       'token_signing/RS256',
     ]);
@@ -715,6 +717,7 @@ describe('bootRealmKeys — a fresh deployment', () => {
       'cookie_hmac/HS256',
       'data_at_rest/A256GCM',
       'event_signing/EdDSA',
+      'event_signing/RS256',
       'token_signing/EdDSA',
       'token_signing/RS256',
     ]);
@@ -830,7 +833,7 @@ describe('bootRealmKeys — the KEK', () => {
       realmId: REALM,
     });
 
-    expect(store.rows).toHaveLength(5);
+    expect(store.rows).toHaveLength(6);
   });
 });
 

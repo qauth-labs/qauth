@@ -74,6 +74,7 @@ import type {
 import { isSignerCallAllowed, isSignerCaller, type SignerCaller } from './signer-policy';
 import {
   CLIENT_ASSERTION_TYP,
+  EVENT_TOKEN_ALGORITHM,
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
@@ -632,7 +633,20 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
       const typ = resolveTyp(purpose, fields['typ']);
       const definition = KEY_PURPOSES[purpose];
-      const algorithm = fields['algorithm'] ?? definition.defaultAlgorithm;
+      // An event token is signed in its kind's algorithm (#624): a SET with
+      // the Ed25519 key, a logout token with the RS256 key the realm JWKS
+      // publishes. Unnamed, the kind's algorithm; named, it must be that one.
+      const eventAlgorithm =
+        purpose === 'event_signing'
+          ? EVENT_TOKEN_ALGORITHM[typ as keyof typeof EVENT_TOKEN_ALGORITHM]
+          : undefined;
+      const algorithm = fields['algorithm'] ?? eventAlgorithm ?? definition.defaultAlgorithm;
+      if (eventAlgorithm !== undefined && algorithm !== eventAlgorithm) {
+        throw new SignerRequestRefusedError(
+          'ALGORITHM_NOT_ALLOWED',
+          `An event token of type '${typ}' is signed with ${eventAlgorithm} only`
+        );
+      }
       if (
         !isJwsKeyAlgorithm(algorithm) ||
         !(definition.algorithms as readonly string[]).includes(algorithm)

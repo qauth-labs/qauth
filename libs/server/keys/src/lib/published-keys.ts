@@ -7,7 +7,7 @@ import type { RealmJwks, Signer, VerificationKey } from './signer';
 import { SignerAccessDeniedError, SignerRequestRefusedError } from './signer-errors';
 import type { PublicKeyRecord, SignerKeyStore } from './signer-key-store';
 import { isSignerCallAllowed, isSignerCaller } from './signer-policy';
-import { isVerificationKeyPurpose, REALM_JWKS_PURPOSES } from './signer-typ';
+import { isRealmJwksKey, isVerificationKeyPurpose, REALM_JWKS_PURPOSES } from './signer-typ';
 
 /**
  * A realm's published keys (`realm_public_keys`), read without a KEK
@@ -110,17 +110,16 @@ export function verificationKeysOf(
 }
 
 /**
- * The realm's JWKS at `at`: its published token and event keys
- * ({@link REALM_JWKS_PURPOSES}) inside their window, none compromised. The window is {@link isPublishedAt}'s, as for the verification
+ * The realm's JWKS at `at`: its published token keys and the event keys that
+ * sign logout tokens ({@link isRealmJwksKey}), inside their window, none
+ * compromised. The window is {@link isPublishedAt}'s, as for the verification
  * set, so a retired key leaves both together.
  */
 export function realmJwksOf(records: readonly PublicKeyRecord[], at: number): RealmJwks {
   const keys = sortForPublication(records)
     .filter(
       (record) =>
-        (REALM_JWKS_PURPOSES as readonly string[]).includes(record.purpose) &&
-        record.status !== 'compromised' &&
-        isPublishedAt(record, at)
+        isRealmJwksKey(record) && record.status !== 'compromised' && isPublishedAt(record, at)
     )
     .map(publicJwkOf);
   return Object.freeze({ keys: Object.freeze(keys) });

@@ -305,18 +305,19 @@ describe('OIDC conformance — discovery document', () => {
 });
 
 describe('OIDC conformance — JWKS', () => {
-  it('publishes the EdDSA Ed25519 token key (no private component) when RS256 is not configured, then the event key', async () => {
+  it('publishes the EdDSA Ed25519 token key (no private component) when RS256 is not configured, then the RS256 logout-token key', async () => {
     const server = await buildApp();
     const { app } = server;
     try {
       const jwks = await fetchJwks(app);
-      // The token key, then the event key that signs logout tokens (#624).
+      // The token key, then the RS256 event key that signs logout tokens
+      // (#624); the Ed25519 event key, which signs SETs, is not here.
       expect(jwks.keys.map((key) => key['kid'])).toEqual([
         await activeKid(server, 'EdDSA'),
-        await activeKid(server, 'EdDSA', 'event_signing'),
+        await activeKid(server, 'RS256', 'event_signing'),
       ]);
+      expect(jwks.keys.map((key) => key['kty'])).toEqual(['OKP', 'RSA']);
       for (const key of jwks.keys) {
-        expect(key['kty']).toBe('OKP');
         expect(key).not.toHaveProperty('d');
       }
       const [jwk] = jwks.keys;

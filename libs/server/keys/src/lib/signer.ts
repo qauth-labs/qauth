@@ -190,8 +190,8 @@ export interface Signer {
   ): Promise<readonly VerificationKey[]>;
 
   /**
-   * The realm's JWKS (RFC 7517 §5): every published key of
-   * `REALM_JWKS_PURPOSES` inside its publication window, `next` keys included,
+   * The realm's JWKS (RFC 7517 §5): every published token key and logout
+   * token key (`isRealmJwksKey`) inside its publication window, `next` keys included,
    * so relying parties learn a key before it signs. Never a `compromised` key.
    * The order is fixed, so every node returns the same document.
    */

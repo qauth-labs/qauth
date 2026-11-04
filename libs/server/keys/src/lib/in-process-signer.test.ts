@@ -473,21 +473,46 @@ describe('signJws', () => {
     const sign = (signer: Signer, claims: Record<string, unknown>, typ = 'logout+jwt') =>
       signer.signJws('delivery', { realmId: REALM_A, purpose: 'event_signing', typ, claims });
 
-    it('signs a logout token for the delivery role with an event key the realm JWKS publishes, the realm issuer as iss, typed logout+jwt (§2.4, §2.6)', async () => {
+    it('signs a logout token for the delivery role with the RS256 event key the realm JWKS publishes, the realm issuer as iss, typed logout+jwt (§2.4, §2.6)', async () => {
       const { signer, keys } = await setup();
 
       const token = await sign(signer, logoutToken);
 
-      const kid = activeKid(keys, REALM_A, 'event_signing');
-      // Signed with an asymmetric key, never alg none (§2.6), typed (§2.4).
-      expect(decodeProtectedHeader(token)).toEqual({ alg: 'EdDSA', kid, typ: 'logout+jwt' });
+      const kid = activeKid(keys, REALM_A, 'event_signing', 'RS256');
+      // Signed with an asymmetric key, never alg none (§2.6), typed (§2.4),
+      // in the algorithm a fresh realm signs its ID tokens with (§2.4).
+      expect(decodeProtectedHeader(token)).toEqual({ alg: 'RS256', kid, typ: 'logout+jwt' });
       // iss is the realm's issuer, which the delivery role cannot set (§2.4).
       expect(decodeJwt(token)).toEqual({ iss: ISSUER_A, ...logoutToken });
       const jwks = await signer.getJwks('local', REALM_A);
       const jwk = jwks.keys.find((key) => key.kid === kid);
-      if (jwk === undefined) throw new Error('the realm JWKS lacks the event key');
-      const verified = await compactVerify(token, await importJWK(jwk as JWK, 'EdDSA'));
+      if (jwk === undefined) throw new Error('the realm JWKS lacks the logout-token key');
+      const verified = await compactVerify(token, await importJWK(jwk as JWK, 'RS256'));
       expect(verified.protectedHeader.typ).toBe('logout+jwt');
+    });
+
+    it("signs each event token kind with its own key, and refuses the other kind's algorithm", async () => {
+      const { signer, keys } = await setup();
+      const set = { jti: 'j', iat: NOW_SECONDS, aud: 'receiver', events: { 'urn:e': {} } };
+
+      // The Ed25519 event key signs SETs; the realm JWKS does not list it.
+      const token = await sign(signer, set, 'secevent+jwt');
+      const kid = activeKid(keys, REALM_A, 'event_signing');
+      expect(decodeProtectedHeader(token)).toMatchObject({ alg: 'EdDSA', kid });
+      const jwks = await signer.getJwks('local', REALM_A);
+      expect(jwks.keys.map((key) => key.kid)).not.toContain(kid);
+
+      const as = (typ: string, algorithm: string, claims: Record<string, unknown>) =>
+        signer.signJws('delivery', {
+          realmId: REALM_A,
+          purpose: 'event_signing',
+          typ,
+          algorithm,
+          claims,
+        } as SignJwsRequest);
+      expect(await refusal(as('logout+jwt', 'EdDSA', logoutToken))).toBe('ALGORITHM_NOT_ALLOWED');
+      expect(await refusal(as('secevent+jwt', 'RS256', set))).toBe('ALGORITHM_NOT_ALLOWED');
+      await expect(as('logout+jwt', 'RS256', logoutToken)).resolves.toEqual(expect.any(String));
     });
 
     it.each([
@@ -1419,23 +1444,31 @@ describe('encrypt and decrypt', () => {
 });
 
 describe('getVerificationKeys and getJwks', () => {
-  it('publish the token keys, then the event keys, in the JWKS, never a symmetric key', async () => {
+  it('publish the token keys, then the RS256 event key, in the JWKS, never a SET key or a symmetric key', async () => {
     const { signer, keys } = await setup();
 
     const jwks = await signer.getJwks('local', REALM_A);
     const events = await signer.getVerificationKeys('local', REALM_A, 'event_signing');
 
     // A relying party verifies a logout token at the realm's jwks_uri
-    // (Back-Channel Logout 1.0 §2.6, #624); a SET receiver reads the same keys
-    // at the SSF transmitter's own JWKS.
+    // (Back-Channel Logout 1.0 §2.6, #624). The Ed25519 event key signs SETs
+    // only, and a SET receiver reads it at the SSF transmitter's own JWKS.
+    const logout = activeKid(keys, REALM_A, 'event_signing', 'RS256');
     expect(jwks.keys.map((key) => key.kid)).toEqual([
       activeKid(keys, REALM_A, 'token_signing'),
-      activeKid(keys, REALM_A, 'event_signing'),
+      logout,
     ]);
-    expect(events.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'event_signing')]);
+    expect(jwks.keys.map((key) => [key.kty, key.alg, key.use])).toEqual([
+      ['OKP', 'EdDSA', 'sig'],
+      ['RSA', 'RS256', 'sig'],
+    ]);
+    expect(events.map((key) => key.kid).sort()).toEqual(
+      [activeKid(keys, REALM_A, 'event_signing'), logout].sort()
+    );
     for (const key of [...jwks.keys, ...events.map((event) => event.publicJwk)]) {
-      expect(key).toMatchObject({ kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig' });
       expect(key).not.toHaveProperty('d');
+      expect(key).not.toHaveProperty('p');
+      expect(key).not.toHaveProperty('k');
     }
   });
 
@@ -1468,11 +1501,14 @@ describe('getVerificationKeys and getJwks', () => {
     expect(await signer.getVerificationKeys('local', REALM_A, 'token_signing')).toEqual([]);
     expect((await signer.getJwks('local', REALM_A)).keys.map((key) => key.kid)).not.toContain(kid);
 
-    const event = activeKid(keys, REALM_A, 'event_signing');
-    store.update(REALM_A, event, { status: 'compromised' });
+    const set = activeKid(keys, REALM_A, 'event_signing');
+    const logout = activeKid(keys, REALM_A, 'event_signing', 'RS256');
+    store.update(REALM_A, logout, { status: 'compromised' });
     advance(REFRESH_MS);
     expect((await signer.getJwks('local', REALM_A)).keys).toEqual([]);
-    expect(await signer.getVerificationKeys('local', REALM_A, 'event_signing')).toEqual([]);
+    expect(
+      (await signer.getVerificationKeys('local', REALM_A, 'event_signing')).map((key) => key.kid)
+    ).toEqual([set]);
   });
 
   it('return frozen copies', async () => {

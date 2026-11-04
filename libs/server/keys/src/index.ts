@@ -92,7 +92,9 @@ export {
 } from './lib/signer-policy';
 export {
   CLIENT_ASSERTION_TYP,
+  EVENT_TOKEN_ALGORITHM,
   isJwsSigningPurpose,
+  isRealmJwksKey,
   isTypAllowed,
   isVerificationKeyPurpose,
   JWS_SIGNING_PURPOSES,

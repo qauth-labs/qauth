@@ -1,7 +1,7 @@
 import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 
 import { requireDockerOrSkip, truncateDomainTablesStatement } from '@qauth-labs/shared-testing';
-import { createLocalJWKSet, importPKCS8, jwtVerify, type JWTVerifyGetKey, SignJWT } from 'jose';
+import { createLocalJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -114,7 +114,7 @@ describe('key import at first boot, through the real auth-server', () => {
     return rows;
   }
 
-  it('stores the keys; the JWKS has the same public keys as before, plus a kid on Ed25519 and the event key', async () => {
+  it('stores the keys; the JWKS has the same public keys as before, plus a kid on Ed25519 and the logout-token key', async () => {
     const server = await boot();
     try {
       const stored = await storedKeys(server);
@@ -122,6 +122,7 @@ describe('key import at first boot, through the real auth-server', () => {
         'cookie_hmac/HS256',
         'data_at_rest/A256GCM',
         'event_signing/EdDSA',
+        'event_signing/RS256',
         'token_signing/EdDSA',
         'token_signing/RS256',
       ]);
@@ -132,18 +133,24 @@ describe('key import at first boot, through the real auth-server', () => {
       const edKid = stored.find(
         (key) => key.algorithm === 'EdDSA' && key.purpose === 'token_signing'
       )?.kid;
-      const rsaKid = stored.find((key) => key.algorithm === 'RS256')?.kid;
-      const eventKid = stored.find((key) => key.purpose === 'event_signing')?.kid;
+      const rsaKid = stored.find(
+        (key) => key.algorithm === 'RS256' && key.purpose === 'token_signing'
+      )?.kid;
+      const logoutKid = stored.find(
+        (key) => key.algorithm === 'RS256' && key.purpose === 'event_signing'
+      )?.kid;
       // The realm's JWKS since #491: the store's keys in the signer's fixed
       // order (purpose, publication, kid), which does not follow the
       // algorithm. A verifier picks a key by kid, so the order means nothing.
-      // The event key that signs logout tokens follows the token keys (#624).
+      // The RS256 event key that signs logout tokens follows the token keys;
+      // the Ed25519 one, which signs SETs, is not here (#624, d-1026-09).
       expect(keys).toHaveLength(3);
       expect(keys.map((key) => key['kid'])).toEqual([
         expect.any(String),
         expect.any(String),
-        eventKid,
+        logoutKid,
       ]);
+      expect(keys.filter((key) => key['kty'] === 'OKP')).toHaveLength(1);
       const byKid = new Map(keys.map((key) => [key['kid'], publicMembers(key)]));
       expect(byKid.get(edKid)).toEqual(
         publicMembers(createPublicKey(jwt.publicKey).export({ format: 'jwk' }))
@@ -185,24 +192,12 @@ describe('key import at first boot, through the real auth-server', () => {
       ).json<{
         keys: Parameters<typeof createLocalJWKSet>[0]['keys'];
       }>();
-      // The realm JWKS still publishes the key that signed it. It lists the
-      // event key that signs logout tokens too (#624), a second Ed25519 key:
-      // a verifier that picks a key without a `kid` finds both, and jose asks
-      // its caller to try each until the token expires (CHANGELOG, #624). A
-      // token issued since the upgrade names its key in `kid`.
-      const refusal: unknown = await jwtVerify(token, createLocalJWKSet(jwks), {
-        issuer: ISSUER,
-      }).catch((error: unknown) => error);
-      expect(refusal).toMatchObject({ code: 'ERR_JWKS_MULTIPLE_MATCHING_KEYS' });
-      const candidates = refusal as AsyncIterable<Awaited<ReturnType<JWTVerifyGetKey>>>;
-      let verified = 0;
-      for await (const key of candidates) {
-        verified += await jwtVerify(token, key, { issuer: ISSUER }).then(
-          () => 1,
-          () => 0
-        );
-      }
-      expect(verified).toBe(1);
+      // The realm JWKS holds one Ed25519 key, the token key: the event key
+      // that signs SETs is not in it (#624), so a verifier that picks a key
+      // without a `kid` still finds the one that signed this token.
+      await expect(
+        jwtVerify(token, createLocalJWKSet(jwks), { issuer: ISSUER })
+      ).resolves.toBeDefined();
 
       const stored = await server.app.signer.getVerificationKeys(
         'local',

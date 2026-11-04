@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLIENT_ASSERTION_TYP,
+  EVENT_TOKEN_ALGORITHM,
   isJwsSigningPurpose,
+  isRealmJwksKey,
   isTypAllowed,
   isVerificationKeyPurpose,
   JWS_SIGNING_PURPOSES,
@@ -21,9 +23,24 @@ describe('JWS_TYP_BY_PURPOSE', () => {
     expect(JWS_SIGNING_PURPOSES).toEqual(['token_signing', 'event_signing']);
   });
 
-  it('publishes the event signing keys in the realm JWKS after the token keys, for logout tokens (Back-Channel Logout 1.0 §2.6, #624)', () => {
+  it('signs each event token kind in one algorithm: SETs with EdDSA, logout tokens with RS256 as ID tokens (#624)', () => {
+    expect(EVENT_TOKEN_ALGORITHM).toEqual({ 'secevent+jwt': 'EdDSA', 'logout+jwt': 'RS256' });
+    expect(Object.isFrozen(EVENT_TOKEN_ALGORITHM)).toBe(true);
+    expect(Object.keys(EVENT_TOKEN_ALGORITHM).sort()).toEqual(
+      [...JWS_TYP_BY_PURPOSE.event_signing].sort()
+    );
+  });
+
+  it('publishes the token keys, then the logout-token keys, in the realm JWKS, never a SET key (Back-Channel Logout 1.0 §2.6, #624)', () => {
     expect(REALM_JWKS_PURPOSES).toEqual(['token_signing', 'event_signing']);
     expect(Object.isFrozen(REALM_JWKS_PURPOSES)).toBe(true);
+    for (const algorithm of ['EdDSA', 'RS256', 'ML-DSA-65']) {
+      expect(isRealmJwksKey({ purpose: 'token_signing', algorithm }), algorithm).toBe(true);
+    }
+    expect(isRealmJwksKey({ purpose: 'event_signing', algorithm: 'RS256' })).toBe(true);
+    expect(isRealmJwksKey({ purpose: 'event_signing', algorithm: 'EdDSA' })).toBe(false);
+    expect(isRealmJwksKey({ purpose: 'oid4vp_request_signing', algorithm: 'ES256' })).toBe(false);
+    expect(isRealmJwksKey({ purpose: 'cookie_hmac', algorithm: 'HS256' })).toBe(false);
   });
 
   it('shares no typ between purposes', () => {

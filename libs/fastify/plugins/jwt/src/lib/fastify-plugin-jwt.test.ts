@@ -455,14 +455,17 @@ describe('signing through the signer (#491)', () => {
     try {
       const jwksA = await app.jwtUtils.getJwks(realms.a);
       const jwksB = await app.jwtUtils.getJwks(realms.b);
-      // The token key, then the event key that signs logout tokens (#624).
+      // The token key, then the RS256 event key that signs logout tokens (#624).
       expect(jwksA.keys.map((key) => key.kid)).toEqual([
         await activeKid(realms, realms.a, 'EdDSA'),
-        await activeKid(realms, realms.a, 'EdDSA', 'event_signing'),
+        await activeKid(realms, realms.a, 'RS256', 'event_signing'),
       ]);
+      for (const jwks of [jwksA, jwksB]) {
+        expect(jwks.keys.map((key) => key.alg)).toEqual(['EdDSA', 'RS256']);
+      }
       for (const key of [...jwksA.keys, ...jwksB.keys]) {
         expect(key).not.toHaveProperty('d');
-        expect(key).toMatchObject({ alg: 'EdDSA', use: 'sig' });
+        expect(key).toMatchObject({ use: 'sig' });
       }
 
       const token = await app.jwtUtils.signAccessToken(realms.a, {

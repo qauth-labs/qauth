@@ -116,6 +116,13 @@ export interface KeyPurposeDefinition {
    */
   readonly hybridCompanion?: KeyAlgorithm;
   /**
+   * Algorithms besides {@link defaultAlgorithm} that every realm holds an
+   * active key of: `provisionRealmKeys` creates each one missing, on its own
+   * key, never as a hybrid pair. `event_signing` holds an RS256 key beside its
+   * Ed25519 one, for logout tokens (#624).
+   */
+  readonly alsoProvisioned?: readonly KeyAlgorithm[];
+  /**
    * Whether only a federation-operator deployment may create the purpose's
    * keys. Every other deployment refuses them (ADR-019 Decision 9).
    */
@@ -167,13 +174,14 @@ export const KEY_PURPOSES = freezeRegistry({
     hybridCompanion: 'ML-DSA-65',
   },
   event_signing: {
-    description: 'Signs Security Event Tokens and logout tokens.',
+    description: 'Signs Security Event Tokens (its Ed25519 key) and logout tokens (its RS256 key).',
     kind: 'signing',
     algorithms: ['EdDSA', 'RS256'],
     defaultAlgorithm: 'EdDSA',
     scoped: false,
     published: true,
     rotation: AUTOMATIC,
+    alsoProvisioned: ['RS256'],
   },
   federation_entity: {
     description: "Signs the realm's OpenID Federation entity statements.",
@@ -283,7 +291,9 @@ export type KeyPurpose = keyof typeof KEY_PURPOSES;
 
 /**
  * The keys every realm gets when it is created (`provisionRealmKeys`): token
- * and event signing, the cookie HMAC and data at rest.
+ * and event signing, the cookie HMAC and data at rest, each in its default
+ * algorithm and in every algorithm its purpose also provisions
+ * (`alsoProvisioned`).
  */
 export const STANDARD_REALM_KEY_PURPOSES = Object.freeze([
   'token_signing',
