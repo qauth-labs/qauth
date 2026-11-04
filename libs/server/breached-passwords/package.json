@@ -1,0 +1,16 @@
+{
+  "name": "@qauth-labs/server-breached-passwords",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/server-egress": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}
