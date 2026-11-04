@@ -142,7 +142,7 @@
       "section": "2.4",
       "level": "MUST",
       "quote": "A Logout Token MUST be signed and MAY also be encrypted.",
-      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — signed by the signer role with the realm's RS256 event_signing key, which the realm JWKS publishes (libs/server/keys/src/lib/signer-typ.ts, EVENT_TOKEN_ALGORITHM and isRealmJwksKey)",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — signed by the signer role with the realm's token_signing key, which the realm JWKS publishes",
       "status": "covered",
       "evidenceMatch": "signs a logout token for the delivery role"
     },
@@ -151,11 +151,9 @@
       "section": "2.4",
       "level": "MUST",
       "quote": "The same keys are used to sign and encrypt Logout Tokens as are used for ID Tokens.",
-      "applies": "libs/server/keys/src/lib/signer-typ.ts (EVENT_TOKEN_ALGORITHM) — logout tokens are signed with the realm's RS256 event_signing key, in the algorithm a fresh realm signs its ID tokens with, published in the realm JWKS; ID tokens are signed with a token_signing key",
-      "status": "waived",
-      "reason": "ADR-019 Decision 9 gives logout-token signing to the event_signing purpose, so that the delivery role can ask the signer for event tokens and never for an access token or an ID token. The logout token is signed in the ID tokens' algorithm (RS256, d-1104-08) with a key the realm JWKS publishes, so a relying party verifies it at jwks_uri as §2.6 asks; but it is not the ID tokens' key, and a realm that signs its ID tokens with EdDSA (one upgraded without an RS256 key) still signs its logout tokens with RS256.",
-      "decision": "docs/adr/019-deployment-topology-and-trust-boundaries.md",
-      "revisit": "2027-01-31"
+      "applies": "libs/server/keys/src/lib/signer-typ.ts (JWS_TYP_BY_PURPOSE, idTokenAlgorithm) — logout+jwt is a token_signing type, signed with the key and in the algorithm of the realm's ID tokens (ADR-019 Decision 9, amended 2026-11-04)",
+      "status": "covered",
+      "evidenceMatch": "signs a logout token with the key and algorithm of the realm's ID tokens"
     },
     {
       "id": "backchannel-2_4-typed",
@@ -198,7 +196,7 @@
       "section": "2.6",
       "level": "MUST NOT",
       "quote": "Additionally, an alg with the value none MUST NOT be used for Logout Tokens.",
-      "applies": "libs/server/keys/src/lib/in-process-signer.ts — the signer signs with an asymmetric event_signing key; it has no unsigned mode.",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts — the signer signs with an asymmetric token_signing key; it has no unsigned mode.",
       "status": "covered",
       "evidenceMatch": "signs a logout token for the delivery role"
     },

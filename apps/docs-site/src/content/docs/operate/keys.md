@@ -47,8 +47,7 @@ gets these keys at its first boot:
 | `token_signing` | EdDSA     | Always                 | `/.well-known/jwks.json`                         |
 | `token_signing` | RS256     | A fresh realm only     | `/.well-known/jwks.json`                         |
 | `token_signing` | ML-DSA-65 | With hybrid signing on | `/.well-known/jwks.json`                         |
-| `event_signing` | EdDSA     | Always                 | `/ssf/jwks.json`: it signs SETs                  |
-| `event_signing` | RS256     | Always                 | `/.well-known/jwks.json`: it signs logout tokens |
+| `event_signing` | EdDSA     | Always                 | `/ssf/jwks.json`, for the SSF transmitter's SETs |
 | `cookie_hmac`   | HS256     | Always                 | Never: it signs the browser cookies              |
 | `data_at_rest`  | A256GCM   | Always                 | Never: it encrypts the realm's secrets           |
 
@@ -429,11 +428,11 @@ cache, so a rotation through the store will change nothing for a relying party
 that follows the rule. A key replaced through its variable leaves the JWKS at
 once: such a relying party refuses the old key's tokens within 5 minutes.
 
-The JWKS lists one more key after the token keys: the realm's RS256 event
-key, which signs
-[back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout) and
-nothing else. The Ed25519 event key, which signs Security Event Tokens, is
-served only at the SSF transmitter's `/ssf/jwks.json`.
+The token keys sign
+[back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout) too,
+in the algorithm of the realm's ID tokens, as OpenID Connect Back-Channel
+Logout 1.0 §2.4 asks: a relying party verifies them at this JWKS, as it
+verifies ID tokens.
 
 ## Key formats
 

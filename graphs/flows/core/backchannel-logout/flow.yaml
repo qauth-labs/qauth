@@ -259,7 +259,7 @@ states:
       delivery's id, the same on every retry of it, so an app can tell a retry it already acted on), events with the http://schemas.openid.net/event/backchannel-logout member set to {}, sub
       (the user's id, as the ID tokens name the user) and sid (the session). There is no nonce. The route hands them to
       the delivery role's signer handle with typ logout+jwt; the signer adds iss, the realm's issuer, and signs with
-      the realm's RS256 event_signing key, which the realm JWKS publishes. The route holds no key.
+      the key and algorithm of the realm's ID tokens, which the realm JWKS publishes (§2.4). The route holds no key.
     invoke: { external: signer }
     on:
       DONE:
