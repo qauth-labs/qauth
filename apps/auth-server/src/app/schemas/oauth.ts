@@ -712,6 +712,13 @@ export const dynamicClientRegistrationRequestSchema = z.object({
   // route may send the browser after a logout. Bounded like `redirect_uris`;
   // the handler checks each entry by the redirect URI rule.
   post_logout_redirect_uris: boundedArray(z.array(z.string().min(1).max(2048)), 20).optional(),
+  // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): where QAuth POSTs a
+  // logout token when a session that signed a user in to this client ends.
+  // The handler checks its form, then its addresses through the egress
+  // client: a private or loopback address is refused.
+  backchannel_logout_uri: z.string().min(1).max(2048).optional(),
+  // Back-Channel Logout 1.0 §2.2: the client needs `sid` in every logout token.
+  backchannel_logout_session_required: z.boolean().optional(),
   grant_types: boundedArray(
     z.array(
       z.enum([
@@ -773,6 +780,10 @@ export const dynamicClientRegistrationResponseSchema = z.object({
   redirect_uris: z.array(z.string()).optional(),
   /** Echoed when the client registered at least one (#675). */
   post_logout_redirect_uris: z.array(z.string()).optional(),
+  /** Echoed when the client registered one (#624). */
+  backchannel_logout_uri: z.string().optional(),
+  /** Echoed with the URI (#624). */
+  backchannel_logout_session_required: z.boolean().optional(),
   grant_types: z.array(z.string()),
   response_types: z.array(z.string()),
   token_endpoint_auth_method: z.string(),

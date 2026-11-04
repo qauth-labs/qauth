@@ -148,16 +148,19 @@ describe('what each role loads (the boot-time list)', () => {
     expect([...pluginsFor(['admin'])]).toEqual(['dpop', 'jwt']);
   });
 
-  it('gives delivery the event store and the SSF streams, and no identity data', () => {
+  it('gives delivery the event store, the SSF streams and the back-channel logout clients, and no identity data', () => {
     expect(repositoriesFor(['delivery'])).toEqual([
       'realms',
       'events',
       'eventDeliveries',
       'eventRetention',
       'ssfStreams',
+      'backchannelLogoutClients',
       'realmPublicKeys',
     ]);
-    expect([...pluginsFor(['delivery'])]).toEqual(['ssf', 'eventDelivery']);
+    // The egress client, with the deployment's allowlist, for the logout
+    // tokens' POSTs (#624).
+    expect([...pluginsFor(['delivery'])]).toEqual(['ssf', 'eventDelivery', 'egress']);
   });
 
   it('keeps the API-only stores out of web', () => {

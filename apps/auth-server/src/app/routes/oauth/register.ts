@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
+import { assertRegistrableBackchannelLogoutDestination } from '../../helpers/backchannel-logout-destination';
 import { assertDeveloperClientLimit } from '../../helpers/developer-client-limit';
 import {
   registrationSchemaError,
@@ -103,6 +104,19 @@ export default async function (fastify: FastifyInstance) {
       // them with HTTP 400 and the bare code in `error`.
       const normalized = validateAndNormalize(body, allowedScopes, env.REDIRECT_URI_CUSTOM_SCHEMES);
 
+      // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624; ADR-019 Decision
+      // 8): the URI's form passed above; its host must resolve, and only to
+      // public addresses. A client's own registration never uses the
+      // deployment allowlist, so a private or loopback address is refused,
+      // even for a development client. Delivery checks again every time.
+      if (normalized.backchannelLogoutUri !== null) {
+        await assertRegistrableBackchannelLogoutDestination(
+          fastify,
+          normalized.backchannelLogoutUri,
+          current.name
+        );
+      }
+
       // A registration attributed to a developer adds to the same list as
       // `POST /api/clients`, so it counts against the same ceiling, checked
       // before the argon2id hash. An anonymous one belongs to no developer.
@@ -148,6 +162,12 @@ export default async function (fastify: FastifyInstance) {
         // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never
         // redirect after a logout.
         postLogoutRedirectUris: normalized.postLogoutRedirectUris,
+        // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): the client's
+        // own, so never one the egress allowlist may open; NULL = no logout
+        // token.
+        backchannelLogoutUri: normalized.backchannelLogoutUri,
+        backchannelLogoutUriSource: normalized.backchannelLogoutUri === null ? null : 'client',
+        backchannelLogoutSessionRequired: normalized.backchannelLogoutSessionRequired,
         scopes: normalized.scopes,
         grantTypes: normalized.grantTypes,
         responseTypes: normalized.responseTypes,
@@ -272,6 +292,12 @@ export default async function (fastify: FastifyInstance) {
         // the other optional fields below.
         ...(normalized.postLogoutRedirectUris.length > 0
           ? { post_logout_redirect_uris: normalized.postLogoutRedirectUris }
+          : {}),
+        ...(normalized.backchannelLogoutUri !== null
+          ? {
+              backchannel_logout_uri: normalized.backchannelLogoutUri,
+              backchannel_logout_session_required: normalized.backchannelLogoutSessionRequired,
+            }
           : {}),
         grant_types: normalized.grantTypes,
         response_types: normalized.responseTypes,

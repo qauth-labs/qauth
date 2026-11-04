@@ -86,6 +86,19 @@ export interface EventFanOutRequest {
   readonly pageSize?: number;
   /** Pages read per realm in one call, so one busy realm cannot hold the rest. Defaults to 10. */
   readonly maxPagesPerRealm?: number;
+  /**
+   * How far back a new position starts, in milliseconds, by route kind. A
+   * kind not named starts at the horizon: its destinations receive what is
+   * committed from their realm's first fan-out on. A kind whose events are
+   * written only for its destinations (back-channel logout, #624) names a
+   * window instead, so the events committed before any node had fanned the
+   * realm out for it (the delivery role was down, or had not polled yet) are
+   * not lost: its new position starts before the realm's first event of the
+   * destinations' types inside the window, never above the horizon. A row
+   * already written for an event and destination is never written twice. At
+   * most 30 days (`FAN_OUT_BACKFILL_MAX_MS`).
+   */
+  readonly backfillMs?: Readonly<Record<string, number>>;
 }
 
 /** What one {@link EventDeliveriesRepository.fanOut} did. */

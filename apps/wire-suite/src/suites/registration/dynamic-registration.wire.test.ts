@@ -106,6 +106,27 @@ describe('[POST /oauth/register] RFC 7591 §3 — open dynamic registration on a
   });
 });
 
+// A client's own backchannel_logout_uri never uses the egress allowlist
+// (ADR-019 Decision 8): the server refuses a loopback address at
+// registration, before it opens any connection, so the test needs no network
+// beyond the server.
+describe('[POST /oauth/register] OpenID Connect Back-Channel Logout 1.0 §2.2 — a client registers its backchannel_logout_uri', () => {
+  it('refuses a backchannel_logout_uri that resolves to a loopback address with 400 invalid_client_metadata, and registers nothing (§2.2; RFC 7591 §3.2.2)', async () => {
+    const error = await expectOAuthError(
+      await register({
+        client_name: `wire-suite back-channel logout ${randomUUID()}`,
+        redirect_uris: ['https://app.example/wire-suite/callback'],
+        backchannel_logout_uri: 'https://127.0.0.1/wire-suite/backchannel-logout',
+      }),
+      { status: 400, error: 'invalid_client_metadata' }
+    );
+
+    expect(error.error_description).toBe(
+      'backchannel_logout_uri must name a host that resolves, and only to public addresses'
+    );
+  });
+});
+
 describe('RFC 8414 §2 — client ID metadata documents, on by default', () => {
   it.each(DISCOVERY_DOCUMENTS)(
     'advertises client_id_metadata_document_supported as true in %s (§2)',

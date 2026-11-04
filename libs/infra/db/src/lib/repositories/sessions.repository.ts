@@ -18,7 +18,9 @@ import {
 } from 'drizzle-orm';
 
 import type {
+  Database,
   DbTransaction,
+  EventsRepository,
   ListedSession,
   NewSession,
   RevokedSession,
@@ -35,6 +37,25 @@ import { DbClient } from '../db';
 import { oauthClients, realms } from '../schema/core';
 import { sessionClients, type SessionRevokedReason, sessions } from '../schema/sessions';
 import { authorizationCodes } from '../schema/tokens';
+import { createEventsRepository } from './events.repository';
+
+/**
+ * The event a revocation writes for each client to notify by back-channel
+ * logout (#624): `user.client_session_ended` of `@qauth-labs/shared-events`.
+ */
+const CLIENT_SESSION_ENDED_EVENT = 'urn:qauth:event:user.client_session_ended:v1-rc.0';
+
+/** Options of {@link createSessionsRepository}. */
+export interface SessionsRepositoryOptions {
+  /**
+   * Where a revocation writes its back-channel logout notices (#624), in its
+   * own transaction: the database plugin's event store repository, which
+   * hands each event to telemetry once it commits. One without telemetry on
+   * `defaultDb` when absent, so no revocation ends a session without its
+   * notices.
+   */
+  readonly events?: Pick<EventsRepository, 'emit'>;
+}
 
 /**
  * Factory for the browser sessions repository (ADR-019 Decision 3, issue
@@ -48,7 +69,12 @@ import { authorizationCodes } from '../schema/tokens';
  * @param defaultDb - Database client to use for queries
  * @returns Repository implementing {@link SessionsRepository}
  */
-export function createSessionsRepository(defaultDb: DbClient): SessionsRepository {
+export function createSessionsRepository(
+  defaultDb: DbClient,
+  options: SessionsRepositoryOptions = {}
+): SessionsRepository {
+  const events = options.events ?? createEventsRepository(defaultDb as Database);
+
   /**
    * The registry rows of the realm's live sessions (not revoked, before
    * `expires_at`) that `where` selects, oldest first. The join on `sessions`
@@ -132,7 +158,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
     t: DbClient,
     rows: readonly SessionClient[],
     realmOf: ReadonlyMap<string, string>
-  ): Promise<SessionClientDetail[]> {
+  ): Promise<ClientDetailWithLogout[]> {
     if (rows.length === 0) return [];
     const ids = [...new Set(rows.map((row) => row.oauthClientId))];
     const clients = await t
@@ -141,6 +167,7 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
         realmId: oauthClients.realmId,
         clientId: oauthClients.clientId,
         name: oauthClients.name,
+        backchannelLogoutUri: oauthClients.backchannelLogoutUri,
       })
       .from(oauthClients)
       .where(anyOf(oauthClients.id, ids));
@@ -149,10 +176,15 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
       .flatMap((row) => {
         const client = byId.get(row.oauthClientId);
         if (client === undefined || client.realmId !== realmOf.get(row.sessionId)) return [];
-        return [{ ...row, clientId: client.clientId, clientName: client.name }];
+        return [
+          {
+            detail: { ...row, clientId: client.clientId, clientName: client.name },
+            notify: typeof client.backchannelLogoutUri === 'string',
+          },
+        ];
       })
       .sort(
-        (a, b) =>
+        ({ detail: a }, { detail: b }) =>
           a.firstSeenAt - b.firstSeenAt ||
           compare(a.sessionId, b.sessionId) ||
           compare(a.oauthClientId, b.oauthClientId)
@@ -170,6 +202,13 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
    * unnoticed. The codes are spent as a logout spends a user's codes: an ID
    * token redeemed from one would name a session that has ended, and the same
    * fresh snapshot sees every code a `recordClient` committed with its row.
+   *
+   * Last, the back-channel logout notices (OpenID Connect Back-Channel Logout
+   * 1.0, issue #624): one `user.client_session_ended` event per ended session
+   * and client it served that has a `backchannel_logout_uri` now, written in
+   * this transaction (the outbox of ADR-019 Decision 8). The delivery role
+   * sends each client its logout token from it, so a notice commits with the
+   * end or not at all, and a node that stops after the commit loses none.
    */
   async function finishEnded(
     t: DbClient,
@@ -199,12 +238,25 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
           eq(authorizationCodes.used, false)
         )
       );
-    return [...ended]
-      .sort((a, b) => compare(a.id, b.id))
-      .map((session) => ({
-        session,
-        clients: clients.filter((client) => client.sessionId === session.id),
-      }));
+    const sorted = [...ended].sort((a, b) => compare(a.id, b.id));
+    for (const session of sorted) {
+      for (const { detail, notify } of clients) {
+        if (!notify || detail.sessionId !== session.id) continue;
+        await events.emit(t as DbTransaction, {
+          type: CLIENT_SESSION_ENDED_EVENT,
+          realm: session.realmId,
+          subject: { type: 'user', id: session.userId },
+          client: { id: detail.clientId },
+          data: { sid: session.id, reason: session.revokedReason ?? 'unknown' },
+        });
+      }
+    }
+    return sorted.map((session) => ({
+      session,
+      clients: clients
+        .filter(({ detail }) => detail.sessionId === session.id)
+        .map(({ detail }) => detail),
+    }));
   }
 
   /**
@@ -296,7 +348,9 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
     );
     return rows.map((session) => ({
       session,
-      clients: clients.filter((client) => client.sessionId === session.id),
+      clients: clients
+        .filter(({ detail }) => detail.sessionId === session.id)
+        .map(({ detail }) => detail),
     }));
   }
 
@@ -597,6 +651,15 @@ export function createSessionsRepository(defaultDb: DbClient): SessionsRepositor
 
 /** How many times a transaction of its own is run when Postgres aborts it as a deadlock. */
 const DEADLOCK_ATTEMPTS = 3;
+
+/**
+ * A client a session served, and whether its end is to be told to the client
+ * by back-channel logout: it has a `backchannel_logout_uri`.
+ */
+interface ClientDetailWithLogout {
+  readonly detail: SessionClientDetail;
+  readonly notify: boolean;
+}
 
 /** Whether `error`, or the driver error drizzle wrapped in it, is a deadlock (40P01). */
 function isDeadlock(error: unknown): boolean {

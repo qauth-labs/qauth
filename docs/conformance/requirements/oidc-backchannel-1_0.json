@@ -1,0 +1,237 @@
+{
+  "specId": "oidc-backchannel-1_0",
+  "note": "Hand-authored. `quote` is verbatim from https://openid.net/specs/openid-connect-backchannel-1_0.html with line wrapping removed and nothing else changed (reference titles shown on hover are left out, as in the other OpenID specs' rows).",
+  "requirements": [
+    {
+      "id": "backchannel-2_1-supported",
+      "section": "2.1",
+      "level": "OPTIONAL",
+      "quote": "backchannel_logout_supported OPTIONAL. Boolean value specifying whether the OP supports back-channel logout, with true indicating support. If omitted, the default value is false.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts (buildOpenIdConfiguration) — true in /.well-known/openid-configuration, set by the route once the delivery route is wired; absent from the OAuth metadata.",
+      "status": "covered",
+      "evidenceMatch": "backchannel_logout_supported"
+    },
+    {
+      "id": "backchannel-2_1-session-supported",
+      "section": "2.1",
+      "level": "SHOULD",
+      "quote": "It SHOULD also register this related metadata value: backchannel_logout_session_supported OPTIONAL. Boolean value specifying whether the OP can pass a sid (session ID) Claim in the Logout Token to identify the RP session with the OP. If supported, the sid Claim is also included in ID Tokens issued by the OP.",
+      "applies": "apps/auth-server/src/app/helpers/discovery.ts — true beside backchannel_logout_supported. The logout token carries the session as sid, the value an ID token of that session carries (#549).",
+      "status": "covered",
+      "evidenceMatch": "backchannel_logout_session_supported"
+    },
+    {
+      "id": "backchannel-2_2-absolute-uri",
+      "section": "2.2",
+      "level": "MUST",
+      "quote": "The back-channel logout URI MUST be an absolute URI as defined by Section 4.3 of [RFC3986].",
+      "applies": "libs/shared/validation/src/lib/backchannel-logout-uri.ts — dynamic registration, client metadata documents and the seed manifest refuse a URI that is not an absolute https URI.",
+      "status": "covered",
+      "evidenceMatch": "is not an absolute URI"
+    },
+    {
+      "id": "backchannel-2_2-query-retained",
+      "section": "2.2",
+      "level": "MUST",
+      "quote": "The back-channel logout URI MAY include an application/x-www-form-urlencoded formatted query component, per Section 3.4 of [RFC3986], which MUST be retained when adding additional query parameters.",
+      "applies": "libs/server/backchannel-logout/src/lib/delivery-route.ts — the POST goes to the URI as registered, query included; QAuth adds no query parameter (the token is in the body).",
+      "status": "covered",
+      "evidenceMatch": "keeps the query"
+    },
+    {
+      "id": "backchannel-2_2-no-fragment",
+      "section": "2.2",
+      "level": "MUST NOT",
+      "quote": "The back-channel logout URI MUST NOT include a fragment component.",
+      "applies": "libs/shared/validation/src/lib/backchannel-logout-uri.ts — a URI with a fragment, even an empty one, is refused at registration.",
+      "status": "covered",
+      "evidenceMatch": "must not include a fragment"
+    },
+    {
+      "id": "backchannel-2_2-logout-uri",
+      "section": "2.2",
+      "level": "OPTIONAL",
+      "quote": "backchannel_logout_uri OPTIONAL. RP URL that will cause the RP to log itself out when sent a Logout Token by the OP. This URL SHOULD use the https scheme and MAY contain port, path, and query parameter components; however, it MAY use the http scheme, provided that the Client Type is confidential, as defined in Section 2.1 of OAuth 2.0 [RFC6749], and provided the OP allows the use of http RP URIs.",
+      "applies": "apps/auth-server/src/app/routes/oauth/register.ts, helpers/cimd.ts, the seed manifest — stored with the client. QAuth allows no http URI, and a URI the client sets must resolve only to public addresses (ADR-019 Decision 8); only an admin may set one the egress allowlist admits.",
+      "status": "covered",
+      "evidenceMatch": "stores the URI|must use https|only to public addresses"
+    },
+    {
+      "id": "backchannel-2_2-session-required",
+      "section": "2.2",
+      "level": "OPTIONAL",
+      "quote": "backchannel_logout_session_required OPTIONAL. Boolean value specifying whether the RP requires that a sid (session ID) Claim be included in the Logout Token to identify the RP session with the OP when the backchannel_logout_uri is used. If omitted, the default value is false.",
+      "applies": "libs/server/backchannel-logout/src/lib/delivery-route.ts — a client that registered it gets no logout token without sid; the delivery ends without one (sid_unavailable).",
+      "status": "covered",
+      "evidenceMatch": "needs sid|sid flag"
+    },
+    {
+      "id": "backchannel-2_4-iss",
+      "section": "2.4",
+      "level": "REQUIRED",
+      "quote": "iss REQUIRED. Issuer Identifier, as specified in Section 2 of [OpenID.Core].",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — the signer adds the realm issuer as iss and refuses a caller's iss; the delivery role cannot set it.",
+      "status": "covered",
+      "evidenceMatch": "signs a logout token for the delivery role"
+    },
+    {
+      "id": "backchannel-2_4-aud",
+      "section": "2.4",
+      "level": "REQUIRED",
+      "quote": "aud REQUIRED. Audience(s), as specified in Section 2 of [OpenID.Core].",
+      "applies": "libs/server/backchannel-logout/src/lib/logout-token.ts — aud is the client_id, the audience of its ID tokens.",
+      "status": "covered",
+      "evidenceMatch": "passes every check|not issued to"
+    },
+    {
+      "id": "backchannel-2_4-iat",
+      "section": "2.4",
+      "level": "REQUIRED",
+      "quote": "iat REQUIRED. Issued at time, as specified in Section 2 of [OpenID.Core].",
+      "applies": "libs/server/backchannel-logout/src/lib/logout-token.ts — the time of the delivery attempt, in whole seconds.",
+      "status": "covered",
+      "evidenceMatch": "passes every check"
+    },
+    {
+      "id": "backchannel-2_4-exp",
+      "section": "2.4",
+      "level": "REQUIRED",
+      "quote": "exp REQUIRED. Expiration time, as specified in Section 2 of [OpenID.Core].",
+      "applies": "libs/server/backchannel-logout/src/lib/logout-token.ts — two minutes after iat.",
+      "status": "covered",
+      "evidenceMatch": "passes every check|expires at most two minutes"
+    },
+    {
+      "id": "backchannel-2_4-jti",
+      "section": "2.4",
+      "level": "REQUIRED",
+      "quote": "jti REQUIRED. Unique identifier for the token, as specified in Section 9 of [OpenID.Core].",
+      "applies": "libs/server/backchannel-logout/src/lib/delivery-route.ts — the delivery id, a UUID: one per client and session. A retransmission of the same delivery keeps it, so a relying party that keeps the jti values it saw can tell a retry it already acted on.",
+      "status": "covered",
+      "evidenceMatch": "passes every check|keeps the jti"
+    },
+    {
+      "id": "backchannel-2_4-events",
+      "section": "2.4",
+      "level": "REQUIRED",
+      "quote": "events REQUIRED. Claim whose value is a JSON object containing the member name http://schemas.openid.net/event/backchannel-logout. This declares that the JWT is a Logout Token. The corresponding member value MUST be a JSON object and SHOULD be the empty JSON object {}.",
+      "applies": "libs/server/backchannel-logout/src/lib/logout-token.ts — events holds that one member, whose value is {}.",
+      "status": "covered",
+      "evidenceMatch": "events member is the empty JSON object"
+    },
+    {
+      "id": "backchannel-2_4-sub-or-sid",
+      "section": "2.4",
+      "level": "MUST",
+      "quote": "A Logout Token MUST contain either a sub or a sid Claim, and MAY contain both.",
+      "applies": "libs/server/backchannel-logout/src/lib/logout-token.ts (logoutTokenClaims) — sub is the user and sid the session; building a token with neither throws, and the route drops a delivery whose event names neither.",
+      "status": "covered",
+      "evidenceMatch": "sub alone, sid alone, or both"
+    },
+    {
+      "id": "backchannel-2_4-no-nonce",
+      "section": "2.4",
+      "level": "MUST NOT",
+      "quote": "A nonce Claim MUST NOT be present.",
+      "applies": "libs/server/backchannel-logout/src/lib/logout-token.ts — the claims set has no nonce member.",
+      "status": "covered",
+      "evidenceMatch": "carries no nonce"
+    },
+    {
+      "id": "backchannel-2_4-signed",
+      "section": "2.4",
+      "level": "MUST",
+      "quote": "A Logout Token MUST be signed and MAY also be encrypted.",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts (signJws) — signed by the signer role with the realm's token_signing key, which the realm JWKS publishes",
+      "status": "covered",
+      "evidenceMatch": "signs a logout token for the delivery role"
+    },
+    {
+      "id": "backchannel-2_4-same-keys-as-id-tokens",
+      "section": "2.4",
+      "level": "MUST",
+      "quote": "The same keys are used to sign and encrypt Logout Tokens as are used for ID Tokens.",
+      "applies": "libs/server/keys/src/lib/signer-typ.ts (JWS_TYP_BY_PURPOSE, idTokenAlgorithm) — logout+jwt is a token_signing type, signed with the key and in the algorithm of the realm's ID tokens (ADR-019 Decision 9, amended 2026-11-04)",
+      "status": "covered",
+      "evidenceMatch": "signs a logout token with the key and algorithm of the realm's ID tokens"
+    },
+    {
+      "id": "backchannel-2_4-typed",
+      "section": "2.4",
+      "level": "RECOMMENDED",
+      "quote": "It is RECOMMENDED that Logout Tokens be explicitly typed. This is accomplished by including a typ (type) Header Parameter with a value of logout+jwt in the Logout Token.",
+      "applies": "libs/server/keys/src/lib/signer-typ.ts — the signer signs logout+jwt only for the token_signing purpose, and the route always asks for it.",
+      "status": "covered",
+      "evidenceMatch": "explicitly typed logout\\+jwt"
+    },
+    {
+      "id": "backchannel-2_5-post-form",
+      "section": "2.5",
+      "level": "MUST",
+      "quote": "The OP uses an HTTP POST to the registered back-channel logout URI to trigger the logout actions by the RP. The POST body uses the application/x-www-form-urlencoded encoding and must include a logout_token parameter containing a Logout Token from the OP for the RP identifying the End-User to be logged out.",
+      "applies": "libs/server/backchannel-logout/src/lib/delivery-route.ts — a POST through the SSRF-safe egress client, which checks the URI's addresses again at every attempt, with logout_token as the form body.",
+      "status": "covered",
+      "evidenceMatch": "logout_token form parameter|form-encoded logout_token"
+    },
+    {
+      "id": "backchannel-2_5-delay-retransmission",
+      "section": "2.5",
+      "level": "SHOULD",
+      "quote": "In this case, the OP SHOULD delay retransmission for an appropriate amount of time to avoid overwhelming the RP.",
+      "applies": "libs/server/event-delivery/src/lib/retry.ts — the delivery role waits a doubling, jittered delay before each retry, spread over hours by default.",
+      "status": "covered",
+      "evidenceMatch": "retryDelayMs"
+    },
+    {
+      "id": "backchannel-2_5-no-other-retransmission",
+      "section": "2.5",
+      "level": "SHOULD NOT",
+      "quote": "In all other cases, the OP SHOULD NOT retransmit a Back-Channel Logout Request.",
+      "applies": "libs/server/backchannel-logout/src/lib/delivery-route.ts — only a 408, a 429, a 5xx, a timeout, a network failure or a refused address is retried; any other answer ends the delivery.",
+      "status": "covered",
+      "evidenceMatch": "is retried: (true|false)"
+    },
+    {
+      "id": "backchannel-2_6-no-alg-none",
+      "section": "2.6",
+      "level": "MUST NOT",
+      "quote": "Additionally, an alg with the value none MUST NOT be used for Logout Tokens.",
+      "applies": "libs/server/keys/src/lib/in-process-signer.ts — the signer signs with an asymmetric token_signing key; it has no unsigned mode.",
+      "status": "covered",
+      "evidenceMatch": "signs a logout token for the delivery role"
+    },
+    {
+      "id": "backchannel-2_6-rp-validation",
+      "section": "2.6",
+      "level": "MUST",
+      "quote": "Upon receiving a logout request at the back-channel logout URI, the RP MUST validate the Logout Token as follows:",
+      "status": "n/a",
+      "reason": "The relying party's obligation. QAuth only sends logout tokens; the unit tests validate them as §2.6 describes to show that a relying party can."
+    },
+    {
+      "id": "backchannel-2_7-rp-actions",
+      "section": "2.7",
+      "level": "SHOULD",
+      "quote": "Refresh tokens issued without the offline_access property to a session being logged out SHOULD be revoked.",
+      "status": "n/a",
+      "reason": "The relying party's logout actions on receiving a logout token. QAuth acts as an OP here, not as an RP of another OP."
+    },
+    {
+      "id": "backchannel-2_8-accept-204",
+      "section": "2.8",
+      "level": "SHOULD",
+      "quote": "Therefore, OPs should be prepared to also process an HTTP 204 No Content response as a successful response.",
+      "applies": "libs/server/backchannel-logout/src/lib/delivery-route.ts — every 2xx answer delivers.",
+      "status": "covered",
+      "evidenceMatch": "a 204 delivers"
+    },
+    {
+      "id": "backchannel-2_8-rp-response",
+      "section": "2.8",
+      "level": "MUST",
+      "quote": "If the logout succeeded, the RP MUST respond with HTTP 200 OK.",
+      "status": "n/a",
+      "reason": "The relying party's response; QAuth reads it and never sends one."
+    }
+  ]
+}

@@ -358,6 +358,108 @@ describe('createSessionsRepository', () => {
     ]);
   });
 
+  describe('back-channel logout notices (OpenID Connect Back-Channel Logout 1.0, #624)', () => {
+    const LOGOUT_CLIENT = '0190a000-0000-7000-8000-0000000000ce';
+
+    /** A revocation of the session, which served CLIENT_ID and LOGOUT_CLIENT. */
+    function recording() {
+      return createRecordingDb((text) => {
+        const lower = text.toLowerCase();
+        if (lower.startsWith('update "sessions"')) return [SESSION_ROW];
+        if (lower.startsWith('delete from "session_clients"')) {
+          return [
+            [SESSION_ID, CLIENT_ID, String(NOW - 2_000)],
+            [SESSION_ID, LOGOUT_CLIENT, String(NOW - 1_000)],
+          ];
+        }
+        if (lower.startsWith('select') && lower.includes('from "oauth_clients"')) {
+          return [
+            [CLIENT_ID, REALM_ID, 'app', 'App', null],
+            [LOGOUT_CLIENT, REALM_ID, 'rp', 'RP', 'https://rp.example/backchannel'],
+          ];
+        }
+        return undefined;
+      });
+    }
+
+    it('queues one user.client_session_ended event per client with a backchannel_logout_uri, in the revocation’s transaction', async () => {
+      const { db, queries } = recording();
+
+      const ended = await createSessionsRepository(db).revoke(REALM_ID, SESSION_ID, 'sign_out');
+
+      // Both clients are still returned; only the one with a URI is notified.
+      expect(ended?.clients.map((client) => client.clientId)).toEqual(['app', 'rp']);
+      const verbs = queries.map((query) =>
+        query.text.toLowerCase().split(' ').slice(0, 3).join(' ')
+      );
+      expect(verbs).toEqual([
+        'begin isolation level',
+        'update "sessions" set',
+        'delete from "session_clients"',
+        'select "id", "realm_id",',
+        'update "authorization_codes" set',
+        'insert into "events"',
+        'commit',
+      ]);
+      const insert = queries.find((query) =>
+        query.text.toLowerCase().startsWith('insert into "events"')
+      );
+      expect(insert?.values).toContain('urn:qauth:event:user.client_session_ended:v1-rc.0');
+      expect(insert?.values).toContain(REALM_ID);
+      expect(insert?.values).toContain(USER_ID);
+      expect(insert?.values).toContain('rp');
+      expect(insert?.values).not.toContain('app');
+      const data = insert?.values.find(
+        (value) => typeof value === 'string' && value.includes(SESSION_ID)
+      );
+      expect(JSON.parse(String(data))).toEqual({ sid: SESSION_ID, reason: 'sign_out' });
+    });
+
+    it('writes the notices through the event store repository it is given', async () => {
+      const { db } = recording();
+      const emit = vi.fn(async () => 'event-id');
+
+      await createSessionsRepository(db, { events: { emit } }).revokeForUser(
+        REALM_ID,
+        USER_ID,
+        'sign_out_everywhere'
+      );
+
+      // revokeForUser locks first: the recording answers no row to the lock,
+      // so nothing ends and nothing is queued.
+      expect(emit).not.toHaveBeenCalled();
+
+      const recorded = recording();
+      await createSessionsRepository(recorded.db, { events: { emit } }).revoke(
+        REALM_ID,
+        SESSION_ID,
+        'admin'
+      );
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit).toHaveBeenCalledWith(expect.anything(), {
+        type: 'urn:qauth:event:user.client_session_ended:v1-rc.0',
+        realm: REALM_ID,
+        subject: { type: 'user', id: USER_ID },
+        client: { id: 'rp' },
+        // The row as the UPDATE returned it names the reason it was ended with.
+        data: { sid: SESSION_ID, reason: 'sign_out' },
+      });
+    });
+
+    it('a revocation whose emit fails ends nothing: the notice commits with the end or not at all', async () => {
+      const { db, queries } = recording();
+      const emit = vi.fn(async () => {
+        throw new Error('event store down');
+      });
+
+      await expect(
+        createSessionsRepository(db, { events: { emit } }).revoke(REALM_ID, SESSION_ID, 'sign_out')
+      ).rejects.toThrow('event store down');
+      expect(queries.some((query) => query.text.toLowerCase() === 'commit')).toBe(false);
+      expect(queries.some((query) => query.text.toLowerCase() === 'rollback')).toBe(true);
+    });
+  });
+
   it('revoke names each client it returns by its client_id, and leaves out one not of the session’s realm', async () => {
     const OTHER_CLIENT = '0190a000-0000-7000-8000-0000000000cd';
     const { db, queries } = createRecordingDb((text) => {

@@ -28,8 +28,9 @@ const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
  * - `GET /.well-known/oauth-authorization-server` — RFC 8414 AS metadata.
  * - `GET /.well-known/openid-configuration`       — OIDC Discovery 1.0.
  * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS: the token
- *   keys only. The SSF transmitter's SET keys are published apart, at
- *   `/ssf/jwks.json` (d-1026-09).
+ *   keys only, which sign access tokens, ID tokens and logout tokens (OpenID
+ *   Connect Back-Channel Logout 1.0 §2.4, #624). The SSF transmitter's SET
+ *   keys are published apart, at `/ssf/jwks.json` (d-1026-09).
  *
  * - `GET /.well-known/ssf-configuration`          — SSF 1.0 §7 transmitter
  *   metadata, registered only while SSF_TRANSMITTER_ENABLED is on (#410).
@@ -84,6 +85,10 @@ export default async function (fastify: FastifyInstance) {
     // RFC 9449 §5.1 (#480): the DPoP proof algorithms, only while DPOP_ENABLED
     // is on (`fastify.dpop` is null otherwise).
     ...(fastify.dpop ? { dpopSigningAlgValuesSupported: fastify.dpop.algorithms } : {}),
+    // OpenID Connect Back-Channel Logout 1.0 §2.1 (#624): every session
+    // revocation queues the logout tokens, and the delivery role always
+    // carries the route that sends them.
+    backchannelLogoutSupported: true,
     experimentalItems,
   });
 

@@ -92,11 +92,14 @@ export {
 } from './lib/signer-policy';
 export {
   CLIENT_ASSERTION_TYP,
+  idTokenAlgorithm,
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
   JWS_SIGNING_PURPOSES,
   JWS_TYP_BY_PURPOSE,
+  JWS_TYPS,
+  jwsPurposeOfTyp,
   type JwsSigningPurpose,
   type JwsTyp,
   OID4VP_REQUEST_OBJECT_TYP,

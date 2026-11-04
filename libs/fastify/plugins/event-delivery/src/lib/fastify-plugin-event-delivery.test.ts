@@ -32,16 +32,28 @@ describe('deliverySignerHandle', () => {
     });
   });
 
-  it('signs event tokens with event_signing only, as the delivery caller', async () => {
+  it('signs a SET with the event key and a logout token with the ID token key, as the delivery caller', async () => {
     const fake = signer();
     const handle = deliverySignerHandle(fake as unknown as Signer);
     await handle.signEventToken({ realmId: 'r', typ: 'secevent+jwt', claims: { jti: 'j' } });
-    expect(fake.signJws).toHaveBeenCalledWith('delivery', {
-      realmId: 'r',
-      purpose: 'event_signing',
-      typ: 'secevent+jwt',
-      claims: { jti: 'j' },
-    });
+    await handle.signEventToken({ realmId: 'r', typ: 'logout+jwt', claims: { jti: 'l' } });
+    await handle.signEventToken({ realmId: 'r', typ: 'other+jwt', claims: { jti: 'o' } });
+    expect(fake.signJws.mock.calls).toEqual([
+      [
+        'delivery',
+        { realmId: 'r', purpose: 'event_signing', typ: 'secevent+jwt', claims: { jti: 'j' } },
+      ],
+      // OpenID Connect Back-Channel Logout 1.0 §2.4: the ID tokens' keys (#624).
+      [
+        'delivery',
+        { realmId: 'r', purpose: 'token_signing', typ: 'logout+jwt', claims: { jti: 'l' } },
+      ],
+      // A type no purpose signs goes to event_signing, which refuses it.
+      [
+        'delivery',
+        { realmId: 'r', purpose: 'event_signing', typ: 'other+jwt', claims: { jti: 'o' } },
+      ],
+    ]);
   });
 
   it('decrypts a stored destination secret as the delivery caller', async () => {
@@ -58,11 +70,14 @@ describe('deliverySignerHandle', () => {
 
   it('asks for nothing the signer policy refuses the delivery caller', () => {
     expect(isSignerCallAllowed('delivery', 'signWebhook')).toBe(true);
-    expect(isSignerCallAllowed('delivery', 'signJws', 'event_signing')).toBe(true);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'secevent+jwt')).toBe(true);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'logout+jwt')).toBe(true);
     expect(isSignerCallAllowed('delivery', 'decrypt', 'delivery:ssf_streams.x:1')).toBe(true);
     expect(isSignerCallAllowed('delivery', 'decrypt', 'another_table.secret:1')).toBe(false);
     // What the handle never offers.
-    expect(isSignerCallAllowed('delivery', 'signJws', 'token_signing')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'at+jwt')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'JWT')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'oauth-id-jag+jwt')).toBe(false);
     expect(isSignerCallAllowed('delivery', 'encrypt')).toBe(false);
     expect(Object.keys(deliverySignerHandle(signer() as unknown as Signer)).sort()).toEqual([
       'decrypt',

@@ -157,7 +157,7 @@ export interface KeyPurposeDefinition {
  */
 export const KEY_PURPOSES = freezeRegistry({
   token_signing: {
-    description: 'Signs access tokens and ID tokens.',
+    description: 'Signs access tokens, ID tokens and logout tokens.',
     kind: 'signing',
     algorithms: ['EdDSA', 'RS256', 'ML-DSA-65'],
     defaultAlgorithm: 'EdDSA',
@@ -167,7 +167,7 @@ export const KEY_PURPOSES = freezeRegistry({
     hybridCompanion: 'ML-DSA-65',
   },
   event_signing: {
-    description: 'Signs Security Event Tokens and logout tokens.',
+    description: 'Signs Security Event Tokens.',
     kind: 'signing',
     algorithms: ['EdDSA', 'RS256'],
     defaultAlgorithm: 'EdDSA',

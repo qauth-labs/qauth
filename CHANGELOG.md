@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Back-channel logout** ([#624], OpenID Connect Back-Channel Logout 1.0,
+  ADR-019 Decisions 4, 8 and 9, ADR-017 F0). A client may register
+  `backchannel_logout_uri` and `backchannel_logout_session_required` through
+  dynamic registration, a client metadata document or the seed manifest
+  (migration 0058). The URI must be an absolute `https` URI without a fragment
+  or user information, and a URI the client registers must resolve only to
+  public addresses: the egress client checks it at registration, and a
+  refused one is `invalid_client_metadata` (a document drops it; a check that
+  failed rather than refused, such as a name that did not resolve now, keeps a
+  document's URI, since delivery checks again). Only a URI an admin sets, through the seed manifest, may
+  use the egress allowlist. Whenever a session ends (RP-initiated logout,
+  `POST /auth/logout`, sign out everywhere, a password reset, an admin, a
+  retired key, the session limit or the session lapsing), the session
+  revocation writes one `user.client_session_ended` event for each client the
+  session served that has a URI, in its own transaction. The `delivery` role
+  turns each into a logout token for that client (`typ: logout+jwt`; `iss`,
+  `aud` = `client_id`, `iat`, `exp` two minutes later, `jti` = the delivery id,
+  `events`, `sub` and `sid`; no `nonce`), signed by the signer with the
+  key and in the algorithm of the realm's ID tokens (§2.4: `RS256` while the realm holds an RS256
+  token key, else `EdDSA`), and POSTs it as the `logout_token` form
+  parameter through the egress client, which checks the address again at
+  every attempt. The signer holds every event token, a Security Event Token or a logout token,
+  to its kind: no
+  `scope`, `client_id`, `nonce` or other grant claim, an `events` object, no
+  `sub` or `exp` in a Security Event Token, and for a logout token the
+  back-channel logout event alone, an `aud`, a `jti`, a `sub` or `sid`, at most two
+  minutes of life and no claim but `aud`, `iat`, `exp`, `jti`, `events`, `sub` and `sid`
+  (`LOGOUT_TOKEN_CLAIMS`); anything else is refused (`INVALID_CLAIMS`). A delivery
+  route may now ask the delivery role to start a realm's first fan-out a set
+  time back rather than at the horizon (`DeliveryRoute.backfillMs`, at most 30
+  days); back-channel logout starts a day back, so a notice committed before
+  the role first listed the realm is sent late rather than lost. A `5xx`, `408`, `429`, timeout or network failure is retried
+  on the delivery schedule with the same `jti`; any other answer is final. A
+  failed delivery never holds a sign-out back: it is recorded on the delivery
+  row and counted in `qauth_events_delivery_attempts_total` under the kind
+  `backchannel_logout`. A client that needs `sid` gets no token without one.
+  Discovery lists `backchannel_logout_supported` and
+  `backchannel_logout_session_supported`. `logout+jwt` is now a `token_signing` type
+  (`JWS_TYP_BY_PURPOSE`), so a relying party verifies a logout token at `jwks_uri` with the keys
+  it verifies ID tokens with; the realm JWKS and `/ssf/jwks.json` are unchanged. The signer's
+  grants name token types (`SIGNER_POLICY`): the `delivery` role may have a `logout+jwt` signed
+  with the token key and a `secevent+jwt` with the event key, and no access token, ID token or
+  ID-JAG; the `api` role signs no logout token, and `signHybrid` none at all. ADR-019 Decision 9
+  is amended for this. The `delivery` role's database user reads the client
+  columns the route needs, and the role loads the egress plugin. New
+  libraries `@qauth-labs/server-backchannel-logout` and
+  `@qauth-labs/fastify-plugin-backchannel-logout`; conformance rows in
+  `docs/conformance/requirements/oidc-backchannel-1_0.json`.
+
 - **RP-initiated logout** ([#675], OpenID Connect RP-Initiated Logout 1.0,
   ADR-017 phase F0, ADR-019 Decision 4). `GET` and `POST /oauth/end-session`,
   listed in discovery as `end_session_endpoint`, sign the browser out at an
@@ -528,7 +577,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decrypt with the `data_at_rest` key, and read the verification keys and the
   realm JWKS. The signer sets `iss` from the realm row and `kid` from the
   active key; a caller can set neither. `token_signing` signs only `at+jwt`
-  and ID tokens, `event_signing` only `secevent+jwt` and `logout+jwt`. Every
+  and ID tokens (and, since [#624], logout tokens), `event_signing` only
+  `secevent+jwt`. Every
   call names its caller's role (`local`, `web`, `api`, `delivery`, `admin`),
   and a policy table decides what each may call. No operation returns a
   private key. The in-process signer unwraps a key on first use, keeps it in a

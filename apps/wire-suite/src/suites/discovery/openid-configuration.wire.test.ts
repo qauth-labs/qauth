@@ -68,3 +68,13 @@ describe('[GET /.well-known/openid-configuration] OIDC Discovery 1.0 §3 — the
     );
   });
 });
+
+describe('[GET /.well-known/openid-configuration] OpenID Connect Back-Channel Logout 1.0 §2.1 — the OP metadata', () => {
+  it('advertises backchannel_logout_supported and backchannel_logout_session_supported, both true (§2.1)', async () => {
+    const { body } = await getJsonObject(documentUrl);
+
+    expect(body['backchannel_logout_supported']).toBe(true);
+    // true: every logout token carries the sid the ID tokens carry.
+    expect(body['backchannel_logout_session_supported']).toBe(true);
+  });
+});

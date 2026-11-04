@@ -481,6 +481,34 @@ export const oauthClients = pgTable(
       .notNull()
       .default(JSONB_EMPTY_ARRAY)
       .$type<string[]>(),
+    /**
+     * OpenID Connect Back-Channel Logout 1.0 §2.2 `backchannel_logout_uri`
+     * (#624): where QAuth POSTs a logout token when a browser session that
+     * signed a user in to this client ends. NULL: the client gets none. Every
+     * registration path checks its form (`backchannelLogoutUriProblem` in
+     * shared-validation) and its addresses through the egress client, and the
+     * egress client checks them again before every delivery.
+     */
+    backchannelLogoutUri: text('backchannel_logout_uri'),
+    /**
+     * Who set {@link oauthClients.backchannelLogoutUri}, as the egress client
+     * names a destination's source (ADR-019 Decision 8): `client`, its own
+     * dynamic registration or CIMD document, or `admin`, an operator's seed
+     * manifest (later the admin API). Only an `admin` URI may use the
+     * deployment allowlist to reach a private address; a client's never does.
+     * Set exactly when the URI is (CHECK `oauth_clients_backchannel_logout_source`).
+     */
+    backchannelLogoutUriSource: varchar('backchannel_logout_uri_source', {
+      length: 16,
+    }).$type<'client' | 'admin' | null>(),
+    /**
+     * Back-Channel Logout 1.0 §2.2 `backchannel_logout_session_required`: the
+     * client needs `sid` in every logout token. QAuth puts the session's `sid`
+     * in every one; a notice without a sid is not sent to such a client.
+     */
+    backchannelLogoutSessionRequired: boolean('backchannel_logout_session_required')
+      .notNull()
+      .default(false),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * The scopes the `client_credentials` grant may issue to this client, out
@@ -812,6 +840,13 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_post_logout_redirect_uris_is_array',
       sql`jsonb_typeof(${t.postLogoutRedirectUris}) = 'array'`
+    ),
+    // #624: a back-channel logout URI always says who set it, and the source
+    // is one the egress client knows, so delivery never has to guess whether
+    // the deployment allowlist may apply.
+    check(
+      'oauth_clients_backchannel_logout_source',
+      sql`(${t.backchannelLogoutUri} IS NULL AND ${t.backchannelLogoutUriSource} IS NULL) OR (${t.backchannelLogoutUri} IS NOT NULL AND ${t.backchannelLogoutUriSource} IN ('client', 'admin'))`
     ),
     // #593: the stored form of a verified domain, so a value written by hand
     // can never reach a screen in any other form. The same expression as

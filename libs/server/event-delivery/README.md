@@ -72,6 +72,12 @@ for good after `maxAttempts`.
   delivery comes due again after 30 seconds (`DELIVERY_HOLD_INTERVAL_MS`), however long the hold.
 - **A failing listing.** When a route's `destinations()` throws, nothing is fanned out that cycle,
   so no destination misses an event because its route could not be asked.
+- **Where a realm starts.** A realm the role fans out for a route for the first time, or again
+  after it had no destination of that route, starts at the horizon: a new destination receives
+  what is committed from then on. A route whose events are written only for its destinations sets
+  `backfillMs` (at most 30 days, `ROUTE_BACKFILL_MAX_MS`) to start that far back instead, so an
+  event committed before the role first listed the realm is not lost; the back-channel logout
+  route (#624) starts a day back. No event is written twice for one destination.
 - **Stopping.** `stop()` claims nothing more, waits for the attempts in flight up to
   `shutdownTimeoutMs`, then aborts the rest and releases their leases, so another node takes them
   at once.

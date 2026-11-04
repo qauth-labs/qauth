@@ -189,6 +189,8 @@ const CIMD_REFRESHED_FIELDS = [
   'description',
   'redirectUris',
   'postLogoutRedirectUris',
+  'backchannelLogoutUri',
+  'backchannelLogoutSessionRequired',
   'grantTypes',
   'responseTypes',
   'tokenEndpointAuthMethod',

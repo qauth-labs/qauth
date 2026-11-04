@@ -98,7 +98,8 @@ export interface DeliverySigner {
 
   /**
    * A Security Event Token or a logout token: a compact JWS signed by the
-   * realm's `event_signing` key.
+   * realm's `event_signing` key, or for a logout token by the `token_signing`
+   * key that signs its ID tokens (OpenID Connect Back-Channel Logout 1.0 §2.4).
    */
   signEventToken(request: {
     readonly realmId: string;
@@ -185,6 +186,18 @@ export interface DeliveryRoute {
   destinations(): Promise<readonly RouteDestination[]>;
 
   /**
+   * How far back, in milliseconds, the role starts a realm it fans out for
+   * this route for the first time, or again after the realm had no
+   * destination of it; at most {@link ROUTE_BACKFILL_MAX_MS}. Absent: at the
+   * horizon, so a new destination receives what is committed from then on,
+   * as a new webhook or SSF stream should. A route whose events are written
+   * only for its destinations sets it, so an event committed before the role
+   * first listed the realm (the role was down, or had not polled yet) is not
+   * lost; an event already written for a destination is never written twice.
+   */
+  readonly backfillMs?: number;
+
+  /**
    * Deliver one event to one destination. A throw counts as a failed attempt
    * (`route_error`) that is retried.
    */
@@ -194,6 +207,9 @@ export interface DeliveryRoute {
     context: DeliveryContext
   ): Promise<DeliveryOutcome>;
 }
+
+/** The longest {@link DeliveryRoute.backfillMs}: 30 days. */
+export const ROUTE_BACKFILL_MAX_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** A claimed delivery, as the store hands it over. */
 export interface ClaimedDelivery extends Delivery {
@@ -231,6 +247,8 @@ export interface DeliveryStore {
     readonly destinations: readonly DeliveryDestination[];
     readonly now: number;
     readonly pageSize?: number;
+    /** {@link DeliveryRoute.backfillMs}, by route kind, for the routes that set it. */
+    readonly backfillMs?: Readonly<Record<string, number>>;
   }): Promise<{ readonly deliveries: number; readonly more: boolean }>;
   dueDestinations(
     kinds: readonly string[],

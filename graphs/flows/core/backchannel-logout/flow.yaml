@@ -1,0 +1,416 @@
+# OpenID Connect Back-Channel Logout 1.0 (#624; ADR-018 §3, ADR-019 Decisions 4 and 8, ADR-017 phase F0): when a
+# browser session ends, every app the session signed in to and that registered a back-channel logout URI gets a
+# signed logout token, server to server. Written before the code (status: proposed), as ADR-021 Decision 4 asks of a
+# new core flow, so it carries no source anchors.
+#
+# - The walk runs from the end of the sessions to the last attempt to deliver one logout token: the revocation that
+#   queues the notices, the delivery role's fan-out, each attempt and how it ends. It is a background flow: no HTTP
+#   caller waits for it, so its exits are camelCase (graphs/README.md, "Protocol exits") and each names the state the
+#   delivery is left in, as `response`.
+# - One process per (client, session): the revocation writes one event per client a session served, and the fan-out
+#   one delivery per event and client. A session that served three apps walks this flow three times.
+# - `invoke: { external }` names a store or a service the domain graph holds no entity for: the browser sessions
+#   (the session service: Postgres, with the cache in front), the clients the delivery role reads, the signer role
+#   and the egress client (ADR-019 Decisions 8 and 9).
+schema: delurio-graph/0
+kind: flow
+id: core.backchannel-logout
+status: proposed
+domain: qauth
+title: Tell each app a browser session signed in to that the session ended
+summary: >-
+  A browser session ends: the person signs out at an app (RP-initiated logout) or at POST /auth/logout, an admin
+  revokes it, a key is retired in an emergency, or it lapses. Every caller ends sessions through the session service,
+  and in the transaction that marks a session revoked and takes the clients it served, QAuth writes one
+  user.client_session_ended event per client with a backchannel_logout_uri to the event store: the notices cannot be
+  lost once the end commits,
+  and the end never waits for them. The delivery role fans each event out to its client when the client registered a
+  backchannel_logout_uri, and delivers it at least once: it reads the client again, has the signer role sign a logout
+  token (typ logout+jwt, with iss, aud, iat, a two-minute exp, a jti every retry keeps, the back-channel logout event, sub and
+  sid, and no nonce), and POSTs it as the logout_token form field through the egress client, which checks the
+  destination's addresses again. A 2xx delivers it; a failure that may pass is retried on the delivery role's
+  schedule; any other answer ends the delivery as failed. A failed delivery is recorded and counted, and changes
+  nothing about the sign-out.
+
+scope:
+  shows: >-
+    the end of browser sessions through the session service, the notices it queues, and the delivery of one logout
+    token to one app, from the fan-out through every attempt to its last
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "who ends a session and what the caller answers: RP-initiated logout (core.logout), POST /auth/logout
+      (core.logout-token), the expiry sweep (idle and expired sessions), and the account's sign out everywhere, an
+      admin's revocation and the emergency retirement of a key once their routes land; each ends sessions through
+      the session service, and each pairs it with the token revocation it owes"
+    - "the delivery role's own mechanics (#460): the poll, the lease of a claimed row, a node that stops mid-attempt
+      (the row comes due again, so a token may arrive twice and the app drops the repeat by sid), the backoff and the
+      attempt limit (EVENT_DELIVERY_MAX_ATTEMPTS, EVENT_DELIVERY_RETRY_*), and the delivery history and metrics"
+    - "registering the URI: dynamic registration and CIMD documents check it through the egress client and refuse a
+      URI that is not https, carries credentials or a fragment, or resolves to a private, loopback or other non-public
+      address, even for a development client; only the seed manifest, an operator's, sets a URI as an admin, which the
+      deployment allowlist may then let reach a private address"
+    - "the signer's own refusals: the delivery role may sign a logout+jwt with the realm's ID token key and a
+      secevent+jwt with its event_signing key, and nothing else, and its handle holds no key"
+    - 'front-channel logout: QAuth has none (ADR-019 Decision 4)'
+
+context:
+  served:
+    values: [some, none]
+    initial: any
+    say:
+      some: 'the session had signed the person in to at least one app with a backchannel_logout_uri'
+      none: 'the session never got as far as an app, or none of its apps registered a backchannel_logout_uri'
+  # The client, when the delivery role fans the event out.
+  uriAtFanOut:
+    values: [registered, none]
+    initial: any
+    say:
+      registered: 'the client has a backchannel_logout_uri when the delivery role lists its destinations'
+      none: 'the client registered none, or was deleted, disabled or suspended, before the fan-out'
+  # The client, as one attempt reads it.
+  clientAtAttempt:
+    values: [active, gone, inactive, uriDropped]
+    initial: any
+    say:
+      active: "the client is enabled, not suspended, of the event's realm, and still has its URI"
+      gone: 'the client was deleted since, or the row is of another realm'
+      inactive: 'the client was disabled or suspended since'
+      uriDropped: 'the client dropped its backchannel_logout_uri since'
+  needsSid:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the client did not set backchannel_logout_session_required'
+      'true': 'the client set backchannel_logout_session_required'
+  sessionSid:
+    values: [present, absent]
+    initial: any
+    say:
+      present: 'the event names the session by its sid, as every session QAuth creates has one'
+      absent: 'the event names no sid'
+  uriSetBy:
+    values: [client, admin]
+    initial: any
+    say:
+      client: "the client's own registration set the URI (dynamic registration, a CIMD document)"
+      admin: 'an operator or admin set it (the seed manifest)'
+  address:
+    values: [public, private]
+    initial: any
+    say:
+      public: 'every address the host resolves to now is public'
+      private: 'the host is, or now resolves to, a private, loopback, link-local or other non-public address'
+  allowlisted:
+    values: [false, true]
+    initial: any
+    say:
+      'false': "the deployment allowlist names neither the host nor its range for the client's realm"
+      'true': "the deployment allowlist names the host or its range for the client's realm"
+  answer:
+    values: [ok, refused, unavailable]
+    initial: any
+    say:
+      ok: 'the app answers 200, or 204 as some frameworks do (§2.8)'
+      refused: 'the app answers 400, or another status no retry changes: a redirect, 401, 403, 404'
+      unavailable: 'the app answers 5xx, 408 or 429: it may answer later'
+  attempts:
+    values: [left, spent]
+    initial: any
+    say:
+      left: 'the delivery has attempts left'
+      spent: 'this was its last attempt'
+  sessionEnded: { values: [false, true], initial: false }
+  queued: { values: [false, true], initial: false }
+  deliveryRow: { values: [false, true], initial: false }
+  signed: { values: [false, true], initial: false }
+  posted: { values: [false, true], initial: false }
+
+guards:
+  servedNone: "served == 'none'"
+  noUriAtFanOut: "uriAtFanOut == 'none'"
+  clientGone: "clientAtAttempt == 'gone'"
+  clientInactive: "clientAtAttempt == 'inactive'"
+  uriDropped: "clientAtAttempt == 'uriDropped'"
+  sidUnavailable: "needsSid == true and sessionSid == 'absent'"
+  destinationBlocked: "address == 'private' and not (uriSetBy == 'admin' and allowlisted == true)"
+  answeredOk: "answer == 'ok'"
+  answeredRefused: "answer == 'refused'"
+  attemptsSpent: "attempts == 'spent'"
+
+effects:
+  endSessions: { set: { sessionEnded: true } }
+  queueNotices: { set: { queued: true } }
+  writeDelivery: { set: { deliveryRow: true } }
+  signToken: { set: { signed: true } }
+  postToken: { set: { posted: true } }
+  # Between two attempts the client, its DNS, the allowlist, the signer and the app may all change. `signed` and
+  # `posted` describe one attempt: the next one signs a new token and sends it again.
+  waitForRetry:
+    set: { signed: false, posted: false }
+    havoc: [clientAtAttempt, needsSid, uriSetBy, address, allowlisted, answer, attempts]
+
+failures:
+  endingSessions: { from: browserSessionStore, server: [server_error] }
+  readingClient: { from: clientStore, server: [route_error] }
+  signing: { from: signer, server: [route_error] }
+  posting: { from: egressClient, network: [network, timeout, busy] }
+
+# The main story: a person signs out, and the one app the session signed in to logs out too.
+main:
+  given:
+    served: some
+    uriAtFanOut: registered
+    clientAtAttempt: active
+    needsSid: false
+    sessionSid: present
+    uriSetBy: client
+    address: public
+    allowlisted: false
+    answer: ok
+    attempts: left
+  events: [DONE, FAN_OUT, ATTEMPT, DONE, DONE, DONE]
+
+initial: endingSessions
+states:
+  endingSessions:
+    title: End the sessions, and queue a notice for each client they served
+    description: >-
+      The session service's revocation: one session, a user's sessions, or a realm's in batches. One transaction
+      locks the sessions, marks them revoked with the reason, deletes their registry rows (the clients each one
+      served), spends their unredeemed codes, and writes one user.client_session_ended event per session and client
+      that has a backchannel_logout_uri to the event store, the outbox: the event names the user, the client and the
+      session's sid. Then the
+      cache entries are tombstoned and the session service's listeners hear of the end.
+    invoke: { external: browserSessionStore }
+    on:
+      DONE:
+        - guard: servedNone
+          target: nothingToNotify
+          effect: [endSessions]
+          say: 'the session ends; it served no app with a backchannel_logout_uri, so nothing is queued'
+        - target: queued
+          effect: [endSessions, queueNotices]
+          say: 'the session ends and its notices are queued, in the same commit'
+      FAIL.server:
+        target: endFailed
+        say: 'Postgres cannot store the change: the transaction rolls back'
+
+  queued:
+    title: The notices wait in the event store
+    description: >-
+      The caller's answer does not wait for them: a sign-out completes whatever the apps do later. Nothing is lost if
+      the node stops now; the delivery role reads the event store, not this process.
+    on:
+      FAN_OUT:
+        target: fanningOut
+        say: "the delivery role's next poll reaches the event"
+
+  fanningOut:
+    title: Match the event to its client
+    description: >-
+      The back-channel logout route lists every client with a backchannel_logout_uri that is enabled and not
+      suspended, each taking only user.client_session_ended events whose envelope client is its own client_id. The
+      fan-out writes one delivery row per matching client and event, so each client gets one logout token per session.
+    always:
+      - guard: noUriAtFanOut
+        target: notSentNoLogoutUri
+        say: 'no destination matches: the client registered no URI, so it gets nothing'
+      - target: awaitingAttempt
+        effect: [writeDelivery]
+        say: 'one delivery row for this client and this session'
+
+  awaitingAttempt:
+    title: Wait for the delivery role to claim the delivery
+    on:
+      ATTEMPT:
+        target: readingClient
+        say: 'the delivery role claims the row, counting one attempt'
+
+  readingClient:
+    title: Read the client as it is now
+    description: >-
+      The delivery may have waited: the client, its URI and its sid rule are read again at every attempt, by the
+      delivery role's own database user, which may read only the columns that say where a logout token goes.
+    invoke: { external: clientStore }
+    on:
+      DONE:
+        - guard: clientGone
+          target: droppedClientGone
+          say: 'the client is gone, or of another realm'
+        - guard: clientInactive
+          target: droppedClientInactive
+          say: 'the client is disabled or suspended'
+        - guard: uriDropped
+          target: droppedNoLogoutUri
+          say: 'the client no longer has a backchannel_logout_uri'
+        - guard: sidUnavailable
+          target: droppedSidUnavailable
+          say: 'the client requires a sid and the event names none: nothing is sent'
+        - target: signing
+          say: 'the client still takes the notice'
+      FAIL.server:
+        target: attemptFailed
+        say: 'the client cannot be read now'
+
+  signing:
+    title: Have the signer role sign the logout token
+    description: >-
+      The claims are aud (the client_id), iat (now), exp (two minutes later, Back-Channel Logout 1.0 §4), jti (the
+      delivery's id, the same on every retry of it, so an app can tell a retry it already acted on), events with the http://schemas.openid.net/event/backchannel-logout member set to {}, sub
+      (the user's id, as the ID tokens name the user) and sid (the session). There is no nonce. The route hands them to
+      the delivery role's signer handle with typ logout+jwt; the signer adds iss, the realm's issuer, and signs with
+      the key and algorithm of the realm's ID tokens, which the realm JWKS publishes (§2.4). The route holds no key.
+    invoke: { external: signer }
+    on:
+      DONE:
+        target: checkingDestination
+        effect: [signToken]
+        say: 'the signer answers a compact JWS'
+      FAIL.server:
+        target: attemptFailed
+        say: 'the signer cannot sign now'
+
+  checkingDestination:
+    title: Check the destination again through the egress client
+    description: >-
+      The egress client resolves the URI's host now and checks every address before it connects, as it did at
+      registration: https only, no credentials, and no private, loopback, link-local or other non-public address. A
+      URI the client's own registration set never uses the deployment allowlist; one an admin set uses it for the
+      client's realm.
+    always:
+      - guard: destinationBlocked
+        target: attemptFailed
+        say: 'the egress client refuses the address: nothing is sent, and a later attempt checks again'
+      - target: posting
+        say: 'the destination passes'
+
+  posting:
+    title: POST the logout token to the app
+    description: >-
+      POST to the backchannel_logout_uri, with Content-Type application/x-www-form-urlencoded and the body
+      logout_token=<the token> (§2.5). No redirect is followed, and the answer is read up to 64 KiB.
+    invoke: { external: egressClient }
+    on:
+      DONE:
+        - guard: answeredOk
+          target: delivered
+          effect: [postToken]
+          say: 'the app answers 2xx'
+        - guard: answeredRefused
+          target: refusedByApp
+          effect: [postToken]
+          say: 'the app answers 400 or another status no retry changes'
+        - target: attemptFailed
+          effect: [postToken]
+          say: 'the app answers 5xx, 408 or 429'
+      FAIL.network:
+        target: attemptFailed
+        effect: [postToken]
+        say: 'no answer: the connection, TLS or the time limit fails'
+
+  attemptFailed:
+    title: Record the failed attempt
+    description: >-
+      The delivery row keeps the error class and the status, and qauth_events_delivery_attempts_total counts the
+      attempt under kind backchannel_logout. The session stays ended.
+    always:
+      - guard: attemptsSpent
+        target: failedForGood
+        say: 'that was the last attempt'
+      - target: waitingToRetry
+        say: 'attempts are left'
+
+  waitingToRetry:
+    title: Wait for the next attempt
+    description: "The delivery role's backoff: 30 seconds, doubling, at most 6 hours, by default."
+    on:
+      RETRY:
+        target: readingClient
+        effect: [waitForRetry]
+        say: 'the delivery comes due again, and the role claims it'
+
+  # Exits: where the delivery is left.
+
+  delivered:
+    type: final
+    title: The app logged the session out
+    response: { body: { delivery: delivered } }
+
+  refusedByApp:
+    type: final
+    title: The app refused the logout token
+    description: The app said the token is invalid or its logout failed; no retry would change that (§2.5).
+    response: { body: { delivery: failed, errorClass: http_status } }
+
+  failedForGood:
+    type: final
+    title: Every attempt failed
+    description: The delivery stays in the queue as failed, with the last attempt's error class.
+    response: { body: { delivery: failed, errorClass: "the last attempt's" } }
+
+  droppedClientGone:
+    type: final
+    title: Nothing is sent to a client that no longer exists
+    response: { body: { delivery: failed, errorClass: client_deleted } }
+
+  droppedClientInactive:
+    type: final
+    title: Nothing is sent to a disabled or suspended client
+    response: { body: { delivery: failed, errorClass: client_inactive } }
+
+  droppedNoLogoutUri:
+    type: final
+    title: Nothing is sent to a client that dropped its URI
+    response: { body: { delivery: failed, errorClass: logout_uri_removed } }
+
+  droppedSidUnavailable:
+    type: final
+    title: Nothing is sent when the client requires a sid the notice lacks
+    response: { body: { delivery: failed, errorClass: sid_unavailable } }
+
+  notSentNoLogoutUri:
+    type: final
+    title: A client without a back-channel logout URI gets nothing
+    description: No delivery row is written, so nothing is attempted, counted or shown as failed.
+
+  nothingToNotify:
+    type: final
+    title: The session ended, and served no app
+
+  endFailed:
+    type: final
+    title: Nothing ended
+    description: >-
+      The revocation's transaction rolled back: no session ended and no notice was queued. The caller's own error
+      answers, so a sign-out that did not happen never looks like one that did.
+
+assertions:
+  - id: a-notice-commits-with-the-end
+    never: 'queued and not sessionEnded'
+    say: 'A notice is queued only in the transaction that ends its session, so it is never sent for a session that did not end'
+  - id: an-end-is-never-lost
+    never: 'sessionEnded and not servedNone and not queued'
+    say: 'A session that served an app never ends without its notices queued, whatever happens to the node next'
+  - id: delivery-never-undoes-the-sign-out
+    never: "state in ['delivered', 'refusedByApp', 'failedForGood', 'droppedClientGone', 'droppedClientInactive', 'droppedNoLogoutUri', 'droppedSidUnavailable', 'notSentNoLogoutUri'] and not sessionEnded"
+    say: 'Every delivery outcome, a failed one included, comes after the session ended; none of them ends or keeps a session'
+  - id: nothing-for-an-app-the-session-never-served
+    never: 'deliveryRow and servedNone'
+    say: 'Only a client the session served gets a delivery'
+  - id: no-token-without-a-uri
+    never: "posted and (noUriAtFanOut or clientAtAttempt != 'active')"
+    say: 'A logout token goes only to an active client that has a back-channel logout URI at the fan-out and at the attempt'
+  - id: no-private-address-for-a-client-registration
+    never: 'posted and destinationBlocked'
+    say: >-
+      A logout token never reaches a private or loopback address, unless an admin set the URI and the deployment
+      allowlist names it for the client's realm
+  - id: sid-when-the-client-requires-it
+    never: 'posted and sidUnavailable'
+    say: 'A client that requires a sid never gets a logout token without one'
+  - id: signed-before-sent
+    never: 'posted and not signed'
+    say: 'What is posted is a token the signer role signed'
+  - id: delivered-means-posted
+    never: "state == 'delivered' and not posted"
+    say: 'A delivery counts as delivered only when the app answered the POST'

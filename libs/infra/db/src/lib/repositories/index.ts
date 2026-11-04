@@ -9,6 +9,7 @@ export * from './admin-roles.repository';
 export * from './api-keys.repository';
 export * from './audit-logs.repository';
 export * from './authorization-codes.repository';
+export * from './backchannel-logout-clients.repository';
 export * from './email-verification-tokens.repository';
 export * from './event-deliveries.repository';
 export * from './event-retention.repository';

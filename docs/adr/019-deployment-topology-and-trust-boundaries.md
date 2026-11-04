@@ -153,6 +153,25 @@
 >   itself, so a browser that hands it random ids does not cost QAuth a Redis read each. The list
 >   never holds the reverse proxy's address or a range browsers reach QAuth from: every caller
 >   from a listed address counts per interaction.
+>
+> **Amended 2026-11-04** with the maintainer's decision of that day on back-channel logout (#624):
+> follow OpenID Connect Back-Channel Logout 1.0 as it is written. Decision 9 gave logout-token
+> signing to the SET key, so that the delivery role could ask the signer for event tokens and never
+> for a token of the token key. §2.4 says the keys that sign ID tokens sign logout tokens too, and a
+> relying party verifies them at the realm's `jwks_uri` (§2.6), which holds no SET key
+> (d-1026-09).
+>
+> - Decision 9: the access-token and ID-token key signs logout tokens, in the ID tokens' algorithm.
+>   The SET key signs Security Event Tokens only. The realm JWKS and the SSF transmitter's JWKS are
+>   unchanged.
+> - Decision 9: the signer's grants name token types, not keys. The delivery role may have a
+>   logout token signed with the token key and a SET with the SET key, and nothing else: no access
+>   token, ID token or ID-JAG. The API role signs no logout token. The signer holds both kinds of
+>   event token to their claims: no grant claim and no `nonce`, an `events` object, and for a
+>   logout token the back-channel logout event alone, at most two minutes of life and no claim
+>   outside its own (`aud`, `iat`, `exp`, `jti`, `events`, `sub`, `sid`).
+> - What the delivery role can still do with the token key, if it is compromised, is sign logout
+>   tokens for any client and session of its realm: a forged sign-out, never a sign-in.
 
 ## Context
 
@@ -847,8 +866,8 @@ trusts no caller for its network position (Decision 7).
 
 **One key per purpose.**
 
-- access-token and ID-token signing;
-- Security Event Token (SET) and logout-token signing;
+- access-token, ID-token and logout-token signing (logout tokens amended 2026-11-04);
+- Security Event Token (SET) signing;
 - the federation entity key;
 - the trust-anchor key;
 - OID4VP verifier request signing;

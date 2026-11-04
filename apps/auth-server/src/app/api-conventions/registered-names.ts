@@ -76,6 +76,8 @@ const REGISTERED_NAME_GROUPS: Readonly<Record<string, readonly string[]>> = {
     'revocation_endpoint',
     'introspection_endpoint',
     'end_session_endpoint',
+    'backchannel_logout_supported',
+    'backchannel_logout_session_supported',
     'device_authorization_endpoint',
     'pushed_authorization_request_endpoint',
     'scopes_supported',

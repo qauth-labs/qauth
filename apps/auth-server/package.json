@@ -18,6 +18,7 @@
     "@opentelemetry/resources": "catalog:",
     "@opentelemetry/sdk-logs": "catalog:",
     "@qauth-labs/core-crypto": "workspace:*",
+    "@qauth-labs/fastify-plugin-backchannel-logout": "workspace:*",
     "@qauth-labs/fastify-plugin-cache": "workspace:*",
     "@qauth-labs/fastify-plugin-db": "workspace:*",
     "@qauth-labs/fastify-plugin-dpop": "workspace:*",

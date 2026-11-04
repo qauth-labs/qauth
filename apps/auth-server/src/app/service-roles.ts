@@ -155,12 +155,15 @@ export const SERVICE_ROLE_DEFINITIONS: Readonly<Record<ServiceRole, ServiceRoleD
     repositories: ['realmSecrets'],
   },
   delivery: {
-    // The reader and the SSF delivery route; the event store's lag and age
-    // gauges in the metrics read `events` and `eventRetention`, and the
-    // delivery history reads the role's own queue through `eventDeliveries`.
+    // The reader, the SSF delivery route and the back-channel logout route
+    // (#624), which reads its clients through `backchannelLogoutClients` and
+    // POSTs through the egress client, whose allowlist an admin-set URI may
+    // use; the event store's lag and age gauges in the metrics read `events`
+    // and `eventRetention`, and the delivery history reads the role's own
+    // queue through `eventDeliveries`.
     summary: 'the event delivery reader and event retention',
-    plugins: ['eventDelivery', 'ssf'],
-    repositories: ['events', 'eventDeliveries', 'eventRetention'],
+    plugins: ['eventDelivery', 'ssf', 'egress'],
+    repositories: ['events', 'eventDeliveries', 'eventRetention', 'backchannelLogoutClients'],
   },
 };
 

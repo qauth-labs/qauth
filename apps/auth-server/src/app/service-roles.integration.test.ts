@@ -369,7 +369,12 @@ describe('service roles (#495)', () => {
         await signer.signEventToken({
           realmId: delivery.realmId,
           typ: 'secevent+jwt',
-          claims: { jti: delivery.eventId },
+          // The signer holds an event token to its kind (#624): a SET carries
+          // an events object.
+          claims: {
+            jti: delivery.eventId,
+            events: { 'https://schemas.openid.net/secevent/ssf/event-type/verification': {} },
+          },
         });
         return { ok: true, statusCode: 202 };
       },

@@ -348,6 +348,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-user-client-session-ended-v1",
+      "description": "The urn:qauth:event:user.client_session_ended:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #624).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.client_session_ended.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-user-disabled-v1",
       "description": "The urn:qauth:event:user.disabled:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #748).",
       "format": "json-schema",

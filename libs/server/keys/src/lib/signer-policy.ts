@@ -1,5 +1,5 @@
 import type { SignerOperation } from './signer';
-import { JWS_SIGNING_PURPOSES, type JwsSigningPurpose } from './signer-typ';
+import { JWS_TYPS, type JwsTyp } from './signer-typ';
 
 /**
  * Who may call which signer operation (ADR-019 Decision 9, issue #464).
@@ -31,8 +31,13 @@ export type SignerCaller = (typeof SIGNER_CALLERS)[number];
 
 /** What one role may call. */
 export interface SignerGrant {
-  /** The purposes the role may sign with through `signJws`. */
-  readonly signJws: readonly JwsSigningPurpose[];
+  /**
+   * The token types the role may sign through `signJws`. Each type belongs to
+   * one purpose (`JWS_TYP_BY_PURPOSE`), so the grant names the key and the
+   * kind of token together: `delivery` may have a logout token signed with
+   * the token key, and no access token or ID token (#624).
+   */
+  readonly signJws: readonly JwsTyp[];
   readonly signHybrid: boolean;
   readonly signWebhook: boolean;
   readonly signClientAssertion: boolean;
@@ -128,7 +133,8 @@ const NOTHING_ELSE = {
  *   `oid4vp_request_signing` key and seals each request's ephemeral response
  *   key with the `data_at_rest` key (#546): it may encrypt only with an
  *   {@link OID4VP_RESPONSE_KEY_CONTEXT_PREFIX} context, and decrypts nothing.
- * - `api` signs access and ID tokens (`token_signing`, hybrid included), signs
+ * - `api` signs access tokens, ID tokens and ID-JAGs (`token_signing`, hybrid
+ *   included), but no logout token, signs
  *   client assertions toward upstream providers (#547), and encrypts with the
  *   `data_at_rest` key. It decrypts only four kinds of stored secret: a
  *   realm's mail transport secret ({@link REALM_MAIL_SECRET_CONTEXT_PREFIX}),
@@ -142,8 +148,12 @@ const NOTHING_ELSE = {
  *   else of the role decrypts, and it signs no request object: the request is
  *   signed when the `web` role builds it. No granted prefix is the start of
  *   another role's, so no grant reaches another role's secrets.
- * - `delivery` signs Security Event Tokens and logout tokens
- *   (`event_signing`) and webhook messages (#547). It holds no secret: it
+ * - `delivery` signs Security Event Tokens (`event_signing`), logout tokens
+ *   (`logout+jwt`, with the `token_signing` key that signs the ID tokens, as
+ *   OpenID Connect Back-Channel Logout 1.0 §2.4 asks, #624) and webhook
+ *   messages (#547), and no other token of either key: the signer holds both
+ *   kinds of event token to their claims (`eventTokenClaimsProblem`). It
+ *   holds no secret: it
  *   sends the message to the signer and gets the signature header back. It
  *   may decrypt, never encrypt, and only a ciphertext whose `context` starts
  *   with {@link DELIVERY_SECRET_CONTEXT_PREFIX}: a destination's secret, such
@@ -157,7 +167,7 @@ const NOTHING_ELSE = {
  */
 export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freezePolicy({
   local: {
-    signJws: JWS_SIGNING_PURPOSES,
+    signJws: JWS_TYPS,
     signHybrid: true,
     signWebhook: true,
     signClientAssertion: true,
@@ -176,7 +186,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
   },
   api: {
     ...NOTHING_ELSE,
-    signJws: ['token_signing'],
+    signJws: ['at+jwt', 'JWT', 'oauth-id-jag+jwt'],
     signHybrid: true,
     signClientAssertion: true,
     encrypt: true,
@@ -190,7 +200,7 @@ export const SIGNER_POLICY: Readonly<Record<SignerCaller, SignerGrant>> = freeze
   },
   delivery: {
     ...NOTHING_ELSE,
-    signJws: ['event_signing'],
+    signJws: ['secevent+jwt', 'logout+jwt'],
     signWebhook: true,
     decrypt: [DELIVERY_SECRET_CONTEXT_PREFIX],
     ...PUBLIC_READS,
@@ -217,11 +227,13 @@ export function isSignerCaller(value: unknown): value is SignerCaller {
 
 /**
  * Whether `caller` may call `operation`. For `signJws`, `detail` names the
- * purpose to sign with, and the call is allowed only when the role's grant
- * lists it. For `encrypt` and `decrypt`, `detail` is the ciphertext's
- * `context`: a role whose grant is a list of prefixes may encrypt or decrypt
- * only with a context that starts with one of them, and is refused when none
- * is given. An unknown role, operation or purpose is never allowed.
+ * token type (`typ`) to sign, and the call is allowed only when the role's
+ * grant lists it; a purpose is not a type, and is never allowed, so no caller
+ * authorizes a key on its purpose alone (#624). For `encrypt` and `decrypt`, `detail` is the
+ * ciphertext's `context`: a role whose grant is a list of prefixes may encrypt
+ * or decrypt only with a context that starts with one of them, and is refused
+ * when none is given. An unknown role, operation, type or purpose is never
+ * allowed.
  */
 export function isSignerCallAllowed(
   caller: unknown,

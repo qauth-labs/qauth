@@ -184,6 +184,33 @@ describe('event deliveries integration (real Postgres)', () => {
       expect((await rows()).map((row) => row.event_id)).not.toContain(before);
     });
 
+    it('starts a kind with a backfill window before the first event inside it, and writes no row twice (#624)', async () => {
+      const realm = randomUUID();
+      const now = Date.now();
+      const destinations = [destination(realm, 'a', { types: [SIGNED_IN] })];
+      // An event two minutes old, then one 30 seconds old.
+      const old = await createEventsRepository(db(), {
+        now: () => now - 120_000,
+      }).emitInOwnTransaction(signedIn(realm));
+      const early = await createEventsRepository(db(), {
+        now: () => now - 30_000,
+      }).emitInOwnTransaction(signedIn(realm));
+      const backfillMs = { [KINDS[0]]: 60_000 };
+
+      // The first fan-out starts the position before `early`, which is inside
+      // the window; `old` is not.
+      await queue.fanOut({ kinds: KINDS, destinations, now, backfillMs });
+      await queue.fanOut({ kinds: KINDS, destinations, now, backfillMs });
+      expect((await rows()).map((row) => row.event_id)).toEqual([early]);
+      expect((await rows()).map((row) => row.event_id)).not.toContain(old);
+
+      // Forgotten and started again: `early` is read again and not written twice.
+      await queue.fanOut({ kinds: KINDS, destinations: [], now, backfillMs });
+      await queue.fanOut({ kinds: KINDS, destinations, now, backfillMs });
+      await queue.fanOut({ kinds: KINDS, destinations, now, backfillMs });
+      expect((await rows()).map((row) => row.event_id)).toEqual([early]);
+    });
+
     it('writes no row twice, even when the position is moved back', async () => {
       const realm = randomUUID();
       const destinations = [destination(realm, 'a')];

@@ -56,7 +56,7 @@ With both on, the realm:
   `/ssf/jwks.json`, the `jwks_uri` of the metadata. A receiver verifies each SET with a key from
   there. It needs no token, and is cached for at most 5 minutes, as the realm JWKS is;
 - keeps the SET keys out of the realm JWKS at `/.well-known/jwks.json`, which holds only the keys
-  of its access and ID tokens. A resource server that skips the `typ` check therefore cannot take
+  of its access, ID and logout tokens. A resource server that skips the `typ` check therefore cannot take
   a SET for an access token;
 - serves stream management under `/ssf/` (see the
   [API reference](/integrate/api-reference/#shared-signals-framework-transmitter)).

@@ -1,0 +1,35 @@
+{
+  "name": "server-backchannel-logout",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/server/backchannel-logout/src",
+  "projectType": "library",
+  "tags": ["scope:server", "type:utility"],
+  "targets": {
+    "test": {
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "json": "{workspaceRoot}/tsconfig.json",
+          "fields": ["compilerOptions"]
+        },
+        {
+          "externalDependencies": ["vitest", "typescript", "jose"]
+        },
+        {
+          "env": "CI"
+        },
+        {
+          "dependentTasksOutputFiles": "**/*.js",
+          "transitive": true
+        },
+        "{workspaceRoot}/libs/**/package.json",
+        "{workspaceRoot}/apps/*/package.json"
+      ],
+      "metadata": {
+        "description": "Overrides the @nx/vitest-inferred target's `inputs`, which only cover this project's own files. `key-isolation.test.ts` resolves workspace packages through their package.json files and walks their sources with TypeScript, so a change to a package's entry points or to TypeScript must re-run it. Setting `inputs` REPLACES the inferred array, so the first six entries are the inferred defaults re-declared."
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project server-backchannel-logout --web"
+}

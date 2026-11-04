@@ -68,3 +68,38 @@ describe('post_logout_redirect_uris rows (#675)', () => {
     expect(buildUpdate(spec(), 'hash').postLogoutRedirectUris).toEqual([]);
   });
 });
+
+describe('back-channel logout rows (#624)', () => {
+  const spec = (overrides: Record<string, unknown> = {}): ClientSpec =>
+    clientSpecSchema.parse({
+      client_id: 'notes-app',
+      name: 'Notes',
+      grant_types: ['authorization_code'],
+      redirect_uris: ['https://notes.example.com/callback'],
+      ...overrides,
+    });
+
+  it('writes the URI as set by an admin, with the sid flag, on a new client and on a rotation', () => {
+    const entry = spec({
+      backchannel_logout_uri: 'https://notes.example.com/backchannel',
+      backchannel_logout_session_required: true,
+    });
+    const expected = {
+      backchannelLogoutUri: 'https://notes.example.com/backchannel',
+      backchannelLogoutUriSource: 'admin',
+      backchannelLogoutSessionRequired: true,
+    };
+    expect(buildInsert('realm-id', entry, 'hash')).toMatchObject(expected);
+    expect(buildUpdate(entry, 'hash')).toMatchObject(expected);
+  });
+
+  it('writes no URI and no source for an entry without one, so a rotation clears a URI the manifest dropped', () => {
+    const expected = {
+      backchannelLogoutUri: null,
+      backchannelLogoutUriSource: null,
+      backchannelLogoutSessionRequired: false,
+    };
+    expect(buildInsert('realm-id', spec(), 'hash')).toMatchObject(expected);
+    expect(buildUpdate(spec(), 'hash')).toMatchObject(expected);
+  });
+});

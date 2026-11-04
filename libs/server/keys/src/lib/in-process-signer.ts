@@ -25,6 +25,7 @@ import {
 } from './data-at-rest';
 import { openKeyMaterial } from './envelope';
 import { KeyDecryptionError } from './errors';
+import { eventTokenClaimsProblem, isEventTokenTyp } from './event-token-claims';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
@@ -73,9 +74,11 @@ import type {
 import { isSignerCallAllowed, isSignerCaller, type SignerCaller } from './signer-policy';
 import {
   CLIENT_ASSERTION_TYP,
+  idTokenAlgorithm,
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
+  JWS_TYP_BY_PURPOSE,
   type JwsSigningPurpose,
   type JwsTyp,
   OID4VP_REQUEST_OBJECT_TYP,
@@ -621,7 +624,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           `${describePurpose(purpose)} does not sign through signJws`
         );
       }
-      authorize(caller, 'signJws', purpose);
+      // First, before the request is read further: the role may sign some
+      // type of the purpose. The type itself is checked once it is resolved.
+      const grantedTyps = (JWS_TYP_BY_PURPOSE[purpose] as readonly string[]).filter((typ) =>
+        isSignerCallAllowed(caller, 'signJws', typ)
+      );
+      if (grantedTyps.length === 0) {
+        throw new SignerAccessDeniedError(
+          isSignerCaller(caller) ? caller : undefined,
+          'signJws',
+          purpose
+        );
+      }
       const realmId = resolveRealmId(fields['realmId']);
       if (fields['scopeId'] !== undefined && fields['scopeId'] !== null) {
         throw new SignerRequestRefusedError(
@@ -630,8 +644,30 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         );
       }
       const typ = resolveTyp(purpose, fields['typ']);
+      // The role's grant names the token types it may ask for: `delivery` may
+      // have a logout token signed with the token key, and nothing else of it.
+      if (!isSignerCallAllowed(caller, 'signJws', typ)) {
+        throw new SignerAccessDeniedError(caller, 'signJws', purpose);
+      }
       const definition = KEY_PURPOSES[purpose];
-      const algorithm = fields['algorithm'] ?? definition.defaultAlgorithm;
+      // A logout token is signed as the realm's ID tokens are, with the same
+      // key, so in their algorithm and in no other (OpenID Connect
+      // Back-Channel Logout 1.0 §2.4, #624).
+      const logoutAlgorithm =
+        typ === 'logout+jwt'
+          ? idTokenAlgorithm(
+              (await listKeys(realmId, 'token_signing', null))
+                .filter((key) => key.status === 'active')
+                .map((key) => key.algorithm)
+            )
+          : undefined;
+      const algorithm = fields['algorithm'] ?? logoutAlgorithm ?? definition.defaultAlgorithm;
+      if (logoutAlgorithm !== undefined && algorithm !== logoutAlgorithm) {
+        throw new SignerRequestRefusedError(
+          'ALGORITHM_NOT_ALLOWED',
+          `A logout token is signed as the realm's ID tokens are, with ${logoutAlgorithm}`
+        );
+      }
       if (
         !isJwsKeyAlgorithm(algorithm) ||
         !(definition.algorithms as readonly string[]).includes(algorithm)
@@ -644,6 +680,14 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         );
       }
       const claims = resolveClaims(fields['claims']);
+      if (isEventTokenTyp(typ)) {
+        // A logout token is signed with the ID tokens' key (#624), and the
+        // delivery role asks for both kinds of event token: the signer holds
+        // each to its kind, so no caller has an access token's or an ID
+        // token's claims signed as one (eventTokenClaimsProblem).
+        const problem = eventTokenClaimsProblem(typ, claims, Math.floor(now() / 1000));
+        if (problem !== undefined) throw new SignerRequestRefusedError('INVALID_CLAIMS', problem);
+      }
 
       const issuer = await realmIssuer(realmId);
       const record = await activeKey(realmId, purpose, algorithm);
@@ -666,6 +710,17 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
       const realmId = resolveRealmId(fields['realmId']);
       const typ = resolveTyp('token_signing', fields['typ']);
+      if (typ === 'logout+jwt') {
+        throw new SignerRequestRefusedError(
+          'TYP_NOT_ALLOWED',
+          'A logout token is signed through signJws, as the ID tokens are, never as a hybrid carrier'
+        );
+      }
+      // The hybrid carrier signs with the token key: only a type the role may
+      // have signed through signJws.
+      if (!isSignerCallAllowed(caller, 'signJws', typ)) {
+        throw new SignerAccessDeniedError(caller, 'signHybrid', 'token_signing');
+      }
       const claims = resolveClaims(fields['claims']);
 
       const issuer = await realmIssuer(realmId);

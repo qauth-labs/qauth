@@ -19,7 +19,7 @@ vi.mock('../../config/env', () => ({ env: ENV }));
 
 vi.mock('./egress-get', () => ({ egressGet }));
 
-import { blockedEgress } from '../../testing/egress';
+import { blockedEgress, failedEgress } from '../../testing/egress';
 import {
   cimdDocumentSchema,
   fetchAndValidateCimdDocument,
@@ -741,5 +741,109 @@ describe('toCimdClientInsert — post_logout_redirect_uris (OpenID Connect RP-In
       expect(parsed.success).toBe(true);
       expect(parsed.data?.post_logout_redirect_uris).toBeUndefined();
     }
+  });
+});
+
+describe('backchannel_logout_uri in a CIMD document (OpenID Connect Back-Channel Logout 1.0 §2.2, #624)', () => {
+  const REALM = 'realm-1';
+  const SENTINEL = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$ZGlnZXN0';
+  const URI = 'https://app.example.com/backchannel';
+
+  /** A stub whose egress client refuses the hosts `refused` names. */
+  function withEgress(refused: (url: string) => boolean = () => false) {
+    const fastify = fastifyStub();
+    fastify.egress = {
+      validateDestination: vi.fn(async (url: string) => {
+        if (refused(url)) throw blockedEgress('resolves to a private address');
+        return { url, host: new URL(url).hostname, port: 443, addresses: ['203.0.113.10'] };
+      }),
+    };
+    return fastify;
+  }
+
+  it('keeps a URI whose address passes, checked as a client-registered destination', async () => {
+    const fastify = withEgress();
+    egressGet.mockResolvedValue(
+      ok(validDoc({ backchannel_logout_uri: URI, backchannel_logout_session_required: true }))
+    );
+
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+
+    expect(doc.backchannel_logout_uri).toBe(URI);
+    expect(fastify.egress.validateDestination).toHaveBeenCalledWith(URI, {
+      purpose: 'backchannel-logout',
+      source: 'client',
+    });
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.backchannelLogoutUri).toBe(URI);
+    expect(insert.backchannelLogoutSessionRequired).toBe(true);
+  });
+
+  it('keeps a URI whose check failed rather than refused, such as a name that did not resolve now', async () => {
+    const fastify = fastifyStub();
+    fastify.egress = {
+      validateDestination: vi.fn(async () => {
+        throw failedEgress('the name did not resolve');
+      }),
+    };
+    egressGet.mockResolvedValue(ok(validDoc({ backchannel_logout_uri: URI })));
+
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+
+    // Delivery checks the addresses again before every logout token.
+    expect(doc.backchannel_logout_uri).toBe(URI);
+  });
+
+  it('drops a URI on a private or loopback address, and still resolves the client', async () => {
+    const fastify = withEgress(() => true);
+    egressGet.mockResolvedValue(
+      ok(
+        validDoc({
+          backchannel_logout_uri: 'https://127.0.0.1/backchannel',
+          backchannel_logout_session_required: true,
+        })
+      )
+    );
+
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+
+    expect(doc).not.toHaveProperty('backchannel_logout_uri');
+    expect(doc).not.toHaveProperty('backchannel_logout_session_required');
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.backchannelLogoutUri).toBeNull();
+    expect(insert.backchannelLogoutSessionRequired).toBe(false);
+    // The cached document holds no URI either.
+    const cached = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+    expect(cached).not.toHaveProperty('backchannel_logout_uri');
+  });
+
+  it.each([
+    ['http://app.example.com/backchannel'],
+    ['https://app.example.com/backchannel#frag'],
+    [42],
+    [''],
+  ])('drops %j, whose form is refused, without asking the egress client', async (value) => {
+    const fastify = withEgress();
+    egressGet.mockResolvedValue(ok(validDoc({ backchannel_logout_uri: value })));
+
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+
+    // A value that is not a bounded string reads as absent (`.catch`).
+    expect(doc.backchannel_logout_uri).toBeUndefined();
+    expect(fastify.egress.validateDestination).not.toHaveBeenCalled();
+  });
+
+  it('re-checks the form at materialisation, for a document cached before the field was read', () => {
+    const doc = cimdDocumentSchema.parse(
+      validDoc({ backchannel_logout_uri: 'http://app.example.com/backchannel' })
+    );
+    expect(toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL).backchannelLogoutUri).toBeNull();
+  });
+
+  it('registers no URI and no sid flag for a document without the field', () => {
+    const doc = cimdDocumentSchema.parse(validDoc({ backchannel_logout_session_required: true }));
+    const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
+    expect(insert.backchannelLogoutUri).toBeNull();
+    expect(insert.backchannelLogoutSessionRequired).toBe(false);
   });
 });

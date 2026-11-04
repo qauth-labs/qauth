@@ -174,6 +174,8 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'user.sign_in_step_passed':
     'One step of a sign-in; the sign-in itself is the entry (`signed_in`).',
   'user.sign_out_failed': 'A refused sign-out changes nothing on the account.',
+  'user.client_session_ended':
+    'The notice to one app that a session ended, for back-channel logout; the end of the session is the entry.',
   'user.registered': 'The account’s creation, older than the log for most accounts.',
   'user.disabled':
     'An operator’s switch, recorded in the admin events; a disabled account cannot read its log.',

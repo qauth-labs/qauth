@@ -53,6 +53,19 @@ function withoutFirstPartyColumns<T extends object>(data: T): T {
 }
 
 /**
+ * The back-channel logout columns of a CIMD client (#624): the document's URI
+ * with `client` as its source, whatever the caller passed, or none of it.
+ */
+function cimdBackchannelLogout(data: NewOAuthClient) {
+  const uri = data.backchannelLogoutUri ?? null;
+  return {
+    backchannelLogoutUri: uri,
+    backchannelLogoutUriSource: uri === null ? null : ('client' as const),
+    backchannelLogoutSessionRequired: data.backchannelLogoutSessionRequired ?? false,
+  };
+}
+
+/**
  * Factory function that creates an OAuth clients repository with CRUD operations
  *
  * @param defaultDb - Database client to use for queries
@@ -310,7 +323,14 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
         // whatever the caller passed.
         // Nor first party (#631): its document is self-asserted. The conflict
         // update below never names the first-party columns either.
-        .values({ ...data, provisionedByOperator: false, ...NOT_FIRST_PARTY })
+        // Its back-channel logout URI is the document's, so the client's own
+        // (#624): never one an admin set, which the egress allowlist may open.
+        .values({
+          ...data,
+          provisionedByOperator: false,
+          ...NOT_FIRST_PARTY,
+          ...cimdBackchannelLogout(data),
+        })
         .onConflictDoUpdate({
           target: [oauthClients.realmId, oauthClients.clientId],
           set: {
@@ -320,6 +340,9 @@ export function createOAuthClientsRepository(defaultDb: DbClient): OAuthClientsR
             // #675: document-derived like `redirectUris`; a document that
             // drops the field clears the list.
             postLogoutRedirectUris: data.postLogoutRedirectUris ?? [],
+            // #624: document-derived too; a document that drops the URI
+            // clears it, with its source and the sid flag.
+            ...cimdBackchannelLogout(data),
             grantTypes: data.grantTypes,
             responseTypes: data.responseTypes,
             tokenEndpointAuthMethod: data.tokenEndpointAuthMethod,

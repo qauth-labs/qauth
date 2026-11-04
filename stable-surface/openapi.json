@@ -7010,6 +7010,14 @@
                       "maxLength": 2048
                     }
                   },
+                  "backchannel_logout_uri": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "backchannel_logout_session_required": {
+                    "type": "boolean"
+                  },
                   "grant_types": {
                     "maxItems": 8,
                     "type": "array",
@@ -7130,6 +7138,12 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "backchannel_logout_uri": {
+                      "type": "string"
+                    },
+                    "backchannel_logout_session_required": {
+                      "type": "boolean"
                     },
                     "grant_types": {
                       "type": "array",

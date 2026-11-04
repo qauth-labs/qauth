@@ -428,6 +428,12 @@ cache, so a rotation through the store will change nothing for a relying party
 that follows the rule. A key replaced through its variable leaves the JWKS at
 once: such a relying party refuses the old key's tokens within 5 minutes.
 
+The token keys sign
+[back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout) too,
+in the algorithm of the realm's ID tokens, as OpenID Connect Back-Channel
+Logout 1.0 §2.4 asks: a relying party verifies them at this JWKS, as it
+verifies ID tokens.
+
 ## Key formats
 
 ### PEM keys: PKCS#8 recommended

@@ -5,6 +5,7 @@ import {
   type AdminRolesRepository,
   type ApiKeysRepository,
   type AuthorizationCodesRepository,
+  type BackchannelLogoutClientsRepository,
   createAdminApprovalsRepository,
   createAdminAuditLogRepository,
   createAdminGrantsRepository,
@@ -12,6 +13,7 @@ import {
   createApiKeysRepository,
   createAuditLogsRepository,
   createAuthorizationCodesRepository,
+  createBackchannelLogoutClientsRepository,
   createDatabase,
   createEmailVerificationTokensRepository,
   createEventDeliveriesRepository,
@@ -113,6 +115,12 @@ declare module 'fastify' {
        */
       ssfStreams: SsfStreamsRepository;
       /**
+       * The back-channel logout route's reads of the clients with a
+       * `backchannel_logout_uri` (OpenID Connect Back-Channel Logout 1.0,
+       * #624), as the delivery role's database user.
+       */
+      backchannelLogoutClients: BackchannelLogoutClientsRepository;
+      /**
        * Custom admin roles (ADR-019 Decision 7, #510). Built-in roles are
        * defined in the auth server's code, not stored.
        */
@@ -186,6 +194,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   eventRetention: true,
   sessions: true,
   ssfStreams: true,
+  backchannelLogoutClients: true,
   adminRoles: true,
   adminGrants: true,
   adminAuditLog: true,
@@ -261,6 +270,14 @@ export const databasePlugin = fp<DatabasePluginOptions>(
     fastify.decorate('dbPool', database.pool);
     // Built lazily per name, so a process builds only the repositories its
     // service roles use (#495). Every one when no list is given.
+    // One event store repository, whoever asks first: the sessions
+    // repository writes its back-channel logout notices through it (#624),
+    // so they reach telemetry like any other event.
+    let eventsRepository: Repositories['events'] | undefined;
+    const sharedEvents = (): Repositories['events'] =>
+      (eventsRepository ??= createEventsRepository(database.db, {
+        telemetry: options.eventTelemetry,
+      }));
     const builders: { [Name in RepositoryName]: () => Repositories[Name] } = {
       users: () => createUsersRepository(database.db),
       realms: () => createRealmsRepository(database.db, { seeds: options.realmPolicySeeds }),
@@ -274,11 +291,12 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       userCredentials: () => createUserCredentialsRepository(database.db),
       userAttributes: () => createUserAttributesRepository(database.db),
       oid4vpRequestStates: () => createOid4vpRequestStatesRepository(database.db),
-      events: () => createEventsRepository(database.db, { telemetry: options.eventTelemetry }),
+      events: sharedEvents,
       eventDeliveries: () => createEventDeliveriesRepository(database.db),
       eventRetention: () => createEventRetentionRepository(database.db),
-      sessions: () => createSessionsRepository(database.db),
+      sessions: () => createSessionsRepository(database.db, { events: sharedEvents() }),
       ssfStreams: () => createSsfStreamsRepository(database.db),
+      backchannelLogoutClients: () => createBackchannelLogoutClientsRepository(database.db),
       adminRoles: () =>
         createAdminRolesRepository(database.db, { catalog: options.adminRoleCatalog }),
       adminGrants: () =>

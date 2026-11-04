@@ -5,6 +5,7 @@
  * it, like `client-suspension.ts`.
  */
 import {
+  backchannelLogoutUriProblem,
   FIRST_PARTY_PROFILES,
   FIRST_PARTY_REASON_MAX_LENGTH,
   type FirstPartyPolicy,
@@ -118,6 +119,24 @@ export const clientSpecSchema = z
     // Each entry passes the redirect URI rule. Omitted ⇒ `[]` ⇒ never
     // redirect.
     post_logout_redirect_uris: z.array(redirectUriZ).optional(),
+    // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): where QAuth POSTs a
+    // logout token when a session that signed a user in to this client ends.
+    // An https URI with no credentials and no fragment. The operator sets it
+    // as an admin (ADR-019 Decision 8): delivery checks its addresses through
+    // the egress client, and only the deployment allowlist lets it reach a
+    // private one. Omitted ⇒ NULL ⇒ no logout token.
+    backchannel_logout_uri: z
+      .string()
+      .superRefine((uri, ctx) => {
+        const problem = backchannelLogoutUriProblem(uri);
+        if (problem !== undefined) {
+          ctx.addIssue({ code: 'custom', message: `"${uri}": backchannel_logout_uri ${problem}` });
+        }
+      })
+      .optional(),
+    // Back-Channel Logout 1.0 §2.2: the client needs `sid` in every logout
+    // token. Omitted ⇒ false.
+    backchannel_logout_session_required: z.boolean().optional(),
     require_pkce: z.boolean().optional(),
     token_endpoint_auth_method: tokenEndpointAuthMethodZ.optional(),
     // ADR-007 §2: classify a seeded client as an autonomous AI agent.

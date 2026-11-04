@@ -1,4 +1,5 @@
 import formbody from '@fastify/formbody';
+import { backchannelLogoutPlugin } from '@qauth-labs/fastify-plugin-backchannel-logout';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin, hasRepository } from '@qauth-labs/fastify-plugin-db';
 import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
@@ -1074,8 +1075,24 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     await fastify.register(ssfPlugin, { enabled: env.SSF_TRANSMITTER_ENABLED });
   }
   const ssf = plugins.has('ssf') ? fastify.ssf : null;
+  // OpenID Connect Back-Channel Logout 1.0 (#624): a session revocation
+  // queues a `user.client_session_ended` event per client with a
+  // `backchannel_logout_uri`, in its own transaction, and this route POSTs
+  // each client its logout token, signed by the signer role, through the
+  // egress client, which checks the address again at every attempt. Only the
+  // delivery role builds it; the roles that end sessions only queue.
+  const deliversBackchannelLogout = plugins.has('eventDelivery') && plugins.has('egress');
+  if (deliversBackchannelLogout) {
+    await fastify.register(backchannelLogoutPlugin, {
+      clients: fastify.repositories.backchannelLogoutClients,
+    });
+  }
+  const backchannelLogout = deliversBackchannelLogout
+    ? fastify.backchannelLogout.deliveryRoute
+    : null;
   const deliveryRoutes: readonly DeliveryRoute[] = [
     ...(ssf === null ? [] : [ssf.deliveryRoute]),
+    ...(backchannelLogout === null ? [] : [backchannelLogout]),
     ...(eventDeliveryRoutes ?? []),
   ];
 
@@ -1127,8 +1144,8 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // EVENT_DELIVERY_* keys set. It starts on `onReady` and stops on `onClose`
   // once its attempts in flight end, so it needs the database, the signer
   // and the metrics above it, and it signs only through a `delivery` handle
-  // of the signer. Its routes are the SSF route while the transmitter is on
-  // and a test's own; with none it does nothing but publish its metrics. It
+  // of the signer. Its routes are the back-channel logout route (#624), the
+  // SSF route while the transmitter is on, and a test's own; with none it does nothing but publish its metrics. It
   // rides the default realm boot switch, as every database step at boot
   // does: a boot without a database delivers nothing. Only a process
   // that holds the `delivery` role runs it (#495).

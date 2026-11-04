@@ -644,6 +644,26 @@ describe('startDeliveryRole', () => {
     expect(fanOut).toHaveBeenCalledWith(['webhook', 'ssf']);
   });
 
+  it('passes the backfill window of each route that sets one to the fan-out (#624)', async () => {
+    const fanOut = vi.fn();
+    await setup(
+      (clock) => [
+        route(clock, [], undefined, 'webhook'),
+        { ...route(clock, [], undefined, 'backchannel_logout'), backfillMs: 86_400_000 },
+      ],
+      {},
+      true,
+      (store) => ({
+        ...store,
+        fanOut: (request) => {
+          fanOut(request.backfillMs);
+          return store.fanOut(request);
+        },
+      })
+    );
+    expect(fanOut).toHaveBeenCalledWith({ backchannel_logout: 86_400_000 });
+  });
+
   describe('stop', () => {
     it('claims nothing more and lets an attempt in flight finish', async () => {
       let answer!: (outcome: DeliveryOutcome) => void;
@@ -803,5 +823,13 @@ describe('resolveDeliverySettings', () => {
     expect(() =>
       startDeliveryRole({ ...options, routes: [route(clock, [], undefined, 'Webhook')] })
     ).toThrow(TypeError);
+  });
+
+  it.each([-1, 1.5, 31 * 24 * 60 * 60 * 1000])('refuses a backfill window of %s', (backfillMs) => {
+    const clock = createManualClock(START);
+    const options = { store: createMemoryStore(), signer, log: logger(), clock };
+    expect(() =>
+      startDeliveryRole({ ...options, routes: [{ ...route(clock, []), backfillMs }] })
+    ).toThrow('backfill');
   });
 });
