@@ -564,7 +564,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      */
     const unchecked = async (step: StepName, failure: BreachCheckFailure): Promise<void> => {
       const { subject } = state.transaction;
-      if (subject === undefined) throw new Error('sign-in engine: an unchecked step without a subject');
+      if (subject === undefined)
+        throw new Error('sign-in engine: an unchecked step without a subject');
       await context.audit(
         Object.freeze({
           outcome: 'unchecked',
@@ -1247,7 +1248,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         Object.freeze({
           current: Object.freeze({
             step: 'new_password',
-            params: Object.freeze(reasons === undefined ? params : { ...params, reasons: [...reasons] }),
+            params: Object.freeze(
+              reasons === undefined ? params : { ...params, reasons: [...reasons] }
+            ),
           }),
           alternatives: Object.freeze([]),
         }) as StepOffer;
@@ -1380,11 +1383,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
           if (result !== null) return result;
         }
-      } else if (
-        updateDue(current) &&
-        boundBeyondPassword(current) &&
-        !provedBeyondPassword()
-      ) {
+      } else if (updateDue(current) && boundBeyondPassword(current) && !provedBeyondPassword()) {
         // The forced update (#635): an account with a factor beyond its
         // password proves it first, so a person who knows only the password,
         // a listed one above all, sets no new one (ADR-017 Decision 4, rule

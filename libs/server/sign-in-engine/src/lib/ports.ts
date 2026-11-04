@@ -1,8 +1,5 @@
 import type { StepName } from '@qauth-labs/server-step-grammar';
-import type {
-  PasswordNormalization,
-  PasswordRejectionReason,
-} from '@qauth-labs/shared-validation';
+import type { PasswordNormalization, PasswordRejectionReason } from '@qauth-labs/shared-validation';
 
 /**
  * THE ENGINE'S PORTS: everything the sign-in engine reads or calls, as
@@ -223,7 +220,10 @@ export interface BreachedPasswordCheck {
    * `failed`; a throw is read as `failed` (`unavailable`) too, so no check
    * ever blocks a sign-in.
    */
-  check(input: { readonly realmId: string; readonly password: string }): Promise<BreachCheckVerdict>;
+  check(input: {
+    readonly realmId: string;
+    readonly password: string;
+  }): Promise<BreachCheckVerdict>;
 }
 
 /** No breach list: every check is `off`. The default, until a deployment passes its own. */

@@ -119,7 +119,10 @@ export class FakeBreachList implements BreachedPasswordCheck {
 
   constructor(readonly listed: Set<string> = new Set()) {}
 
-  async check(input: { readonly realmId: string; readonly password: string }): Promise<BreachCheckVerdict> {
+  async check(input: {
+    readonly realmId: string;
+    readonly password: string;
+  }): Promise<BreachCheckVerdict> {
     this.checked.push(Object.freeze({ ...input }));
     if (this.throws) throw new Error('fake breach list: down');
     if (this.off) return { kind: 'off' };
@@ -182,7 +185,11 @@ export class FakePasswordUpdates implements PasswordUpdates {
     this.replaced.push(Object.freeze({ ...input }));
     this.directory.accounts.set(input.identifier, {
       ...account,
-      password: { disabled: false, hash: fakeHash(input.password), normalization: input.normalization },
+      password: {
+        disabled: false,
+        hash: fakeHash(input.password),
+        normalization: input.normalization,
+      },
       requiredActions: (account.requiredActions ?? []).filter(
         (action) => action !== 'update_password'
       ),

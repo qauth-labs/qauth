@@ -83,7 +83,15 @@ function build(
     clock: manualClock(),
     ...options,
   });
-  return { engine, directory, sender: new FakeCodeSender(), addresses, policy, breachList, updates };
+  return {
+    engine,
+    directory,
+    sender: new FakeCodeSender(),
+    addresses,
+    policy,
+    breachList,
+    updates,
+  };
 }
 
 type Ctx = RoundContext & { readonly records: ReturnType<typeof recordingAudit>['records'] };
@@ -167,7 +175,10 @@ describe('the breach-list check of a presented password', () => {
   it('checks only a right password, as it was verified', async () => {
     const built = build();
     const wrong = await signIn(built, 'not the password at all, sorry');
-    expect(wrong).toMatchObject({ kind: 'step', offer: { current: { error: 'invalid_credentials' } } });
+    expect(wrong).toMatchObject({
+      kind: 'step',
+      offer: { current: { error: 'invalid_credentials' } },
+    });
     expect(built.breachList.checked).toEqual([]);
     const unknown = build(passwordAccount(USER, UNLISTED));
     unknown.directory.accounts.clear();
@@ -302,11 +313,7 @@ describe('a listed password on a password-only account', () => {
 
     // A new password on the breach list: the new one must pass the check too.
     const listedCtx = context(built);
-    const listed = await built.engine.advance(
-      kept(weak),
-      newPasswordAnswer(NEW_LISTED),
-      listedCtx
-    );
+    const listed = await built.engine.advance(kept(weak), newPasswordAnswer(NEW_LISTED), listedCtx);
     expect(listed).toMatchObject({
       kind: 'step',
       offer: {
@@ -324,11 +331,7 @@ describe('a listed password on a password-only account', () => {
 
     // A good one: replaced, and the sign-in completes with the password's amr.
     const doneCtx = context(built);
-    const done = await built.engine.advance(
-      kept(listed),
-      newPasswordAnswer(NEW_PASSWORD),
-      doneCtx
-    );
+    const done = await built.engine.advance(kept(listed), newPasswordAnswer(NEW_PASSWORD), doneCtx);
     expect(done).toEqual({
       kind: 'complete',
       transaction: null,
@@ -440,9 +443,12 @@ describe('a listed password on a password-only account', () => {
 describe('a listed password on an account with a second factor', () => {
   it('asks for the TOTP first, never a code, and the new password only after it', async () => {
     const totp = fakeTotp();
-    const built = build(passwordAccount(USER, LISTED, { others: [{ type: 'totp', disabled: false }] }), {
-      steps: [totp.handler],
-    });
+    const built = build(
+      passwordAccount(USER, LISTED, { others: [{ type: 'totp', disabled: false }] }),
+      {
+        steps: [totp.handler],
+      }
+    );
     const second = await signIn(built, LISTED);
     expect(second).toMatchObject({ kind: 'step', offer: { current: { step: 'totp' } } });
     expect(built.sender.sent).toEqual([]);
@@ -471,7 +477,9 @@ describe('a listed password on an account with a second factor', () => {
   });
 
   it('answers a redirect when the second factor cannot be asked for: email never stands in for it', async () => {
-    const built = build(passwordAccount(USER, LISTED, { others: [{ type: 'totp', disabled: false }] }));
+    const built = build(
+      passwordAccount(USER, LISTED, { others: [{ type: 'totp', disabled: false }] })
+    );
     const result = await signIn(built, LISTED);
     expect(result).toEqual({ kind: 'redirect', reason: 'step_not_available', transaction: null });
     expect(built.sender.sent).toEqual([]);
@@ -479,9 +487,12 @@ describe('a listed password on an account with a second factor', () => {
 
   it('asks for the second factor the MFA policy requires once, then the new password', async () => {
     const totp = fakeTotp();
-    const built = build(passwordAccount(USER, LISTED, { others: [{ type: 'totp', disabled: false }] }), {
-      steps: [totp.handler],
-    });
+    const built = build(
+      passwordAccount(USER, LISTED, { others: [{ type: 'totp', disabled: false }] }),
+      {
+        steps: [totp.handler],
+      }
+    );
     built.policy.policy = { realm: 'required', client: 'off' };
     const second = await signIn(built, LISTED);
     const third = await built.engine.advance(
@@ -573,7 +584,11 @@ describe('an update the sign-in cannot run', () => {
       role: 'first_factor',
       factor: 'password',
       params: () => ({}),
-      verify: async () => ({ kind: 'refused', error: 'password_rejected', audit: { reason: 'invalid_answer' } }),
+      verify: async () => ({
+        kind: 'refused',
+        error: 'password_rejected',
+        audit: { reason: 'invalid_answer' },
+      }),
     } as unknown as AnyStepHandler;
     expect(() => build(undefined, { steps: [handler] })).toThrow(/never a sign-in step/);
   });
