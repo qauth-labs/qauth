@@ -127,6 +127,8 @@ describe('the engine mail and its send caps (#637, real containers)', () => {
   const booted: BootedAuthServer[] = [];
   const logLines: string[] = [];
   const sent: SentMail[] = [];
+  /** How long the transport takes to accept a mail; a mail lands in `sent` once it has. */
+  let transportDelayMs = 0;
 
   beforeAll(async () => {
     dockerUp = await requireDockerOrSkip();
@@ -143,6 +145,7 @@ describe('the engine mail and its send caps (#637, real containers)', () => {
     if (!dockerUp) ctx.skip();
     logLines.length = 0;
     sent.length = 0;
+    transportDelayMs = 0;
   });
 
   afterEach(async () => {
@@ -161,6 +164,8 @@ describe('the engine mail and its send caps (#637, real containers)', () => {
     const { emailService } = server.app;
     const original = emailService.sendEngineMail.bind(emailService);
     emailService.sendEngineMail = async (realmId, to, mail, context) => {
+      if (transportDelayMs > 0)
+        await new Promise((resolve) => setTimeout(resolve, transportDelayMs));
       sent.push({ to, mail, baseUrl: context.baseUrl });
       return original(realmId, to, mail, context);
     };
@@ -252,6 +257,22 @@ describe('the engine mail and its send caps (#637, real containers)', () => {
     }
     expect(await settle(OWNER, 'code', 3)).toHaveLength(3);
     expect(mailsTo(UNKNOWN, 'code')).toHaveLength(0);
+  }, 120_000);
+
+  it('answers before a slow transport has taken the mail, so a send cannot be told by its time', async () => {
+    const app = await boot();
+    await registerPasswordAccount(app, OWNER);
+    transportDelayMs = 3_000;
+
+    const before = Date.now();
+    const response = await sendCode(app, '203.0.113.9', { address: OWNER });
+    const elapsed = Date.now() - before;
+
+    expect(response.statusCode).toBe(200);
+    expect(elapsed).toBeGreaterThanOrEqual(TIMING_FLOOR_MS);
+    expect(elapsed).toBeLessThan(transportDelayMs);
+    expect(mailsTo(OWNER, 'code')).toHaveLength(0);
+    expect(await settle(OWNER, 'code', 1)).toHaveLength(1);
   }, 120_000);
 
   it('answers an existing and an unknown address at the ceiling with the same 429, alerts once and notices once', async () => {
