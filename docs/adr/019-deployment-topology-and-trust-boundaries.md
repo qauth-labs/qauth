@@ -147,6 +147,11 @@
 >   empty by default. It applies to the step read only: the personal read, the answer and the
 >   cancel carry the flow cookie, which the proxy strips from requests to the ceremony app, so only
 >   the browser makes them, and they count per address.
+> - QAuth bounds a listed address's step reads per interaction only, and cannot tell apart the
+>   browsers behind it. The ceremony app's server limits the step reads it makes for each browser
+>   itself, so a browser that hands it random ids does not cost QAuth a Redis read each. The list
+>   never holds the reverse proxy's address or a range browsers reach QAuth from: every caller
+>   from a listed address counts per interaction.
 
 ## Context
 
