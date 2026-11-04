@@ -78,6 +78,7 @@ import {
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
+  JWS_TYP_BY_PURPOSE,
   type JwsSigningPurpose,
   type JwsTyp,
   OID4VP_REQUEST_OBJECT_TYP,
@@ -623,7 +624,18 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           `${describePurpose(purpose)} does not sign through signJws`
         );
       }
-      authorize(caller, 'signJws', purpose);
+      // First, before the request is read further: the role may sign some
+      // type of the purpose. The type itself is checked once it is resolved.
+      const grantedTyps = (JWS_TYP_BY_PURPOSE[purpose] as readonly string[]).filter((typ) =>
+        isSignerCallAllowed(caller, 'signJws', typ)
+      );
+      if (grantedTyps.length === 0) {
+        throw new SignerAccessDeniedError(
+          isSignerCaller(caller) ? caller : undefined,
+          'signJws',
+          purpose
+        );
+      }
       const realmId = resolveRealmId(fields['realmId']);
       if (fields['scopeId'] !== undefined && fields['scopeId'] !== null) {
         throw new SignerRequestRefusedError(
@@ -703,6 +715,11 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
           'TYP_NOT_ALLOWED',
           'A logout token is signed through signJws, as the ID tokens are, never as a hybrid carrier'
         );
+      }
+      // The hybrid carrier signs with the token key: only a type the role may
+      // have signed through signJws.
+      if (!isSignerCallAllowed(caller, 'signJws', typ)) {
+        throw new SignerAccessDeniedError(caller, 'signHybrid', 'token_signing');
       }
       const claims = resolveClaims(fields['claims']);
 

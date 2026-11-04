@@ -18,8 +18,11 @@
  * - **A Security Event Token** carries no `sub` and no `exp`: QAuth's SETs
  *   name their subject in `sub_id` and never expire.
  * - **A logout token** carries the back-channel logout event alone, an `aud`,
- *   a `sub` or a `sid`, an `iat` near the signer's clock and an `exp` at most
- *   two minutes after it (Back-Channel Logout 1.0 §4).
+ *   a `jti`, a `sub` or a `sid`, an `iat` near the signer's clock and an `exp`
+ *   at most two minutes after it (Back-Channel Logout 1.0 §2.4, §4), and no
+ *   other claim ({@link LOGOUT_TOKEN_CLAIMS}): a relying party that skips the
+ *   `typ` check and reads, say, `email` from what it takes for an ID token
+ *   finds none.
  */
 
 /** The token types that are event tokens, whose claims the signer checks. */
@@ -32,6 +35,21 @@ export function isEventTokenTyp(typ: string): boolean {
 
 /** The `events` member of a logout token (Back-Channel Logout 1.0 §2.4). */
 export const LOGOUT_TOKEN_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
+
+/**
+ * The claims a logout token may carry, besides the `iss` the signer adds
+ * (Back-Channel Logout 1.0 §2.4). It is an allow-list: the key that signs
+ * logout tokens signs ID tokens too.
+ */
+export const LOGOUT_TOKEN_CLAIMS: readonly string[] = Object.freeze([
+  'aud',
+  'iat',
+  'exp',
+  'jti',
+  'events',
+  'sub',
+  'sid',
+]);
 
 /** The longest a logout token the signer signs may live, in seconds. */
 export const LOGOUT_TOKEN_MAX_LIFETIME_SECONDS = 120;
@@ -99,11 +117,17 @@ export function eventTokenClaimsProblem(
     return undefined;
   }
 
+  for (const claim of Object.keys(claims)) {
+    if (!LOGOUT_TOKEN_CLAIMS.includes(claim)) {
+      return `A logout token carries only ${LOGOUT_TOKEN_CLAIMS.join(', ')}; not '${claim}'`;
+    }
+  }
   const names = Object.keys(events);
   if (names.length !== 1 || names[0] !== LOGOUT_TOKEN_EVENT || !isPlainObject(events[names[0]])) {
     return "A logout token's 'events' holds the back-channel logout event alone, as an object";
   }
   if (!isNonEmptyString(claims['aud'])) return "A logout token's 'aud' is one client_id";
+  if (!isNonEmptyString(claims['jti'])) return "A logout token carries a 'jti'";
   const sub = claims['sub'];
   const sid = claims['sid'];
   if (sub !== undefined && !isNonEmptyString(sub)) return "A logout token's 'sub' is a string";

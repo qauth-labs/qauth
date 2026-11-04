@@ -34,8 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to its kind: no
   `scope`, `client_id`, `nonce` or other grant claim, an `events` object, no
   `sub` or `exp` in a Security Event Token, and for a logout token the
-  back-channel logout event alone, an `aud`, a `sub` or `sid` and at most two
-  minutes of life; anything else is refused (`INVALID_CLAIMS`). A delivery
+  back-channel logout event alone, an `aud`, a `jti`, a `sub` or `sid`, at most two
+  minutes of life and no claim but `aud`, `iat`, `exp`, `jti`, `events`, `sub` and `sid`
+  (`LOGOUT_TOKEN_CLAIMS`); anything else is refused (`INVALID_CLAIMS`). A delivery
   route may now ask the delivery role to start a realm's first fan-out a set
   time back rather than at the horizon (`DeliveryRoute.backfillMs`, at most 30
   days); back-channel logout starts a day back, so a notice committed before

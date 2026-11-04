@@ -1,5 +1,5 @@
 import type { SignerOperation } from './signer';
-import { isJwsSigningPurpose, JWS_TYP_BY_PURPOSE, JWS_TYPS, type JwsTyp } from './signer-typ';
+import { JWS_TYPS, type JwsTyp } from './signer-typ';
 
 /**
  * Who may call which signer operation (ADR-019 Decision 9, issue #464).
@@ -228,8 +228,8 @@ export function isSignerCaller(value: unknown): value is SignerCaller {
 /**
  * Whether `caller` may call `operation`. For `signJws`, `detail` names the
  * token type (`typ`) to sign, and the call is allowed only when the role's
- * grant lists it; a purpose as `detail` asks whether the role may sign any
- * type of that purpose. For `encrypt` and `decrypt`, `detail` is the
+ * grant lists it; a purpose is not a type, and is never allowed, so no caller
+ * authorizes a key on its purpose alone (#624). For `encrypt` and `decrypt`, `detail` is the
  * ciphertext's `context`: a role whose grant is a list of prefixes may encrypt
  * or decrypt only with a context that starts with one of them, and is refused
  * when none is given. An unknown role, operation, type or purpose is never
@@ -244,14 +244,7 @@ export function isSignerCallAllowed(
   const grant: SignerGrant = SIGNER_POLICY[caller];
   if (!Object.hasOwn(grant, operation)) return false;
   if (operation === 'signJws') {
-    if (detail === undefined) return false;
-    const granted = grant.signJws as readonly string[];
-    if (granted.includes(detail)) return true;
-    // A purpose: whether the role may sign any of its types.
-    return (
-      isJwsSigningPurpose(detail) &&
-      JWS_TYP_BY_PURPOSE[detail].some((typ: string) => granted.includes(typ))
-    );
+    return detail !== undefined && (grant.signJws as readonly string[]).includes(detail);
   }
   if (operation === 'encrypt' || operation === 'decrypt') {
     const allowed = grant[operation];

@@ -398,7 +398,9 @@ What the signer guarantees:
   A logout token is signed with the keys that sign ID tokens, in their algorithm, as OpenID Connect
   Back-Channel Logout 1.0 §2.4 asks (#624): a relying party verifies it at the realm JWKS. The
   signer holds it, and a Security Event Token, to its kind (`eventTokenClaimsProblem`): no grant
-  claim and no `nonce`, the back-channel logout event alone, at most two minutes of life.
+  claim and no `nonce`, the back-channel logout event alone, at most two minutes of life, and for a
+  logout token no claim outside `LOGOUT_TOKEN_CLAIMS` (`aud`, `iat`, `exp`, `jti`, `events`, `sub`,
+  `sid`).
   `signHybrid` signs no logout token.
 
   The scoped purposes and the OID4VP request key sign through their own operations, each with one

@@ -258,9 +258,11 @@ describe('isSignerCallAllowed', () => {
     expect(isSignerCallAllowed('local', 'signJws')).toBe(false);
     expect(isSignerCallAllowed('local', 'signJws', 'cookie_hmac')).toBe(false);
     expect(isSignerCallAllowed('api', 'signJws', 'event_signing')).toBe(false);
-    // A purpose is granted when one of its types is: delivery signs logout
-    // tokens with the token key (#624), and api signs none of them.
-    expect(isSignerCallAllowed('delivery', 'signJws', 'token_signing')).toBe(true);
+    // A purpose is not a type: no role is granted a key on its purpose alone
+    // (#624). Delivery signs logout tokens with the token key, api none.
+    expect(isSignerCallAllowed('local', 'signJws', 'token_signing')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'token_signing')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'logout+jwt')).toBe(true);
     expect(isSignerCallAllowed('api', 'signJws', 'logout+jwt')).toBe(false);
     expect(isSignerCallAllowed('delivery', 'signJws', 'JWT')).toBe(false);
     expect(isSignerCallAllowed('delivery', 'signJws', 'at+jwt')).toBe(false);

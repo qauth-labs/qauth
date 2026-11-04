@@ -567,6 +567,11 @@ describe('signJws', () => {
       ['an access token grant', { ...logoutToken, scope: 'admin' }],
       ['a client_id', { ...logoutToken, client_id: 'rp' }],
       ['a nonce', { ...logoutToken, nonce: 'n' }],
+      // An allow-list: an ID token's identity claims are refused too.
+      ['an email', { ...logoutToken, email: 'user@example.test' }],
+      ['an at_hash', { ...logoutToken, at_hash: 'h' }],
+      ['a tenant claim', { ...logoutToken, tenant: 'acme' }],
+      ['no jti', { ...logoutToken, jti: undefined }],
       ['no events', { ...logoutToken, events: undefined }],
       ['another event', { ...logoutToken, events: { 'urn:other': {} } }],
       ['a second event', { ...logoutToken, events: { ...logoutToken.events, 'urn:other': {} } }],

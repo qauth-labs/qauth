@@ -168,7 +168,8 @@
 >   logout token signed with the token key and a SET with the SET key, and nothing else: no access
 >   token, ID token or ID-JAG. The API role signs no logout token. The signer holds both kinds of
 >   event token to their claims: no grant claim and no `nonce`, an `events` object, and for a
->   logout token the back-channel logout event alone and at most two minutes of life.
+>   logout token the back-channel logout event alone, at most two minutes of life and no claim
+>   outside its own (`aud`, `iat`, `exp`, `jti`, `events`, `sub`, `sid`).
 > - What the delivery role can still do with the token key, if it is compromised, is sign logout
 >   tokens for any client and session of its realm: a forged sign-out, never a sign-in.
 
