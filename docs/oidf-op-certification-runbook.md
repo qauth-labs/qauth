@@ -328,6 +328,25 @@ Watch these during the run; each is anchored to QAuth code so you know the expec
 
 ---
 
+## Additional profile — Back-Channel OP (#624)
+
+QAuth sends OpenID Connect Back-Channel Logout 1.0 logout tokens, so the **Back-Channel OP** logout profile can be run after Basic OP. It builds on RP-initiated logout (#675): the suite signs in, asks `end_session_endpoint` to log out, and waits for a logout token at the `backchannel_logout_uri` its client registered. The requirement rows the run settles are in [`docs/conformance/requirements/oidc-backchannel-1_0.json`](conformance/requirements/oidc-backchannel-1_0.json).
+
+**Plan.** "Test an OpenID Provider" → the back-channel logout certification plan, certificationProfileName **"Back-Channel OP"**. **[RE-CHECK AT RUN TIME]** the exact plan id and label, and whether the suite asks for the RP-initiated logout profile to run with it. Use the same variants as Basic OP (Step 5), `server_metadata` = **discovery**.
+
+**Before the run:**
+
+1. **Discovery lists the profile.** `curl -s "$ISSUER/.well-known/openid-configuration" | jq '{end_session_endpoint, backchannel_logout_supported, backchannel_logout_session_supported}'` shows the endpoint and `true` twice.
+2. **A delivery role runs.** Logout tokens leave through the `delivery` role (ADR-019 Decision 8): a single process runs it by default; a split deployment needs a process with `delivery` (and `signer`, or a signer it reaches). The role picks a new token up within its poll interval, about a second.
+3. **The suite's receiver is public.** A URI the client registers must resolve only to public addresses, so the hosted suite works and a self-hosted one on `localhost.emobix.co.uk` (127.0.0.1) is refused at registration, as the profile intends. For a pre-flight run against a self-hosted suite, use a static client whose `backchannel_logout_uri` the seed manifest sets, with the suite's host in the egress allowlist (`EGRESS_ALLOWLIST_PATH`): only a URI an admin sets may use the allowlist.
+4. **The client.** With `dynamic_client` the suite registers `backchannel_logout_uri` itself. With `static_client`, set `backchannel_logout_uri` (and `backchannel_logout_session_required` if the plan asks for `sid`) on the client in the seed manifest.
+
+**Expected outcomes:**
+
+- [ ] **One logout token per client and session**, POSTed as `logout_token`, verifiable at the realm's `jwks_uri`, with `typ: logout+jwt`, `iss`, `aud`, `iat`, `exp` (two minutes), `jti`, `events`, `sub`, `sid` and no `nonce`.
+- [ ] **The token's algorithm. [RE-CHECK AT RUN TIME]** Logout tokens are signed with the realm's `event_signing` key (EdDSA by default, ADR-019 Decision 9), while ID tokens are RS256 (Step 1). Back-Channel Logout 1.0 §2.4 says the same keys sign both, and the matrix waives that row. If the suite refuses a logout token whose algorithm differs from the ID token's, record it and do not submit this profile until the open decision on the logout token's key is settled.
+- [ ] **Retries.** A receiver that answers `5xx` gets the same `jti` again on the delivery schedule (`EVENT_DELIVERY_RETRY_INITIAL_DELAY`, `EVENT_DELIVERY_RETRY_MAX_DELAY`); any other non-`2xx` answer is final. The sign-out itself never waits for the receiver.
+
 ## Appendix — Basic-plan modules mapped to QAuth behaviour
 
 | Suite module (Basic OP)                                  | QAuth behaviour                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Where                                                               | Expected    |

@@ -174,7 +174,13 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'RP-initiated logout',
     state: 'shipped',
     summary:
-      'OpenID Connect RP-Initiated Logout 1.0 at `/oauth/end-session` (GET and POST), listed in discovery as `end_session_endpoint`. A valid `id_token_hint` for the signed-in account ends that browser session at once; any other signed-in browser confirms first. The browser goes back only to a `post_logout_redirect_uris` entry the client registered, matched exactly. The session end reaches the session service’s listeners, but back-channel logout tokens are not sent yet (#624), and there is no front-channel logout (ADR-018).',
+      'OpenID Connect RP-Initiated Logout 1.0 at `/oauth/end-session` (GET and POST), listed in discovery as `end_session_endpoint`. A valid `id_token_hint` for the signed-in account ends that browser session at once; any other signed-in browser confirms first. The browser goes back only to a `post_logout_redirect_uris` entry the client registered, matched exactly. There is no front-channel logout (ADR-018).',
+  },
+  {
+    feature: 'Back-channel logout',
+    state: 'shipped',
+    summary:
+      'OpenID Connect Back-Channel Logout 1.0: a client registers `backchannel_logout_uri` (an `https` URI on public addresses), and whenever a session ends, by any path, each client it served gets a signed `logout+jwt` logout token at that URI. The token is queued in the transaction that ends the session and sent by the delivery role through the SSRF-safe egress client, with retries; a failed delivery never holds a sign-out back. Discovery lists `backchannel_logout_supported` and `backchannel_logout_session_supported` (#624).',
   },
   {
     feature: 'API keys',

@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Back-channel logout** ([#624], OpenID Connect Back-Channel Logout 1.0,
+  ADR-019 Decisions 4, 8 and 9, ADR-017 F0). A client may register
+  `backchannel_logout_uri` and `backchannel_logout_session_required` through
+  dynamic registration, a client metadata document or the seed manifest
+  (migration 0058). The URI must be an absolute `https` URI without a fragment
+  or user information, and a URI the client registers must resolve only to
+  public addresses, even for a development client: the egress client checks
+  it at registration, and a refused one is `invalid_client_metadata` (a
+  document drops it). Only a URI an admin sets, through the seed manifest, may
+  use the egress allowlist. Whenever a session ends (RP-initiated logout,
+  `POST /auth/logout`, sign out everywhere, a password reset, an admin, a
+  retired key, the session limit or the session lapsing), the session
+  revocation writes one `user.client_session_ended` event for each client the
+  session served that has a URI, in its own transaction. The `delivery` role
+  turns each into a logout token for that client (`typ: logout+jwt`; `iss`,
+  `aud` = `client_id`, `iat`, `exp` two minutes later, `jti` = the delivery id,
+  `events`, `sub` and `sid`; no `nonce`), signed by the signer with the
+  realm's `event_signing` key, and POSTs it as the `logout_token` form
+  parameter through the egress client, which checks the address again at
+  every attempt. A `5xx`, `408`, `429`, timeout or network failure is retried
+  on the delivery schedule with the same `jti`; any other answer is final. A
+  failed delivery never holds a sign-out back: it is recorded on the delivery
+  row and counted in `qauth_events_delivery_attempts_total` under the kind
+  `backchannel_logout`. A client that needs `sid` gets no token without one.
+  Discovery lists `backchannel_logout_supported` and
+  `backchannel_logout_session_supported`. The realm JWKS lists the
+  `event_signing` keys after the token keys, so a relying party verifies the
+  token at `jwks_uri`. The `delivery` role's database user reads the client
+  columns the route needs, and the role loads the egress plugin. New library
+  `@qauth-labs/server-backchannel-logout`; conformance rows in
+  `docs/conformance/requirements/oidc-backchannel-1_0.json`.
+
 - **RP-initiated logout** ([#675], OpenID Connect RP-Initiated Logout 1.0,
   ADR-017 phase F0, ADR-019 Decision 4). `GET` and `POST /oauth/end-session`,
   listed in discovery as `end_session_endpoint`, sign the browser out at an
@@ -851,11 +883,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   come out of the event store through the delivery role (RFC 8935 push, retried
   on its schedule; a `400` ends a delivery only with a known SET error); the
   signer signs them with the realm's `event_signing` key, and the `jti` is the
-  event id on every retry. The SET keys are published apart, at
-  `/ssf/jwks.json`, the metadata's `jwks_uri`; the realm JWKS at
-  `/.well-known/jwks.json` holds only token keys, and so does the signer's
-  `getJwks` (`REALM_JWKS_PURPOSES` is `token_signing` alone), so a verifier
-  that skips the `typ` check cannot take a SET for an access token. A paused
+  event id on every retry. The SET keys are served at `/ssf/jwks.json`, the
+  metadata's `jwks_uri`, which holds them alone; the realm JWKS at
+  `/.well-known/jwks.json` lists them too, after the token keys, for logout
+  tokens ([#624]). A paused
   stream's events are held without spending attempts and sent within 30
   seconds of it being enabled: delivery routes gain a `hold` outcome for that.
   `endpoint_url` is checked through the egress client at registration and at

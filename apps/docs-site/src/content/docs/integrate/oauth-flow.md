@@ -722,14 +722,64 @@ The route ends the browser session only. It revokes no refresh token: an app
 that signs out revokes its own refresh token at [`/oauth/revoke`](#token-revocation-rfc-7009)
 first, then sends the browser here. Each outcome is recorded as
 `user.signed_out`, which names the ended session (`sid`), or as
-`user.sign_out_failed` with the reason. QAuth sends no front-channel logout.
-Back-channel logout tokens are not sent yet.
+`user.sign_out_failed` with the reason. QAuth sends no front-channel logout;
+it tells apps by [back-channel logout](#back-channel-logout).
 
 Register return URIs as `post_logout_redirect_uris`: in the
 [registration request](#dynamic-client-registration-rfc-7591), in a CIMD
 document, or in the seed manifest. They follow the same scheme rules as
 `redirect_uris`. A client that registered none is never redirected. A CIMD
 document whose list breaks a rule registers none, and its client still
+resolves.
+
+### Back-channel logout
+
+When a browser session ends, QAuth POSTs a logout token to every app the
+session signed in to that registered a `backchannel_logout_uri`
+([OpenID Connect Back-Channel Logout 1.0](https://openid.net/specs/openid-connect-backchannel-1_0.html)).
+Whatever ended the session sends it: this endpoint, `POST /auth/logout`, a
+password reset, an admin, a retired key, the browser's session limit, or the
+session lapsing. Discovery says so with `backchannel_logout_supported` and
+`backchannel_logout_session_supported`.
+
+```http
+POST /backchannel HTTP/1.1
+Host: app.example
+Content-Type: application/x-www-form-urlencoded
+
+logout_token=eyJhbGciOiJFZERTQSIsInR5cCI6ImxvZ291dCtqd3QiLCJraWQiOiIuLi4ifQ...
+```
+
+The token is a JWT with `typ: logout+jwt`, signed with the realm's event key
+(`EdDSA` unless the operator chose `RS256`). Its claims are `iss`, `aud` (your `client_id`), `iat`, `exp` (two
+minutes later), `jti`, `events` with the member
+`http://schemas.openid.net/event/backchannel-logout` and an empty object,
+`sub` (the user, as in your ID tokens) and `sid` (the session, as in your ID
+tokens). It never carries `nonce`. Validate it as §2.6 says, then end your
+own session for that `sid`, or every session of that `sub`, and answer `200`
+or `204`.
+
+- **One token per app and session.** Each attempt signs a new token with a
+  fresh `iat` and `exp`; a retry keeps the `jti`, so an app that keeps the
+  `jti` values it has seen can tell a retry it already acted on.
+- **Retries.** A `5xx`, `408` or `429` answer, a timeout or a network failure
+  is retried on the server's delivery schedule. Any other answer, such as a
+  `400`, is final, as §2.5 asks.
+- **Sign-out never waits.** The session ends first; the token is queued in the
+  same database transaction and sent afterwards, so an app that is down never
+  holds anyone signed in, and a server that stops loses no token.
+- **`backchannel_logout_session_required: true`** asks for `sid` in every
+  token. QAuth always sends it.
+
+Register the URI as `backchannel_logout_uri` in the
+[registration request](#dynamic-client-registration-rfc-7591), in a CIMD
+document, or in the seed manifest. It must be an absolute `https` URL with a
+host, no user name or password and no fragment. A URI you register yourself
+must resolve only to public addresses: a private, loopback or link-local
+address is refused at registration, even for a development client, and
+checked again before every token. Only the operator, through the seed
+manifest, may set a URI the deployment's egress allowlist opens. A CIMD
+document whose URI breaks a rule registers none, and its client still
 resolves.
 
 ---
@@ -886,6 +936,7 @@ See the example in [step 0](#0-prerequisites--a-client). Key fields:
 | ---------------------------- | ----------------------------------------------------------------------- |
 | `redirect_uris`              | Required for `authorization_code`. Schemes: see below.                  |
 | `post_logout_redirect_uris`  | Optional. Where [RP-initiated logout](#rp-initiated-logout) may return. |
+| `backchannel_logout_uri`     | Optional. Where [back-channel logout](#back-channel-logout) POSTs.      |
 | `grant_types`                | Subset of `authorization_code`, `refresh_token`, `client_credentials`.  |
 | `token_endpoint_auth_method` | `none` (public/PKCE), `client_secret_basic`, or `client_secret_post`.   |
 | `scope`                      | Space-separated; **capped to the realm allowlist**. No `qauth:` scope.  |

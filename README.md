@@ -64,6 +64,9 @@ the open work.
 - RP-initiated logout: an app sends the browser to `/oauth/end-session` to
   sign it out, and gets it back at a URI it registered. Without a valid
   `id_token_hint` for the signed-in account, the person confirms first.
+- Back-channel logout: whenever a session ends, each app it signed in to that
+  registered a `backchannel_logout_uri` gets a signed logout token there,
+  queued with the sign-out and retried until it arrives.
 - Resource indicators (RFC 8707): each token is bound to its audience.
 - Client registration by Client ID Metadata Document (CIMD). RFC 7591 dynamic
   registration remains as a fallback.
