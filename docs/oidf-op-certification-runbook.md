@@ -344,7 +344,7 @@ QAuth sends OpenID Connect Back-Channel Logout 1.0 logout tokens, so the **Back-
 **Expected outcomes:**
 
 - [ ] **One logout token per client and session**, POSTed as `logout_token`, verifiable at the realm's `jwks_uri`, with `typ: logout+jwt`, `iss`, `aud`, `iat`, `exp` (two minutes), `jti`, `events`, `sub`, `sid` and no `nonce`.
-- [ ] **The token's algorithm. [RE-CHECK AT RUN TIME]** Logout tokens are signed with the realm's `event_signing` key (EdDSA by default, ADR-019 Decision 9), while ID tokens are RS256 (Step 1). Back-Channel Logout 1.0 §2.4 says the same keys sign both, and the matrix waives that row. If the suite refuses a logout token whose algorithm differs from the ID token's, record it and do not submit this profile until the open decision on the logout token's key is settled.
+- [ ] **The token's algorithm. [RE-CHECK AT RUN TIME]** Logout tokens are signed with RS256, as the ID tokens are (Step 1), by the realm's RS256 `event_signing` key (ADR-019 Decision 9), which the realm JWKS publishes after the token keys. Back-Channel Logout 1.0 §2.4 says the same keys sign both, and the matrix waives that row: the key is the event key, not the ID token key. If the suite refuses a logout token because its `kid` is not the ID token's, record it before submitting this profile.
 - [ ] **Retries.** A receiver that answers `5xx` gets the same `jti` again on the delivery schedule (`EVENT_DELIVERY_RETRY_INITIAL_DELAY`, `EVENT_DELIVERY_RETRY_MAX_DELAY`); any other non-`2xx` answer is final. The sign-out itself never waits for the receiver.
 
 ## Appendix — Basic-plan modules mapped to QAuth behaviour

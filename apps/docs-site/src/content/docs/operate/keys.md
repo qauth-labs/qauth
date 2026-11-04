@@ -42,14 +42,15 @@ A key has one of four statuses:
 A realm has one active key per purpose and algorithm. A fresh default realm
 gets these keys at its first boot:
 
-| Purpose         | Algorithm | When                   | Published at                                  |
-| --------------- | --------- | ---------------------- | --------------------------------------------- |
-| `token_signing` | EdDSA     | Always                 | `/.well-known/jwks.json`                      |
-| `token_signing` | RS256     | A fresh realm only     | `/.well-known/jwks.json`                      |
-| `token_signing` | ML-DSA-65 | With hybrid signing on | `/.well-known/jwks.json`                      |
-| `event_signing` | EdDSA     | Always                 | `/.well-known/jwks.json` and `/ssf/jwks.json` |
-| `cookie_hmac`   | HS256     | Always                 | Never: it signs the browser cookies           |
-| `data_at_rest`  | A256GCM   | Always                 | Never: it encrypts the realm's secrets        |
+| Purpose         | Algorithm | When                   | Published at                                     |
+| --------------- | --------- | ---------------------- | ------------------------------------------------ |
+| `token_signing` | EdDSA     | Always                 | `/.well-known/jwks.json`                         |
+| `token_signing` | RS256     | A fresh realm only     | `/.well-known/jwks.json`                         |
+| `token_signing` | ML-DSA-65 | With hybrid signing on | `/.well-known/jwks.json`                         |
+| `event_signing` | EdDSA     | Always                 | `/ssf/jwks.json`: it signs SETs                  |
+| `event_signing` | RS256     | Always                 | `/.well-known/jwks.json`: it signs logout tokens |
+| `cookie_hmac`   | HS256     | Always                 | Never: it signs the browser cookies              |
+| `data_at_rest`  | A256GCM   | Always                 | Never: it encrypts the realm's secrets           |
 
 The OID4VP request-signing key exists only when the key boot step imports it
 from `OID4VP_VERIFIER_SIGNING_KEY`. A key a realm lacks, such as an RS256 key
@@ -428,15 +429,11 @@ cache, so a rotation through the store will change nothing for a relying party
 that follows the rule. A key replaced through its variable leaves the JWKS at
 once: such a relying party refuses the old key's tokens within 5 minutes.
 
-The JWKS lists the realm's event keys too, after its token keys: they sign
-[back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout). In a
-realm that signs with Ed25519, that makes two Ed25519 keys. A token issued by
-0.1 names no `kid`, so a library that picks a key without one finds both and
-refuses the token (`jose`: `ERR_JWKS_MULTIPLE_MATCHING_KEYS`, whose candidates
-the caller may try in turn). After the upgrade to 0.2, a relying party may
-therefore refuse such a token until it expires, at most the longest access
-token lifetime: the client then uses its refresh token or signs in again, and
-its new token names its key.
+The JWKS lists one more key after the token keys: the realm's RS256 event
+key, which signs
+[back-channel logout tokens](/integrate/oauth-flow/#back-channel-logout) and
+nothing else. The Ed25519 event key, which signs Security Event Tokens, is
+served only at the SSF transmitter's `/ssf/jwks.json`.
 
 ## Key formats
 

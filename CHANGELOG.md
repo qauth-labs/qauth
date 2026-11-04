@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turns each into a logout token for that client (`typ: logout+jwt`; `iss`,
   `aud` = `client_id`, `iat`, `exp` two minutes later, `jti` = the delivery id,
   `events`, `sub` and `sid`; no `nonce`), signed by the signer with the
-  realm's `event_signing` key, and POSTs it as the `logout_token` form
+  realm's RS256 `event_signing` key, as ID tokens are signed, and POSTs it as the `logout_token` form
   parameter through the egress client, which checks the address again at
   every attempt. The signer holds every `event_signing` token to its kind: no
   `scope`, `client_id`, `nonce` or other grant claim, an `events` object, no
@@ -43,15 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   row and counted in `qauth_events_delivery_attempts_total` under the kind
   `backchannel_logout`. A client that needs `sid` gets no token without one.
   Discovery lists `backchannel_logout_supported` and
-  `backchannel_logout_session_supported`. The realm JWKS lists the
-  `event_signing` keys after the token keys, so a relying party verifies the
-  token at `jwks_uri`. **Upgrading from 0.1.x (relying parties and resource
-  servers):** the event key is a second Ed25519 key in the realm JWKS. A token
-  issued before the upgrade carries no `kid`, so a verifier that picks a key
-  without one finds two and refuses the token (`jose`:
-  `ERR_JWKS_MULTIPLE_MATCHING_KEYS`, whose candidates the caller may try)
-  until it expires; the client then gets a new token, which names its key.
-  QAuth's own verification is unchanged. The `delivery` role's database user reads the client
+  `backchannel_logout_session_supported`. **Every realm gets an RS256
+  `event_signing` key** beside its Ed25519 one, at its next boot: each signs one
+  kind of event token, the Ed25519 key Security Event Tokens and the RS256 key
+  logout tokens, and the signer refuses an event token in the other
+  algorithm (`ALGORITHM_NOT_ALLOWED`). The realm JWKS lists the RS256 key after
+  the token keys, so a relying party verifies a logout token at `jwks_uri`; it
+  lists no key that signs SETs, and keeps one Ed25519 key, the token key. The `delivery` role's database user reads the client
   columns the route needs, and the role loads the egress plugin. New
   libraries `@qauth-labs/server-backchannel-logout` and
   `@qauth-labs/fastify-plugin-backchannel-logout`; conformance rows in
@@ -899,10 +897,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   come out of the event store through the delivery role (RFC 8935 push, retried
   on its schedule; a `400` ends a delivery only with a known SET error); the
   signer signs them with the realm's `event_signing` key, and the `jti` is the
-  event id on every retry. The SET keys are served at `/ssf/jwks.json`, the
-  metadata's `jwks_uri`, which holds them alone; the realm JWKS at
-  `/.well-known/jwks.json` lists them too, after the token keys, for logout
-  tokens ([#624]). A paused
+  event id on every retry. The SET keys are published apart, at
+  `/ssf/jwks.json`, the metadata's `jwks_uri`; the realm JWKS at
+  `/.well-known/jwks.json` lists none of them (since [#624] it lists, after
+  the token keys, the RS256 key that signs logout tokens), so a verifier that
+  skips the `typ` check cannot take a SET for an access token. A paused
   stream's events are held without spending attempts and sent within 30
   seconds of it being enabled: delivery routes gain a `hold` outcome for that.
   `endpoint_url` is checked through the egress client at registration and at

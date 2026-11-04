@@ -750,10 +750,10 @@ Content-Type: application/x-www-form-urlencoded
 logout_token=eyJhbGciOiJFZERTQSIsInR5cCI6ImxvZ291dCtqd3QiLCJraWQiOiIuLi4ifQ...
 ```
 
-The token is a JWT with `typ: logout+jwt`, signed with the realm's event key,
-an `EdDSA` key that the realm's `jwks_uri` publishes beside the token keys:
-your JWT library must accept `EdDSA` for it, even when your ID tokens are
-`RS256`. Its claims are `iss`, `aud` (your `client_id`), `iat`, `exp` (two
+The token is a JWT with `typ: logout+jwt`, signed with `RS256`, the
+algorithm a fresh realm signs its ID tokens with, by the realm's logout key,
+which the realm's `jwks_uri` publishes after the token keys under its own
+`kid`. Its claims are `iss`, `aud` (your `client_id`), `iat`, `exp` (two
 minutes later), `jti`, `events` with the member
 `http://schemas.openid.net/event/backchannel-logout` and an empty object,
 `sub` (the user, as in your ID tokens) and `sid` (the session, as in your ID

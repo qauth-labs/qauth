@@ -55,10 +55,9 @@ With both on, the realm:
 - serves its SET signing keys (the `event_signing` purpose of ADR-019 Decision 9) at
   `/ssf/jwks.json`, the `jwks_uri` of the metadata. A receiver verifies each SET with a key from
   there. It needs no token, and is cached for at most 5 minutes, as the realm JWKS is;
-- the realm JWKS at `/.well-known/jwks.json` lists the same keys after the token keys, because
-  they sign logout tokens too, which apps verify there (back-channel logout). A SET says what it is
-  in its `typ` header (`secevent+jwt`), so a resource server that checks `typ`, as RFC 9068 asks,
-  never takes one for an access token;
+- keeps the SET keys out of the realm JWKS at `/.well-known/jwks.json`, which holds only the keys
+  of its access, ID and logout tokens. A resource server that skips the `typ` check therefore cannot take
+  a SET for an access token;
 - serves stream management under `/ssf/` (see the
   [API reference](/integrate/api-reference/#shared-signals-framework-transmitter)).
 

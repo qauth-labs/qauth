@@ -28,9 +28,9 @@ const DISCOVERY_CACHE_CONTROL = 'public, max-age=3600';
  * - `GET /.well-known/oauth-authorization-server` — RFC 8414 AS metadata.
  * - `GET /.well-known/openid-configuration`       — OIDC Discovery 1.0.
  * - `GET /.well-known/jwks.json`                  — RFC 7517 JWKS: the token
- *   keys, then the event keys that sign logout tokens (OpenID Connect
- *   Back-Channel Logout 1.0 §2.6, #624). The SSF transmitter serves the event
- *   keys alone at `/ssf/jwks.json`.
+ *   keys, then the RS256 event keys that sign logout tokens (OpenID Connect
+ *   Back-Channel Logout 1.0 §2.6, #624). The SSF transmitter serves the
+ *   Ed25519 event keys, which sign SETs, alone at `/ssf/jwks.json`.
  *
  * - `GET /.well-known/ssf-configuration`          — SSF 1.0 §7 transmitter
  *   metadata, registered only while SSF_TRANSMITTER_ENABLED is on (#410).

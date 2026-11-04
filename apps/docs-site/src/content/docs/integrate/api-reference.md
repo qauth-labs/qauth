@@ -680,10 +680,9 @@ not exist, before the request is validated.
 | `POST /ssf/subjects/remove`            | Remove one: `204`.                                                          |
 | `POST /ssf/verify`                     | Ask for a verification event: `204`; `429` within 10 seconds of the last.   |
 
-The SET keys are published at `/ssf/jwks.json`, and in the realm JWKS at
-`/.well-known/jwks.json` after the token keys, since they sign logout tokens
-too. A SET is typed `secevent+jwt`: a resource server checks `typ` to refuse
-it as an access token. Every stream management route takes the
+The SET keys are published only at `/ssf/jwks.json`, never in the realm JWKS at
+`/.well-known/jwks.json`, so a resource server that skips the `typ` check cannot
+take a SET for an access token. Every stream management route takes the
 receiver's own access token (`client_credentials`) carrying the `ssf:stream`
 scope, with the realm's issuer in `aud` and no other realm's issuer. The client must still hold `ssf:stream`. A receiver reaches only
 its own stream; another `stream_id`, or a stream deleted meanwhile, answers
