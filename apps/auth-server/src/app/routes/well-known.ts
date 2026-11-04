@@ -84,6 +84,10 @@ export default async function (fastify: FastifyInstance) {
     // RFC 9449 §5.1 (#480): the DPoP proof algorithms, only while DPOP_ENABLED
     // is on (`fastify.dpop` is null otherwise).
     ...(fastify.dpop ? { dpopSigningAlgValuesSupported: fastify.dpop.algorithms } : {}),
+    // OpenID Connect Back-Channel Logout 1.0 §2.1 (#624): every session
+    // revocation queues the logout tokens, and the delivery role always
+    // carries the route that sends them.
+    backchannelLogoutSupported: true,
     experimentalItems,
   });
 

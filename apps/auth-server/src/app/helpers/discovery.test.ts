@@ -340,6 +340,25 @@ describe('buildOpenIdConfiguration', () => {
       'end_session_endpoint'
     );
   });
+
+  it('lists backchannel_logout_supported and backchannel_logout_session_supported only once delivery is there (Back-Channel Logout 1.0 §2.1, #624)', () => {
+    // Without the delivery route nothing is sent, so nothing is claimed.
+    const without = buildOpenIdConfiguration({ issuer: ISSUER });
+    expect(without).not.toHaveProperty('backchannel_logout_supported');
+    expect(without).not.toHaveProperty('backchannel_logout_session_supported');
+    expect(
+      buildOpenIdConfiguration({ issuer: ISSUER, backchannelLogoutSupported: false })
+    ).not.toHaveProperty('backchannel_logout_supported');
+
+    const oidc = buildOpenIdConfiguration({ issuer: ISSUER, backchannelLogoutSupported: true });
+    expect(oidc['backchannel_logout_supported']).toBe(true);
+    // The logout token carries sid, as the ID tokens do (#549).
+    expect(oidc['backchannel_logout_session_supported']).toBe(true);
+    // OpenID Provider members: the RFC 8414 document does not carry them.
+    expect(
+      buildAuthorizationServerMetadata({ issuer: ISSUER, backchannelLogoutSupported: true })
+    ).not.toHaveProperty('backchannel_logout_supported');
+  });
 });
 
 /**

@@ -90,6 +90,16 @@ export interface DiscoveryMetadataInput {
    */
   dpopSigningAlgValuesSupported?: readonly string[];
   /**
+   * Whether this deployment sends back-channel logout tokens (OpenID Connect
+   * Back-Channel Logout 1.0 §2.1, #624): publishes
+   * `backchannel_logout_supported` and `backchannel_logout_session_supported`,
+   * both `true`, in the OpenID Provider metadata. The route passes it once the
+   * delivery role carries the back-channel logout route, which it always
+   * does; defaults to false here, so a document built without it claims
+   * nothing it does not deliver.
+   */
+  backchannelLogoutSupported?: boolean;
+  /**
    * The experimental items this deployment turns on (ADR-018 §5), as
    * `listEnabledExperimental()` (`config/experimental-features.ts`) lists
    * them. Each adds the discovery members its registry entry lists, and only
@@ -323,6 +333,12 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
     // OpenID Connect RP-Initiated Logout 1.0 §2.1 (#675): where an app sends
     // the browser to sign it out. No front-channel logout (ADR-018).
     end_session_endpoint: `${resolveIssuerIdentifier(input.issuer)}/oauth/end-session`,
+    // OpenID Connect Back-Channel Logout 1.0 §2.1 (#624): a session's end is
+    // POSTed to each client with a `backchannel_logout_uri`, as a logout token
+    // that carries `sid` (the `sid` ID tokens carry, #549) and `sub`.
+    ...(input.backchannelLogoutSupported === true
+      ? { backchannel_logout_supported: true, backchannel_logout_session_supported: true }
+      : {}),
     // OIDC Core §5.1 — `sub` is always emitted. `nonce` is echoed in the ID
     // token when the client supplies it (OIDC Core §3.1.3.6). `name` is emitted
     // when the user has a display name set. This list MUST stay consistent with
