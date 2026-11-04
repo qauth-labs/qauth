@@ -141,12 +141,12 @@ import {
   type LogoutRequest,
 } from '../helpers/interaction-record';
 import { interactionIdHash } from '../helpers/interaction-record';
+import { createPeerAddressList } from '../helpers/peer-address-list';
 import { answerRouteNotFound } from '../helpers/request-bounds';
 import { SESSION_COOKIE_NAME } from '../helpers/session-cookie';
 import { emitUserEvent } from '../helpers/user-events';
 import { corsPlugin } from '../plugins/cors';
 import errorHandler from '../plugins/error-handler';
-import { createPeerAddressList } from '../helpers/peer-address-list';
 import interactionApi, {
   ANSWER_BODY_LIMIT,
   carriesCredential,

@@ -257,7 +257,7 @@ describe('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT', () => {
     for (const extra of [
       { CEREMONY_APP_PEER_RATE_LIMIT: '600' },
       { CEREMONY_APP_PEERS: '', CEREMONY_APP_PEER_RATE_LIMIT: '600' },
-    ]) {
+    ] as Record<string, string>[]) {
       const issues = ceremonyIssues(extra);
       expect(issues.map((issue) => issue.path.join('.'))).toEqual(['CEREMONY_APP_PEERS']);
       expect(issues[0].message).toContain('CEREMONY_APP_PEERS and CEREMONY_APP_PEER_RATE_LIMIT');
