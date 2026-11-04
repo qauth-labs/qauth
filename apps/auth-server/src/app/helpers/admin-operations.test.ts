@@ -1095,6 +1095,13 @@ const CORRECT_CLASSIFY: Record<string, AdminOperationDefinition['classify']> = {
           Array.isArray(next) && next.every((uri) => (current as unknown[]).includes(uri)),
         'posture-loosening'
       ),
+      // #624: removing the URI is an ordinary write; setting one sends
+      // logout tokens to a new destination.
+      '/backchannelLogoutUri': unless(
+        '/backchannelLogoutUri',
+        (next) => next === null,
+        'token-content'
+      ),
       '/tokenEndpointAuthMethod': securityWith('token-content'),
       '/jwks': securityWith('token-content'),
       '/jwks/keys': securityWith('token-content'),

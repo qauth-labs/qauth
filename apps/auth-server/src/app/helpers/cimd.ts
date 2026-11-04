@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 
 import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
 import { InvalidClientError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
+import { backchannelLogoutUriProblem } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 
@@ -9,6 +10,7 @@ import { env } from '../../config/env';
 import { OAUTH_CLIENT_ID_MAX_LENGTH } from '../constants';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
+import { isRegistrableBackchannelLogoutDestination } from './backchannel-logout-destination';
 import type { CimdPolicy } from './cimd-policy';
 import {
   assertJwksMutuallyExclusive,
@@ -78,6 +80,17 @@ export const cimdDocumentSchema = z.object({
     .max(20)
     .optional()
     .catch(undefined),
+  /**
+   * OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): where QAuth POSTs a
+   * logout token when a session of the client ends. Tolerated like
+   * `post_logout_redirect_uris`: a value that is not a bounded string, whose
+   * form `backchannelLogoutUriProblem` refuses, or whose host the egress
+   * client refuses (checked when the document is fetched) reads as absent,
+   * and the client gets no logout token.
+   */
+  backchannel_logout_uri: z.string().min(1).max(2048).optional().catch(undefined),
+  /** Back-Channel Logout 1.0 §2.2: the client needs `sid` in the logout token. */
+  backchannel_logout_session_required: z.boolean().optional().catch(undefined),
   scope: z.string().max(2048).optional(),
   /**
    * RFC 7591 §2 tolerance: `grant_types` / `response_types` /
@@ -233,6 +246,13 @@ export interface CimdClientInsert {
   redirectUris: string[];
   /** OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never redirect. */
   postLogoutRedirectUris: string[];
+  /**
+   * OpenID Connect Back-Channel Logout 1.0 §2.2 (#624); `null` = no logout
+   * token. `upsertCimdClient` stores it with `client` as its source, so the
+   * egress allowlist never opens it.
+   */
+  backchannelLogoutUri: string | null;
+  backchannelLogoutSessionRequired: boolean;
   grantTypes: CimdGrantType[];
   responseTypes: 'code'[];
   /**
@@ -458,6 +478,14 @@ export function toCimdClientInsert(
   const postLogoutRedirectUris = registrablePostLogoutRedirectUris(
     doc.post_logout_redirect_uris ?? []
   );
+  // Back-Channel Logout 1.0 §2.2 (#624): the URI's form again, for a document
+  // cached before QAuth read the field; its address was checked at the fetch
+  // and is checked again before every logout token.
+  const backchannelLogoutUri =
+    doc.backchannel_logout_uri !== undefined &&
+    backchannelLogoutUriProblem(doc.backchannel_logout_uri) === undefined
+      ? doc.backchannel_logout_uri
+      : null;
 
   // CIMD §6.2 / RFC 7591 §2 (#384). A document may register PUBLIC keys so the
   // client can authenticate with `private_key_jwt` instead of being restricted
@@ -507,6 +535,9 @@ export function toCimdClientInsert(
     description: 'CIMD client (client_id metadata document)',
     redirectUris,
     postLogoutRedirectUris,
+    backchannelLogoutUri,
+    backchannelLogoutSessionRequired:
+      backchannelLogoutUri !== null && doc.backchannel_logout_session_required === true,
     grantTypes,
     responseTypes,
     tokenEndpointAuthMethod: usesPrivateKeyJwt ? 'private_key_jwt' : 'none',
@@ -660,8 +691,38 @@ export async function fetchAndValidateCimdDocument(
     throw new InvalidClientError('CIMD client_id does not match the document URL');
   }
 
+  const document = await withRegistrableBackchannelLogoutUri(fastify, parsed.data);
   const ttl = resolveCacheTtlSeconds(result.headers);
-  await writeCache(fastify, clientId, parsed.data, ttl);
+  await writeCache(fastify, clientId, document, ttl);
 
-  return parsed.data;
+  return document;
+}
+
+/**
+ * The document without its `backchannel_logout_uri` (#624) when the URI's
+ * form is refused or the egress client refuses its host: a client registers
+ * such a URI itself, so a private, loopback or otherwise non-public address
+ * is refused, never opened by the allowlist (ADR-019 Decision 8). As for
+ * `post_logout_redirect_uris`, the field costs the document nothing: the
+ * client resolves and gets no logout token. Checked before the document is
+ * cached, so a cached document holds only a URI that passed.
+ */
+async function withRegistrableBackchannelLogoutUri(
+  fastify: FastifyInstance,
+  doc: CimdDocument
+): Promise<CimdDocument> {
+  const uri = doc.backchannel_logout_uri;
+  if (uri === undefined) return doc;
+  if (
+    backchannelLogoutUriProblem(uri) === undefined &&
+    (await isRegistrableBackchannelLogoutDestination(fastify, uri))
+  ) {
+    return doc;
+  }
+  const {
+    backchannel_logout_uri: _uri,
+    backchannel_logout_session_required: _required,
+    ...rest
+  } = doc;
+  return rest;
 }

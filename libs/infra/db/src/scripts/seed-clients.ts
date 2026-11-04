@@ -205,6 +205,19 @@ function firstPartyRow(spec: ClientSpec) {
 }
 
 /**
+ * The back-channel logout columns of a manifest entry (#624): the URI with
+ * `admin` as its source, since the operator wrote it, or none of it.
+ */
+function backchannelLogoutRow(spec: ClientSpec) {
+  return {
+    backchannelLogoutUri: spec.backchannel_logout_uri ?? null,
+    backchannelLogoutUriSource:
+      spec.backchannel_logout_uri === undefined ? null : ('admin' as const),
+    backchannelLogoutSessionRequired: spec.backchannel_logout_session_required ?? false,
+  };
+}
+
+/**
  * Row for a freshly-inserted client. Defaults here mirror the schema column
  * defaults (require_pkce = true, response_types = ['code']) so a client
  * created via seed behaves identically to one created via the dev portal.
@@ -219,6 +232,9 @@ export function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash:
     redirectUris: spec.redirect_uris ?? [],
     // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never redirect after a logout.
     postLogoutRedirectUris: spec.post_logout_redirect_uris ?? [],
+    // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624), set by the operator
+    // as an admin. Removed from the manifest ⇒ cleared, with its source.
+    ...backchannelLogoutRow(spec),
     scopes: spec.scopes ?? [],
     // #891: the scopes `client_credentials` may issue, out of `scopes`; NULL =
     // any of them. De-duplicated like the passkey origins.
@@ -270,6 +286,9 @@ export function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     redirectUris: spec.redirect_uris ?? [],
     // OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675); `[]` = never redirect after a logout.
     postLogoutRedirectUris: spec.post_logout_redirect_uris ?? [],
+    // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624), set by the operator
+    // as an admin. Removed from the manifest ⇒ cleared, with its source.
+    ...backchannelLogoutRow(spec),
     scopes: spec.scopes ?? [],
     // Removed from the manifest ⇒ NULL ⇒ any scope of `scopes` again (#891).
     clientCredentialsScopes: clientCredentialsScopesOf(spec),

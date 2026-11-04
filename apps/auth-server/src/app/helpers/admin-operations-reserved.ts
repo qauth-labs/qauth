@@ -377,7 +377,7 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
     'clients.update',
     ['token-content', 'posture-loosening'],
     `${ADR_019}, #518, #632`,
-    'Change a client: its redirect URIs, post-logout redirect URIs, authentication method, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, environment or agent-type fields.',
+    'Change a client: its redirect URIs, post-logout redirect URIs, back-channel logout URI, authentication method, first-party trust, verified domain, PKCE or DPoP, client_credentials scopes, environment or agent-type fields.',
     [
       clientCase(
         'adds a redirect URI',
@@ -396,6 +396,14 @@ export const RESERVED_OPERATIONS: readonly ReservedOperation[] = Object.freeze([
           ],
         },
         ['posture-loosening']
+      ),
+      // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): a logout token
+      // naming the user and the session goes there, and a URI an admin sets
+      // may reach a destination the egress allowlist opens.
+      clientCase(
+        'sets a back-channel logout URI',
+        { backchannelLogoutUri: 'https://app.example/backchannel' },
+        ['token-content']
       ),
       clientCase(
         'sets the token endpoint authentication method to none',

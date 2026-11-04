@@ -1,3 +1,4 @@
+import { EgressError } from '@qauth-labs/fastify-plugin-egress';
 import {
   ForbiddenError,
   InvalidClientMetadataError,
@@ -76,6 +77,17 @@ function createReply() {
   return { reply, state };
 }
 
+/** What the egress client throws for a host whose address it refuses. */
+function egressRefusal(): EgressError {
+  return new EgressError({
+    reason: 'address',
+    outcome: 'blocked',
+    purpose: 'backchannel-logout',
+    host: 'app.example',
+    message: 'blocked: address',
+  });
+}
+
 function createFastifyStub(
   realmOverrides: Partial<{
     dynamicRegistrationAllowedScopes: string[];
@@ -133,6 +145,16 @@ function createFastifyStub(
     },
     passwordHasher: {
       hashPassword: vi.fn(async (v: string) => `argon2id$${v.slice(0, 8)}`),
+    },
+    // The egress client's address check (#624): every host public unless a
+    // test refuses it.
+    egress: {
+      validateDestination: vi.fn(async (url: string) => ({
+        url,
+        host: new URL(url).hostname,
+        port: 443,
+        addresses: ['203.0.113.10'],
+      })),
     },
     // A realm with no policies yet is capped with its fill's list (#516).
     policyStore: {
@@ -513,6 +535,110 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
           .success
       ).toBe(false);
     });
+  });
+
+  describe('backchannel_logout_uri (OpenID Connect Back-Channel Logout 1.0 §2.2, #624)', () => {
+    const registerWith = async (
+      body: Record<string, unknown>,
+      refuse?: (url: string) => Error | undefined
+    ) => {
+      const { fastify, ctx, state } = createFastifyStub();
+      const validateDestination = (fastify as unknown as { egress: { validateDestination: Mock } })
+        .egress.validateDestination;
+      if (refuse) {
+        validateDestination.mockImplementation(async (url: string) => {
+          const error = refuse(url);
+          if (error) throw error;
+          return { url, host: new URL(url).hostname, port: 443, addresses: ['203.0.113.10'] };
+        });
+      }
+      await registerRoute(fastify);
+      const run = () =>
+        ctx.handler!(
+          {
+            body: dynamicClientRegistrationRequestSchema.parse({
+              redirect_uris: ['https://app.example/cb'],
+              ...body,
+            }),
+            ip: '127.0.0.1',
+            headers: {},
+          },
+          createReply().reply
+        ) as Promise<Record<string, unknown>>;
+      return { run, state, validateDestination };
+    };
+
+    it('stores the URI with the client as its source, and echoes it with the sid flag (RFC 7591 §3.2.1)', async () => {
+      const { run, state, validateDestination } = await registerWith({
+        backchannel_logout_uri: 'https://app.example/backchannel',
+        backchannel_logout_session_required: true,
+      });
+      const result = await run();
+      expect(state.createdClients[0]).toMatchObject({
+        backchannelLogoutUri: 'https://app.example/backchannel',
+        backchannelLogoutUriSource: 'client',
+        backchannelLogoutSessionRequired: true,
+      });
+      expect(result.backchannel_logout_uri).toBe('https://app.example/backchannel');
+      expect(result.backchannel_logout_session_required).toBe(true);
+      // A client-registered destination: never the allowlist (ADR-019 Decision 8).
+      expect(validateDestination).toHaveBeenCalledWith('https://app.example/backchannel', {
+        purpose: 'backchannel-logout',
+        source: 'client',
+        realm: expect.any(String),
+      });
+    });
+
+    it('stores none and echoes nothing when the request names none', async () => {
+      const { run, state, validateDestination } = await registerWith({
+        backchannel_logout_session_required: true,
+      });
+      const result = await run();
+      expect(state.createdClients[0]).toMatchObject({
+        backchannelLogoutUri: null,
+        backchannelLogoutUriSource: null,
+      });
+      expect(result).not.toHaveProperty('backchannel_logout_uri');
+      expect(validateDestination).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['http://app.example/backchannel', 'must use https'],
+      ['https://app.example/backchannel#x', 'must not include a fragment'],
+      ['https://user:pw@app.example/backchannel', 'must not carry a user name or password'],
+      ['/backchannel', 'is not an absolute URI'],
+    ])('refuses %s as invalid_client_metadata and stores nothing', async (uri, problem) => {
+      const { run, state, validateDestination } = await registerWith({
+        backchannel_logout_uri: uri,
+      });
+      const error = await run().catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(InvalidClientMetadataError);
+      expect((error as { errorDescription?: string }).errorDescription).toBe(
+        `backchannel_logout_uri ${problem}`
+      );
+      expect(state.createdClients).toHaveLength(0);
+      expect(validateDestination).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      'https://127.0.0.1/backchannel',
+      'https://10.0.0.5/backchannel',
+      'https://[::1]/backchannel',
+      'https://internal.example/backchannel',
+    ])(
+      'refuses %s, whose address the egress client refuses, even for a development client',
+      async (uri) => {
+        const { run, state } = await registerWith({ backchannel_logout_uri: uri }, () =>
+          egressRefusal()
+        );
+        const error = await run().catch((caught: unknown) => caught);
+        expect(error).toBeInstanceOf(InvalidClientMetadataError);
+        expect((error as { errorDescription?: string }).errorDescription).toBe(
+          'backchannel_logout_uri must name a host that resolves, and only to public addresses'
+        );
+        expect(state.createdClients).toHaveLength(0);
+      }
+    );
   });
 
   it('defaults to a standard (non-agent) client when is_agent is omitted', async () => {

@@ -383,6 +383,65 @@ describe('isCimdClientIdShape', () => {
     });
   });
 
+  describe('backchannel_logout_uri (OpenID Connect Back-Channel Logout 1.0 §2.2, #624)', () => {
+    const logoutClient = (extra: Record<string, unknown> = {}) => ({
+      realm: 'master',
+      clients: [
+        {
+          client_id: 'notes',
+          name: 'Notes',
+          grant_types: ['authorization_code'],
+          redirect_uris: ['https://notes.example.com/cb'],
+          ...extra,
+        },
+      ],
+    });
+
+    it('accepts an https URI and the sid flag, and leaves both out when omitted', () => {
+      const entry = manifestSchema.parse(
+        logoutClient({
+          backchannel_logout_uri: 'https://notes.example.com/backchannel?tenant=a',
+          backchannel_logout_session_required: true,
+        })
+      ).clients?.[0];
+      expect(entry?.backchannel_logout_uri).toBe('https://notes.example.com/backchannel?tenant=a');
+      expect(entry?.backchannel_logout_session_required).toBe(true);
+      const bare = manifestSchema.parse(logoutClient()).clients?.[0];
+      expect(bare?.backchannel_logout_uri).toBeUndefined();
+      expect(bare?.backchannel_logout_session_required).toBeUndefined();
+    });
+
+    it.each([
+      ['an http URI', 'http://notes.example.com/backchannel', 'must use https'],
+      ['a fragment', 'https://notes.example.com/backchannel#x', 'must not include a fragment'],
+      [
+        'credentials',
+        'https://u:p@notes.example.com/backchannel',
+        'must not carry a user name or password',
+      ],
+    ])('refuses %s, naming the field and why', (_label, uri, problem) => {
+      const result = manifestSchema.safeParse(logoutClient({ backchannel_logout_uri: uri }));
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]).toMatchObject({
+        path: ['clients', 0, 'backchannel_logout_uri'],
+        message: expect.stringContaining(`backchannel_logout_uri ${problem}`),
+      });
+    });
+
+    it('refuses the URI on a CIMD entry, whose document is the place for it', () => {
+      const result = manifestSchema.safeParse({
+        realm: 'master',
+        cimd_clients: [
+          {
+            client_id: 'https://notes.example.com/client.json',
+            backchannel_logout_uri: 'https://notes.example.com/backchannel',
+          },
+        ],
+      });
+      expect(result.success).toBe(false);
+    });
+  });
+
   describe('client_credentials_scopes (#891)', () => {
     /** A relying party that signs users in and receives SSF events as itself. */
     const receiverClient = (overrides: Record<string, unknown>) => ({

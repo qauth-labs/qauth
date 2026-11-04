@@ -1,0 +1,4 @@
+ALTER TABLE "oauth_clients" ADD COLUMN "backchannel_logout_uri" text;--> statement-breakpoint
+ALTER TABLE "oauth_clients" ADD COLUMN "backchannel_logout_uri_source" varchar(16);--> statement-breakpoint
+ALTER TABLE "oauth_clients" ADD COLUMN "backchannel_logout_session_required" boolean DEFAULT false NOT NULL;--> statement-breakpoint
+ALTER TABLE "oauth_clients" ADD CONSTRAINT "oauth_clients_backchannel_logout_source" CHECK (("oauth_clients"."backchannel_logout_uri" IS NULL AND "oauth_clients"."backchannel_logout_uri_source" IS NULL) OR ("oauth_clients"."backchannel_logout_uri" IS NOT NULL AND "oauth_clients"."backchannel_logout_uri_source" IN ('client', 'admin')));

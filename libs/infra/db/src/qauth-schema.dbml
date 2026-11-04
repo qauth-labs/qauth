@@ -212,6 +212,9 @@ Table "oauth_clients" {
   "description" text
   "redirect_uris" jsonb [not null, note: "Array of allowed redirect URIs"]
   "post_logout_redirect_uris" jsonb [not null, default: `'[]'::jsonb`, note: "OpenID Connect RP-Initiated Logout 1.0 §3.1 (#675): where the end-session route may redirect after a logout, matched exactly; [] never redirects"]
+  "backchannel_logout_uri" text [note: "OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): where QAuth POSTs a logout token when a session that signed a user in to the client ends; NULL = none"]
+  "backchannel_logout_uri_source" varchar(16) [note: "Who set backchannel_logout_uri: client (its own registration) or admin (the seed manifest); only an admin URI may use the egress allowlist; set exactly with the URI"]
+  "backchannel_logout_session_required" boolean [not null, default: false, note: "Back-Channel Logout 1.0 §2.2: the client needs sid in every logout token"]
   "scopes" jsonb [not null, default: `'[]'::jsonb`, note: "Default OAuth scopes"]
   "client_credentials_scopes" jsonb [note: "The scopes the client_credentials grant may issue, out of scopes; NULL = any of them; set only through the seed manifest (#891)"]
   "enabled" boolean [not null, default: true]

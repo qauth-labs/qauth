@@ -1,5 +1,9 @@
 import { InvalidClientMetadataError, InvalidRedirectUriError } from '@qauth-labs/shared-errors';
-import { isReservedQauthScope, redirectTarget } from '@qauth-labs/shared-validation';
+import {
+  backchannelLogoutUriProblem,
+  isReservedQauthScope,
+  redirectTarget,
+} from '@qauth-labs/shared-validation';
 
 import { hasOnlyUriCharacters } from '../schemas/common';
 import type { DynamicClientRegistrationRequest } from '../schemas/oauth';
@@ -169,6 +173,21 @@ export function validatePostLogoutRedirectUri(uri: string, customSchemes: readon
 }
 
 /**
+ * OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): the form a
+ * `backchannel_logout_uri` must take (`backchannelLogoutUriProblem` in
+ * shared-validation): an absolute `https` URI, with no credentials and no
+ * fragment. `http` is refused even where §2.2 would allow it, since every
+ * logout token goes through the egress client, which reaches `https` only. A
+ * refusal is `invalid_client_metadata`, its description naming the field.
+ */
+export function validateBackchannelLogoutUri(uri: string): void {
+  const problem = backchannelLogoutUriProblem(uri);
+  if (problem !== undefined) {
+    rejectRegistration('invalid_client_metadata', `backchannel_logout_uri ${problem}`);
+  }
+}
+
+/**
  * Policy defaults, applied when a dyn-reg request omits fields.
  * We pick conservative defaults: authorization_code + refresh_token,
  * `code` response type, public client (PKCE required).
@@ -195,6 +214,15 @@ export interface NormalizedRegistrationRequest {
    * {@link validatePostLogoutRedirectUri}. Empty when the request named none.
    */
   postLogoutRedirectUris: string[];
+  /**
+   * OpenID Connect Back-Channel Logout 1.0 §2.2 (#624): its form checked by
+   * {@link validateBackchannelLogoutUri}; NULL when the request named none.
+   * The route checks its addresses through the egress client before it
+   * stores it.
+   */
+  backchannelLogoutUri: string | null;
+  /** Back-Channel Logout 1.0 §2.2 `backchannel_logout_session_required`; `false` when omitted. */
+  backchannelLogoutSessionRequired: boolean;
   grantTypes: DynRegGrantType[];
   responseTypes: 'code'[];
   tokenEndpointAuthMethod: 'none' | 'client_secret_basic' | 'client_secret_post';
@@ -229,6 +257,8 @@ export interface NormalizedRegistrationRequest {
  * - Requires redirect_uris for any user-involving grant.
  * - Validates every redirect_uri per OAuth 2.1 §10.3.
  * - Validates every post_logout_redirect_uri by the same rule (#675).
+ * - Validates the form of backchannel_logout_uri (#624); the route checks its
+ *   addresses.
  * - Forces `token_endpoint_auth_method=none` for clients that only use
  *   authorization_code (public client posture) when not explicitly
  *   declared as confidential.
@@ -279,6 +309,9 @@ export function validateAndNormalize(
   for (const uri of postLogoutRedirectUris) {
     validatePostLogoutRedirectUri(uri, customRedirectSchemes);
   }
+
+  const backchannelLogoutUri = body.backchannel_logout_uri ?? null;
+  if (backchannelLogoutUri !== null) validateBackchannelLogoutUri(backchannelLogoutUri);
 
   // Scope cap: intersect requested scopes with the realm's allowlist. Per
   // RFC 7591 §2, the authorization server MAY register the client with a
@@ -349,6 +382,8 @@ export function validateAndNormalize(
     clientName: body.client_name ?? null,
     redirectUris,
     postLogoutRedirectUris,
+    backchannelLogoutUri,
+    backchannelLogoutSessionRequired: body.backchannel_logout_session_required ?? false,
     grantTypes,
     responseTypes,
     tokenEndpointAuthMethod,

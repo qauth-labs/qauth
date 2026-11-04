@@ -1,3 +1,5 @@
+export type * from './lib/backchannel-logout-uri';
+export * from './lib/backchannel-logout-uri';
 export type * from './lib/email';
 export * from './lib/email';
 export type * from './lib/event-retention';
