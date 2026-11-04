@@ -7,7 +7,15 @@ const TRUST_PROXY_NAMED_RANGES = new Set(['loopback', 'linklocal', 'uniquelocal'
 
 /** One `TRUST_PROXY` list entry: a named range, an IP address, or IP/prefix CIDR. */
 function isTrustProxyEntry(entry: string): boolean {
-  if (TRUST_PROXY_NAMED_RANGES.has(entry)) return true;
+  return TRUST_PROXY_NAMED_RANGES.has(entry) || isAddressOrCidr(entry);
+}
+
+/**
+ * One entry of an address list such as `TRUST_PROXY` or `CEREMONY_APP_PEERS`:
+ * an IP address, or an IP/prefix CIDR range whose prefix fits the address's
+ * family. A named range is not one.
+ */
+export function isAddressOrCidr(entry: string): boolean {
   const [address, prefix, ...rest] = entry.split('/');
   if (rest.length > 0) return false;
   const family = isIP(address);

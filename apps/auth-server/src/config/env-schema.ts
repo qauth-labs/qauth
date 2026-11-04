@@ -5,6 +5,7 @@ import {
   assuranceEnvSchema,
   authEnvSchema,
   baseEnvSchema,
+  ceremonyAppPeerProblems,
   databaseEnvSchema,
   dpopEnvSchema,
   egressEnvSchema,
@@ -281,6 +282,18 @@ export const envSchema = z
           });
         }
       }
+    }
+
+    // #982 — the ceremony app server's addresses and their cap are set
+    // together, as ADR-017 Decision 7 has FIRST_PARTY_BACKEND_PEERS and its
+    // cap: a list without a cap leaves its step reads no budget, and a cap
+    // without a list applies to no address.
+    for (const problem of ceremonyAppPeerProblems(env)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [problem.variable],
+        message: problem.message,
+      });
     }
 
     // #452 — the job lock takes a pool connection of its own.
