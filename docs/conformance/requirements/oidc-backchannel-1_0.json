@@ -160,7 +160,7 @@
       "section": "2.4",
       "level": "RECOMMENDED",
       "quote": "It is RECOMMENDED that Logout Tokens be explicitly typed. This is accomplished by including a typ (type) Header Parameter with a value of logout+jwt in the Logout Token.",
-      "applies": "libs/server/keys/src/lib/signer-typ.ts — the signer signs logout+jwt only for the event_signing purpose, and the route always asks for it.",
+      "applies": "libs/server/keys/src/lib/signer-typ.ts — the signer signs logout+jwt only for the token_signing purpose, and the route always asks for it.",
       "status": "covered",
       "evidenceMatch": "explicitly typed logout\\+jwt"
     },

@@ -47,8 +47,9 @@ export const SSF_PATHS = Object.freeze({
   verify: '/ssf/verify',
   /**
    * The transmitter's own JWKS: the realm's SET verification keys
-   * (`event_signing`) and nothing else. The realm JWKS lists them too, after
-   * the token keys, for logout tokens (#624).
+   * (`event_signing`), published apart from the realm JWKS so that no token
+   * verifier reading the realm JWKS can accept a SET-signed token
+   * (d-1026-09).
    */
   jwks: '/ssf/jwks.json',
 });

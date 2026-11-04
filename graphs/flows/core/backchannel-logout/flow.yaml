@@ -49,8 +49,8 @@ scope:
       URI that is not https, carries credentials or a fragment, or resolves to a private, loopback or other non-public
       address, even for a development client; only the seed manifest, an operator's, sets a URI as an admin, which the
       deployment allowlist may then let reach a private address"
-    - "the signer's own refusals: the delivery role may sign event tokens (logout+jwt, secevent+jwt) with the realm's
-      event_signing key and nothing else, and its handle holds no key"
+    - "the signer's own refusals: the delivery role may sign a logout+jwt with the realm's ID token key and a
+      secevent+jwt with its event_signing key, and nothing else, and its handle holds no key"
     - 'front-channel logout: QAuth has none (ADR-019 Decision 4)'
 
 context:
