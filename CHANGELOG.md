@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passwords are checked against: `off` (the default, seeded from
   `PASSWORD_BREACH_LIST_SOURCE`; nothing changes), `local` (the operator's
   file of SHA-1 digests at `BREACHED_PASSWORD_LIST_PATH`, loaded at boot and
-  again on `SIGHUP`) or `k_anonymity` (a range lookup at
+  again within 30 seconds of the file changing) or `k_anonymity` (a range lookup at
   `BREACHED_PASSWORD_RANGE_URL`, such as Have I Been Pwned's, that sends only
   the first five hex characters of the password's SHA-1, padded, through the
   egress client, with no redirect and a three-second limit). `POST
@@ -32,8 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   did not load, a lookup that failed or was refused) never blocks a sign-in, a
   password update or a registration: it is counted on
   `qauth_breached_password_checks_total` with its reason and written as the
-  new `user.password_breach_check_failed` event. The legacy `/auth/login` and
-  `/ui/login` do not check the list yet.
+  new `user.password_breach_check_failed` event. The check at sign-in and the
+  forced update run only in the Interaction API, which `/oauth/authorize`
+  uses while `INTERACTION_UI_ENABLED` is on; the legacy `/auth/login` and
+  `/ui/login`, the default browser path, check neither the list nor
+  `update_password` until they move onto the sign-in engine ([#709]). No route
+  writes `update_password` yet: the admin API ([#700]) and the account's
+  "this wasn't me" ([#689]) will.
 - **Back-channel logout** ([#624], OpenID Connect Back-Channel Logout 1.0,
   ADR-019 Decisions 4, 8 and 9, ADR-017 F0). A client may register
   `backchannel_logout_uri` and `backchannel_logout_session_required` through
@@ -3036,6 +3041,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#642]: https://github.com/qauth-labs/qauth/issues/642
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#675]: https://github.com/qauth-labs/qauth/issues/675
+[#689]: https://github.com/qauth-labs/qauth/issues/689
+[#700]: https://github.com/qauth-labs/qauth/issues/700
+[#709]: https://github.com/qauth-labs/qauth/issues/709
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845

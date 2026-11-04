@@ -1168,20 +1168,29 @@ digests, 40 hex characters a line, with an optional `:count`) for `local`, or
 `BREACHED_PASSWORD_RANGE_URL` (an `https` URL whose path ends with `/`, such
 as `https://api.pwnedpasswords.com/range/`) for `k_anonymity`; a private
 mirror needs an `EGRESS_ALLOWLIST_PATH` entry naming the realms that use it.
-Each node loads the local list at boot and again when it receives `SIGHUP`;
-a reload that fails keeps the list it had. A realm that names a source the
+Each node loads the local list at boot and again within 30 seconds of the file
+changing (a new modification time, size or inode, so a file renamed into place
+counts); a reload that fails keeps the list it had. A realm that names a source the
 deployment did not set up gets a failed check on every password, which lets
 the sign-in through and is counted and recorded: watch
 `qauth_breached_password_checks_total{result="failed"}` after turning a
 source on.
 
-Once a realm checks, a user whose password is on the list is asked for a new
-one at their next sign-in through the hosted pages, after a code mailed to
-their address (or their second factor). Migration 0059 adds the
-`user_required_actions` table, which holds the `update_password` action an
-operator tool or a later admin API asks for. During a rolling upgrade a node of
-the previous release neither checks the list nor reads that table: a sign-in
-it serves completes as before.
+Once a realm checks, `POST /auth/register` refuses a password on the list.
+At sign-in the list is checked, and a new password asked for, only in the
+Interaction API: with `INTERACTION_UI_ENABLED` on, a user whose password is on
+the list is asked for a new one at their next sign-in, after a code mailed to
+their address (or their second factor). The legacy `/ui/login`, which
+`/oauth/authorize` still uses while the switch is off (the default), and
+`POST /auth/login` check neither the list nor a pending update until they move
+onto the sign-in engine ([#709](https://github.com/qauth-labs/qauth/issues/709)).
+
+Migration 0059 adds the `user_required_actions` table, which holds the
+`update_password` action the admin API and the account's "this wasn't me" will
+ask for (no route writes it yet). During a rolling upgrade a node of the
+previous release neither checks the list nor reads that table, and cannot read
+a sign-in that a node of this release has marked for a password update: that
+sign-in starts again on the older node and completes as before.
 
 ## Upgrading within 1.x
 
