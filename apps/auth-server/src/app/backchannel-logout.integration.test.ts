@@ -437,7 +437,7 @@ describe.each<Deployment>(['one process', 'split roles'])(
       expect(await deliveriesOf(silent.id)).toEqual([]);
     });
 
-    it('refuses a URI on a private or loopback address at registration, even for a development client', async () => {
+    it('refuses a URI on a private or loopback address at registration', async () => {
       const { app } = await boot();
       for (const uri of [
         'https://127.0.0.1/backchannel',

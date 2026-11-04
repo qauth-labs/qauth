@@ -10,7 +10,7 @@ import { env } from '../../config/env';
 import { OAUTH_CLIENT_ID_MAX_LENGTH } from '../constants';
 import { hasOnlyUriCharacters } from '../schemas/common';
 import { TOKEN_EXCHANGE_GRANT_TYPE } from '../schemas/oauth';
-import { isRegistrableBackchannelLogoutDestination } from './backchannel-logout-destination';
+import { checkBackchannelLogoutDestination } from './backchannel-logout-destination';
 import type { CimdPolicy } from './cimd-policy';
 import {
   assertJwksMutuallyExclusive,
@@ -705,7 +705,14 @@ export async function fetchAndValidateCimdDocument(
  * is refused, never opened by the allowlist (ADR-019 Decision 8). As for
  * `post_logout_redirect_uris`, the field costs the document nothing: the
  * client resolves and gets no logout token. Checked before the document is
- * cached, so a cached document holds only a URI that passed.
+ * cached, so a cached document holds no URI the egress client refused.
+ *
+ * A check that failed rather than refused (the name did not resolve now, a
+ * timeout, a busy client) keeps the URI: a refresh during a DNS outage must
+ * not clear a working URI and drop the client's logout tokens until the next
+ * refresh. Nothing is sent now, and delivery checks the addresses again
+ * before every logout token, so a URI that later resolves to a private
+ * address still gets nothing.
  */
 async function withRegistrableBackchannelLogoutUri(
   fastify: FastifyInstance,
@@ -715,7 +722,7 @@ async function withRegistrableBackchannelLogoutUri(
   if (uri === undefined) return doc;
   if (
     backchannelLogoutUriProblem(uri) === undefined &&
-    (await isRegistrableBackchannelLogoutDestination(fastify, uri))
+    (await checkBackchannelLogoutDestination(fastify, uri)) !== 'blocked'
   ) {
     return doc;
   }

@@ -383,7 +383,10 @@ export function validateAndNormalize(
     redirectUris,
     postLogoutRedirectUris,
     backchannelLogoutUri,
-    backchannelLogoutSessionRequired: body.backchannel_logout_session_required ?? false,
+    // The flag means nothing without a URI: stored only beside one, as a
+    // client metadata document's is.
+    backchannelLogoutSessionRequired:
+      backchannelLogoutUri !== null && (body.backchannel_logout_session_required ?? false),
     grantTypes,
     responseTypes,
     tokenEndpointAuthMethod,

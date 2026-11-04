@@ -597,6 +597,7 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       expect(state.createdClients[0]).toMatchObject({
         backchannelLogoutUri: null,
         backchannelLogoutUriSource: null,
+        backchannelLogoutSessionRequired: false,
       });
       expect(result).not.toHaveProperty('backchannel_logout_uri');
       expect(validateDestination).not.toHaveBeenCalled();
@@ -625,20 +626,17 @@ describe('POST /oauth/register — Dynamic Client Registration (RFC 7591)', () =
       'https://10.0.0.5/backchannel',
       'https://[::1]/backchannel',
       'https://internal.example/backchannel',
-    ])(
-      'refuses %s, whose address the egress client refuses, even for a development client',
-      async (uri) => {
-        const { run, state } = await registerWith({ backchannel_logout_uri: uri }, () =>
-          egressRefusal()
-        );
-        const error = await run().catch((caught: unknown) => caught);
-        expect(error).toBeInstanceOf(InvalidClientMetadataError);
-        expect((error as { errorDescription?: string }).errorDescription).toBe(
-          'backchannel_logout_uri must name a host that resolves, and only to public addresses'
-        );
-        expect(state.createdClients).toHaveLength(0);
-      }
-    );
+    ])('refuses %s, whose address the egress client refuses', async (uri) => {
+      const { run, state } = await registerWith({ backchannel_logout_uri: uri }, () =>
+        egressRefusal()
+      );
+      const error = await run().catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(InvalidClientMetadataError);
+      expect((error as { errorDescription?: string }).errorDescription).toBe(
+        'backchannel_logout_uri must name a host that resolves, and only to public addresses'
+      );
+      expect(state.createdClients).toHaveLength(0);
+    });
   });
 
   it('defaults to a standard (non-agent) client when is_agent is omitted', async () => {

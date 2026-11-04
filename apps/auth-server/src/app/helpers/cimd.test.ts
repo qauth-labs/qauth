@@ -19,7 +19,7 @@ vi.mock('../../config/env', () => ({ env: ENV }));
 
 vi.mock('./egress-get', () => ({ egressGet }));
 
-import { blockedEgress } from '../../testing/egress';
+import { blockedEgress, failedEgress } from '../../testing/egress';
 import {
   cimdDocumentSchema,
   fetchAndValidateCimdDocument,
@@ -777,6 +777,21 @@ describe('backchannel_logout_uri in a CIMD document (OpenID Connect Back-Channel
     const insert = toCimdClientInsert(REALM, CLIENT_ID, doc, SENTINEL);
     expect(insert.backchannelLogoutUri).toBe(URI);
     expect(insert.backchannelLogoutSessionRequired).toBe(true);
+  });
+
+  it('keeps a URI whose check failed rather than refused, such as a name that did not resolve now', async () => {
+    const fastify = fastifyStub();
+    fastify.egress = {
+      validateDestination: vi.fn(async () => {
+        throw failedEgress('the name did not resolve');
+      }),
+    };
+    egressGet.mockResolvedValue(ok(validDoc({ backchannel_logout_uri: URI })));
+
+    const doc = await fetchAndValidateCimdDocument(fastify, CLIENT_ID, POLICY);
+
+    // Delivery checks the addresses again before every logout token.
+    expect(doc.backchannel_logout_uri).toBe(URI);
   });
 
   it('drops a URI on a private or loopback address, and still resolves the client', async () => {

@@ -1,5 +1,5 @@
+import { BACKCHANNEL_LOGOUT_EGRESS_PURPOSE } from '@qauth-labs/fastify-plugin-backchannel-logout';
 import { isEgressError } from '@qauth-labs/fastify-plugin-egress';
-import { BACKCHANNEL_LOGOUT_EGRESS_PURPOSE } from '@qauth-labs/server-backchannel-logout';
 import type { FastifyInstance } from 'fastify';
 
 import { rejectRegistration } from './dynamic-client-registration';
@@ -27,15 +27,29 @@ export async function isRegistrableBackchannelLogoutDestination(
   uri: string,
   realmName?: string
 ): Promise<boolean> {
+  return (await checkBackchannelLogoutDestination(fastify, uri, realmName)) === 'passed';
+}
+
+/**
+ * The egress client's verdict on a `backchannel_logout_uri` a client
+ * registers: `passed`; `blocked`, a refusal no retry changes (a non-public
+ * address, a URI whose form it refuses); or `failed`, a name that did not
+ * resolve now, a timeout or a busy client, which may pass later.
+ */
+export async function checkBackchannelLogoutDestination(
+  fastify: FastifyInstance,
+  uri: string,
+  realmName?: string
+): Promise<'passed' | 'blocked' | 'failed'> {
   try {
     await fastify.egress.validateDestination(uri, {
       purpose: BACKCHANNEL_LOGOUT_EGRESS_PURPOSE,
       source: 'client',
       ...(realmName === undefined ? {} : { realm: realmName }),
     });
-    return true;
+    return 'passed';
   } catch (error) {
-    if (isEgressError(error)) return false;
+    if (isEgressError(error)) return error.outcome === 'blocked' ? 'blocked' : 'failed';
     throw error;
   }
 }
