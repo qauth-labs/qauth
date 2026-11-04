@@ -46,8 +46,8 @@ describe('eventDeliveryGrantStatements', () => {
       'GRANT SELECT, INSERT, UPDATE ON TABLE "event_deliveries" TO "qauth_delivery"',
       'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "event_delivery_positions" TO "qauth_delivery"',
       'GRANT SELECT ON TABLE "ssf_streams" TO "qauth_delivery"',
-      'GRANT SELECT ("id", "ssf_transmitter_enabled", "issuer") ON TABLE "realms" TO "qauth_delivery"',
-      'GRANT SELECT ("id", "enabled", "suspended", "scopes") ON TABLE "oauth_clients" TO "qauth_delivery"',
+      'GRANT SELECT ("id", "ssf_transmitter_enabled", "issuer", "name") ON TABLE "realms" TO "qauth_delivery"',
+      'GRANT SELECT ("id", "enabled", "suspended", "scopes", "realm_id", "client_id", "backchannel_logout_uri", "backchannel_logout_uri_source", "backchannel_logout_session_required") ON TABLE "oauth_clients" TO "qauth_delivery"',
       'GRANT SELECT ("stream_id", "event_subject_type", "event_subject_id") ON TABLE "ssf_stream_subjects" TO "qauth_delivery"',
     ]);
   });

@@ -133,9 +133,10 @@ async function buildTestApp(
 async function activeKid(
   realms: TestRealms,
   realm: TokenRealm,
-  algorithm: string
+  algorithm: string,
+  purpose: 'token_signing' | 'event_signing' = 'token_signing'
 ): Promise<string> {
-  const keys = await realms.signer.signer.getVerificationKeys('local', realm.id, 'token_signing');
+  const keys = await realms.signer.signer.getVerificationKeys('local', realm.id, purpose);
   const key = keys.find((candidate) => candidate.algorithm === algorithm);
   if (key === undefined) throw new Error(`no ${algorithm} key`);
   return key.kid;
@@ -454,8 +455,10 @@ describe('signing through the signer (#491)', () => {
     try {
       const jwksA = await app.jwtUtils.getJwks(realms.a);
       const jwksB = await app.jwtUtils.getJwks(realms.b);
+      // The token key, then the event key that signs logout tokens (#624).
       expect(jwksA.keys.map((key) => key.kid)).toEqual([
         await activeKid(realms, realms.a, 'EdDSA'),
+        await activeKid(realms, realms.a, 'EdDSA', 'event_signing'),
       ]);
       for (const key of [...jwksA.keys, ...jwksB.keys]) {
         expect(key).not.toHaveProperty('d');
