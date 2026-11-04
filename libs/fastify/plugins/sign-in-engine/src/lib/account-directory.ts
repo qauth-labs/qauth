@@ -82,7 +82,10 @@ export interface AccountDirectoryOptions {
  *   account: every password and passkey (`webauthn`) credential it holds in
  *   the realm, and whether it holds a live admin grant seen from the realm
  *   (#510). An account that exists so costs one read more than none before
- *   the password is checked, not four.
+ *   the password is checked, not four. It is verified when every password
+ *   credential's `email_verified` says so (none has an address to prove: a
+ *   passkey or a wallet is its primary identity); a credential whose data
+ *   cannot be read is not verified.
  * - A credential the failure ladder's hard action marked
  *   (`user_credentials.disabled_at`, #615) is disabled only while the hard
  *   action is armed, which is asked only when a mark is there. It still counts
@@ -165,10 +168,15 @@ export function createRepositoryAccountDirectory(
           disabled: disabled[passwords.length + index] === true,
         })),
       ];
+      const verified = passwords.every((row) => {
+        const data = passwordCredentialDataSchema.safeParse(row.credentialData);
+        return data.success && data.data.email_verified;
+      });
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,
         admin: grants.length > 0,
+        verified,
         factors: Object.freeze(factors),
       });
     },

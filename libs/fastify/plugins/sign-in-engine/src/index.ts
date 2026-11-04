@@ -1,4 +1,5 @@
 export * from './lib/account-directory';
+export * from './lib/address-verifier';
 export * from './lib/audit-events';
 export * from './lib/failure-ladder';
 export * from './lib/fastify-plugin-sign-in-engine';
@@ -10,8 +11,14 @@ export * from './lib/password-verifier';
 export * from './lib/send-caps';
 // What the auth server works with, from the engine library it may not import.
 export {
+  type AddressVerifier,
   type AuditSink,
   type CompletedSignIn,
+  EMAIL_CODE_LADDER_POLICY,
+  type EmailCodeDependencies,
+  type EmailCodeDigest,
+  type EmailCodeSender,
+  type EmailCodeSendOutcome,
   type IdentifierDigest,
   type LadderPolicy,
   type MailPassBinding,

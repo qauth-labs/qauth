@@ -22,11 +22,13 @@ export type SignInAuditEvent =
 /**
  * The sign-in method a step belongs to, for `user.sign_in_failed`'s
  * `method`. A step a later issue adds needs its entry here, and the event's
- * method set may grow with it.
+ * method set may grow with it. The email code verifies the address of a
+ * password account after its password (#638): it is part of that sign-in,
+ * and never a method of its own.
  */
 const STEP_METHODS: Readonly<
   Partial<Record<StepName, EventDataOf<typeof SIGN_IN_FAILED>['method']>>
-> = Object.freeze({ identifier: 'password', password: 'password' });
+> = Object.freeze({ identifier: 'password', password: 'password', email_code: 'password' });
 
 /**
  * Map one of the engine's audit records onto a registered event: an accepted
