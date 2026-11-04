@@ -33,6 +33,7 @@
     "@qauth-labs/fastify-plugin-sign-in-engine": "workspace:*",
     "@qauth-labs/fastify-plugin-signer": "workspace:*",
     "@qauth-labs/fastify-plugin-ssf": "workspace:*",
+    "@qauth-labs/server-backchannel-logout": "workspace:*",
     "@qauth-labs/server-config": "workspace:*",
     "@qauth-labs/shared-validation": "workspace:*",
     "@qauth-labs/shared-errors": "workspace:*",
