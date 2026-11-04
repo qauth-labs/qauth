@@ -263,7 +263,7 @@ Redis-backed `@fastify/rate-limit` plugin is registered app-wide
 (`apps/auth-server/src/app/app.ts:931`) ahead of both route sweeps (lines 294
 and 301), against the same `fastify.redis` client
 (`apps/auth-server/src/app/plugins/rate-limit.ts:28`); `RATE_LIMIT_ENABLED`
-defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:12-15`);
+defaults to `true` (`libs/server/config/src/lib/schemas/rate-limit.ts:41-44`);
 and the `onRequest` hook it attaches to each of those routes `INCR`s a per-IP
 counter on **every** request, authenticated or not (`PEXPIRE` on the first
 request of a window, `PTTL` on the rest) — which is why the size cap above talks

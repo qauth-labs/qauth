@@ -140,8 +140,9 @@
 > well-formed id.
 >
 > - Decision 6: the step read counts per realm and address, at the authorization endpoint's budget,
->   unless its TCP peer (`request.ip`, no other forwarded header) is one of the ceremony app
->   server's egress addresses, which the operator lists in `CEREMONY_APP_PEERS`. A listed peer's
+>   unless its client address (`request.ip`, as `TRUST_PROXY` resolves it, so the ceremony app
+>   server's own address and never the proxy's; no other forwarded header) is one of the ceremony
+>   app server's egress addresses, which the operator lists in `CEREMONY_APP_PEERS`. A listed peer's
 >   read counts per interaction, under `CEREMONY_APP_PEER_RATE_LIMIT` reads a minute. The two are
 >   set together, as ADR-017 Decision 7 has `FIRST_PARTY_BACKEND_PEERS` and its cap; the list is
 >   empty by default. It applies to the step read only: the personal read, the answer and the

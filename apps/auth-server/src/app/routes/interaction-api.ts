@@ -312,10 +312,11 @@ function ceremonyAppPeers(): PeerAddressList {
 
 /**
  * Whether a step read counts per interaction (#982): its id is well formed
- * and its TCP peer, `request.ip`, is one of the ceremony app server's
- * addresses the operator listed (`CEREMONY_APP_PEERS`). No forwarded header
- * is read for it beyond what `TRUST_PROXY` already resolves into
- * `request.ip`.
+ * and its client address, `request.ip`, is one of the ceremony app server's
+ * addresses the operator listed (`CEREMONY_APP_PEERS`). `request.ip` is the
+ * TCP peer, or behind a proxy the address `TRUST_PROXY` resolves, so the
+ * ceremony app server's own address and never the proxy's; no other
+ * forwarded header is read for it.
  */
 export function readsPerInteraction(
   request: FastifyRequest,
