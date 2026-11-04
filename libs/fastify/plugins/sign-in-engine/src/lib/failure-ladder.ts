@@ -327,15 +327,17 @@ export function createRedisFailureLadder(
     let settled = false;
     const reservation: LadderReservation = {
       kind: 'reserved',
-      async settle(outcome): Promise<LadderSettlement> {
+      async settle(outcome, options): Promise<LadderSettlement> {
         if (settled) throw new Error('sign-in ladder: a reservation settled twice');
         settled = true;
         if (outcome === 'success') {
+          // An empty IP HMAC records no known IP: the script skips it.
+          const remembered = options?.rememberIp === false ? '' : ip;
           await run(
             SETTLE_SUCCESS_SCRIPT,
             SETTLE_SUCCESS_SCRIPT_SHA,
             [counter, known],
-            [now(), policy.onSuccess, runId, policy.knownIpMs, ip, LADDER_MAX_KNOWN_IPS],
+            [now(), policy.onSuccess, runId, policy.knownIpMs, remembered, LADDER_MAX_KNOWN_IPS],
             'settle'
           );
           return NOTHING_DUE;

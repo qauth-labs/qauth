@@ -617,6 +617,17 @@ describe('the Redis failure ladder', () => {
     expect(redis.hashes.has(ladderCounterKey(REALM, IDENTIFIER_HMAC, 'email_code'))).toBe(false);
   });
 
+  it('clears the counter and makes no IP known on a success settled without it (#638)', async () => {
+    const { reserved, fail, redis } = setup();
+    await fail(2);
+    const reservation = await reserved();
+    await reservation.settle('success', { rememberIp: false });
+    expect(redis.hashes.has(COUNTER)).toBe(false);
+    expect(redis.sets.get(KNOWN_IPS)?.size ?? 0).toBe(0);
+    await (await reserved()).settle('success');
+    expect(redis.sets.get(KNOWN_IPS)?.size).toBe(1);
+  });
+
   it('resets a factor’s run for the owner’s reset', async () => {
     const { ladder, fail, attempt, counter } = setup();
     await fail(5);

@@ -529,6 +529,21 @@ describe('the email-code ladder (ADR-017 Decision 7)', () => {
     expect(built.ladder.counter(REALM, hmac, 'email_code')).toBeUndefined();
   });
 
+  it('makes no end-user IP known to an unverified account at its password, and does once the code verifies it', async () => {
+    const built = build();
+    const hmac = await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER });
+    const ctx = context(built, { endUserIp: '203.0.113.7' });
+    const second = await toCode(built, ctx);
+    // An abandoned code step leaves no known IP behind.
+    expect(built.ladder.knownIps(REALM, hmac).size).toBe(0);
+    expect(built.ladder.counter(REALM, hmac, 'password')).toBeUndefined();
+    await built.engine.advance(kept(second), codeAnswer(built.sender.last), ctx);
+    expect(built.directory.accounts.get(IDENTIFIER)?.verified).toBe(true);
+    // The owner's next sign-in, now verified, makes it known.
+    await toCode(built, ctx);
+    expect([...built.ladder.knownIps(REALM, hmac).keys()]).toEqual(['203.0.113.7']);
+  });
+
   it('reserves on the email_code counter with no end-user IP, and never suppresses the mail', async () => {
     const reserve = vi.fn<LadderHook['reserve']>(async () => ({
       kind: 'reserved' as const,

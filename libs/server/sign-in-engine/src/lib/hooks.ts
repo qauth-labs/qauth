@@ -62,16 +62,27 @@ export interface LadderSettlement {
 /** A settlement that fires nothing. */
 export const NOTHING_DUE: LadderSettlement = Object.freeze({ ceilingReached: false });
 
+/** How a success settles: whether it makes the attempt's end-user IP known to the account. */
+export interface LadderSuccessOptions {
+  /**
+   * `false` clears the counter and records no IP: the right password of an
+   * account whose address is not proved yet (#638), which has no owner whose
+   * IPs a later attempt may count as known. `true` by default.
+   */
+  readonly rememberIp?: boolean;
+}
+
 /** One reserved attempt of the ladder, settled once the credential is checked. */
 export interface LadderReservation {
   readonly kind: 'reserved';
   /**
    * `success` clears the counter of the factor it proved (or of the email
    * codes, for a right code), and no other, and makes the attempt's end-user
-   * IP known to the account; `failure` keeps the attempt counted, and says
-   * whether the hard action is due. Settled once.
+   * IP known to the account unless `options.rememberIp` is `false`;
+   * `failure` keeps the attempt counted, and says whether the hard action is
+   * due. Settled once.
    */
-  settle(outcome: 'success' | 'failure'): Promise<LadderSettlement>;
+  settle(outcome: 'success' | 'failure', options?: LadderSuccessOptions): Promise<LadderSettlement>;
 }
 
 /** The ladder's answer to a reservation. */

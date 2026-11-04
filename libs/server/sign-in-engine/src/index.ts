@@ -39,6 +39,7 @@ export {
   type LadderHook,
   type LadderReservation,
   type LadderSettlement,
+  type LadderSuccessOptions,
   type LadderVerdict,
   type LimitVerdict,
   NO_LADDER,

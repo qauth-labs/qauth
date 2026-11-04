@@ -131,7 +131,7 @@ export function createMemoryLadder(
       let settled = false;
       const reservation: LadderReservation = {
         kind: 'reserved',
-        async settle(outcome) {
+        async settle(outcome, options) {
           if (settled) throw new Error('memory ladder: settled twice');
           settled = true;
           if (outcome === 'success') {
@@ -141,7 +141,7 @@ export function createMemoryLadder(
               if (current.failures <= 1) counters.delete(key);
               else counters.set(key, { ...current, failures: current.failures - 1 });
             }
-            if (endUserIp !== undefined && policy.knownIpMs > 0) {
+            if (endUserIp !== undefined && policy.knownIpMs > 0 && options?.rememberIp !== false) {
               const ips = known.get(knownKey(realmId, identifierHmac)) ?? new Map<string, number>();
               ips.set(endUserIp, now());
               known.set(knownKey(realmId, identifierHmac), ips);
