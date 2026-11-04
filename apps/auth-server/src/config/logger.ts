@@ -41,6 +41,9 @@ export const LOG_REDACT_PATHS = [
   '*.client_secret',
   'code',
   'code_verifier',
+  // An emailed code, as an answer to the email_code step carries it (#638).
+  'otp',
+  '*.otp',
   'secret',
   '*.secret',
   'authorization',
