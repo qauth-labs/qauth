@@ -229,7 +229,10 @@ describe('the Interaction API (#616, real containers)', () => {
   async function boot(extra: Record<string, string> = {}): Promise<void> {
     if (!infra || !jwt) throw new Error('infrastructure not started');
     await server?.close();
-    server = await bootAuthServer({ ...baseEnvironment(infra, jwt), ...extra }, { routes: startRoute });
+    server = await bootAuthServer(
+      { ...baseEnvironment(infra, jwt), ...extra },
+      { routes: startRoute }
+    );
     await resetE2eState(server.app);
     await provisionClient(server.app, await registerPasswordAccount(server.app, EMAIL));
     await server.app.listen({ port: 0, host: '127.0.0.1' });

@@ -1381,9 +1381,7 @@ describe('the parts (#616)', () => {
     const perInteraction = `${REALM.id}:interaction:${interactionIdHash(id)}`;
 
     expect(interactionReadRateLimitKey(request(id, '198.51.100.7'), peers)).toBe(perInteraction);
-    expect(interactionReadRateLimitKey(request(id, '2001:db8:1:2::9'), peers)).toBe(
-      perInteraction
-    );
+    expect(interactionReadRateLimitKey(request(id, '2001:db8:1:2::9'), peers)).toBe(perInteraction);
     expect(readsPerInteraction(request(id, '198.51.100.7'), peers)).toBe(true);
 
     expect(interactionReadRateLimitKey(request(id, '203.0.113.9'), peers)).toBe(
@@ -1394,9 +1392,9 @@ describe('the parts (#616)', () => {
     );
     expect(readsPerInteraction(request('junk', '198.51.100.7'), peers)).toBe(false);
     // With no peer listed, as by default, every read counts per address.
-    expect(interactionReadRateLimitKey(request(id, '198.51.100.7'), createPeerAddressList([]))).toBe(
-      `${REALM.id}:198.51.100.7`
-    );
+    expect(
+      interactionReadRateLimitKey(request(id, '198.51.100.7'), createPeerAddressList([]))
+    ).toBe(`${REALM.id}:198.51.100.7`);
   });
 
   it('tells an answer that carries a credential, as JSON or as a form post', () => {
