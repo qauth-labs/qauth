@@ -98,7 +98,8 @@ export interface DeliverySigner {
 
   /**
    * A Security Event Token or a logout token: a compact JWS signed by the
-   * realm's `event_signing` key.
+   * realm's `event_signing` key, or for a logout token by the `token_signing`
+   * key that signs its ID tokens (OpenID Connect Back-Channel Logout 1.0 §2.4).
    */
   signEventToken(request: {
     readonly realmId: string;

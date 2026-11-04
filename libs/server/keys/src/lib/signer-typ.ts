@@ -4,25 +4,26 @@
  *
  * A JWS names what it is in its protected `typ` header (RFC 8725 §3.11), and a
  * verifier that checks `typ` refuses a token of another type. Binding each
- * purpose to its types means a role allowed to sign one kind of token cannot
- * obtain another kind with the right `typ`: `delivery` cannot get an `at+jwt`,
- * and `api` cannot get a `logout+jwt`.
+ * purpose to its types, and each role to the types it may ask for
+ * (`SIGNER_POLICY`), means a role allowed to sign one kind of token cannot
+ * obtain another kind with the right `typ`: `delivery` cannot get an `at+jwt`
+ * or an ID token, and `api` cannot get a `logout+jwt`.
  *
  * The protection reaches as far as the verifier checks `typ`. QAuth's own
- * verifiers resolve access tokens against `token_signing` keys only, by
- * purpose (`getVerificationKeys`), never against the realm JWKS.
+ * verifiers resolve access tokens against `token_signing` keys only, and the
+ * two purposes are published apart (d-1026-09): the realm JWKS holds only
+ * `token_signing` keys ({@link REALM_JWKS_PURPOSES}), and the SSF transmitter
+ * serves the `event_signing` keys at its own `jwks_uri`. A relying party that
+ * reads the realm JWKS and skips the `typ` check therefore still cannot take a
+ * Security Event Token for an access token, nor the other way round.
  *
- * Each `event_signing` key signs one kind of event token
- * ({@link EVENT_TOKEN_ALGORITHM}, #624): the Ed25519 key signs Security Event
- * Tokens, and the SSF transmitter serves it at its own `jwks_uri`; the RS256
- * key signs logout tokens, as ID tokens are signed, and the realm JWKS
- * publishes it, because a relying party verifies a logout token there (OpenID
- * Connect Back-Channel Logout 1.0 §2.6; {@link isRealmJwksKey}). So a key the
- * realm JWKS lists never signs a SET (d-1026-09), and the realm JWKS keeps one
- * Ed25519 key, the token key. A relying party tells a logout token from an ID
- * token by `typ`, as RFC 8725 §3.11 and Back-Channel Logout 1.0 §2.4 ask; a
- * logout token carries no `nonce`, which an ID token of a request that sent
- * one must, and the signer holds it to its kind (`eventTokenClaimsProblem`).
+ * A logout token is signed with the keys that sign ID tokens (OpenID Connect
+ * Back-Channel Logout 1.0 §2.4), so `logout+jwt` is a `token_signing` type,
+ * signed in the ID tokens' algorithm ({@link idTokenAlgorithm}), and a relying
+ * party verifies it at the realm JWKS (§2.6; #624, ADR-019 Decision 9 as
+ * amended 2026-11-04). It is told from an ID token by its `typ` and its
+ * `events` claim, and it never carries a `nonce` (§2.4): the signer holds it to
+ * that kind (`eventTokenClaimsProblem`).
  *
  * A purpose that is not listed is not signed through `signJws` at all. The
  * scoped purposes have their own operations (`signWebhook`,
@@ -37,14 +38,13 @@ export const JWS_TYP_BY_PURPOSE = Object.freeze({
    * on an OIDC ID token (`ID_TOKEN_TYP` in `@qauth-labs/server-jwt`);
    * `oauth-id-jag+jwt` is an Identity Assertion JWT Authorization Grant
    * (draft-ietf-oauth-identity-assertion-authz-grant), which a target
-   * authorization server verifies against the realm JWKS.
+   * authorization server verifies against the realm JWKS; `logout+jwt` is an
+   * OpenID Connect Back-Channel Logout 1.0 logout token, which the keys of the
+   * ID tokens sign (§2.4, #624).
    */
-  token_signing: Object.freeze(['at+jwt', 'JWT', 'oauth-id-jag+jwt'] as const),
-  /**
-   * `secevent+jwt` is a Security Event Token (RFC 8417 §2.3); `logout+jwt` is
-   * an OpenID Connect Back-Channel Logout 1.0 §2.4 logout token.
-   */
-  event_signing: Object.freeze(['secevent+jwt', 'logout+jwt'] as const),
+  token_signing: Object.freeze(['at+jwt', 'JWT', 'oauth-id-jag+jwt', 'logout+jwt'] as const),
+  /** `secevent+jwt` is a Security Event Token (RFC 8417 §2.3). */
+  event_signing: Object.freeze(['secevent+jwt'] as const),
 });
 
 /** A purpose `signJws` signs with. See {@link JWS_TYP_BY_PURPOSE}. */
@@ -69,48 +69,51 @@ export function isTypAllowed(purpose: JwsSigningPurpose, typ: unknown): typ is J
   return (JWS_TYP_BY_PURPOSE[purpose] as readonly unknown[]).includes(typ);
 }
 
-/**
- * The algorithm each kind of event token is signed with (#624, d-1104-08,
- * d-1104-10). A Security Event Token is signed with the realm's Ed25519
- * `event_signing` key; a logout token with its RS256 one, the algorithm
- * OpenID Connect signs ID tokens with by default and a fresh realm signs its
- * ID tokens with. The signer signs no event token in the other algorithm, so
- * each key signs one kind.
- */
-export const EVENT_TOKEN_ALGORITHM = Object.freeze({
-  'secevent+jwt': 'EdDSA',
-  'logout+jwt': 'RS256',
-} as const satisfies Record<JwsTyp<'event_signing'>, string>);
+/** Every `typ` that `signJws` signs, in the order of {@link JWS_TYP_BY_PURPOSE}. */
+export const JWS_TYPS: readonly JwsTyp[] = Object.freeze(
+  JWS_SIGNING_PURPOSES.flatMap((purpose): readonly JwsTyp[] => JWS_TYP_BY_PURPOSE[purpose])
+);
 
 /**
- * The purposes whose published keys make up the realm's JWKS (`jwks_uri`), in
- * their order there: the keys that verify the realm's access tokens and ID
- * tokens, then the `event_signing` keys that verify its logout tokens, which
- * a relying party reads there (OpenID Connect Back-Channel Logout 1.0 §2.6,
- * #624). Of `event_signing`, only the logout-token algorithm's keys
- * ({@link isRealmJwksKey}); the SSF transmitter serves the SET keys at its own
- * JWKS (d-1026-09). The other published purposes appear elsewhere: the
- * federation keys in the entity configuration, the OID4VP keys in the request
- * object and its certificate, and an upstream client-assertion key in the
- * JWKS served to that provider (`getUpstreamJwks`, #547).
+ * The purpose whose keys sign tokens of type `typ`, or `undefined` for a type
+ * `signJws` does not sign. No two purposes share a type, so the type names the
+ * key: a logout token is a `token_signing` type (#624).
+ */
+export function jwsPurposeOfTyp(typ: unknown): JwsSigningPurpose | undefined {
+  return JWS_SIGNING_PURPOSES.find((purpose) => isTypAllowed(purpose, typ));
+}
+
+/**
+ * The algorithm a realm signs its ID tokens with, and so its logout tokens
+ * (OpenID Connect Back-Channel Logout 1.0 §2.4, #624): `RS256` while the realm
+ * holds an active RS256 `token_signing` key, which the OpenID certification
+ * suite verifies (#309), and `EdDSA` otherwise. The auth server's ID tokens
+ * and the signer's logout tokens both take it from here.
+ *
+ * @param activeAlgorithms - the algorithms of the realm's active `token_signing` keys
+ */
+export function idTokenAlgorithm(activeAlgorithms: Iterable<string>): 'RS256' | 'EdDSA' {
+  for (const algorithm of activeAlgorithms) {
+    if (algorithm === 'RS256') return 'RS256';
+  }
+  return 'EdDSA';
+}
+
+/**
+ * The purposes whose published keys make up the realm's JWKS (`jwks_uri`):
+ * the keys that verify the realm's access tokens, ID tokens and logout tokens
+ * (Back-Channel Logout 1.0 §2.6, #624). The
+ * `event_signing` keys are published apart, at the SSF transmitter's own JWKS
+ * (`getVerificationKeys`, d-1026-09), so a token of one purpose never verifies
+ * against the key set of the other. The other published purposes appear
+ * elsewhere too: the federation keys in the entity configuration, the OID4VP
+ * keys in the request object and its certificate, and an upstream
+ * client-assertion key in the JWKS served to that provider
+ * (`getUpstreamJwks`, #547).
  */
 export const REALM_JWKS_PURPOSES: readonly JwsSigningPurpose[] = Object.freeze([
   'token_signing',
-  'event_signing',
 ] as const);
-
-/**
- * Whether the realm JWKS lists a published key of this purpose and algorithm:
- * every `token_signing` key, and the `event_signing` keys that sign logout
- * tokens ({@link EVENT_TOKEN_ALGORITHM}), never the ones that sign SETs.
- */
-export function isRealmJwksKey(key: {
-  readonly purpose: string;
-  readonly algorithm: string;
-}): boolean {
-  if (key.purpose === 'token_signing') return true;
-  return key.purpose === 'event_signing' && key.algorithm === EVENT_TOKEN_ALGORITHM['logout+jwt'];
-}
 
 /**
  * The `typ` of a client assertion: a client authentication JWT, explicitly

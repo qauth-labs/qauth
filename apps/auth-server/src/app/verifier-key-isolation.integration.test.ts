@@ -186,11 +186,10 @@ describe('the verifier key never reaches the published JWKS (#377)', () => {
     }
   });
 
-  it('publishes only the EdDSA token key it was configured with and the RS256 logout-token key', async () => {
+  it('publishes only the EdDSA token key it was configured with', async () => {
     // The control that makes the two assertions above non-vacuous in the other
     // direction: the set is not empty and not accidentally filtered — it holds
-    // exactly the key type QAuth signs its own tokens with, then the RS256
-    // event key that signs logout tokens (#624).
+    // exactly the key type QAuth signs its own tokens with.
     const server = await bootWithVerifierIdentity();
 
     try {
@@ -198,7 +197,6 @@ describe('the verifier key never reaches the published JWKS (#377)', () => {
 
       expect((keys as unknown as Array<Record<string, unknown>>).map((key) => key['kty'])).toEqual([
         'OKP',
-        'RSA',
       ]);
     } finally {
       await server.close();

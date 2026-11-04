@@ -24,12 +24,12 @@ const SID = '0192a000-0000-7000-8000-0000000000aa';
 
 /**
  * What the signer does with the claims a route hands it: add `iss`, set the
- * `typ` and the key id, sign with the realm's `event_signing` key (EdDSA).
+ * `typ` and the key id, sign with the key of the realm's ID tokens (EdDSA here).
  */
 async function signAsTheSigner(claims: Readonly<Record<string, unknown>>) {
   const { privateKey, publicKey } = await generateKeyPair('EdDSA', { crv: 'Ed25519' });
   const token = await new SignJWT({ iss: ISSUER, ...claims } as JWTPayload)
-    .setProtectedHeader({ alg: 'EdDSA', typ: LOGOUT_TOKEN_TYP, kid: 'event-key' })
+    .setProtectedHeader({ alg: 'EdDSA', typ: LOGOUT_TOKEN_TYP, kid: 'token-key' })
     .sign(privateKey);
   return { token, publicKey, jwk: await exportJWK(publicKey) };
 }
@@ -76,7 +76,7 @@ describe('logout token (OpenID Connect Back-Channel Logout 1.0 §2.4, #624)', ()
 
     const { payload, protectedHeader } = await validateAsTheRp(token, publicKey, 'rp', NOW + 1_000);
 
-    expect(protectedHeader).toEqual({ alg: 'EdDSA', typ: 'logout+jwt', kid: 'event-key' });
+    expect(protectedHeader).toEqual({ alg: 'EdDSA', typ: 'logout+jwt', kid: 'token-key' });
     expect(payload).toEqual({
       iss: ISSUER,
       aud: 'rp',

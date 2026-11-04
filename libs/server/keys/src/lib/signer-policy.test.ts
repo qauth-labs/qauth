@@ -13,15 +13,15 @@ import {
   type SignerCaller,
   UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './signer-policy';
-import { JWS_SIGNING_PURPOSES } from './signer-typ';
+import { JWS_TYPS } from './signer-typ';
 
-/** Every grant as `operation` or `signJws:<purpose>`, for one role. */
+/** Every grant as `operation` or `signJws:<typ>`, for one role. */
 function grantsOf(caller: SignerCaller): string[] {
   return SIGNER_OPERATIONS.flatMap((operation) =>
     operation === 'signJws'
-      ? JWS_SIGNING_PURPOSES.filter((purpose) =>
-          isSignerCallAllowed(caller, 'signJws', purpose)
-        ).map((purpose) => `signJws:${purpose}`)
+      ? JWS_TYPS.filter((typ) => isSignerCallAllowed(caller, 'signJws', typ)).map(
+          (typ) => `signJws:${typ}`
+        )
       : isSignerCallAllowed(caller, operation)
         ? [operation]
         : []
@@ -36,8 +36,11 @@ describe('SIGNER_POLICY', () => {
   it('pins what each role may call', () => {
     expect(Object.fromEntries(SIGNER_CALLERS.map((caller) => [caller, grantsOf(caller)]))).toEqual({
       local: [
-        'signJws:token_signing',
-        'signJws:event_signing',
+        'signJws:at+jwt',
+        'signJws:JWT',
+        'signJws:oauth-id-jag+jwt',
+        'signJws:logout+jwt',
+        'signJws:secevent+jwt',
         'signHybrid',
         'signWebhook',
         'signClientAssertion',
@@ -57,7 +60,9 @@ describe('SIGNER_POLICY', () => {
         'getUpstreamJwks',
       ],
       api: [
-        'signJws:token_signing',
+        'signJws:at+jwt',
+        'signJws:JWT',
+        'signJws:oauth-id-jag+jwt',
         'signHybrid',
         'signClientAssertion',
         'encrypt',
@@ -66,7 +71,8 @@ describe('SIGNER_POLICY', () => {
         'getUpstreamJwks',
       ],
       delivery: [
-        'signJws:event_signing',
+        'signJws:logout+jwt',
+        'signJws:secevent+jwt',
         'signWebhook',
         'getVerificationKeys',
         'getJwks',
@@ -87,9 +93,7 @@ describe('SIGNER_POLICY', () => {
   });
 
   it('lets local call every operation', () => {
-    expect(grantsOf('local')).toHaveLength(
-      SIGNER_OPERATIONS.length - 1 + JWS_SIGNING_PURPOSES.length
-    );
+    expect(grantsOf('local')).toHaveLength(SIGNER_OPERATIONS.length - 1 + JWS_TYPS.length);
   });
 
   it('lets web sign request objects and nothing else (#546)', () => {
@@ -254,6 +258,12 @@ describe('isSignerCallAllowed', () => {
     expect(isSignerCallAllowed('local', 'signJws')).toBe(false);
     expect(isSignerCallAllowed('local', 'signJws', 'cookie_hmac')).toBe(false);
     expect(isSignerCallAllowed('api', 'signJws', 'event_signing')).toBe(false);
+    // A purpose is granted when one of its types is: delivery signs logout
+    // tokens with the token key (#624), and api signs none of them.
+    expect(isSignerCallAllowed('delivery', 'signJws', 'token_signing')).toBe(true);
+    expect(isSignerCallAllowed('api', 'signJws', 'logout+jwt')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'JWT')).toBe(false);
+    expect(isSignerCallAllowed('delivery', 'signJws', 'at+jwt')).toBe(false);
   });
 
   it('refuses an operation the table does not know', () => {

@@ -183,7 +183,7 @@ const keys = createKeyFactory({
   hybridSigning: cryptoEnv.HYBRID_SIGNING_ENABLED,
 });
 
-await keys.provisionRealmKeys(realmId); // token_signing, event_signing (Ed25519 and RS256), cookie_hmac, data_at_rest
+await keys.provisionRealmKeys(realmId); // token_signing, event_signing, cookie_hmac, data_at_rest
 const [webhook] = await keys.createKey({
   realmId,
   purpose: 'webhook_signing',
@@ -218,9 +218,7 @@ and both rows share one `pair_id`.
 
 `provisionRealmKeys` creates a realm's standard keys in one transaction: all of them or none. It
 skips a purpose that already holds an active key of its default algorithm (with hybrid signing on,
-both keys of the `token_signing` pair), and creates a key of each algorithm the purpose also
-provisions (`alsoProvisioned`: the RS256 `event_signing` key that signs logout tokens, #624) that it
-lacks, so it can run at every boot. It refuses a realm that holds
+both keys of the `token_signing` pair), so it can run at every boot. It refuses a realm that holds
 only one half of that pair. Two calls for one realm must not run at once: a caller on several nodes
 serializes them, as the boot step's advisory lock does (#485). Both functions take an outer
 transaction (`tx`) so a realm and its keys can be created together.
@@ -369,20 +367,20 @@ const token = await signer.signJws('api', {
 });
 ```
 
-| Operation                                                                    | Returns                                                                                                                             |
-| ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `signJws({ realmId, purpose, typ, algorithm?, claims })`                     | A compact JWS signed by the realm's active key of the purpose. `algorithm` defaults to the purpose's default (`EdDSA`).             |
-| `signHybrid({ realmId, typ, claims })`                                       | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                 |
-| `signWebhook({ realmId, subscriptionId, id, timestamp, body })`              | The `webhook-signature` header value. See [Webhook signatures](#webhook-signatures).                                                |
-| `signClientAssertion({ realmId, providerId, audience, algorithm?, claims })` | A `private_key_jwt` client assertion toward an upstream provider. See [Client assertions](#client-assertions).                      |
-| `signRequestObject({ realmId, certificateChain, claims })`                   | An OID4VP request object signed by the realm's ES256 verifier key. See [Request objects](#request-objects).                         |
-| `getCookieSecrets(realmId, { kid? })`                                        | The active cookie HMAC secret and the most recently retired one, as fresh buffers; a `kid` its list lacks reads the store again.    |
-| `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                  |
-| `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                               |
-| `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.       |
-|                                                                              | The purposes are `token_signing`, `event_signing` and `oid4vp_request_signing` (`VERIFICATION_KEY_PURPOSES`).                       |
-| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing`, then `event_signing` keys in their window, `next` keys included, in a fixed order. |
-| `getUpstreamJwks(realmId, providerId)`                                       | The JWKS of one upstream provider's client-assertion keys, by the same window rules as `getJwks`.                                   |
+| Operation                                                                    | Returns                                                                                                                                                                                       |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `signJws({ realmId, purpose, typ, algorithm?, claims })`                     | A compact JWS signed by the realm's active key of the purpose. `algorithm` defaults to the purpose's default (`EdDSA`); a logout token's is the ID tokens' (`idTokenAlgorithm`) and no other. |
+| `signHybrid({ realmId, typ, claims })`                                       | The detached-parallel hybrid carrier of ADR-005: `{ token, pqcSignature, pqcAlg }`. Needs `HYBRID_SIGNING_ENABLED`.                                                                           |
+| `signWebhook({ realmId, subscriptionId, id, timestamp, body })`              | The `webhook-signature` header value. See [Webhook signatures](#webhook-signatures).                                                                                                          |
+| `signClientAssertion({ realmId, providerId, audience, algorithm?, claims })` | A `private_key_jwt` client assertion toward an upstream provider. See [Client assertions](#client-assertions).                                                                                |
+| `signRequestObject({ realmId, certificateChain, claims })`                   | An OID4VP request object signed by the realm's ES256 verifier key. See [Request objects](#request-objects).                                                                                   |
+| `getCookieSecrets(realmId, { kid? })`                                        | The active cookie HMAC secret and the most recently retired one, as fresh buffers; a `kid` its list lacks reads the store again.                                                              |
+| `encrypt({ realmId, plaintext, context? })`                                  | A `data_at_rest` ciphertext that names its key. See [Data at rest](#data-at-rest).                                                                                                            |
+| `decrypt({ realmId, ciphertext, context? })`                                 | The plaintext. An `active` or `retired` key decrypts; a `compromised` one is refused.                                                                                                         |
+| `getVerificationKeys(realmId, purpose)`                                      | The public keys that may verify the purpose's tokens: `active` keys and `retired` keys still inside their publication window.                                                                 |
+|                                                                              | The purposes are `token_signing`, `event_signing` and `oid4vp_request_signing` (`VERIFICATION_KEY_PURPOSES`).                                                                                 |
+| `getJwks(realmId)`                                                           | The realm's JWKS: the published `token_signing` keys in their window, `next` keys included, in a fixed order. No `event_signing` key.                                                         |
+| `getUpstreamJwks(realmId, providerId)`                                       | The JWKS of one upstream provider's client-assertion keys, by the same window rules as `getJwks`.                                                                                             |
 
 What the signer guarantees:
 
@@ -392,37 +390,39 @@ What the signer guarantees:
   before signing, so what is checked is what is signed.
 - **Each purpose signs its own token types only** (`JWS_TYP_BY_PURPOSE`). Any other pair is refused.
 
-  | Purpose         | `typ`                                                   |
-  | --------------- | ------------------------------------------------------- |
-  | `token_signing` | `at+jwt`, `JWT` (ID token), `oauth-id-jag+jwt` (ID-JAG) |
-  | `event_signing` | `secevent+jwt`, `logout+jwt`                            |
+  | Purpose         | `typ`                                                                                |
+  | --------------- | ------------------------------------------------------------------------------------ |
+  | `token_signing` | `at+jwt`, `JWT` (ID token), `oauth-id-jag+jwt` (ID-JAG), `logout+jwt` (logout token) |
+  | `event_signing` | `secevent+jwt`                                                                       |
+
+  A logout token is signed with the keys that sign ID tokens, in their algorithm, as OpenID Connect
+  Back-Channel Logout 1.0 §2.4 asks (#624): a relying party verifies it at the realm JWKS. The
+  signer holds it, and a Security Event Token, to its kind (`eventTokenClaimsProblem`): no grant
+  claim and no `nonce`, the back-channel logout event alone, at most two minutes of life.
+  `signHybrid` signs no logout token.
 
   The scoped purposes and the OID4VP request key sign through their own operations, each with one
   fixed `typ`: `client-authentication+jwt` (`CLIENT_ASSERTION_TYP`) and `oauth-authz-req+jwt`
   (`OID4VP_REQUEST_OBJECT_TYP`).
 
 - **Each role calls only what `SIGNER_POLICY` grants.** Anything else is a
-  `SignerAccessDeniedError`. Every role may read public keys.
+  `SignerAccessDeniedError`. Every role may read public keys. A `signJws` grant names token types,
+  so it names the key and the kind of token together.
 
-  | Role       | May call                                                                                                                                                                                                           |
-  | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                                                    |
-  | `web`      | `getCookieSecrets`, `signRequestObject`, `encrypt` of an `oid4vp-response-key:` context only. It signs no token and decrypts nothing.                                                                              |
-  | `api`      | `signJws` for `token_signing`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:` or `oid4vp-response-key:` context only. |
-  | `delivery` | `signJws` for `event_signing`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                                             |
-  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                                            |
+  | Role       | May call                                                                                                                                                                                                                                  |
+  | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `local`    | Everything. The caller inside the signer's own process, in a single deployment.                                                                                                                                                           |
+  | `web`      | `getCookieSecrets`, `signRequestObject`, `encrypt` of an `oid4vp-response-key:` context only. It signs no token and decrypts nothing.                                                                                                     |
+  | `api`      | `signJws` for `at+jwt`, `JWT` and `oauth-id-jag+jwt`, `signHybrid`, `signClientAssertion`, `encrypt`, `decrypt` of a `realm_secrets:mail.`, `upstream-oidc:client-secret:`, `auth-method-plugin:` or `oid4vp-response-key:` context only. |
+  | `delivery` | `signJws` for `secevent+jwt` and `logout+jwt`, `signWebhook`, `decrypt` of a `delivery:` context only.                                                                                                                                    |
+  | `admin`    | Public keys only. The key operations of #544 and #551 add their grants.                                                                                                                                                                   |
 
   The public keys are `getVerificationKeys`, `getJwks` and `getUpstreamJwks`.
 
-- **Each event key signs one kind of event token** (#624). A realm holds two `event_signing`
-  keys: the Ed25519 one signs Security Event Tokens, the RS256 one logout tokens, in the algorithm
-  ID tokens are signed with (`EVENT_TOKEN_ALGORITHM`); the signer refuses an event token in the
-  other algorithm. The realm JWKS lists the `token_signing` keys, then the RS256 `event_signing`
-  keys (`isRealmJwksKey`): a relying party verifies a logout token against the realm's `jwks_uri`
-  (OpenID Connect Back-Channel Logout 1.0 §2.6). It lists no SET key, so a SET never verifies
-  against it (d-1026-09); the SSF transmitter serves the Ed25519 keys at its own `jwks_uri`, from
-  `getVerificationKeys`. QAuth's own verifiers resolve keys by purpose and never read the realm
-  JWKS.
+- **The two signing purposes publish apart** (d-1026-09). The realm JWKS holds only
+  `token_signing` keys (`REALM_JWKS_PURPOSES`). The SSF transmitter serves the `event_signing`
+  keys at its own `jwks_uri`, from `getVerificationKeys`. A verifier that reads the realm JWKS and
+  skips the `typ` check still cannot take a Security Event Token for an access token.
 
 - **No key leaves it.** No operation returns a private key, a key object or symmetric material,
   except the cookie HMAC secret, which ADR-019 hands to the browser-facing role. A webhook secret

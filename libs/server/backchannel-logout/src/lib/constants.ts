@@ -12,7 +12,9 @@ export const BACKCHANNEL_LOGOUT_EGRESS_PURPOSE = 'backchannel-logout';
 /**
  * The `typ` header of a logout token (Back-Channel Logout 1.0 §2.4): the
  * explicit type the spec recommends, which tells it from an ID token. The
- * signer's policy lets the delivery role sign it with `event_signing` only.
+ * signer signs it with the key and algorithm of the realm's ID tokens (§2.4),
+ * and its policy lets the delivery role sign this type and no access token or
+ * ID token.
  */
 export const LOGOUT_TOKEN_TYP = 'logout+jwt';
 

@@ -25,7 +25,7 @@ import {
 } from './data-at-rest';
 import { openKeyMaterial } from './envelope';
 import { KeyDecryptionError } from './errors';
-import { eventTokenClaimsProblem } from './event-token-claims';
+import { eventTokenClaimsProblem, isEventTokenTyp } from './event-token-claims';
 import type { KekProvider } from './kek-provider';
 import { isScopeId, MAX_SCOPE_ID_LENGTH } from './key-factory';
 import { KEY_PURPOSES, type KeyPurpose } from './key-purposes';
@@ -74,7 +74,7 @@ import type {
 import { isSignerCallAllowed, isSignerCaller, type SignerCaller } from './signer-policy';
 import {
   CLIENT_ASSERTION_TYP,
-  EVENT_TOKEN_ALGORITHM,
+  idTokenAlgorithm,
   isJwsSigningPurpose,
   isTypAllowed,
   isVerificationKeyPurpose,
@@ -632,19 +632,28 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         );
       }
       const typ = resolveTyp(purpose, fields['typ']);
+      // The role's grant names the token types it may ask for: `delivery` may
+      // have a logout token signed with the token key, and nothing else of it.
+      if (!isSignerCallAllowed(caller, 'signJws', typ)) {
+        throw new SignerAccessDeniedError(caller, 'signJws', purpose);
+      }
       const definition = KEY_PURPOSES[purpose];
-      // An event token is signed in its kind's algorithm (#624): a SET with
-      // the Ed25519 key, a logout token with the RS256 key the realm JWKS
-      // publishes. Unnamed, the kind's algorithm; named, it must be that one.
-      const eventAlgorithm =
-        purpose === 'event_signing'
-          ? EVENT_TOKEN_ALGORITHM[typ as keyof typeof EVENT_TOKEN_ALGORITHM]
+      // A logout token is signed as the realm's ID tokens are, with the same
+      // key, so in their algorithm and in no other (OpenID Connect
+      // Back-Channel Logout 1.0 §2.4, #624).
+      const logoutAlgorithm =
+        typ === 'logout+jwt'
+          ? idTokenAlgorithm(
+              (await listKeys(realmId, 'token_signing', null))
+                .filter((key) => key.status === 'active')
+                .map((key) => key.algorithm)
+            )
           : undefined;
-      const algorithm = fields['algorithm'] ?? eventAlgorithm ?? definition.defaultAlgorithm;
-      if (eventAlgorithm !== undefined && algorithm !== eventAlgorithm) {
+      const algorithm = fields['algorithm'] ?? logoutAlgorithm ?? definition.defaultAlgorithm;
+      if (logoutAlgorithm !== undefined && algorithm !== logoutAlgorithm) {
         throw new SignerRequestRefusedError(
           'ALGORITHM_NOT_ALLOWED',
-          `An event token of type '${typ}' is signed with ${eventAlgorithm} only`
+          `A logout token is signed as the realm's ID tokens are, with ${logoutAlgorithm}`
         );
       }
       if (
@@ -659,10 +668,11 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
         );
       }
       const claims = resolveClaims(fields['claims']);
-      if (purpose === 'event_signing') {
-        // The realm JWKS publishes these keys, for logout tokens (#624): the
-        // signer holds each event token to its kind, so a caller cannot have
-        // them sign an access token's claims (eventTokenClaimsProblem).
+      if (isEventTokenTyp(typ)) {
+        // A logout token is signed with the ID tokens' key (#624), and the
+        // delivery role asks for both kinds of event token: the signer holds
+        // each to its kind, so no caller has an access token's or an ID
+        // token's claims signed as one (eventTokenClaimsProblem).
         const problem = eventTokenClaimsProblem(typ, claims, Math.floor(now() / 1000));
         if (problem !== undefined) throw new SignerRequestRefusedError('INVALID_CLAIMS', problem);
       }
@@ -688,6 +698,12 @@ export function createInProcessSigner(options: InProcessSignerOptions): Signer {
       }
       const realmId = resolveRealmId(fields['realmId']);
       const typ = resolveTyp('token_signing', fields['typ']);
+      if (typ === 'logout+jwt') {
+        throw new SignerRequestRefusedError(
+          'TYP_NOT_ALLOWED',
+          'A logout token is signed through signJws, as the ID tokens are, never as a hybrid carrier'
+        );
+      }
       const claims = resolveClaims(fields['claims']);
 
       const issuer = await realmIssuer(realmId);

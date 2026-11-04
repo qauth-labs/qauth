@@ -97,8 +97,9 @@ export type SignerRefusalReason =
   /** The request carries a field the operation does not take, such as `kid` or `iss`. */
   | 'UNEXPECTED_FIELD'
   /**
-   * The claims are not a JSON object, or an `event_signing` token's claims
-   * are not of its kind (`eventTokenClaimsProblem`, #624).
+   * The claims are not a JSON object, or an event token's claims (a Security
+   * Event Token's or a logout token's) are not of its kind
+   * (`eventTokenClaimsProblem`, #624).
    */
   | 'INVALID_CLAIMS'
   /** `HYBRID_SIGNING_ENABLED` is off. */

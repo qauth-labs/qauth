@@ -574,20 +574,18 @@ describe('createKey', () => {
 });
 
 describe('provisionRealmKeys', () => {
-  it('creates the standard keys, the RS256 event key among them, in one transaction', async () => {
+  it('creates the four standard keys in one transaction', async () => {
     const { factory, store } = setup();
 
     const keys = await factory.provisionRealmKeys(REALM);
 
-    // The RS256 event key signs logout tokens, the Ed25519 one SETs (#624).
     expect(keys.map((key) => [key.purpose, key.algorithm, key.status])).toEqual([
       ['token_signing', 'EdDSA', 'active'],
       ['event_signing', 'EdDSA', 'active'],
-      ['event_signing', 'RS256', 'active'],
       ['cookie_hmac', 'HS256', 'active'],
       ['data_at_rest', 'A256GCM', 'active'],
     ]);
-    expect(store.rows).toHaveLength(5);
+    expect(store.rows).toHaveLength(4);
     expect(store.calls.filter((call) => call.method === 'transaction')).toHaveLength(1);
     const txIds = new Set(
       store.calls.filter((call) => call.method !== 'transaction').map((call) => call.tx?.id)
@@ -604,7 +602,6 @@ describe('provisionRealmKeys', () => {
       ['token_signing', 'EdDSA'],
       ['token_signing', 'ML-DSA-65'],
       ['event_signing', 'EdDSA'],
-      ['event_signing', 'RS256'],
       ['cookie_hmac', 'HS256'],
       ['data_at_rest', 'A256GCM'],
     ]);
@@ -620,7 +617,7 @@ describe('provisionRealmKeys', () => {
     await factory.provisionRealmKeys(REALM);
 
     expect(await factory.provisionRealmKeys(REALM)).toEqual([]);
-    expect(store.rows).toHaveLength(6);
+    expect(store.rows).toHaveLength(5);
   });
 
   it('refuses a realm whose token key has no ML-DSA-65 half once hybrid signing is on', async () => {
@@ -636,7 +633,7 @@ describe('provisionRealmKeys', () => {
       reason: 'HYBRID_PAIR_INCOMPLETE',
     });
     expect(wrap).not.toHaveBeenCalled();
-    expect(store.rows).toHaveLength(5);
+    expect(store.rows).toHaveLength(4);
   });
 
   it('refuses a realm whose token key has no Ed25519 half with hybrid signing on', async () => {
@@ -690,43 +687,9 @@ describe('provisionRealmKeys', () => {
 
     const keys = await factory.provisionRealmKeys(REALM);
 
-    expect(keys.map((key) => key.purpose)).toEqual([
-      'event_signing',
-      'event_signing',
-      'data_at_rest',
-    ]);
+    expect(keys.map((key) => key.purpose)).toEqual(['event_signing', 'data_at_rest']);
     expect(await factory.provisionRealmKeys(REALM)).toEqual([]);
-    expect(store.rows).toHaveLength(5);
-  });
-
-  it('gives a realm provisioned before #624 its RS256 event key, and nothing else', async () => {
-    const { factory, store } = setup();
-    for (const purpose of [
-      'token_signing',
-      'event_signing',
-      'cookie_hmac',
-      'data_at_rest',
-    ] as const) {
-      await factory.createKey({ realmId: REALM, purpose });
-    }
-
-    const keys = await factory.provisionRealmKeys(REALM);
-
-    expect(keys.map((key) => [key.purpose, key.algorithm, key.status])).toEqual([
-      ['event_signing', 'RS256', 'active'],
-    ]);
-    expect(store.rows).toHaveLength(5);
-  });
-
-  it('creates the Ed25519 event key a realm lacks beside an RS256 one it has', async () => {
-    const { factory } = setup();
-    await factory.createKey({ realmId: REALM, purpose: 'event_signing', algorithm: 'RS256' });
-
-    const keys = await factory.provisionRealmKeys(REALM);
-
-    expect(
-      keys.filter((key) => key.purpose === 'event_signing').map((key) => key.algorithm)
-    ).toEqual(['EdDSA']);
+    expect(store.rows).toHaveLength(4);
   });
 
   it('still creates the default token key beside an RS256 one', async () => {
@@ -756,7 +719,7 @@ describe('provisionRealmKeys', () => {
     await factory.provisionRealmKeys(REALM.toUpperCase());
 
     expect(await factory.provisionRealmKeys(REALM)).toEqual([]);
-    expect(store.rows.map((row) => row.key.realmId)).toEqual([REALM, REALM, REALM, REALM, REALM]);
+    expect(store.rows.map((row) => row.key.realmId)).toEqual([REALM, REALM, REALM, REALM]);
   });
 
   it('runs in the caller’s transaction when given one', async () => {
@@ -978,7 +941,6 @@ describe('deleteScopedKeys', () => {
       ['webhook_signing', 'sub-2'],
       ['upstream_client_assertion', 'sub-1'],
       ['token_signing', null],
-      ['event_signing', null],
       ['event_signing', null],
       ['cookie_hmac', null],
       ['data_at_rest', null],

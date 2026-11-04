@@ -111,9 +111,9 @@ function stringMember(data: Readonly<Record<string, unknown>>, name: string): st
  * - **The logout token.** `aud` is the client's `client_id`, `sub` the user
  *   and `sid` the session, the values its ID tokens carry; `iat` is the
  *   attempt's time and `exp` two minutes later; `jti` is the delivery's id,
- *   the same on every retry of it. The signer signs it with the realm's
- *   `event_signing` key, `typ: logout+jwt`, and adds `iss`; the route holds
- *   no key.
+ *   the same on every retry of it. The signer signs it with the key and
+ *   algorithm of the realm's ID tokens (§2.4), `typ: logout+jwt`, and adds
+ *   `iss`; the route holds no key.
  * - **The POST.** `logout_token` as an `application/x-www-form-urlencoded`
  *   body through the egress client, which checks the URI's addresses again at
  *   every attempt. A URI the client registered never uses the allowlist; one

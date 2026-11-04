@@ -185,9 +185,7 @@ export interface KeyFactory<Tx> {
    * algorithm is left as it is (for `token_signing` with hybrid signing on:
    * both keys of the pair), so the call can be repeated: it fills the
    * standard keys a realm lacks, as the boot step for the default realm needs
-   * (#485), the keys of a purpose's `alsoProvisioned` algorithms included
-   * (the RS256 `event_signing` key, #624). If one key cannot be stored, none
-   * is.
+   * (#485). If one key cannot be stored, none is.
    *
    * Two calls for one realm must not run at once. Both would see the same
    * missing keys, and the second would fail on the one-active-key index and
@@ -478,26 +476,18 @@ export function createKeyFactory<Tx>(options: KeyFactoryOptions<Tx>): KeyFactory
           const present = wanted.filter((algorithm) =>
             active.some((key) => key.algorithm === algorithm)
           );
-          if (present.length < wanted.length) {
-            if (present.length > 0) {
-              throw new KeyCreationRefusedError(
-                'HYBRID_PAIR_INCOMPLETE',
-                `The realm's active '${purpose}' keys are not a complete hybrid pair ` +
-                  `(active: ${present.join(', ')}; a pair is ${wanted.join(' and ')}). ` +
-                  'Rotate them to a new pair.'
-              );
-            }
-            const prepared = await prepareKeys(resolveRequest({ realmId, purpose }));
-            created.push(...(await writeKeys(prepared, tx)));
+          if (present.length === wanted.length) continue;
+          if (present.length > 0) {
+            throw new KeyCreationRefusedError(
+              'HYBRID_PAIR_INCOMPLETE',
+              `The realm's active '${purpose}' keys are not a complete hybrid pair ` +
+                `(active: ${present.join(', ')}; a pair is ${wanted.join(' and ')}). ` +
+                'Rotate them to a new pair.'
+            );
           }
 
-          // The purpose's other algorithms, each on a key of its own: the
-          // RS256 `event_signing` key that signs logout tokens (#624).
-          for (const algorithm of definition.alsoProvisioned ?? []) {
-            if (active.some((key) => key.algorithm === algorithm)) continue;
-            const prepared = await prepareKeys(resolveRequest({ realmId, purpose, algorithm }));
-            created.push(...(await writeKeys(prepared, tx)));
-          }
+          const prepared = await prepareKeys(resolveRequest({ realmId, purpose }));
+          created.push(...(await writeKeys(prepared, tx)));
         }
         return created;
       }, provisionOptions.tx);

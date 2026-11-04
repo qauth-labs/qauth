@@ -408,6 +408,22 @@ describe.each<Deployment>(['one process', 'split roles'])(
       expect(tokens.find(({ payload }) => payload['sid'] === first.sid)?.payload.sub).toBe(
         first.userId
       );
+      // Signed with the key and algorithm of the realm's ID tokens (§2.4): the
+      // algorithm discovery lists first, by a key of the realm JWKS, which
+      // holds the token keys alone.
+      const idTokenAlgorithm = (
+        await app.inject({ method: 'GET', url: '/.well-known/openid-configuration' })
+      ).json<{ id_token_signing_alg_values_supported: string[] }>()
+        .id_token_signing_alg_values_supported[0];
+      const realmKeys = (
+        await app.inject({ method: 'GET', url: '/.well-known/jwks.json' })
+      ).json<JSONWebKeySet>();
+      for (const { protectedHeader } of tokens) {
+        expect(protectedHeader.alg).toBe(idTokenAlgorithm);
+        expect(realmKeys.keys.find((key) => key.kid === protectedHeader.kid)?.alg).toBe(
+          idTokenAlgorithm
+        );
+      }
 
       // Once per session: nothing more arrives, and each delivery is done.
       await new Promise((resolve) => setTimeout(resolve, 3_000));

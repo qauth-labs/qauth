@@ -24,7 +24,7 @@ import {
   verifyHybridAccessToken,
   verifyIdTokenHint,
 } from '@qauth-labs/server-jwt';
-import type { VerificationKey } from '@qauth-labs/server-keys';
+import { idTokenAlgorithm, type VerificationKey } from '@qauth-labs/server-keys';
 import {
   JWTExpiredError,
   JWTInvalidError,
@@ -467,7 +467,8 @@ export const jwtPlugin = fp<JwtPluginOptions>(
         // the ID token resolves unambiguously against the realm's JWKS.
         const { expiresInOverride, ...fields } = payload;
         const { claims, audience } = buildIdTokenClaims(fields);
-        const algorithm = (await activeTokenAlgorithms(realm)).has('RS256') ? 'RS256' : 'EdDSA';
+        // The signer signs logout tokens by the same rule (#624).
+        const algorithm = idTokenAlgorithm(await activeTokenAlgorithms(realm));
         return signer.signJws(SIGNER_CALLER, {
           realmId: realm.id,
           purpose: 'token_signing',

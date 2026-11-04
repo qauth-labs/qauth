@@ -146,12 +146,12 @@ async function buildApp(options: BuildAppOptions = {}): Promise<TestServer> {
 }
 
 /** The `kid` of the realm's active `token_signing` key of `algorithm`, as the signer lists it. */
-async function activeKid(
-  server: TestServer,
-  algorithm: string,
-  purpose: 'token_signing' | 'event_signing' = 'token_signing'
-): Promise<string> {
-  const keys = await server.signer.signer.getVerificationKeys('local', server.realm.id, purpose);
+async function activeKid(server: TestServer, algorithm: string): Promise<string> {
+  const keys = await server.signer.signer.getVerificationKeys(
+    'local',
+    server.realm.id,
+    'token_signing'
+  );
   const key = keys.find((candidate) => candidate.algorithm === algorithm);
   if (key === undefined) throw new Error(`The realm has no ${algorithm} key`);
   return key.kid;
@@ -305,21 +305,12 @@ describe('OIDC conformance — discovery document', () => {
 });
 
 describe('OIDC conformance — JWKS', () => {
-  it('publishes the EdDSA Ed25519 token key (no private component) when RS256 is not configured, then the RS256 logout-token key', async () => {
+  it('publishes a single EdDSA Ed25519 key (no private component) when RS256 is not configured', async () => {
     const server = await buildApp();
     const { app } = server;
     try {
       const jwks = await fetchJwks(app);
-      // The token key, then the RS256 event key that signs logout tokens
-      // (#624); the Ed25519 event key, which signs SETs, is not here.
-      expect(jwks.keys.map((key) => key['kid'])).toEqual([
-        await activeKid(server, 'EdDSA'),
-        await activeKid(server, 'RS256', 'event_signing'),
-      ]);
-      expect(jwks.keys.map((key) => key['kty'])).toEqual(['OKP', 'RSA']);
-      for (const key of jwks.keys) {
-        expect(key).not.toHaveProperty('d');
-      }
+      expect(jwks.keys).toHaveLength(1);
       const [jwk] = jwks.keys;
       expect(jwk['kty']).toBe('OKP');
       expect(jwk['crv']).toBe('Ed25519');
@@ -364,12 +355,10 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
     const { app } = server;
     try {
       const jwks = await fetchJwks(app);
-      // Three keys: the EdDSA OKP and the RS256 RSA token keys, and the EdDSA
-      // event key that signs logout tokens (#624).
-      expect(jwks.keys).toHaveLength(3);
+      // Two keys: the EdDSA OKP active key and the RS256 RSA key.
+      expect(jwks.keys).toHaveLength(2);
 
-      const tokenKid = await activeKid(server, 'EdDSA');
-      const okp = jwks.keys.find((k) => k['kty'] === 'OKP' && k['kid'] === tokenKid);
+      const okp = jwks.keys.find((k) => k['kty'] === 'OKP');
       const rsa = jwks.keys.find((k) => k['kty'] === 'RSA');
       expect(okp).toBeDefined();
       expect(rsa).toBeDefined();
@@ -476,8 +465,7 @@ describe('OIDC conformance — RS256 ID token signing (#309, cert #286)', () => 
 
 describe('OIDC conformance — ID token validation against the published key (OIDC Core §2)', () => {
   it('mints an ID token that verifies against the server key with all required claims', async () => {
-    const server = await buildApp();
-    const { app, realm } = server;
+    const { app, realm } = await buildApp();
     try {
       const nonce = 'n-0S6_WzA2Mj';
       // Mint via the SAME jwtUtils the token endpoint uses, for the request realm.
@@ -493,11 +481,11 @@ describe('OIDC conformance — ID token validation against the published key (OI
       // The JWKS publishes the public half of the signing key, under the kid
       // the token's header names.
       const jwks = await fetchJwks(app);
+      expect(jwks.keys).toHaveLength(1);
+      const [jwk] = jwks.keys;
       const header = decodeHeader(idToken);
       expect(header['alg']).toBe('EdDSA');
-      expect(header['kid']).toBe(await activeKid(server, 'EdDSA'));
-      const jwk = jwks.keys.find((key) => key['kid'] === header['kid']);
-      if (jwk === undefined) throw new Error('the JWKS lacks the ID token key');
+      expect(header['kid']).toBe(jwk['kid']);
 
       // SIGNATURE, asserted directly: it verifies under the published JWK.
       expect(verifiesEdDsa(idToken, importJwk(jwk))).toBe(true);

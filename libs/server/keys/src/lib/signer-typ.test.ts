@@ -2,45 +2,50 @@ import { describe, expect, it } from 'vitest';
 
 import {
   CLIENT_ASSERTION_TYP,
-  EVENT_TOKEN_ALGORITHM,
+  idTokenAlgorithm,
   isJwsSigningPurpose,
-  isRealmJwksKey,
   isTypAllowed,
   isVerificationKeyPurpose,
   JWS_SIGNING_PURPOSES,
   JWS_TYP_BY_PURPOSE,
+  JWS_TYPS,
+  jwsPurposeOfTyp,
   OID4VP_REQUEST_OBJECT_TYP,
   REALM_JWKS_PURPOSES,
   VERIFICATION_KEY_PURPOSES,
 } from './signer-typ';
 
 describe('JWS_TYP_BY_PURPOSE', () => {
-  it('binds token signing to access tokens, ID tokens and ID-JAGs, event signing to SETs and logout tokens', () => {
+  it('binds token signing to access tokens, ID tokens, ID-JAGs and logout tokens, event signing to SETs', () => {
+    // A logout token is signed with the keys of the ID tokens (OpenID Connect
+    // Back-Channel Logout 1.0 §2.4, #624).
     expect(JWS_TYP_BY_PURPOSE).toEqual({
-      token_signing: ['at+jwt', 'JWT', 'oauth-id-jag+jwt'],
-      event_signing: ['secevent+jwt', 'logout+jwt'],
+      token_signing: ['at+jwt', 'JWT', 'oauth-id-jag+jwt', 'logout+jwt'],
+      event_signing: ['secevent+jwt'],
     });
     expect(JWS_SIGNING_PURPOSES).toEqual(['token_signing', 'event_signing']);
+    expect(JWS_TYPS).toEqual(['at+jwt', 'JWT', 'oauth-id-jag+jwt', 'logout+jwt', 'secevent+jwt']);
+    expect(Object.isFrozen(JWS_TYPS)).toBe(true);
   });
 
-  it('signs each event token kind in one algorithm: SETs with EdDSA, logout tokens with RS256 as ID tokens (#624)', () => {
-    expect(EVENT_TOKEN_ALGORITHM).toEqual({ 'secevent+jwt': 'EdDSA', 'logout+jwt': 'RS256' });
-    expect(Object.isFrozen(EVENT_TOKEN_ALGORITHM)).toBe(true);
-    expect(Object.keys(EVENT_TOKEN_ALGORITHM).sort()).toEqual(
-      [...JWS_TYP_BY_PURPOSE.event_signing].sort()
-    );
-  });
-
-  it('publishes the token keys, then the logout-token keys, in the realm JWKS, never a SET key (Back-Channel Logout 1.0 §2.6, #624)', () => {
-    expect(REALM_JWKS_PURPOSES).toEqual(['token_signing', 'event_signing']);
-    expect(Object.isFrozen(REALM_JWKS_PURPOSES)).toBe(true);
-    for (const algorithm of ['EdDSA', 'RS256', 'ML-DSA-65']) {
-      expect(isRealmJwksKey({ purpose: 'token_signing', algorithm }), algorithm).toBe(true);
+  it('names the purpose of each type, and none for a type signJws does not sign', () => {
+    expect(jwsPurposeOfTyp('logout+jwt')).toBe('token_signing');
+    expect(jwsPurposeOfTyp('JWT')).toBe('token_signing');
+    expect(jwsPurposeOfTyp('secevent+jwt')).toBe('event_signing');
+    for (const typ of [
+      'LOGOUT+JWT',
+      CLIENT_ASSERTION_TYP,
+      OID4VP_REQUEST_OBJECT_TYP,
+      '',
+      undefined,
+    ]) {
+      expect(jwsPurposeOfTyp(typ), String(typ)).toBeUndefined();
     }
-    expect(isRealmJwksKey({ purpose: 'event_signing', algorithm: 'RS256' })).toBe(true);
-    expect(isRealmJwksKey({ purpose: 'event_signing', algorithm: 'EdDSA' })).toBe(false);
-    expect(isRealmJwksKey({ purpose: 'oid4vp_request_signing', algorithm: 'ES256' })).toBe(false);
-    expect(isRealmJwksKey({ purpose: 'cookie_hmac', algorithm: 'HS256' })).toBe(false);
+  });
+
+  it('keeps the event signing keys out of the realm JWKS (d-1026-09)', () => {
+    expect(REALM_JWKS_PURPOSES).toEqual(['token_signing']);
+    expect(Object.isFrozen(REALM_JWKS_PURPOSES)).toBe(true);
   });
 
   it('shares no typ between purposes', () => {
@@ -108,5 +113,14 @@ describe('the OID4VP request key (#546)', () => {
     ]) {
       expect(isVerificationKeyPurpose(purpose), String(purpose)).toBe(false);
     }
+  });
+});
+
+describe('idTokenAlgorithm (#309, #624)', () => {
+  it('is RS256 while the realm holds an active RS256 token key, else EdDSA', () => {
+    expect(idTokenAlgorithm(['EdDSA', 'RS256'])).toBe('RS256');
+    expect(idTokenAlgorithm(new Set(['RS256']))).toBe('RS256');
+    expect(idTokenAlgorithm(['EdDSA', 'ML-DSA-65'])).toBe('EdDSA');
+    expect(idTokenAlgorithm([])).toBe('EdDSA');
   });
 });

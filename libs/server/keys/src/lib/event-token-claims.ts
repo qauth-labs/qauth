@@ -1,13 +1,14 @@
 /**
- * What the signer lets an `event_signing` token carry (issue #624).
+ * What the signer lets an event token carry: a Security Event Token or a
+ * logout token (issue #624).
  *
- * The realm JWKS publishes the `event_signing` keys, so that a relying party
- * verifies a logout token at `jwks_uri` (OpenID Connect Back-Channel Logout
- * 1.0 §2.6). A verifier that reads that JWKS and skips the `typ` check, as
- * RFC 9068 §4 forbids, would then take any token those keys sign. The
- * delivery role asks for them, and it is the role that talks to destinations
- * on the internet; so the signer, not the role, holds an event token to its
- * kind:
+ * A logout token is signed with the keys of the ID tokens, which the realm
+ * JWKS publishes (OpenID Connect Back-Channel Logout 1.0 §2.4, §2.6). A
+ * verifier that reads that JWKS and skips the `typ` check, as RFC 9068 §4 and
+ * RFC 8725 §3.11 forbid, would take a token those keys sign for another kind.
+ * The delivery role asks for both kinds of event token, and it is the role
+ * that talks to destinations on the internet; so the signer, not the role,
+ * holds an event token to its kind:
  *
  * - **No grant.** Neither kind carries a claim a resource server or a client
  *   reads as an access token's or an ID token's grant: `scope`, `client_id`,
@@ -20,6 +21,14 @@
  *   a `sub` or a `sid`, an `iat` near the signer's clock and an `exp` at most
  *   two minutes after it (Back-Channel Logout 1.0 §4).
  */
+
+/** The token types that are event tokens, whose claims the signer checks. */
+export const EVENT_TOKEN_TYPS: readonly string[] = Object.freeze(['secevent+jwt', 'logout+jwt']);
+
+/** Whether `typ` is an event token's type (see {@link EVENT_TOKEN_TYPS}). */
+export function isEventTokenTyp(typ: string): boolean {
+  return EVENT_TOKEN_TYPS.includes(typ);
+}
 
 /** The `events` member of a logout token (Back-Channel Logout 1.0 §2.4). */
 export const LOGOUT_TOKEN_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
@@ -64,8 +73,7 @@ function isNonEmptyString(value: unknown): value is string {
  * Why `claims` are not of the event token kind `typ` names, or `undefined`
  * when they are. The message names a claim, never a value.
  *
- * @param typ - `secevent+jwt` or `logout+jwt`; the caller checked it is one
- *   the `event_signing` purpose signs
+ * @param typ - `secevent+jwt` or `logout+jwt` ({@link isEventTokenTyp})
  * @param claims - the claims as the signer will sign them, without `iss`
  * @param nowSeconds - the signer's clock, in whole seconds
  */
