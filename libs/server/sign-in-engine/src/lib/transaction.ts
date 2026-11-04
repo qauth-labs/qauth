@@ -95,6 +95,13 @@ export interface SignInTransaction {
    * password only when the person types it.
    */
   readonly breachedPassword?: true;
+  /**
+   * The account held an `update_password` required action when this
+   * transaction read it (#635): the sign-in completes only once this
+   * transaction set a new password, even if another sign-in updates the
+   * password, and so removes the action, meanwhile. Set at rule 8.
+   */
+  readonly updatePasswordRequired?: true;
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, and when it began. */
@@ -172,6 +179,7 @@ export const signInTransactionSchema = z.strictObject({
   authTime: z.int().positive().optional(),
   emailCode: heldEmailCodeSchema.optional(),
   breachedPassword: z.literal(true).optional(),
+  updatePasswordRequired: z.literal(true).optional(),
 });
 
 /**
@@ -191,6 +199,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     authTime,
     emailCode,
     breachedPassword,
+    updatePasswordRequired,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -198,6 +207,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if ((authTime === undefined) !== (subject === undefined)) return null;
   // Only a password that proved the subject is checked against a breach list.
   if (breachedPassword === true && subject === undefined) return null;
+  // A required action is read only once a factor fixed the subject.
+  if (updatePasswordRequired === true && subject === undefined) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -209,6 +220,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ...(authTime === undefined ? {} : { authTime }),
     ...(emailCode === undefined ? {} : { emailCode }),
     ...(breachedPassword === undefined ? {} : { breachedPassword }),
+    ...(updatePasswordRequired === undefined ? {} : { updatePasswordRequired }),
   });
 }
 

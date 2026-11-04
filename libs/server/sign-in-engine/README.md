@@ -189,7 +189,10 @@ password were not listed, and the round writes an `unchecked` audit record namin
 
 A password update is due when the password proved the account and was listed, or the account holds
 an `update_password` required action (`SignInAccount.requiredActions`, read with the whole account;
-a directory that reads none fails closed). It is never asked for before the rest of rule 8:
+a directory that reads none fails closed). An action the transaction saw is remembered in it
+(`updatePasswordRequired`): another sign-in that sets a new password, and so removes the action,
+never releases one that proved only the old password. It is never asked for before the rest of
+rule 8:
 
 - An account with a factor beyond the password (TOTP, a passkey) proves that factor first, whatever
   the MFA policy says; an email code never stands in for it. When no registered, served step can

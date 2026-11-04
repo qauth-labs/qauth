@@ -1183,6 +1183,16 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       return ended('identifier', 'subject_mismatch');
     if (!provenAccount.enabled) return ended('identifier', 'account_disabled');
     let account: SignInAccount = provenAccount;
+    // An `update_password` this transaction saw stays owed to it (#635):
+    // another sign-in that sets a new password, and so removes the action,
+    // never releases this one, which proved only the old password.
+    if (
+      provenAccount.requiredActions.includes('update_password') &&
+      state.transaction.updatePasswordRequired !== true &&
+      !state.transaction.verified.some((step) => step.step === 'new_password')
+    ) {
+      state.transaction = { ...state.transaction, updatePasswordRequired: true };
+    }
     // An address this transaction has still to verify: the account's is not
     // proved, and no code of this transaction proved it.
     const addressPending = (current: SignInAccount): boolean =>
@@ -1199,6 +1209,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const updateDue = (current: SignInAccount): boolean =>
       !passwordUpdated() &&
       (state.transaction.breachedPassword === true ||
+        state.transaction.updatePasswordRequired === true ||
         current.requiredActions.includes('update_password')) &&
       current.factors.some((factor) => factor.type === 'password');
     /** Whether the account has a factor beyond its password: a second factor or a passkey, disabled or not. */

@@ -532,6 +532,55 @@ describe('an update_password required action', () => {
     expect(built.sender.sent).toHaveLength(1);
   });
 
+  it('stays owed to a sign-in that saw it, even after another sign-in completed the update', async () => {
+    const built = build(passwordAccount(USER, UNLISTED, { requiredActions: ['update_password'] }));
+    // Sign-in A proves the old password and waits at the mailed code.
+    const first = await signIn(built, UNLISTED);
+    expect(first).toMatchObject({ kind: 'step', offer: { current: { step: 'email_code' } } });
+    expect(kept(first).updatePasswordRequired).toBe(true);
+    expect(readSignInTransaction(JSON.parse(JSON.stringify(kept(first))))).toMatchObject({
+      updatePasswordRequired: true,
+    });
+    const codeOfA = built.sender.last;
+
+    // Sign-in B completes the update meanwhile, which removes the action.
+    const other = await signIn(built, UNLISTED);
+    const otherCode = await built.engine.advance(
+      kept(other),
+      codeAnswer(built.sender.last),
+      context(built)
+    );
+    const otherDone = await built.engine.advance(
+      kept(otherCode),
+      newPasswordAnswer(NEW_PASSWORD),
+      context(built)
+    );
+    expect(otherDone).toMatchObject({ kind: 'complete' });
+    expect(built.directory.accounts.get(IDENTIFIER)?.requiredActions).toEqual([]);
+
+    // A, which proved only the old password, still has to set a new one.
+    const eager = await built.engine.advance(
+      kept(first),
+      newPasswordAnswer(NEW_PASSWORD),
+      context(built)
+    );
+    expect(eager).toMatchObject({ kind: 'step', offer: { current: { step: 'email_code' } } });
+    const afterCode = await built.engine.advance(kept(eager), codeAnswer(codeOfA), context(built));
+    expect(afterCode).toMatchObject({ kind: 'step', offer: { current: UPDATE_STEP } });
+    expect(built.updates.replaced).toHaveLength(1);
+  });
+
+  it('refuses a stored transaction that holds the action without a subject', async () => {
+    const built = build(passwordAccount(USER, UNLISTED, { requiredActions: ['update_password'] }));
+    const first = await built.engine.advance(null, null, {
+      ...context(built),
+      loginHint: IDENTIFIER,
+    });
+    const stored = JSON.parse(JSON.stringify(kept(first))) as Record<string, unknown>;
+    expect(readSignInTransaction(stored)).not.toBeNull();
+    expect(readSignInTransaction({ ...stored, updatePasswordRequired: true })).toBeNull();
+  });
+
   it('acts on update_password alone: the other actions are later steps', async () => {
     const built = build(
       passwordAccount(USER, UNLISTED, {
