@@ -1302,12 +1302,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `429` with `Retry-After`. An answer that carries a credential spends the
   sign-in form's rate limit (`LOGIN_RATE_LIMIT`), as one form post to
   `/ui/login` does; any other answer and the cancel spend the authorization
-  endpoint's; the step read, which the ceremony app's server makes for every
-  browser, counts per interaction. The engine shares the legacy sign-in forms'
-  per-account failure ladder. The redirect comes from the interaction record
-  and the realm, never the request; a finished sign-in goes on with its
-  authorization request ([#628]). The interaction record is now version 2 (an
-  interaction of the previous release reads as expired).
+  endpoint's. The step read counts per address at the authorization
+  endpoint's budget too, except from the ceremony app server's egress
+  addresses, which make it for every browser ([#982]): the operator lists them
+  in the new `CEREMONY_APP_PEERS` (addresses and CIDR ranges, empty by
+  default), and a listed address's reads count per interaction, under the new
+  `CEREMONY_APP_PEER_RATE_LIMIT` reads a minute. The two are set together; a
+  boot that sets one without the other is refused. A deployment whose ceremony
+  app reads the step from its server must list it, or everyone signing in
+  shares that server's one address bucket. The engine shares the legacy
+  sign-in forms' per-account failure ladder. The redirect comes from the
+  interaction record and the realm, never the request; a finished sign-in goes
+  on with its authorization request ([#628]). The interaction record is now
+  version 2 (an interaction of the previous release reads as expired).
 
 - **`/oauth/authorize` can start an interaction** ([#628], ADR-019 Decision 6).
   With the new, temporary `INTERACTION_UI_ENABLED` switch on (default off),
@@ -2967,6 +2974,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#964]: https://github.com/qauth-labs/qauth/issues/964
 [#968]: https://github.com/qauth-labs/qauth/issues/968
 [#969]: https://github.com/qauth-labs/qauth/issues/969
+[#982]: https://github.com/qauth-labs/qauth/issues/982
 
 ### Deprecated
 

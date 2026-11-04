@@ -120,10 +120,12 @@ describe('rate-limit key functions in the app', () => {
   // `admin/`) has no host realm: its ceilings key by address alone and by the
   // token's subject, each with a key function of its own, which reads admin
   // claims a public route's request does not carry. The Interaction API
-  // (#616, ADR-019 Decision 6) keys its step read by realm and interaction,
-  // because the ceremony app's server makes that read for every browser, and
-  // its answers by realm and address with a bucket suffix; each has a named
-  // key function in that route file.
+  // (#616, ADR-019 Decision 6) keys a step read from one of the ceremony app
+  // server's listed addresses (`CEREMONY_APP_PEERS`, #982) by realm and
+  // interaction, because that server makes the read for every browser, and
+  // every other step read by realm and address through realmRateLimitKey; it
+  // keys its answers by realm and address with a bucket suffix. Each has a
+  // named key function in that route file.
   const PUBLIC_KEY_FUNCTIONS = new Set(['realmRateLimitKey']);
   const ADMIN_KEY_FUNCTIONS = new Set(['adminAddressRateLimitKey', 'adminSubjectRateLimitKey']);
   const INTERACTION_KEY_FUNCTIONS = new Set([

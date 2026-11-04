@@ -491,6 +491,9 @@ export async function bootAuthServer(
       key.startsWith('EGRESS_') ||
       key.startsWith('EVENT_DELIVERY_') ||
       key.startsWith('INTERACTION_') ||
+      // The ceremony app server's addresses and their cap (#982): set
+      // together, so a boot that leaves them out must not inherit one.
+      key.startsWith('CEREMONY_APP_') ||
       // The mail transport's seeds (#529): SMTP_PASSWORD or RESEND_API_KEY
       // left by one boot would seed the next one's realm.
       key.startsWith('SMTP_') ||
