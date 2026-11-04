@@ -22,6 +22,7 @@ import {
   createRepositoryAddressVerifier,
 } from './address-verifier';
 import { signInAuditEvent } from './audit-events';
+import { type BreachCheckResult, createRealmBreachCheck } from './breached-passwords';
 import { signInEnginePlugin } from './fastify-plugin-sign-in-engine';
 import {
   createCookieSecretEmailCodeDigest,
@@ -545,6 +546,49 @@ describe('the repository address verifier (#638)', () => {
     const { verifier, warn } = stubWrites({ attribute: undefined });
     expect(await verifier.markVerified(input)).toEqual({ kind: 'verified' });
     expect(warn).toHaveBeenCalledWith({ userId: USER }, expect.any(String));
+  });
+});
+
+describe('the realm breach check (#635)', () => {
+  it('asks the checker with the realm setting and maps every result', async () => {
+    const calls: unknown[] = [];
+    const results: BreachCheckResult[] = [
+      { kind: 'off' },
+      { kind: 'listed', source: 'local' },
+      { kind: 'not_listed', source: 'k_anonymity' },
+      { kind: 'failed', source: 'k_anonymity', reason: 'lookup_blocked' },
+    ];
+    let next = 0;
+    const check = createRealmBreachCheck({
+      checker: {
+        check: async (input) => {
+          calls.push(input);
+          return results[next++] ?? { kind: 'off' };
+        },
+      },
+      settingOf: async (realmId) => ({ source: 'k_anonymity', name: `name-of-${realmId}` }),
+    });
+    const verdicts = [];
+    for (let index = 0; index < results.length; index += 1) {
+      verdicts.push(await check.check({ realmId: REALM, password: 'pw' }));
+    }
+    expect(verdicts).toEqual([
+      { kind: 'off' },
+      { kind: 'listed' },
+      { kind: 'not_listed' },
+      { kind: 'failed', failure: 'lookup_blocked' },
+    ]);
+    expect(calls[0]).toEqual({ source: 'k_anonymity', password: 'pw', realm: `name-of-${REALM}` });
+  });
+
+  it('throws when the realm cannot be read, which the engine counts as a failed check', async () => {
+    const check = createRealmBreachCheck({
+      checker: { check: async () => ({ kind: 'off' }) },
+      settingOf: async () => {
+        throw new Error('no such realm');
+      },
+    });
+    await expect(check.check({ realmId: REALM, password: 'pw' })).rejects.toThrow('no such realm');
   });
 });
 

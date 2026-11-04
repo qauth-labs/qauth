@@ -1,6 +1,7 @@
 export * from './lib/account-directory';
 export * from './lib/address-verifier';
 export * from './lib/audit-events';
+export * from './lib/breached-passwords';
 export * from './lib/failure-ladder';
 export * from './lib/fastify-plugin-sign-in-engine';
 export * from './lib/identifier-digest';

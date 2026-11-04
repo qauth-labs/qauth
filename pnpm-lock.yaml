@@ -1103,6 +1103,9 @@ importers:
 
   libs/fastify/plugins/sign-in-engine:
     dependencies:
+      '@qauth-labs/server-breached-passwords':
+        specifier: workspace:*
+        version: link:../../../server/breached-passwords
       '@qauth-labs/server-federation':
         specifier: workspace:*
         version: link:../../../server/federation
