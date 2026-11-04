@@ -69,8 +69,10 @@ export const rateLimitEnvSchema = z.object({
    *
    * The ceremony app's server reads the current step of the Interaction API
    * (`GET /interaction/v1-rc.0/{interactionId}`) for every browser. A step
-   * read whose TCP peer (`request.ip`; no other forwarded header is read for
-   * it) is on this list counts per interaction, under
+   * read whose client address (`request.ip`, as `TRUST_PROXY` resolves it,
+   * so the ceremony app server's own address and never the proxy's; no
+   * other forwarded header is read for it) is on this list counts per
+   * interaction, under
    * `CEREMONY_APP_PEER_RATE_LIMIT`; every other step read counts per realm
    * and address, at the authorization endpoint's budget.
    *
@@ -84,9 +86,15 @@ export const rateLimitEnvSchema = z.object({
 
   /**
    * The step reads a listed ceremony app peer may make of one interaction per
-   * minute (#982). No default: set together with `CEREMONY_APP_PEERS`.
+   * minute (#982). No default, and blank is unset: set together with
+   * `CEREMONY_APP_PEERS`.
    */
-  CEREMONY_APP_PEER_RATE_LIMIT: z.coerce.number().int().min(1).optional(),
+  CEREMONY_APP_PEER_RATE_LIMIT: z.preprocess(
+    // Blank is unset, as an empty CEREMONY_APP_PEERS is, so a blank value
+    // meets the set-together check rather than a bare range error.
+    (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+    z.coerce.number().int().min(1).optional()
+  ),
 });
 
 /**
