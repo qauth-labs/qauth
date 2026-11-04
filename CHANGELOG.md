@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dynamic registration, a client metadata document or the seed manifest
   (migration 0058). The URI must be an absolute `https` URI without a fragment
   or user information, and a URI the client registers must resolve only to
-  public addresses, even for a development client: the egress client checks
-  it at registration, and a refused one is `invalid_client_metadata` (a
-  document drops it). Only a URI an admin sets, through the seed manifest, may
+  public addresses: the egress client checks it at registration, and a
+  refused one is `invalid_client_metadata` (a document drops it; a check that
+  failed rather than refused, such as a name that did not resolve now, keeps a
+  document's URI, since delivery checks again). Only a URI an admin sets, through the seed manifest, may
   use the egress allowlist. Whenever a session ends (RP-initiated logout,
   `POST /auth/logout`, sign out everywhere, a password reset, an admin, a
   retired key, the session limit or the session lapsing), the session
@@ -28,7 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `events`, `sub` and `sid`; no `nonce`), signed by the signer with the
   realm's `event_signing` key, and POSTs it as the `logout_token` form
   parameter through the egress client, which checks the address again at
-  every attempt. A `5xx`, `408`, `429`, timeout or network failure is retried
+  every attempt. The signer holds every `event_signing` token to its kind: no
+  `scope`, `client_id`, `nonce` or other grant claim, an `events` object, no
+  `sub` or `exp` in a Security Event Token, and for a logout token the
+  back-channel logout event alone, an `aud`, a `sub` or `sid` and at most two
+  minutes of life; anything else is refused (`INVALID_CLAIMS`). A delivery
+  route may now ask the delivery role to start a realm's first fan-out a set
+  time back rather than at the horizon (`DeliveryRoute.backfillMs`, at most 30
+  days); back-channel logout starts a day back, so a notice committed before
+  the role first listed the realm is sent late rather than lost. A `5xx`, `408`, `429`, timeout or network failure is retried
   on the delivery schedule with the same `jti`; any other answer is final. A
   failed delivery never holds a sign-out back: it is recorded on the delivery
   row and counted in `qauth_events_delivery_attempts_total` under the kind
@@ -37,8 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `backchannel_logout_session_supported`. The realm JWKS lists the
   `event_signing` keys after the token keys, so a relying party verifies the
   token at `jwks_uri`. The `delivery` role's database user reads the client
-  columns the route needs, and the role loads the egress plugin. New library
-  `@qauth-labs/server-backchannel-logout`; conformance rows in
+  columns the route needs, and the role loads the egress plugin. New
+  libraries `@qauth-labs/server-backchannel-logout` and
+  `@qauth-labs/fastify-plugin-backchannel-logout`; conformance rows in
   `docs/conformance/requirements/oidc-backchannel-1_0.json`.
 
 - **RP-initiated logout** ([#675], OpenID Connect RP-Initiated Logout 1.0,

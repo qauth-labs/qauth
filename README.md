@@ -66,7 +66,7 @@ the open work.
   `id_token_hint` for the signed-in account, the person confirms first.
 - Back-channel logout: whenever a session ends, each app it signed in to that
   registered a `backchannel_logout_uri` gets a signed logout token there,
-  queued with the sign-out and retried until it arrives.
+  queued with the sign-out and retried while the app is unreachable.
 - Resource indicators (RFC 8707): each token is bound to its audience.
 - Client registration by Client ID Metadata Document (CIMD). RFC 7591 dynamic
   registration remains as a fallback.
