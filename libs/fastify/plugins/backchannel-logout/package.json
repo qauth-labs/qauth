@@ -1,0 +1,18 @@
+{
+  "name": "@qauth-labs/fastify-plugin-backchannel-logout",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/index.ts",
+  "dependencies": {
+    "@qauth-labs/fastify-plugin-egress": "workspace:*",
+    "@qauth-labs/server-backchannel-logout": "workspace:*",
+    "@qauth-labs/server-event-delivery": "workspace:*",
+    "fastify": "catalog:",
+    "fastify-plugin": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "fastify-plugin-backchannel-logout",
+  "$schema": "../../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/fastify/plugins/backchannel-logout/src",
+  "projectType": "library",
+  "tags": ["scope:fastify", "type:backchannel-logout"],
+  "// targets": "to see all targets run: nx show project fastify-plugin-backchannel-logout --web"
+}

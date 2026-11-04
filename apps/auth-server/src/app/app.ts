@@ -1,4 +1,5 @@
 import formbody from '@fastify/formbody';
+import { backchannelLogoutPlugin } from '@qauth-labs/fastify-plugin-backchannel-logout';
 import { cachePlugin } from '@qauth-labs/fastify-plugin-cache';
 import { databasePlugin, hasRepository } from '@qauth-labs/fastify-plugin-db';
 import { dpopPlugin } from '@qauth-labs/fastify-plugin-dpop';
@@ -35,7 +36,6 @@ import {
   signerPlugin,
 } from '@qauth-labs/fastify-plugin-signer';
 import { SSF_DELIVERY_KIND, ssfPlugin } from '@qauth-labs/fastify-plugin-ssf';
-import { createBackchannelLogoutRoute } from '@qauth-labs/server-backchannel-logout';
 import {
   passwordPolicyWarnings,
   resolveStatusListTrustAnchorPems,
@@ -1081,13 +1081,15 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
   // each client its logout token, signed by the signer role, through the
   // egress client, which checks the address again at every attempt. Only the
   // delivery role builds it; the roles that end sessions only queue.
-  const backchannelLogout =
-    plugins.has('eventDelivery') && plugins.has('egress')
-      ? createBackchannelLogoutRoute({
-          clients: fastify.repositories.backchannelLogoutClients,
-          egress: fastify.egress,
-        })
-      : null;
+  const deliversBackchannelLogout = plugins.has('eventDelivery') && plugins.has('egress');
+  if (deliversBackchannelLogout) {
+    await fastify.register(backchannelLogoutPlugin, {
+      clients: fastify.repositories.backchannelLogoutClients,
+    });
+  }
+  const backchannelLogout = deliversBackchannelLogout
+    ? fastify.backchannelLogout.deliveryRoute
+    : null;
   const deliveryRoutes: readonly DeliveryRoute[] = [
     ...(ssf === null ? [] : [ssf.deliveryRoute]),
     ...(backchannelLogout === null ? [] : [backchannelLogout]),

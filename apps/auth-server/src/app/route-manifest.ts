@@ -346,7 +346,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'oauth/register',
     prefix: '/oauth',
     roles: ['api'],
-    plugins: ['jwt', 'password'],
+    plugins: ['egress', 'jwt', 'password'],
     repositories: ['events', 'oauthClients', 'realms', 'users'],
     load: () => import('./routes/oauth/register'),
   },
