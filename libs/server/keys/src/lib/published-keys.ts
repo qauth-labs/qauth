@@ -110,8 +110,8 @@ export function verificationKeysOf(
 }
 
 /**
- * The realm's JWKS at `at`: its published token keys inside their window, none
- * compromised. The window is {@link isPublishedAt}'s, as for the verification
+ * The realm's JWKS at `at`: its published token and event keys
+ * ({@link REALM_JWKS_PURPOSES}) inside their window, none compromised. The window is {@link isPublishedAt}'s, as for the verification
  * set, so a retired key leaves both together.
  */
 export function realmJwksOf(records: readonly PublicKeyRecord[], at: number): RealmJwks {

@@ -37,8 +37,9 @@ import {
  * Covers the acceptance criteria of #410: metadata when enabled, none when
  * not; a receiver creates a push stream, adds a subject, asks for
  * verification and receives a SET that verifies with a key from the
- * metadata's `jwks_uri`, the transmitter's own JWKS, which the realm JWKS of
- * the token keys does not share (d-1026-09); the SET `jti` is the event id on every retry; a receiver answering 5xx is
+ * metadata's `jwks_uri`, the transmitter's own JWKS, which holds no token key
+ * (the realm JWKS lists the event keys after the token keys, for logout
+ * tokens, #624); the SET `jti` is the event id on every retry; a receiver answering 5xx is
  * retried and the status shows it; a private endpoint is refused at
  * registration and at delivery; with the switch off there is no route, no
  * metadata and no delivery row; a stream in one realm never gets another
@@ -476,13 +477,15 @@ describe('the SSF transmitter (real containers)', () => {
         audience: who.clientId,
         typ: 'secevent+jwt',
       });
-      // The realm JWKS of the token keys holds no SET key, so a SET never
-      // verifies as a token (d-1026-09).
-      const tokenKeys = (
+      // The realm JWKS lists the event keys too, for logout tokens (#624): a
+      // SET is told from an access token there by its `typ`.
+      const realmKeys = (
         await app.inject({ method: 'GET', url: '/.well-known/jwks.json' })
       ).json<JSONWebKeySet>();
-      expect(tokenKeys.keys.map((key) => key.kid)).not.toContain(decodeProtectedHeader(token).kid);
-      await expect(jwtVerify(token, createLocalJWKSet(tokenKeys))).rejects.toThrow();
+      expect(realmKeys.keys.map((key) => key.kid)).toContain(decodeProtectedHeader(token).kid);
+      await expect(
+        jwtVerify(token, createLocalJWKSet(realmKeys), { typ: 'at+jwt' })
+      ).rejects.toThrow();
       const [eventId] = await verificationEventIds(app, streamId);
       expect(payload).toEqual({
         iss: ISSUER,

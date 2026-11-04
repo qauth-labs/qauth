@@ -21,8 +21,8 @@ describe('JWS_TYP_BY_PURPOSE', () => {
     expect(JWS_SIGNING_PURPOSES).toEqual(['token_signing', 'event_signing']);
   });
 
-  it('keeps the event signing keys out of the realm JWKS (d-1026-09)', () => {
-    expect(REALM_JWKS_PURPOSES).toEqual(['token_signing']);
+  it('publishes the event signing keys in the realm JWKS after the token keys, for logout tokens (Back-Channel Logout 1.0 §2.6, #624)', () => {
+    expect(REALM_JWKS_PURPOSES).toEqual(['token_signing', 'event_signing']);
     expect(Object.isFrozen(REALM_JWKS_PURPOSES)).toBe(true);
   });
 

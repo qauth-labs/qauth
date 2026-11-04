@@ -1320,14 +1320,19 @@ describe('encrypt and decrypt', () => {
 });
 
 describe('getVerificationKeys and getJwks', () => {
-  it('publish the token keys in the JWKS and the event keys apart, never a symmetric key', async () => {
+  it('publish the token keys, then the event keys, in the JWKS, never a symmetric key', async () => {
     const { signer, keys } = await setup();
 
     const jwks = await signer.getJwks('local', REALM_A);
     const events = await signer.getVerificationKeys('local', REALM_A, 'event_signing');
 
-    // The event keys verify SETs at the SSF transmitter's own JWKS (d-1026-09).
-    expect(jwks.keys.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'token_signing')]);
+    // A relying party verifies a logout token at the realm's jwks_uri
+    // (Back-Channel Logout 1.0 §2.6, #624); a SET receiver reads the same keys
+    // at the SSF transmitter's own JWKS.
+    expect(jwks.keys.map((key) => key.kid)).toEqual([
+      activeKid(keys, REALM_A, 'token_signing'),
+      activeKid(keys, REALM_A, 'event_signing'),
+    ]);
     expect(events.map((key) => key.kid)).toEqual([activeKid(keys, REALM_A, 'event_signing')]);
     for (const key of [...jwks.keys, ...events.map((event) => event.publicJwk)]) {
       expect(key).toMatchObject({ kty: 'OKP', crv: 'Ed25519', alg: 'EdDSA', use: 'sig' });

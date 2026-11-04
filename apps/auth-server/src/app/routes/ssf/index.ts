@@ -184,11 +184,10 @@ export default async function (fastify: FastifyInstance) {
     security: BEARER,
   };
 
-  // The transmitter's own JWKS (d-1026-09): the realm's active and retired
-  // SET verification keys (`event_signing`, ADR-019 Decision 9), never a
-  // compromised one. They are published apart from the realm JWKS, so a
-  // verifier that reads the realm JWKS and skips the `typ` check cannot take
-  // a SET-signed token for an access token. Public, as every JWKS is: no
+  // The transmitter's own JWKS: the realm's active and retired SET
+  // verification keys (`event_signing`, ADR-019 Decision 9), never a
+  // compromised one, and no token key. The realm JWKS lists them too, after
+  // the token keys, for logout tokens (#624). Public, as every JWKS is: no
   // receiver token. The `onRequest` hook above answers 404 for a realm that
   // does not run the transmitter. A key store that cannot be read fails the
   // request; the realm JWKS does not depend on it.
@@ -198,7 +197,7 @@ export default async function (fastify: FastifyInstance) {
       config: { surface: 'meta' },
       schema: {
         description:
-          'The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. The realm JWKS at `/.well-known/jwks.json` holds no SET key.',
+          'The JSON Web Key Set (RFC 7517) that verifies the realm’s Security Event Tokens: its active and retired `event_signing` keys. The `jwks_uri` of the transmitter metadata. Unauthenticated, cacheable for five minutes. It holds no token key; the realm JWKS at `/.well-known/jwks.json` lists these keys too, after the token keys, for logout tokens.',
         tags: TAGS,
         'x-qauth-stability': 'experimental',
         'x-qauth-errors': [404],

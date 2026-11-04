@@ -42,14 +42,14 @@ A key has one of four statuses:
 A realm has one active key per purpose and algorithm. A fresh default realm
 gets these keys at its first boot:
 
-| Purpose         | Algorithm | When                   | Published at                                     |
-| --------------- | --------- | ---------------------- | ------------------------------------------------ |
-| `token_signing` | EdDSA     | Always                 | `/.well-known/jwks.json`                         |
-| `token_signing` | RS256     | A fresh realm only     | `/.well-known/jwks.json`                         |
-| `token_signing` | ML-DSA-65 | With hybrid signing on | `/.well-known/jwks.json`                         |
-| `event_signing` | EdDSA     | Always                 | `/ssf/jwks.json`, for the SSF transmitter's SETs |
-| `cookie_hmac`   | HS256     | Always                 | Never: it signs the browser cookies              |
-| `data_at_rest`  | A256GCM   | Always                 | Never: it encrypts the realm's secrets           |
+| Purpose         | Algorithm | When                   | Published at                                  |
+| --------------- | --------- | ---------------------- | --------------------------------------------- |
+| `token_signing` | EdDSA     | Always                 | `/.well-known/jwks.json`                      |
+| `token_signing` | RS256     | A fresh realm only     | `/.well-known/jwks.json`                      |
+| `token_signing` | ML-DSA-65 | With hybrid signing on | `/.well-known/jwks.json`                      |
+| `event_signing` | EdDSA     | Always                 | `/.well-known/jwks.json` and `/ssf/jwks.json` |
+| `cookie_hmac`   | HS256     | Always                 | Never: it signs the browser cookies           |
+| `data_at_rest`  | A256GCM   | Always                 | Never: it encrypts the realm's secrets        |
 
 The OID4VP request-signing key exists only when the key boot step imports it
 from `OID4VP_VERIFIER_SIGNING_KEY`. A key a realm lacks, such as an RS256 key

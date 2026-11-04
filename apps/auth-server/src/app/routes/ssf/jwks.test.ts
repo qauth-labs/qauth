@@ -16,8 +16,8 @@ vi.mock('../../../config/env', () => ({
 import ssfRoutes from './index';
 
 /**
- * `GET /ssf/jwks.json`, the SSF transmitter's own JWKS (#410, d-1026-09): the
- * realm's SET verification keys, apart from the realm JWKS. The end-to-end
+ * `GET /ssf/jwks.json`, the SSF transmitter's own JWKS (#410): the realm's SET
+ * verification keys and no token key. The end-to-end
  * suite verifies a pushed SET against it; this one pins the route's own rules.
  */
 

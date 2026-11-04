@@ -409,7 +409,7 @@ describe('GET /.well-known/jwks.json', () => {
     }
   });
 
-  it('holds no SET key, even for a realm that runs the SSF transmitter (d-1026-09)', async () => {
+  it('serves the realm JWKS the signer builds, and reads no key of its own, for a realm that runs the SSF transmitter', async () => {
     const app = Fastify({ logger: false });
     const jwks = { keys: [{ kty: 'OKP', crv: 'Ed25519', x: 'x', alg: 'EdDSA', kid: 'token' }] };
     const eventKey = { kid: 'event', publicJwk: { kty: 'OKP', crv: 'Ed25519', kid: 'event' } };
@@ -429,7 +429,8 @@ describe('GET /.well-known/jwks.json', () => {
     try {
       const res = await app.inject({ method: 'GET', url: '/.well-known/jwks.json' });
       expect(res.statusCode).toBe(200);
-      // The SET keys are published apart, at the transmitter's own JWKS.
+      // The realm JWKS is the signer's (`getJwks`, which lists the event keys
+      // after the token keys, #624): the route adds none of its own.
       expect(res.json()).toEqual(jwks);
       expect(getVerificationKeys).not.toHaveBeenCalled();
     } finally {

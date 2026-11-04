@@ -44,8 +44,8 @@ export function issuerBase(issuer: string): string {
  *   that carries the `ssf:stream` scope.
  * - `default_subjects` is `NONE`: a stream receives events only about the
  *   subjects its receiver adds.
- * - `jwks_uri` is the transmitter's own JWKS, which holds only the SET keys,
- *   not the realm JWKS of the token keys (d-1026-09).
+ * - `jwks_uri` is the transmitter's own JWKS, which holds only the SET keys;
+ *   the realm JWKS holds the token keys as well (#624).
  *
  * @param issuer - The realm's issuer.
  */
