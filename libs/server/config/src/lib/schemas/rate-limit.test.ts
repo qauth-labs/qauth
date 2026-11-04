@@ -36,6 +36,7 @@ describe('rateLimitEnvSchema CEREMONY_APP_PEERS', () => {
     expect(() => peers('true')).toThrow(/invalid: true/);
     expect(() => peers('10.0.4.0/33')).toThrow(/invalid: 10\.0\.4\.0\/33/);
     expect(() => peers('ceremony.internal')).toThrow(/invalid: ceremony\.internal/);
+    expect(() => peers('fe80::1%eth0')).toThrow(/without a zone id.*invalid: fe80::1%eth0/);
   });
 });
 
