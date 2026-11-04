@@ -1156,6 +1156,33 @@ the previous release until every node runs this release, and after a rollback.
 A node of the previous release also still registers passwords under the old
 rule (the score floor only) while it runs.
 
+### Passwords on a breach list
+
+From this release a realm can check passwords against a breach list
+([#635](https://github.com/qauth-labs/qauth/issues/635), ADR-020 §3). The new
+realm policy `password.breachListSource` is `off` in every realm after the
+upgrade (the first node of this release gives every realm the seed
+`PASSWORD_BREACH_LIST_SOURCE`, `off` when unset), so nothing changes until an
+operator turns it on. Set `BREACHED_PASSWORD_LIST_PATH` (a file of SHA-1
+digests, 40 hex characters a line, with an optional `:count`) for `local`, or
+`BREACHED_PASSWORD_RANGE_URL` (an `https` URL whose path ends with `/`, such
+as `https://api.pwnedpasswords.com/range/`) for `k_anonymity`; a private
+mirror needs an `EGRESS_ALLOWLIST_PATH` entry naming the realms that use it.
+Each node loads the local list at boot and again when it receives `SIGHUP`;
+a reload that fails keeps the list it had. A realm that names a source the
+deployment did not set up gets a failed check on every password, which lets
+the sign-in through and is counted and recorded: watch
+`qauth_breached_password_checks_total{result="failed"}` after turning a
+source on.
+
+Once a realm checks, a user whose password is on the list is asked for a new
+one at their next sign-in through the hosted pages, after a code mailed to
+their address (or their second factor). Migration 0059 adds the
+`user_required_actions` table, which holds the `update_password` action an
+operator tool or a later admin API asks for. During a rolling upgrade a node of
+the previous release neither checks the list nor reads that table: a sign-in
+it serves completes as before.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
