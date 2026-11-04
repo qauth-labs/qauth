@@ -141,17 +141,31 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
 
 /**
  * The columns `delivery` reads of tables it may not read whole: whether a
- * stream may receive events and where its subjects point
- * (`EVENT_DELIVERY_COLUMNS`), and each realm's event retention
+ * stream may receive events and where its subjects point, and a client's
+ * back-channel logout metadata (`EVENT_DELIVERY_COLUMNS`), and each realm's
+ * event retention
  * (`EVENT_RETENTION_REALM_COLUMNS`).
  */
 export const COLUMN_GRANTS: ColumnGrants = Object.freeze({
-  oauth_clients: { delivery: ['id', 'enabled', 'suspended', 'scopes'] },
+  oauth_clients: {
+    delivery: [
+      'id',
+      'enabled',
+      'suspended',
+      'scopes',
+      'realm_id',
+      'client_id',
+      'backchannel_logout_uri',
+      'backchannel_logout_uri_source',
+      'backchannel_logout_session_required',
+    ],
+  },
   realms: {
     delivery: [
       'id',
       'ssf_transmitter_enabled',
       'issuer',
+      'name',
       'user_event_retention_days',
       'admin_event_retention_days',
     ],

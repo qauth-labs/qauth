@@ -20,8 +20,18 @@ describe('eventDeliveryGrantStatements', () => {
       ssf_streams: ['SELECT'],
     });
     expect(EVENT_DELIVERY_COLUMNS).toEqual({
-      realms: ['id', 'ssf_transmitter_enabled', 'issuer'],
-      oauth_clients: ['id', 'enabled', 'suspended', 'scopes'],
+      realms: ['id', 'ssf_transmitter_enabled', 'issuer', 'name'],
+      oauth_clients: [
+        'id',
+        'enabled',
+        'suspended',
+        'scopes',
+        'realm_id',
+        'client_id',
+        'backchannel_logout_uri',
+        'backchannel_logout_uri_source',
+        'backchannel_logout_session_required',
+      ],
       ssf_stream_subjects: ['stream_id', 'event_subject_type', 'event_subject_id'],
     });
     expect(eventDeliveryGrantStatements('qauth_delivery')).toEqual([

@@ -91,6 +91,32 @@ export const userSignedOut = defineEventType({
   ssf: { event: CAEP_SESSION_REVOKED, session: 'sid' },
 });
 
+/**
+ * The back-channel logout notice of one client and one session (OpenID
+ * Connect Back-Channel Logout 1.0, issue #624): the session revocation writes
+ * it in its own transaction, so the notice commits with the end, and the
+ * delivery role sends the client its logout token from it.
+ */
+export const userClientSessionEnded = defineEventType({
+  name: 'user.client_session_ended',
+  version: 1,
+  rc: 0,
+  description:
+    'A browser session ended that had served a client with a registered `backchannel_logout_uri`, and QAuth queued that client a logout token (OpenID Connect Back-Channel Logout 1.0). One event per client and session, written in the transaction that ended the session, whatever ended it: a sign-out, an admin, a reset, a retired key, the browser limit or the session lapsing. `client` is the client to notify.',
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    sid: recordId('The session that ended: the `sid` its ID tokens and the logout token carry.'),
+    reason: reason(),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'The end of a session is user.signed_out, sent as CAEP 1.0 `session-revoked`. This event is the per-client notice of OpenID Connect Back-Channel Logout 1.0, delivered as a logout token to the client, not as a SET.',
+});
+
 export const userSignOutFailed = defineEventType({
   name: 'user.sign_out_failed',
   version: 1,
@@ -176,6 +202,7 @@ export const USER_EVENT_TYPES = [
   userSignInFailed,
   userSignInStepPassed,
   userSignedOut,
+  userClientSessionEnded,
   userSignOutFailed,
   userRegistered,
   userRegistrationFailed,

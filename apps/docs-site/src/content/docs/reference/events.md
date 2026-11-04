@@ -213,6 +213,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                            | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                    | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.client_session_ended:v1-rc.0`](#userclient_session_ended-v1-rc0)                | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                    | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                  | user     | warning  | v0.2.0 |
@@ -314,6 +315,21 @@ A person signed out, and QAuth ended their browser sessions: the one session the
 | Member | Type | Required | Meaning                                                                                                                                                                                  |
 | ------ | ---- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sid`  | UUID | no       | The browser session this sign-out ended, when it ended one: the `sid` its ID tokens carry (#549). Absent when the sign-out ended every session of the user, as `POST /auth/logout` does. |
+
+### user.client_session_ended v1-rc.0
+
+A browser session ended that had served a client with a registered `backchannel_logout_uri`, and QAuth queued that client a logout token (OpenID Connect Back-Channel Logout 1.0). One event per client and session, written in the transaction that ended the session, whatever ended it: a sign-out, an admin, a reset, a retired key, the browser limit or the session lapsing. `client` is the client to notify.
+
+- Identifier: `urn:qauth:event:user.client_session_ended:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.client_session_ended.v1-rc.0.json](/schemas/events/user.client_session_ended.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member   | Type   | Required | Meaning                                                                                         |
+| -------- | ------ | -------- | ----------------------------------------------------------------------------------------------- |
+| `sid`    | UUID   | yes      | The session that ended: the `sid` its ID tokens and the logout token carry.                     |
+| `reason` | string | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release. |
 
 ### user.sign_out_failed v1-rc.0
 
