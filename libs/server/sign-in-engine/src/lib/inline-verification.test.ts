@@ -221,8 +221,17 @@ describe('the code step after a correct password', () => {
     );
     expect(third).toMatchObject({ kind: 'step', offer: { current: { step: 'totp' } } });
     expect(built.addresses.calls).toHaveLength(1);
-    const fourth = await built.engine.advance(
+    // The code worked once: the transaction holds none, and answering it again verifies nothing.
+    expect(kept(third).emailCode).toBeUndefined();
+    const replayed = await built.engine.advance(
       kept(third),
+      codeAnswer(built.sender.last),
+      context(built)
+    );
+    expect(replayed).toMatchObject({ kind: 'step', offer: { current: { step: 'totp' } } });
+    expect(built.addresses.calls).toHaveLength(1);
+    const fourth = await built.engine.advance(
+      kept(replayed),
       answer('totp', { otp: '123456' }),
       context(built)
     );
