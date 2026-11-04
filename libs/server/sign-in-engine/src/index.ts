@@ -1,5 +1,26 @@
 export {
+  answerEmailCode,
+  EMAIL_CODE_HMAC_PATTERN,
+  EMAIL_CODE_MAX_WRONG_ANSWERS,
+  EMAIL_CODE_RESEND_AFTER_MS,
+  EMAIL_CODE_SALT_PATTERN,
+  EMAIL_CODE_TTL_MS,
+  type EmailCodeAnswer,
+  emailCodeExpired,
+  type EmailCodeLength,
+  emailCodeLength,
+  emailCodeParams,
+  type EmailCodePurpose,
+  emailCodeResendDue,
+  generateEmailCode,
+  generateEmailCodeSalt,
+  type HeldEmailCode,
+  heldEmailCode,
+  sameEmailCodeHmac,
+} from './lib/email-code';
+export {
   createSignInEngine,
+  type EmailCodeDependencies,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInEngine,
   type SignInEngineDependencies,
@@ -28,18 +49,24 @@ export {
 export { IDENTIFIER_MAX_BYTES, readIdentifier } from './lib/identifier';
 export {
   checkLadderPolicy,
+  EMAIL_CODE_LADDER_POLICY,
   type LadderPolicy,
   ladderWaitMs,
   PASSWORD_LADDER_POLICY,
 } from './lib/ladder';
 export {
   type AccountDirectory,
+  type AddressVerification,
+  type AddressVerifier,
   type AuditSink,
   type BoundFactor,
   type Clock,
+  type EmailCodeDigest,
   FACTOR_TYPES,
   type FactorType,
   type IdentifierDigest,
+  LADDER_COUNTERS,
+  type LadderCounter,
   MFA_MODES,
   type MfaMode,
   type MfaPolicy,
@@ -58,6 +85,8 @@ export {
 } from './lib/ports';
 export type {
   CompletedSignIn,
+  EmailCodeSender,
+  EmailCodeSendOutcome,
   RefusalReason,
   RoundAnswer,
   RoundContext,

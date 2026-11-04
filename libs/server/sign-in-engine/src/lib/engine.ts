@@ -5,6 +5,7 @@ import {
   type ReadAnswer,
   STEP_NAMES,
   STEP_URNS,
+  type StepAnswer,
   StepAnswerError,
   type StepErrorCode,
   type StepName,
@@ -14,6 +15,19 @@ import {
 } from '@qauth-labs/server-step-grammar';
 
 import {
+  answerEmailCode,
+  EMAIL_CODE_HMAC_PATTERN,
+  EMAIL_CODE_TTL_MS,
+  emailCodeExpired,
+  emailCodeLength,
+  emailCodeParams,
+  emailCodeResendDue,
+  generateEmailCode,
+  generateEmailCodeSalt,
+  type HeldEmailCode,
+  heldEmailCode,
+} from './email-code';
+import {
   factorStrength,
   FIRST_FACTOR_STRENGTH,
   provenFactorStrength,
@@ -21,11 +35,13 @@ import {
   secondFactorRequired,
   strongestBoundFactor,
 } from './factors';
-import { type HookRound, NO_LADDER, type SignInHooks } from './hooks';
+import { type HookRound, type LadderReservation, NO_LADDER, type SignInHooks } from './hooks';
 import { readIdentifier } from './identifier';
 import {
   type AccountDirectory,
+  type AddressVerifier,
   type Clock,
+  type EmailCodeDigest,
   type IdentifierDigest,
   MFA_MODES,
   type MfaPolicy,
@@ -83,7 +99,11 @@ import {
  *    from #651 a passkey beside it. Its answer is reserved on the ladder's hook
  *    before it is verified.
  * 8. After a first factor: the downgrade rule (the account's strongest bound
- *    factor, a disabled one included), then the MFA policy just read.
+ *    factor, a disabled one included), then the MFA policy just read, then,
+ *    with `emailCodes`, the inline verification of an address not proved yet
+ *    (#638): an emailed code, never a factor, whatever
+ *    `REQUIRE_VERIFIED_ACCOUNT` says. An account that lacks the second
+ *    factor the policy requires gets the set-up step first, never a code.
  * 9. Complete: the transport mints the session or the code.
  *
  * Until a factor succeeds, nothing the engine answers depends on the account:
@@ -100,6 +120,19 @@ import {
 /** Every round answers no earlier than this after it arrived: `MIN_RESPONSE_TIME_MS.LOGIN` (ADR-017 Decision 7). */
 export const SIGN_IN_MIN_RESPONSE_TIME_MS = 500;
 
+/**
+ * What the inline verification of an account's address needs (#638, ADR-017
+ * Decisions 5 and 8). The round's capped sender comes with each round
+ * (`RoundContext.sendCode`), bound to its request; the email-code ladder is
+ * the `ladder` hook's `email_code` counter.
+ */
+export interface EmailCodeDependencies {
+  /** The code's keyed HMAC: what the transaction holds in the code's place. */
+  readonly digest: EmailCodeDigest;
+  /** Marks the address verified once its code is answered right: the engine's one write to an account. */
+  readonly addresses: AddressVerifier;
+}
+
 /** What the engine is built from. */
 export interface SignInEngineDependencies {
   readonly accounts: AccountDirectory;
@@ -107,8 +140,21 @@ export interface SignInEngineDependencies {
   /** The realm's and the client's MFA policy, read on every round. */
   readonly policy: MfaPolicyReader;
   readonly identifierDigest: IdentifierDigest;
-  /** `REQUIRE_VERIFIED_ACCOUNT`, as the deployment set it. */
+  /**
+   * `REQUIRE_VERIFIED_ACCOUNT`, as the deployment set it. It decides only for
+   * an engine built without `emailCodes`: with them, an unverified account is
+   * verified inline after its correct password whatever it says (ADR-017
+   * Decision 8).
+   */
   readonly requireVerifiedAccount: boolean;
+  /**
+   * The email codes of the inline verification (#638). With them, a correct
+   * password proves an account whose address is not verified yet, and rule 8
+   * mails it a code before the sign-in completes. Without them, an unverified
+   * account is refused like a wrong password while `requireVerifiedAccount`
+   * is on, and signs in while it is off.
+   */
+  readonly emailCodes?: EmailCodeDependencies;
   readonly hooks?: SignInHooks;
   /**
    * The password ladder's hard action (#615): called when a failure counts at
@@ -172,6 +218,15 @@ const TRANSACTION_ENDED: RoundResult = Object.freeze({
 /** The steps no role may take: an email code is never an authenticator (ADR-017 Decision 5). */
 const NEVER_A_FACTOR: readonly StepName[] = Object.freeze(['email_code']);
 
+/**
+ * An email code that verifies an account after its password: 6 digits
+ * (ADR-017 Decision 5). The Interaction API never offers `confirm_sign_in`,
+ * the FiPA endpoint's per-client check (PRO-22), and this engine offers it to
+ * no transport yet.
+ */
+const VERIFY_ACCOUNT = 'verify_account' as const;
+const VERIFY_ACCOUNT_LENGTH = emailCodeLength(VERIFY_ACCOUNT, { afterPassword: true });
+
 /** Check the handlers a deployment adds, and order every handler by role. */
 function buildHandlers(deps: SignInEngineDependencies) {
   const identifier = createIdentifierStep();
@@ -180,7 +235,9 @@ function buildHandlers(deps: SignInEngineDependencies) {
     passwords: deps.passwords,
     ladder: deps.hooks?.ladder ?? NO_LADDER,
     hardAction: deps.passwordHardAction ?? NO_HARD_ACTION,
-    requireVerifiedAccount: deps.requireVerifiedAccount,
+    // With email codes, an unverified account's right password proves it,
+    // and rule 8 verifies its address (#638, ADR-017 Decision 8).
+    requireVerifiedAccount: deps.requireVerifiedAccount && deps.emailCodes === undefined,
     ...(deps.onUnavailable === undefined ? {} : { onSettleFailure: deps.onUnavailable }),
   });
   const extra = deps.steps ?? [];
@@ -274,6 +331,33 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   // The step grammar's one answer reader, shared with both transports.
   const grammar = createInteractionMapper();
   const factorOf = (step: StepName) => handlers.byStep.get(step)?.factor;
+  const { emailCodes } = deps;
+  const ladder = deps.hooks?.ladder ?? NO_LADDER;
+  /** Whether the engine answers `step` itself: a handler's, or the email code of the inline verification. */
+  const knows = (step: StepName) =>
+    handlers.byStep.has(step) || (step === 'email_code' && emailCodes !== undefined);
+  /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
+  const report = (port: string, error: unknown) => {
+    try {
+      deps.onUnavailable?.(new SignInStoreUnavailableError(port, error));
+    } catch {
+      // Nothing to do: the answer stands.
+    }
+  };
+  /**
+   * Settle an email-code reservation. A failure stays counted when settling
+   * fails, so a settle error is reported and changes no answer.
+   */
+  const settleCode = async (
+    reservation: LadderReservation,
+    outcome: 'success' | 'failure'
+  ): Promise<void> => {
+    try {
+      await reservation.settle(outcome);
+    } catch (error) {
+      report('ladder', error);
+    }
+  };
 
   async function advance(
     stored: SignInTransaction | null,
@@ -304,7 +388,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   ): Promise<RoundResult> {
     const named =
       answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
-    const step = named !== undefined && handlers.byStep.has(named) ? named : 'identifier';
+    const step = named !== undefined && knows(named) ? named : 'identifier';
     await context.audit(Object.freeze({ outcome: 'ended', step, reason }));
     return TRANSACTION_ENDED;
   }
@@ -447,7 +531,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * transaction starts. Never a step only the client named.
      */
     const roundStep = (): StepName =>
-      answeredName !== undefined && handlers.byStep.has(answeredName) ? answeredName : 'identifier';
+      answeredName !== undefined && knows(answeredName) ? answeredName : 'identifier';
     const redirect = (reason: 'step_not_available' | 'request'): RoundResult =>
       Object.freeze({ kind: 'redirect', reason, transaction: null });
 
@@ -479,11 +563,19 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           ? offer.current
           : Object.freeze({ ...offer.current, error } as StepOffer['current']);
       const handler = handlers.byStep.get(current.step) as StepHandler | undefined;
+      const { identifier } = state.transaction;
+      // The email code's screen names the address the code went to.
+      const personal =
+        current.step === 'email_code'
+          ? identifier === undefined
+            ? {}
+            : { identifier }
+          : (handler?.personal?.(stepRound()) ?? {});
       return Object.freeze({
         kind: 'step',
         transaction: freezeTransaction(state.transaction),
         offer: Object.freeze({ ...offer, current }),
-        personal: Object.freeze({ ...(handler?.personal?.(stepRound()) ?? {}) }),
+        personal: Object.freeze({ ...personal }),
       });
     };
     /** Whether the round's answer is to one of `offer`'s steps. */
@@ -571,7 +663,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (!account.enabled) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'account_disabled');
       }
-      if (!account.verified && deps.requireVerifiedAccount) {
+      if (!account.verified && deps.requireVerifiedAccount && emailCodes === undefined) {
         return refuseAnswer(offer, read.step, 'invalid_credentials', 'email_not_verified');
       }
       state.transaction = {
@@ -628,6 +720,190 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         default:
           throw new Error(`sign-in engine: ${read.step} answered ${verdict.kind}`);
       }
+    };
+
+    /** The `email_code` step for `held` at `at`: the step alone, required. */
+    const codeOffer = (held: HeldEmailCode, at: number): StepOffer =>
+      Object.freeze({
+        current: Object.freeze({
+          step: 'email_code',
+          params: Object.freeze(emailCodeParams(held, at)),
+        }),
+        alternatives: Object.freeze([]),
+      }) as StepOffer;
+
+    /**
+     * The inline verification of the address the transaction's identifier
+     * names, after a factor proved its account (#638; ADR-017 Decisions 5
+     * and 8; `graphs/flows/core/account-verification/flow.yaml`). Returns the
+     * round's result while the code is pending, or `null` once the address
+     * is verified and the rules go on.
+     *
+     * - The first round mails a 6-digit code through the capped sender and
+     *   offers `email_code` with `verify_account`; a cap that answers 429
+     *   refuses the round, and nothing is held.
+     * - An answer with no otp asks for a new code: one is mailed a minute
+     *   after the last, and the transaction's count of wrong answers stays.
+     * - An expired code is refused with `code_expired`, nothing compared or
+     *   counted.
+     * - Otherwise the answer is reserved on the email-code ladder (the
+     *   identifier HMAC's `email_code` counter, across transactions), with no
+     *   end-user IP: an account whose address is not proved has no owner
+     *   whose IPs are known. Inside a wait it is refused, not compared.
+     * - The code is compared HMAC to HMAC, in constant time. A wrong one is
+     *   counted, and the 5th of the transaction burns the code and ends
+     *   it. A right one clears the ladder's
+     *   counter, marks the address verified, and is recorded among the
+     *   verified steps: no `amr` value, no `auth_time`.
+     */
+    const verifyAddress = async (
+      codes: EmailCodeDependencies,
+      subject: string
+    ): Promise<RoundResult | null> => {
+      const { identifier } = state.transaction;
+      // A subject a discoverable factor named holds no address to mail, and
+      // a transport that cannot serve the step cannot take the code.
+      if (identifier === undefined || !served.has('email_code')) {
+        return redirect('step_not_available');
+      }
+      const { sendCode } = context;
+      if (sendCode === undefined) {
+        throw new Error('sign-in engine: no email-code sender for this round');
+      }
+      const digestCode = (salt: string, code: string): Promise<string> =>
+        fromStore('emailCodeDigest', async () => {
+          const digest = await codes.digest({ realmId, salt, code });
+          if (typeof digest !== 'string' || !EMAIL_CODE_HMAC_PATTERN.test(digest)) {
+            throw new Error('not an email-code HMAC');
+          }
+          return digest;
+        });
+      /**
+       * Mail a new code, `previous`'s count of wrong answers kept. Returns
+       * the round's refusal when a cap answers 429, else `null` with the
+       * code held.
+       */
+      const issue = async (previous?: HeldEmailCode): Promise<RoundResult | null> => {
+        const issuedAt = clock.now();
+        const code = generateEmailCode(VERIFY_ACCOUNT_LENGTH);
+        const salt = generateEmailCodeSalt();
+        const hmac = await digestCode(salt, code);
+        const sent = await fromStore('sendCode', () =>
+          sendCode({
+            realmId,
+            address: identifier,
+            purpose: VERIFY_ACCOUNT,
+            code,
+            expiresInSeconds: EMAIL_CODE_TTL_MS / 1000,
+            afterFirstFactor: true,
+          })
+        );
+        if (sent?.kind === 'capped') {
+          await audit('refused', 'email_code', 'send_capped');
+          return throttled(Math.max(1, Math.ceil(sent.retryAfterSeconds)));
+        }
+        if (sent?.kind !== 'accepted') {
+          throw new SignInStoreUnavailableError('sendCode', new Error('not a send outcome'));
+        }
+        state.transaction = {
+          ...state.transaction,
+          emailCode: heldEmailCode({
+            purpose: VERIFY_ACCOUNT,
+            length: VERIFY_ACCOUNT_LENGTH,
+            salt,
+            hmac,
+            issuedAt,
+            ...(previous === undefined ? {} : { previous }),
+          }),
+        };
+        return null;
+      };
+      /** Mail a code and offer the step for it. */
+      const issueAndOffer = async (previous?: HeldEmailCode): Promise<RoundResult> => {
+        const refused = await issue(previous);
+        if (refused !== null) return refused;
+        const issued = state.transaction.emailCode;
+        if (issued === undefined) throw new Error('sign-in engine: no code was held');
+        return offerStep(codeOffer(issued, clock.now()));
+      };
+
+      const held = state.transaction.emailCode;
+      // The round after the factor: the first code.
+      if (held === undefined) return issueAndOffer();
+      const at = clock.now();
+      const offer = codeOffer(held, at);
+      // An answer to another step is ignored, as every eager answer is; a
+      // round with none asks for the code again.
+      if (turn.pending?.name !== 'email_code') {
+        return offerStep(offer, emailCodeExpired(held, at) ? 'code_expired' : undefined);
+      }
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('email_code');
+      turn.pending = null;
+      const { otp } = read.answer as StepAnswer<'email_code'>;
+      if (otp === undefined) {
+        // A new code once one is due; before, the same step, nothing mailed.
+        return emailCodeResendDue(held, at) ? issueAndOffer(held) : offerStep(offer);
+      }
+      if (emailCodeExpired(held, at)) {
+        await audit('refused', 'email_code', 'code_expired');
+        return offerStep(offer, 'code_expired');
+      }
+      // The ladder first: inside a wait nothing is compared or counted.
+      const identifierDigest = await identifierHmac();
+      const reservation = await fromStore('ladder', () =>
+        ladder.reserve({ realmId, identifierHmac: identifierDigest, factor: 'email_code' })
+      );
+      if (reservation.kind === 'wait') {
+        await audit('refused', 'email_code', 'locked_out');
+        return throttled(reservation.retryAfterSeconds);
+      }
+      // A digest that fails leaves the attempt counted, as a store fault
+      // after the password's reservation does.
+      const presented = await digestCode(held.salt, otp);
+      const answered = answerEmailCode(held, presented, at);
+      switch (answered.kind) {
+        case 'wrong':
+          await settleCode(reservation, 'failure');
+          state.transaction = { ...state.transaction, emailCode: answered.held };
+          await audit('refused', 'email_code', 'invalid_code');
+          return offerStep(codeOffer(answered.held, at), 'invalid_credentials');
+        case 'burned':
+          await settleCode(reservation, 'failure');
+          state.transaction = { ...state.transaction, emailCode: undefined };
+          return ended('email_code', 'code_burned');
+        case 'accepted':
+          break;
+        default:
+          // `at` is the one clock reading of both checks: an expired code
+          // was refused above.
+          throw new Error(`sign-in engine: an email code answered ${answered.kind}`);
+      }
+      // The right code clears the ladder's counter, whatever comes next.
+      await settleCode(reservation, 'success');
+      // The code is held until the address is written: a write that fails
+      // refuses the round, and the same code may be answered again.
+      const marked = await fromStore('addresses', () =>
+        codes.addresses.markVerified({ realmId, userId: subject, identifier })
+      );
+      if (marked?.kind !== 'verified') {
+        const reason = marked?.kind === 'refused' ? marked.reason : undefined;
+        if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
+          throw new SignInStoreUnavailableError('addresses', new Error('not a verification'));
+        }
+        state.transaction = { ...state.transaction, emailCode: undefined };
+        return ended('email_code', reason);
+      }
+      state.transaction = {
+        ...state.transaction,
+        emailCode: undefined,
+        verified: [
+          ...state.transaction.verified,
+          { step: 'email_code', params: read.params } as OfferedStep,
+        ],
+      };
+      await audit('passed', 'email_code');
+      return null;
     };
 
     // Rule 8's input, read on every round and never kept: a policy that
@@ -848,6 +1124,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return ended('identifier', 'subject_mismatch');
       if (!reread.enabled) return ended('identifier', 'account_disabled');
       account = reread;
+    }
+
+    // Rule 8, last: an address not proved yet is verified inline with an
+    // emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says (ADR-017 Decision
+    // 8). An account the MFA policy needs a second factor of has met it, or
+    // been redirected to the set-up step, above: never a code in its place.
+    if (emailCodes !== undefined && !account.verified) {
+      const result = await verifyAddress(emailCodes, subject);
+      if (result !== null) return result;
     }
 
     // Rule 9: complete. The transport mints the session or the code, and the

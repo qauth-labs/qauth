@@ -5,6 +5,7 @@ import type {
   StepOffer,
 } from '@qauth-labs/server-step-grammar';
 
+import type { EmailCodePurpose } from './email-code';
 import type { AuditSink } from './ports';
 import type { SignInTransaction } from './transaction';
 
@@ -17,6 +18,32 @@ export interface RoundAnswer {
   /** How it arrived: a form post (the default) or a JSON body. */
   readonly encoding?: AnswerEncoding;
 }
+
+/** What the capped sender decided about a code (#637): send it, or refuse with a 429. */
+export type EmailCodeSendOutcome =
+  /** The code goes out, or is quietly dropped at a quiet tier: the engine cannot tell, and does not try. */
+  | { readonly kind: 'accepted' }
+  /** A tier that answers 429 is full, whatever the address: nothing is mailed. */
+  | { readonly kind: 'capped'; readonly retryAfterSeconds: number };
+
+/**
+ * The transport's capped sender of email codes (PRO-14, #637), bound to the
+ * round's request: it counts the code on every send cap that applies and,
+ * unless a tier stops it, dispatches the mail after the answer is built. The
+ * code is handed over only to be mailed; the engine keeps its HMAC alone. A
+ * throw is an outage of the caps, which refuses the round: fail closed.
+ */
+export type EmailCodeSender = (mail: {
+  readonly realmId: string;
+  /** The normalised address: the transaction's identifier. */
+  readonly address: string;
+  readonly purpose: EmailCodePurpose;
+  readonly code: string;
+  /** How long the code is valid, in seconds: what the mail says. */
+  readonly expiresInSeconds: number;
+  /** The code follows a correct first factor in the same transaction: it skips the per-address ceiling. */
+  readonly afterFirstFactor: boolean;
+}) => Promise<EmailCodeSendOutcome>;
 
 /** What a round is for: the transport's view of the request, already checked by its own rules 1 and 2. */
 export interface RoundContext {
@@ -46,6 +73,12 @@ export interface RoundContext {
   readonly endUserIp?: string;
   /** Where the round's audit records go. */
   readonly audit: AuditSink;
+  /**
+   * The capped sender of email codes, bound to this round's request. An
+   * engine built with `emailCodes` needs it on every round that may mail a
+   * code: the inline verification of an account after its password (#638).
+   */
+  readonly sendCode?: EmailCodeSender;
 }
 
 /** A completed sign-in: what the transport mints a session or a code from. */

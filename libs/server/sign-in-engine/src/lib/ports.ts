@@ -17,6 +17,14 @@ export const FACTOR_TYPES = ['password', 'passkey', 'totp'] as const;
 export type FactorType = (typeof FACTOR_TYPES)[number];
 
 /**
+ * A counter of the failure ladder (#615): one per factor, and the email
+ * codes' (#638, ADR-017 Decision 7: "the same key, a separate counter"),
+ * which counts wrong codes and is never a factor.
+ */
+export const LADDER_COUNTERS = [...FACTOR_TYPES, 'email_code'] as const;
+export type LadderCounter = (typeof LADDER_COUNTERS)[number];
+
+/**
  * One authenticator bound to an account. A disabled one (the ladder's hard
  * action, `user_credentials.disabled_at`, #615) cannot be used, and still
  * counts as bound for the downgrade rule and the MFA policy (ADR-017
@@ -40,8 +48,10 @@ export interface SignInCandidate {
   readonly enabled: boolean;
   /**
    * Whether the account's primary identity is proved (for a password
-   * account, its address). `REQUIRE_VERIFIED_ACCOUNT` refuses an unverified
-   * one like a wrong password until PRO-15 (#638) verifies it inline.
+   * account, its address). An engine built with `emailCodes` proves an
+   * unverified one's password and verifies its address inline (#638); one
+   * built without refuses it like a wrong password under
+   * `REQUIRE_VERIFIED_ACCOUNT`.
    */
   readonly verified: boolean;
   /**
@@ -72,6 +82,14 @@ export interface SignInAccount {
   readonly enabled: boolean;
   /** Whether the account holds an admin role in the realm, for the `required_for_admins` MFA policy. */
   readonly admin: boolean;
+  /**
+   * Whether its primary identity is proved, read again: an account whose
+   * password credential's address is not proved yet is verified inline after
+   * its password (#638). An account with no password credential (a passkey or
+   * a wallet is its primary identity) has no address to prove and is
+   * verified.
+   */
+  readonly verified: boolean;
   /** Every authenticator bound to it, disabled ones included. */
   readonly factors: readonly BoundFactor[];
 }
@@ -184,8 +202,19 @@ export const SIGN_IN_AUDIT_REASONS = [
   'invalid_credentials',
   /** The password was right, and the user is disabled. */
   'account_disabled',
-  /** The password was right, and the account is unverified while `REQUIRE_VERIFIED_ACCOUNT` is on. */
+  /**
+   * The password was right, and the account is unverified while
+   * `REQUIRE_VERIFIED_ACCOUNT` is on, in an engine built without email codes.
+   */
   'email_not_verified',
+  /** A wrong email code (#638): refused and counted, in the transaction and on its ladder. */
+  'invalid_code',
+  /** An email code answered after its 10 minutes: nothing was compared or counted. */
+  'code_expired',
+  /** The 5th wrong email code of a transaction: the code is burned, and the transaction ends. */
+  'code_burned',
+  /** A send cap that answers 429 refused the code's mail (#637): nothing was mailed. */
+  'send_capped',
   /** The identifier's ladder is inside a wait: not verified, not counted. */
   'locked_out',
   /** One subject per transaction: another identifier, or another user's proof. */
@@ -230,6 +259,45 @@ export type SignInAuditRecord = {
 
 /** Where a round's audit records go: the transport's event writer, in order. A write that fails fails the round. */
 export type AuditSink = (record: SignInAuditRecord) => Promise<void>;
+
+/**
+ * An email code's keyed HMAC (#638): HMAC-SHA-256 under a server-side key,
+ * over the realm, the code's own salt and the code, base64url without padding
+ * (43 characters). The transaction holds this and the salt, never the code.
+ * A throw is an outage, which refuses the round.
+ */
+export type EmailCodeDigest = (input: {
+  readonly realmId: string;
+  readonly salt: string;
+  readonly code: string;
+}) => Promise<string>;
+
+/** What marking an address verified found. */
+export type AddressVerification =
+  /** The address is verified now. */
+  | { readonly kind: 'verified' }
+  /**
+   * Nothing was written: the account is disabled (`account_disabled`), or the
+   * address names no password credential of the subject (`subject_mismatch`).
+   * The transaction ends.
+   */
+  | { readonly kind: 'refused'; readonly reason: 'account_disabled' | 'subject_mismatch' };
+
+/** Where the engine marks an address verified: its only write to an account. */
+export interface AddressVerifier {
+  /**
+   * Mark `identifier`, the address of the password credential of `userId` in
+   * the realm, verified: the credential's `email_verified` and the email
+   * attribute's verified flag, in one database transaction, and only while
+   * the user is enabled. Idempotent. A throw is an outage, which refuses the
+   * round with nothing written.
+   */
+  markVerified(input: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly identifier: string;
+  }): Promise<AddressVerification>;
+}
 
 /** The engine's clock: `now` in epoch milliseconds, and a wait. */
 export interface Clock {
