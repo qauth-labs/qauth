@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { checkRetrySchedule, DEFAULT_RETRY_SCHEDULE, retryDelayMs } from './retry';
 
-describe('retryDelayMs', () => {
+describe('retryDelayMs — the delay before each retransmission (Back-Channel Logout 1.0 §2.5)', () => {
   const schedule = { initialDelayMs: 1_000, maxDelayMs: 10_000, multiplier: 2, jitter: 0.2 };
 
   it('doubles from the first delay up to the cap, before jitter', () => {

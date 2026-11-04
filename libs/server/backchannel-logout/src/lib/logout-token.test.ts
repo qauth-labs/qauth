@@ -112,7 +112,7 @@ describe('logout token (OpenID Connect Back-Channel Logout 1.0 §2.4, #624)', ()
     expect(events).toEqual({ [BACKCHANNEL_LOGOUT_EVENT]: {} });
   });
 
-  it('expires at most two minutes after it is issued (§4)', async () => {
+  it('expires at most two minutes after it is issued, as the security considerations advise (§2.4 exp)', async () => {
     const claims = logoutTokenClaims({ audience: 'rp', sid: SID, jti: 'j', now: NOW });
     expect(claims.exp - claims.iat).toBeLessThanOrEqual(120);
     const { token, publicKey } = await signAsTheSigner(claims);

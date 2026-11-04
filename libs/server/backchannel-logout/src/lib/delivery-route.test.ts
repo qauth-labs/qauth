@@ -152,6 +152,16 @@ describe('createBackchannelLogoutRoute (OpenID Connect Back-Channel Logout 1.0, 
     });
   });
 
+  it('POSTs to a URI with a query as it was registered, and keeps the query (§2.2)', async () => {
+    const uri = 'https://rp.example/backchannel?tenant=a&x=1';
+    const { route, request, context } = setup({ found: client({ uri }) });
+
+    await route.deliver(delivery, ended(), context);
+
+    expect(request.mock.calls[0][0].url).toBe(uri);
+    expect(request.mock.calls[0][0].body).toBe('logout_token=signed.logout.token');
+  });
+
   it('lets only a URI an admin set use the egress allowlist (ADR-019 Decision 8)', async () => {
     const { route, request, context } = setup({ found: client({ uriSource: 'admin' }) });
 
@@ -160,7 +170,7 @@ describe('createBackchannelLogoutRoute (OpenID Connect Back-Channel Logout 1.0, 
     expect(request.mock.calls[0][0].source).toBe('admin');
   });
 
-  it('keeps the jti of a delivery across its retries, and signs a fresh iat and exp each time', async () => {
+  it('keeps the jti of a delivery across its retries, and signs a fresh iat and exp each time (§2.4 jti)', async () => {
     let now = NOW;
     const clients: BackchannelLogoutClientSource = {
       listDestinations: vi.fn(async () => []),
@@ -219,7 +229,7 @@ describe('createBackchannelLogoutRoute (OpenID Connect Back-Channel Logout 1.0, 
     });
   });
 
-  it('a 204 delivers', async () => {
+  it('a 204 delivers, as an OP should be prepared to accept (§2.8)', async () => {
     const { route, context } = setup({ respond: async () => ({ status: 204 }) });
     expect(await route.deliver(delivery, ended(), context)).toEqual({ ok: true, statusCode: 204 });
   });

@@ -136,6 +136,19 @@
       "increment": 6,
       "sealed": true,
       "scopeNote": "The end-session endpoint of #675: the request parameters and their checks (§2), end_session_endpoint in discovery (§2.1), the redirect back to a registered URI (§3), the post_logout_redirect_uris client metadata (§3.1) and the error handling (§4). Rows cover the OP's obligations in those sections; the RP's own (the parameters it is RECOMMENDED to send, the URI schemes it SHOULD register) have none. Sections 5 and later are considerations no test cites, so the spec is sealed."
+    },
+    {
+      "id": "oidc-backchannel-1_0",
+      "name": "OpenID Connect Back-Channel Logout 1.0",
+      "url": "https://openid.net/specs/openid-connect-backchannel-1_0.html",
+      "aliases": [
+        "OpenID Connect Back-Channel Logout 1.0",
+        "OIDC Back-Channel Logout 1.0",
+        "Back-Channel Logout 1.0"
+      ],
+      "increment": 7,
+      "sealed": true,
+      "scopeNote": "The back-channel logout of #624: the discovery members (§2.1), the client metadata and its URI rules (§2.2), the logout token (§2.4), the POST and its retransmission (§2.5), the one §2.6 rule the token itself must meet, and the 204 an OP must accept (§2.8). Rows cover the OP's obligations in those sections; the RP's own (validation, logout actions, its response) are n/a. §3 holds no requirement of its own, and §4 and later are considerations, so the spec is sealed."
     }
   ]
 }
