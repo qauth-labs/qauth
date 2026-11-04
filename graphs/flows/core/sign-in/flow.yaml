@@ -474,8 +474,9 @@ states:
       The downgrade rule: the transaction must prove the account's strongest bound factor (a passkey above a password),
       and a disabled factor still counts as bound. Then the MFA policy just read: when it requires a second factor, the
       transaction's amr must carry mfa, and an account with no usable second factor gets the set-up step, never a
-      code. Then an address not proved yet is verified inline. The step that would meet the first two is a later
-      issue's; until it exists, the engine answers a redirect.
+      code. Then an address not proved yet is verified inline, before a second factor the account has is asked for
+      (ADR-017 Decision 4, rule 8). The step that would meet the first two is a later issue's; until it exists, the
+      engine answers a redirect.
     always:
       - guard: passkeyBound
         target: redirected

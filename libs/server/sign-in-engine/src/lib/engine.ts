@@ -102,8 +102,9 @@ import {
  *    factor, a disabled one included), then the MFA policy just read, then,
  *    with `emailCodes`, the inline verification of an address not proved yet
  *    (#638): an emailed code, never a factor, whatever
- *    `REQUIRE_VERIFIED_ACCOUNT` says. An account that lacks the second
- *    factor the policy requires gets the set-up step first, never a code.
+ *    `REQUIRE_VERIFIED_ACCOUNT` says, before the second factor the policy
+ *    asks for. An account that lacks the second factor the policy requires
+ *    gets the set-up step first, never a code.
  * 9. Complete: the transport mints the session or the code.
  *
  * Until a factor succeeds, nothing the engine answers depends on the account:
@@ -1092,6 +1093,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       return ended('identifier', 'subject_mismatch');
     if (!provenAccount.enabled) return ended('identifier', 'account_disabled');
     let account: SignInAccount = provenAccount;
+    // An address this transaction has still to verify: the account's is not
+    // proved, and no code of this transaction proved it.
+    const addressPending = (current: SignInAccount): boolean =>
+      !current.verified && !state.transaction.verified.some((step) => step.step === 'email_code');
 
     for (;;) {
       const current: SignInAccount = account;
@@ -1111,6 +1116,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       } else if (secondFactorRequired(policy, current) && !provesMfa(state.transaction.verified)) {
         // The MFA policy: the transaction's amr must carry mfa.
         needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(candidate);
+        // An account that lacks the factor gets the set-up step, below, never
+        // a code. One that has it verifies its address first: rule 8 asks for
+        // the verification before the second factor (ADR-017 Decision 4).
+        if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
+          const result = await verifyAddress(emailCodes, subject);
+          if (result !== null) return result;
+        }
       }
       if (needed === null) break;
       // No step can meet the rule yet, or the transport cannot serve one.
@@ -1126,11 +1138,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       account = reread;
     }
 
-    // Rule 8, last: an address not proved yet is verified inline with an
-    // emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says (ADR-017 Decision
-    // 8). An account the MFA policy needs a second factor of has met it, or
-    // been redirected to the set-up step, above: never a code in its place.
-    if (emailCodes !== undefined && !account.verified) {
+    // Rule 8: an address not proved yet is verified inline with an emailed
+    // code, whatever REQUIRE_VERIFIED_ACCOUNT says (ADR-017 Decision 8). Here
+    // when no second factor is asked for; an account the MFA policy needs one
+    // of verified it before that factor, above, or was redirected to the
+    // set-up step: never a code in its place.
+    if (emailCodes !== undefined && addressPending(account)) {
       const result = await verifyAddress(emailCodes, subject);
       if (result !== null) return result;
     }

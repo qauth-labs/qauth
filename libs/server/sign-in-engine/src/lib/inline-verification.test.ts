@@ -182,17 +182,18 @@ describe('the code step after a correct password', () => {
     expect(built.sender.sent).toEqual([]);
   });
 
-  it('verifies the address after the second factor the policy requires', async () => {
+  it('verifies the address before the second factor the policy requires (rule 8)', async () => {
+    const verifyTotp = vi.fn(async () => ({
+      kind: 'proved' as const,
+      account: { userId: USER, enabled: true, verified: true },
+    }));
     const totp = {
       step: 'totp',
       role: 'second_factor',
       factor: 'totp',
       usableBy: () => true,
       params: () => ({ digits: 6 }),
-      verify: async () => ({
-        kind: 'proved' as const,
-        account: { userId: USER, enabled: true, verified: false },
-      }),
+      verify: verifyTotp,
     } as unknown as AnyStepHandler;
     const built = build(
       passwordAccount(USER, PASSWORD, {
@@ -203,23 +204,34 @@ describe('the code step after a correct password', () => {
     );
     built.policy.policy = { realm: 'required', client: 'off' };
     const second = await toCode(built);
-    expect(second).toMatchObject({ kind: 'step', offer: { current: { step: 'totp' } } });
-    expect(built.sender.sent).toEqual([]);
-    const third = await built.engine.advance(
+    expect(second).toMatchObject({ kind: 'step', offer: { current: { step: 'email_code' } } });
+    expect(built.sender.sent).toHaveLength(1);
+    // An eager answer to the second factor is ignored while the code is pending.
+    const eager = await built.engine.advance(
       kept(second),
       answer('totp', { otp: '123456' }),
       context(built)
     );
-    expect(third).toMatchObject({ kind: 'step', offer: { current: { step: 'email_code' } } });
-    const fourth = await built.engine.advance(
-      kept(third),
+    expect(eager).toMatchObject({ kind: 'step', offer: { current: { step: 'email_code' } } });
+    expect(verifyTotp).not.toHaveBeenCalled();
+    const third = await built.engine.advance(
+      kept(eager),
       codeAnswer(built.sender.last),
       context(built)
     );
+    expect(third).toMatchObject({ kind: 'step', offer: { current: { step: 'totp' } } });
+    expect(built.addresses.calls).toHaveLength(1);
+    const fourth = await built.engine.advance(
+      kept(third),
+      answer('totp', { otp: '123456' }),
+      context(built)
+    );
+    expect(verifyTotp).toHaveBeenCalledTimes(1);
     expect(fourth).toMatchObject({
       kind: 'complete',
       signIn: { amr: ['pwd', 'otp', 'mfa'] },
     });
+    expect(built.sender.sent).toHaveLength(1);
   });
 
   it('redirects a transport that cannot serve the step, mailing nothing', async () => {
