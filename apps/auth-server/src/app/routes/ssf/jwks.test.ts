@@ -23,6 +23,8 @@ import ssfRoutes from './index';
 
 const REALM_ID = '0192a000-0000-7000-8000-000000000001';
 const EVENT_KEY = { kty: 'OKP', crv: 'Ed25519', x: 'event-x', alg: 'EdDSA', kid: 'event' };
+/** The realm's RS256 event key, which signs logout tokens and no SET (#624). */
+const LOGOUT_KEY = { kty: 'RSA', n: 'logout-n', e: 'AQAB', alg: 'RS256', kid: 'logout' };
 
 const apps: FastifyInstance[] = [];
 
@@ -42,7 +44,10 @@ async function buildApp(
   app.setSerializerCompiler(serializerCompiler);
   const getVerificationKeys = vi.fn(
     options.getVerificationKeys ??
-      (async () => [{ kid: 'event', status: 'active', publicJwk: EVENT_KEY }])
+      (async () => [
+        { kid: 'event', algorithm: 'EdDSA', status: 'active', publicJwk: EVENT_KEY },
+        { kid: 'logout', algorithm: 'RS256', status: 'active', publicJwk: LOGOUT_KEY },
+      ])
   );
   const requireJwt = vi.fn();
   app.decorate('ssf', {} as never);
@@ -63,7 +68,7 @@ async function buildApp(
 }
 
 describe('GET /ssf/jwks.json', () => {
-  it("serves the realm's SET keys to anyone, cacheable for five minutes", async () => {
+  it("serves the realm's SET keys to anyone, cacheable for five minutes, and not its logout-token key", async () => {
     const { app, getVerificationKeys, requireJwt } = await buildApp();
 
     const res = await app.inject({ method: 'GET', url: '/ssf/jwks.json' });

@@ -14,3 +14,6 @@ export {
   OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
   OID4VP_REQUEST_OBJECT_TYP as SIGNER_REQUEST_OBJECT_TYP,
 } from '@qauth-labs/server-keys';
+// The algorithm of each event token kind (#624), so the SSF transmitter's JWKS
+// lists the keys that sign SETs and no logout-token key.
+export { EVENT_TOKEN_ALGORITHM } from '@qauth-labs/server-keys';
