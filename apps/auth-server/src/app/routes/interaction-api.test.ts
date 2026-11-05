@@ -1233,7 +1233,7 @@ describe('the events of a client whose id is longer than an event holds (#616)',
 
 describe('the method of user.signed_in (#639)', () => {
   /** The `user.signed_in` event's data of the sign-in that completes after `round`. */
-  async function signedInAfter(round: typeof PASSWORD_ROUND): Promise<unknown> {
+  async function signedInAfter(round: object): Promise<unknown> {
     engine.advance.mockResolvedValueOnce(round).mockResolvedValueOnce(COMPLETE_ROUND);
     const browser = new Browser();
     const id = await browser.start();
