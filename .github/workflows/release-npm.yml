@@ -12,10 +12,13 @@
 # release candidate goes to the `next` dist-tag, a release to `latest`. A
 # staged version goes live only when a maintainer approves it on npmjs.com
 # with 2FA. The run leaves one draft release with every tarball and QAuth's
-# CHANGELOG section as its notes. See RELEASING.md.
+# CHANGELOG section attached as release-notes-<version>.md. Its body is short
+# and links that section: the repository host refuses a release body over
+# 125,000 characters, and a CHANGELOG section can be longer. See RELEASING.md.
 #
 # Every pull request packs, stamps, checks and installs the same way as a dry
-# run, at the newest version CHANGELOG.md names, and publishes nothing.
+# run, at the newest version CHANGELOG.md names, builds the release body and
+# notes, and publishes nothing.
 #
 # npm's trusted publisher for each @qauth-labs SDK names this file:
 # release-npm.yml, environment npm.
@@ -74,6 +77,13 @@ jobs:
             echo "dist-tag=$(field distTag)"
             echo "packages=$(field packages)"
           } >> "$GITHUB_OUTPUT"
+      - name: Build the draft release's body and full notes, so a break fails before anything is staged
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          node scripts/sdk-release/notes.mjs "$VERSION" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$RUNNER_TEMP/notes"
+          cat "$RUNNER_TEMP/notes/release-body.md"
 
   pack:
     needs: plan
@@ -159,7 +169,8 @@ jobs:
         working-directory: pack
         run: npm stage publish ./*.tgz --tag "$DIST_TAG" --access public
 
-  # One draft release per tag, with every SDK tarball and QAuth's notes.
+  # One draft release per tag, with every SDK tarball, its checksum and QAuth's
+  # notes in full as a file; the body links the notes.
   draft-release:
     needs: [plan, publish]
     if: needs.plan.outputs.publish == 'true'
@@ -168,7 +179,6 @@ jobs:
       contents: write
     env:
       VERSION: ${{ needs.plan.outputs.version }}
-      DIST_TAG: ${{ needs.plan.outputs.dist-tag }}
       TAG: ${{ github.ref_name }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -184,20 +194,12 @@ jobs:
           pattern: sdk-*
           merge-multiple: true
           path: pack
-      - name: Draft the release with the SDK tarballs and QAuth's changelog section
+      - name: Draft the release with the SDK tarballs and QAuth's notes as a file
         run: |
           set -euo pipefail
-          node scripts/sdk-release/notes.mjs "$VERSION" > notes.md
-          {
-            echo
-            echo "---"
-            echo
-            echo "The SDK packages are staged on npm as \`$VERSION\` (dist-tag \`$DIST_TAG\`), with"
-            echo "provenance. They go live when a maintainer approves each stage on npmjs.com"
-            echo "with 2FA; publish this draft after that. The server images and their digests"
-            echo "are in the release-images run of the same tag."
-          } >> notes.md
+          notes="$RUNNER_TEMP/notes"
+          node scripts/sdk-release/notes.mjs "$VERSION" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$notes"
           prerelease=()
           case "$VERSION" in *-rc.*) prerelease=(--prerelease) ;; esac
-          gh release create "$TAG" pack/*.tgz pack/*.sha256 \
-            --draft --verify-tag --title "$TAG" --notes-file notes.md "${prerelease[@]}"
+          gh release create "$TAG" pack/*.tgz pack/*.sha256 "$notes/release-notes-$VERSION.md" \
+            --draft --verify-tag --title "$TAG" --notes-file "$notes/release-body.md" "${prerelease[@]}"
