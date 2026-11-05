@@ -65,6 +65,11 @@ export const POLICIES_READ_FROM_REALM_ROW: ReadonlySet<string> = new Set([
   'mail.smtp.port',
   'mail.smtp.secure',
   'mail.smtp.user',
+  // The bot challenge (`helpers/bot-challenge.ts`, #643): whether every
+  // registration passes it first, and the built-in proof of work's
+  // difficulty, read for every challenge.
+  'botChallenge.requiredAtSignUp',
+  'botChallenge.difficulty',
 ]);
 
 /**
