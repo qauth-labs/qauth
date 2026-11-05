@@ -2,6 +2,7 @@ import { request as httpRequest } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 import type { EngineMail } from '@qauth-labs/fastify-plugin-email';
+import { type ProofOfWorkParams, solveProofOfWork } from '@qauth-labs/shared-interaction-client';
 import {
   CEREMONY_PAGE_PREFIX,
   INTERACTION_API_PREFIX,
@@ -37,7 +38,9 @@ import {
  * whatever `REQUIRE_VERIFIED_ACCOUNT` says; after 5 wrong codes across two
  * transactions the next attempt inside the email-code ladder's wait is
  * refused and the account stays unverified; and a correct code outside a wait
- * is accepted, verifies the address and completes the sign-in.
+ * is accepted, verifies the address and completes the sign-in. Past the
+ * ladder's free failures the next round first asks for the bot challenge
+ * (#643; ADR-017 Decision 7), which the page's own solver answers.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
@@ -49,6 +52,7 @@ const HOST = 'auth.example.com';
 const IDENTIFIER = stepUrn('identifier');
 const PASSWORD = stepUrn('password');
 const EMAIL_CODE = stepUrn('email_code');
+const CAPTCHA = stepUrn('captcha');
 
 const AUTHORIZE_REQUEST = {
   response_type: 'code' as const,
@@ -388,6 +392,27 @@ describe('the inline verification of an account (#638, real containers)', () => 
     const fifth = await second.answer(b.id, EMAIL_CODE, { otp: wrong(b.code) });
     expect(fifth.status, fifth.body).toBe(303);
     expect(await second.read(b.id)).toMatchObject({ error: 'invalid_credentials' });
+
+    // The 5th wrong code passed the email-code ladder's free failures (a soft
+    // threshold, PRO-12): the next round asks for the bot challenge before
+    // its answer is read (#643, rule 5), and the code step resumes after it.
+    const challenged = await second.answer(b.id, EMAIL_CODE, { otp: b.code });
+    expect(challenged.status, challenged.body).toBe(303);
+    const offered = await second.read(b.id);
+    expect(offered.step).toBe(CAPTCHA);
+    const params = offered.params?.[CAPTCHA] as unknown as ProofOfWorkParams;
+    expect(params).toMatchObject({ provider: 'pow', difficulty: 18 });
+    const failed = await second.answer(b.id, CAPTCHA, { captcha_token: 'not-a-solution' });
+    expect(failed.status, failed.body).toBe(303);
+    const again = await second.read(b.id);
+    expect(again).toMatchObject({ step: CAPTCHA, error: 'captcha_failed' });
+    const solution = await solveProofOfWork(
+      again.params?.[CAPTCHA] as unknown as ProofOfWorkParams
+    );
+    const passed = await second.answer(b.id, CAPTCHA, { captcha_token: solution });
+    expect(passed.status, passed.body).toBe(303);
+    expect((await second.read(b.id)).step).toBe(EMAIL_CODE);
+    expect(await addressVerified()).toBe(false);
 
     // Inside the wait the right code is refused, neither compared nor counted.
     const waited = await second.answer(b.id, EMAIL_CODE, { otp: b.code });

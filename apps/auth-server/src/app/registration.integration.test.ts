@@ -1,5 +1,6 @@
 import type { EngineMail } from '@qauth-labs/fastify-plugin-email';
 import { SIGN_IN_MIN_RESPONSE_TIME_MS } from '@qauth-labs/fastify-plugin-sign-in-engine';
+import { type ProofOfWorkParams, solveProofOfWork } from '@qauth-labs/shared-interaction-client';
 import {
   CEREMONY_PAGE_PREFIX,
   INTERACTION_API_PREFIX,
@@ -59,6 +60,7 @@ const PASSWORD = stepUrn('password');
 const EMAIL_CODE = stepUrn('email_code');
 const NEW_PASSWORD = stepUrn('new_password');
 const CONSENT = stepUrn('consent');
+const CAPTCHA = stepUrn('captcha');
 const FORM = { 'content-type': 'application/x-www-form-urlencoded' };
 /** A post from a page of the realm origin, as the ceremony page sends it. */
 const SAME_ORIGIN = { origin: ORIGIN, 'sec-fetch-site': 'same-origin' };
@@ -134,6 +136,18 @@ describe('registration through prompt=create (#640, real containers)', () => {
     await server().policyStore.update(
       realmId,
       { accounts: { allowSignUp: allowed } },
+      { expectedVersion: current.version }
+    );
+    server().realmHostCache.clear();
+  }
+
+  /** The realm's `botChallenge.requiredAtSignUp` policy (#643). */
+  async function realmRequiresChallenge(required: boolean): Promise<void> {
+    const current = await server().policyStore.get(realmId);
+    if (current === undefined) throw new Error(`no policies for realm ${realmId}`);
+    await server().policyStore.update(
+      realmId,
+      { botChallenge: { requiredAtSignUp: required } },
       { expectedVersion: current.version }
     );
     server().realmHostCache.clear();
@@ -507,5 +521,55 @@ describe('registration through prompt=create (#640, real containers)', () => {
     await atCode(new CookieJar());
     expect(mails.get(DISABLED_EMAIL) ?? []).toEqual([]);
     expect(await snapshot()).toEqual(before);
+  });
+
+  describe('the bot challenge before a registration (#643)', () => {
+    it.each([
+      ['the realm', () => realmRequiresChallenge(true)],
+      [
+        'the client',
+        async () => {
+          await query('UPDATE oauth_clients SET registration_challenge = true WHERE id = $1', [
+            clientRowId,
+          ]);
+        },
+      ],
+    ])(
+      'asks for it before any code is mailed when %s requires it, and resumes the identifier after it',
+      async (_who, requireChallenge) => {
+        await requireChallenge();
+        try {
+          const jar = new CookieJar();
+          const id = interactionIdOf(await authorize(jar));
+          const identified = await answer(jar, id, IDENTIFIER, { login_hint: NEW_EMAIL });
+          expect(identified.statusCode, identified.body).toBe(303);
+          const offered = await read(id);
+          expect(offered.step).toBe(CAPTCHA);
+          expect(mails.get(NEW_EMAIL) ?? []).toEqual([]);
+
+          // A wrong solution: captcha_failed, a new puzzle, and still no mail.
+          const wrong = await answer(jar, id, CAPTCHA, { captcha_token: 'not-a-solution' });
+          expect(wrong.statusCode, wrong.body).toBe(303);
+          const again = await read(id);
+          expect(again).toMatchObject({ step: CAPTCHA, error: 'captcha_failed' });
+          expect(mails.get(NEW_EMAIL) ?? []).toEqual([]);
+
+          // The page's solver answers it; the identifier step resumes.
+          const solution = await solveProofOfWork(
+            again.params?.[CAPTCHA] as unknown as ProofOfWorkParams
+          );
+          const solved = await answer(jar, id, CAPTCHA, { captcha_token: solution });
+          expect(solved.statusCode, solved.body).toBe(303);
+          expect((await read(id)).step).toBe(IDENTIFIER);
+          const resumed = await answer(jar, id, IDENTIFIER, { login_hint: NEW_EMAIL });
+          expect(resumed.statusCode, resumed.body).toBe(303);
+          expect((await mailed(NEW_EMAIL)).template).toBe('code');
+          expect((await read(id)).step).toBe(EMAIL_CODE);
+        } finally {
+          await realmRequiresChallenge(false);
+        }
+      },
+      60_000
+    );
   });
 });
