@@ -24,7 +24,7 @@ export type SignInEnginePluginOptions = FastifyPluginOptions &
     /**
      * Whether the server runs in production. Defaults to
      * `NODE_ENV === 'production'`. In production the engine is built only
-     * with a `ladder` hook and a `passwordHardAction`.
+     * with a `ladder` hook, a `limits` hook and a `passwordHardAction`.
      */
     readonly production?: boolean;
   };
@@ -40,10 +40,13 @@ export const SIGN_IN_ENGINE_PLUGIN_NAME = packageJson.name;
  * In production it refuses an engine without a `ladder` hook (the
  * per-account ladder of `createRedisFailureLadder`, #615): the engine's
  * default ladder counts nothing, so a password could be guessed without
- * limit. It refuses one without a `passwordHardAction` too: the default never
- * disables a password at the ladder's hard ceiling, whatever arms it.
+ * limit. It refuses one without a `limits` hook (the round limits of
+ * `createRoundLimiter` over `createRedisRoundLimits`, #636): without it one
+ * end-user IP could try a password on every account. It refuses one without a
+ * `passwordHardAction` too: the default never disables a password at the
+ * ladder's hard ceiling, whatever arms it.
  *
- * @throws Error in production when `hooks.ladder` or `passwordHardAction` is absent
+ * @throws Error in production when `hooks.ladder`, `hooks.limits` or `passwordHardAction` is absent
  */
 export function createCheckedSignInEngine(options: SignInEnginePluginOptions): SignInEngine {
   const { production = process.env['NODE_ENV'] === 'production', ...dependencies } = options;
@@ -51,6 +54,12 @@ export function createCheckedSignInEngine(options: SignInEnginePluginOptions): S
     throw new Error(
       'sign-in engine: a production server needs a ladder hook (#615); without one a ' +
         'password could be guessed without limit'
+    );
+  }
+  if (production && dependencies.hooks?.limits === undefined) {
+    throw new Error(
+      'sign-in engine: a production server needs a limits hook (#636); without one no ' +
+        'end-user IP or client is limited across accounts'
     );
   }
   if (production && dependencies.passwordHardAction === undefined) {
@@ -68,7 +77,7 @@ export function createCheckedSignInEngine(options: SignInEnginePluginOptions): S
  * answer route, #616; the FiPA endpoint, #646) register it with the adapters
  * of this library over the server's repositories, password hasher and signer.
  *
- * @throws Error in production when `hooks.ladder` or `passwordHardAction` is absent
+ * @throws Error in production when `hooks.ladder`, `hooks.limits` or `passwordHardAction` is absent
  */
 export const signInEnginePlugin = fp(
   async (fastify: FastifyInstance, options: SignInEnginePluginOptions) => {
