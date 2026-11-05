@@ -5,7 +5,7 @@ import {
   SAMPLE_CONFIG,
   sampleProviderEgress,
 } from '../../testing/sample-auth-method.fixture';
-import type { AuthMethod, AuthMethodContext } from './auth-method.interface';
+import type { AuthMethod, AuthMethodContext } from './auth-method';
 import { createAuthMethodContext } from './context';
 import { MAX_UPSTREAM_TRANSACTION_BYTES } from './contract';
 import { completeUpstreamStep, startUpstreamStep, upstreamBindingMatches } from './engine';

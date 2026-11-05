@@ -1,0 +1,12 @@
+{
+  // The tests, the sample fixture and the example plugin, type-checked with
+  // the sources (the `typecheck` target runs both configs). The example
+  // imports this package by name, which resolves to src/ here.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "composite": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "testing/**/*.ts", "examples/**/*.ts"]
+}

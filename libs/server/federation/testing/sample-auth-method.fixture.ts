@@ -2,23 +2,24 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { z } from 'zod';
 
-import type {
-  AuthMethod,
-  AuthMethodEgressRequest,
-  AuthMethodEgressResponse,
-  AuthMethodParameters,
-  UpstreamCallbackOutcome,
-  UserAttribute,
-  VerifiedIdentity,
+import {
+  AUTH_METHOD_CONTRACT,
+  type AuthMethod,
+  type AuthMethodEgressResponse,
+  type AuthMethodParameters,
+  UPSTREAM_STEP_URN,
+  type UpstreamCallbackOutcome,
+  type UserAttribute,
+  type VerifiedIdentity,
 } from '../src';
-import { AUTH_METHOD_CONTRACT, UPSTREAM_STEP_URN } from '../src/auth-method/contract';
-import type { AuthMethodKitScenario } from '../src/testing';
 
 /**
- * A sample AuthMethod for the contract's own tests (#599): a small
- * authorization-code method against a fake provider, written the way a plugin
- * author would write one. It is not OpenID Connect; the generic OIDC upstream
- * client is #601.
+ * A sample AuthMethod for the registry's and the plugin loader's tests (#599,
+ * #600): a small authorization-code method against a fake provider, written
+ * the way a plugin author would write one. It is not OpenID Connect; the
+ * generic OIDC upstream client is #601. The contract's own tests, and the
+ * kit's, run the same method in `@qauth-labs/plugin-sdk`
+ * (`libs/sdk/plugin-sdk/testing/sample-auth-method.fixture.ts`).
  *
  * What it shows:
  *
@@ -222,70 +223,6 @@ export function createSampleAuthMethod(
           verified: identity.rawClaims['email_verified'] === true,
         },
       ];
-    },
-  };
-}
-
-/** The sample provider's config in the kit's realm. */
-export const SAMPLE_CONFIG: SampleConfig = {
-  authorizationEndpoint: `${PROVIDER}/authorize`,
-  tokenEndpoint: `${PROVIDER}/token`,
-  clientId: 'kit-client',
-  clientSecret: 'kit-client-secret-value',
-};
-
-/** The subject the fake provider signs in. */
-export const SAMPLE_SUBJECT = 'provider-subject-248';
-
-/**
- * The fake provider's token endpoint: a code is `code-for-<subject>`, and a
- * token request without a PKCE verifier is refused. (Whether the verifier
- * matches the challenge is the kit's check.)
- */
-export function sampleProviderEgress(request: AuthMethodEgressRequest): AuthMethodEgressResponse {
-  const json = (status: number, body: unknown): AuthMethodEgressResponse => ({
-    status,
-    headers: { 'content-type': 'application/json' },
-    body: Buffer.from(JSON.stringify(body), 'utf8'),
-    url: request.url,
-  });
-  if (request.url !== SAMPLE_CONFIG.tokenEndpoint || request.method !== 'POST') {
-    return json(404, { error: 'not_found' });
-  }
-  const form = new URLSearchParams(typeof request.body === 'string' ? request.body : '');
-  const code = form.get('code') ?? '';
-  if (
-    form.get('client_secret') !== SAMPLE_CONFIG.clientSecret ||
-    !code.startsWith('code-for-') ||
-    (form.get('code_verifier') ?? '') === ''
-  ) {
-    return json(400, { error: 'invalid_grant' });
-  }
-  return json(200, {
-    sub: code.slice('code-for-'.length),
-    email: 'person@example.com',
-    email_verified: true,
-  });
-}
-
-/** The kit's scenario for the sample method: GET callbacks, or `form_post` ones. */
-export function sampleScenario(
-  options: { readonly responseMode?: 'query' | 'form_post' } = {}
-): AuthMethodKitScenario {
-  const back = (parameters: Record<string, string>) =>
-    options.responseMode === 'form_post'
-      ? { path: '/callback', method: 'POST' as const, form: parameters }
-      : { path: '/callback', method: 'GET' as const, query: parameters };
-  return {
-    config: SAMPLE_CONFIG,
-    egress: sampleProviderEgress,
-    callback(authorizationRequest) {
-      const state = authorizationRequest.searchParams.get('state') ?? '';
-      return back({ code: `code-for-${SAMPLE_SUBJECT}`, state });
-    },
-    declined(authorizationRequest) {
-      const state = authorizationRequest.searchParams.get('state') ?? '';
-      return back({ error: 'access_denied', state });
     },
   };
 }

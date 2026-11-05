@@ -11,6 +11,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@qauth-labs/plugin-sdk": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "vitest": "catalog:"

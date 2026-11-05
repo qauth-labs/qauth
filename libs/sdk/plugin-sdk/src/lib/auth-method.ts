@@ -1,12 +1,12 @@
 import type { z } from 'zod';
 
-import type { CredentialProvider } from '../providers/credential-provider.interface';
 import type {
   AUTH_METHOD_CONTRACT,
   AUTH_METHOD_ICON_MEDIA_TYPES,
   AuthMethodStepUrn,
   UpstreamFailureReason,
-} from './contract';
+} from './contract.js';
+import type { CredentialProvider } from './credential-provider.js';
 
 /**
  * The AuthMethod contract (#599): a sign-in method that plugs into QAuth's

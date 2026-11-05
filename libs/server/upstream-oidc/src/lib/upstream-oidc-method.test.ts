@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { checkAuthMethod } from '@qauth-labs/plugin-sdk/testing';
 import {
   type AuthMethod,
   type AuthMethodBounceRoute,
@@ -9,7 +10,6 @@ import {
   startUpstreamStep,
   type UpstreamStart,
 } from '@qauth-labs/server-federation';
-import { checkAuthMethod } from '@qauth-labs/server-federation/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {

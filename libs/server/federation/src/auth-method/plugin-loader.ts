@@ -1,13 +1,15 @@
-import type { AuthMethod } from './auth-method.interface';
 import {
+  assertAuthMethod,
   AUTH_METHOD_CONTRACT,
   AUTH_METHOD_CONTRACT_NAME,
-  UPSTREAM_OIDC_METHOD_ID,
-  UPSTREAM_OIDC_TYPE_PATTERN,
-} from './contract';
-import { AuthMethodContractError } from './errors';
+  AUTH_METHOD_PLUGIN_EXPORT,
+  type AuthMethod,
+  AuthMethodContractError,
+} from '@qauth-labs/plugin-sdk';
+import { authMethodSnapshot } from '@qauth-labs/plugin-sdk/host';
+
+import { UPSTREAM_OIDC_METHOD_ID, UPSTREAM_OIDC_TYPE_PATTERN } from './contract';
 import { authMethodSecretPaths } from './secret-members';
-import { assertAuthMethod, authMethodSnapshot } from './validate';
 
 /**
  * THE PLUGIN LOADER (ADR-019 Decision 12, ADR-018 §4, issue #600).
@@ -33,19 +35,6 @@ import { assertAuthMethod, authMethodSnapshot } from './validate';
  *
  * @experimental
  */
-
-/**
- * The export a plugin package names its method by: `authMethod`, an
- * AuthMethod object. A CommonJS package may put it under `default`.
- *
- * ```ts
- * // index.ts of @example/qauth-plugin-corp-sso
- * export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = { … };
- * ```
- *
- * @experimental
- */
-export const AUTH_METHOD_PLUGIN_EXPORT = 'authMethod';
 
 /**
  * Imports a plugin package by name. The production one is `import()`;

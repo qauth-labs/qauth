@@ -15,8 +15,8 @@ import type {
   AuthMethodCallbackRoute,
   AuthMethodRoute,
   UpstreamCallbackOutcome,
-} from '../auth-method/auth-method.interface';
-import { AuthMethodContractError } from '../auth-method/errors';
+} from '../lib/auth-method';
+import { AuthMethodContractError } from '../lib/errors';
 import { checkAuthMethod } from './contract-kit';
 
 /** The problems the kit reports for `method`, or `[]` when it passes. */

@@ -5,9 +5,9 @@ import type {
   AuthMethodEgressRequest,
   AuthMethodEgressResponse,
   AuthMethodLogger,
-} from './auth-method.interface';
-import { AUTH_METHOD_ROUTE_PATH_PATTERN, authMethodRoutePrefix } from './contract';
-import { AuthMethodConfigError } from './errors';
+} from './auth-method.js';
+import { AUTH_METHOD_ROUTE_PATH_PATTERN, authMethodRoutePrefix } from './contract.js';
+import { AuthMethodConfigError } from './errors.js';
 
 /**
  * The egress client as the host has it: the shape of `EgressClient.request`

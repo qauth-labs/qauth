@@ -10,28 +10,28 @@ import type {
   AuthMethodParameters,
   AuthMethodRoute,
   UpstreamStart,
-} from '../auth-method/auth-method.interface';
-import { createAuthMethodContext } from '../auth-method/context';
+} from '../lib/auth-method.js';
+import { createAuthMethodContext } from '../lib/context.js';
 import {
   completeUpstreamStep,
   presentedUpstreamBinding,
   startUpstreamStep,
   upstreamBindingMatches,
-} from '../auth-method/engine';
-import { AuthMethodContractError } from '../auth-method/errors';
-import { authMethodParameters } from '../auth-method/parameters';
-import { authMethodProblems } from '../auth-method/validate';
-import { disableFetch } from './fetch-guard';
+} from '../lib/engine.js';
+import { AuthMethodContractError } from '../lib/errors.js';
+import { authMethodParameters } from '../lib/parameters.js';
+import { authMethodProblems } from '../lib/validate.js';
+import { disableFetch } from './fetch-guard.js';
 
 /**
  * The contract test kit (#599): one function a method's author calls, in any
  * test runner, to check the method against the AuthMethod contract. It is
- * test support, served from the `testing` entry point, never from the main
- * one, and it refuses to run under `NODE_ENV=production`: while it runs, it
+ * test support, served from the `@qauth-labs/plugin-sdk/testing` entry point,
+ * never from the main one, and it refuses to run under `NODE_ENV=production`: while it runs, it
  * replaces the global `fetch`.
  *
  * ```ts
- * import { checkAuthMethod } from '@qauth-labs/server-federation/testing';
+ * import { checkAuthMethod } from '@qauth-labs/plugin-sdk/testing';
  *
  * it('meets the AuthMethod contract', async () => {
  *   await checkAuthMethod(myMethod, {

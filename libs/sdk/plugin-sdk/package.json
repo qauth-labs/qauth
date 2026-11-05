@@ -1,0 +1,70 @@
+{
+  "name": "@qauth-labs/plugin-sdk",
+  "version": "0.0.0",
+  "description": "SDK for QAuth sign-in method plugins: the experimental AuthMethod contract (qauth-auth-method/1-rc.0), its types, constants and errors, and the contract test kit, so a plugin can be written, tested and released in its own repository.",
+  "keywords": [
+    "qauth",
+    "plugin",
+    "auth-method",
+    "oauth",
+    "oidc",
+    "identity-provider",
+    "federation"
+  ],
+  "license": "Apache-2.0",
+  "homepage": "https://docs.qauth.dev/extend/auth-method-contract/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qauth-labs/qauth.git",
+    "directory": "libs/sdk/plugin-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/qauth-labs/qauth/issues"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./host": "./src/host.ts",
+    "./testing": "./src/testing/index.ts",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./host": {
+        "types": "./dist/host.d.ts",
+        "import": "./dist/host.js"
+      },
+      "./testing": {
+        "types": "./dist/testing/index.d.ts",
+        "import": "./dist/testing/index.js"
+      },
+      "./package.json": "./package.json"
+    }
+  },
+  "peerDependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "catalog:",
+    "@vitest/ui": "catalog:",
+    "vitest": "catalog:",
+    "zod": "catalog:"
+  }
+}
