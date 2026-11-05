@@ -44,7 +44,9 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 # /app/libs, which does not exist in the runner stage, so the image booted
 # straight into `Cannot find module '@qauth-labs/fastify-plugin-cache'`. The
 # real copies this produces depend on `injectWorkspacePackages: true` in
-# pnpm-workspace.yaml — the two must change together.
+# pnpm-workspace.yaml — the two must change together. Each copy holds every
+# file of its package, `files` field or not (`deployAllFiles: true` there):
+# `@qauth-labs/plugin-sdk` lists only its npm build, and runs here from source.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     pnpm --filter @qauth-labs/auth-server deploy --prod \
     --store-dir /pnpm/store /deploy

@@ -86,6 +86,14 @@ auditConfig:
 # `pnpm deploy`, which now emits a self-contained bundle whose links stay
 # inside it.
 injectWorkspacePackages: true
+# A deploy copies every file of an injected workspace package, not only those
+# its `files` field lists. The SDKs in libs/sdk/ list only their npm build
+# (`dist`, README.md, LICENSE), so a deploy that honoured `files` would copy
+# none of their sources; the auth server runs `@qauth-labs/plugin-sdk` (#1009),
+# where the AuthMethod contract is declared, from its TypeScript sources under
+# tsx, as it runs every other workspace package. Every other package has no
+# `files` field, so this changes nothing else.
+deployAllFiles: true
 onlyBuiltDependencies:
   - '@swc/core'
   - 'esbuild'
