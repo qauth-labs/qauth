@@ -80,6 +80,19 @@ export const loginHintParamSchema = z
       'OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it.',
   });
 
+/**
+ * QAuth's direct-routing parameter (#639): the type of one of the realm's
+ * upstream identity providers (`oidc_corp`), hidden ones included. When the
+ * request needs a sign-in, the endpoint starts that provider at once instead
+ * of showing the first sign-in step. A value that names no provider the
+ * realm has on is ignored, as it is with `prompt=none` and for a browser
+ * already signed in.
+ */
+export const upstreamRouteParamSchema = z.string().max(64).optional().meta({
+  description:
+    "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed.",
+});
+
 /* -------------------------------------------------------------------------- */
 /*        Grant-type, token-type and client-assertion URNs (one place)        */
 /* -------------------------------------------------------------------------- */
@@ -306,6 +319,9 @@ export const authorizeQuerySchema = z.object({
   dpop_jkt: dpopJktParamSchema,
   // OIDC Core §3.1.2.1 (#628): pre-fills the identifier step of an interaction.
   login_hint: loginHintParamSchema,
+  // QAuth's direct-routing parameter (#639): start the realm's upstream
+  // provider of this type at once.
+  qauth_upstream: upstreamRouteParamSchema,
 });
 
 export type AuthorizeQuery = z.infer<typeof authorizeQuerySchema>;

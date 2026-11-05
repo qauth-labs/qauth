@@ -2,6 +2,7 @@ import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
 import {
   interactionPersonalView,
   interactionStepView,
+  type UpstreamProviderEntry,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { ceremonyPagePath, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
@@ -45,6 +46,7 @@ import { requestRealm } from './request-realm';
 import { highestAgentModeInScopes } from './scope-modes';
 import { readSessionSideRecord } from './session-side-record';
 import { evaluateStepUp, isDangerousScope, parsePromptMode } from './step-up';
+import { upstreamProviderCatalog } from './upstream-providers';
 import { emitUserEvent, type UserEventOptions } from './user-events';
 
 /**
@@ -87,9 +89,29 @@ import { emitUserEvent, type UserEventOptions } from './user-events';
 /** The consent step's name (`urn:qauth:ia:consent:v1-rc.0`). */
 export const CONSENT_STEP = stepUrn('consent');
 
-/** The identifier step every sign-in of an authorization request starts at. */
-function identifierStep(): InteractionStep {
-  return { name: IDENTIFIER_STEP, params: {}, alternatives: [] };
+/** The `upstream` step's name (`urn:qauth:ia:upstream:v1-rc.0`, #639). */
+export const UPSTREAM_STEP = stepUrn('upstream');
+
+/**
+ * The identifier step every sign-in of an authorization request starts at,
+ * with the realm's upstream providers beside it (#639): the `upstream`
+ * alternative and its list, as the engine's first round offers them. A list
+ * the step cannot show leaves the alternative out.
+ */
+function identifierStep(providers: readonly UpstreamProviderEntry[] = []): InteractionStep {
+  const step: InteractionStep = { name: IDENTIFIER_STEP, params: {}, alternatives: [] };
+  if (providers.length === 0) return step;
+  const offered: InteractionStep = {
+    ...step,
+    alternatives: [UPSTREAM_STEP],
+    alternativeParams: { [UPSTREAM_STEP]: { providers: providers.map((entry) => ({ ...entry })) } },
+  };
+  try {
+    interactionStepView(offered);
+  } catch {
+    return step;
+  }
+  return offered;
 }
 
 /**
@@ -243,7 +265,12 @@ export async function authorizationInteractionStart(
   const carried =
     session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } };
   if (outcome.kind === 'sign_in') {
-    return { step: identifierStep(), personal: identifierPrefill(query.login_hint), ...carried };
+    const providers = await upstreamProviderCatalog(fastify).offered(target.realm.id);
+    return {
+      step: identifierStep(providers),
+      personal: identifierPrefill(query.login_hint),
+      ...carried,
+    };
   }
   if (session === null) {
     // `decideAuthorization` answers `consent` only for a session.

@@ -20,6 +20,10 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { startInteraction } from '../../helpers/interaction';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import {
+  type RealmUpstreamProviderOf,
+  upstreamProviderCatalog,
+} from '../../helpers/upstream-providers';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
@@ -56,6 +60,16 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
 }
 
 /**
+ * The authorization request without its routing parameter (`qauth_upstream`,
+ * #639): the interaction holds the request it routes, never the route.
+ */
+function withoutUpstreamRoute(query: AuthorizeQuery): AuthorizeQuery {
+  const held = { ...query };
+  delete held.qauth_upstream;
+  return held;
+}
+
+/**
  * GET /oauth/authorize
  * OAuth 2.1 Authorization Code Flow with PKCE.
  *
@@ -88,6 +102,7 @@ function buildAuthorizeUrlWithParams(request: FastifyRequest): string {
  * with only that header is treated as one without a session.
  */
 export default async function (fastify: FastifyInstance) {
+  const upstreamProviders = upstreamProviderCatalog(fastify);
   // OIDC Core §3.1.2.1: the authorization endpoint MUST support BOTH GET (params
   // in the query string) and POST (params form-encoded in the body). ONE shared
   // config and ONE shared handler back both methods, so their behaviour —
@@ -145,11 +160,56 @@ export default async function (fastify: FastifyInstance) {
         return sendAuthorizationError(reply, target.client, query.redirect_uri, outcome.params);
       case 'sign_in':
       case 'consent':
+        if (outcome.kind === 'sign_in' && query.qauth_upstream !== undefined) {
+          // The request routes to an upstream provider (#639): one the realm
+          // has on, hidden or not, starts at once; any other value is ignored.
+          const routed = await upstreamProviders.find(target.realm.id, query.qauth_upstream);
+          if (routed !== undefined) {
+            return startUpstream(request, reply, target, query, outcome, browserSession, routed);
+          }
+        }
         if (env.INTERACTION_UI_ENABLED) {
           return startCeremony(request, reply, target, query, outcome, browserSession);
         }
         return sendToPage(request, reply, outcome);
     }
+  };
+
+  /**
+   * The routing parameter (`qauth_upstream`, #639) named a provider the realm
+   * has on: start an interaction for the request, as a ceremony does, and
+   * send the browser to the route that starts the provider in it
+   * (`/ui/upstream/<type>/start`), which answers the waiting page. Whichever
+   * sign-in UI the deployment runs, the provider's leg runs in an
+   * interaction bound to the flow cookie. The interaction holds the request
+   * without the routing parameter, so a way back to the first step shows it.
+   */
+  const startUpstream = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    target: AuthorizationTarget,
+    query: AuthorizeQuery,
+    outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' }>,
+    browserSession: BrowserSession | null,
+    routed: RealmUpstreamProviderOf
+  ) => {
+    const held = withoutUpstreamRoute(query);
+    const start = await authorizationInteractionStart(
+      fastify,
+      outcome,
+      held,
+      target,
+      browserSession
+    );
+    if ('error' in start) {
+      return sendAuthorizationError(reply, target.client, query.redirect_uri, start.error);
+    }
+    const started = await startInteraction(request, reply, { request: held, ...start });
+    const type = encodeURIComponent(routed.entry.provider);
+    return reply.redirect(
+      `/ui/upstream/${type}/start?interaction=${encodeURIComponent(started.id)}`,
+      302
+    );
   };
 
   /**
@@ -184,7 +244,10 @@ export default async function (fastify: FastifyInstance) {
       }
       return sendAuthorizationError(reply, target.client, query.redirect_uri, start.error);
     }
-    const started = await startInteraction(request, reply, { request: query, ...start });
+    // The routing parameter named no provider the realm has on: the
+    // interaction holds the request without it.
+    const held = withoutUpstreamRoute(query);
+    const started = await startInteraction(request, reply, { request: held, ...start });
     return reply.redirect(ceremonyPagePath(started.id), 302);
   };
 

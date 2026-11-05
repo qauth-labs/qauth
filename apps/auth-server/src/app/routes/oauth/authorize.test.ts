@@ -279,6 +279,11 @@ function makeFastify() {
       users: {
         findById: vi.fn(async (realmId: string, id: string) => ({ id, enabled: true, realmId })),
       },
+      // The realm's upstream providers (#639): none, unless a test says otherwise.
+      realmUpstreamProviders: {
+        listByRealm: vi.fn().mockResolvedValue([]),
+        find: vi.fn().mockResolvedValue(undefined),
+      },
     },
     // A nested `transaction()` is a savepoint of the same transaction, as in
     // drizzle, so the stub hands the code insert the same handle.
@@ -1178,6 +1183,7 @@ describeModes('GET /oauth/authorize — CIMD (Client ID Metadata Documents)', ()
         },
         oauthConsents: { findActive: vi.fn() },
         authorizationCodes: { create: vi.fn().mockResolvedValue({ id: 'code-1' }) },
+        realmUpstreamProviders: { listByRealm: vi.fn(async () => []), find: vi.fn() },
       },
       jwtUtils: {
         extractFromHeader: vi.fn(),
@@ -3221,6 +3227,116 @@ describe('GET /oauth/authorize — the interactions it starts (#628)', () => {
       expect(startInteraction).not.toHaveBeenCalled();
       expect(state.redirected).toMatch(/error=(login|consent)_required/);
     }
+  });
+});
+
+/**
+ * The routing parameter (`qauth_upstream`, #639): a request that needs a
+ * sign-in and names one of the realm's upstream providers that is on,
+ * hidden or not, starts an interaction and goes to the route that starts
+ * the provider, in either sign-in UI. A value that names nothing is ignored.
+ */
+describe('GET /oauth/authorize — the routing parameter qauth_upstream (#639)', () => {
+  const PROVIDER_ROW = {
+    id: 'provider-1',
+    realmId: REALM.id,
+    type: 'oidc_corp',
+    displayName: 'Example Corp',
+    displayOrder: 0,
+    hidden: true,
+    enabled: true,
+    marksVerified: true,
+    config: {},
+  };
+
+  afterEach(() => {
+    mutableEnv.INTERACTION_UI_ENABLED = false;
+  });
+
+  async function route(query: Record<string, unknown>, row: unknown) {
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue(undefined);
+    const find = fastify.repositories.realmUpstreamProviders.find as unknown as Mock;
+    find.mockResolvedValue(row);
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      { query: { ...BASE_QUERY, ...query }, url: '/oauth/authorize', headers: {}, ip: '127.0.0.1' },
+      reply
+    );
+    return { state, find };
+  }
+
+  for (const ui of [false, true]) {
+    it(`starts a hidden provider the realm has on, with INTERACTION_UI_ENABLED=${ui}`, async () => {
+      mutableEnv.INTERACTION_UI_ENABLED = ui;
+      const { state, find } = await route({ qauth_upstream: 'oidc_corp' }, PROVIDER_ROW);
+
+      expect(find).toHaveBeenCalledWith(REALM.id, 'oidc_corp');
+      expect(state.redirected).toBe(`/ui/upstream/oidc_corp/start?interaction=${INTERACTION_ID}`);
+      const input = takeStartedInteraction();
+      expect(input.step.name).toBe(stepUrn('identifier'));
+      // The interaction holds the request without the route.
+      expect(input.request).not.toHaveProperty('qauth_upstream');
+      expect(input.request).toMatchObject({ client_id: BASE_QUERY.client_id });
+    });
+  }
+
+  it("lists the realm's listed providers beside the first step, never a hidden one", async () => {
+    mutableEnv.INTERACTION_UI_ENABLED = true;
+    const { fastify, ctx } = makeFastify();
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(CLIENT);
+    (fastify.repositories.realmUpstreamProviders.listByRealm as unknown as Mock).mockResolvedValue([
+      { ...PROVIDER_ROW, hidden: false },
+      { ...PROVIDER_ROW, type: 'oidc_hidden', displayName: 'Hidden Corp' },
+    ]);
+    const { reply } = createReply();
+    await ctx.handler!(
+      { query: BASE_QUERY, url: '/oauth/authorize', headers: {}, ip: '127.0.0.1' },
+      reply
+    );
+
+    expect(takeStartedInteraction().step).toEqual({
+      name: stepUrn('identifier'),
+      params: {},
+      alternatives: [stepUrn('upstream')],
+      alternativeParams: {
+        [stepUrn('upstream')]: { providers: [{ provider: 'oidc_corp', name: 'Example Corp' }] },
+      },
+    });
+  });
+
+  it('ignores a provider the realm has not, or has off', async () => {
+    mutableEnv.INTERACTION_UI_ENABLED = true;
+    for (const row of [undefined, { ...PROVIDER_ROW, enabled: false }]) {
+      const { state } = await route({ qauth_upstream: 'oidc_corp' }, row);
+
+      expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
+      expect(takeStartedInteraction().request).not.toHaveProperty('qauth_upstream');
+    }
+  });
+
+  it('ignores the parameter when no sign-in is needed', async () => {
+    const { state, find } = await route(
+      { qauth_upstream: 'oidc_corp', prompt: 'none' },
+      PROVIDER_ROW
+    );
+
+    expect(find).not.toHaveBeenCalled();
+    expect(state.redirected).toMatch(/error=login_required/);
+  });
+
+  it('takes a value of at most 64 characters', () => {
+    expect(
+      authorizeQuerySchema.safeParse({ ...BASE_QUERY, qauth_upstream: 'oidc_' + 'a'.repeat(59) })
+        .success
+    ).toBe(true);
+    expect(
+      authorizeQuerySchema.safeParse({ ...BASE_QUERY, qauth_upstream: 'oidc_' + 'a'.repeat(60) })
+        .success
+    ).toBe(false);
   });
 });
 

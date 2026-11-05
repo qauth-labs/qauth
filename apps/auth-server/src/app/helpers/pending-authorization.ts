@@ -270,6 +270,35 @@ export async function consumePendingAuthorization(
 }
 
 /**
+ * Read a handle WITHOUT burning it (#639): the authorize URL it stands for,
+ * or `null` when the handle is malformed, unknown, expired or already used.
+ * The sign-in page's upstream links read it to start the request again with
+ * the provider it routes to (`qauth_upstream`); the handle stays for the
+ * page's own sign-in. A Redis failure reads as a miss, as
+ * {@link consumePendingAuthorization} treats it.
+ */
+export async function peekPendingAuthorization(
+  fastify: FastifyInstance,
+  handle: unknown
+): Promise<string | null> {
+  if (!isPendingAuthorizationHandle(handle)) return null;
+  let record: PendingAuthorization | null;
+  try {
+    record = await fastify.sessionUtils.getSession<PendingAuthorization>(
+      `${PENDING_AUTHORIZATION_KEY_PREFIX}${handle}`
+    );
+  } catch (error) {
+    fastify.log.warn(
+      { err: error },
+      'pending authorization store unavailable; treating as expired'
+    );
+    return null;
+  }
+  if (!record) return null;
+  return normalizeInternalAuthorizeUrl(record.authorizeUrl);
+}
+
+/**
  * The ONE way every call site bounces a user to the login page.
  *
  * Centralised on purpose: #316 was a "fixed one site, missed the others" bug,

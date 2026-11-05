@@ -115,10 +115,9 @@ describe('what each role loads (the boot-time list)', () => {
   /**
    * The repositories no process builds: nothing reads them. Custom admin
    * roles are read only through the grants until the admin API's role routes
-   * ship (#679). The upstream providers are read by the sign-in flow (#639)
-   * and written by the admin API (#714), neither of which is routed yet.
+   * ship (#679).
    */
-  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles', 'realmUpstreamProviders'];
+  const UNUSED: readonly RepositoryName[] = ['auditLogs', 'adminRoles'];
 
   it('builds every repository but the unused ones in a single process', () => {
     expect(repositoriesFor(SERVICE_ROLE_NAMES)).toEqual(

@@ -1,6 +1,7 @@
 import {
   type PasswordAttempt,
   SignInStoreUnavailableError,
+  type UpstreamProviderEntry,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
@@ -17,6 +18,10 @@ import { verifyPasswordCredential } from '../../helpers/credential-auth';
 import { recordSuccessfulLogin, registerLoginAttempt } from '../../helpers/failed-login';
 import { html, render } from '../../helpers/html';
 import { ladderEndUserIp } from '../../helpers/password-attempts';
+import {
+  normalizeInternalAuthorizeUrl,
+  RESUME_PATH_PREFIX,
+} from '../../helpers/pending-authorization';
 import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
 import { isSafeReturnTo } from '../../helpers/return-to';
@@ -31,6 +36,7 @@ import {
   verifyLoginCsrfCookie,
 } from '../../helpers/session-cookie';
 import { ensureMinimumResponseTime } from '../../helpers/timing';
+import { upstreamProviderCatalog } from '../../helpers/upstream-providers';
 import { emitUserEvent } from '../../helpers/user-events';
 import { walletLoginOfferedIn } from '../../helpers/wallet-login-request';
 import { type LoginForm, loginFormSchema } from '../../schemas/auth';
@@ -68,8 +74,15 @@ function loginPage(opts: {
    * rather than a link that refuses (#296, LOCKED).
    */
   walletLoginOffered: boolean;
+  /**
+   * The realm's upstream providers the page offers (#639): a link each, to
+   * the request the page was opened for, routed to the provider. Empty when
+   * the page is for no authorization request, or the realm lists none.
+   */
+  upstreamProviders: readonly UpstreamProviderEntry[];
 }): string {
-  const { returnTo, cspNonce, csrfToken, error, email, walletLoginOffered } = opts;
+  const { returnTo, cspNonce, csrfToken, error, email, walletLoginOffered, upstreamProviders } =
+    opts;
   const walletLoginHref = `/ui/wallet-login?return_to=${encodeURIComponent(returnTo)}`;
   return render(
     html`<!doctype html>
@@ -157,6 +170,14 @@ function loginPage(opts: {
               background: #fff;
               padding: 0 8px;
             }
+            .providers {
+              list-style: none;
+              margin: 0 0 12px;
+              padding: 0;
+            }
+            .providers li + li {
+              margin-top: 8px;
+            }
             .alt-action {
               display: block;
               width: 100%;
@@ -195,9 +216,31 @@ function loginPage(opts: {
             </label>
             <button type="submit">Sign in</button>
             ${
+              walletLoginOffered || upstreamProviders.length > 0
+                ? html`<div class="divider"><span>or</span></div>`
+                : ''
+            }
+            ${
+              upstreamProviders.length > 0
+                ? html`<ul class="providers" aria-label="Sign in with another provider">
+                    ${upstreamProviders.map(
+                      (provider) =>
+                        html`<li>
+                          <a
+                            class="alt-action"
+                            href="/ui/upstream/${encodeURIComponent(
+                              provider.provider
+                            )}?return_to=${encodeURIComponent(returnTo)}"
+                            >Sign in with ${provider.name}</a
+                          >
+                        </li>`
+                    )}
+                  </ul>`
+                : ''
+            }
+            ${
               walletLoginOffered
-                ? html`<div class="divider"><span>or</span></div>
-                    <a class="alt-action" href="${walletLoginHref}">Sign in with your wallet</a>`
+                ? html`<a class="alt-action" href="${walletLoginHref}">Sign in with your wallet</a>`
                 : ''
             }
           </form>
@@ -226,6 +269,19 @@ function signInRefusal(requireVerifiedAccount: boolean): string {
  * session and redirects to `return_to`.
  */
 export default async function (fastify: FastifyInstance) {
+  const upstreamCatalog = upstreamProviderCatalog(fastify);
+  /**
+   * The upstream providers the page offers (#639): the realm's listed ones,
+   * when the page is for an authorization request (`return_to` a parked
+   * request or an authorize URL), which the provider's link starts again.
+   */
+  const upstreamProvidersFor = async (
+    realmId: string,
+    returnTo: string
+  ): Promise<readonly UpstreamProviderEntry[]> =>
+    returnTo.startsWith(RESUME_PATH_PREFIX) || normalizeInternalAuthorizeUrl(returnTo) !== null
+      ? upstreamCatalog.offered(realmId)
+      : [];
   fastify.withTypeProvider<ZodTypeProvider>().get(
     '/login',
     {
@@ -268,6 +324,7 @@ export default async function (fastify: FastifyInstance) {
           cspNonce: reply.cspNonce.style,
           csrfToken,
           walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
+          upstreamProviders: await upstreamProvidersFor(requestRealm(request).id, returnTo),
         })
       );
     }
@@ -328,6 +385,7 @@ export default async function (fastify: FastifyInstance) {
             error: 'Your session expired. Please try again.',
             email: body.email,
             walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
+            upstreamProviders: await upstreamProvidersFor(requestRealm(request).id, returnTo),
           })
         );
       }
@@ -359,6 +417,7 @@ export default async function (fastify: FastifyInstance) {
             error,
             email: body.email,
             walletLoginOffered: await walletLoginOfferedIn(fastify, requestRealm(request)),
+            upstreamProviders: await upstreamProvidersFor(requestRealm(request).id, returnTo),
           })
         );
       };
