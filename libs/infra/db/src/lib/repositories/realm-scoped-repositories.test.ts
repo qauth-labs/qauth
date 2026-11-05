@@ -16,6 +16,7 @@ import { createRealmUpstreamProvidersRepository } from './realm-upstream-provide
 import { createRefreshTokensRepository } from './refresh-tokens.repository';
 import { createSessionsRepository } from './sessions.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
+import { createUserRecoveryCodesRepository } from './user-recovery-codes.repository';
 import { createUserRequiredActionsRepository } from './user-required-actions.repository';
 import { createUsersRepository } from './users.repository';
 
@@ -76,6 +77,16 @@ export function requiredRealmArgument(db: DbClient): void {
   const realmPlugins = createRealmAuthMethodPluginsRepository(db);
   const requiredActions = createUserRequiredActionsRepository(db);
   const upstreamProviders = createRealmUpstreamProvidersRepository(db);
+  const recoveryCodes = createUserRecoveryCodesRepository(db);
+
+  // @ts-expect-error an account's recovery codes are those of a realm (#649)
+  void recoveryCodes.status(ID);
+  // @ts-expect-error an account's recovery codes are those of a realm (#649)
+  void recoveryCodes.findUnused(ID);
+  // @ts-expect-error a recovery code is taken in a realm (#649)
+  void recoveryCodes.markUsed({ userId: ID, id: OTHER_ID, usedAt: 1 });
+  // @ts-expect-error a recovery-code set is written for a user of a realm (#649)
+  void recoveryCodes.replaceSet({ userId: ID, codeHashes: ['h'], createdAt: 1 });
 
   // @ts-expect-error a provider is looked up in a realm (#639)
   void upstreamProviders.find('oidc_google');
@@ -346,6 +357,21 @@ const CALLS: readonly RealmScopedCall[] = [
   [
     'userRequiredActions.remove',
     (db) => createUserRequiredActionsRepository(db).remove(REALM_ID, ID, 'update_password'),
+  ],
+  ['userRecoveryCodes.status', (db) => createUserRecoveryCodesRepository(db).status(REALM_ID, ID)],
+  [
+    'userRecoveryCodes.findUnused',
+    (db) => createUserRecoveryCodesRepository(db).findUnused(REALM_ID, ID),
+  ],
+  [
+    'userRecoveryCodes.markUsed',
+    (db) =>
+      createUserRecoveryCodesRepository(db).markUsed({
+        realmId: REALM_ID,
+        userId: ID,
+        id: OTHER_ID,
+        usedAt: 1,
+      }),
   ],
   [
     'refreshTokens.findByTokenHash',

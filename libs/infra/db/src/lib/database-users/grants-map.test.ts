@@ -68,6 +68,12 @@ describe('the grants map (#498)', () => {
     });
   });
 
+  it("lets web alone read, take and replace an account's recovery codes (#649)", () => {
+    expect(TABLE_GRANTS['user_recovery_codes']).toEqual({
+      web: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+    });
+  });
+
   it('lets web alone read and advance the session epochs (#642)', () => {
     expect(TABLE_GRANTS['user_session_epochs']).toEqual({
       web: ['SELECT', 'INSERT', 'UPDATE'],

@@ -138,6 +138,12 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   ssf_streams: { api: SIUD, delivery: S },
   user_attributes: { web: SIU, api: SIU },
   user_credentials: { web: SIU, api: SIU },
+  // Each account's recovery codes (#649): the sign-in engine, on `web`,
+  // reads an account's codes, takes one (an `UPDATE … WHERE used_at IS NULL`)
+  // and replaces a set (a `DELETE` and an `INSERT` in one transaction) when
+  // it shows a new one. Nothing else touches them yet; the account console's
+  // regeneration (#687) adds `api`.
+  user_recovery_codes: { web: SIUD },
   // The actions a user must take at the next sign-in (#635): the sign-in
   // engine, on `web`, reads and deletes a user's rows; `api` (the account
   // console's "this wasn't me") and `admin` (an admin's request) add them.
