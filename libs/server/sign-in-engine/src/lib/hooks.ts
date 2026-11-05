@@ -1,6 +1,7 @@
 import type { StepName } from '@qauth-labs/server-step-grammar';
 
 import type { LadderCounter } from './ports';
+import type { RoundEnvironment } from './round-limits';
 import type { SignInTransaction } from './transaction';
 
 /**
@@ -10,7 +11,7 @@ import type { SignInTransaction } from './transaction';
  *
  * | Hook           | Rule | Filled by                                   |
  * | -------------- | ---- | ------------------------------------------- |
- * | `limits`       | 3    | PRO-13 (#636): per client, per end-user IP  |
+ * | `limits`       | 3, 7 | PRO-13 (#636): per client, per end-user IP  |
  * | `request`      | 4    | each transport's request checks (#628, #665)|
  * | `botChallenge` | 5    | PRO-19 (#643)                               |
  * | `ladder`       | 3, 7 | PRO-12 (#615): reserve before verify        |
@@ -23,12 +24,71 @@ export interface HookRound {
   readonly transaction: SignInTransaction;
   /** The step the round's answer names, when the grammar knows it. */
   readonly answered?: StepName;
+  /**
+   * The round's end-user IP, as the limiters key it (`RoundContext.endUserIp`);
+   * absent when the round carries no address.
+   */
+  readonly endUserIp?: string;
+  /**
+   * The client's effective environment (ADR-008 §7), `production` unless the
+   * transport said otherwise: `development` relaxes the limiters (ADR-008 §5).
+   */
+  readonly environment: RoundEnvironment;
 }
 
 /** The answer of the limiters. */
 export type LimitVerdict =
   | { readonly kind: 'continue' }
   | { readonly kind: 'throttled'; readonly retryAfterSeconds: number };
+
+/** A credential round the limiters reserve before its credential is verified (#636). */
+export interface CredentialRound {
+  readonly realmId: string;
+  readonly clientId: string;
+  /** The end-user IP, as the limiters key it; absent: no per-IP row applies. */
+  readonly endUserIp?: string;
+  readonly environment: RoundEnvironment;
+  /**
+   * The keyed HMAC of the identifier the round is for, for the IP bucket's
+   * count of distinct identifiers; absent before any identifier (a
+   * discoverable passkey).
+   */
+  readonly identifierHmac?: string;
+}
+
+/** A reserved credential round, settled once its credential is checked. */
+export interface CredentialRoundReservation {
+  readonly kind: 'reserved';
+  /**
+   * `success`: the credential was right, and `userId` the account it proved,
+   * whose success counts once per window toward the client's failure ratio;
+   * `failure`: it was wrong, and stays counted; `withdrawn`: it was never
+   * verified (the account's ladder refused it inside a wait), and is taken
+   * back. Settled once.
+   */
+  settle(
+    outcome: 'success' | 'failure' | 'withdrawn',
+    options?: { readonly userId?: string }
+  ): Promise<void>;
+}
+
+/** The limiters' answer to a credential round. */
+export type CredentialLimitVerdict =
+  | CredentialRoundReservation
+  /** Inside a delay or past a hard limit: the round is refused, neither verified nor counted. */
+  | { readonly kind: 'throttled'; readonly retryAfterSeconds: number };
+
+/**
+ * The limiters around the per-account ladder (PRO-13, #636; ADR-017
+ * Decision 7): per end-user IP, per IP bucket and, at the FiPA endpoint, per
+ * authenticated client. `round` answers every round at rule 3; `reserve`
+ * holds a credential round (a password, an `otp`, a recovery code, a
+ * WebAuthn response) before its credential is verified, as the ladder does.
+ */
+export interface LimitsHook {
+  round(round: HookRound): Promise<LimitVerdict>;
+  reserve(round: CredentialRound): Promise<CredentialLimitVerdict>;
+}
 
 /** The answer of the transport's request checks. */
 export type RequestVerdict =
@@ -117,7 +177,7 @@ export interface LadderHook {
 }
 
 export interface SignInHooks {
-  readonly limits?: (round: HookRound) => Promise<LimitVerdict>;
+  readonly limits?: LimitsHook;
   readonly request?: (round: HookRound) => Promise<RequestVerdict>;
   readonly botChallenge?: (round: HookRound) => Promise<BotChallengeVerdict>;
   readonly ladder?: LadderHook;

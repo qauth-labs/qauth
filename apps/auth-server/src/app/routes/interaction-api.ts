@@ -51,6 +51,7 @@ import { createPeerAddressList, type PeerAddressList } from '../helpers/peer-add
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../helpers/request-realm';
+import { roundEnvironment } from '../helpers/round-limits';
 import {
   type UpstreamProviderCatalog,
   upstreamProviderCatalog,
@@ -487,11 +488,18 @@ async function decideAnswer(
   // The engine counts by the client id as it is; an event carries it only
   // when the envelope's bound allows (a CIMD URL can be longer).
   const eventClientId = eventClientIdOf(state);
+  // The round limits' environment (#636; ADR-008 §5): development relaxes them.
+  const environment = await roundEnvironment(
+    request.server,
+    requestRealm(request),
+    state.request.client_id
+  );
   const context = (receivedAt: number): RoundContext => ({
     realm: { id: realmId },
     client: { id: state.request.client_id },
     receivedAt,
     ...ladderEndUserIp(request),
+    environment,
     sendCode,
     // A pick of an upstream provider (#639) starts it, bound to this
     // interaction once the round's state is written; the way back from the

@@ -15,6 +15,7 @@ import {
 } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { requestRealm } from '../../helpers/request-realm';
+import { roundEnvironment } from '../../helpers/round-limits';
 import { upstreamProviderCatalog } from '../../helpers/upstream-providers';
 import {
   auditUpstreamRefusal,
@@ -165,6 +166,7 @@ export default async function (fastify: FastifyInstance) {
               null,
               upstreamRoundContext(request, state, {
                 receivedAt,
+                environment: await roundEnvironment(fastify, realm, state.request.client_id),
                 upstreamRoute: provider.entry,
                 startUpstream: upstreamStarter(
                   fastify,

@@ -17,12 +17,20 @@ import {
   recordingAudit,
 } from '../testing/fakes';
 import { createMemoryLadder } from '../testing/memory-ladder';
+import { createMemoryRoundLimits } from '../testing/memory-round-limits';
 import {
   createSignInEngine,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInEngineDependencies,
 } from './engine';
-import { type LadderHook, NOTHING_DUE, type SignInHooks } from './hooks';
+import {
+  type CredentialRound,
+  type HookRound,
+  type LadderHook,
+  type LimitsHook,
+  NOTHING_DUE,
+  type SignInHooks,
+} from './hooks';
 import { PASSWORD_LADDER_POLICY } from './ladder';
 import {
   type Clock,
@@ -32,6 +40,7 @@ import {
   SYSTEM_CLOCK,
 } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
+import { createRoundLimiter, ROUND_LIMIT_POLICY } from './round-limits';
 import type { AnyStepHandler, StepHandler, StepVerdict } from './steps/handler';
 import { SIGN_IN_TRANSACTION_MAX_AGE_MS, type SignInTransaction } from './transaction';
 
@@ -78,6 +87,14 @@ function manualClock(start = T0): Clock & { slept: number[]; advance(ms: number)
     advance: (ms) => {
       now += ms;
     },
+  };
+}
+
+/** A limiter that refuses every round at rule 3 for `retryAfterSeconds`. */
+function limitsThrottling(retryAfterSeconds: number): LimitsHook {
+  return {
+    round: async () => ({ kind: 'throttled', retryAfterSeconds }),
+    reserve: async () => ({ kind: 'throttled', retryAfterSeconds }),
   };
 }
 
@@ -1337,16 +1354,21 @@ describe('the hooks', () => {
 
   it('refuses the round for a limiter, the request checks, or a store the hooks need', async () => {
     const cases: [SignInHooks, Partial<RoundResult>][] = [
-      [
-        { limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) },
-        { reason: 'throttled' },
-      ],
+      [{ limits: limitsThrottling(9) }, { reason: 'throttled' }],
       [
         { request: async () => ({ kind: 'refuse', code: 'unmet_authentication_requirements' }) },
         { reason: 'request_refused' },
       ],
       [{ request: async () => ({ kind: 'redirect' }) }, { kind: 'redirect' }],
-      [{ limits: async () => Promise.reject(new Error('redis down')) }, { reason: 'unavailable' }],
+      [
+        {
+          limits: {
+            round: async () => Promise.reject(new Error('redis down')),
+            reserve: async () => Promise.reject(new Error('redis down')),
+          },
+        },
+        { reason: 'unavailable' },
+      ],
       [
         { ladder: { reserve: async () => Promise.reject(new Error('redis down')) } },
         { reason: 'unavailable' },
@@ -1366,7 +1388,7 @@ describe('the hooks', () => {
 
   it('audits a round a limiter or the request checks refused, under the identifier the transaction holds', async () => {
     const cases: [SignInHooks, string][] = [
-      [{ limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) }, 'rate_limited'],
+      [{ limits: limitsThrottling(9) }, 'rate_limited'],
       [
         { request: async () => ({ kind: 'refuse', code: 'unmet_authentication_requirements' }) },
         'request_refused',
@@ -1381,13 +1403,20 @@ describe('the hooks', () => {
 
       // Once the transaction holds one: the record names its HMAC.
       let throttle = false;
-      const gated: SignInHooks = Object.fromEntries(
-        Object.entries(hooks).map(([name, hook]) => [
-          name,
-          async (round: never) =>
-            throttle ? (hook as (r: never) => unknown)(round) : { kind: 'continue' },
-        ])
-      );
+      const { limits, request } = hooks;
+      const gated: SignInHooks = {
+        ...(limits === undefined
+          ? {}
+          : {
+              limits: {
+                round: async (round) => (throttle ? limits.round(round) : { kind: 'continue' }),
+                reserve: (round) => limits.reserve(round),
+              },
+            }),
+        ...(request === undefined
+          ? {}
+          : { request: async (round) => (throttle ? request(round) : { kind: 'continue' }) }),
+      };
       const held = build(undefined, { hooks: gated });
       const round0 = await held.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
       throttle = true;
@@ -1406,7 +1435,7 @@ describe('the hooks', () => {
 
   it('names a refused round by the identifier step when the answer names a step it has no handler for', async () => {
     const built = build(undefined, {
-      hooks: { limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) },
+      hooks: { limits: limitsThrottling(9) },
     });
     const ctx = context();
     await built.engine.advance(null, answer('totp', { otp: '123456' }), ctx);
@@ -1418,7 +1447,13 @@ describe('the hooks', () => {
   it('runs the hooks in the rule order and never shows them an answer’s fields', async () => {
     const seen: string[] = [];
     const hooks: SignInHooks = {
-      limits: async (round) => (seen.push(`limits:${JSON.stringify(round)}`), { kind: 'continue' }),
+      limits: {
+        round: async (round) => (
+          seen.push(`limits:${JSON.stringify(round)}`),
+          { kind: 'continue' }
+        ),
+        reserve: async () => ({ kind: 'reserved', settle: async () => undefined }),
+      },
       request: async (round) => (seen.push(`request:${round.answered}`), { kind: 'continue' }),
       botChallenge: async (round) => (seen.push(`bot:${round.answered}`), { kind: 'not_due' }),
     };
@@ -2016,6 +2051,260 @@ describe('the failure ladder (#615)', () => {
         expect(calls.length, `failure ${i}`).toBe(i === 100 ? 1 : 0);
         now += PASSWORD_LADDER_POLICY.maxWaitMs;
       }
+    });
+  });
+});
+
+describe('the round limits (#636)', () => {
+  /** A limits hook that records what it is asked, and admits every round. */
+  const recordingLimits = (events: string[] = []) => {
+    const rounds: HookRound[] = [];
+    const reserved: CredentialRound[] = [];
+    const settled: { outcome: string; userId?: string }[] = [];
+    const hook: LimitsHook = {
+      round: async (round) => {
+        rounds.push(round);
+        return { kind: 'continue' };
+      },
+      reserve: async (round) => {
+        events.push('limits');
+        reserved.push(round);
+        return {
+          kind: 'reserved',
+          settle: async (outcome, options) => {
+            settled.push({ outcome, ...(options?.userId === undefined ? {} : options) });
+          },
+        };
+      },
+    };
+    return { hook, rounds, reserved, settled };
+  };
+  const recordingLadder = (events: string[], wait = false): LadderHook => ({
+    reserve: async () => {
+      events.push('ladder');
+      return wait
+        ? { kind: 'wait', retryAfterSeconds: 7 }
+        : { kind: 'reserved', settle: async () => NOTHING_DUE };
+    },
+  });
+
+  it('reserves a credential round before the account’s ladder and the verifier, keyed as the round', async () => {
+    const events: string[] = [];
+    const limits = recordingLimits(events);
+    const built = build(undefined, {
+      hooks: { limits: limits.hook, ladder: recordingLadder(events) },
+    });
+    await built.engine.advance(
+      null,
+      passwordAnswer(WRONG, IDENTIFIER),
+      context({ endUserIp: '203.0.113.9', environment: 'staging' })
+    );
+    expect(events).toEqual(['limits', 'ladder']);
+    expect(limits.reserved).toEqual([
+      {
+        realmId: REALM,
+        clientId: CLIENT,
+        environment: 'staging',
+        endUserIp: '203.0.113.9',
+        identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
+      },
+    ]);
+    expect(limits.rounds).toMatchObject([
+      { realmId: REALM, clientId: CLIENT, endUserIp: '203.0.113.9', environment: 'staging' },
+    ]);
+  });
+
+  it('meets production’s limits when the transport names no environment, or one it does not know', async () => {
+    const limits = recordingLimits();
+    const built = build(undefined, { hooks: { limits: limits.hook } });
+    await built.engine.advance(null, passwordAnswer(WRONG, IDENTIFIER), context());
+    await built.engine.advance(
+      null,
+      passwordAnswer(WRONG, IDENTIFIER),
+      context({ environment: 'dev' as never })
+    );
+    expect(limits.reserved.map((round) => round.environment)).toEqual(['production', 'production']);
+    expect(limits.rounds.map((round) => round.environment)).toEqual(['production', 'production']);
+  });
+
+  it('refuses a throttled credential round with 429, neither verified nor on the ladder, and audits it', async () => {
+    const events: string[] = [];
+    const limits: LimitsHook = {
+      round: async () => ({ kind: 'continue' }),
+      reserve: async () => ({ kind: 'throttled', retryAfterSeconds: 30 }),
+    };
+    const built = build(undefined, { hooks: { limits, ladder: recordingLadder(events) } });
+    const ctx = context();
+    const result = await built.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), ctx);
+    expect(result).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 30 });
+    expect(built.passwords.verifications).toBe(0);
+    expect(events).toEqual([]);
+    expect(ctx.records).toContainEqual(
+      expect.objectContaining({ outcome: 'refused', step: 'password', reason: 'rate_limited' })
+    );
+  });
+
+  it('settles a wrong password as a failure, a right one as a success of its account, and a ladder wait as withdrawn', async () => {
+    const limits = recordingLimits();
+    const built = build(undefined, { hooks: { limits: limits.hook } });
+    await built.engine.advance(null, passwordAnswer(WRONG, IDENTIFIER), context());
+    await built.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context());
+    const waiting = build(undefined, {
+      hooks: { limits: limits.hook, ladder: recordingLadder([], true) },
+    });
+    const waited = await waiting.engine.advance(
+      null,
+      passwordAnswer(PASSWORD, IDENTIFIER),
+      context()
+    );
+    expect(waited).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 7 });
+    expect(limits.settled).toEqual([
+      { outcome: 'failure' },
+      { outcome: 'success', userId: USER },
+      { outcome: 'withdrawn' },
+    ]);
+  });
+
+  it('settles an unknown account’s password as a failure, as any wrong one', async () => {
+    const limits = recordingLimits();
+    const built = build({ [IDENTIFIER]: null }, { hooks: { limits: limits.hook } });
+    await built.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context());
+    expect(limits.settled).toEqual([{ outcome: 'failure' }]);
+  });
+
+  it('reserves nothing for a round without a credential', async () => {
+    const limits = recordingLimits();
+    const built = build(undefined, { hooks: { limits: limits.hook } });
+    const first = await built.engine.advance(null, null, context());
+    if (first.kind !== 'step') throw new Error(first.kind);
+    await built.engine.advance(
+      first.transaction,
+      answer('identifier', { login_hint: IDENTIFIER }),
+      context()
+    );
+    expect(limits.reserved).toEqual([]);
+    expect(limits.rounds).toHaveLength(2);
+  });
+
+  it('refuses the round as unavailable when the reservation fails, before any credential is checked', async () => {
+    const onUnavailable = vi.fn();
+    const limits: LimitsHook = {
+      round: async () => ({ kind: 'continue' }),
+      reserve: async () => Promise.reject(new Error('redis down')),
+    };
+    const built = build(undefined, { hooks: { limits }, onUnavailable });
+    const result = await built.engine.advance(
+      null,
+      passwordAnswer(PASSWORD, IDENTIFIER),
+      context()
+    );
+    expect(result).toMatchObject({ kind: 'refused', reason: 'unavailable' });
+    expect(built.passwords.verifications).toBe(0);
+    expect(onUnavailable).toHaveBeenCalledWith(expect.objectContaining({ port: 'limits' }));
+  });
+
+  it('refuses the round as unavailable on a reservation out of shape', async () => {
+    const limits = {
+      round: async () => ({ kind: 'continue' }),
+      reserve: async () => ({ kind: 'reserved' }),
+    } as unknown as LimitsHook;
+    const built = build(undefined, { hooks: { limits } });
+    const result = await built.engine.advance(
+      null,
+      passwordAnswer(PASSWORD, IDENTIFIER),
+      context()
+    );
+    expect(result).toMatchObject({ kind: 'refused', reason: 'unavailable' });
+    expect(built.passwords.verifications).toBe(0);
+  });
+
+  it('keeps the answer when settling fails, and reports it', async () => {
+    const onUnavailable = vi.fn();
+    const limits: LimitsHook = {
+      round: async () => ({ kind: 'continue' }),
+      reserve: async () => ({
+        kind: 'reserved',
+        settle: async () => Promise.reject(new Error('redis down')),
+      }),
+    };
+    const built = build(undefined, { hooks: { limits }, onUnavailable });
+    const result = await built.engine.advance(
+      null,
+      passwordAnswer(PASSWORD, IDENTIFIER),
+      context()
+    );
+    expect(result.kind).toBe('complete');
+    expect(onUnavailable).toHaveBeenCalledWith(expect.objectContaining({ port: 'limits' }));
+  });
+
+  describe('on the memory store', () => {
+    const IP = '203.0.113.9';
+    const setup = (environment?: 'development' | 'staging') => {
+      let now = T0;
+      const store = createMemoryRoundLimits(() => now);
+      const limiter = createRoundLimiter(store, {
+        ipDigest: fakeIdentifierDigest,
+        perClient: false,
+      });
+      const built = build({}, { hooks: { limits: limiter } });
+      /** One wrong password for an identifier of its own, from the IP. */
+      const guess = (i: number) =>
+        built.engine.advance(
+          null,
+          passwordAnswer(WRONG, `guess-${i}@example.com`),
+          context({ endUserIp: IP, ...(environment === undefined ? {} : { environment }) })
+        );
+      return { built, guess, advance: (ms: number) => (now += ms) };
+    };
+    const isRefusedCredential = (result: RoundResult) =>
+      result.kind === 'step' && result.offer.current.error === 'invalid_credentials';
+
+    it('delays an IP 30 s once 10 of its rounds failed, unverified inside the delay', async () => {
+      const { built, guess, advance } = setup();
+      for (let i = 0; i < 10; i += 1) expect(isRefusedCredential(await guess(i))).toBe(true);
+      // The 10th failure starts the delay.
+      const verified = built.passwords.verifications;
+      expect(await guess(10)).toMatchObject({
+        kind: 'refused',
+        reason: 'throttled',
+        retryAfterSeconds: 30,
+      });
+      expect(built.passwords.verifications).toBe(verified);
+      advance(30_000);
+      expect(isRefusedCredential(await guess(11))).toBe(true);
+      expect(await guess(12)).toMatchObject({ kind: 'refused', reason: 'throttled' });
+    });
+
+    it('refuses every round of an IP for 15 minutes once 30 of its rounds failed', async () => {
+      const { built, guess, advance } = setup();
+      for (let i = 0; i < 30; i += 1) {
+        expect(isRefusedCredential(await guess(i)), `round ${i}`).toBe(true);
+        advance(ROUND_LIMIT_POLICY.endUserIp.delayMs);
+      }
+      const verified = built.passwords.verifications;
+      expect(await guess(30)).toMatchObject({
+        kind: 'refused',
+        reason: 'throttled',
+        retryAfterSeconds: 15 * 60 - 30,
+      });
+      // Rule 3 refuses the IP's round before anything else, a first round included.
+      expect(await built.engine.advance(null, null, context({ endUserIp: IP }))).toMatchObject({
+        kind: 'refused',
+        reason: 'throttled',
+      });
+      expect(built.passwords.verifications).toBe(verified);
+      advance(15 * 60_000);
+      expect(isRefusedCredential(await guess(31))).toBe(true);
+    });
+
+    it('relaxes the limits for a development client, and keeps them for a staging one', async () => {
+      const development = setup('development');
+      for (let i = 0; i < 40; i += 1) {
+        expect(isRefusedCredential(await development.guess(i)), `round ${i}`).toBe(true);
+      }
+      const staging = setup('staging');
+      for (let i = 0; i < 10; i += 1) await staging.guess(i);
+      expect(await staging.guess(10)).toMatchObject({ kind: 'refused', reason: 'throttled' });
     });
   });
 });

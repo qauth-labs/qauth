@@ -10,6 +10,7 @@ export * from './lib/password-attempts';
 export * from './lib/password-hard-action';
 export * from './lib/password-updates';
 export * from './lib/password-verifier';
+export * from './lib/round-limits';
 export * from './lib/send-caps';
 // What the auth server works with, from the engine library it may not import.
 export {
@@ -20,6 +21,7 @@ export {
   type BreachCheckVerdict,
   type BreachedPasswordCheck,
   type CompletedSignIn,
+  createRoundLimiter,
   EMAIL_CODE_LADDER_POLICY,
   type EmailCodeDependencies,
   type EmailCodeDigest,
@@ -42,8 +44,16 @@ export {
   REQUIRED_ACTIONS,
   type RequiredAction,
   retryAfterSeconds,
+  ROUND_LIMIT_POLICY,
   type RoundAnswer,
   type RoundContext,
+  type RoundEnvironment,
+  roundEnvironmentOf,
+  type RoundLimitAlertEvent,
+  type RoundLimiter,
+  type RoundLimitPolicy,
+  roundLimitPolicy,
+  type RoundLimitStore,
   type RoundResult,
   SEND_CAP_POLICY,
   type SendCapDecision,

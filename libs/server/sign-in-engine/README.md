@@ -21,7 +21,7 @@ const engine = createSignInEngine({
   emailCodes: { digest, addresses }, // the inline verification of an unverified account (#638)
   breachCheck, // BreachedPasswordCheck: the realm's breach list (#635); none checks nothing
   passwordUpdates, // PasswordUpdates: the forced password update (#635); none redirects it
-  hooks: { ladder }, // limits, request, botChallenge: later issues fill them; ladder: #615
+  hooks: { ladder, limits }, // ladder: #615; limits: #636; request, botChallenge: later issues
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [], // the steps later issues add
 });
@@ -32,6 +32,8 @@ const result = await engine.advance(transaction, answer, {
   loginHint, // the authorization request's login_hint, frozen at round 0
   serves, // the steps this transport can serve; every step by default
   receivedAt, // the request's arrival, for the timing floor
+  endUserIp, // the end-user IP as the limiters key it (an IPv6 address by its /64); none: no IP row
+  environment, // the client's effective environment (ADR-008 §7): development relaxes the limits
   audit, // where the round's audit records go
   sendCode, // the capped sender of email codes (#637), bound to the request
 });
@@ -66,7 +68,9 @@ ADR-017 Decision 4's order, from rule 3 (rules 1 and 2, the transport's own chec
 authentication, run before the call). The first unmet rule produces the answer.
 
 1. The MFA policy is read, on every round. A policy that cannot be read refuses the round.
-2. The `limits` hook (rule 3; PRO-13, #636).
+2. The `limits` hook (rule 3; PRO-13, #636): a round from an end-user IP inside its hard block, or
+   above the client's rounds a minute, is refused as `throttled`. See
+   [The round limits](#the-round-limits).
 3. The `request` hook (rule 4): the transport's request checks (#628, #665).
 4. The `botChallenge` hook (rule 5; PRO-19, #643). A due challenge comes before every other step:
    the `captcha` step when a handler for it is registered and the transport serves it, else a 429.
@@ -78,8 +82,9 @@ authentication, run before the call). The first unmet rule produces the answer.
    it (ADR-017 Decision 4).
 6. The first factor (rule 7), offered alike to every account until one succeeds: the password
    required, with any other first factor beside it. The password answer is reserved on the
-   `ladder` hook (PRO-12, #615) before it is verified: inside the account's wait it is refused as
-   `throttled`, neither verified nor counted.
+   `limits` hook (#636), then on the `ladder` hook (PRO-12, #615), before it is verified: inside a
+   delay, a hard limit or the account's wait it is refused as `throttled`, neither verified nor
+   counted.
 7. After a first factor (rule 8): the downgrade rule (the transaction must prove the account's
    strongest bound factor; a disabled factor still counts as bound), then the MFA policy just read
    (a policy that requires a second factor needs `mfa` in the `amr`). A rule no registered step can
@@ -108,13 +113,14 @@ authentication, run before the call). The first unmet rule produces the answer.
 - **One subject per transaction.** The first identifier and the first user proven are fixed. A
   factor that names its account by itself (a discoverable passkey) offered once an identifier is
   held must prove the account that identifier names, or the transaction ends.
-- **Fail closed.** A port that throws (the policy, the directory, a hook, the ladder's reservation,
-  the verifier, the identifier key) refuses the round as `unavailable`; every one of them that can
-  fail before a credential is checked does so alike for every identifier. Settling a ladder
-  reservation never changes the answer: a failure there is reported through `onUnavailable`, and a
-  reporter that throws changes nothing either. The engine's default ladder counts nothing, so the
-  plugin of `@qauth-labs/fastify-plugin-sign-in-engine` refuses to build a production engine
-  without a `ladder` hook.
+- **Fail closed.** A port that throws (the policy, the directory, a hook, the limits' or the
+  ladder's reservation, the verifier, the identifier key) refuses the round as `unavailable`; every
+  one of them that can fail before a credential is checked does so alike for every identifier.
+  Settling a reservation never changes the answer: a failure there is reported through
+  `onUnavailable`, and a reporter that throws changes nothing either. The engine's default ladder
+  counts nothing and it has no default limits, so the plugin of
+  `@qauth-labs/fastify-plugin-sign-in-engine` refuses to build a production engine without a
+  `ladder` and a `limits` hook.
 - **A disabled user is never changed.** It gets the ordinary invalid-credentials answer, and no
   subject is fixed, so no transport can mint for it. The engine checks this for every factor step,
   not only the password: a step that proves a disabled account (or, in an engine built without
@@ -144,6 +150,43 @@ run time). While it is not, the directory reports a disabled mark as `ignoredMar
 stays usable, and a sign-in that proves it calls `clearIgnoredMark`. Neither call changes the
 answer: a failure is reported through `onUnavailable`. `src/testing/memory-ladder.ts` is an
 in-memory ladder with the same rules, for tests.
+
+## The round limits
+
+`createRoundLimiter(store, { ipDigest, perClient, onAlert })` (`src/lib/round-limits.ts`) is the
+`limits` hook (PRO-13, #636; ADR-017 Decision 7). It keys a round by the keyed HMACs of its
+end-user IP and of the IP's bucket (`endUserIpBucket`: an IPv4 address's /24, an IPv6 address's
+/48; a translated or IPv4-mapped address by its IPv4 /24), and by its client only with `perClient`,
+the FiPA endpoint's authenticated client (#646). A credential round is one whose answer carries a
+`password`, an `otp`, a `recovery_code` or a `webauthn_response` (`isCredentialAnswer`), and an
+email code. Each is reserved, counted as a failed round of every row, before the account's ladder
+and the verifier, and settled after: a right credential takes the failure back (and counts once
+for its account on the client row), a wrong one keeps it, and a round the ladder refused inside a
+wait is withdrawn.
+
+| Row                | Soft: a delay                                                                                         | Hard: `429`                        |
+| ------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| End-user IP        | from 10 failed rounds in 15 minutes, one round per 30 s                                               | 30 failures: 15 minutes, any round |
+| The IP's bucket    | failures for more than 20 distinct identifiers in 15 minutes: each IP one round per 30 s, an alert    |                                    |
+| Client (FiPA only) | a failure ratio above 50 % over at least 200 rounds, or more than 300 failures, in 5 minutes, 1 per s | above 600 rounds a minute          |
+
+`ROUND_LIMIT_POLICY` holds the numbers; `roundLimitPolicy({ clientMaxRounds, registrationPerIp })`
+derives the client's failure budget (a tenth of what `FIRST_PARTY_CLIENT_MAX_ROUNDS` admits in 5
+minutes) and its delay from the rounds a minute, and takes the per-IP registration-start cap
+(3 an hour by default; 1,000 an hour per client). A delay is a pace: while a soft threshold holds,
+the row admits one credential round per delay and refuses the others with `Retry-After`, neither
+verified nor counted. The bucket only counts identifiers: past its threshold it paces each of its
+IPs, so one address cannot hold the other addresses of its network back. The bot challenge (PRO-19, #643) will replace it. In `development`
+(`RoundContext.environment`, ADR-008 §5) every count is tenfold and every delay a tenth;
+`staging`, `production` and an unknown value meet the numbers above.
+
+The store (`RoundLimitStore`) makes each decision atomically; the auth server's is a set of Redis
+scripts in `@qauth-labs/fastify-plugin-sign-in-engine`. `src/testing/round-limit-store-contract.ts`
+is the contract every store runs, and `src/testing/memory-round-limits.ts` an in-memory store with
+the same rules, for tests. An alert (an IP blocked, a bucket past its identifiers, a client past
+its ratio, its budget or its rounds a minute) goes to `onAlert` once per window, with the key's
+HMAC, never an address. `reserveRegistrationStart` caps registration starts for the registration
+steps (#640).
 
 ## The email code
 

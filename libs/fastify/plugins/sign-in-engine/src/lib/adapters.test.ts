@@ -964,6 +964,10 @@ describe('the plugin', () => {
       settle: async () => ({ ceilingReached: false }),
     }),
   };
+  const limits = {
+    round: async () => ({ kind: 'continue' as const }),
+    reserve: async () => ({ kind: 'reserved' as const, settle: async () => undefined }),
+  };
   const passwordHardAction = {
     ceilingReached: async () => undefined,
     clearIgnoredMark: async () => undefined,
@@ -981,7 +985,7 @@ describe('the plugin', () => {
     const withLadder = Fastify();
     await withLadder.register(signInEnginePlugin, {
       ...dependencies(),
-      hooks: { ladder },
+      hooks: { ladder, limits },
       passwordHardAction,
       production: true,
     });
@@ -995,12 +999,27 @@ describe('the plugin', () => {
       (async () => {
         await app.register(signInEnginePlugin, {
           ...dependencies(),
-          hooks: { ladder },
+          hooks: { ladder, limits },
           production: true,
         });
         await app.ready();
       })()
     ).rejects.toThrow(/hard action/);
+  });
+
+  it('refuses to build a production engine without the round limits, so no IP tries every account', async () => {
+    const app = Fastify();
+    await expect(
+      (async () => {
+        await app.register(signInEnginePlugin, {
+          ...dependencies(),
+          hooks: { ladder },
+          passwordHardAction,
+          production: true,
+        });
+        await app.ready();
+      })()
+    ).rejects.toThrow(/limits hook/);
   });
 
   it('reads production from NODE_ENV when the option is absent', async () => {

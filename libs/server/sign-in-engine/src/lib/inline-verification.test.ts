@@ -21,7 +21,7 @@ import {
 import { createMemoryLadder, type MemoryLadder } from '../testing/memory-ladder';
 import { EMAIL_CODE_RESEND_AFTER_MS, EMAIL_CODE_TTL_MS } from './email-code';
 import { createSignInEngine, type SignInEngineDependencies } from './engine';
-import type { LadderHook } from './hooks';
+import type { LadderHook, LimitsHook } from './hooks';
 import type { Clock } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
 import type { AnyStepHandler } from './steps/handler';
@@ -600,6 +600,83 @@ describe('the email-code ladder (ADR-017 Decision 7)', () => {
     expect(result).toMatchObject({ kind: 'refused', reason: 'unavailable' });
     expect(built.addresses.calls).toEqual([]);
     expect(onUnavailable).toHaveBeenCalledWith(expect.objectContaining({ port: 'ladder' }));
+  });
+});
+
+describe('the round limits (#636)', () => {
+  /** A limits hook recording each reservation's step and outcome, and the ladder's after it. */
+  const recording = () => {
+    const events: string[] = [];
+    const limits: LimitsHook = {
+      round: async () => ({ kind: 'continue' }),
+      reserve: async () => {
+        events.push('reserve');
+        return {
+          kind: 'reserved',
+          settle: async (outcome, options) => {
+            events.push(
+              `settle:${outcome}${options?.userId === undefined ? '' : `:${options.userId}`}`
+            );
+          },
+        };
+      },
+    };
+    const ladder: LadderHook = {
+      reserve: async ({ factor }) => {
+        events.push(`ladder:${factor}`);
+        return { kind: 'reserved', settle: async () => ({ ceilingReached: false }) };
+      },
+    };
+    return { events, limits, ladder };
+  };
+
+  it('counts an email code as a credential round, before its ladder: a wrong one fails, a right one succeeds', async () => {
+    const { events, limits, ladder } = recording();
+    const built = build(undefined, { ladder, hooks: { limits, ladder } });
+    let round = await toCode(built);
+    round = await built.engine.advance(
+      kept(round),
+      codeAnswer(wrongCode(built.sender.last)),
+      context(built)
+    );
+    await built.engine.advance(kept(round), codeAnswer(built.sender.last), context(built));
+    expect(events).toEqual([
+      // The password.
+      'reserve',
+      'ladder:password',
+      `settle:success:${USER}`,
+      // The wrong code, then the right one.
+      'reserve',
+      'ladder:email_code',
+      'settle:failure',
+      'reserve',
+      'ladder:email_code',
+      `settle:success:${USER}`,
+    ]);
+  });
+
+  it('refuses a code inside a delay before it is compared or counted on the ladder', async () => {
+    const { events, ladder } = recording();
+    let throttle = false;
+    const limits: LimitsHook = {
+      round: async () => ({ kind: 'continue' }),
+      reserve: async () =>
+        throttle
+          ? { kind: 'throttled', retryAfterSeconds: 30 }
+          : { kind: 'reserved', settle: async () => undefined },
+    };
+    const built = build(undefined, { ladder, hooks: { limits, ladder } });
+    const second = await toCode(built);
+    throttle = true;
+    events.length = 0;
+    const ctx = context(built);
+    const result = await built.engine.advance(kept(second), codeAnswer(built.sender.last), ctx);
+    expect(result).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 30 });
+    expect(events).toEqual([]);
+    expect(built.addresses.calls).toEqual([]);
+    expect(ctx.records).toContainEqual(
+      expect.objectContaining({ outcome: 'refused', step: 'email_code', reason: 'rate_limited' })
+    );
   });
 });
 

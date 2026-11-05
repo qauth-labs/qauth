@@ -44,7 +44,13 @@ import {
   secondFactorRequired,
   strongestBoundFactor,
 } from './factors';
-import { type HookRound, type LadderReservation, NO_LADDER, type SignInHooks } from './hooks';
+import {
+  type CredentialRoundReservation,
+  type HookRound,
+  type LadderReservation,
+  NO_LADDER,
+  type SignInHooks,
+} from './hooks';
 import { readIdentifier } from './identifier';
 import {
   type AccountDirectory,
@@ -70,6 +76,7 @@ import {
   type UpstreamProviderEntry,
 } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult, UpstreamProof } from './round';
+import { isCredentialAnswer, roundEnvironmentOf } from './round-limits';
 import type {
   AnyStepHandler,
   ProvedAccount,
@@ -103,7 +110,12 @@ import {
  * authentication (rule 2) come before the call.
  *
  * 3. The MFA policy is read (a policy that cannot be read refuses the round),
- *    then the limiters' hook.
+ *    then the limiters' hook (#636): a round from an end-user IP inside its
+ *    hard block, or above the client's rounds a minute, is refused. Every
+ *    credential round (a password, an `otp`, a recovery code, a WebAuthn
+ *    response) is reserved on the same hook before its credential is
+ *    verified, and before the account's ladder: inside a delay or past a
+ *    hard limit it is refused, neither verified nor counted.
  * 4. The transport's request checks' hook.
  * 5. The bot challenge's hook: a due challenge comes before every other step.
  * 6. The identifier: the request's `login_hint`, else an answer's. The first
@@ -444,6 +456,23 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
   };
   /**
+   * Settle a credential round's reservation on the limiters (#636). A failure
+   * stays counted when settling fails, so a settle error is reported and
+   * changes no answer.
+   */
+  const settleRound = async (
+    reservation: CredentialRoundReservation | null,
+    outcome: 'success' | 'failure' | 'withdrawn',
+    userId?: string
+  ): Promise<void> => {
+    if (reservation === null) return;
+    try {
+      await reservation.settle(outcome, userId === undefined ? undefined : { userId });
+    } catch (error) {
+      report('limits', error);
+    }
+  };
+  /**
    * Settle an email-code reservation. A failure stays counted when settling
    * fails, so a settle error is reported and changes no answer.
    */
@@ -574,6 +603,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const found = state.transaction;
     const realmId = context.realm.id;
     const clientId = context.client.id;
+    // ADR-008 §5: only `development` relaxes the limiters; anything else is production.
+    const environment = roundEnvironmentOf(context.environment ?? 'production');
     const served = new Set<StepName>(context.serves ?? STEP_NAMES);
     const answeredName =
       answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
@@ -672,6 +703,44 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         reason: 'invalid_answer',
         transaction: freezeTransaction(state.transaction),
       });
+    };
+    /**
+     * Reserve a credential round of `step` on the limiters (#636; ADR-017
+     * Decision 7), before its credential is verified and before the
+     * account's ladder: an answer that carries a password, an `otp`, a
+     * recovery code or a WebAuthn response. Returns the round's refusal
+     * when a delay or a hard limit holds (audited as `rate_limited`, nothing
+     * verified or counted), else the reservation to settle once the
+     * credential is checked, or `null` without a limiter. A reservation left
+     * unsettled, because the verification failed, stays a failed round.
+     */
+    const reserveCredentialRound = async (
+      step: StepName
+    ): Promise<
+      | { readonly refused: RoundResult }
+      | { readonly reservation: CredentialRoundReservation | null }
+    > => {
+      const { limits } = hooks;
+      if (limits === undefined) return { reservation: null };
+      const named = state.transaction.identifier ?? state.transaction.upstream?.address;
+      const identifierDigest = named === undefined ? undefined : await identifierHmac();
+      const verdict = await fromStore('limits', () =>
+        limits.reserve({
+          realmId,
+          clientId,
+          environment,
+          ...(context.endUserIp === undefined ? {} : { endUserIp: context.endUserIp }),
+          ...(identifierDigest === undefined ? {} : { identifierHmac: identifierDigest }),
+        })
+      );
+      if (verdict?.kind === 'throttled') {
+        await audit('refused', step, 'rate_limited');
+        return { refused: throttled(Math.max(1, Math.ceil(verdict.retryAfterSeconds))) };
+      }
+      if (verdict?.kind !== 'reserved' || typeof verdict.settle !== 'function') {
+        throw new SignInStoreUnavailableError('limits', new Error('not a reservation'));
+      }
+      return { reservation: verdict };
     };
     /**
      * The step a refusal of the whole round names: the answered one when the
@@ -849,21 +918,40 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (read === null) return invalidAnswer(pending.name);
       turn.pending = null;
       const handler = handlers.byStep.get(read.step) as StepHandler;
+      // A credential round meets the limiters first (#636); a bot challenge's
+      // answer carries no credential.
+      let reservation: CredentialRoundReservation | null = null;
+      if (isCredentialAnswer(read.answer)) {
+        const limited = await reserveCredentialRound(read.step);
+        if ('refused' in limited) return limited.refused;
+        reservation = limited.reservation;
+      }
       const verdict: StepVerdict = await handler.verify(stepRound(), {
         params: read.params,
         answer: read.answer,
       });
       switch (verdict.kind) {
         case 'refused':
+          await settleRound(reservation, 'failure');
           return refuseAnswer(offer, read.step, verdict.error, verdict.audit.reason);
         case 'throttled':
+          // The account's ladder refused it inside a wait: never verified.
+          await settleRound(reservation, 'withdrawn');
           await audit('refused', read.step, verdict.audit.reason);
           return throttled(verdict.retryAfterSeconds);
-        case 'proved':
+        case 'proved': {
           if (handler.role !== 'first_factor' && handler.role !== 'second_factor') {
             throw new Error(`sign-in engine: ${read.step} proved an account`);
           }
-          return prove(offer, verdict.account, read, verdict.breachCheck);
+          const result = await prove(offer, verdict.account, read, verdict.breachCheck);
+          // The engine's own checks may still refuse the proof: a failed round.
+          await settleRound(
+            reservation,
+            result === null ? 'success' : 'failure',
+            verdict.account.userId
+          );
+          return result;
+        }
         case 'passed':
           if (handler.role !== 'challenge') throw new Error(`sign-in engine: ${read.step} passed`);
           state.transaction = {
@@ -1161,12 +1249,17 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         await audit('refused', 'email_code', 'code_expired');
         return offerStep(offer, 'code_expired');
       }
-      // The ladder first: inside a wait nothing is compared or counted.
+      // A code is a credential round (#636): the limiters first, then the
+      // ladder; inside a delay or a wait nothing is compared or counted.
+      const limited = await reserveCredentialRound('email_code');
+      if ('refused' in limited) return limited.refused;
+      const codeRound = limited.reservation;
       const identifierDigest = await identifierHmac();
       const reservation = await fromStore('ladder', () =>
         ladder.reserve({ realmId, identifierHmac: identifierDigest, factor: 'email_code' })
       );
       if (reservation.kind === 'wait') {
+        await settleRound(codeRound, 'withdrawn');
         await audit('refused', 'email_code', 'locked_out');
         return throttled(reservation.retryAfterSeconds);
       }
@@ -1177,11 +1270,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       switch (answered.kind) {
         case 'wrong':
           await settleCode(reservation, 'failure');
+          await settleRound(codeRound, 'failure');
           state.transaction = { ...state.transaction, emailCode: answered.held };
           await audit('refused', 'email_code', 'invalid_code');
           return offerStep(codeOffer(answered.held, at), 'invalid_credentials');
         case 'burned':
           await settleCode(reservation, 'failure');
+          await settleRound(codeRound, 'failure');
           state.transaction = { ...state.transaction, emailCode: undefined };
           return ended('email_code', 'code_burned');
         case 'accepted':
@@ -1193,6 +1288,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       // The right code clears the ladder's counter, whatever comes next.
       await settleCode(reservation, 'success');
+      await settleRound(codeRound, 'success', subject);
       // The code is held until the address is written: a write that fails
       // refuses the round, and the same code may be answered again.
       const marked = await fromStore('addresses', () =>
@@ -1234,15 +1330,20 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       clientId,
       transaction: found,
       ...(turn.pending === null ? {} : { answered: turn.pending.name }),
+      ...(context.endUserIp === undefined ? {} : { endUserIp: context.endUserIp }),
+      environment,
     });
 
-    // Rule 3: the limiters.
+    // Rule 3: the limiters, on every round (#636).
     const { limits, request, botChallenge } = hooks;
     if (limits !== undefined) {
-      const verdict = await fromStore('limits', () => limits(hookRound));
-      if (verdict.kind === 'throttled') {
+      const verdict = await fromStore('limits', () => limits.round(hookRound));
+      if (verdict?.kind === 'throttled') {
         await audit('refused', roundStep(), 'rate_limited');
-        return throttled(verdict.retryAfterSeconds);
+        return throttled(Math.max(1, Math.ceil(verdict.retryAfterSeconds)));
+      }
+      if (verdict?.kind !== 'continue') {
+        throw new SignInStoreUnavailableError('limits', new Error('not a limit verdict'));
       }
     }
 

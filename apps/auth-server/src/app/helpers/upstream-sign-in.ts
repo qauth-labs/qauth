@@ -46,6 +46,7 @@ import { normalizeInternalAuthorizeUrl } from './pending-authorization';
 import { realmRateLimitKey } from './realm-rate-limit';
 import { buildRealmUrl } from './realm-url';
 import { type RealmRow, requestRealm } from './request-realm';
+import { roundEnvironment } from './round-limits';
 import {
   sendUpstreamPage,
   upstreamErrorPage,
@@ -642,6 +643,7 @@ export function upstreamRouteHost(
             proof,
             upstreamRoundContext(request, state, {
               receivedAt,
+              environment: await roundEnvironment(fastify, realm, state.request.client_id),
               // The pages show no further step: the sign-in completes here,
               // or fails closed (a passkey, a code to verify the address).
               ...(pending.mode === 'pages'

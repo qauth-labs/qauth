@@ -16,19 +16,22 @@ through this one, which re-exports the types it needs.
 | `createRepositoryAddressVerifier`    | Marks a password credential's address verified, and its email attribute, in one database transaction, for an enabled subject only                                                                    |
 | `createRepositoryPasswordUpdates`    | The forced password update (#635): the realm's policy, and one transaction that writes the new hash, clears the disabled mark and the `update_password` required action, for an enabled subject only |
 | `signInAuditEvent`                   | An audit record as `user.sign_in_step_passed`, `user.sign_in_failed` or `user.password_breach_check_failed`, with the user as subject once resolved and the HMAC before                              |
-| `signInEnginePlugin`                 | Decorates `fastify.signInEngine` with an engine built from its options; in production only with a `ladder` hook                                                                                      |
+| `signInEnginePlugin`                 | Decorates `fastify.signInEngine` with an engine built from its options; in production only with a `ladder` and a `limits` hook                                                                       |
 | `createRedisFailureLadder`           | The per-account failure ladder (#615) in Redis: one script reserves an attempt before its check; no key holds an address                                                                             |
 | `createPasswordHardAction`           | The ladder's hard action at 100 failures: mark the password disabled, alert the operator, notify the owner; only while armed                                                                         |
 | `createHardActionArming`             | Whether the hard action is armed in a realm: the hosted reset (#642) on and the owner's notice (#637) sendable, asked every call                                                                     |
 | `createPasswordAttempts`             | The ladder as the legacy login routes use it: reserve before the password, settle after, a store error as one error type                                                                             |
 | `END_USER_IP_HMAC_LABEL`             | The HKDF label of the end-user IP digest the ladder keeps known IPs under                                                                                                                            |
+| `createRedisRoundLimits`             | The round limits (#636) in Redis: per end-user IP, per IP bucket, per client and registration starts, one script per decision; no key holds an address                                               |
 
 Nothing registers the plugin yet: the transports do, the Interaction API's answer route (#616)
 and the FiPA endpoint (#646), and they emit the mapped events with the server's event writer.
 Each keeps the engine's transaction server-side, under an unguessable handle bound to the realm and
 the client: the transaction is not sealed (see the engine's README). In production (`NODE_ENV`, or
 the `production` option) the plugin refuses to register without `hooks.ladder`: the engine's
-default ladder counts nothing, so a password could be guessed without limit.
+default ladder counts nothing, so a password could be guessed without limit. It refuses to register
+without `hooks.limits` too (#636): without the round limits one end-user IP could try a password on
+every account.
 
 The auth server's legacy routes, `POST /auth/login` and `POST /ui/login`, and the password check
 of the email verification (`POST /auth/verify`, `POST /ui/verify`) use the ladder today,
@@ -45,6 +48,13 @@ end-user IP HMACs, scored by their last successful sign-in). The braces are a Re
 tag, so one script reads and writes both. Every Redis call is bounded (2 s), and any error or
 timeout of a reservation refuses the attempt before a credential is checked.
 
+The round limits' keys are `round-limits:{<realm id>}:ip:<IP HMAC>:…`, `…:bucket:<bucket HMAC>:…`,
+`…:client:<client hash>:…` and `…:registration:…`: sorted sets of the rounds in each window, the
+bucket's identifier HMACs, and the end of each block, delay and alert. An end-user IP and its bucket
+are their keyed HMACs (the ladder's label), a client and an account the SHA-256 of their ids. Every
+time is the store's clock; every key expires with its window. Every Redis call is bounded (2 s),
+and any error refuses the round before a credential is checked.
+
 ## Known gaps
 
 - The identifier and end-user IP keys are derived from the realm's cookie secret, with no secret of
@@ -58,6 +68,10 @@ timeout of a reservation refuses the attempt before a credential is checked.
 - Only the password and the email code (#638) have a ladder. The second factors (#653) reuse it
   with policies of their own; until then their reservations are refused.
 - No TOTP factor is reported until TOTP is stored (#653).
+- The round limits' client row and per-client registration cap wait for the FiPA endpoint (#646),
+  whose authenticated client they count, and `FIRST_PARTY_CLIENT_MAX_ROUNDS` with it; the
+  registration-start cap waits for the registration steps (#640). The soft thresholds delay rounds
+  until the bot challenge (#643) replaces the delay.
 
 ## Tests
 
@@ -73,3 +87,8 @@ sequential ones, an attempt inside a wait is neither verified nor counted, the 1
 disables the password only while armed, an ignored mark lets the user in, a known IP skips the
 wait for 20 known-IP failures of a run, whatever other addresses tried, and reaches the 100th only
 through the waits, still counting each, and a stopped Redis refuses the round before any credential is checked.
+`round-limits.integration.test.ts` (Docker) runs the round limits' scripts through the store
+contract the memory store keeps, and holds them to #636's acceptance criteria: 30 failed rounds
+from one IP refuse its rounds for 15 minutes, failures for more than 20 identifiers from one bucket
+delay it and alert, the fourth registration start from one IP in an hour is refused, and a stopped
+Redis refuses rounds before any credential is checked.
