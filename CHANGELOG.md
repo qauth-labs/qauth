@@ -9,6 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Registration with `prompt=create`** ([#640], ADR-017 Decisions 3, 8 and
+  10, ADR-020 §3, OpenID Connect Prompt Create 1.0). `/oauth/authorize`
+  accepts `prompt=create`, which starts a registration interaction in the
+  Interaction API instead of a sign-in. It is off unless both the realm and the
+  client allow it: the realm's `accounts.allowSignUp` (seeded by
+  `ALLOW_SIGN_UP`, off by default; the same switch upstream sign-up reads) and
+  the client's new `hosted_flows` list naming `register`. `hosted_flows` is the
+  nullable column `oauth_clients.hosted_flows` (migration 0061), which only
+  the `db:seed-oauth-clients` manifest writes; no client can set its own. The
+  request needs the `openid` scope and no `max_age`, else `invalid_request`; a
+  client not allowed gets `unauthorized_client`, a realm that does not allow
+  sign-up `invalid_request`; each refusal is recorded as `authorization.failed`.
+  The sign-in engine registers the account in this order: the address, then an
+  8-digit `verify_account` code with the same step and timing for every
+  address (a new address gets the code, an existing account's address the
+  code and an "account exists" notice, a disabled user's address no mail), then
+  `new_password` with `purpose: "register"` under the realm's password policy
+  and breach list. Only then is the account created, in one database
+  transaction with its verified password credential, its verified email
+  attribute and `user.registered`; an address taken meanwhile ends the
+  transaction. An address an account already holds is helped to sign in to it
+  instead (an unclaimed account too, until [#641]). A registration signs nobody
+  in: no browser session, and the code and the ID token carry no `auth_time`,
+  no `amr` and no session. Discovery's OpenID Provider metadata gains
+  `prompt_values_supported` (`none`, `login`, `consent`, and `create` only while
+  the realm allows sign-up and the Interaction API is on). The flow is graphed
+  in `graphs/flows/core/sign-up`, and `graphs/flows/core/authorization` gains
+  the `prompt=create` checks.
 - **Breached-password check and the forced password update** ([#635],
   ADR-020 §3, ADR-017 Decisions 4 and 8, NIST SP 800-63B-4 §3.1.1.2). A realm
   chooses in the new policy `password.breachListSource` which breach list
@@ -3100,6 +3128,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#636]: https://github.com/qauth-labs/qauth/issues/636
 [#637]: https://github.com/qauth-labs/qauth/issues/637
 [#639]: https://github.com/qauth-labs/qauth/issues/639
+[#640]: https://github.com/qauth-labs/qauth/issues/640
+[#641]: https://github.com/qauth-labs/qauth/issues/641
 [#642]: https://github.com/qauth-labs/qauth/issues/642
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#672]: https://github.com/qauth-labs/qauth/issues/672

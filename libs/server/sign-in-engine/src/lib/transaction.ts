@@ -13,6 +13,7 @@ import {
   emailCodeLength,
   type HeldEmailCode,
 } from './email-code';
+import type { SignInFlow } from './round';
 
 /**
  * THE SIGN-IN TRANSACTION: what the engine keeps between the rounds of one
@@ -23,8 +24,9 @@ import {
  * It holds no policy (the MFA policy is read on every round, ADR-017
  * Decision 4), no answer, no password, no code and no account state: only the
  * realm and the client it is for, when it began, who it is for, what it
- * proved, the HMAC of an email code it mailed (#638), and whether the password
- * it proved was on the realm's breach list (#635).
+ * proved, the HMAC of an email code it mailed (#638), whether the password
+ * it proved was on the realm's breach list (#635), and whether it is a
+ * registration (#640).
  *
  * It is not sealed: whoever can write it can claim any subject and any
  * verified step. The transport must keep it server-side, under an
@@ -110,13 +112,20 @@ export interface SignInTransaction {
    * verified (a provider whose verified switch is off).
    */
   readonly upstream?: { readonly provider: string; readonly address?: string };
+  /**
+   * The flow, when it is not a sign-in: `register` for a registration
+   * (#640), set at round 0 from the request's `prompt=create`. It never
+   * changes; a round of another flow ends the transaction.
+   */
+  readonly flow?: SignInFlow;
 }
 
-/** What binds a transaction to its sign-in: its realm, its client, and when it began. */
+/** What binds a transaction to its sign-in: its realm, its client, when it began, and its flow. */
 export interface SignInTransactionBinding {
   readonly realmId: string;
   readonly clientId: string;
   readonly createdAt: number;
+  readonly flow?: SignInFlow;
 }
 
 /** A transaction that holds nothing yet: the state before round 0. */
@@ -127,6 +136,7 @@ export function newSignInTransaction(binding: SignInTransactionBinding): SignInT
     clientId: binding.clientId,
     createdAt: binding.createdAt,
     verified: Object.freeze([]),
+    ...(binding.flow === undefined ? {} : { flow: binding.flow }),
   });
 }
 
@@ -194,6 +204,7 @@ export const signInTransactionSchema = z.strictObject({
       address: z.string().min(3).max(254).optional(),
     })
     .optional(),
+  flow: z.literal('register').optional(),
 });
 
 /**
@@ -215,6 +226,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     breachedPassword,
     updatePasswordRequired,
     upstream,
+    flow,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -226,6 +238,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (updatePasswordRequired === true && subject === undefined) return null;
   // The provider's address is kept only once its callback fixed the subject.
   if (upstream?.address !== undefined && subject === undefined) return null;
+  // A registration never goes out to an upstream provider (#640).
+  if (flow === 'register' && upstream !== undefined) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -246,6 +260,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
             ...(upstream.address === undefined ? {} : { address: upstream.address }),
           },
         }),
+    ...(flow === undefined ? {} : { flow }),
   });
 }
 

@@ -1,27 +1,40 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import {
+  type AccountRegistrations,
   createArgon2PasswordVerifier,
   createCheckedSignInEngine,
   createRepositoryAccountDirectory,
+  createRepositoryAccountRegistrations,
   createRepositoryAddressVerifier,
   createRepositoryPasswordUpdates,
   type EmailCodeSender,
   NO_SECOND_FACTOR_POLICY,
+  REGISTRATION_NOT_ALLOWED,
   type RoundResult,
   type SignInEngine,
   storedStepOf,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
-import { TemporarilyUnavailableError, TooManyRequestsError } from '@qauth-labs/shared-errors';
+import {
+  TemporarilyUnavailableError,
+  TooManyRequestsError,
+  UniqueConstraintError,
+} from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { accountPoliciesOf } from './account-policies';
 import { type BackgroundTasks } from './background-tasks';
-import { createEngineMailer, type EngineMailer } from './engine-mail';
+import { type CodeMail, createEngineMailer, type EngineMailer } from './engine-mail';
 import type { InteractionDecision } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
+import { InteractionExpiredError } from './interaction-expired';
+import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
+import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
 import { createServerRoundLimiter } from './round-limits';
 import { upstreamProviderDirectory } from './upstream-providers';
+import { emitUserEvent, type EventTransaction } from './user-events';
 
 /**
  * The sign-in engines of the browser transports, shared by the Interaction
@@ -39,6 +52,47 @@ export interface InteractionEngines {
   readonly of: (requireVerifiedAccount: boolean) => SignInEngine;
   /** The capped sender of email codes (PRO-14, #637), bound to one request. */
   readonly sendCode: (request: FastifyRequest) => EmailCodeSender;
+  /**
+   * Run `rounds` (the engine's rounds for one request) as that request's
+   * (#640): a registration they complete records its `user.registered` event
+   * with the request's trace id, address and user agent. A registration
+   * outside it fails, closed: its transaction rolls back.
+   */
+  readonly forRequest: <T>(request: FastifyRequest, rounds: () => Promise<T>) => Promise<T>;
+}
+
+/**
+ * The request the engine's rounds run for, while one of them registers an
+ * account (#640). The engine's ports live as long as the process and a
+ * request one round, so the registration port reads the request here rather
+ * than through a parameter, as the wallet verifier's status audit does
+ * (`wallet-verification.ts`).
+ */
+const roundRequests = new AsyncLocalStorage<FastifyRequest>();
+
+/** The mail a registration's code goes out in, by what the engine decided for the address (#640). */
+export function codeMailOf(mail: Parameters<EmailCodeSender>[0]): CodeMail | undefined {
+  switch (mail.registration) {
+    // A disabled account's address: counted as any other, mailed nothing
+    // (ADR-017 Decision 8; the answer is the same either way).
+    case 'withheld':
+      return undefined;
+    // An address that already has an account: the code, and the notice that
+    // the account exists, which helps its owner sign in.
+    case 'account_exists':
+      return {
+        template: 'account_exists',
+        code: mail.code,
+        expiresInSeconds: mail.expiresInSeconds,
+      };
+    default:
+      return {
+        template: 'code',
+        purpose: mail.purpose,
+        code: mail.code,
+        expiresInSeconds: mail.expiresInSeconds,
+      };
+  }
 }
 
 /**
@@ -53,15 +107,11 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
   return async (mail) => {
     const realm = requestRealm(request);
     if (mail.realmId !== realm.id) throw new Error('an email code for another realm');
+    const codeMail = codeMailOf(mail);
     const outcome = await mailer.sendCode(request, {
       realm,
       address: mail.address,
-      mail: {
-        template: 'code',
-        purpose: mail.purpose,
-        code: mail.code,
-        expiresInSeconds: mail.expiresInSeconds,
-      },
+      ...(codeMail === undefined ? {} : { mail: codeMail }),
       flow: mail.purpose === 'recovery' ? 'reset' : 'register',
       afterFirstFactor: mail.afterFirstFactor,
     });
@@ -91,6 +141,13 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * `update_password` required action (#635, ADR-020 §3): after the account's
  * second factor, or after an 8-digit recovery code to its address. The new
  * password meets the realm's password policy and the breach list too.
+ *
+ * Both register a password account when the round's request asks for it
+ * (`prompt=create`, #640; ADR-017 Decision 8): only while the realm and the
+ * client both allow it (`registrationAllowed`), read again on every round,
+ * after an 8-digit code proved the mailbox and a new password met the realm's
+ * policy. The account, its verified password credential, its verified email
+ * attribute and its `user.registered` event commit in one transaction.
  *
  * Building them registers an `onClose` hook for the mail's background tasks,
  * which Fastify refuses once the server started: a route that builds them
@@ -152,6 +209,44 @@ export function createInteractionEngines(
       hash: (password) => fastify.passwordHasher.hashPassword(password),
     }
   );
+  const registrations: AccountRegistrations =
+    createRepositoryAccountRegistrations<EventTransaction>(
+      {
+        users: fastify.repositories.users,
+        userCredentials: fastify.repositories.userCredentials,
+        userAttributes: fastify.repositories.userAttributes,
+      },
+      (work) => fastify.db.transaction(work),
+      {
+        allowed: async ({ realmId, clientId }) => {
+          const realm = await fastify.repositories.realms.findById(realmId);
+          if (realm === undefined) return false;
+          const client = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
+          return registrationAllowed(accountPoliciesOf(fastify, realm), client);
+        },
+        hash: (password) => fastify.passwordHasher.hashPassword(password),
+        isUniqueViolation: (error) => error instanceof UniqueConstraintError,
+        registered: async ({ realmId, clientId, userId }, tx) => {
+          const request = roundRequests.getStore();
+          if (request === undefined) {
+            throw new Error('an account registered outside the request that asked for it');
+          }
+          // The account's event commits with the account (ADR-019 Decision 8).
+          await emitUserEvent(
+            request,
+            'urn:qauth:event:user.registered:v1-rc.0',
+            { method: 'password' },
+            {
+              tx,
+              realmId,
+              userId,
+              clientId: clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null,
+              actor: 'user',
+            }
+          );
+        },
+      }
+    );
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(
@@ -175,6 +270,7 @@ export function createInteractionEngines(
       // The realm's upstream identity providers (#639), offered beside the
       // identifier step on a round whose transport can start one.
       upstream: upstreamProviderDirectory(fastify),
+      registrations,
       hooks: { ladder: ladder.ladder, limits },
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
@@ -185,6 +281,7 @@ export function createInteractionEngines(
   return {
     of: (requireVerifiedAccount) => (requireVerifiedAccount ? verified : unverified),
     sendCode: (request) => engineCodeSender(mailer, request),
+    forRequest: (request, rounds) => roundRequests.run(request, rounds),
   };
 }
 
@@ -216,6 +313,13 @@ export function decisionOf(
       };
     }
     case 'complete':
+      if (result.signIn.registered === true) {
+        // A registration (#640; ADR-017 Decisions 8 and 10): the account
+        // exists, verified, and nobody signed in. The interaction finishes
+        // for the new account with no browser session, no `amr` and no
+        // `auth_time`.
+        return { kind: 'registered', userId: result.signIn.subject };
+      }
       // The sign-in is done: the interaction finishes with it, under a new
       // browser session (`authenticated` with no next step). The session's
       // issue time is when the request came, before the account was read
@@ -242,6 +346,12 @@ export function decisionOf(
           });
         case 'invalid_answer':
           throw new InvalidAnswerError('the engine refused the answer');
+        case 'request_refused':
+          // The realm or the client stopped allowing registration since the
+          // interaction started (#640): it ends as an expired one does, and
+          // nothing was created.
+          if (result.code === REGISTRATION_NOT_ALLOWED) throw new InteractionExpiredError();
+          throw new Error(`the sign-in engine refused a round: ${result.code}`);
         default:
           // `transaction_ended` again after a fresh start, or a request check
           // this transport does not register: an engine fault.

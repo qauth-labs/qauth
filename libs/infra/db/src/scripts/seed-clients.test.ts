@@ -103,3 +103,27 @@ describe('back-channel logout rows (#624)', () => {
     expect(buildUpdate(spec(), 'hash')).toMatchObject(expected);
   });
 });
+
+describe('hosted_flows rows (#640)', () => {
+  const spec = (overrides: Record<string, unknown> = {}): ClientSpec =>
+    clientSpecSchema.parse({
+      client_id: 'notes-app',
+      name: 'Notes',
+      grant_types: ['authorization_code'],
+      redirect_uris: ['https://notes.example.com/callback'],
+      ...overrides,
+    });
+
+  it('writes the list on a new client and on a rotation', () => {
+    const entry = spec({ hosted_flows: ['register'] });
+    expect(buildInsert('realm-id', entry, 'hash').hostedFlows).toEqual(['register']);
+    expect(buildUpdate(entry, 'hash').hostedFlows).toEqual(['register']);
+  });
+
+  it('writes NULL for an entry without one or with an empty one, so a rotation clears it', () => {
+    for (const entry of [spec(), spec({ hosted_flows: [] })]) {
+      expect(buildInsert('realm-id', entry, 'hash').hostedFlows).toBeNull();
+      expect(buildUpdate(entry, 'hash').hostedFlows).toBeNull();
+    }
+  });
+});

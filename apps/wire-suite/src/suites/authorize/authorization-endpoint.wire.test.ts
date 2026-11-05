@@ -194,3 +194,32 @@ describe('[GET /oauth/authorize] RFC 9207 §2 — iss on every authorization res
     });
   });
 });
+
+describe('[GET /oauth/authorize] OpenID Connect Prompt Create 1.0 §4.1 — a request to register', () => {
+  it('refuses prompt=create without the openid scope with invalid_request, sent back with state and iss (§4.1)', async () => {
+    const request = authorizationRequest({ prompt: 'create', scope: 'profile email' });
+
+    const url = redirectResponse(await call('GET /oauth/authorize', { query: request.params }));
+
+    expect(url.searchParams.get('error')).toBe('invalid_request');
+    expect(url.searchParams.get('state')).toBe(request.state);
+    expect(url.searchParams.get('iss')).toBe(baseUrl);
+    expect(url.searchParams.has('code')).toBe(false);
+  });
+
+  it('refuses prompt=create with invalid_request while discovery does not list create (§4.1, §4.2)', async (context) => {
+    const { body } = await getJsonObject(serverPath(baseUrl, '/.well-known/openid-configuration'));
+    const values = body['prompt_values_supported'];
+    // A deployment that allows sign-up lists `create`; its clients' own
+    // registration permission then decides, which this suite cannot set.
+    if (Array.isArray(values) && values.includes('create')) context.skip();
+    const request = authorizationRequest({ prompt: 'create' });
+
+    const url = redirectResponse(await call('GET /oauth/authorize', { query: request.params }));
+
+    expect(url.searchParams.get('error')).toBe('invalid_request');
+    expect(url.searchParams.get('state')).toBe(request.state);
+    expect(url.searchParams.get('iss')).toBe(baseUrl);
+    expect(url.searchParams.has('code')).toBe(false);
+  });
+});

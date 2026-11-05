@@ -20,16 +20,20 @@ import {
   PASSWORD_MIN_LENGTH_FLOOR,
   PASSWORD_NORMALIZATION_NFC,
   PASSWORD_REJECTION_REASONS,
+  type PasswordNormalization,
   type PasswordRejectionReason,
 } from '@qauth-labs/shared-validation';
 
 import {
   answerEmailCode,
+  countWrongEmailCode,
   EMAIL_CODE_HMAC_PATTERN,
   EMAIL_CODE_TTL_MS,
   emailCodeExpired,
+  type EmailCodeLength,
   emailCodeLength,
   emailCodeParams,
+  type EmailCodePurpose,
   emailCodeResendDue,
   generateEmailCode,
   generateEmailCodeSalt,
@@ -54,6 +58,7 @@ import {
 import { readIdentifier } from './identifier';
 import {
   type AccountDirectory,
+  type AccountRegistrations,
   type AddressVerifier,
   type BreachCheckFailure,
   type BreachCheckVerdict,
@@ -75,7 +80,13 @@ import {
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,
 } from './ports';
-import type { RoundAnswer, RoundContext, RoundResult, UpstreamProof } from './round';
+import type {
+  RegistrationMail,
+  RoundAnswer,
+  RoundContext,
+  RoundResult,
+  UpstreamProof,
+} from './round';
 import { isCredentialAnswer, roundEnvironmentOf } from './round-limits';
 import type {
   AnyStepHandler,
@@ -142,6 +153,15 @@ import {
  *    password, a code mailed to its address.
  * 9. Complete: the transport mints the session or the code.
  *
+ * A registration (#640; `RoundContext.flow` `register`, from `prompt=create`)
+ * runs the same rules with its own gate after rule 4: the realm and the
+ * client must both allow it, on every round. Rule 6 asks for the address
+ * alone; then its mailbox is proved with an 8-digit code, the same step for a
+ * new address and an existing one, and a new address sets its password and
+ * the account is created (ADR-017 Decision 8). An account that holds the
+ * address is helped to sign in to it: rule 7 on. The flow is graphed in
+ * `graphs/flows/core/sign-up/flow.yaml`.
+ *
  * Until a factor succeeds, nothing the engine answers depends on the account:
  * an unknown identifier, a password-only, passkey-only, disabled or locked
  * account and an unverified one under `REQUIRE_VERIFIED_ACCOUNT` get the same
@@ -206,6 +226,13 @@ export interface SignInEngineDependencies {
    * answered with a redirect, never completed.
    */
   readonly passwordUpdates?: PasswordUpdates;
+  /**
+   * Registration (#640; ADR-017 Decision 8): its gate and the write that
+   * creates an account. A registration also needs `emailCodes` and
+   * `passwordUpdates`, whose policy sets the new password. Without all
+   * three, a registration is answered with a redirect.
+   */
+  readonly registrations?: AccountRegistrations;
   readonly hooks?: SignInHooks;
   /**
    * The password ladder's hard action (#615): called when a failure counts at
@@ -313,6 +340,19 @@ const RECOVERY = 'recovery' as const;
 
 /** The email-code purposes of a sign-in: verifying an address, and proving a mailbox before a forced update. */
 type SignInCodePurpose = typeof VERIFY_ACCOUNT | typeof RECOVERY;
+
+/** The steps a registration needs the transport to serve (#640). */
+const REGISTRATION_STEPS: readonly StepName[] = Object.freeze([
+  'identifier',
+  'email_code',
+  'new_password',
+]);
+
+/**
+ * The code of the refusal of a registration the realm or the client does not
+ * allow (#640): `RoundResult` `request_refused`.
+ */
+export const REGISTRATION_NOT_ALLOWED = 'registration_not_allowed';
 
 /** Check the handlers a deployment adds, and order every handler by role. */
 function buildHandlers(deps: SignInEngineDependencies) {
@@ -548,12 +588,16 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     proof?: UpstreamProof
   ): Promise<RoundResult> {
     const now = clock.now();
+    if (context.flow !== undefined && context.flow !== 'register') {
+      throw new Error('sign-in engine: an unknown flow');
+    }
     const found =
       stored === null
         ? newSignInTransaction({
             realmId: context.realm.id,
             clientId: context.client.id,
             createdAt: now,
+            ...(context.flow === undefined ? {} : { flow: context.flow }),
           })
         : readSignInTransaction(stored);
     // A transaction that is not well formed ends: nothing in it can be trusted.
@@ -568,6 +612,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
     if (now - found.createdAt > SIGN_IN_TRANSACTION_MAX_AGE_MS) {
       return endUnusable(answer, context, 'transaction_expired', proof);
+    }
+    // A transaction runs the flow it began with (#640): a sign-in never
+    // becomes a registration, nor a registration a sign-in.
+    if (found.flow !== context.flow) {
+      return endUnusable(answer, context, 'transaction_invalid', proof);
     }
     // A subject without an identifier comes only from a discoverable factor,
     // or from an upstream provider's callback (#639).
@@ -606,6 +655,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // ADR-008 §5: only `development` relaxes the limiters; anything else is production.
     const environment = roundEnvironmentOf(context.environment ?? 'production');
     const served = new Set<StepName>(context.serves ?? STEP_NAMES);
+    /** A registration (#640), not a sign-in. */
+    const registering = state.transaction.flow === 'register';
     const answeredName =
       answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
     /** The round's answer while no step has taken it. */
@@ -1122,54 +1173,64 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         alternatives: Object.freeze([]),
       }) as StepOffer;
 
+    /** Whether this transaction proved the mailbox: an email code answered right, for any purpose. */
+    const provedMailbox = (): boolean =>
+      state.transaction.verified.some((step) => step.step === 'email_code');
+
     /**
-     * The inline verification of the address the transaction's identifier
-     * names, after a factor proved its account (#638; ADR-017 Decisions 5
-     * and 8; `graphs/flows/core/account-verification/flow.yaml`). Returns the
-     * round's result while the code is pending, or `null` once the address
-     * is verified and the rules go on. With the purpose `recovery` it proves
-     * the mailbox of a password-only account before a forced password update
-     * (#635), with the same rounds and an 8-digit code; the address is
-     * marked verified all the same, which it already is.
+     * The rounds of one emailed code (#638), whatever it is for: the inline
+     * verification of an account's address, the mailbox proof before a forced
+     * update, and a registration's first answer (#640). Returns the round's
+     * result while the code is pending, or the params it was answered with
+     * once it is answered right; the code is still held then, so a write
+     * that fails refuses the round and the same code may be answered again.
      *
-     * - The first round mails a 6-digit code through the capped sender and
-     *   offers `email_code` with `verify_account`; a cap that answers 429
-     *   refuses the round, and nothing is held.
+     * - The first round mails a code through the capped sender and offers
+     *   `email_code`; a cap that answers 429 refuses the round, and nothing
+     *   is held. `beforeFirst` may refuse that round first: a registration's
+     *   start cap.
      * - An answer with no otp asks for a new code: one is mailed a minute
      *   after the last, and the transaction's count of wrong answers stays.
      * - An expired code is refused with `code_expired`, nothing compared or
      *   counted.
-     * - Otherwise the answer is reserved on the email-code ladder (the
-     *   identifier HMAC's `email_code` counter, across transactions), with no
-     *   end-user IP: an account whose address is not proved has no owner
-     *   whose IPs are known. Inside a wait it is refused, not compared.
+     * - Otherwise the answer is reserved on the limiters, then on the
+     *   email-code ladder (the identifier HMAC's `email_code` counter, across
+     *   transactions), with no end-user IP: an address not proved has no
+     *   owner whose IPs are known. Inside a delay or a wait it is refused,
+     *   not compared.
      * - The code is compared HMAC to HMAC, in constant time. A wrong one is
-     *   counted, and the 5th of the transaction burns the code and ends
-     *   it. A right one clears the ladder's
-     *   counter, marks the address verified, and is recorded among the
-     *   verified steps: no `amr` value, no `auth_time`.
+     *   counted, and the 5th of the transaction burns the code and ends it.
+     *   A right one that `takes` refuses is answered exactly as a wrong one.
+     *   A right one taken clears the ladder's counter.
      */
-    const verifyAddress = async (
+    const codeRound = async (
       codes: EmailCodeDependencies,
-      subject: string,
-      purpose: SignInCodePurpose
-    ): Promise<RoundResult | null> => {
-      const length = emailCodeLength(purpose, { afterPassword: true });
-      // The address is the identifier; for an account an upstream provider
-      // proved (#639), the address that provider gave.
-      const upstreamAddress =
-        state.transaction.identifier === undefined ? state.transaction.upstream : undefined;
-      const identifier = state.transaction.identifier ?? upstreamAddress?.address;
-      // A subject a discoverable factor named holds no address to mail, nor
-      // does one a provider proved without an address, and a transport that
-      // cannot serve the step cannot take the code.
-      if (identifier === undefined || !served.has('email_code')) {
-        return redirect('step_not_available');
+      spec: {
+        readonly purpose: EmailCodePurpose;
+        readonly length: EmailCodeLength;
+        /** Where the code goes: the normalised address. */
+        readonly address: string;
+        /** The code follows a correct first factor of this transaction. */
+        readonly afterFirstFactor: boolean;
+        /** The account a right code settles the limiters' round for, when one is proved. */
+        readonly userId?: string;
+        /** Before the first code: the round's refusal, or `null` to mail it. */
+        readonly beforeFirst?: () => Promise<RoundResult | null>;
+        /** What each code's mail says about the address: a registration's (#640). */
+        readonly registration?: () => Promise<RegistrationMail>;
+        /**
+         * Whether a right code is taken; with `false` it is answered as a
+         * wrong one, audited with `refusedAs`.
+         */
+        readonly takes?: () => Promise<boolean>;
+        readonly refusedAs?: SignInAuditReason;
       }
+    ): Promise<{ readonly result: RoundResult } | { readonly params: unknown }> => {
       const { sendCode } = context;
       if (sendCode === undefined) {
         throw new Error('sign-in engine: no email-code sender for this round');
       }
+      const { purpose, length, address } = spec;
       const digestCode = (salt: string, code: string): Promise<string> =>
         fromStore('emailCodeDigest', async () => {
           const digest = await codes.digest({ realmId, salt, code });
@@ -1184,6 +1245,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
        * code held.
        */
       const issue = async (previous?: HeldEmailCode): Promise<RoundResult | null> => {
+        // A registration re-reads the address before every code it mints
+        // (ADR-017 Decision 8): a disabled user's gets no mail.
+        const registration =
+          spec.registration === undefined ? undefined : await spec.registration();
         const issuedAt = clock.now();
         const code = generateEmailCode(length);
         const salt = generateEmailCodeSalt();
@@ -1191,11 +1256,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const sent = await fromStore('sendCode', () =>
           sendCode({
             realmId,
-            address: identifier,
+            address,
             purpose,
             code,
             expiresInSeconds: EMAIL_CODE_TTL_MS / 1000,
-            afterFirstFactor: true,
+            afterFirstFactor: spec.afterFirstFactor,
+            ...(registration === undefined ? {} : { registration }),
           })
         );
         if (sent?.kind === 'capped') {
@@ -1228,57 +1294,71 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       };
 
       const held = state.transaction.emailCode;
-      // The round after the factor: the first code.
-      if (held === undefined) return issueAndOffer();
+      // The first round: the first code.
+      if (held === undefined) {
+        const refused = await spec.beforeFirst?.();
+        if (refused !== undefined && refused !== null) return { result: refused };
+        return { result: await issueAndOffer() };
+      }
       const at = clock.now();
       const offer = codeOffer(held, at);
       // An answer to another step is ignored, as every eager answer is; a
       // round with none asks for the code again.
       if (turn.pending?.name !== 'email_code') {
-        return offerStep(offer, emailCodeExpired(held, at) ? 'code_expired' : undefined);
+        return {
+          result: offerStep(offer, emailCodeExpired(held, at) ? 'code_expired' : undefined),
+        };
       }
       const read = readPending(offer);
-      if (read === null) return invalidAnswer('email_code');
+      if (read === null) return { result: await invalidAnswer('email_code') };
       turn.pending = null;
       const { otp } = read.answer as StepAnswer<'email_code'>;
       if (otp === undefined) {
         // A new code once one is due; before, the same step, nothing mailed.
-        return emailCodeResendDue(held, at) ? issueAndOffer(held) : offerStep(offer);
+        return {
+          result: emailCodeResendDue(held, at) ? await issueAndOffer(held) : offerStep(offer),
+        };
       }
       if (emailCodeExpired(held, at)) {
         await audit('refused', 'email_code', 'code_expired');
-        return offerStep(offer, 'code_expired');
+        return { result: offerStep(offer, 'code_expired') };
       }
       // A code is a credential round (#636): the limiters first, then the
       // ladder; inside a delay or a wait nothing is compared or counted.
       const limited = await reserveCredentialRound('email_code');
-      if ('refused' in limited) return limited.refused;
-      const codeRound = limited.reservation;
+      if ('refused' in limited) return { result: limited.refused };
+      const codeRoundReservation = limited.reservation;
       const identifierDigest = await identifierHmac();
       const reservation = await fromStore('ladder', () =>
         ladder.reserve({ realmId, identifierHmac: identifierDigest, factor: 'email_code' })
       );
       if (reservation.kind === 'wait') {
-        await settleRound(codeRound, 'withdrawn');
+        await settleRound(codeRoundReservation, 'withdrawn');
         await audit('refused', 'email_code', 'locked_out');
-        return throttled(reservation.retryAfterSeconds);
+        return { result: throttled(reservation.retryAfterSeconds) };
       }
       // A digest that fails leaves the attempt counted, as a store fault
       // after the password's reservation does.
       const presented = await digestCode(held.salt, otp);
-      const answered = answerEmailCode(held, presented, at);
+      let answered = answerEmailCode(held, presented, at);
+      let refusedAs: SignInAuditReason = 'invalid_code';
+      // A right code that may not be taken gets the answer of a wrong one.
+      if (answered.kind === 'accepted' && spec.takes !== undefined && !(await spec.takes())) {
+        answered = countWrongEmailCode(held);
+        refusedAs = spec.refusedAs ?? 'invalid_code';
+      }
       switch (answered.kind) {
         case 'wrong':
           await settleCode(reservation, 'failure');
-          await settleRound(codeRound, 'failure');
+          await settleRound(codeRoundReservation, 'failure');
           state.transaction = { ...state.transaction, emailCode: answered.held };
-          await audit('refused', 'email_code', 'invalid_code');
-          return offerStep(codeOffer(answered.held, at), 'invalid_credentials');
+          await audit('refused', 'email_code', refusedAs);
+          return { result: offerStep(codeOffer(answered.held, at), 'invalid_credentials') };
         case 'burned':
           await settleCode(reservation, 'failure');
-          await settleRound(codeRound, 'failure');
+          await settleRound(codeRoundReservation, 'failure');
           state.transaction = { ...state.transaction, emailCode: undefined };
-          return ended('email_code', 'code_burned');
+          return { result: await ended('email_code', 'code_burned') };
         case 'accepted':
           break;
         default:
@@ -1288,7 +1368,59 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       // The right code clears the ladder's counter, whatever comes next.
       await settleCode(reservation, 'success');
-      await settleRound(codeRound, 'success', subject);
+      await settleRound(codeRoundReservation, 'success', spec.userId);
+      return { params: read.params };
+    };
+
+    /** Record the code `codeRound` accepted among the verified steps, the code consumed. */
+    const codeTaken = async (params: unknown): Promise<void> => {
+      state.transaction = {
+        ...state.transaction,
+        emailCode: undefined,
+        verified: [...state.transaction.verified, { step: 'email_code', params } as OfferedStep],
+      };
+      await audit('passed', 'email_code');
+    };
+
+    /**
+     * The inline verification of the address the transaction's identifier
+     * names, after a factor proved its account (#638; ADR-017 Decisions 5
+     * and 8; `graphs/flows/core/account-verification/flow.yaml`). Returns the
+     * round's result while the code is pending, or `null` once the address
+     * is verified and the rules go on. With the purpose `recovery` it proves
+     * the mailbox of a password-only account before a forced password update
+     * (#635), with the same rounds and an 8-digit code; the address is
+     * marked verified all the same, which it already is.
+     *
+     * The code's rounds are {@link codeRound}'s, with a 6-digit code for
+     * `verify_account`. A right one marks the address verified and is
+     * recorded among the verified steps: no `amr` value, no `auth_time`.
+     */
+    const verifyAddress = async (
+      codes: EmailCodeDependencies,
+      subject: string,
+      purpose: SignInCodePurpose
+    ): Promise<RoundResult | null> => {
+      const length = emailCodeLength(purpose, { afterPassword: true });
+      // The address is the identifier; for an account an upstream provider
+      // proved (#639), the address that provider gave.
+      const upstreamAddress =
+        state.transaction.identifier === undefined ? state.transaction.upstream : undefined;
+      const identifier = state.transaction.identifier ?? upstreamAddress?.address;
+      // A subject a discoverable factor named holds no address to mail, nor
+      // does one a provider proved without an address, and a transport that
+      // cannot serve the step cannot take the code.
+      if (identifier === undefined || !served.has('email_code')) {
+        return redirect('step_not_available');
+      }
+      const answered = await codeRound(codes, {
+        purpose,
+        length,
+        address: identifier,
+        afterFirstFactor: true,
+        userId: subject,
+      });
+      if ('result' in answered) return answered.result;
       // The code is held until the address is written: a write that fails
       // refuses the round, and the same code may be answered again.
       const marked = await fromStore('addresses', () =>
@@ -1307,15 +1439,216 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         state.transaction = { ...state.transaction, emailCode: undefined };
         return ended('email_code', reason);
       }
+      await codeTaken(answered.params);
+      return null;
+    };
+
+    /**
+     * The `new_password` step (#635; ADR-017 Decision 8): offered with
+     * `purpose` and the realm's minimum length. An answer is checked against
+     * the realm's password policy, then against its breach list (a listed
+     * one is refused as `blocklisted`, a check that fails accepts it and is
+     * recorded), and is then handed to `write`: the forced update's
+     * replacement, or a registration's creation (#640), which answers the
+     * round's result when it refused, else `null`. Returns the round's result
+     * while the step is pending, or `null` once the password is set.
+     */
+    const askNewPassword = async (
+      updates: PasswordUpdates,
+      identifier: string,
+      purpose: 'update_required' | 'register',
+      write: (password: string, normalization: PasswordNormalization) => Promise<RoundResult | null>
+    ): Promise<RoundResult | null> => {
+      const minLength = await fromStore('passwordUpdates', async () => {
+        const value = await updates.minLength(realmId);
+        if (
+          !Number.isInteger(value) ||
+          value < PASSWORD_MIN_LENGTH_FLOOR ||
+          value > PASSWORD_MAX_LENGTH
+        ) {
+          throw new Error('not a minimum password length');
+        }
+        return value;
+      });
+      const params: StepParams<'new_password'> = Object.freeze({
+        purpose,
+        min_length: minLength,
+        max_length: PASSWORD_MAX_LENGTH,
+      });
+      const offerWith = (reasons?: readonly PasswordRejectionReason[]): StepOffer =>
+        Object.freeze({
+          current: Object.freeze({
+            step: 'new_password',
+            params: Object.freeze(
+              reasons === undefined ? params : { ...params, reasons: [...reasons] }
+            ),
+          }),
+          alternatives: Object.freeze([]),
+        }) as StepOffer;
+      const offer = offerWith();
+      const refuse = async (
+        reasons: readonly PasswordRejectionReason[],
+        reason: SignInAuditReason
+      ): Promise<RoundResult> => {
+        await audit('refused', 'new_password', reason);
+        return offerStep(offerWith(reasons), 'password_rejected');
+      };
+      // An answer to another step is ignored, as every eager answer is.
+      if (turn.pending?.name !== 'new_password') return offerStep(offer);
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('new_password');
+      turn.pending = null;
+      const chosen = (read.answer as StepAnswer<'new_password'>).new_password;
+      const checked = await fromStore('passwordUpdates', async () => {
+        const result = await updates.check({ realmId, identifier, password: chosen });
+        if (result?.kind === 'rejected') {
+          const known = PASSWORD_REJECTION_REASONS as readonly unknown[];
+          if (
+            !Array.isArray(result.reasons) ||
+            result.reasons.length === 0 ||
+            !result.reasons.every((reason) => known.includes(reason)) ||
+            new Set(result.reasons).size !== result.reasons.length
+          ) {
+            throw new Error('not a password policy refusal');
+          }
+          return result;
+        }
+        if (
+          result?.kind !== 'accepted' ||
+          typeof result.password !== 'string' ||
+          result.normalization !== PASSWORD_NORMALIZATION_NFC
+        ) {
+          throw new Error('not a password policy check');
+        }
+        return result;
+      });
+      if (checked.kind === 'rejected') return refuse(checked.reasons, 'password_rejected');
+      // The new password must itself pass the breach list: a listed one is
+      // the blocklist's refusal (NIST SP 800-63B-4 §3.1.1.2 counts breach
+      // corpora among the values a verifier blocks).
+      const breach = await checkBreachList(deps.breachCheck, realmId, checked.password);
+      if (breach.kind === 'listed') return refuse(['blocklisted'], 'password_breached');
+      const written = await write(checked.password, checked.normalization);
+      if (written !== null) return written;
       state.transaction = {
         ...state.transaction,
-        emailCode: undefined,
         verified: [
           ...state.transaction.verified,
-          { step: 'email_code', params: read.params } as OfferedStep,
+          { step: 'new_password', params: read.params } as OfferedStep,
         ],
       };
-      await audit('passed', 'email_code');
+      await audit('passed', 'new_password');
+      if (breach.kind === 'failed') await unchecked('new_password', breach.failure);
+      return null;
+    };
+
+    /**
+     * A registration's rounds once the transaction holds the address (#640;
+     * ADR-017 Decision 8; `graphs/flows/core/sign-up/flow.yaml`). Returns the
+     * round's result, or `null` when an account holds the address and the
+     * person is helped to sign in to it: rule 7's first factor.
+     *
+     * 1. The mailbox first: an 8-digit `verify_account` code, the same step
+     *    for a new address and an existing one. The first code is a
+     *    registration start, which the limiters cap. The mail says whether an
+     *    account holds the address; a disabled user's gets none, and every
+     *    code answered for it is answered as a wrong one, so nothing of that
+     *    user changes.
+     * 2. Then, with no account holding the address, `new_password` with the
+     *    purpose `register`: the realm's password policy and its breach list,
+     *    as for every new password. Once it passes, the account is created in
+     *    one write; an address another account took meanwhile ends the
+     *    transaction (`registration_conflict`).
+     *
+     * No account exists before both pass. The registration completes with no
+     * `amr` and no `auth_time` (ADR-017 Decision 10).
+     */
+    const register = async (identifier: string): Promise<RoundResult | null> => {
+      const { registrations, passwordUpdates: updates } = deps;
+      if (registrations === undefined || emailCodes === undefined || updates === undefined) {
+        throw new Error('sign-in engine: a registration without its dependencies');
+      }
+      const readCandidate = () =>
+        fromStore('accounts', () => deps.accounts.findByIdentifier(realmId, identifier));
+      if (!provedMailbox()) {
+        const answered = await codeRound(emailCodes, {
+          purpose: VERIFY_ACCOUNT,
+          length: emailCodeLength(VERIFY_ACCOUNT, { afterPassword: false }),
+          address: identifier,
+          afterFirstFactor: false,
+          beforeFirst: reserveRegistrationStart,
+          registration: async () => {
+            const candidate = await readCandidate();
+            if (candidate === null) return 'new_address';
+            return candidate.enabled ? 'account_exists' : 'withheld';
+          },
+          takes: async () => {
+            const candidate = await readCandidate();
+            return candidate === null || candidate.enabled;
+          },
+          refusedAs: 'account_disabled',
+        });
+        if ('result' in answered) return answered.result;
+        await codeTaken(answered.params);
+      }
+      // An account holds the address: the person is helped to sign in to it
+      // (ADR-017 Decision 8). An unclaimed one, too, until PRO-17 (#641) ends
+      // it instead; its address is verified once its password is proved.
+      if ((await readCandidate()) !== null) return null;
+      const asked = await askNewPassword(
+        updates,
+        identifier,
+        'register',
+        async (password, normalization) => {
+          const created = await fromStore('registrations', () =>
+            registrations.create({ realmId, clientId, identifier, password, normalization })
+          );
+          if (created?.kind === 'conflict') return ended('new_password', 'registration_conflict');
+          if (
+            created?.kind !== 'created' ||
+            typeof created.userId !== 'string' ||
+            created.userId.length === 0
+          ) {
+            throw new SignInStoreUnavailableError('registrations', new Error('not a registration'));
+          }
+          state.transaction = { ...state.transaction, subject: created.userId };
+          return null;
+        }
+      );
+      if (asked !== null) return asked;
+      const { subject } = state.transaction;
+      if (subject === undefined)
+        throw new Error('sign-in engine: a registration without its account');
+      return Object.freeze({
+        kind: 'complete',
+        transaction: null,
+        signIn: Object.freeze({ subject, identifier, registered: true as const }),
+      });
+    };
+
+    /**
+     * Count a registration start on the limiters (#640; ADR-017 Decision 7):
+     * the round's refusal, audited as `rate_limited`, or `null` to go on.
+     */
+    const reserveRegistrationStart = async (): Promise<RoundResult | null> => {
+      const { limits } = hooks;
+      if (limits?.reserveRegistrationStart === undefined) return null;
+      const reserve = limits.reserveRegistrationStart.bind(limits);
+      const verdict = await fromStore('limits', () =>
+        reserve({
+          realmId,
+          clientId,
+          environment,
+          ...(context.endUserIp === undefined ? {} : { endUserIp: context.endUserIp }),
+        })
+      );
+      if (verdict?.kind === 'throttled') {
+        await audit('refused', 'email_code', 'rate_limited');
+        return throttled(Math.max(1, Math.ceil(verdict.retryAfterSeconds)));
+      }
+      if (verdict?.kind !== 'continue') {
+        throw new SignInStoreUnavailableError('limits', new Error('not a limit verdict'));
+      }
       return null;
     };
 
@@ -1360,6 +1693,37 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         });
       }
       if (verdict.kind === 'redirect') return redirect('request');
+    }
+
+    // Rule 4, for a registration (#640; ADR-017 Decision 8): the realm and
+    // the client must both allow it, on every round, before anything is
+    // mailed or written. A transport or an engine that cannot serve its steps
+    // sends the person elsewhere.
+    if (registering) {
+      const { registrations } = deps;
+      if (
+        registrations === undefined ||
+        emailCodes === undefined ||
+        deps.passwordUpdates === undefined ||
+        !REGISTRATION_STEPS.every((step) => served.has(step))
+      ) {
+        return redirect('step_not_available');
+      }
+      const allowed: unknown = await fromStore('registrations', () =>
+        registrations.allowed({ realmId, clientId })
+      );
+      if (allowed !== true) {
+        if (allowed !== false) {
+          throw new SignInStoreUnavailableError('registrations', new Error('not a gate verdict'));
+        }
+        await audit('refused', roundStep(), 'registration_closed');
+        return Object.freeze({
+          kind: 'refused',
+          reason: 'request_refused',
+          code: REGISTRATION_NOT_ALLOWED,
+          transaction: freezeTransaction(state.transaction),
+        });
+      }
     }
 
     // Rule 5: a due bot challenge comes before every other step. Any other
@@ -1431,6 +1795,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
 
     if (state.transaction.subject === undefined) {
+      if (state.transaction.identifier === undefined && registering) {
+        // A registration asks for the address alone (#640): no factor, no
+        // upstream provider.
+        return offerStep(await offerOf([handlers.identifier]));
+      }
       if (state.transaction.identifier === undefined) {
         // Nobody is named yet: the identifier step, the same for everyone, or
         // a discoverable first factor before it, with the identifier step and
@@ -1505,6 +1874,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // The same identifier again: nothing more to do with that answer.
         if (turn.pending?.name === 'identifier') turn.pending = null;
 
+        // A registration (#640): the mailbox, then the password, then the
+        // account; or, for an address an account holds, rule 7.
+        if (registering) {
+          const identifier = state.transaction.identifier;
+          if (identifier === undefined) throw new Error('sign-in engine: no address to register');
+          const result = await register(identifier);
+          if (result !== null) return result;
+        }
+
         // Rule 7: the first factor, offered alike to every account until one
         // succeeds. Only an answer to it is verified; any other is ignored.
         const firstFactors = handlers.firstFactors.filter((handler) => served.has(handler.step));
@@ -1545,6 +1923,26 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     ) {
       state.transaction = { ...state.transaction, updatePasswordRequired: true };
     }
+    // A registration for an address an account holds (#640): its mailbox was
+    // proved before its password, so the same person proved both, and an
+    // address not verified yet is verified now, as the inline verification
+    // would after the password (ADR-017 Decision 8).
+    if (registering && !account.verified && provedMailbox() && emailCodes !== undefined) {
+      const { identifier } = state.transaction;
+      if (identifier === undefined)
+        throw new Error('sign-in engine: a registration without its address');
+      const marked = await fromStore('addresses', () =>
+        emailCodes.addresses.markVerified({ realmId, userId: subject, identifier })
+      );
+      if (marked?.kind !== 'verified') {
+        const reason = marked?.kind === 'refused' ? marked.reason : undefined;
+        if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
+          throw new SignInStoreUnavailableError('addresses', new Error('not a verification'));
+        }
+        return ended('email_code', reason);
+      }
+      account = { ...account, verified: true };
+    }
     // An address this transaction has still to verify: the account's is not
     // proved, and no code of this transaction proved it.
     const addressPending = (current: SignInAccount): boolean =>
@@ -1573,121 +1971,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const factor = factorOf(step.step);
         return factor !== undefined && factor !== 'password';
       });
-    /** Whether this transaction proved the account's mailbox: an email code answered right, for any purpose. */
-    const provedMailbox = (): boolean =>
-      state.transaction.verified.some((step) => step.step === 'email_code');
-
-    /**
-     * The `new_password` step of the forced update (#635; ADR-017 Decision 8):
-     * offered with `update_required` and the realm's minimum length. An
-     * answer is checked against the realm's password policy, then against
-     * its breach list (a listed one is refused as `blocklisted`, a check that
-     * fails accepts it and is recorded), and then replaces the password,
-     * clearing the `update_password` required action. Returns the round's
-     * result while the step is pending, or `null` once the password is set.
-     */
-    const askNewPassword = async (
-      updates: PasswordUpdates,
-      subject: string,
-      identifier: string
-    ): Promise<RoundResult | null> => {
-      const minLength = await fromStore('passwordUpdates', async () => {
-        const value = await updates.minLength(realmId);
-        if (
-          !Number.isInteger(value) ||
-          value < PASSWORD_MIN_LENGTH_FLOOR ||
-          value > PASSWORD_MAX_LENGTH
-        ) {
-          throw new Error('not a minimum password length');
-        }
-        return value;
-      });
-      const params: StepParams<'new_password'> = Object.freeze({
-        purpose: 'update_required',
-        min_length: minLength,
-        max_length: PASSWORD_MAX_LENGTH,
-      });
-      const offerWith = (reasons?: readonly PasswordRejectionReason[]): StepOffer =>
-        Object.freeze({
-          current: Object.freeze({
-            step: 'new_password',
-            params: Object.freeze(
-              reasons === undefined ? params : { ...params, reasons: [...reasons] }
-            ),
-          }),
-          alternatives: Object.freeze([]),
-        }) as StepOffer;
-      const offer = offerWith();
-      const refuse = async (
-        reasons: readonly PasswordRejectionReason[],
-        reason: SignInAuditReason
-      ): Promise<RoundResult> => {
-        await audit('refused', 'new_password', reason);
-        return offerStep(offerWith(reasons), 'password_rejected');
-      };
-      // An answer to another step is ignored, as every eager answer is.
-      if (turn.pending?.name !== 'new_password') return offerStep(offer);
-      const read = readPending(offer);
-      if (read === null) return invalidAnswer('new_password');
-      turn.pending = null;
-      const chosen = (read.answer as StepAnswer<'new_password'>).new_password;
-      const checked = await fromStore('passwordUpdates', async () => {
-        const result = await updates.check({ realmId, identifier, password: chosen });
-        if (result?.kind === 'rejected') {
-          const known = PASSWORD_REJECTION_REASONS as readonly unknown[];
-          if (
-            !Array.isArray(result.reasons) ||
-            result.reasons.length === 0 ||
-            !result.reasons.every((reason) => known.includes(reason)) ||
-            new Set(result.reasons).size !== result.reasons.length
-          ) {
-            throw new Error('not a password policy refusal');
-          }
-          return result;
-        }
-        if (
-          result?.kind !== 'accepted' ||
-          typeof result.password !== 'string' ||
-          result.normalization !== PASSWORD_NORMALIZATION_NFC
-        ) {
-          throw new Error('not a password policy check');
-        }
-        return result;
-      });
-      if (checked.kind === 'rejected') return refuse(checked.reasons, 'password_rejected');
-      // The new password must itself pass the breach list: a listed one is
-      // the blocklist's refusal (NIST SP 800-63B-4 §3.1.1.2 counts breach
-      // corpora among the values a verifier blocks).
-      const breach = await checkBreachList(deps.breachCheck, realmId, checked.password);
-      if (breach.kind === 'listed') return refuse(['blocklisted'], 'password_breached');
-      const replaced = await fromStore('passwordUpdates', () =>
-        updates.replace({
-          realmId,
-          userId: subject,
-          identifier,
-          password: checked.password,
-          normalization: checked.normalization,
-        })
-      );
-      if (replaced?.kind !== 'replaced') {
-        const reason = replaced?.kind === 'refused' ? replaced.reason : undefined;
-        if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
-          throw new SignInStoreUnavailableError('passwordUpdates', new Error('not a replacement'));
-        }
-        return ended('new_password', reason);
-      }
-      state.transaction = {
-        ...state.transaction,
-        verified: [
-          ...state.transaction.verified,
-          { step: 'new_password', params: read.params } as OfferedStep,
-        ],
-      };
-      await audit('passed', 'new_password');
-      if (breach.kind === 'failed') await unchecked('new_password', breach.failure);
-      return null;
-    };
-
     /**
      * The forced password update (#635; ADR-017 Decision 4, rule 8, decided
      * 2026-10-23), once every factor the sign-in needs is proved. The
@@ -1718,7 +2001,25 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const result = await verifyAddress(emailCodes, subject, RECOVERY);
         if (result !== null) return result;
       }
-      return askNewPassword(updates, subject, identifier);
+      return askNewPassword(
+        updates,
+        identifier,
+        'update_required',
+        async (password, normalization) => {
+          const replaced = await fromStore('passwordUpdates', () =>
+            updates.replace({ realmId, userId: subject, identifier, password, normalization })
+          );
+          if (replaced?.kind === 'replaced') return null;
+          const reason = replaced?.kind === 'refused' ? replaced.reason : undefined;
+          if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
+            throw new SignInStoreUnavailableError(
+              'passwordUpdates',
+              new Error('not a replacement')
+            );
+          }
+          return ended('new_password', reason);
+        }
+      );
     };
 
     for (;;) {

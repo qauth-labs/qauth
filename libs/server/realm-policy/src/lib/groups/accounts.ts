@@ -44,7 +44,7 @@ export const ACCOUNTS_POLICY_GROUP = {
     environmentBound: false,
     doc: {
       summary:
-        'Whether a person may create a new account through the hosted sign-in: today, an upstream identity that no account holds yet (#639) creates one only while this is on, and the legacy `POST /auth/register` does not read it.',
+        'Whether a person may create a new account through the hosted sign-in, from an unknown upstream identity (#639) or with `prompt=create` (#640, for a client whose `hosted_flows` name `register`); the legacy `POST /auth/register` does not read it.',
       link: groupDocsLink('accounts'),
     },
   }),

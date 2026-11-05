@@ -171,6 +171,17 @@ export function answerEmailCode(
 ): EmailCodeAnswer {
   if (emailCodeExpired(held, now)) return { kind: 'expired' };
   if (sameEmailCodeHmac(presentedHmac, held.hmac)) return { kind: 'accepted' };
+  return countWrongEmailCode(held);
+}
+
+/**
+ * Count a wrong answer against `held`: the {@link EMAIL_CODE_MAX_WRONG_ANSWERS}th
+ * burns the code. Also how a right code that may not be taken is answered (a
+ * disabled user's address at registration, #640): exactly as a wrong one.
+ */
+export function countWrongEmailCode(
+  held: HeldEmailCode
+): Extract<EmailCodeAnswer, { readonly kind: 'wrong' | 'burned' }> {
   const wrongAnswers = held.wrongAnswers + 1;
   if (wrongAnswers >= EMAIL_CODE_MAX_WRONG_ANSWERS) return { kind: 'burned' };
   return { kind: 'wrong', held: Object.freeze({ ...held, wrongAnswers }) };

@@ -99,6 +99,7 @@ const REGISTERED_NAME_GROUPS: Readonly<Record<string, readonly string[]>> = {
     'op_policy_uri',
     'op_tos_uri',
     'authorization_response_iss_parameter_supported',
+    'prompt_values_supported',
   ],
   // OAuth Protected Resource Metadata (RFC 9728 §2).
   'OAuth protected resource metadata': [

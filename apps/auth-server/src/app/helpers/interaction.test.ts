@@ -119,6 +119,8 @@ type DecisionSpec =
       step?: InteractionStep;
       personal?: Record<string, unknown>;
     }
+  /** A registration finished the interaction (#640). */
+  | { kind: 'registered'; userId: string }
   | { kind: 'finished' };
 
 /**
@@ -682,6 +684,59 @@ describe('a sign-in that finishes the interaction (#616)', () => {
       transaction,
       null,
     ]);
+  });
+});
+
+describe('a registration that finishes the interaction (#640)', () => {
+  it('ends the interaction for the new account, with no browser session, no amr and no auth_time', async () => {
+    const owner = new Browser();
+    const id = await owner.start({ step: IDENTIFIER, request: { prompt: 'create' } });
+
+    const answered = await owner.answerWithCsrf(id, await owner.csrf(id), {
+      kind: 'registered',
+      userId: USER_A,
+    });
+
+    expect(answered.statusCode, answered.body).toBe(200);
+    const result = answered.json() as {
+      kind: string;
+      request: { prompt?: string };
+      transaction: Record<string, unknown>;
+    };
+    expect(result.kind).toBe('finished');
+    expect(result.transaction).toEqual({ userId: USER_A, amr: [], registered: true });
+    expect(result.request.prompt).toBe('create');
+    // Nobody signed in: no session cookie, and the flow secret is gone.
+    expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(owner.cookies.has(FLOW_COOKIE)).toBe(false);
+    expect((await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`)).statusCode).toBe(410);
+    const answeredEvents = vi
+      .mocked(emitUserEvent)
+      .mock.calls.filter(([, type]) => type === 'urn:qauth:event:interaction.answered:v1-rc.0');
+    expect(answeredEvents.map(([, , data]) => (data as { outcome: string }).outcome)).toEqual([
+      'finished',
+    ]);
+    // The event names the new account.
+    expect(answeredEvents[0]?.[3]).toMatchObject({ userId: USER_A });
+  });
+
+  it('refuses a registration in an interaction somebody already signed in to, and changes nothing', async () => {
+    const owner = new Browser();
+    const id = await owner.start({
+      step: CONSENT_STEP,
+      transaction: { userId: USER_B, amr: [] },
+    });
+
+    const answered = await owner.answerWithCsrf(id, await owner.csrf(id), {
+      kind: 'registered',
+      userId: USER_A,
+    });
+
+    expect(answered.statusCode).toBe(500);
+    // The turn was given back: the interaction stays at its step.
+    const read = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
+    expect(read.statusCode).toBe(200);
+    expect((read.json() as { revision: number }).revision).toBe(0);
   });
 });
 

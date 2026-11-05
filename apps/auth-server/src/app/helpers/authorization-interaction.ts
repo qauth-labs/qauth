@@ -9,7 +9,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../constants';
 import type { AuthorizeQuery } from '../schemas/oauth';
-import { toStoredAssuranceLevel } from './acr-claims';
+import { accountCredentialRefusal } from './account-validity';
 import { mintAuthorizationCode } from './authorization-code';
 import type { AuthorizationErrorParams } from './authorization-error';
 import {
@@ -18,6 +18,13 @@ import {
   checkAuthorizationRequest,
   decideAuthorization,
 } from './authorization-request';
+import {
+  type AuthorizationSubject,
+  isRegisteredSubject,
+  subjectAuthTimeMs,
+  subjectEnforcesDangerousStepUp,
+  subjectGrant,
+} from './authorization-subject';
 import { liveBrowserSession } from './browser-session';
 import {
   findExceedingAgentScopesForClient,
@@ -130,6 +137,39 @@ export function identifierPrefill(loginHint: string | undefined): InteractionPer
     return {};
   }
   return personal;
+}
+
+/**
+ * The interaction `prompt=create` starts (#640; ADR-017 Decision 8): the
+ * identifier step, with no upstream provider beside it (a registration sets a
+ * password), `login_hint` as its prefill. Its transaction is empty: the
+ * engine's rounds are a registration's because the request it holds asks for
+ * `create`. A browser that is already signed in carries its session in, as a
+ * sign-in does (#964), and keeps it: a registration creates no session.
+ */
+export function registrationInteractionStart(
+  query: AuthorizeQuery,
+  session: BrowserSession | null
+): AuthorizationInteractionStart {
+  return {
+    step: identifierStep(),
+    personal: identifierPrefill(query.login_hint),
+    ...(session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } }),
+  };
+}
+
+/**
+ * The authorization request without `prompt=create` (#640): once the
+ * interaction that registered the account (or signed in the address's owner)
+ * finished, the request is decided as an ordinary one, and a next interaction
+ * of it (a consent, a sign-in a dangerous scope asks for) is not a
+ * registration again.
+ */
+export function withoutCreatePrompt(query: AuthorizeQuery): AuthorizeQuery {
+  if (query.prompt !== 'create') return query;
+  const held = { ...query };
+  delete held.prompt;
+  return held;
 }
 
 /** What the consent step shows, beside the scopes and resources the request comes to. */
@@ -250,8 +290,9 @@ async function consentPersonal(
  * request.
  *
  * @param session - the browser session the request came with, `null` for a
- *   browser that is not signed in; a consent is for it, and a consent
- *   outcome always has one
+ *   browser that is not signed in, or the user an interaction just registered
+ *   (#640), who has no session; a consent is for it, and a consent outcome
+ *   always has one
  * @throws InvalidRequestError when the consent step cannot show where the
  *   code goes (`clientDisplay`), as the consent page refuses to render
  */
@@ -260,10 +301,13 @@ export async function authorizationInteractionStart(
   outcome: Extract<AuthorizationOutcome, { kind: 'sign_in' | 'consent' }>,
   query: AuthorizeQuery,
   target: Pick<AuthorizationTarget, 'realm' | 'iss' | 'client'>,
-  session: BrowserSession | null
+  session: AuthorizationSubject | null
 ): Promise<AuthorizationInteractionStart | { readonly error: AuthorizationErrorParams }> {
+  // A registered user has no session to carry in.
   const carried =
-    session === null ? {} : { carriedSession: { userId: session.userId, sid: session.sid } };
+    session === null || isRegisteredSubject(session)
+      ? {}
+      : { carriedSession: { userId: session.userId, sid: session.sid } };
   if (outcome.kind === 'sign_in') {
     const providers = await upstreamProviderCatalog(fastify).offered(target.realm.id);
     return {
@@ -303,6 +347,16 @@ export async function authorizationInteractionStart(
       },
     };
   }
+  if (isRegisteredSubject(session)) {
+    // The consent of a user just registered (#640): for the account, with no
+    // session and no authentication time, as the registration finished.
+    return {
+      step,
+      personal: {},
+      transaction: { userId: session.userId, amr: [], registered: true },
+      client: display,
+    };
+  }
   const transaction: InteractionTransaction = {
     userId: session.userId,
     sid: session.sid,
@@ -326,7 +380,7 @@ export async function authorizationInteractionStart(
 export async function recordUnshowableConsent(
   request: FastifyRequest,
   target: AuthorizationTarget,
-  session: BrowserSession,
+  session: { readonly userId: string },
   error: AuthorizationErrorParams
 ): Promise<void> {
   await emitUserEvent(
@@ -350,16 +404,25 @@ export interface FinishedAuthorization {
 }
 
 /**
- * The browser session an interaction's transaction holds, while it is live,
- * still its user's and the account may still use it; `null` otherwise, and
- * for a transaction in which nobody signed in.
+ * Who an interaction's transaction decides the request for: the browser
+ * session it holds, while it is live, still its user's and the account may
+ * still use it; or the account it registered (#640), while the account is
+ * enabled. `null` otherwise, and for a transaction in which nobody signed in.
  */
-async function transactionSession(
+async function transactionSubject(
   fastify: FastifyInstance,
   realmId: string,
   transaction: InteractionTransaction
-): Promise<BrowserSession | null> {
-  if (transaction.sid === undefined || transaction.userId === undefined) return null;
+): Promise<AuthorizationSubject | null> {
+  if (transaction.userId === undefined) return null;
+  if (transaction.registered === true) {
+    const user = await fastify.repositories.users.findById(realmId, transaction.userId);
+    // An account disabled since it was registered gets nothing; the request
+    // goes on at a sign-in, which refuses it.
+    if (user === undefined || accountCredentialRefusal(user, Date.now()) !== null) return null;
+    return { registered: true, realmId, userId: transaction.userId };
+  }
+  if (transaction.sid === undefined) return null;
   return liveBrowserSession(fastify, realmId, transaction.sid, transaction.userId);
 }
 
@@ -386,13 +449,18 @@ export async function finishAuthorization(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
-  finished: FinishedAuthorization
+  finishedInteraction: FinishedAuthorization
 ): Promise<string> {
+  // A registration's request is an ordinary one from here (#640).
+  const finished = {
+    ...finishedInteraction,
+    request: withoutCreatePrompt(finishedInteraction.request),
+  };
   const query = finished.request;
   const checked = await checkAuthorizationRequest(fastify, request, query);
   if (checked.kind === 'refused') return buildRedirectUrl(query.redirect_uri, checked.params);
   const { target } = checked;
-  const session = await transactionSession(fastify, target.realm.id, finished.transaction);
+  const session = await transactionSubject(fastify, target.realm.id, finished.transaction);
   const outcome = await decideAuthorization(fastify, request, target, query, session);
   return continueAuthorization(fastify, request, reply, finished, target, session, outcome);
 }
@@ -409,7 +477,7 @@ async function continueAuthorization(
   reply: FastifyReply,
   finished: FinishedAuthorization,
   target: AuthorizationTarget,
-  session: BrowserSession | null,
+  session: AuthorizationSubject | null,
   outcome: AuthorizationOutcome
 ): Promise<string> {
   const query = finished.request;
@@ -510,8 +578,10 @@ export async function finishConsent(
   fastify: FastifyInstance,
   request: FastifyRequest,
   reply: FastifyReply,
-  finished: FinishedConsent
+  finishedConsent: FinishedConsent
 ): Promise<string> {
+  // A registration's request is an ordinary one from here (#640).
+  const finished = { ...finishedConsent, request: withoutCreatePrompt(finishedConsent.request) };
   const query = finished.request;
   const { transaction, step, answer } = finished;
   const userId = transaction.userId;
@@ -553,8 +623,9 @@ export async function finishConsent(
   const { client, policy } = target;
 
   // The session again, with its account: one disabled since cannot consent.
-  // The request goes on at a sign-in, as one with no session does.
-  const session = await transactionSession(fastify, realm.id, transaction);
+  // The request goes on at a sign-in, as one with no session does. A user
+  // just registered (#640) consents for the account, with no session.
+  const session = await transactionSubject(fastify, realm.id, transaction);
   if (session === null) {
     return continueAuthorization(fastify, request, reply, finished, target, null, {
       kind: 'sign_in',
@@ -653,12 +724,13 @@ export async function finishConsent(
     priorConsentScopes: [],
     prompt,
     maxAgeSeconds: query.max_age ?? null,
-    authTimeMs: session.authTime,
+    authTimeMs: subjectAuthTimeMs(session),
     nowMs: Date.now(),
     freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
     // ADR-008 §5 (#197): a development client is spared the dangerous-scope
-    // rule only; `prompt` and `max_age` hold everywhere.
-    enforceDangerousStepUp: policy.agentStepUpEnforced,
+    // rule only; `prompt` and `max_age` hold everywhere. A registration
+    // (#640) never is: no sign-in authenticated it.
+    enforceDangerousStepUp: subjectEnforcesDangerousStepUp(session, policy),
     forceFreshLogin: forcedLogin,
   });
   if (stepUp.requiresFreshLogin) {
@@ -694,14 +766,9 @@ export async function finishConsent(
         codeChallenge: query.code_challenge,
         codeChallengeMethod: query.code_challenge_method,
         nonce: query.nonce ?? null,
-        // OIDC Core §2 `auth_time`: the real end-user authentication time.
-        authTime: session.authTime,
-        // #237: the authentication's eIDAS LoA, for the ID token's `acr`.
-        assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
-        // ADR-019 Decision 3 (#552): the refresh family never outlives the session.
-        sessionExpiresAt: session.expiresAt,
-        // ADR-019 Decisions 3 and 4 (#549): the session the ID token names.
-        session: { realmId: session.realmId, sid: session.sid },
+        // The session's `auth_time`, `acr`, end and `sid`, or none of them
+        // for a user just registered (#640; ADR-017 Decision 10).
+        ...subjectGrant(session),
         scopes,
         resource: [...resources],
         state: query.state ?? null,
@@ -725,6 +792,12 @@ export async function finishConsent(
     // elevation, with the fresh sign-in's time, and the agent's scope mode
     // when the client is an agent.
     if (dangerous.length > 0) {
+      // The step-up gate above sends a registration (#640) to a sign-in
+      // before any dangerous scope: reaching here without one is a bug, and
+      // the transaction rolls back.
+      if (isRegisteredSubject(session)) {
+        throw new Error('a dangerous scope granted to a registration without a sign-in');
+      }
       const scopeMode = isAgentClient(client) ? highestAgentModeInScopes(scopes) : null;
       await emitUserEvent(
         request,

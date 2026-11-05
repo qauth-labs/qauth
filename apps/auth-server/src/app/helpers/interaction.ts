@@ -236,7 +236,14 @@ export type InteractionDecision =
       readonly personal?: InteractionPersonalData;
     }
   /** The interaction is done: the caller completes or denies the request. */
-  | { readonly kind: 'finished' };
+  | { readonly kind: 'finished' }
+  /**
+   * The answer registered a new account (#640; ADR-017 Decisions 8 and 10):
+   * the interaction finishes for it, as `finished` does, with no browser
+   * session, no `amr` and no `auth_time`. Only an authorization interaction
+   * in which nobody has signed in registers.
+   */
+  | { readonly kind: 'registered'; readonly userId: string };
 
 /** What {@link answerInteraction} did. */
 export type InteractionAnswerResult =
@@ -788,6 +795,10 @@ export type InteractionAnswerTarget =
  *   transport (#616) must submit credential steps by `fetch`, or guard a form
  *   post against a double submit, so a second click never sends the answer
  *   again with the old cookie.
+ * - `registered`: a new account (#640). The interaction ends as at
+ *   `finished`, and its transaction names the account (`registered: true`)
+ *   with no session, no `amr` and no `auth_time`: the request is decided for
+ *   it, and its code carries neither.
  * - `finished`: the interaction ends; its secret leaves the cookie, and the
  *   request and the transaction go back to the caller, which completes or
  *   denies the authorization request (#628), or continues it in a next
@@ -1007,6 +1018,28 @@ async function settleAnswer(
     setFlowCookie(reply, secrets, env.INTERACTION_TTL);
     await answered('finished', taken);
     return finishedOf(taken, taken.transaction, { secrets, expiresAt: taken.expiresAt });
+  }
+
+  if (decision.kind === 'registered') {
+    // Only an authorization interaction in which nobody has signed in
+    // registers: an engine bug otherwise, thrown before anything is written.
+    if (taken.purpose !== 'authorization' || taken.transaction.userId !== undefined) {
+      throw new Error('a registration finishes an authorization nobody has signed in to');
+    }
+    const owned = await deleteInteraction(redis, taken, bound.idHash);
+    settled.done = true;
+    // The sweep claimed it first and reports it expired: it does not finish.
+    // The account stays; its owner signs in with it.
+    if (!owned) refuse(request, 'expired');
+    const secrets = nextFlowSecrets(bound.secrets, { remove: bound.secret });
+    setFlowCookie(reply, secrets, env.INTERACTION_TTL);
+    const registered: InteractionTransaction = {
+      userId: decision.userId,
+      amr: [],
+      registered: true,
+    };
+    await answered('finished', { ...taken, transaction: registered });
+    return finishedOf(taken, registered, { secrets, expiresAt: taken.expiresAt });
   }
 
   if (taken.purpose === 'logout') {

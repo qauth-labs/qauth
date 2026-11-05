@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   firstPartyColumnsOf,
+  hostedFlowsColumnOf,
   isCimdClientIdShape,
   manifestSchema,
   parseManifest,
@@ -777,5 +778,49 @@ describe('parseManifest: the system client id', () => {
         { SYSTEM_CLIENT_ID: 'portal' }
       )
     ).toThrow(/listed twice/);
+  });
+});
+
+describe('hosted flows (#640, ADR-017 Decision 8)', () => {
+  const webClient = {
+    client_id: 'notes-web',
+    name: 'Notes',
+    grant_types: ['authorization_code', 'refresh_token'],
+    redirect_uris: ['https://notes.example.com/callback'],
+  };
+
+  function parse(client: Record<string, unknown>) {
+    return manifestSchema.safeParse({ realm: 'master', clients: [client] });
+  }
+
+  it('accepts the register flow on an authorization-code client, with no profile', () => {
+    const parsed = parse({ ...webClient, hosted_flows: ['register'] });
+    expect(parsed.success).toBe(true);
+    const client = parsed.data?.clients?.[0];
+    expect(client && hostedFlowsColumnOf(client)).toEqual(['register']);
+  });
+
+  it('writes NULL for no list and for an empty one', () => {
+    for (const client of [webClient, { ...webClient, hosted_flows: [] }]) {
+      const parsed = parse(client);
+      expect(parsed.success).toBe(true);
+      const spec = parsed.data?.clients?.[0];
+      expect(spec && hostedFlowsColumnOf(spec)).toBeNull();
+    }
+  });
+
+  it('refuses an unknown flow, a repeat, and a client without the authorization_code grant', () => {
+    expect(parse({ ...webClient, hosted_flows: ['login'] }).success).toBe(false);
+    expect(parse({ ...webClient, hosted_flows: ['register', 'register'] }).success).toBe(false);
+    const machine = parse({
+      ...webClient,
+      grant_types: ['client_credentials'],
+      redirect_uris: undefined,
+      hosted_flows: ['register'],
+    });
+    expect(machine.success).toBe(false);
+    expect(machine.error?.issues.map((issue) => issue.message).join('\n')).toContain(
+      'hosted_flows requires the authorization_code grant'
+    );
   });
 });

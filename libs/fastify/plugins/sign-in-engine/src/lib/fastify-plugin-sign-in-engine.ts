@@ -46,7 +46,8 @@ export const SIGN_IN_ENGINE_PLUGIN_NAME = packageJson.name;
  * `passwordHardAction` too: the default never disables a password at the
  * ladder's hard ceiling, whatever arms it.
  *
- * @throws Error in production when `hooks.ladder`, `hooks.limits` or `passwordHardAction` is absent
+ * @throws Error in production when `hooks.ladder`, `hooks.limits` or `passwordHardAction` is
+ *   absent, or when `registrations` is set without `hooks.limits.reserveRegistrationStart`
  */
 export function createCheckedSignInEngine(options: SignInEnginePluginOptions): SignInEngine {
   const { production = process.env['NODE_ENV'] === 'production', ...dependencies } = options;
@@ -68,6 +69,16 @@ export function createCheckedSignInEngine(options: SignInEnginePluginOptions): S
         'it the ladder never disables a password at its hard ceiling'
     );
   }
+  if (
+    production &&
+    dependencies.registrations !== undefined &&
+    dependencies.hooks?.limits?.reserveRegistrationStart === undefined
+  ) {
+    throw new Error(
+      'sign-in engine: a production server that registers accounts needs the registration ' +
+        'start cap (#640); without it one address could start registrations without limit'
+    );
+  }
   return createSignInEngine(dependencies);
 }
 
@@ -77,7 +88,8 @@ export function createCheckedSignInEngine(options: SignInEnginePluginOptions): S
  * answer route, #616; the FiPA endpoint, #646) register it with the adapters
  * of this library over the server's repositories, password hasher and signer.
  *
- * @throws Error in production when `hooks.ladder`, `hooks.limits` or `passwordHardAction` is absent
+ * @throws Error in production when `hooks.ladder`, `hooks.limits` or `passwordHardAction` is
+ *   absent, or when `registrations` is set without `hooks.limits.reserveRegistrationStart`
  */
 export const signInEnginePlugin = fp(
   async (fastify: FastifyInstance, options: SignInEnginePluginOptions) => {

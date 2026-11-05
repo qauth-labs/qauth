@@ -108,6 +108,13 @@ export interface DiscoveryMetadataInput {
    */
   experimentalItems?: readonly ExperimentalDiscoveryItem[];
   /**
+   * Whether the realm offers sign-up (`realmOffersRegistration`, #640): the
+   * OpenID Provider metadata's `prompt_values_supported` lists `create` only
+   * then (OpenID Connect Prompt Create 1.0 §4.2). Defaults to false, so a
+   * document built without it claims no registration.
+   */
+  registrationOffered?: boolean;
+  /**
    * What the members of each experimental item hold. Defaults to
    * {@link EXPERIMENTAL_MEMBER_VALUES}; a test passes the values of an
    * item it makes up.
@@ -169,6 +176,17 @@ export function experimentalDiscoveryMembers(
   }
   return members;
 }
+
+/**
+ * The `prompt` values `/oauth/authorize` accepts whatever the realm allows
+ * (OpenID Connect Core 1.0 §3.1.2.1): `create` joins them while the realm
+ * offers sign-up ({@link buildOpenIdConfiguration}, #640).
+ */
+export const BASE_PROMPT_VALUES_SUPPORTED: readonly string[] = Object.freeze([
+  'none',
+  'login',
+  'consent',
+]);
 
 /**
  * Default `id_token_signing_alg_values_supported`. EdDSA is always available;
@@ -339,6 +357,14 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
     ...(input.backchannelLogoutSupported === true
       ? { backchannel_logout_supported: true, backchannel_logout_session_supported: true }
       : {}),
+    // OpenID Connect Prompt Create 1.0 §4.2 (#640): the `prompt` values the
+    // authorization endpoint accepts. `create` only while the realm offers
+    // sign-up: a request with it is refused otherwise, as an unsupported
+    // value is (§4.1).
+    prompt_values_supported: [
+      ...BASE_PROMPT_VALUES_SUPPORTED,
+      ...(input.registrationOffered === true ? ['create'] : []),
+    ],
     // OIDC Core §5.1 — `sub` is always emitted. `nonce` is echoed in the ID
     // token when the client supplies it (OIDC Core §3.1.3.6). `name` is emitted
     // when the user has a display name set. This list MUST stay consistent with

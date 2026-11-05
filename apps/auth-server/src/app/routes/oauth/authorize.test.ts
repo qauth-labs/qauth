@@ -3340,6 +3340,160 @@ describe('GET /oauth/authorize — the routing parameter qauth_upstream (#639)',
   });
 });
 
+describe('GET /oauth/authorize — prompt=create (#640)', () => {
+  /** A client whose operator-set flow list names `register`. */
+  const REGISTERING_CLIENT = { ...CLIENT, scopes: ['openid', 'email'], hostedFlows: ['register'] };
+  const CREATE_QUERY = { prompt: 'create', scope: 'openid email' };
+
+  beforeEach(() => {
+    mutableEnv.INTERACTION_UI_ENABLED = true;
+  });
+  afterEach(() => {
+    mutableEnv.INTERACTION_UI_ENABLED = false;
+  });
+
+  /**
+   * The endpoint, for `query`, with `client`, in a realm whose
+   * `accounts.allowSignUp` is `signUp` (on unless asked), and signed in when
+   * asked.
+   */
+  async function create(
+    query: Record<string, unknown>,
+    options: {
+      readonly signUp?: boolean;
+      readonly client?: Record<string, unknown>;
+      readonly signedIn?: boolean;
+    } = {}
+  ) {
+    const { fastify, ctx, sessions } = makeFastify();
+    fastify.policyStore = testPolicyStore(
+      {},
+      { accounts: { allowSignUp: options.signUp ?? true } }
+    ) as unknown as typeof fastify.policyStore;
+    await authorizeRoute(fastify);
+    (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
+      options.client ?? REGISTERING_CLIENT
+    );
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      // A consent that would let a sign-in skip the screen: a registration
+      // still starts, and no code is minted.
+      scopes: ['openid', 'email'],
+      resources: [],
+      revokedAt: null,
+    });
+    const headers: Record<string, string> = {};
+    if (options.signedIn === true) {
+      const signedIn = await sessions.signIn({
+        sid: 'sid-640',
+        realmId: REALM.id,
+        userId: 'user-1',
+      });
+      headers.cookie = signedIn.cookie;
+    }
+    const { reply, state } = createReply();
+    await ctx.handler!(
+      {
+        query: { ...BASE_QUERY, ...CREATE_QUERY, ...query },
+        url: '/oauth/authorize',
+        headers,
+        ip: '127.0.0.1',
+        realm: REALM,
+      },
+      reply
+    );
+    return { fastify, state };
+  }
+
+  /** The request was refused with `error`, before any interaction, and recorded with `reason`. */
+  function expectRefused(
+    state: { readonly redirected?: string; readonly statusCode?: number },
+    error: string,
+    reason: string
+  ): void {
+    expect(state.statusCode).toBe(302);
+    const location = new URL(state.redirected as string);
+    expect(`${location.origin}${location.pathname}`).toBe(BASE_QUERY.redirect_uri);
+    expect(location.searchParams.get('error')).toBe(error);
+    expect(location.searchParams.get('state')).toBe(BASE_QUERY.state);
+    expect(location.searchParams.get('iss')).not.toBeNull();
+    expect(startInteraction).not.toHaveBeenCalled();
+    expect(emitUserEventMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'urn:qauth:event:authorization.failed:v1-rc.0',
+      { error, reason },
+      expect.objectContaining({ clientId: CLIENT.clientId })
+    );
+  }
+
+  it('starts a registration at the identifier step, with no upstream provider beside it', async () => {
+    const { state, fastify } = await create({ login_hint: 'new@example.com' });
+
+    expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
+    const input = takeStartedInteraction();
+    expect(input.step).toEqual({ name: stepUrn('identifier'), params: {}, alternatives: [] });
+    expect(input.personal).toEqual({ login_hint: 'new@example.com' });
+    // The held request asks for `create`: the engine's rounds register.
+    expect(input.request).toMatchObject({ prompt: 'create', client_id: BASE_QUERY.client_id });
+    expect(input.transaction).toBeUndefined();
+    expect(input.carriedSession).toBeUndefined();
+    expect(fastify.repositories.realmUpstreamProviders.listByRealm).not.toHaveBeenCalled();
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('starts a registration for a signed-in browser too, carrying its session in and minting nothing', async () => {
+    const { state, fastify } = await create({}, { signedIn: true });
+
+    expect(state.redirected).toBe(ceremonyPagePath(INTERACTION_ID));
+    expect(takeStartedInteraction().carriedSession).toEqual({ userId: 'user-1', sid: 'sid-640' });
+    expect(fastify.repositories.authorizationCodes.create).not.toHaveBeenCalled();
+  });
+
+  it('holds the request without the routing parameter: an upstream provider never registers', async () => {
+    await create({ qauth_upstream: 'oidc_corp' });
+
+    const input = takeStartedInteraction();
+    expect(input.request).not.toHaveProperty('qauth_upstream');
+  });
+
+  it('refuses prompt=create without the openid scope with invalid_request', async () => {
+    const { state } = await create({ scope: 'email' });
+    expectRefused(state, 'invalid_request', 'create_without_openid');
+  });
+
+  it('refuses prompt=create with no scope at all with invalid_request', async () => {
+    const { state } = await create({ scope: undefined });
+    expectRefused(state, 'invalid_request', 'create_without_openid');
+  });
+
+  it('refuses prompt=create in a realm that does not allow sign-up with invalid_request', async () => {
+    const { state } = await create({}, { signUp: false });
+    expectRefused(state, 'invalid_request', 'registration_not_offered');
+  });
+
+  it('refuses prompt=create while the Interaction API is off, whatever the realm allows', async () => {
+    mutableEnv.INTERACTION_UI_ENABLED = false;
+    const { state } = await create({});
+    expectRefused(state, 'invalid_request', 'registration_not_offered');
+  });
+
+  for (const [name, hostedFlows] of [
+    ['no flow list', null],
+    ['an empty flow list', []],
+    ['a flow list that is not an array', 'register'],
+    ['a flow list without register', ['reset']],
+  ] as const) {
+    it(`refuses prompt=create for a client with ${name} with unauthorized_client`, async () => {
+      const { state } = await create({}, { client: { ...REGISTERING_CLIENT, hostedFlows } });
+      expectRefused(state, 'unauthorized_client', 'registration_not_allowed_for_client');
+    });
+  }
+
+  it('refuses prompt=create with max_age: a registration signs nobody in', async () => {
+    const { state } = await create({ max_age: 300 });
+    expectRefused(state, 'invalid_request', 'create_with_max_age');
+  });
+});
+
 describe('authorizeQuerySchema — login_hint (#628)', () => {
   it('takes a login_hint of up to 254 bytes in UTF-8, and refuses a longer one', () => {
     // 127 two-byte characters: 254 bytes.

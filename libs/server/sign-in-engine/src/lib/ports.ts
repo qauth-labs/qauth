@@ -289,6 +289,48 @@ export interface PasswordUpdates {
 }
 
 /** How a realm or a client sets MFA (ADR-020): off, optional, required, or required for admins. */
+/** What creating an account found (#640). */
+export type AccountRegistration =
+  /** The account was created: its `users` row, its verified password credential and its verified address. */
+  | { readonly kind: 'created'; readonly userId: string }
+  /**
+   * Nothing was written: another account took the address first (a
+   * unique-constraint race). The transaction ends, as FiPA's
+   * `invalid_session` does.
+   */
+  | { readonly kind: 'conflict' };
+
+/**
+ * Registration (#640; ADR-017 Decision 8): the gate and the one write that
+ * creates an account. The new password's policy and the breach list are the
+ * forced update's ({@link PasswordUpdates}, {@link BreachedPasswordCheck}):
+ * one password policy for every new password. Every method that throws
+ * refuses the round, with nothing written.
+ */
+export interface AccountRegistrations {
+  /**
+   * Whether the realm and the client both allow registration: the realm's
+   * sign-up switch, and the client's allowed flows (a redirect-flow
+   * client's `hosted_flows`, a native client's `first_party_policy.flows`)
+   * listing `register`. Read on every round of a registration.
+   */
+  allowed(input: { readonly realmId: string; readonly clientId: string }): Promise<boolean>;
+  /**
+   * Create the account of `identifier`, whose mailbox the transaction proved:
+   * in one database transaction, the `users` row, the verified `password`
+   * credential holding an Argon2id hash of `password` (already in NFC) with
+   * its normalisation marker, and the verified `email` attribute. An address
+   * another account holds by then is a `conflict`, with nothing written.
+   */
+  create(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly identifier: string;
+    readonly password: string;
+    readonly normalization: PasswordNormalization;
+  }): Promise<AccountRegistration>;
+}
+
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;
 export type MfaMode = (typeof MFA_MODES)[number];
 
@@ -404,6 +446,16 @@ export const SIGN_IN_AUDIT_REASONS = [
    * again with `provider_unavailable`.
    */
   'provider_unavailable',
+  /**
+   * The realm or the client does not allow registration (#640): the round
+   * of a registration was refused, with nothing mailed or written.
+   */
+  'registration_closed',
+  /**
+   * Another account took the address while the registration set its password
+   * (#640): nothing was created, and the transaction ends.
+   */
+  'registration_conflict',
 ] as const;
 export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 

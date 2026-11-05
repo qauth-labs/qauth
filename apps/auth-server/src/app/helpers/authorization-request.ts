@@ -1,4 +1,3 @@
-import type { BrowserSession } from '@qauth-labs/fastify-plugin-sessions';
 import { UnauthorizedClientError } from '@qauth-labs/shared-errors';
 import { resolveFirstPartyProfile } from '@qauth-labs/shared-validation';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
@@ -6,9 +5,14 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { env } from '../../config/env';
 import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../constants';
 import type { AuthorizeQuery } from '../schemas/oauth';
-import { toStoredAssuranceLevel } from './acr-claims';
 import { mintAuthorizationCode } from './authorization-code';
 import type { AuthorizationErrorParams } from './authorization-error';
+import {
+  type AuthorizationSubject,
+  subjectAuthTimeMs,
+  subjectEnforcesDangerousStepUp,
+  subjectGrant,
+} from './authorization-subject';
 import { findExceedingAgentScopesForClient, unlistedReservedAudiences } from './client-auth';
 import { resolveClient, type ResolvedClient, unresolvedClientError } from './client-resolution';
 import { isClientUsable, unusableClientError } from './client-status';
@@ -288,8 +292,9 @@ export type AuthorizationOutcome =
 
 /**
  * Decide an authorization request that passed {@link checkAuthorizationRequest},
- * for `session`, the browser session it comes with (`null` for none), and
- * issue the code when nothing is left for the person to do.
+ * for `session`, the browser session it comes with (`null` for none) or the
+ * user an interaction just registered ({@link RegisteredSubject}), and issue
+ * the code when nothing is left for the person to do.
  *
  * The checks run in the endpoint's order and each event is the endpoint's: the
  * agent scope cap, the scope allowlist, the QAuth API audiences, the stored or
@@ -303,7 +308,7 @@ export async function decideAuthorization(
   request: FastifyRequest,
   target: AuthorizationTarget,
   query: AuthorizeQuery,
-  session: BrowserSession | null
+  session: AuthorizationSubject | null
 ): Promise<AuthorizationOutcome> {
   const { realm, iss, client, policy, clientEvent } = target;
   const redirectUri = query.redirect_uri;
@@ -474,12 +479,13 @@ export async function decideAuthorization(
         : [],
     prompt,
     maxAgeSeconds: query.max_age ?? null,
-    authTimeMs: session.authTime,
+    authTimeMs: subjectAuthTimeMs(session),
     nowMs: Date.now(),
     freshAuthWindowMs: STEP_UP_FRESH_AUTH_WINDOW_MS,
     // ADR-008 §5 (#197): relax the automatic dangerous-scope fresh-login
     // for a development client; explicit prompt/max_age still enforced.
-    enforceDangerousStepUp: policy.agentStepUpEnforced,
+    // Never for a registration (#640), which no sign-in authenticated.
+    enforceDangerousStepUp: subjectEnforcesDangerousStepUp(session, policy),
     forceFreshLogin: forcedLogin,
   });
 
@@ -620,21 +626,9 @@ export async function decideAuthorization(
         codeChallenge: query.code_challenge,
         codeChallengeMethod: query.code_challenge_method,
         nonce: query.nonce ?? null,
-        // OIDC Core §2 `auth_time`: persist the REAL end-user authentication
-        // time (the browser session's `auth_time`, epoch MS) — never the code-mint
-        // time — so /oauth/token can assert it in the ID token and a `max_age`
-        // check evaluates the actual session age.
-        authTime: session.authTime,
-        // #237 (ADR-004/ADR-010): bind the authentication's eIDAS LoA to the
-        // code so /oauth/token can assert `acr` in the ID token. NULL on the
-        // password path (`'low'`, no claim), the "omit the claim" outcome.
-        assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
-        // ADR-019 Decision 3 (#552): the session's absolute end, so the
-        // refresh family this code starts never outlives the session.
-        sessionExpiresAt: session.expiresAt,
-        // ADR-019 Decisions 3 and 4 (#549): the session whose `sid` the code
-        // exchange puts in the ID token, and which records this client.
-        session: { realmId: session.realmId, sid: session.sid },
+        // The session's authentication (`auth_time`, `acr`, its end and
+        // `sid`), or none of it for a registration (#640).
+        ...subjectGrant(session),
         scopes,
         // RFC 8707: bind the resource indicator(s) to the authorization
         // code so /oauth/token can set the access token's `aud` claim to

@@ -75,6 +75,9 @@ export type UpdateOAuthClient = Partial<
     | 'firstPartyProfile'
     | 'firstPartyPolicy'
     | 'firstPartyReason'
+    // #640: the hosted flows are operator-set too (ADR-017 Decision 8), so a
+    // client cannot allow its own sign-up.
+    | 'hostedFlows'
   >
 > & {
   updatedAt?: number;

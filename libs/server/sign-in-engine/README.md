@@ -21,6 +21,7 @@ const engine = createSignInEngine({
   emailCodes: { digest, addresses }, // the inline verification of an unverified account (#638)
   breachCheck, // BreachedPasswordCheck: the realm's breach list (#635); none checks nothing
   passwordUpdates, // PasswordUpdates: the forced password update (#635); none redirects it
+  registrations, // AccountRegistrations: registration's gate and account creation (#640)
   hooks: { ladder, limits }, // ladder: #615; limits: #636; request, botChallenge: later issues
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [], // the steps later issues add
@@ -36,17 +37,18 @@ const result = await engine.advance(transaction, answer, {
   environment, // the client's effective environment (ADR-008 §7): development relaxes the limits
   audit, // where the round's audit records go
   sendCode, // the capped sender of email codes (#637), bound to the request
+  flow, // 'register' for prompt=create (#640); absent for a sign-in
 });
 ```
 
 `advance` returns one of:
 
-| `kind`     | Meaning                                                                                                    |
-| ---------- | ---------------------------------------------------------------------------------------------------------- |
-| `step`     | the next step, or the same step again with its error: a `StepOffer` and its personal data                  |
-| `complete` | the sign-in is complete: `subject`, `identifier`, `amr`, `authTime`; the transport mints session/code      |
-| `redirect` | continue elsewhere: a step the sign-in needs does not exist yet or is not served (FiPA: `redirect_to_web`) |
-| `refused`  | `transaction_ended`, `throttled`, `unavailable`, `invalid_answer` or `request_refused`                     |
+| `kind`     | Meaning                                                                                                     |
+| ---------- | ----------------------------------------------------------------------------------------------------------- |
+| `step`     | the next step, or the same step again with its error: a `StepOffer` and its personal data                   |
+| `complete` | the sign-in is complete: `subject`, `identifier`, `amr`, `authTime`; a registration's: `registered`, no amr |
+| `redirect` | continue elsewhere: a step the sign-in needs does not exist yet or is not served (FiPA: `redirect_to_web`)  |
+| `refused`  | `transaction_ended`, `throttled`, `unavailable`, `invalid_answer` or `request_refused`                      |
 
 The transaction it returns is the one to keep for the next round; `signInTransactionSchema` checks
 it when it is read back. It holds the realm and the client it is for, when round 0 began, the
@@ -95,6 +97,8 @@ authentication, run before the call). The first unmet rule produces the answer.
    list, or an `update_password` required action) is asked for before completing: see
    [The forced password update](#the-forced-password-update).
 8. Complete (rule 9).
+
+A registration runs the same rules with its own gate and steps: see [Registration](#registration).
 
 ## What holds for every round
 
@@ -196,7 +200,7 @@ verifies the address before the sign-in completes. The flow is graphed in
 [`graphs/flows/core/account-verification/flow.yaml`](../../../graphs/flows/core/account-verification/flow.yaml).
 
 - The engine draws a 6-digit code from the CSPRNG (`crypto.randomInt`; 8 digits for recovery and
-  registration, which later issues add), mails it through the round's `sendCode` and offers
+  registration), mails it through the round's `sendCode` and offers
   `email_code` with the purpose `verify_account`. A send cap that answers 429 refuses the round as
   `throttled`, and nothing is held. The Interaction API never offers `confirm_sign_in`.
 - The transaction holds the code only as its keyed HMAC (`emailCodes.digest`) under a salt of its
@@ -218,6 +222,43 @@ verifies the address before the sign-in completes. The flow is graphed in
 
 An engine built without `emailCodes` keeps the gate: an unverified account's right password is
 refused like a wrong one under `REQUIRE_VERIFIED_ACCOUNT`, and signs in while it is off.
+
+## Registration
+
+With `registrations`, `emailCodes` and `passwordUpdates`, a round whose `flow` is `register` (the
+request's `prompt=create`, #640; ADR-017 Decision 8) registers a password account. The flow is
+graphed in [`graphs/flows/core/sign-up/flow.yaml`](../../../graphs/flows/core/sign-up/flow.yaml).
+The transaction keeps its flow from round 0: a round of another flow ends it.
+
+- **The gate**, after the request checks, on every round: `registrations.allowed` must say that
+  the realm (its sign-up switch) and the client (a redirect-flow client's `hosted_flows`, a
+  native client's `first_party_policy.flows`) both allow it. Otherwise the round is refused as
+  `request_refused` with `registration_not_allowed` (`REGISTRATION_NOT_ALLOWED`), audited as
+  `registration_closed`, and nothing is mailed or written. An engine or a transport that cannot
+  serve the identifier, `email_code` and `new_password` steps answers `redirect`.
+- **The address**, alone: the identifier step, with no factor and no upstream provider beside it.
+- **The mailbox**: an 8-digit `email_code` with the purpose `verify_account`, the same step for a
+  new address and for one an account holds, in body and in timing. The first code is a
+  registration start, which the `limits` hook's `reserveRegistrationStart` caps (3 an hour per
+  end-user IP by default). Only the mail tells the two apart (`sendCode`'s `registration`:
+  `new_address`, or `account_exists` with an "account exists" notice); and it skips no send cap
+  (`afterFirstFactor: false`). Every code is otherwise the email code above: the ladder, the
+  limiters, the 5th wrong answer, the resend.
+- **A disabled user's address** gets no mail (`withheld`: counted on every cap, never mailed), and
+  every code answered for it is answered and counted as a wrong one (`account_disabled`), a code
+  mailed before it was disabled included: nothing of that user changes. Every issue and every
+  right answer re-reads the account.
+- **After the code**, an address no account holds gets `new_password` with the purpose `register`:
+  the realm's password policy and its breach list, as for every new password. Once it passes,
+  `registrations.create` creates the account in one write: the `users` row, the verified password
+  credential with its normalisation marker, and the verified address. An address another account
+  took meanwhile ends the transaction (`registration_conflict`; FiPA's `invalid_session`). No
+  account exists before both the code and the password pass. The registration completes with
+  `registered: true` and neither `amr` nor `authTime` (ADR-017 Decision 10).
+- **An address an account holds** is helped to sign in: rule 7's first factor, then rule 8 as for
+  any sign-in. An account whose address is not verified yet is verified once its password is
+  proved, since the same person proved the mailbox and the password. Until PRO-17 (#641) ends an
+  unclaimed account instead, that holds for one too.
 
 ## The forced password update
 
@@ -296,5 +337,7 @@ authenticator.
 - The policy has no storage yet: `NO_SECOND_FACTOR_POLICY` is the default until it has one.
 - A due password update in a transaction that holds no identifier (a discoverable passkey that
   proved the account by itself, #651) answers `redirect`: the mailbox code needs the identifier.
+- A registration for an unclaimed account (a password account whose address is not proved) is
+  helped to sign in to it; PRO-17 (#641) ends that account and registers the mailbox owner instead.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
   `complete_profile` wait for the steps that set them up.

@@ -29,8 +29,10 @@ export interface AccountPolicies {
   readonly requireVerifiedAccount: boolean;
   /**
    * `accounts.allowSignUp` (#639): whether a person may create a new account
-   * through the hosted sign-in; an unknown upstream identity creates one only
-   * while this is on. `POST /auth/register` does not read it.
+   * through the hosted sign-in; an unknown upstream identity, and a
+   * `prompt=create` registration (#640) of a client whose `hosted_flows` name
+   * `register`, create one only while this is on. `POST /auth/register` does
+   * not read it.
    */
   readonly allowSignUp: boolean;
   /** `password.minScore`: the lowest zxcvbn score, 0 to 4, a new password may have. */

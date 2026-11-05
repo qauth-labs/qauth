@@ -10,6 +10,7 @@ import {
   FIRST_PARTY_REASON_MAX_LENGTH,
   type FirstPartyPolicy,
   firstPartyPolicySchema,
+  hostedFlowsSchema,
   InvalidVerifiedDomainError,
   InvalidWebAuthnOriginError,
   isNativeBrowserLegRedirectUri,
@@ -199,12 +200,29 @@ export const clientSpecSchema = z
     // and recorded in its `client.first_party_changed` event. Required with a
     // profile, refused without one.
     first_party_reason: z.string().trim().min(1).max(FIRST_PARTY_REASON_MAX_LENGTH).optional(),
+    // ADR-017 Decision 8 (#640): the hosted flows this redirect-flow client
+    // may start beyond sign-in. `["register"]` lets it start registration with
+    // `prompt=create`, while the realm allows sign-up too (`accounts.allowSignUp`).
+    // Operator-set only, like `first_party_profile`: no registration path
+    // accepts it. Omitted ⇒ NULL ⇒ none; removed on `--rotate` ⇒ cleared.
+    hosted_flows: hostedFlowsSchema.optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be
   // present in the same request or response." Enforced HERE, at the validation
   // layer, rather than as a DB CHECK so the operator gets a message naming the
   // conflict instead of a constraint violation.
+  .refine(
+    (spec) =>
+      spec.hosted_flows === undefined ||
+      spec.hosted_flows.length === 0 ||
+      spec.grant_types.includes('authorization_code'),
+    {
+      message:
+        'hosted_flows requires the authorization_code grant: a hosted flow ends in an authorization code',
+      path: ['hosted_flows'],
+    }
+  )
   .refine((spec) => !(spec.jwks && spec.jwks_uri), {
     message: 'jwks and jwks_uri are mutually exclusive (RFC 7591 §2) — set at most one',
     path: ['jwks'],
@@ -457,6 +475,16 @@ export function firstPartyColumnsOf(spec: ClientSpec): ClientFirstPartyColumns {
         : null,
     reason: spec.first_party_reason ?? null,
   };
+}
+
+/**
+ * The `hosted_flows` column a client entry writes (#640): the manifest's list,
+ * or NULL when the entry has none or an empty one, so `--rotate` clears a
+ * list the manifest no longer names.
+ */
+export function hostedFlowsColumnOf(spec: ClientSpec): string[] | null {
+  const flows = spec.hosted_flows;
+  return flows === undefined || flows.length === 0 ? null : [...flows];
 }
 export type CimdClientSpec = z.infer<typeof cimdClientSpecSchema>;
 export type Manifest = z.infer<typeof manifestSchema>;

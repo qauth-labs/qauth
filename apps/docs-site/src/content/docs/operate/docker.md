@@ -794,6 +794,47 @@ client on `/oauth/authorize`. Set the profile on the client's entry in the
   Each change of the profile, its policy or its reason is recorded as a
   `client.first_party_changed` event (see [Events](/reference/events/)).
 
+### Clients that may start a registration (`hosted_flows`)
+
+A client sends a person to register with `prompt=create` on
+`/oauth/authorize` ([Registration](/integrate/oauth-flow/#registration-promptcreate)).
+Registration is off unless two operators' switches both allow it:
+
+- the realm's `accounts.allowSignUp` policy, seeded by `ALLOW_SIGN_UP` and off
+  by default ([Realm policies](/reference/realm-policies/)), the same switch
+  that lets an upstream identity create an account; and
+- the client's `hosted_flows`, a list on its entry in the
+  `db:seed-oauth-clients` manifest. `["register"]` is the only flow it takes
+  today.
+
+```json
+{
+  "realm": "master",
+  "clients": [
+    {
+      "client_id": "notes-web",
+      "name": "Notes",
+      "grant_types": ["authorization_code", "refresh_token"],
+      "redirect_uris": ["https://notes.example.com/callback"],
+      "hosted_flows": ["register"]
+    }
+  ]
+}
+```
+
+- A client cannot set its own list. Dynamic registration, `POST /api/clients`
+  and a CIMD document never write `hosted_flows`, so no client can turn on its
+  own sign-up. A client with no list, or an empty one, starts no registration.
+- `hosted_flows` needs the `authorization_code` grant: a registration ends in
+  an authorization code.
+- The seed skips a client that already exists. `--rotate` writes the list the
+  manifest names, and clears it when the entry no longer names one.
+- Registration runs only on the Interaction API (`INTERACTION_UI_ENABLED`).
+  With it off, `prompt=create` is refused whatever the switches say.
+- A `native_backend` client's own flows (`first_party_policy.flows`) are for
+  the authorization challenge endpoint. On `/oauth/authorize` it registers
+  only through `hosted_flows`, like every other client.
+
 ### Outbound calls and the egress allowlist
 
 The outbound calls the server makes for a configuration value or a request (the

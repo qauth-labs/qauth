@@ -145,17 +145,20 @@ function insertedValues(query: CapturedQuery): Map<string, unknown> {
   );
 }
 
+// The hosted flows are operator-set the same way (#640, ADR-017 Decision 8).
 const FIRST_PARTY_COLUMNS = [
   '"first_party_profile"',
   '"first_party_policy"',
   '"first_party_reason"',
+  '"hosted_flows"',
 ] as const;
 
-/** What a caller might try to pass: a profile with its policy and reason. */
+/** What a caller might try to pass: a profile with its policy and reason, and a hosted flow. */
 const FLAGGED = {
   firstPartyProfile: 'native_backend' as const,
   firstPartyPolicy: { flows: ['login'] },
   firstPartyReason: 'Our own app',
+  hostedFlows: ['register'],
 };
 
 // #631 (ADR-017 Decision 2): first-partyness is operator-set. The paths that
@@ -163,7 +166,7 @@ const FLAGGED = {
 // server's own system client, CIMD materialisation) write no profile, policy
 // or reason, whatever the caller passed.
 describe('the repository writes no first-party profile (#631)', () => {
-  it('create writes NULL for the three first-party columns', async () => {
+  it('create writes NULL for the first-party columns and the hosted flows', async () => {
     const { db, queries } = createRecordingDb();
 
     await createOAuthClientsRepository(db).create({ ...CIMD_ROW, ...FLAGGED });
@@ -245,6 +248,15 @@ describe('UpdateOAuthClient', () => {
     // @ts-expect-error -- nor its reason.
     const reason: UpdateOAuthClient = { firstPartyReason: 'ours' };
     expect([flag, unflag, policy, reason]).toHaveLength(4);
+  });
+
+  // #640: only the operator lets a client start registration.
+  it('cannot carry hosted flows', () => {
+    // @ts-expect-error -- `hostedFlows` is operator state, not an update field.
+    const allow: UpdateOAuthClient = { hostedFlows: ['register'] };
+    // @ts-expect-error -- nor can an update clear it.
+    const clear: UpdateOAuthClient = { hostedFlows: null };
+    expect([allow, clear]).toHaveLength(2);
   });
 });
 

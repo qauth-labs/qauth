@@ -159,7 +159,21 @@ context:
     initial: any
     say:
       'true': 'the request carries prompt=none: no page may be shown'
-      'false': 'it carries no prompt, or prompt=login or prompt=consent'
+      'false': 'it carries no prompt, or prompt=login, prompt=consent or prompt=create'
+  # prompt=create (#640; OpenID Connect Prompt Create 1.0), and what the endpoint makes of it, in the order it checks.
+  # prompt holds one value, so a request with prompt=none carries none.
+  create:
+    values: [absent, withoutOpenid, notOffered, clientNotAllowed, withMaxAge, allowed]
+    initial: any
+    say:
+      absent: 'the request carries no prompt=create'
+      withoutOpenid: 'prompt=create without the openid scope'
+      notOffered: "prompt=create with openid, and the realm's accounts.allowSignUp is off"
+      clientNotAllowed: >-
+        prompt=create with openid, the realm allows sign-up, and the client's operator-set hosted_flows do not name
+        register
+      withMaxAge: 'prompt=create with openid and max_age, the realm and the client allowing sign-up'
+      allowed: 'prompt=create with openid and no max_age, the realm and the client allowing sign-up'
   stepUp:
     values: [satisfied, freshLogin]
     initial: any
@@ -240,6 +254,9 @@ effects:
   # the answer that finishes an interaction: the request is decided again, for the session a sign-in in it just created,
   # whose sign-in time satisfies every step-up the request asks for (max_age is counted in whole seconds)
   finishInteraction: { set: { phase: finish, stepUp: satisfied, interactionOpen: false } }
+  # the answer that finishes a registration interaction: the request is decided again for the account it created, which
+  # has no session and no sign-in time, so nothing it asks a fresh sign-in for is satisfied
+  finishRegistration: { set: { phase: finish, interactionOpen: false } }
   openInteraction: { set: { interactionOpen: true, interactionStarted: true } }
   forFreshLogin: { set: { signInCause: freshLogin } }
   forEndedSession: { set: { signInCause: sessionEnded } }
@@ -257,6 +274,8 @@ failures:
   parkingRequest: { from: pendingAuthorizationStore, tooLarge: [invalid_request] }
   startingSignIn: { from: interactionStore, tooLarge: [invalid_request], server: [server_error] }
   startingConsent: { from: interactionStore, tooLarge: [invalid_request], server: [server_error] }
+  startingRegistration:
+    { from: interactionStore, tooLarge: [invalid_request], server: [server_error] }
   takingFinish:
     from: interactionStore
     expired: [interaction_expired]
@@ -281,6 +300,7 @@ main:
     session: none
     refusal: none
     promptNone: false
+    create: absent
     stepUp: satisfied
     consent: covers
     since: unchanged
@@ -433,9 +453,119 @@ states:
         target: invalid_request.malformed_dpop_jkt_shown
         say: 'dpop_jkt is not one thumbprint, for a client no operator provisioned'
         source: apps/auth-server/src/app/helpers/authorization-error.ts:104
-      - target: findingSession
+      - target: checkingCreatePrompt
         say: 'dpop_jkt is absent, unread or well formed'
-        source: apps/auth-server/src/app/routes/oauth/authorize.ts:133
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:159
+
+  checkingCreatePrompt:
+    title: Check a request for a registration
+    description: >-
+      prompt=create (#640; OpenID Connect Prompt Create 1.0; ADR-017 Decisions 3 and 8), refused before the person
+      sees any page unless the request asks for openid, the realm offers sign-up (its accounts.allowSignUp, served by
+      the Interaction API, so never with INTERACTION_UI_ENABLED off), the client's operator-set hosted_flows name
+      register, and the request carries no max_age, which asks for a sign-in a registration never gives. Each refusal
+      records authorization.failed with its reason. A browser session, if any, is read and carried in; it ends nothing.
+    source: apps/auth-server/src/app/helpers/registration.ts:69
+    always:
+      - guard: "create == 'absent' or silent"
+        target: findingSession
+        say: 'the request carries no prompt=create'
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:164
+      - guard: "create == 'withoutOpenid' and operatorClient"
+        target: invalid_request.create_without_openid
+        say: 'prompt=create without openid, for a client an operator provisioned'
+        source: apps/auth-server/src/app/helpers/registration.ts:74
+      - guard: "create == 'withoutOpenid'"
+        target: invalid_request.create_without_openid_shown
+        say: 'prompt=create without openid, for a client no operator provisioned'
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+      - guard: "(create == 'notOffered' or pages) and operatorClient"
+        target: invalid_request.registration_not_offered
+        say: 'the realm offers no sign-up, for a client an operator provisioned'
+        source: apps/auth-server/src/app/helpers/registration.ts:81
+      - guard: "create == 'notOffered' or pages"
+        target: invalid_request.registration_not_offered_shown
+        say: 'the realm offers no sign-up, for a client no operator provisioned'
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+      - guard: "create == 'clientNotAllowed' and operatorClient"
+        target: unauthorized_client.registration_not_allowed
+        say: 'the client may not register accounts, for a client an operator provisioned'
+        source: apps/auth-server/src/app/helpers/registration.ts:88
+      - guard: "create == 'clientNotAllowed'"
+        target: unauthorized_client.registration_not_allowed_shown
+        say: 'the client may not register accounts, for a client no operator provisioned'
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+      - guard: "create == 'withMaxAge' and operatorClient"
+        target: invalid_request.create_with_max_age
+        say: 'prompt=create with max_age, for a client an operator provisioned'
+        source: apps/auth-server/src/app/helpers/registration.ts:95
+      - guard: "create == 'withMaxAge'"
+        target: invalid_request.create_with_max_age_shown
+        say: 'prompt=create with max_age, for a client no operator provisioned'
+        source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+      - guard: cookieMalformed
+        target: server_error.malformed_cookie
+        say: 'the session cookie cannot be decoded'
+        source: apps/auth-server/src/app/helpers/session-cookie.ts:337
+      - target: startingRegistration
+        say: 'the registration is allowed'
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:297
+
+  startingRegistration:
+    title: Start a registration interaction
+    description: >-
+      As a sign-in interaction, at the identifier step alone, the request held without prompt=create's routing to an
+      upstream provider (qauth_upstream): the engine's rounds are core.sign-up's. The request's login_hint fills in
+      the address. A browser already signed in registers all the same; its session is carried, not ended.
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:299
+    invoke: { external: interactionStore }
+    on:
+      DONE:
+        target: atRegistrationCeremony
+        effect: [openInteraction]
+        say: 'the interaction is stored'
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:303
+      FAIL.tooLarge:
+        target: invalid_request.authorization_too_large
+        say: 'the request is over 16 KiB, or the record over 32 KiB'
+        source: apps/auth-server/src/app/helpers/interaction.ts:489
+      FAIL.server:
+        target: server_error.interaction_store
+        say: 'the interaction store fails'
+        source: apps/auth-server/src/app/plugins/error-handler.ts:620
+
+  atRegistrationCeremony:
+    title: The person registers at the ceremony page
+    description: >-
+      The steps of the registration are core.sign-up's: the address, an emailed code, a new password. The answer that
+      creates the account finishes the interaction with no session: the request is then decided again for the new
+      account, which has no sign-in time, so a dangerous scope or a native_backend client asks for a sign-in first,
+      and the code the endpoint mints carries no auth_time, no amr and no session. prompt=create is not carried past
+      that finish. For an address an account holds, core.sign-up hands over to the sign-in, whose finish is a
+      sign-in's.
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:303
+    response:
+      status: '302 from /oauth/authorize; 303 or 200 from the Interaction API when an interaction finished'
+      headers:
+        Location: >-
+          /ui/interaction/<the interaction id, 43 base64url characters>, from /oauth/authorize; the same path on the
+          realm's issuer, when an interaction finished
+        Set-Cookie: >-
+          __Host-qauth_flow=<the browser's interaction secrets, this one's added>; Path=/; HttpOnly; SameSite=Lax, and
+          the session cookie cleared when the request carried an unusable one
+      body: >-
+        none from /oauth/authorize; from the Interaction API, a form post gets the redirect and a JSON answer
+        { result: redirect, location }
+    on:
+      FINISH:
+        target: takingFinish
+        effect: [finishRegistration]
+        say: 'the new password creates the account, which finishes the interaction'
+        source: apps/auth-server/src/app/helpers/interaction.ts:1023
+      CANCEL:
+        target: recheckingCancel
+        say: 'the person cancels, with the CSRF value of the step they see; the interaction ends'
+        source: apps/auth-server/src/app/routes/interaction-api.ts:761
 
   findingSession:
     title: Find the browser session
@@ -1266,6 +1396,90 @@ states:
         a page titled "Sign-in not completed" that names the error with its description and the host of redirect_uri,
         and, for an http(s) redirect URI, a link "Continue to <host>" carrying the whole error response
 
+  invalid_request.create_without_openid:
+    type: final
+    title: Tell the client prompt=create needs the openid scope
+    redirect: error
+    code: invalid_request
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=invalid_request, error_description=prompt=create requires the openid scope, state
+          when the request had one, and iss
+
+  invalid_request.create_without_openid_shown:
+    type: final
+    title: Show, rather than redirect, the openid error of a client no operator provisioned
+    redirect: never
+    code: invalid_request
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    response: *shown
+
+  invalid_request.registration_not_offered:
+    type: final
+    title: Tell the client the realm offers no sign-up
+    redirect: error
+    code: invalid_request
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=invalid_request, error_description=prompt=create is not supported, state when the
+          request had one, and iss
+
+  invalid_request.registration_not_offered_shown:
+    type: final
+    title: Show, rather than redirect, the sign-up refusal of a client no operator provisioned
+    redirect: never
+    code: invalid_request
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    response: *shown
+
+  unauthorized_client.registration_not_allowed:
+    type: final
+    title: Tell the client it may not register accounts
+    redirect: error
+    code: unauthorized_client
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=unauthorized_client, error_description=the client may not register accounts, state
+          when the request had one, and iss
+
+  unauthorized_client.registration_not_allowed_shown:
+    type: final
+    title: Show, rather than redirect, the registration refusal of a client no operator provisioned
+    redirect: never
+    code: unauthorized_client
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    response: *shown
+
+  invalid_request.create_with_max_age:
+    type: final
+    title: Tell the client prompt=create takes no max_age
+    redirect: error
+    code: invalid_request
+    source: apps/auth-server/src/app/routes/oauth/authorize.ts:290
+    response:
+      status: 302
+      headers:
+        Location: >-
+          redirect_uri with error=invalid_request, error_description=prompt=create cannot be combined with max_age,
+          state when the request had one, and iss
+
+  invalid_request.create_with_max_age_shown:
+    type: final
+    title: Show, rather than redirect, the max_age error of a client no operator provisioned
+    redirect: never
+    code: invalid_request
+    source: apps/auth-server/src/app/helpers/authorization-error.ts:104
+    response: *shown
+
   login_required.no_session:
     type: final
     title: Tell the client prompt=none found no session
@@ -1677,6 +1891,8 @@ assertions:
   - id: shown-not-redirected-before-any-page
     never: >-
       provisioning == 'selfService' and state in ['invalid_request.malformed_dpop_jkt', 'login_required.no_session',
+      'invalid_request.create_without_openid', 'invalid_request.registration_not_offered',
+      'unauthorized_client.registration_not_allowed', 'invalid_request.create_with_max_age',
       'invalid_scope.agent_scope_mode_exceeded', 'invalid_target.unlisted_reserved_audience',
       'login_required.fresh_login', 'consent_required.prompt_none', 'login_required.session_ended',
       'consent_required.consent_withdrawn', 'invalid_scope.consent_not_shown', 'invalid_target.consent_not_shown']
@@ -1688,3 +1904,9 @@ assertions:
     never: "phase == 'finish' and not interactionStarted"
     say: 'The request is decided at a finish only for an interaction this request started'
     source: apps/auth-server/src/app/routes/interaction-api.ts:720
+  - id: registration-only-when-allowed
+    never: "state in ['startingRegistration', 'atRegistrationCeremony'] and create != 'allowed'"
+    say: >-
+      A registration starts only for prompt=create with openid and no max_age, while the realm and the client both
+      allow sign-up
+    source: apps/auth-server/src/app/helpers/registration.ts:69

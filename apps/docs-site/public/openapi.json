@@ -6635,7 +6635,8 @@
               "enum": [
                 "none",
                 "login",
-                "consent"
+                "consent",
+                "create"
               ]
             },
             "in": "query",
@@ -6811,7 +6812,8 @@
                     "enum": [
                       "none",
                       "login",
-                      "consent"
+                      "consent",
+                      "create"
                     ]
                   },
                   "max_age": {
@@ -14457,7 +14459,8 @@
               "enum": [
                 "none",
                 "login",
-                "consent"
+                "consent",
+                "create"
               ]
             },
             "in": "query",
