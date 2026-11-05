@@ -218,6 +218,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                   | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.password_reset:v1-rc.0`](#userpassword_reset-v1-rc0)                             | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
@@ -385,6 +386,18 @@ An account could not be created, for example because the address is in use.
 | ---------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `reason`         | string | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                                                                                                                |
 | `identifierHmac` | string | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
+
+### user.password_reset v1-rc.0
+
+A person reset their account's password: an emailed code proved the mailbox, every other authenticator the account holds proved it too, and a new password replaced the old one. Every refresh token and browser session the account held ends with it, and so does every sign-in in progress for it.
+
+- Identifier: `urn:qauth:event:user.password_reset:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.password_reset.v1-rc.0.json](/schemas/events/user.password_reset.v1-rc.0.json)
+- Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
+
+`data` has no members: the envelope carries the event.
 
 ### user.disabled v1-rc.0
 
