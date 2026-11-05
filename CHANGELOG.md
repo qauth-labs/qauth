@@ -161,8 +161,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   environment, and goes live only when a maintainer approves it with 2FA. A
   release candidate goes to the `next` dist-tag and a release to `latest`;
   before 1.0 the versions are `0.x`. The SDK release notes are QAuth's CHANGELOG
-  section. Every pull request runs the same stamp, pack, check and install as a
-  dry run. `@qauth-labs/resource-guard` is the first package: ESM with type
+  section, attached to the draft release as `release-notes-<version>.md`; the
+  release body only links that section, so a long CHANGELOG cannot exceed the
+  repository host's 125,000-character limit on a release body ([#1012]). Every
+  pull request runs the same stamp, pack, check and install as a dry run, and
+  builds the release body and notes. `@qauth-labs/resource-guard` is the first package: ESM with type
   declarations, an `exports` map, `engines` and its licence. `RELEASING.md` is
   the maintainer guide for both the images and the packages: release, rollback
   (deprecate, never unpublish) and the version rule.
@@ -3120,6 +3123,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#969]: https://github.com/qauth-labs/qauth/issues/969
 [#982]: https://github.com/qauth-labs/qauth/issues/982
 [#1009]: https://github.com/qauth-labs/qauth/issues/1009
+[#1012]: https://github.com/qauth-labs/qauth/issues/1012
 
 ### Deprecated
 

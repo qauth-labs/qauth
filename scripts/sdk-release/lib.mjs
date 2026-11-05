@@ -79,20 +79,113 @@ export function hasReleaseSection(changelog, version) {
   return releaseHeadings(changelog).includes(version);
 }
 
+/** The CHANGELOG heading that holds `version`'s notes: its own, or `Unreleased` for a candidate. */
+const notesHeading = (version) => (version.includes('-rc.') ? 'Unreleased' : version);
+
+/** The index of the `## [heading]` line in `lines`; throws when there is none. */
+function sectionStart(lines, heading) {
+  const start = lines.findIndex((line) => headingName(line) === heading);
+  if (start === -1) throw new SdkReleaseError(`CHANGELOG.md has no \`## [${heading}]\` section`);
+  return start;
+}
+
 /**
  * The release notes for `version`: its CHANGELOG section, or for a release
  * candidate (which has none) the `## [Unreleased]` section it ships.
  */
 export function releaseNotes(changelog, version) {
-  const heading = version.includes('-rc.') ? 'Unreleased' : version;
   const lines = changelog.split('\n');
-  const start = lines.findIndex((line) => headingName(line) === heading);
-  if (start === -1) throw new SdkReleaseError(`CHANGELOG.md has no \`## [${heading}]\` section`);
+  const start = sectionStart(lines, notesHeading(version));
   const end = lines.findIndex((line, i) => i > start && line.startsWith('## '));
   return lines
     .slice(start + 1, end === -1 ? undefined : end)
     .join('\n')
     .trim();
+}
+
+/**
+ * The anchor the repository host gives a heading's text: lowercased, with
+ * every character but letters, digits, `_`, `-` and spaces dropped, then each
+ * space a hyphen. Brackets and backslash escapes go with the punctuation, so
+ * `[0.1.3] - 2026-10-21` and its escaped form both give `013---2026-10-21`.
+ */
+const headingAnchor = (text) =>
+  text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}_ -]/gu, '')
+    .replace(/ /g, '-');
+
+/**
+ * Where `version`'s notes start in CHANGELOG.md as the repository host
+ * renders it: `unreleased` for a release candidate, and for a release the
+ * anchor of its own heading, date included (`## [0.1.3] - 2026-10-21` →
+ * `013---2026-10-21`).
+ */
+export function changelogAnchor(changelog, version) {
+  const lines = changelog.split('\n');
+  return headingAnchor(lines[sectionStart(lines, notesHeading(version))].slice(3));
+}
+
+/** The file the draft release attaches with `version`'s notes in full. */
+export const releaseNotesFileName = (version) => `release-notes-${version}.md`;
+
+/** The docs page every upgrade follows: back up, run the migration runner, start. */
+export const UPGRADE_GUIDE_URL = 'https://docs.qauth.dev/operate/upgrades/';
+
+/** A repository's web address, `https://<host>/<owner>/<name>`, as the workflow builds it. */
+const REPOSITORY_URL = /^https:\/\/[\w.-]+(?::\d+)?(?:\/[\w.-]+){2}$/;
+
+/**
+ * The body of the draft release for `version`. The repository host refuses a
+ * release body over 125,000 characters and the 0.2 notes are past that, so the
+ * body never holds the notes: it links their section of CHANGELOG.md at the
+ * tag and names the attached file that carries them in full. Its length does
+ * not depend on the CHANGELOG's. `repositoryUrl` is the repository's web
+ * address, `https://<host>/<owner>/<name>`.
+ */
+export function releaseBody(changelog, version, repositoryUrl) {
+  const distTag = distTagFor(version);
+  if (!REPOSITORY_URL.test(repositoryUrl)) {
+    throw new SdkReleaseError(
+      `${repositoryUrl} is not a repository address (https://<host>/<owner>/<name>)`
+    );
+  }
+  const tag = `v${version}`;
+  const kind =
+    distTag === 'next'
+      ? `a release candidate for ${version.replace(/-rc\.\d+$/, '')}`
+      : 'a release';
+  const notesUrl = `${repositoryUrl}/blob/${tag}/CHANGELOG.md#${changelogAnchor(changelog, version)}`;
+  return [
+    `QAuth \`${version}\` is ${kind}.`,
+    '',
+    `**Release notes:** the [\`${notesHeading(version)}\` section of CHANGELOG.md](${notesUrl}) ` +
+      `at \`${tag}\`, attached in full to this release as \`${releaseNotesFileName(version)}\`.`,
+    '',
+    `**Upgrading:** follow the [upgrade guide](${UPGRADE_GUIDE_URL}): back up the database, ` +
+      "run the new version's migration runner, then start the new version.",
+    '',
+    '---',
+    '',
+    `The SDK packages are staged on npm as \`${version}\` (dist-tag \`${distTag}\`), with ` +
+      'provenance. They go live when a maintainer approves each stage on npmjs.com with 2FA; ' +
+      'publish this draft after that. The server images and their digests are in the ' +
+      'release-images run of the same tag.',
+    '',
+  ].join('\n');
+}
+
+/**
+ * The two files the draft release is made from: `release-body.md`, the short
+ * body {@link releaseBody} builds, and `release-notes-<version>.md`, the
+ * notes {@link releaseNotes} gives, attached beside the SDK tarballs.
+ */
+export function releaseFiles(changelog, version, repositoryUrl) {
+  return [
+    { name: 'release-body.md', text: releaseBody(changelog, version, repositoryUrl) },
+    { name: releaseNotesFileName(version), text: `${releaseNotes(changelog, version)}\n` },
+  ];
 }
 
 /** Only these files may be in a tarball: the manifest, README, LICENSE and compiled `dist/`. */

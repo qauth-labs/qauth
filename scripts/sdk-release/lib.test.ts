@@ -3,13 +3,16 @@
  * committed SDKs are read too, so a manifest edit that would fail the release
  * fails here first, in the unit suite.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
 import {
+  changelogAnchor,
   checkFileContent,
   checkFileList,
   checkManifest,
@@ -17,8 +20,11 @@ import {
   hasReleaseSection,
   latestReleasedVersion,
   parseReleaseTag,
+  releaseBody,
+  releaseFiles,
   releaseNotes,
   SdkReleaseError,
+  UPGRADE_GUIDE_URL,
   valueExportsFromReport,
 } from './lib.mjs';
 
@@ -144,6 +150,118 @@ describe("QAuth's CHANGELOG", () => {
   it('as committed, gives the dry run a version every SDK can be stamped with', () => {
     const committed = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
     expect(() => distTagFor(latestReleasedVersion(committed))).not.toThrow();
+  });
+});
+
+const REPOSITORY = 'https://github.com/qauth-labs/qauth';
+
+/** The repository host refuses a longer release body (`HTTP 422: body is too long`). */
+const RELEASE_BODY_LIMIT = 125_000;
+
+describe('the draft release', () => {
+  it('links a release candidate to the Unreleased section and a release to its own heading', () => {
+    expect(changelogAnchor(CHANGELOG, '0.2.0-rc.0')).toBe('unreleased');
+    expect(changelogAnchor(CHANGELOG, '0.1.3')).toBe('013---2026-10-21');
+    expect(() => changelogAnchor(CHANGELOG, '0.1.4')).toThrow(SdkReleaseError);
+  });
+
+  it('gives the escaped Markdown form of a heading the same anchor', () => {
+    const escaped = CHANGELOG.replace('## [Unreleased]', '## \\[Unreleased\\]').replace(
+      '## [0.1.3]',
+      '## \\[0.1.3\\]'
+    );
+    expect(changelogAnchor(escaped, '0.2.0-rc.0')).toBe('unreleased');
+    expect(changelogAnchor(escaped, '0.1.3')).toBe('013---2026-10-21');
+  });
+
+  it('writes a short body for a release candidate that links its notes', () => {
+    const body = releaseBody(CHANGELOG, '0.2.0-rc.1', REPOSITORY);
+    expect(body).toContain('QAuth `0.2.0-rc.1` is a release candidate for 0.2.0.');
+    expect(body).toContain(
+      '[`Unreleased` section of CHANGELOG.md](https://github.com/qauth-labs/qauth/blob/v0.2.0-rc.1/CHANGELOG.md#unreleased)'
+    );
+    expect(body).toContain('`release-notes-0.2.0-rc.1.md`');
+    expect(body).toContain(`[upgrade guide](${UPGRADE_GUIDE_URL})`);
+    expect(body).toContain('staged on npm as `0.2.0-rc.1` (dist-tag `next`)');
+    expect(body).not.toContain('Coming next.');
+  });
+
+  it('writes a short body for a release that links its own section', () => {
+    const body = releaseBody(CHANGELOG, '0.1.3', REPOSITORY);
+    expect(body).toContain('QAuth `0.1.3` is a release.');
+    expect(body).toContain(
+      '[`0.1.3` section of CHANGELOG.md](https://github.com/qauth-labs/qauth/blob/v0.1.3/CHANGELOG.md#013---2026-10-21)'
+    );
+    expect(body).toContain('`release-notes-0.1.3.md`');
+    expect(body).toContain('staged on npm as `0.1.3` (dist-tag `latest`)');
+    expect(body).not.toContain('The 0.1.3 fix.');
+  });
+
+  it('refuses a version without notes, and an address that is not a repository', () => {
+    expect(() => releaseBody(CHANGELOG, '0.1.4', REPOSITORY)).toThrow(SdkReleaseError);
+    expect(() => releaseBody(CHANGELOG, '1.0.0', REPOSITORY)).toThrow(SdkReleaseError);
+    for (const address of [
+      'qauth-labs/qauth',
+      'http://github.com/qauth-labs/qauth',
+      `${REPOSITORY}/`,
+      'https://github.com/qauth-labs',
+      'https://github.com/qauth-labs/qauth) [x](https://example.com',
+    ]) {
+      expect(() => releaseBody(CHANGELOG, '0.1.3', address)).toThrow(SdkReleaseError);
+    }
+  });
+
+  it('pairs the body with the notes in full', () => {
+    expect(releaseFiles(CHANGELOG, '0.2.0-rc.1', REPOSITORY)).toEqual([
+      { name: 'release-body.md', text: releaseBody(CHANGELOG, '0.2.0-rc.1', REPOSITORY) },
+      { name: 'release-notes-0.2.0-rc.1.md', text: '### Added\n\n- Coming next.\n' },
+    ]);
+  });
+
+  describe('for the committed CHANGELOG', () => {
+    const committed = readFileSync(join(REPO_ROOT, 'CHANGELOG.md'), 'utf8');
+    const latest = latestReleasedVersion(committed);
+    const candidate = `0.${Number(latest.split('.')[1]) + 1}.0-rc.0`;
+
+    it.each([candidate, latest])('keeps the body of %s far under the limit', (version) => {
+      const [body] = releaseFiles(committed, version, REPOSITORY);
+      expect(body.text.length).toBeLessThan(RELEASE_BODY_LIMIT / 100);
+    });
+
+    it.each([candidate, latest])('attaches the section of %s in full', (version) => {
+      const heading = version === candidate ? '## [Unreleased]' : `## [${version}]`;
+      const start = committed.indexOf('\n', committed.indexOf(`\n${heading}`) + 1) + 1;
+      const end = committed.indexOf('\n## ', start);
+      const section = committed.slice(start, end === -1 ? undefined : end).trim();
+      expect(section.length).toBeGreaterThan(0);
+      const [, notes] = releaseFiles(committed, version, REPOSITORY);
+      expect(notes).toEqual({ name: `release-notes-${version}.md`, text: `${section}\n` });
+    });
+  });
+
+  it('notes.mjs writes both files into the directory it is given', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sdk-release-notes-'));
+    try {
+      writeFileSync(join(dir, 'CHANGELOG.md'), CHANGELOG);
+      const script = join(REPO_ROOT, 'scripts/sdk-release/notes.mjs');
+      const run = (...args: string[]) =>
+        spawnSync(process.execPath, [script, ...args], { cwd: dir, encoding: 'utf8' });
+
+      expect(run('0.1.3', REPOSITORY, 'out').status).toBe(0);
+      expect(readFileSync(join(dir, 'out/release-body.md'), 'utf8')).toBe(
+        releaseBody(CHANGELOG, '0.1.3', REPOSITORY)
+      );
+      expect(readFileSync(join(dir, 'out/release-notes-0.1.3.md'), 'utf8')).toBe(
+        '### Fixed\n\n- The 0.1.3 fix.\n'
+      );
+
+      const missing = run('0.1.4', REPOSITORY, 'out');
+      expect(missing.status).toBe(1);
+      expect(missing.stderr).toContain('no `## [0.1.4]` section');
+      expect(run('0.1.3').status).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -92,8 +92,12 @@ OIDC identity, and npm accepts the packages through trusted publishing.
      attested. The run summary lists the digests.
    - `release-npm`: every SDK is packed at `X.Y.Z`, checked, installed into an
      empty project, and staged on npm with provenance. The run then leaves a
-     draft release holding the SDK tarballs, with the CHANGELOG section as its
-     notes.
+     draft release holding the SDK tarballs, their `.sha256` checksums and
+     `release-notes-X.Y.Z.md`: the CHANGELOG section in full (for a release
+     candidate, the `Unreleased` section). The release body stays short, since
+     the repository host refuses one over 125,000 characters: it names the
+     version and the kind of release, links the section in `CHANGELOG.md` at
+     the tag and the upgrade guide, and says how the packages are staged.
 4. Approve each staged package on npmjs.com (the package's Staged Packages tab,
    or `npm stage approve <id>` with 2FA). Only now is it installable.
 5. Verify, then publish the draft release:
@@ -112,8 +116,8 @@ OIDC identity, and npm accepts the packages through trusted publishing.
    are never the baseline, so their approvals stay until the release.
 
 Every pull request runs the npm workflow as a dry run: it stamps the newest
-version `CHANGELOG.md` names into each SDK, packs, checks and installs it, and
-publishes nothing.
+version `CHANGELOG.md` names into each SDK, packs, checks and installs it,
+builds that version's release body and notes file, and publishes nothing.
 
 ## Rollback
 
