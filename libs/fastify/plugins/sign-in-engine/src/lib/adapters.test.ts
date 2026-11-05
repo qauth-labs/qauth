@@ -47,6 +47,7 @@ function stubStores(
     credential: Record<string, unknown> | undefined;
     user: { id: string; enabled: boolean } | undefined;
     passkeys: { realmId: string; disabledAt?: number | null }[];
+    upstreams: Record<string, unknown>[];
     grants: unknown[];
     disabledAt: number | null;
     actions: string[];
@@ -58,6 +59,7 @@ function stubStores(
       | undefined,
     user: { id: USER, enabled: true } as { id: string; enabled: boolean } | undefined,
     passkeys: [] as { realmId: string; disabledAt?: number | null }[],
+    upstreams: [] as Record<string, unknown>[],
     grants: [] as unknown[],
     disabledAt: null as number | null,
     actions: [] as string[],
@@ -74,32 +76,43 @@ function stubStores(
               id: 'cred-1',
               userId: USER,
               realmId,
+              providerType,
               credentialData: state.credential,
               disabledAt: state.disabledAt,
             };
       },
-      findAllByUserIdAndType: async (userId, providerType) => {
-        calls.push(`all:${userId}:${providerType}`);
-        if (providerType === 'password') {
-          return state.credential === undefined
+      findAllByUserId: async (userId) => {
+        calls.push(`all:${userId}`);
+        return [
+          ...(state.credential === undefined
             ? []
             : [
                 {
                   id: 'cred-1',
                   userId,
                   realmId: REALM,
+                  providerType: 'password',
                   credentialData: state.credential,
                   disabledAt: state.disabledAt,
                 },
-              ];
-        }
-        return state.passkeys.map((passkey, index) => ({
-          id: `passkey-${index}`,
-          userId,
-          realmId: passkey.realmId,
-          credentialData: {},
-          disabledAt: passkey.disabledAt ?? null,
-        }));
+              ]),
+          ...state.passkeys.map((passkey, index) => ({
+            id: `passkey-${index}`,
+            userId,
+            realmId: passkey.realmId,
+            providerType: 'webauthn',
+            credentialData: {},
+            disabledAt: passkey.disabledAt ?? null,
+          })),
+          ...state.upstreams.map((upstream, index) => ({
+            id: `upstream-${index}`,
+            userId,
+            realmId: REALM,
+            providerType: 'oidc_corp',
+            credentialData: upstream,
+            disabledAt: null,
+          })),
+        ];
       },
     },
     users: {
@@ -203,6 +216,20 @@ describe('the repository account directory', () => {
     expect(
       await createRepositoryAccountDirectory(passkeyOnly.repos, log()).findByUserId(REALM, USER)
     ).toMatchObject({ verified: true });
+  });
+
+  it("reads an upstream provider's account as its credential's verified says (#639)", async () => {
+    const read = async (upstream: Record<string, unknown>) =>
+      createRepositoryAccountDirectory(
+        stubStores({ credential: undefined, upstreams: [upstream] }).repos,
+        log()
+      ).findByUserId(REALM, USER);
+    expect(
+      await read({ kind: 'upstream', iss: 'https://idp.example', verified: true })
+    ).toMatchObject({ verified: true, factors: [] });
+    expect(await read({ kind: 'upstream', verified: false })).toMatchObject({ verified: false });
+    // Malformed: not verified.
+    expect(await read({ kind: 'upstream' })).toMatchObject({ verified: false });
   });
 
   it('reports a disabled, unverified account as such', async () => {
@@ -475,12 +502,25 @@ describe('the repository address verifier (#638)', () => {
       credential: { id: string; userId: string } | undefined;
       user: { id: string; enabled: boolean } | undefined;
       attribute: unknown;
+      upstreams: readonly {
+        id: string;
+        realmId: string;
+        credentialData: Record<string, unknown>;
+      }[];
+      attributes: readonly { attrKey: string; attrValue: string }[];
     }> = {}
   ) {
     const state = {
       credential: { id: 'cred-1', userId: USER } as { id: string; userId: string } | undefined,
       user: { id: USER, enabled: true } as { id: string; enabled: boolean } | undefined,
       attribute: { verified: true } as unknown,
+      upstreams: [
+        { id: 'up-1', realmId: REALM, credentialData: { kind: 'upstream', verified: false } },
+      ] as readonly { id: string; realmId: string; credentialData: Record<string, unknown> }[],
+      attributes: [{ attrKey: 'email', attrValue: 'Alice@Example.com' }] as readonly {
+        attrKey: string;
+        attrValue: string;
+      }[],
       ...overrides,
     };
     const calls: string[] = [];
@@ -493,6 +533,13 @@ describe('the repository address verifier (#638)', () => {
         setEmailVerified: async (id, tx) => {
           calls.push(`setEmailVerified:${id}:${tx}`);
         },
+        findAllByUserIdAndType: async (userId, providerType, tx) => {
+          calls.push(`upstreams:${userId}:${providerType}:${tx}`);
+          return state.upstreams;
+        },
+        updateCredentialData: async (id, credentialData, tx) => {
+          calls.push(`updateCredentialData:${id}:${JSON.stringify(credentialData)}:${tx}`);
+        },
       },
       users: {
         findById: async (realmId, id, tx) => {
@@ -501,6 +548,10 @@ describe('the repository address verifier (#638)', () => {
         },
       },
       userAttributes: {
+        findByUserIdAndSource: async (userId, source, tx) => {
+          calls.push(`attributes:${userId}:${source}:${tx}`);
+          return state.attributes;
+        },
         setVerified: async (userId, source, attrKey, verified, tx) => {
           calls.push(`attribute:${userId}:${source}:${attrKey}:${verified}:${tx}`);
           return state.attribute;
@@ -539,6 +590,50 @@ describe('the repository address verifier (#638)', () => {
       const { verifier, calls } = stubWrites(overrides);
       expect(await verifier.markVerified(input)).toEqual({ kind: 'refused', reason });
       expect(calls.filter((call) => !/^(credential|user):/.test(call))).toEqual([]);
+    }
+  });
+
+  it("marks an upstream provider's credential and its email attribute verified (#639)", async () => {
+    const { verifier, calls } = stubWrites();
+    expect(await verifier.markVerified({ ...input, upstream: 'oidc_corp' })).toEqual({
+      kind: 'verified',
+    });
+    expect(calls).toEqual([
+      `upstreams:${USER}:oidc_corp:tx-1`,
+      `user:${REALM}:${USER}:tx-1`,
+      `attributes:${USER}:oidc_corp:tx-1`,
+      'updateCredentialData:up-1:{"kind":"upstream","verified":true}:tx-1',
+      `attribute:${USER}:oidc_corp:email:true:tx-1`,
+    ]);
+  });
+
+  it("writes nothing for an upstream account whose address is not the provider's, or in another realm (#639)", async () => {
+    for (const [overrides, reason] of [
+      [
+        { attributes: [{ attrKey: 'email', attrValue: 'mallory@example.com' }] },
+        'subject_mismatch',
+      ],
+      [{ attributes: [] }, 'subject_mismatch'],
+      [
+        {
+          upstreams: [
+            {
+              id: 'up-1',
+              realmId: OTHER_REALM,
+              credentialData: { kind: 'upstream', verified: false },
+            },
+          ],
+        },
+        'subject_mismatch',
+      ],
+      [{ user: { id: USER, enabled: false } }, 'account_disabled'],
+    ] as const) {
+      const { verifier, calls } = stubWrites(overrides);
+      expect(await verifier.markVerified({ ...input, upstream: 'oidc_corp' })).toEqual({
+        kind: 'refused',
+        reason,
+      });
+      expect(calls.filter((call) => /^(updateCredentialData|attribute):/.test(call))).toEqual([]);
     }
   });
 

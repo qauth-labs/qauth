@@ -1,6 +1,8 @@
 import {
+  isUpstreamCredentialData,
   PASSWORD_PROVIDER_TYPE,
   passwordCredentialDataSchema,
+  upstreamCredentialDataSchema,
   WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/server-federation';
 import {
@@ -17,6 +19,7 @@ interface CredentialRow {
   readonly id: string;
   readonly userId: string;
   readonly realmId: string;
+  readonly providerType: string;
   readonly credentialData: Record<string, unknown>;
   /**
    * The failure ladder's disabled mark (#615): when the hard action disabled
@@ -37,7 +40,8 @@ export interface AccountDirectoryRepositories {
       providerType: string,
       externalSub: string
     ): Promise<CredentialRow | undefined>;
-    findAllByUserIdAndType(userId: string, providerType: string): Promise<CredentialRow[]>;
+    /** Every credential of the user, of every type: one read once a factor proved the user. */
+    findAllByUserId(userId: string): Promise<CredentialRow[]>;
   };
   readonly users: {
     findById(
@@ -90,15 +94,19 @@ export interface AccountDirectoryOptions {
  *   `null` when the credential's data cannot be read, which the engine
  *   refuses like a wrong password.
  * - Once a factor proved the user (`findByUserId`) it reads the whole
- *   account: every password and passkey (`webauthn`) credential it holds in
- *   the realm, and whether it holds a live admin grant seen from the realm
- *   (#510). An account that exists so costs one read more than none before
- *   the password is checked, not four. It is verified when every password
- *   credential's `email_verified` says so (none has an address to prove: a
- *   passkey or a wallet is its primary identity); a credential whose data
- *   cannot be read is not verified. It reads the account's pending required
- *   actions too (#635): an `update_password` among them makes the sign-in
- *   ask for a new password before it completes.
+ *   account: every credential it holds in the realm, in one read, of which
+ *   the password and passkey (`webauthn`) ones are its factors, and whether
+ *   it holds a live admin grant seen from the realm (#510). An account that
+ *   exists so costs one read more than none before the password is checked,
+ *   not four. It is verified when every password credential's
+ *   `email_verified` says so and every upstream provider's credential its
+ *   `verified` (#639: false while a provider whose verified switch is off
+ *   created the account and QAuth has not verified its address); with
+ *   neither, a passkey or a wallet is its primary identity, with no address
+ *   to prove. A credential whose data cannot be read is not verified. It
+ *   reads the account's pending required actions too (#635): an
+ *   `update_password` among them makes the sign-in ask for a new password
+ *   before it completes.
  * - A credential the failure ladder's hard action marked
  *   (`user_credentials.disabled_at`, #615) is disabled only while the hard
  *   action is armed, which is asked only when a mark is there. It still counts
@@ -162,13 +170,12 @@ export function createRepositoryAccountDirectory(
     async findByUserId(realmId: string, userId: string): Promise<SignInAccount | null> {
       const user = await stores.users.findById(realmId, userId);
       if (user === undefined) return null;
-      const ofRealm = (rows: CredentialRow[]) => rows.filter((row) => row.realmId === realmId);
-      const passwords = ofRealm(
-        await stores.userCredentials.findAllByUserIdAndType(user.id, PASSWORD_PROVIDER_TYPE)
+      const credentials = (await stores.userCredentials.findAllByUserId(user.id)).filter(
+        (row) => row.realmId === realmId
       );
-      const passkeys = ofRealm(
-        await stores.userCredentials.findAllByUserIdAndType(user.id, WEBAUTHN_PROVIDER_TYPE)
-      );
+      const passwords = credentials.filter((row) => row.providerType === PASSWORD_PROVIDER_TYPE);
+      const passkeys = credentials.filter((row) => row.providerType === WEBAUTHN_PROVIDER_TYPE);
+      const upstreams = credentials.filter((row) => isUpstreamCredentialData(row.credentialData));
       const grants = await stores.adminGrants.listLive(realmId, user.id);
       const pending = await stores.userRequiredActions.listForUser(realmId, user.id);
       const requiredActions: RequiredAction[] = [];
@@ -191,10 +198,18 @@ export function createRepositoryAccountDirectory(
           disabled: disabled[passwords.length + index] === true,
         })),
       ];
-      const verified = passwords.every((row) => {
-        const data = passwordCredentialDataSchema.safeParse(row.credentialData);
-        return data.success && data.data.email_verified;
-      });
+      const verified =
+        passwords.every((row) => {
+          const data = passwordCredentialDataSchema.safeParse(row.credentialData);
+          return data.success && data.data.email_verified;
+        }) &&
+        upstreams.every((row) => {
+          const data = upstreamCredentialDataSchema.safeParse(row.credentialData);
+          if (!data.success) {
+            log.error({ credentialId: row.id }, 'malformed credential_data on upstream credential');
+          }
+          return data.success && data.data.verified;
+        });
       return Object.freeze({
         userId: user.id,
         enabled: user.enabled,

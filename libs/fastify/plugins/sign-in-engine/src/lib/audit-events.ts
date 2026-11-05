@@ -31,7 +31,8 @@ export type SignInAuditEvent =
  * method set may grow with it. The email code verifies the address of a
  * password account after its password (#638), and the forced update sets
  * a new one after it (#635): both are part of that sign-in, and never a
- * method of their own.
+ * method of their own. The `upstream` step is a sign-in through an upstream
+ * identity provider (#639).
  */
 const STEP_METHODS: Readonly<
   Partial<Record<StepName, EventDataOf<typeof SIGN_IN_FAILED>['method']>>
@@ -40,6 +41,7 @@ const STEP_METHODS: Readonly<
   password: 'password',
   email_code: 'password',
   new_password: 'password',
+  upstream: 'upstream',
 });
 
 /**

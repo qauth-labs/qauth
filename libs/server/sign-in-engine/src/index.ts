@@ -32,6 +32,7 @@ export {
   provesMfa,
   secondFactorRequired,
   strongestBoundFactor,
+  UPSTREAM_STRENGTH,
 } from './lib/factors';
 export {
   type BotChallengeVerdict,
@@ -93,6 +94,8 @@ export {
   type SignInAuditRecord,
   type SignInCandidate,
   SYSTEM_CLOCK,
+  type UpstreamProviderDirectory,
+  type UpstreamProviderEntry,
 } from './lib/ports';
 export type {
   CompletedSignIn,
@@ -102,6 +105,9 @@ export type {
   RoundAnswer,
   RoundContext,
   RoundResult,
+  UpstreamProof,
+  UpstreamStarter,
+  UpstreamStartOutcome,
 } from './lib/round';
 export {
   checkSendCapPolicy,

@@ -1,5 +1,6 @@
 import {
   createInteractionMapper,
+  grammarStep,
   isStepName,
   type OfferedStep,
   type ReadAnswer,
@@ -65,8 +66,10 @@ import {
   type SignInAuditReason,
   type SignInAuditRecord,
   SYSTEM_CLOCK,
+  type UpstreamProviderDirectory,
+  type UpstreamProviderEntry,
 } from './ports';
-import type { RoundAnswer, RoundContext, RoundResult } from './round';
+import type { RoundAnswer, RoundContext, RoundResult, UpstreamProof } from './round';
 import type {
   AnyStepHandler,
   ProvedAccount,
@@ -106,7 +109,10 @@ import {
  * 6. The identifier: the request's `login_hint`, else an answer's. The first
  *    one is fixed; a different one ends the transaction (`subject_mismatch`).
  *    With none, the identifier step, or a discoverable first factor before it
- *    once #651 adds one.
+ *    once #651 adds one, and the realm's upstream identity providers beside
+ *    them (#639): a pick sends the browser to the provider, whose callback
+ *    proves the account it holds ({@link SignInEngine.completeUpstream}). An
+ *    upstream sign-in ranks with the password in rule 8's downgrade rule.
  * 7. The first factor, offered alike to every account: the password here, and
  *    from #651 a passkey beside it. Its answer is reserved on the ladder's hook
  *    before it is verified.
@@ -203,6 +209,13 @@ export interface SignInEngineDependencies {
    * engine's own.
    */
   readonly steps?: readonly AnyStepHandler[];
+  /**
+   * The realm's upstream identity providers (#639): offered as the `upstream`
+   * step beside the identifier step, while nobody is named, on a round whose
+   * transport can start one (`RoundContext.startUpstream`). Without it the
+   * step is never offered.
+   */
+  readonly upstream?: UpstreamProviderDirectory;
   readonly clock?: Clock;
   /**
    * Told when a store refused a round, or when settling a ladder reservation
@@ -228,6 +241,21 @@ export interface SignInEngine {
   advance(
     transaction: SignInTransaction | null,
     answer: RoundAnswer | null,
+    context: RoundContext
+  ): Promise<RoundResult>;
+  /**
+   * Run the round of an upstream provider's callback (#639): `proof` names
+   * the account that holds the provider's identity. It proves the `upstream`
+   * step, which ranks with the password, and the rules go on from rule 8 as
+   * after any first factor: the account's passkey when it holds one, the MFA
+   * policy, the inline verification of an address the provider did not
+   * vouch for. The transaction must be the one that sent the person to that
+   * provider, with nobody named since; any other, and a disabled account,
+   * is refused as `invalid_answer`, audited, with the transaction as it was.
+   */
+  completeUpstream(
+    transaction: SignInTransaction | null,
+    proof: UpstreamProof,
     context: RoundContext
   ): Promise<RoundResult>;
 }
@@ -371,6 +399,20 @@ interface RoundState {
   transaction: SignInTransaction;
 }
 
+/** Something the engine can offer: a step handler, or the `upstream` step (#639). */
+interface Offerable {
+  readonly step: StepName;
+  params(round: StepRound): unknown;
+}
+
+/** The params of an `upstream` step listing `providers`, or `null` outside the step's schema. */
+function upstreamParams(
+  providers: readonly UpstreamProviderEntry[]
+): StepParams<'upstream'> | null {
+  const parsed = grammarStep('upstream').params.safeParse({ providers });
+  return parsed.success ? (parsed.data as StepParams<'upstream'>) : null;
+}
+
 /** Build a sign-in engine. */
 export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine {
   const handlers = buildHandlers(deps);
@@ -388,7 +430,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   const knows = (step: StepName) =>
     handlers.byStep.has(step) ||
     (step === 'email_code' && emailCodes !== undefined) ||
-    (step === 'new_password' && deps.passwordUpdates !== undefined);
+    (step === 'new_password' && deps.passwordUpdates !== undefined) ||
+    (step === 'upstream' && deps.upstream !== undefined);
   /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
   const report = (port: string, error: unknown) => {
     try {
@@ -428,6 +471,21 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
   }
 
+  async function completeUpstream(
+    stored: SignInTransaction | null,
+    proof: UpstreamProof,
+    context: RoundContext
+  ): Promise<RoundResult> {
+    const startedAt = context.receivedAt ?? clock.now();
+    try {
+      return await round(stored, null, context, proof);
+    } finally {
+      // The same floor as every round: no callback tells its outcome by its time.
+      const left = SIGN_IN_MIN_RESPONSE_TIME_MS - (clock.now() - startedAt);
+      if (left > 0) await clock.sleep(left);
+    }
+  }
+
   /**
    * End a transaction the round may not use, before anything in it is read.
    * The record names nobody: nothing in such a transaction can be trusted to
@@ -437,10 +495,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   async function endUnusable(
     answer: RoundAnswer | null,
     context: RoundContext,
-    reason: 'transaction_invalid' | 'transaction_expired'
+    reason: 'transaction_invalid' | 'transaction_expired',
+    proof?: UpstreamProof
   ): Promise<RoundResult> {
     const named =
-      answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
+      proof !== undefined
+        ? 'upstream'
+        : answer !== null && typeof answer.step === 'string'
+          ? stepNameOfUrn(answer.step)
+          : undefined;
     const step = named !== undefined && knows(named) ? named : 'identifier';
     await context.audit(Object.freeze({ outcome: 'ended', step, reason }));
     return TRANSACTION_ENDED;
@@ -449,7 +512,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   async function round(
     stored: SignInTransaction | null,
     answer: RoundAnswer | null,
-    context: RoundContext
+    context: RoundContext,
+    proof?: UpstreamProof
   ): Promise<RoundResult> {
     const now = clock.now();
     const found =
@@ -461,29 +525,32 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           })
         : readSignInTransaction(stored);
     // A transaction that is not well formed ends: nothing in it can be trusted.
-    if (found === null) return endUnusable(answer, context, 'transaction_invalid');
+    if (found === null) return endUnusable(answer, context, 'transaction_invalid', proof);
     // Nor can one of another realm or client, or one that starts in the future.
     if (
       found.realmId !== context.realm.id ||
       found.clientId !== context.client.id ||
       found.createdAt > now + SIGN_IN_TRANSACTION_CLOCK_SKEW_MS
     ) {
-      return endUnusable(answer, context, 'transaction_invalid');
+      return endUnusable(answer, context, 'transaction_invalid', proof);
     }
     if (now - found.createdAt > SIGN_IN_TRANSACTION_MAX_AGE_MS) {
-      return endUnusable(answer, context, 'transaction_expired');
+      return endUnusable(answer, context, 'transaction_expired', proof);
     }
-    // A subject without an identifier comes only from a discoverable factor.
+    // A subject without an identifier comes only from a discoverable factor,
+    // or from an upstream provider's callback (#639).
     if (
       found.subject !== undefined &&
       found.identifier === undefined &&
-      !found.verified.some((step) => handlers.byStep.get(step.step)?.discoverable === true)
+      !found.verified.some(
+        (step) => step.step === 'upstream' || handlers.byStep.get(step.step)?.discoverable === true
+      )
     ) {
-      return endUnusable(answer, context, 'transaction_invalid');
+      return endUnusable(answer, context, 'transaction_invalid', proof);
     }
     const state: RoundState = { transaction: found };
     try {
-      return await rules(state, answer, context);
+      return await rules(state, answer, context, { fresh: stored === null, proof });
     } catch (error) {
       if (!(error instanceof SignInStoreUnavailableError)) throw error;
       deps.onUnavailable?.(error);
@@ -498,7 +565,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   async function rules(
     state: RoundState,
     answer: RoundAnswer | null,
-    context: RoundContext
+    context: RoundContext,
+    upstreamRound: { readonly fresh: boolean; readonly proof?: UpstreamProof }
   ): Promise<RoundResult> {
     const found = state.transaction;
     const realmId = context.realm.id;
@@ -513,8 +581,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     };
 
     let hmac: Promise<string> | undefined;
+    /**
+     * The HMAC of the transaction's identifier or, for an account an upstream
+     * provider proved (#639), of the address that provider gave: the address
+     * rule 8 verifies, whose email-code ladder it keys.
+     */
     const identifierHmac = (): Promise<string> => {
-      const { identifier } = state.transaction;
+      const identifier = state.transaction.identifier ?? state.transaction.upstream?.address;
       if (identifier === undefined) throw new Error('sign-in engine: no identifier to digest');
       hmac ??= fromStore('identifierDigest', async () => {
         const digest = await deps.identifierDigest({ realmId, identifier });
@@ -609,14 +682,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
 
     /** The offer of `steps`, the first one current, with their params for this round. */
     const offerOf = async (
-      steps: readonly AnyStepHandler[],
+      steps: readonly Offerable[],
       options: { readonly preferred?: boolean } = {}
     ): Promise<StepOffer> => {
       const current = stepRound();
       const offered = await Promise.all(
         steps.map(async (handler) => ({
           step: handler.step,
-          params: await (handler as StepHandler).params(current),
+          params: await handler.params(current),
         }))
       );
       const [first, ...alternatives] = offered;
@@ -635,9 +708,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           ? offer.current
           : Object.freeze({ ...offer.current, error } as StepOffer['current']);
       const handler = handlers.byStep.get(current.step) as StepHandler | undefined;
-      const { identifier } = state.transaction;
-      // The email code's screen names the address the code went to, and the
-      // new password's the account it is for.
+      // The email code's screen names the address the code went to (for an
+      // account an upstream provider proved, the address it gave, #639), and
+      // the new password's the account it is for.
+      const identifier =
+        current.step === 'email_code'
+          ? (state.transaction.identifier ?? state.transaction.upstream?.address)
+          : state.transaction.identifier;
       const personal =
         current.step === 'email_code' || current.step === 'new_password'
           ? identifier === undefined
@@ -800,6 +877,137 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
     };
 
+    /**
+     * The `upstream` step's params for this round (#639): the realm's
+     * providers, `null` when it offers none, when the engine has no provider
+     * directory, or when the transport can serve or start none. A list
+     * outside the step's schema is a store fault.
+     */
+    const upstreamProviders = async (): Promise<StepParams<'upstream'> | null> => {
+      const directory = deps.upstream;
+      if (
+        directory === undefined ||
+        context.startUpstream === undefined ||
+        !served.has('upstream')
+      ) {
+        return null;
+      }
+      const providers = await fromStore('upstream', () => directory.offered({ realmId, clientId }));
+      if (Array.isArray(providers) && providers.length === 0) return null;
+      const params = Array.isArray(providers) ? upstreamParams(providers) : null;
+      if (params === null) {
+        throw new SignInStoreUnavailableError('upstream', new Error('not a provider list'));
+      }
+      return params;
+    };
+
+    /**
+     * Start an upstream provider (#639): the one the pending answer picked
+     * from `offer`, or the one the authorization request routes to. The
+     * transport keeps the provider's transaction; the engine's records which
+     * provider may complete it. A provider that cannot start is refused with
+     * `provider_unavailable`, the step offered again.
+     */
+    const pickUpstream = async (
+      offer: StepOffer,
+      routed?: UpstreamProviderEntry
+    ): Promise<RoundResult> => {
+      let entry: UpstreamProviderEntry;
+      if (routed === undefined) {
+        const read = readPending(offer);
+        if (read === null) return invalidAnswer('upstream');
+        turn.pending = null;
+        const { provider } = read.answer as StepAnswer<'upstream'>;
+        const listed = (read.params as StepParams<'upstream'>).providers.find(
+          (item) => item.provider === provider
+        );
+        // A provider the step did not list: the answer is malformed.
+        if (listed === undefined) return invalidAnswer('upstream');
+        entry = listed;
+      } else {
+        if (upstreamParams([routed]) === null) {
+          throw new Error('sign-in engine: a routed provider outside the upstream step’s schema');
+        }
+        entry = routed;
+      }
+      const start = context.startUpstream;
+      if (start === undefined)
+        throw new Error('sign-in engine: no upstream starter for this round');
+      const started = await fromStore('startUpstream', () => start(entry));
+      if (started?.kind === 'unavailable') {
+        await audit('refused', 'upstream', 'provider_unavailable');
+        const listed = [offer.current, ...offer.alternatives].some(
+          (offered) => offered.step === 'upstream'
+        );
+        return listed
+          ? offerStep(refusedOffer(offer, 'upstream'), 'provider_unavailable')
+          : offerStep(offer);
+      }
+      if (started?.kind !== 'started' || typeof started.redirectTo !== 'string') {
+        throw new SignInStoreUnavailableError('startUpstream', new Error('not a start outcome'));
+      }
+      state.transaction = { ...state.transaction, upstream: { provider: entry.provider } };
+      const shown = offerStep(offer);
+      if (shown.kind !== 'step') throw new Error('sign-in engine: an offer that is not a step');
+      return Object.freeze({
+        kind: 'upstream',
+        transaction: shown.transaction,
+        offer: shown.offer,
+        personal: shown.personal,
+        provider: entry.provider,
+        redirectTo: started.redirectTo,
+      });
+    };
+
+    /**
+     * Take an upstream provider's proof (#639). Returns the round's refusal,
+     * or `null` once the step is proved and the rules go on. A proof is taken
+     * only by the transaction that sent the person to that provider, while
+     * nobody is named; any other is refused as `invalid_answer`, with the
+     * transaction as it was. The checks of every factor follow: an enabled
+     * account, verified under the gate.
+     */
+    const proveUpstream = async (proof: UpstreamProof): Promise<RoundResult | null> => {
+      const refuse = async (reason: SignInAuditReason): Promise<RoundResult> => {
+        await audit('refused', 'upstream', reason);
+        return Object.freeze({
+          kind: 'refused',
+          reason: 'invalid_answer',
+          transaction: freezeTransaction(state.transaction),
+        });
+      };
+      const { subject, identifier, upstream } = state.transaction;
+      if (
+        subject !== undefined ||
+        identifier !== undefined ||
+        upstream === undefined ||
+        upstream.address !== undefined ||
+        upstream.provider !== proof.provider.provider
+      ) {
+        return refuse('invalid_answer');
+      }
+      const params = upstreamParams([proof.provider]);
+      if (params === null)
+        throw new Error('sign-in engine: a proof outside the upstream step’s schema');
+      if (!proof.account.enabled) return refuse('account_disabled');
+      if (!proof.account.verified && deps.requireVerifiedAccount && emailCodes === undefined) {
+        return refuse('email_not_verified');
+      }
+      const address = proof.address === undefined ? undefined : readIdentifier(proof.address);
+      state.transaction = {
+        ...state.transaction,
+        subject: proof.account.userId,
+        verified: [...state.transaction.verified, { step: 'upstream', params } as OfferedStep],
+        authTime: clock.now(),
+        upstream: {
+          provider: proof.provider.provider,
+          ...(address === null || address === undefined ? {} : { address }),
+        },
+      };
+      await audit('passed', 'upstream');
+      return null;
+    };
+
     /** The `email_code` step for `held` at `at`: the step alone, required. */
     const codeOffer = (held: HeldEmailCode, at: number): StepOffer =>
       Object.freeze({
@@ -843,9 +1051,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       purpose: SignInCodePurpose
     ): Promise<RoundResult | null> => {
       const length = emailCodeLength(purpose, { afterPassword: true });
-      const { identifier } = state.transaction;
-      // A subject a discoverable factor named holds no address to mail, and
-      // a transport that cannot serve the step cannot take the code.
+      // The address is the identifier; for an account an upstream provider
+      // proved (#639), the address that provider gave.
+      const upstreamAddress =
+        state.transaction.identifier === undefined ? state.transaction.upstream : undefined;
+      const identifier = state.transaction.identifier ?? upstreamAddress?.address;
+      // A subject a discoverable factor named holds no address to mail, nor
+      // does one a provider proved without an address, and a transport that
+      // cannot serve the step cannot take the code.
       if (identifier === undefined || !served.has('email_code')) {
         return redirect('step_not_available');
       }
@@ -967,7 +1180,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // The code is held until the address is written: a write that fails
       // refuses the round, and the same code may be answered again.
       const marked = await fromStore('addresses', () =>
-        codes.addresses.markVerified({ realmId, userId: subject, identifier })
+        codes.addresses.markVerified({
+          realmId,
+          userId: subject,
+          identifier,
+          ...(upstreamAddress === undefined ? {} : { upstream: upstreamAddress.provider }),
+        })
       );
       if (marked?.kind !== 'verified') {
         const reason = marked?.kind === 'refused' ? marked.reason : undefined;
@@ -1043,6 +1261,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
     }
 
+    // An upstream provider's callback (#639): it completes the step this
+    // transaction sent the person to, while nobody is named, and the rules
+    // go on from rule 8, as after any first factor.
+    const { proof } = upstreamRound;
+    if (proof !== undefined) {
+      const refused = await proveUpstream(proof);
+      if (refused !== null) return refused;
+    }
+
     // Rule 6: the identifier. The request's login_hint first, then an
     // answer's; the first is fixed, and a different one ends the transaction.
     const brought: { readonly identifier: string; readonly step: StepName }[] = [];
@@ -1090,28 +1317,36 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (state.transaction.identifier === undefined) {
         // Nobody is named yet: the identifier step, the same for everyone, or
         // a discoverable first factor before it, with the identifier step and
-        // the other first factors beside it (ADR-017 Decision 4).
+        // the other first factors beside it (ADR-017 Decision 4); and the
+        // realm's upstream providers after them (#639).
         const discoverable = handlers.discoverable.filter((handler) => served.has(handler.step));
         const others = handlers.firstFactors.filter(
           (handler) => handler.discoverable !== true && served.has(handler.step)
         );
-        if (discoverable.length === 0) {
-          // No discoverable factor is registered (this issue's shape): the
-          // identifier step alone. One is registered, but this transport cannot
-          // serve it: the password it can serve, with the identifier step
-          // beside it (ADR-017 Decision 4, amended 2026-10-31).
-          const steps =
-            handlers.discoverable.length === 0
+        const upstreamOffered = await upstreamProviders();
+        const upstreamStep: Offerable[] =
+          upstreamOffered === null ? [] : [{ step: 'upstream', params: () => upstreamOffered }];
+        // No discoverable factor is registered (this issue's shape): the
+        // identifier step alone. One is registered, but this transport cannot
+        // serve it: the password it can serve, with the identifier step
+        // beside it (ADR-017 Decision 4, amended 2026-10-31). A password
+        // offered beside a discoverable factor is answered with its
+        // login_hint, which the identifier rule above has already taken.
+        const firstSteps: Offerable[] =
+          discoverable.length === 0
+            ? handlers.discoverable.length === 0
               ? [handlers.identifier]
-              : [...others, handlers.identifier];
-          return offerStep(await offerOf(steps, { preferred: true }));
-        }
-        // A password offered here is answered with its login_hint, which
-        // the identifier rule above has already taken.
-        const offer = await offerOf([...discoverable, ...others, handlers.identifier], {
-          preferred: true,
-        });
+              : [...others, handlers.identifier]
+            : [...discoverable, ...others, handlers.identifier];
+        const offer = await offerOf([...firstSteps, ...upstreamStep], { preferred: true });
         const pendingName = turn.pending?.name;
+        // The authorization request routes to a provider (#639): at round 0,
+        // with no answer, it starts at once. The way back is this offer.
+        const { upstreamRoute } = context;
+        if (upstreamRound.fresh && turn.pending === null && upstreamRoute !== undefined) {
+          return pickUpstream(offer, upstreamRoute);
+        }
+        if (upstreamOffered !== null && pendingName === 'upstream') return pickUpstream(offer);
         if (!discoverable.some((handler) => handler.step === pendingName)) return offerStep(offer);
         const result = await verifyPending(offer);
         if (result !== null) return result;
@@ -1442,8 +1677,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     }
 
     // Rule 9: complete. The transport mints the session or the code, and the
-    // transaction ends with it.
-    const amr = transactionAmr(state.transaction.verified);
+    // transaction ends with it. An upstream sign-in adds no `amr` value
+    // (ADR-017 Decision 10): alone, it completes with none.
+    const amr =
+      transactionAmr(state.transaction.verified) ??
+      (state.transaction.verified.some((step) => step.step === 'upstream') ? [] : undefined);
     const { authTime, identifier } = state.transaction;
     if (amr === undefined || authTime === undefined) {
       throw new Error('sign-in engine: complete without a factor');
@@ -1460,5 +1698,5 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     });
   }
 
-  return Object.freeze({ advance });
+  return Object.freeze({ advance, completeUpstream });
 }

@@ -326,6 +326,31 @@ export type IdentifierDigest = (input: {
   readonly identifier: string;
 }) => Promise<string>;
 
+/**
+ * One upstream identity provider as the `upstream` step lists it (#639): its
+ * AuthMethod type (`oidc_corp`), which the answer names; the name its button
+ * shows, as the operator set it; and an icon URL, when one is set.
+ */
+export interface UpstreamProviderEntry {
+  readonly provider: string;
+  readonly name: string;
+  readonly icon?: string;
+}
+
+/**
+ * Where the engine reads the upstream identity providers a realm offers on
+ * its first step (#639): the enabled ones an operator has not hidden, in the
+ * order the screen shows them. Read on every round that offers the step,
+ * never kept, and never for an account: the list is the same for everyone. A
+ * throw is an outage, which refuses the round.
+ */
+export interface UpstreamProviderDirectory {
+  offered(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+  }): Promise<readonly UpstreamProviderEntry[]>;
+}
+
 /** Why an audit record refused or ended: a closed set, which grows with the steps. */
 export const SIGN_IN_AUDIT_REASONS = [
   /** A refused credential: a wrong password, no account, no usable password. */
@@ -373,6 +398,12 @@ export const SIGN_IN_AUDIT_REASONS = [
    * is `unchecked`: the answer was accepted all the same.
    */
   'breach_check_failed',
+  /**
+   * The upstream provider the person picked could not be started (#639): its
+   * discovery document cannot be read, for instance. The step is offered
+   * again with `provider_unavailable`.
+   */
+  'provider_unavailable',
 ] as const;
 export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 
@@ -437,11 +468,18 @@ export interface AddressVerifier {
    * attribute's verified flag, in one database transaction, and only while
    * the user is enabled. Idempotent. A throw is an outage, which refuses the
    * round with nothing written.
+   *
+   * With `upstream`, `identifier` is the address an upstream provider gave an
+   * account it created and whose verified switch is off (#639): the provider's
+   * credential of `userId` and its `email` attribute with that address are
+   * marked verified instead.
    */
   markVerified(input: {
     readonly realmId: string;
     readonly userId: string;
     readonly identifier: string;
+    /** The upstream provider's type, for an account an upstream provider created (#639). */
+    readonly upstream?: string;
   }): Promise<AddressVerification>;
 }
 
