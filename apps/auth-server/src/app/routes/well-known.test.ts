@@ -44,6 +44,8 @@ async function buildApp(overrides?: {
   cimd?: CimdPolicy;
   /** A policy store in place of the test one, for a realm whose stored policies fail to read. */
   policyStore?: unknown;
+  /** Whether the request's realm allows sign-up (#640). */
+  registrationAllowed?: boolean;
 }) {
   const app = Fastify({ logger: false });
 
@@ -75,7 +77,14 @@ async function buildApp(overrides?: {
         overrides?.cimd === undefined ? {} : { registration: { cimd: overrides.cimd } }
       )) as never
   );
-  supplyRequestRealm(app, testRealm({ id: 'realm-1', issuer: overrides?.realmIssuer ?? ISSUER }));
+  supplyRequestRealm(
+    app,
+    testRealm({
+      id: 'realm-1',
+      issuer: overrides?.realmIssuer ?? ISSUER,
+      registrationAllowed: overrides?.registrationAllowed ?? false,
+    })
+  );
 
   await app.register(wellKnownRoutes);
   await app.ready();
@@ -335,6 +344,47 @@ describe('GET /.well-known/openid-configuration', () => {
       expect(app.jwtUtils.getIdTokenSigningAlgValuesSupported).toHaveBeenCalledWith(
         expect.objectContaining({ id: 'realm-1', issuer: ISSUER })
       );
+    } finally {
+      await app.close();
+    }
+  });
+});
+
+describe('prompt_values_supported follows whether the realm offers sign-up (#640)', () => {
+  /** The OpenID Provider metadata's `prompt_values_supported`, for a realm and a deployment. */
+  async function promptValues(registrationAllowed: boolean, interactionUi: boolean) {
+    mockEnv['INTERACTION_UI_ENABLED'] = interactionUi;
+    const app = await buildApp({ registrationAllowed });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/.well-known/openid-configuration' });
+      expect(res.statusCode).toBe(200);
+      return (res.json() as Record<string, unknown>)['prompt_values_supported'];
+    } finally {
+      await app.close();
+    }
+  }
+
+  it('lists create while the realm allows sign-up and the Interaction API serves it', async () => {
+    expect(await promptValues(true, true)).toEqual(['none', 'login', 'consent', 'create']);
+  });
+
+  it('leaves create out while the realm does not allow sign-up', async () => {
+    expect(await promptValues(false, true)).toEqual(['none', 'login', 'consent']);
+  });
+
+  it('leaves create out while the Interaction API is off, whatever the realm allows', async () => {
+    expect(await promptValues(true, false)).toEqual(['none', 'login', 'consent']);
+  });
+
+  it('is an OpenID Provider member: the RFC 8414 document does not carry it', async () => {
+    mockEnv['INTERACTION_UI_ENABLED'] = true;
+    const app = await buildApp({ registrationAllowed: true });
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: '/.well-known/oauth-authorization-server',
+      });
+      expect(res.json()).not.toHaveProperty('prompt_values_supported');
     } finally {
       await app.close();
     }

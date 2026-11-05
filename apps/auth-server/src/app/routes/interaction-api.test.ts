@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
 import rateLimit from '@fastify/rate-limit';
+import { REGISTRATION_NOT_ALLOWED } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import {
   CEREMONY_PAGE_PREFIX,
   INTERACTION_API_PREFIX,
@@ -242,6 +243,8 @@ async function buildApp(
      * session {@link LOGOUT_SID} of {@link USER_ID}.
      */
     readonly logout?: LogoutRequest;
+    /** Members of the authorization request the interaction holds, such as `prompt` (#640). */
+    readonly request?: Partial<InteractionRequest>;
   } = {}
 ): Promise<FastifyInstance> {
   const instance = Fastify({ logger: false });
@@ -298,6 +301,7 @@ async function buildApp(
         request: {
           ...AUTHORIZE_REQUEST,
           client_id: options.clientId ?? AUTHORIZE_REQUEST.client_id,
+          ...options.request,
         },
         step: options.step ?? { name: IDENTIFIER_STEP, params: {}, alternatives: [] },
         ...(options.client === undefined ? {} : { client: options.client }),
@@ -1273,6 +1277,73 @@ describe('the method of user.signed_in (#639)', () => {
 
   it('is password otherwise', async () => {
     expect(await signedInAfter(PASSWORD_ROUND)).toEqual({ method: 'password' });
+  });
+});
+
+describe('a registration, through the engine (#640)', () => {
+  /** The engine's round that registered an account. */
+  const REGISTERED_ROUND = {
+    kind: 'complete',
+    transaction: null,
+    signIn: { subject: 'user-new', identifier: 'new@example.com', registered: true },
+  };
+
+  /** Answer the identifier step of a fresh interaction; the engine answers `round`. */
+  async function answerIdentifier(round: object) {
+    engine.advance.mockResolvedValueOnce(round);
+    const browser = new Browser();
+    const id = await browser.start();
+    const response = await browser.send(id, 'answer', {
+      type: IDENTIFIER,
+      csrf: (await browser.read(id)).csrf,
+      login_hint: 'new@example.com',
+    });
+    return { browser, response };
+  }
+
+  it('runs the rounds of a prompt=create request as a registration', async () => {
+    app = await buildApp({ request: { prompt: 'create' } });
+    await answerIdentifier(PASSWORD_ROUND);
+
+    expect(engine.advance).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ step: IDENTIFIER }),
+      expect.objectContaining({ flow: 'register' })
+    );
+  });
+
+  it('runs the rounds of any other request as a sign-in', async () => {
+    await answerIdentifier(PASSWORD_ROUND);
+
+    expect(engine.advance.mock.calls[0]?.[2]).not.toHaveProperty('flow');
+  });
+
+  it('finishes for the new account with no session and no sign-in recorded', async () => {
+    app = await buildApp({ request: { prompt: 'create' } });
+    const { browser, response } = await answerIdentifier(REGISTERED_ROUND);
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(finishAuthorization).toHaveBeenCalledOnce();
+    expect(finishAuthorization.mock.calls[0]?.[3]).toMatchObject({
+      transaction: { userId: 'user-new', amr: [], registered: true },
+    });
+    // No browser session, no last-login stamp, no `user.signed_in`.
+    expect(browser.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
+    expect(updateLastLogin).not.toHaveBeenCalled();
+    expect(eventTypes()).not.toContain('urn:qauth:event:user.signed_in:v1-rc.0');
+  });
+
+  it('ends the interaction as an expired one when registration closed since it started', async () => {
+    app = await buildApp({ request: { prompt: 'create' } });
+    const { response } = await answerIdentifier({
+      kind: 'refused',
+      reason: 'request_refused',
+      code: REGISTRATION_NOT_ALLOWED,
+      transaction: PASSWORD_ROUND.transaction,
+    });
+
+    expect(response.statusCode).toBe(410);
+    expect(finishAuthorization).not.toHaveBeenCalled();
   });
 });
 

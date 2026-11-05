@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ASSERTION_SIGNING_ALG_VALUES_SUPPORTED,
+  authorizeQuerySchema,
   ID_JAG_GRANT_PROFILE,
   JWT_BEARER_GRANT_TYPE,
 } from '../schemas/oauth';
@@ -339,6 +340,38 @@ describe('buildOpenIdConfiguration', () => {
     expect(buildAuthorizationServerMetadata({ issuer: ISSUER })).not.toHaveProperty(
       'end_session_endpoint'
     );
+  });
+
+  it('lists the prompt values the endpoint accepts, with create only while the realm offers sign-up (Prompt Create 1.0 §4.2, #640)', () => {
+    // Without the realm's say-so nothing registers, so create is not claimed.
+    expect(buildOpenIdConfiguration({ issuer: ISSUER })['prompt_values_supported']).toEqual([
+      'none',
+      'login',
+      'consent',
+    ]);
+    expect(
+      buildOpenIdConfiguration({ issuer: ISSUER, registrationOffered: false })[
+        'prompt_values_supported'
+      ]
+    ).toEqual(['none', 'login', 'consent']);
+    expect(
+      buildOpenIdConfiguration({ issuer: ISSUER, registrationOffered: true })[
+        'prompt_values_supported'
+      ]
+    ).toEqual(['none', 'login', 'consent', 'create']);
+    // An OpenID Provider member: the RFC 8414 document does not carry it.
+    expect(
+      buildAuthorizationServerMetadata({ issuer: ISSUER, registrationOffered: true })
+    ).not.toHaveProperty('prompt_values_supported');
+  });
+
+  it('lists every prompt value the authorization endpoint accepts, and no other', () => {
+    const accepted = authorizeQuerySchema.shape.prompt.unwrap().options;
+    expect(
+      buildOpenIdConfiguration({ issuer: ISSUER, registrationOffered: true })[
+        'prompt_values_supported'
+      ]
+    ).toEqual([...accepted]);
   });
 
   it('lists backchannel_logout_supported and backchannel_logout_session_supported only once delivery is there (Back-Channel Logout 1.0 §2.1, #624)', () => {

@@ -71,7 +71,7 @@ export interface InteractionEngines {
 const roundRequests = new AsyncLocalStorage<FastifyRequest>();
 
 /** The mail a registration's code goes out in, by what the engine decided for the address (#640). */
-function codeMailOf(mail: Parameters<EmailCodeSender>[0]): CodeMail | undefined {
+export function codeMailOf(mail: Parameters<EmailCodeSender>[0]): CodeMail | undefined {
   switch (mail.registration) {
     // A disabled account's address: counted as any other, mailed nothing
     // (ADR-017 Decision 8; the answer is the same either way).

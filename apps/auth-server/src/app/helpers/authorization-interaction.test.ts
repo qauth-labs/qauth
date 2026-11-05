@@ -51,6 +51,8 @@ import {
   finishConsent,
   type FinishedAuthorization,
   identifierPrefill,
+  registrationInteractionStart,
+  withoutCreatePrompt,
 } from './authorization-interaction';
 import type { InteractionRequest, InteractionStep } from './interaction-record';
 
@@ -141,6 +143,8 @@ const realmRequest = {
 /** The transaction the code, the grant and the events commit in (#549). */
 const TX = { tx: true };
 const upsertGrant = vi.fn();
+/** The account a registered transaction names (#640): enabled, never disabled. */
+const findUser = vi.fn();
 const transaction = vi.fn<
   (cb: (tx: unknown) => Promise<unknown>, options?: unknown) => Promise<unknown>
 >(async (cb) => cb(TX));
@@ -148,6 +152,7 @@ const fastify = {
   db: { transaction },
   repositories: {
     oauthConsents: { upsertGrant },
+    users: { findById: findUser },
     // The realm's upstream providers (#639): none.
     realmUpstreamProviders: { listByRealm: async () => [], find: async () => undefined },
   },
@@ -171,6 +176,12 @@ beforeEach(() => {
   readSessionSideRecord.mockResolvedValue({});
   mintAuthorizationCode.mockResolvedValue({ code: 'c0de' });
   upsertGrant.mockResolvedValue({});
+  findUser.mockImplementation(async (realmId: string, id: string) => ({
+    id,
+    realmId,
+    enabled: true,
+    notValidBefore: null,
+  }));
 });
 
 /** A consent step's subject for a client that is no agent and has no audience. */
@@ -819,6 +830,157 @@ describe('finishAuthorization', () => {
       { error: 'invalid_scope', reason: 'consent_step_unshowable' },
       { realmId: REALM.id, userId: 'user-1', clientId: 'notes-app', actor: 'user' }
     );
+  });
+});
+
+/** A registration (#640): the request of `prompt=create`, and what a finish does with it. */
+describe('a registration (#640)', () => {
+  const NEW_USER = 'user-new';
+  const CREATE_REQUEST = { ...REQUEST, prompt: 'create' } as InteractionRequest;
+  const REGISTERED = { userId: NEW_USER, amr: [], registered: true } as const;
+
+  function finishedRegistration(): FinishedAuthorization {
+    return { ...finished(REGISTERED), request: CREATE_REQUEST };
+  }
+
+  it('starts at the identifier step with the hint as its prefill, carrying a signed-in session in', () => {
+    expect(
+      registrationInteractionStart({ ...CREATE_REQUEST, login_hint: 'a@b.example' }, null)
+    ).toEqual({
+      step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
+      personal: { login_hint: 'a@b.example' },
+    });
+    expect(registrationInteractionStart(CREATE_REQUEST, SESSION as never).carriedSession).toEqual({
+      userId: 'user-1',
+      sid: 'sid-1',
+    });
+  });
+
+  it('drops prompt=create and nothing else', () => {
+    expect(withoutCreatePrompt(CREATE_REQUEST)).toEqual(REQUEST);
+    const login = { ...REQUEST, prompt: 'login' } as InteractionRequest;
+    expect(withoutCreatePrompt(login)).toBe(login);
+  });
+
+  it('decides the request for the new account, with no session, as an ordinary request', async () => {
+    decideAuthorization.mockResolvedValue({
+      kind: 'code',
+      location: 'https://notes.example.com/cb',
+    });
+
+    await finishAuthorization(fastify, request, reply, finishedRegistration());
+
+    expect(checkAuthorizationRequest).toHaveBeenCalledWith(fastify, request, REQUEST);
+    expect(findUser).toHaveBeenCalledWith(REALM.id, NEW_USER);
+    expect(liveBrowserSession).not.toHaveBeenCalled();
+    expect(decideAuthorization).toHaveBeenCalledWith(fastify, request, TARGET, REQUEST, {
+      registered: true,
+      realmId: REALM.id,
+      userId: NEW_USER,
+    });
+  });
+
+  for (const [name, user] of [
+    ['gone', undefined],
+    ['disabled since', { id: NEW_USER, enabled: false, notValidBefore: Date.now() }],
+  ] as const) {
+    it(`decides with no subject when the new account is ${name}`, async () => {
+      decideAuthorization.mockResolvedValue({ kind: 'sign_in' });
+      findUser.mockResolvedValue(user);
+
+      await finishAuthorization(fastify, request, reply, finishedRegistration());
+
+      expect(decideAuthorization).toHaveBeenCalledWith(fastify, request, TARGET, REQUEST, null);
+    });
+  }
+
+  it('continues with a consent for the account: no session, no personal data, and no registration again', async () => {
+    decideAuthorization.mockResolvedValue({
+      kind: 'consent',
+      scopes: ['openid', 'email'],
+      resources: [],
+    });
+    const done = finishedRegistration();
+
+    await finishAuthorization(fastify, request, reply, done);
+
+    expect(continueInteraction).toHaveBeenCalledWith(request, reply, done.continuation, {
+      request: REQUEST,
+      step: expect.objectContaining({ name: CONSENT_STEP }),
+      personal: {},
+      transaction: REGISTERED,
+      client: CLIENT_DISPLAY,
+    });
+  });
+
+  describe('its consent answer', () => {
+    /** The consent a registration's interaction held, answered `allow`, for `scopes`. */
+    function consentOf(scopes: readonly string[], query: Partial<InteractionRequest> = {}) {
+      const step = consentStep(scopes, [], SUBJECT);
+      if (typeof step === 'string') throw new Error(step);
+      return {
+        request: { ...CREATE_REQUEST, ...query } as InteractionRequest,
+        transaction: REGISTERED,
+        continuation: { secrets: ['s'.repeat(43)], expiresAt: 1_700_000_900_000 },
+        step,
+        answer: { decision: 'allow' as const, remember: true },
+      };
+    }
+
+    it('mints a code that carries no auth_time, no acr and no session', async () => {
+      const location = new URL(
+        await finishConsent(fastify, realmRequest, reply, consentOf(['openid', 'email']))
+      );
+
+      expect(location.searchParams.get('code')).toBe('c0de');
+      expect(liveBrowserSession).not.toHaveBeenCalled();
+      expect(mintAuthorizationCode).toHaveBeenCalledWith(
+        fastify,
+        expect.objectContaining({
+          userId: NEW_USER,
+          authTime: null,
+          assuranceLevel: null,
+          sessionExpiresAt: null,
+          session: null,
+          scopes: ['openid', 'email'],
+        }),
+        TX
+      );
+    });
+
+    for (const enforced of [true, false]) {
+      it(`sends a dangerous scope to a sign-in before any code, whatever the environment (agentStepUpEnforced=${enforced})`, async () => {
+        checkAuthorizationRequest.mockResolvedValue({
+          kind: 'checked',
+          target: { ...TARGET, policy: { agentStepUpEnforced: enforced } },
+        });
+
+        const raw = await finishConsent(
+          fastify,
+          realmRequest,
+          reply,
+          consentOf(['openid', 'write:notes'], { scope: 'openid write:notes' })
+        );
+
+        expect(raw).toBe(`${ISS}${ceremonyPagePath(NEXT_ID)}`);
+        expect(mintAuthorizationCode).not.toHaveBeenCalled();
+        // A sign-in, not a registration again, and no session to carry in.
+        expect(continueInteraction.mock.calls[0]?.[3]).toEqual({
+          request: { ...REQUEST, scope: 'openid write:notes' },
+          step: { name: stepUrn('identifier'), params: {}, alternatives: [] },
+          personal: {},
+        });
+      });
+    }
+
+    it('sends an account disabled since its registration to a sign-in, minting nothing', async () => {
+      findUser.mockResolvedValue({ id: NEW_USER, enabled: false, notValidBefore: Date.now() });
+
+      await finishConsent(fastify, realmRequest, reply, consentOf(['openid', 'email']));
+
+      expect(mintAuthorizationCode).not.toHaveBeenCalled();
+      expect(continueInteraction).toHaveBeenCalledOnce();
+    });
   });
 });
 
