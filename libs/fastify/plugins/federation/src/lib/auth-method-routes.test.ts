@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type AuthMethodRouteHost,
   authMethodRoutesPlugin,
+  mountAuthMethodFamilyRoutes,
   mountAuthMethodRoutes,
 } from './auth-method-routes';
 import { createConfiguredProviders } from './configured-providers';
@@ -501,5 +502,133 @@ describe('AuthMethod routes', () => {
     expect(providers.map((provider) => provider.type)).toEqual(['password', 'oidc_corp']);
     expect(providers[1]).toBe(corp);
     expect(createPasswordProvider().type).toBe(providers[0].type);
+  });
+});
+
+describe('the routes of an AuthMethod family (#639)', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => {
+    await app?.close();
+    app = undefined;
+    callbackHandle.mockClear();
+  });
+
+  async function bootFamily(
+    members: Record<string, AuthMethod>,
+    routeHost: AuthMethodRouteHost = host(),
+    fixed: readonly AuthMethod[] = []
+  ): Promise<{ app: FastifyInstance; urls: string[]; resolved: string[] }> {
+    const urls: string[] = [];
+    const resolved: string[] = [];
+    app = Fastify({ logger: false });
+    app.addContentTypeParser(
+      'application/x-www-form-urlencoded',
+      { parseAs: 'string' },
+      (_request, body, done) => done(null, Object.fromEntries(new URLSearchParams(String(body))))
+    );
+    app.addHook('onRoute', (route) => {
+      urls.push(`${String(route.method)} ${route.url} ${JSON.stringify(route.config)}`);
+    });
+    for (const fixedMethod of fixed) mountAuthMethodRoutes(app, fixedMethod, routeHost);
+    mountAuthMethodFamilyRoutes(
+      app,
+      {
+        routes: method('oidc_template').routes,
+        resolve: async (type) => {
+          resolved.push(type);
+          return Object.hasOwn(members, type) ? members[type] : undefined;
+        },
+        notFound: async (_request, reply) => reply.code(404).send({ notFound: true }),
+      },
+      routeHost,
+      { config: { rateLimit: { max: 5 }, surface: 'service' } }
+    );
+    await app.ready();
+    return { app, urls, resolved };
+  }
+
+  it('mounts each declared route once under /upstream/:type, on the browser surface', async () => {
+    const booted = await bootFamily({});
+    expect(booted.urls).toEqual([
+      'GET /upstream/:type/callback {"rateLimit":{"max":5},"surface":"browser"}',
+      'POST /upstream/:type/callback {"rateLimit":{"max":5},"surface":"browser"}',
+    ]);
+  });
+
+  it("runs the resolved member's own route, handing the host the binding the callback carries", async () => {
+    const routeHost = host();
+    const ownHandle = vi.fn(async () => ({ kind: 'declined' as const }));
+    const member = method('oidc_corp', [
+      { kind: 'callback', method: 'GET', path: '/callback', handle: ownHandle },
+    ]);
+    const booted = await bootFamily({ oidc_corp: member }, routeHost);
+
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: `/upstream/oidc_corp/callback?state=${BINDING}&error=access_denied`,
+    });
+
+    expect(response.json()).toEqual({ handed: { kind: 'declined' } });
+    expect(booted.resolved).toEqual(['oidc_corp']);
+    expect(ownHandle).toHaveBeenCalledTimes(1);
+    expect(callbackHandle).not.toHaveBeenCalled();
+    expect(routeHost.peekTransaction).toHaveBeenCalledWith(member, expect.anything(), BINDING);
+    expect(routeHost.takeTransaction).toHaveBeenCalledWith(member, expect.anything(), BINDING);
+  });
+
+  it('answers a type the realm has not, or no AuthMethod type, as a path no route serves', async () => {
+    const routeHost = host();
+    const booted = await bootFamily({ oidc_corp: method('oidc_corp') }, routeHost);
+
+    for (const type of ['oidc_other', 'Not-A-Type']) {
+      const response = await booted.app.inject({
+        method: 'GET',
+        url: `/upstream/${type}/callback?state=${BINDING}`,
+      });
+      expect(response.statusCode).toBe(404);
+    }
+    expect(booted.resolved).toEqual(['oidc_other']);
+    expect(routeHost.peekTransaction).not.toHaveBeenCalled();
+    expect(routeHost.complete).not.toHaveBeenCalled();
+  });
+
+  it('ends as a fault when the resolved member is of another type or lacks the route', async () => {
+    const routeHost = host();
+    const booted = await bootFamily(
+      {
+        oidc_corp: method('oidc_other'),
+        oidc_bare: method('oidc_bare', [
+          { kind: 'callback', method: 'POST', path: '/callback', handle: callbackHandle },
+        ]),
+      },
+      routeHost
+    );
+
+    for (const type of ['oidc_corp', 'oidc_bare']) {
+      const response = await booted.app.inject({
+        method: 'GET',
+        url: `/upstream/${type}/callback?state=${BINDING}`,
+      });
+      expect(response.statusCode).toBe(200);
+    }
+    expect(routeHost.complete).toHaveBeenCalledTimes(2);
+    const outcomes = routeHost.complete.mock.calls.map((call) => call[1]);
+    expect(outcomes.every((outcome) => outcome instanceof AuthMethodFaultError)).toBe(true);
+    expect(routeHost.peekTransaction).not.toHaveBeenCalled();
+    expect(callbackHandle).not.toHaveBeenCalled();
+  });
+
+  it('leaves a method mounted at its own prefix to its own routes', async () => {
+    const routeHost = host();
+    const booted = await bootFamily({}, routeHost, [method('corp_sso')]);
+
+    const response = await booted.app.inject({
+      method: 'GET',
+      url: `/upstream/corp_sso/callback?state=${BINDING}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(booted.resolved).toEqual([]);
+    expect(callbackHandle).toHaveBeenCalledTimes(1);
   });
 });
