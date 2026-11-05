@@ -35,6 +35,11 @@ const EVERY_MAIL: readonly EngineMail[] = [
   { template: 'password_disabled', pass: PASS, passExpiresInSeconds: 86_400 },
   { template: 'send_ceiling', flow: 'reset', pass: PASS, passExpiresInSeconds: 86_400 },
   { template: 'send_ceiling', flow: 'register', pass: PASS, passExpiresInSeconds: 86_400 },
+  { template: 'recovery_code_used', unusedCodes: 9 },
+  { template: 'recovery_code_used', unusedCodes: 1 },
+  { template: 'recovery_code_used', unusedCodes: 0 },
+  { template: 'recovery_codes_regenerated' },
+  { template: 'recovery_codes_failed' },
 ];
 
 /** Every `href` and `src` of the HTML, and every URL the plain text spells out. */
@@ -144,6 +149,32 @@ describe('the engine mail registry (#637)', () => {
     expect(ENGINE_MAIL_TEMPLATES.password_disabled.realmMaySwitchOff).toBe(false);
   });
 
+  it('lets no realm switch off the recovery codes’ three notices (#649)', () => {
+    const everything = new Set<string>(ENGINE_MAIL_NAMES);
+
+    for (const name of [
+      'recovery_code_used',
+      'recovery_codes_regenerated',
+      'recovery_codes_failed',
+    ] as const) {
+      expect(isSwitchedOffByRealm(name, everything), name).toBe(false);
+      expect(ENGINE_MAIL_TEMPLATES[name].realmMaySwitchOff, name).toBe(false);
+    }
+  });
+
+  it.each([
+    [9, '9 of your codes are left'],
+    [1, '1 of your codes is left'],
+    [0, 'It was the last unused code of your set'],
+  ])('says how many recovery codes are left: %i', async (unusedCodes, says) => {
+    const { subject, text } = await renderEngineMail(
+      { template: 'recovery_code_used', unusedCodes },
+      { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
+    );
+    expect(subject).toBe('A recovery code was used to sign in');
+    expect(text.replace(/\s+/g, ' ')).toContain(says);
+  });
+
   it('lets no realm switch off any template of the registry', () => {
     const everything = new Set<string>(ENGINE_MAIL_NAMES);
 
@@ -180,6 +211,14 @@ describe('the engine mail registry (#637)', () => {
     [
       'a pass for no flow',
       { template: 'send_ceiling', flow: 'login', pass: PASS, passExpiresInSeconds: 60 },
+    ],
+    [
+      'a count of unused recovery codes past a set',
+      { template: 'recovery_code_used', unusedCodes: 11 },
+    ],
+    [
+      'a count of unused recovery codes that is no count',
+      { template: 'recovery_code_used', unusedCodes: 1.5 },
     ],
     ['an unknown template', { template: 'welcome' }],
   ])('refuses %s', async (_label, mail) => {
