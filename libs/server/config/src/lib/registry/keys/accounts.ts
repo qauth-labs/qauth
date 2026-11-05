@@ -129,7 +129,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: null,
     since: '0.2.0',
-    docs: 'The https URL the hosted bot-challenge provider checks tokens at, such as `https://challenges.cloudflare.com/turnstile/v0/siteverify`, reached through the egress client as an operator destination with no redirect followed and capped time and size; it carries no user name, password, query or fragment, and is required when `BOT_CHALLENGE_PROVIDER` is `hosted`.',
+    docs: 'The https URL the hosted bot-challenge provider checks tokens at, such as `https://challenges.cloudflare.com/turnstile/v0/siteverify`, reached through the egress client as an operator destination with no redirect followed and capped time and size, so a host on a private address needs an `EGRESS_ALLOWLIST_PATH` entry naming the realms that use it; it carries no user name, password, query or fragment, and is required when `BOT_CHALLENGE_PROVIDER` is `hosted`.',
   },
   {
     name: 'BOT_CHALLENGE_REQUIRED_AT_SIGN_UP',
@@ -139,7 +139,7 @@ export const ACCOUNT_KEYS = defineKeys([
     owner: 'accounts',
     default: 'false',
     since: '0.2.0',
-    docs: "Whether every sign-up passes the bot challenge before its address is asked for, whatever the client, which then needs JavaScript on the hosted pages and is refused to a client that cannot serve the `captcha` step, that seeds `botChallenge.requiredAtSignUp` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
+    docs: "Whether every sign-up through the sign-in engine (the legacy `POST /auth/register` never asks) passes the bot challenge before its address is asked for, whatever the client, which then needs JavaScript on the hosted pages and is refused to a client that cannot serve the `captcha` step, that seeds `botChallenge.requiredAtSignUp` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
   },
   {
     name: 'BOT_CHALLENGE_DIFFICULTY',
