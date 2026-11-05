@@ -74,6 +74,7 @@ export {
   isAuthMethod,
   loadAuthMethodPlugins,
   MAX_AUTH_METHOD_SECRET_LENGTH,
+  parseAuthMethodConfig,
   skippedAuthMethodPluginMessage,
   startUpstreamStep,
   UPSTREAM_STEP_URN,

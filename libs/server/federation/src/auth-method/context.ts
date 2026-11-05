@@ -197,26 +197,7 @@ export function createAuthMethodContext<TConfig>(
   parts: AuthMethodContextParts
 ): AuthMethodContext<TConfig> {
   const type = method.type;
-  const parsed = method.configSchema.safeParse(parts.config);
-  if (!parsed.success) {
-    throw new AuthMethodConfigError(
-      type,
-      parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.code}`)
-    );
-  }
-  const notPlain = notPlainDataPath(parsed.data, [], 0);
-  if (notPlain !== undefined) {
-    throw new AuthMethodConfigError(type, [
-      `${notPlain.join('.') || '(root)'}: not plain data (a Map, Set, Date or class instance does not freeze)`,
-    ]);
-  }
-  let config: TConfig;
-  try {
-    // A copy, so freezing it leaves the caller's objects alone.
-    config = structuredClone(parsed.data);
-  } catch {
-    throw new AuthMethodConfigError(type, ['(root): the parsed config is not plain data']);
-  }
+  const config = parseAuthMethodConfig(method, parts.config);
 
   const origin = new URL(parts.origin);
   if (origin.origin !== parts.origin) {
@@ -393,6 +374,41 @@ function originOf(value: unknown): string {
     return '';
   }
   return url.protocol === 'https:' || url.protocol === 'http:' ? url.origin : '';
+}
+
+/**
+ * A method's config as a context holds it: parsed by its `configSchema`, and
+ * a copy of plain data (objects with the plain prototype or none, arrays,
+ * primitives). The admin API checks a plugin's config with it before it
+ * writes it (#600, #639), so a config the context would refuse is refused at
+ * the configure, never at every sign-in.
+ *
+ * @throws AuthMethodConfigError when the config does not pass the schema, or
+ *   its parsed form is not plain data; the error names the failing member's
+ *   path, never its value
+ * @experimental
+ */
+export function parseAuthMethodConfig<TConfig>(method: AuthMethod<TConfig>, raw: unknown): TConfig {
+  const type = method.type;
+  const parsed = method.configSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new AuthMethodConfigError(
+      type,
+      parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.code}`)
+    );
+  }
+  const notPlain = notPlainDataPath(parsed.data, [], 0);
+  if (notPlain !== undefined) {
+    throw new AuthMethodConfigError(type, [
+      `${notPlain.join('.') || '(root)'}: not plain data (a Map, Set, Date or class instance does not freeze)`,
+    ]);
+  }
+  try {
+    // A copy, so freezing it leaves the caller's objects alone.
+    return structuredClone(parsed.data);
+  } catch {
+    throw new AuthMethodConfigError(type, ['(root): the parsed config is not plain data']);
+  }
 }
 
 /**
