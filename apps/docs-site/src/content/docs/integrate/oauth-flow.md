@@ -144,11 +144,24 @@ http://localhost:3000/oauth/authorize
 | `nonce`                 | OIDC        | Bound into the ID token when issued.                                      |
 | `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple, up to 10. |
 | `login_hint`            | no          | At most 254 bytes in UTF-8; pre-fills an interaction's sign-in.           |
+| `qauth_upstream`        | no          | An upstream provider's type; starts the sign-in there. See below.         |
 
 `redirect_uri` and each `resource` are absolute URIs of at most 2048
 characters, written in ASCII as RFC 3986 requires: an internationalised host in
 its `xn--` form, any other non-ASCII character percent-encoded. A raw Unicode
 character or a space is refused with `400`.
+
+#### Routing to an upstream provider
+
+`qauth_upstream=<type>` names one of the realm's upstream identity providers,
+such as `oidc_corp` for a generic OpenID Connect provider, a hidden one
+included. When the request needs a sign-in, the browser goes straight to that
+provider instead of the first sign-in step; after the provider's callback the
+request goes on as any sign-in does, to the consent or the code. A value that
+names no provider the realm has on is ignored, as the parameter is when no
+sign-in is needed (a live session that satisfies the request, or
+`prompt=none`). At most 64 characters; QAuth-defined, so other authorization
+servers ignore it.
 
 #### Redirect URI matching
 

@@ -89,6 +89,12 @@ the open work.
 
 - Email and password sign-up with account verification. Passwords are hashed
   with Argon2id. Repeated failed logins lock the account.
+- Sign-in, and sign-up when a realm allows it (`ALLOW_SIGN_UP`), through a
+  realm's upstream OpenID Connect providers: a button per provider on the
+  sign-in page, or `qauth_upstream=<type>` on the authorization request. An
+  account is found by the provider's subject under its issuer, never matched by
+  email. Providers are stored in `realm_upstream_providers`; the admin API to
+  manage them is still to come.
 - Realms: separate tenants, each with its own issuer and hosts.
 - A developer portal for OAuth clients and API keys.
 - Security headers, CSRF protection and `__Host-` cookies.

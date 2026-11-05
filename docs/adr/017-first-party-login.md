@@ -511,6 +511,20 @@ Proof-of-Possession" code binding and §9.6.1 "Auth Session DPoP Binding" (F3), 
 | `webauthn_get`                       | F2b   | WebAuthn Level 3 request options JSON                                                                        | `webauthn_response`                           | `pop`, `mfa`  |
 | `webauthn_create`                    | F2b   | WebAuthn Level 3 creation options JSON, `optional`                                                           | `webauthn_response`                           | — (enrolment) |
 | `totp`                               | F2c   | `digits`                                                                                                     | `otp`                                         | `otp`         |
+| `upstream`                           | —     | `providers`: 1 to 16 `{ provider, name }`, in the realm's order, hidden providers left out                   | `provider`                                    | —             |
+
+The `upstream` step (#639) is a browser step of the Interaction API, offered beside `identifier`
+before anyone is named; this endpoint never offers it. Its answer names one provider of the list
+by its type (`oidc_<alias>` for a generic OpenID Connect provider, or an AuthMethod plugin's type),
+and the answer's result is a redirect to that provider's authorization request: the start redirect.
+What the provider needs back (`state`, `nonce`, the PKCE verifier) stays server-side for ten
+minutes, bound to the interaction and to the browser's flow cookie. The provider returns the browser
+to `/upstream/<type>/callback` on the realm host, and only the browser that started may complete
+it, once: the return from the callback is the next step's ceremony page, or the final redirect to
+the client, or, for a cancel or an error at the provider, a page with a way back to the first step,
+never a redirect to the client. An authorization request starts a provider directly with
+`qauth_upstream=<type>`, hidden providers included. An upstream sign-in adds no `amr` value and ranks
+with the password in the downgrade rule, below a passkey (Decision 4).
 
 | Situation (every body carries `iss`)                                                                                                                         | HTTP                      | `error`                                      | Notes                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |

@@ -183,6 +183,12 @@ export const FEATURE_STATUS: FeatureStatus[] = [
       'OpenID Connect Back-Channel Logout 1.0: a client registers `backchannel_logout_uri` (an `https` URI on public addresses), and whenever a session ends, by any path, each client it served gets a signed `logout+jwt` logout token at that URI. The token is queued in the transaction that ends the session and sent by the delivery role through the SSRF-safe egress client, with retries; a failed delivery never holds a sign-out back. Discovery lists `backchannel_logout_supported` and `backchannel_logout_session_supported` (#624).',
   },
   {
+    feature: 'Upstream OpenID Connect sign-in',
+    state: 'partial',
+    summary:
+      "A person signs in, or signs up when the realm allows it (`ALLOW_SIGN_UP`, off by default), through one of the realm's upstream OpenID Connect providers (#639): a button per listed provider on the sign-in page and the `upstream` step of the Interaction API, or `qauth_upstream=<type>` on the authorization request, hidden providers included. The account is found by `(realm, provider type, sub)` and tied to the ID token's issuer, never matched by email; a new one gets the provider's claims as attributes, verified unless the provider's verified switch is off. Open: the admin API that manages the providers (#714), which are rows of `realm_upstream_providers` until then; provider icons; and the review-your-details page. While `INTERACTION_UI_ENABLED` is off, an account that needs a further step (its passkey) is refused rather than asked for it.",
+  },
+  {
     feature: 'API keys',
     state: 'shipped',
     summary:

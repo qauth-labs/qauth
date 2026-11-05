@@ -181,6 +181,31 @@ A client whose profile does not hold, because its row breaks one of the
 profile's rules or its policy does not parse, is treated as a client without
 one.
 
+## Upstream providers on the login page
+
+When the login page was opened for an authorization request, it lists the
+realm's upstream identity providers, each as a plain link that works without
+JavaScript: "Sign in with <name>", in the realm's order, a hidden provider left
+out (#639). `GET /ui/upstream/{type}?return_to=<the same return_to>` sends the
+browser back to that authorization request with
+[`qauth_upstream=<type>`](/integrate/oauth-flow/#routing-to-an-upstream-provider),
+reading a parked request (`/ui/resume/{handle}`) without spending it. The
+authorization endpoint starts an interaction for the request and sends the
+browser to `GET /ui/upstream/{type}/start?interaction=<id>`, which starts the
+provider and answers a waiting page: it goes on to the provider at once, with a
+link for a browser that does not follow the refresh and a way back.
+
+The provider sends the browser back to `/upstream/{type}/callback` on the realm
+host. Only the browser that started may complete the sign-in, once; the account
+is found by the provider's subject under its issuer, never by email, and a new
+one is created only when the realm allows sign-up (`ALLOW_SIGN_UP`). On success
+the browser goes back to the authorization request under its new session. A
+cancel or an error at the provider shows a page with a way back to the first
+step; every other failure shows one error page with the request's trace id.
+Nothing of either reaches the client. These pages show no further step, so an
+account that holds a passkey is refused here: it signs in through the
+Interaction API's ceremony page (`INTERACTION_UI_ENABLED`), which asks for it.
+
 ## `/ui/resume/{handle}`
 
 `GET /ui/resume/{handle}` is where a login round-trip lands after a
