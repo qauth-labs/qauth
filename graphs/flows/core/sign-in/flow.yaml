@@ -395,7 +395,11 @@ states:
 
   checkingLimits:
     title: Ask the limiters (rule 3)
-    description: The per-client and per-end-user-IP limits of PRO-13. With no limiter registered, the round goes on.
+    description: >-
+      The per-end-user-IP, per-bucket and per-client limits of PRO-13 (#636): a round from an IP inside its hard
+      block, or above the client's rounds a minute, is refused. A credential round is reserved on them again before
+      the ladder's reservation, so a delay or a hard limit refuses it before it is verified. With no limiter
+      registered, the round goes on.
     always:
       - guard: limited
         target: throttled

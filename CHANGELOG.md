@@ -1295,6 +1295,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user is resolved. The sign-in graph `graphs/flows/core/sign-in` now describes
   the engine (proposed), and the captured graph of the `/ui/login` page moved
   to `graphs/flows/core/sign-in-page`.
+- **Round limits per end-user IP, per network bucket and per client**
+  ([#636], ADR-017 Decision 7, ADR-008 §5). Around the per-account ladder,
+  every Interaction API round is counted in Redis per end-user IP (an IPv6
+  client by its /64) and per bucket (its /24, or its /48). A credential round
+  (a password, any `otp`, a recovery code, a WebAuthn response, an email
+  code) is counted as failed before its credential is checked and before the
+  ladder, and taken back when it was right, so parallel guesses meet the same
+  limits as guesses sent one at a time. From 10 failed rounds of an IP in 15
+  minutes, or failures for more than 20 distinct identifiers from its bucket,
+  the IP or the bucket gets one credential round per 30 seconds and `429`
+  with `Retry-After` for the others, neither verified nor counted; at 30
+  failures every round of the IP gets `429` for 15 minutes. Crossing a
+  threshold logs `a sign-in round limit was crossed` at `error` with the
+  key's HMAC. A client whose effective environment is `development` meets ten
+  times the counts; `staging` keeps production's. A Redis error or a call
+  slower than 2 s refuses the round with `503` before any credential is
+  checked, and a production server refuses to build a sign-in engine without
+  the limits. The client row (a failure ratio above 50 % over 200 rounds, a
+  failure budget of a tenth of `FIRST_PARTY_CLIENT_MAX_ROUNDS`, 600 rounds a
+  minute) and the registration-start caps (`REGISTRATION_RATE_LIMIT` per IP,
+  1,000 an hour per client) are in the library, for the first-party login
+  endpoint and the registration steps that will use them.
 - **The per-account failure ladder** ([#615], ADR-017 Decisions 5 and 7,
   ADR-020 §3, NIST SP 800-63B-4 §3.2.2). Wrong passwords are counted per
   account in Redis, before the password is checked: one Redis script reads the
@@ -3057,6 +3079,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#633]: https://github.com/qauth-labs/qauth/issues/633
 [#634]: https://github.com/qauth-labs/qauth/issues/634
 [#635]: https://github.com/qauth-labs/qauth/issues/635
+[#636]: https://github.com/qauth-labs/qauth/issues/636
 [#637]: https://github.com/qauth-labs/qauth/issues/637
 [#639]: https://github.com/qauth-labs/qauth/issues/639
 [#642]: https://github.com/qauth-labs/qauth/issues/642

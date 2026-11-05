@@ -256,6 +256,39 @@ The tiers are fixed, not configurable, and count unknown addresses too:
 - **Fail closed.** A Redis error, or a call slower than 2 s, fails the start
   rather than mailing uncounted.
 
+### Round limits
+
+Around the per-account ladder, the sign-in engine counts every round per
+end-user IP and per network bucket in Redis (ADR-017 Decision 7). A
+credential round (a password, a code, a recovery code or a WebAuthn response)
+is counted as failed before its credential is checked, and taken back when
+it was right. The Interaction API keys the end-user IP as its rate limits
+do: an IPv6 client by its /64. The bucket is the IP's /24, or an IPv6
+client's /48.
+
+| Row         | At the soft threshold                                                                | At the hard limit                                      |
+| ----------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| End-user IP | 10 failed rounds in 15 min: one credential round per 30 s, others `429`              | 30 failed rounds: every round `429` for 15 min, alerts |
+| Bucket      | failures for more than 20 distinct identifiers in 15 min: one round per 30 s, alerts |                                                        |
+
+- **Alerts.** Crossing a row's threshold logs
+  `a sign-in round limit was crossed` at `error`, once per key per window,
+  with the realm, the alert (`end_user_ip_blocked`, `ip_bucket_identifiers`)
+  and the IP's or the bucket's keyed HMAC, never an address. A client row
+  for the first-party login endpoint adds `client_failure_ratio`,
+  `client_failure_budget` and `client_rounds` with the client id, once that
+  endpoint ships.
+- **Development.** A client whose effective environment (the stricter of the
+  client's and the realm's ceiling) is `development` meets ten times the
+  counts and a tenth of the delays. `staging` keeps the production numbers.
+- **No address in Redis.** The keys start `round-limits:{<realm id>}:` and
+  hold the end-user IP and its bucket as keyed HMACs under the ladder's
+  label. Every key expires with its window.
+- **Fail closed.** A Redis error, or a call slower than 2 s, refuses the
+  round with `503` and `Retry-After: 5` before any credential is checked.
+- **Peer caps stay.** The engine's routes keep their `@fastify/rate-limit`
+  caps on the TCP peer.
+
 ## Health and Readiness
 
 Every process answers two probes on its public port, whatever its service
