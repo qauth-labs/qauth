@@ -1,9 +1,9 @@
 ---
 title: Published images
-description: The container images each QAuth release publishes, how to run them by digest, and how to verify their signature, provenance and SBOM before you do.
+description: The container images each QAuth release publishes, how to run them by digest, how to verify their signature, provenance and SBOM before you do, and how to build your own image with an AuthMethod plugin added.
 sidebar:
   order: 9
-lastVerified: '2026-10-25'
+lastVerified: '2026-11-05'
 ---
 
 Each QAuth release publishes two container images, built once from the
@@ -75,6 +75,65 @@ gh attestation verify oci://ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest>
 The first command proves which workflow run, commit and tag built the image.
 The second shows the packages inside it. Run the same commands for the
 `migration-runner` digest.
+
+## Add a plugin to the image
+
+An [AuthMethod plugin](/extend/auth-method-contract/) is an npm package that the server imports by
+name at boot, from its own `node_modules`. The server never fetches code, so a deployment that uses
+a plugin runs its own image: the published one, with the package added on top.
+
+The published `auth-server` image runs QAuth's sources from `/app`, a `pnpm deploy` tree, and
+imports a listed plugin from `/app/node_modules/<package name>`. Install the plugin in a build
+stage with npm and copy its directory there:
+
+- **nested** (`--install-strategy=nested`), so the plugin's own dependencies, such as the plugin
+  SDK, sit inside its directory and travel with it;
+- **without its peer dependencies** (`--omit=peer`), so it takes `zod` from the server: a plugin's
+  config schema must be built with the server's Zod, or the boot cannot read its secret members;
+- **without install scripts** (`--ignore-scripts`), and at an exact version.
+
+```dockerfile
+# syntax=docker/dockerfile:1.7
+# The QAuth release, by the digest you verified above.
+ARG QAUTH_IMAGE=ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest>
+
+FROM node:26-alpine AS plugin
+WORKDIR /plugin
+RUN npm init --yes > /dev/null \
+ && npm install --omit=dev --omit=peer --install-strategy=nested --ignore-scripts \
+      @example/qauth-plugin-corp-sso@1.2.3
+
+FROM ${QAUTH_IMAGE}
+COPY --from=plugin --chown=nodejs:nodejs \
+  /plugin/node_modules/@example/qauth-plugin-corp-sso \
+  /app/node_modules/@example/qauth-plugin-corp-sso
+```
+
+Copy one directory per plugin, at the same path below `/app/node_modules` as its package name.
+Then list the package and, unless it is on QAuth's first-party list, turn on the plugin API:
+
+```bash
+AUTH_METHOD_PLUGINS=@example/qauth-plugin-corp-sso
+PLUGIN_API_ENABLED=true
+```
+
+At boot the server logs `AuthMethod plugin @example/qauth-plugin-corp-sso loaded` with the
+plugin's `id` and `type`. A package it cannot import stops the boot, and with
+`PLUGIN_API_ENABLED` off it logs a warning that names the package and says why it was skipped. A
+realm admin then enables and configures the plugin through the admin API
+([Installing and enabling a plugin](/extend/auth-method-contract/#installing-and-enabling-a-plugin)).
+
+A plugin release is built for one QAuth contract version, so rebuild this image at every QAuth
+upgrade with the plugin version made for the new release; a mismatch stops the boot and says so.
+Your image is no longer the digest QAuth signed: verify the base digest before you build on it,
+and the plugin's provenance with `npm audit signatures` in the build stage. Plugin code runs
+in the server's process, beside its keys in a single deployment, so add only a package you trust
+as you trust the server.
+
+For example, QAuth's own GitHub plugin, `@qauth-labs/plugin-github`, installs this way: the
+end-to-end suite of its repository builds its test image with this recipe on the released server
+image, and its README names the plugin version made for each QAuth release.
+The example's sources are in [qauth-labs/qauth-plugin-github](https://github.com/qauth-labs/qauth-plugin-github).
 
 ## What a release runs
 

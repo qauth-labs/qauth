@@ -29,9 +29,9 @@ server loads them at boot, and an admin enables, configures and disables each on
 ([below](#installing-and-enabling-a-plugin)). The first method is the generic OpenID Connect
 upstream client (#601, [below](#the-generic-openid-connect-client)): a library that builds one
 method per configured provider, not a plugin package, so nothing registers it in a running server
-until provider administration (#714). The upstream sign-in flow that offers the step and acts on
-its outcome is #639: until it lands, a plugin's routes answer, but no sign-in sends a browser to a
-provider, so a callback is answered as one with no pending sign-in. `WalletProvider` is not an
+until provider administration (#714). The upstream sign-in flow (#639) offers the step and acts
+on its outcome: each plugin a realm has enabled is one of the realm's upstream providers, and an
+account a plugin creates counts as verified. `WalletProvider` is not an
 AuthMethod and stays a plain provider whose `verify()` rejects; wallet sign-in keeps its own seam.
 
 ## The contract
@@ -274,7 +274,8 @@ server's Zod, as a peer dependency.
 ## Installing and enabling a plugin
 
 **Installing.** The operator installs the package with the deployment, as any other dependency
-of the auth server, and lists it in `AUTH_METHOD_PLUGINS` by package name, comma-separated. A
+of the auth server ([into the published image](/operate/images/#add-a-plugin-to-the-image)), and
+lists it in `AUTH_METHOD_PLUGINS` by package name, comma-separated. A
 path, a URL or a `file:` or `git+` specifier is refused: the server never fetches code, and the
 admin console never uploads or edits it.
 
@@ -295,9 +296,11 @@ plugin's `id` or `type` stops the boot. The boot logs one line per plugin it loa
 every boot; a process that loads plugins and holds the `signer` role, as a single deployment
 does, logs one more line saying that plugin code runs beside the signing keys and the KEK. With it
 off, such a package is never imported, and the boot logs a warning saying why.
-QAuth's own provider plugins are first-party: they load whatever the switch says. The first-party
-list is fixed in the server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting; it is
-empty until the first-party plugins ship. Discovery has no member for plugins, and their routes
+A plugin on QAuth's first-party list loads whatever the switch says. The list is fixed in the
+server's code (`FIRST_PARTY_AUTH_METHOD_PLUGINS`), never a setting, and it is empty: a first-party
+plugin released from its own repository, such as the GitHub one, loads like any other package until
+it joins the list ([ADR-018](/reference/records/adr/018-1-0-scope-and-stability/) §3). Discovery
+has no member for plugins, and their routes
 are left out of the OpenAPI documents.
 
 **Per realm**, every plugin starts off. The admin API's plugin operations, under
@@ -504,6 +507,13 @@ each entry point exports. `libs/sdk/plugin-sdk/examples/minimal-plugin` is a com
 OAuth 2.0 provider with PKCE: QAuth's release dry run installs the packed SDK into an empty
 project on every pull request, and builds and tests the example there.
 
+For example, QAuth's GitHub plugin is the example of a plugin in its own repository:
+`@qauth-labs/plugin-github`, from the example repository [qauth-labs/qauth-plugin-github](https://github.com/qauth-labs/qauth-plugin-github).
+It depends only on the published SDK, runs the kit in its CI, and runs an end-to-end suite against
+the released server image with the plugin added on top, as an operator adds it. QAuth makes and
+releases it, yet it is not on the server's first-party list: like any other package, it loads only
+while `PLUGIN_API_ENABLED` is on.
+
 **Install the SDK.** The package carries QAuth's own version: install the version of the QAuth
 release the plugin is for. A release candidate is on npm's `next` dist-tag, the first being
 `0.2.0-rc.1`, and a release is on `latest`; until the first release, `latest` holds only a
@@ -572,7 +582,8 @@ the method's schema is built with the server's Zod ([secret members](#packaging-
 
 **What the operator does** ([above](#installing-and-enabling-a-plugin)):
 
-1. installs the package with the deployment, as any other dependency of the auth server;
+1. installs the package with the deployment, as any other dependency of the auth server: on top
+   of the published image, as [Published images](/operate/images/#add-a-plugin-to-the-image) shows;
 2. lists it by package name in `AUTH_METHOD_PLUGINS`;
 3. turns on `PLUGIN_API_ENABLED=true`. A plugin outside QAuth's first-party list loads only while
    the switch is on. With the switch off, the boot logs a warning that names the package and says

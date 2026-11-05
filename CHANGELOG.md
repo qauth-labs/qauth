@@ -187,6 +187,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   published, is gone: import the kit from `@qauth-labs/plugin-sdk/testing`.
   The container image now deploys workspace packages with all their files
   (`deployAllFiles`), since the image runs the server from source.
+- **First-party plugins in their own repositories, and a plugin added to the
+  server image** ([#672], ADR-018 §3). ADR-018 §3 is amended: a first-party
+  plugin is one QAuth makes and releases, and it may live in its own
+  repository, on its own version line, depending only on the published plugin
+  SDK. The GitHub provider plugin, `@qauth-labs/plugin-github`, is the first,
+  built and released from `qauth-labs/qauth-plugin-github`; it is not on
+  `FIRST_PARTY_AUTH_METHOD_PLUGINS`, so it loads only with
+  `PLUGIN_API_ENABLED=true`, like any package the operator installs. The
+  _Published images_ page gains _Add a plugin to the image_: a Dockerfile that
+  installs a plugin package with npm (nested, without its peer dependencies,
+  so it takes the server's Zod) and copies it into `/app/node_modules` of the
+  published `auth-server` image. The AuthMethod contract page names the plugin
+  as its example of a plugin in its own repository. The server itself is
+  unchanged: it loads such a package as it is.
 - **A registry of configuration keys** ([#449], ADR-018 §5). Every environment
   key the auth server and the developer portal read has one entry in
   `libs/server/config/src/lib/registry/`: a tier (stable, advanced or
@@ -3084,6 +3098,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#639]: https://github.com/qauth-labs/qauth/issues/639
 [#642]: https://github.com/qauth-labs/qauth/issues/642
 [#646]: https://github.com/qauth-labs/qauth/issues/646
+[#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689
 [#700]: https://github.com/qauth-labs/qauth/issues/700
