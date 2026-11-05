@@ -44,6 +44,9 @@ const STEP_METHODS: Readonly<
   // A reset's start (#642): the password is what it replaces.
   password_reset: 'password',
   upstream: 'upstream',
+  // The bot challenge (#643) proves nothing about the account: like the
+  // identifier step, it is part of the password sign-in it holds back.
+  captcha: 'password',
 });
 
 /**
