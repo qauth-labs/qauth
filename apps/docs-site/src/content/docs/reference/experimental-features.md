@@ -157,7 +157,7 @@ evidence for a condition.
 
 ### plugin-api
 
-**The plugin API.** The AuthMethod contract as plugins see it. It is public and documented, so others can write plugins, but it may change in a minor release. It becomes stable in 1.x, after QAuth's own plugins have matured on it; those first-party plugins are part of 1.0.
+**The plugin API.** The AuthMethod contract as plugins see it, published as the npm package `@qauth-labs/plugin-sdk` with its contract test kit, so a plugin can live in its own repository. It is public and documented, so others can write plugins, but it may change in a minor release. It becomes stable in 1.x, after QAuth's own plugins have matured on it; those first-party plugins are part of 1.0.
 
 - Decided in [ADR-018](/reference/records/adr/018-1-0-scope-and-stability/).
 - Runs in: the auth server.
