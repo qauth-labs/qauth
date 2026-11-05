@@ -122,6 +122,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // The realms' secret policy values, as ciphertext (#529): the signer seeds
   // them, admin writes them, `api`'s mail sender reads them.
   realm_secrets: { api: S, admin: SIU, signer: SIU },
+  // Each realm's generic upstream OIDC providers (#639): `web` lists them on
+  // the sign-in pages and loads one at the upstream callback; `admin` adds,
+  // changes and removes them (#714). `api` serves no sign-in page and reads
+  // none, so it holds nothing.
+  realm_upstream_providers: { web: S, admin: SIUD },
   realms: { web: SIU, api: SIU, admin: SIU, signer: SIU },
   refresh_tokens: { web: SIU, api: SIUD },
   roles: {},

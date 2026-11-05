@@ -44,6 +44,15 @@ Three tables (see `libs/infra/db/src/lib/schema/core.ts` + `identity.ts`):
   UNIQUE `(user_id, action)`, so a repeated write keeps the first row; `(user_id,
   realm_id)` → `users` holds the user to the realm. Use
   `fastify.repositories.userRequiredActions` (`add`, `listForUser`, `remove`).
+- **`realm_upstream_providers`** — a realm's generic upstream OIDC providers
+  (#639, migration 0060), one row each: `type` (`oidc_` + lower-case alias, CHECK
+  = `UPSTREAM_OIDC_TYPE_PATTERN`, UNIQUE `(realm_id, type)`), `display_name`
+  (1-64 chars), `display_order`, `hidden` (off the sign-in list, still reachable
+  by direct routing), `enabled`, `marks_verified` (ADR-020 §3) and `config`
+  (JSON object: the upstream-OIDC stored config, its client secret sealed with
+  the realm's data-at-rest key, never plaintext). Use
+  `fastify.repositories.realmUpstreamProviders` (`listByRealm`, `find`,
+  `create`, `update`, `delete`); `web` reads it, `admin` manages it.
 
 ### Login lookup (password auth)
 
@@ -121,6 +130,7 @@ Schema lives in `libs/infra/db/src/lib/schema/`:
 | `user_credentials`            | `identity.ts`              | One row per authentication method; UNIQUE (realm_id, provider_type, external_sub)                              |
 | `user_attributes`             | `identity.ts`              | Claims as data with source trust order; UNIQUE (user_id, source, attr_key)                                     |
 | `user_required_actions`       | `user-required-actions.ts` | Actions owed at next sign-in (#635); UNIQUE (user_id, action); `(user_id, realm_id)` → `users`                 |
+| `realm_upstream_providers`    | `upstream-providers.ts`    | A realm's upstream OIDC providers (#639); UNIQUE (realm_id, type); `config` holds the sealed client secret     |
 | `oauth_clients`               | `core.ts`                  | OAuth 2.1 client registrations; ADR-007 `is_agent`/`max_agent_mode`, ADR-008 `environment`                     |
 | `api_keys`                    | `core.ts`                  | Static developer API keys (ADR-008 §6, env-gated)                                                              |
 | `oauth_consents`              | `consents.ts`              | User consent grants; unique per `(user_id, client_id) WHERE revoked_at IS NULL`                                |

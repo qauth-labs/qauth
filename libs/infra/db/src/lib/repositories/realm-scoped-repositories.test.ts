@@ -12,6 +12,7 @@ import { createOAuthClientsRepository } from './oauth-clients.repository';
 import { createOAuthConsentsRepository } from './oauth-consents.repository';
 import { createOid4vpRequestStatesRepository } from './oid4vp-request-states.repository';
 import { createRealmAuthMethodPluginsRepository } from './realm-auth-method-plugins.repository';
+import { createRealmUpstreamProvidersRepository } from './realm-upstream-providers.repository';
 import { createRefreshTokensRepository } from './refresh-tokens.repository';
 import { createSessionsRepository } from './sessions.repository';
 import { createUserCredentialsRepository } from './user-credentials.repository';
@@ -74,6 +75,14 @@ export function requiredRealmArgument(db: DbClient): void {
   const adminRoles = createAdminRolesRepository(db);
   const realmPlugins = createRealmAuthMethodPluginsRepository(db);
   const requiredActions = createUserRequiredActionsRepository(db);
+  const upstreamProviders = createRealmUpstreamProvidersRepository(db);
+
+  // @ts-expect-error a provider is looked up in a realm (#639)
+  void upstreamProviders.find('oidc_google');
+  // @ts-expect-error a provider is changed in a realm (#639)
+  void upstreamProviders.update('oidc_google', { enabled: false });
+  // @ts-expect-error a provider is deleted in a realm (#639)
+  void upstreamProviders.delete('oidc_google');
 
   // @ts-expect-error a user's required actions are those of a realm (#635)
   void requiredActions.listForUser(ID);
@@ -206,6 +215,25 @@ const CALLS: readonly RealmScopedCall[] = [
         { enabled: true, config: {}, secrets: {} },
         3
       ),
+  ],
+  [
+    'realmUpstreamProviders.listByRealm',
+    (db) => createRealmUpstreamProvidersRepository(db).listByRealm(REALM_ID),
+  ],
+  [
+    'realmUpstreamProviders.find',
+    (db) => createRealmUpstreamProvidersRepository(db).find(REALM_ID, 'oidc_google'),
+  ],
+  [
+    'realmUpstreamProviders.update',
+    (db) =>
+      createRealmUpstreamProvidersRepository(db).update(REALM_ID, 'oidc_google', {
+        enabled: false,
+      }),
+  ],
+  [
+    'realmUpstreamProviders.delete',
+    (db) => createRealmUpstreamProvidersRepository(db).delete(REALM_ID, 'oidc_google'),
   ],
   ['users.findById', (db) => createUsersRepository(db).findById(REALM_ID, ID)],
   ['users.findByIdOrThrow', (db) => createUsersRepository(db).findByIdOrThrow(REALM_ID, ID)],

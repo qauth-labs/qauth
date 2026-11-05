@@ -126,7 +126,7 @@ For type-safe database operations with proper error handling, use the repository
 // repository exports on @qauth-labs/infra-db. Available keys: users, realms,
 // userCredentials, userAttributes, emailVerificationTokens, oauthClients,
 // oauthConsents, refreshTokens, authorizationCodes, auditLogs, apiKeys,
-// userRequiredActions.
+// userRequiredActions, realmUpstreamProviders.
 import { NotFoundError, UniqueConstraintError } from '@qauth-labs/shared-errors';
 
 // Get user by ID

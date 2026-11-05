@@ -17,4 +17,5 @@ export * from './sessions';
 export * from './sql-helpers';
 export * from './ssf';
 export * from './tokens';
+export * from './upstream-providers';
 export * from './user-required-actions';

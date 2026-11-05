@@ -68,6 +68,13 @@ describe('the grants map (#498)', () => {
     });
   });
 
+  it("lets web read the realm's upstream providers and admin manage them (#639)", () => {
+    expect(TABLE_GRANTS['realm_upstream_providers']).toEqual({
+      web: ['SELECT'],
+      admin: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],
+    });
+  });
+
   it('gives realm_keys to the signer alone', () => {
     expect(TABLE_GRANTS['realm_keys']).toEqual({
       signer: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'],

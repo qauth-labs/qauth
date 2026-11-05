@@ -294,6 +294,11 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `add({ realmId, userId, action, source }, tx?)` requires `action` of the user and returns `true` when it wrote a row, `false` when the user already owed it (the first row, with its `source` and `createdAt`, is kept). It throws `NotFoundError` when the realm has no such user, so no caller attaches an action to another realm's user.
   - `listForUser(realmId, userId, tx?)` returns `{ action, source, createdAt }[]`, oldest first.
   - `remove(realmId, userId, action, tx?)` returns whether it deleted a row.
+- **`createRealmUpstreamProvidersRepository(db)`**: The generic upstream OpenID Connect providers of each realm (#639): `realm_upstream_providers`, one row per provider. The admin API (#714) writes them; the sign-in pages and the upstream callback read them.
+  - `listByRealm(realmId, tx?)` returns the realm's providers by `display_order`, then `type`; `find(realmId, type, tx?)` returns one or `undefined`.
+  - `create(data, tx?)` adds a provider and throws `UniqueConstraintError` when the realm already has one of the type.
+  - `update(realmId, type, changes, tx?)` changes the display name, order, `hidden`, `enabled`, `marksVerified` or `config` and stamps `updated_at`; it returns `undefined` when the realm has no such provider. `delete(realmId, type, tx?)` returns whether it deleted a row.
+  - `config` is stored as given: the caller seals the client secret with the realm's `data_at_rest` key first.
 - **`createSsfStreamsRepository(db)`**: The streams of the Shared Signals Framework transmitter (#410): `ssf_streams`, one per receiver and realm, and the subjects each receiver added (`ssf_stream_subjects`).
   - `create`, `find`, `list`, `update`, `remove` and `setStatus` name the realm and the receiver's client row, so a receiver reaches only its own stream; `create` returns `null` when the receiver already has one.
   - `addSubject(streamId, subject, maxSubjects)` returns `added`, `present`, `full`, or `missing` for a stream deleted meanwhile (the count and the insert run under the stream's row lock); `removeSubject` and `listSubjects` complete the set.
@@ -850,6 +855,7 @@ libs/infra/db/
 - **user_credentials**: One row per authentication method per user (`password`, `wallet`, …), keyed by `(realm_id, provider_type, external_sub)` — the sole duplicate-registration guard
 - **user_attributes**: Normalized claims (email, name, …) with a source and verification state; resolved in the ADR-002 trust order `wallet > oidc_* > self_reported`
 - **user_required_actions**: What a user must do at the next sign-in (#635, migration 0059): `update_password`, `setup_mfa`, `setup_passkey` or `complete_profile`, with who asked (`admin` or `user_report`). One row per `(user_id, action)`; the user must belong to the row's realm (`(user_id, realm_id)` → `users`), and the user's or the realm's deletion deletes the rows
+- **realm_upstream_providers**: A realm's generic upstream OIDC providers (#639, migration 0060): `type` (`oidc_` plus a lower-case alias, one per realm), `display_name`, `display_order`, `hidden` (off the sign-in list, still reachable by direct routing), `enabled`, `marks_verified` (ADR-020 §3) and `config` (the stored provider config, its client secret sealed). The realm's deletion deletes the rows
 - **oauth_clients**: OAuth 2.1 client registrations with PKCE support
 
 ### Token Tables
