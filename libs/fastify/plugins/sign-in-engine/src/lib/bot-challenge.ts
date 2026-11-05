@@ -13,10 +13,18 @@ import {
 /**
  * A HOSTED BOT CHALLENGE (PRO-19, #643; ADR-017 Decision 7): a provider that
  * checks its token server side, such as Cloudflare Turnstile, hCaptcha or
- * reCAPTCHA. Each of them takes the same request — a form `POST` of the
+ * reCAPTCHA v2. Each of them takes the same request — a form `POST` of the
  * operator's `secret` and the visitor's token as `response` — and answers a
  * JSON object whose `success` is `true` or `false`. That is all this adapter
- * reads, so any provider that answers so fits it.
+ * reads, so any provider that answers so fits it. A provider that scores a
+ * visitor rather than deciding (reCAPTCHA v3, which answers `success: true`
+ * with a low score for a bot) does not.
+ *
+ * A `false` is the visitor's wrong token, counted as a failed round, unless
+ * its `error-codes` blame the request itself: a missing or wrong secret, a
+ * site key the secret does not match, a malformed request or the provider's
+ * own fault. Those are outages, so a rotated secret refuses every round
+ * rather than count every visitor as a bot.
  *
  * The token is checked at one host, the one the operator configured, through
  * the egress client (ADR-019 Decision 8): `https` only, DNS pinned, no
@@ -41,6 +49,26 @@ export const BOT_CHALLENGE_LIMITS: Readonly<Partial<EgressLimits>> = Object.free
   totalTimeoutMs: 5_000,
   maxResponseBytes: 16 * 1024,
 });
+
+/**
+ * The `error-codes` that blame the request rather than the visitor's token:
+ * the secret (`missing-input-secret`, `invalid-input-secret`), a site key
+ * the secret does not match (`sitekey-secret-mismatch`), a malformed request
+ * (`bad-request`) or the provider's fault (`internal-error`).
+ */
+const REQUEST_FAULT = /secret|sitekey|bad-request|internal/;
+
+/** The `error-codes` of `answer` that blame the request, at most five, each a short code. */
+function requestFaults(answer: Record<string, unknown>): string[] {
+  const codes = answer['error-codes'];
+  if (!Array.isArray(codes)) return [];
+  return codes
+    .filter(
+      (code): code is string =>
+        typeof code === 'string' && /^[a-z0-9-]{1,64}$/.test(code) && REQUEST_FAULT.test(code)
+    )
+    .slice(0, 5);
+}
 
 /** What {@link createSiteVerifyChallengeProvider} needs. */
 export interface SiteVerifyChallengeOptions {
@@ -160,12 +188,19 @@ export function createSiteVerifyChallengeProvider(
       } catch {
         throw new Error('the bot challenge provider answered no JSON');
       }
-      const success =
-        typeof answer === 'object' && answer !== null && !Array.isArray(answer)
-          ? (answer as Record<string, unknown>)['success']
-          : undefined;
+      if (typeof answer !== 'object' || answer === null || Array.isArray(answer)) {
+        throw new Error('the bot challenge provider answered no success');
+      }
+      const fields = answer as Record<string, unknown>;
+      const success = fields['success'];
       if (typeof success !== 'boolean') {
         throw new Error('the bot challenge provider answered no success');
+      }
+      const faults = success ? [] : requestFaults(fields);
+      if (faults.length > 0) {
+        throw new Error(
+          `the bot challenge provider refused the request itself (${faults.join(', ')}): check its secret and site key`
+        );
       }
       return success;
     },

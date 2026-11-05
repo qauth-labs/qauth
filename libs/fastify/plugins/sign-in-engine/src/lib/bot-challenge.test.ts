@@ -105,6 +105,32 @@ describe('the hosted bot challenge', () => {
     expect(egress.request).toHaveBeenCalledTimes(1);
   });
 
+  it('takes a false that blames the token as a wrong token, and one that blames the request as an outage', async () => {
+    for (const codes of [['invalid-input-response'], ['timeout-or-duplicate'], ['unknown-code']]) {
+      const { egress } = answering(json({ success: false, 'error-codes': codes }));
+      expect(
+        await provider(egress).verify({ realmId: REALM, params: PARAMS, token: TOKEN }),
+        codes.join()
+      ).toBe(false);
+    }
+    for (const codes of [
+      ['invalid-input-secret'],
+      ['missing-input-secret', 'invalid-input-response'],
+      ['sitekey-secret-mismatch'],
+      ['bad-request'],
+      ['internal-error'],
+    ]) {
+      const { egress } = answering(json({ success: false, 'error-codes': codes }));
+      const verdict = provider(egress).verify({ realmId: REALM, params: PARAMS, token: TOKEN });
+      await expect(verdict, codes.join()).rejects.toThrow(/refused the request itself/);
+    }
+    // A success is a success, whatever else the answer says.
+    const { egress } = answering(json({ success: true, 'error-codes': ['internal-error'] }));
+    expect(await provider(egress).verify({ realmId: REALM, params: PARAMS, token: TOKEN })).toBe(
+      true
+    );
+  });
+
   it('throws on an outage, naming neither the token nor the secret', async () => {
     const outages: (Partial<EgressResponse> | Error)[] = [
       new EgressError({
