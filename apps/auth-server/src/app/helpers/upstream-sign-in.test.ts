@@ -12,7 +12,13 @@ import { upstreamRouteHost } from './upstream-sign-in';
 import { emitUserEvent } from './user-events';
 
 vi.mock('../../config/env', () => ({
-  env: { NODE_ENV: 'test', LOGIN_RATE_LIMIT: 5, LOGIN_RATE_WINDOW: 900 },
+  env: {
+    NODE_ENV: 'test',
+    LOGIN_RATE_LIMIT: 5,
+    LOGIN_RATE_WINDOW: 900,
+    REGISTRATION_RATE_LIMIT: 3,
+    REGISTRATION_RATE_WINDOW: 3600,
+  },
 }));
 
 vi.mock('./user-events', () => ({ emitUserEvent: vi.fn(async () => undefined) }));

@@ -20,6 +20,7 @@ import type { InteractionDecision } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
 import { requestRealm } from './request-realm';
+import { createServerRoundLimiter } from './round-limits';
 import { upstreamProviderDirectory } from './upstream-providers';
 
 /**
@@ -80,6 +81,11 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * longer decides the Interaction API's answer, and an unverified account
  * never completes a sign-in here without its code.
  *
+ * Both meet the round limits (#636, ADR-017 Decision 7) before the ladder:
+ * every round from an end-user IP inside its hard block is refused, and each
+ * credential round is counted per end-user IP and per IP bucket before its
+ * credential is checked.
+ *
  * Both check a right password against the realm's breach list and ask for a
  * new one before completing when it is listed or the account holds an
  * `update_password` required action (#635, ADR-020 §3): after the account's
@@ -96,6 +102,9 @@ export function createInteractionEngines(
 ): InteractionEngines {
   const mailer = createEngineMailer(fastify, options.tasks);
   const ladder = createServerLadderParts(fastify, mailer.passwordDisabledNotices);
+  // The round limits (#636): the end-user IP's and its bucket's. The
+  // Interaction API's client is not authenticated, so no client row.
+  const limits = createServerRoundLimiter(fastify, { perClient: false });
   const emailCodes = {
     digest: createServerEmailCodeDigest(fastify),
     addresses: createRepositoryAddressVerifier(
@@ -166,7 +175,7 @@ export function createInteractionEngines(
       // The realm's upstream identity providers (#639), offered beside the
       // identifier step on a round whose transport can start one.
       upstream: upstreamProviderDirectory(fastify),
-      hooks: { ladder: ladder.ladder },
+      hooks: { ladder: ladder.ladder, limits },
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
         fastify.log.error({ err: error, port: error.port }, 'sign-in engine store unavailable'),

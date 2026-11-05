@@ -24,6 +24,8 @@ vi.mock('../../../config/env', () => ({
     SECURITY_HSTS_ENABLED: false,
     SECURITY_HSTS_MAX_AGE: 31536000,
     DYNAMIC_CLIENT_BADGE_DAYS: 30,
+    REGISTRATION_RATE_LIMIT: 3,
+    REGISTRATION_RATE_WINDOW: 3600,
   },
 }));
 
