@@ -567,6 +567,9 @@ describe('registration through prompt=create (#640, real containers)', () => {
           expect((await read(id)).step).toBe(EMAIL_CODE);
         } finally {
           await realmRequiresChallenge(false);
+          await query('UPDATE oauth_clients SET registration_challenge = NULL WHERE id = $1', [
+            clientRowId,
+          ]);
         }
       },
       60_000

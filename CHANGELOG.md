@@ -28,7 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interaction client ships, so the strict CSP needs no exception.
   `BOT_CHALLENGE_PROVIDER=hosted` checks a hosted provider's token instead,
   with one form POST to `BOT_CHALLENGE_HOSTED_VERIFY_URL` through the egress
-  client (no redirect, 5 seconds, 16 KiB). The reference proxy's new
+  client (no redirect, 5 seconds, 16 KiB), for sign-in and registration; a
+  password reset still gets the proof of work. A `success: false` whose
+  `error-codes` blame the secret, the site key or the provider refuses the
+  round instead of counting the visitor. The reference proxy's new
   `site/bot-challenge.conf` names such a provider's script hosts per realm
   host, empty by default; they are added to `script-src` and `frame-src` of
   the interaction page alone. `captcha_token` is redacted from the logs and

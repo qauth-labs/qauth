@@ -236,7 +236,14 @@ the round. Two exist:
   `@qauth-labs/shared-interaction-client`, served from the realm origin.
 - `createSiteVerifyChallengeProvider` in `@qauth-labs/fastify-plugin-sign-in-engine`: a hosted
   provider that takes a form `POST` of the secret and the token and answers `success`, reached
-  through the egress client at the one verify URL the operator configured.
+  through the egress client at the one verify URL the operator configured. A `false` whose
+  `error-codes` blame the secret, the site key or the provider is an outage, not a wrong token.
+
+A provider's `params` learns the transaction's `flow`, so a deployment can pick one by flow: the
+auth server answers a password reset with the proof of work even when a hosted provider is
+configured, since that provider's script may run on the sign-in and sign-up pages only (ADR-019
+Decision 5). The callback round of an upstream provider (#639) is never held for a challenge: it
+carries the provider's proof, which a challenge would throw away.
 
 ## The email code
 
