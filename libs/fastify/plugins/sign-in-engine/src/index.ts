@@ -3,6 +3,7 @@ export * from './lib/account-registrations';
 export * from './lib/account-resets';
 export * from './lib/address-verifier';
 export * from './lib/audit-events';
+export * from './lib/bot-challenge';
 export * from './lib/breached-passwords';
 export * from './lib/failure-ladder';
 export * from './lib/fastify-plugin-sign-in-engine';
@@ -23,11 +24,14 @@ export {
   type AccountResets,
   type AddressVerifier,
   type AuditSink,
+  type BotChallengeProvider,
   BREACH_CHECK_FAILURES,
   type BreachCheckFailure,
   type BreachCheckVerdict,
   type BreachedPasswordCheck,
   type CompletedSignIn,
+  createCaptchaStep,
+  createProofOfWorkProvider,
   createRoundLimiter,
   EMAIL_CODE_LADDER_POLICY,
   type EmailCodeDependencies,
@@ -35,6 +39,7 @@ export {
   type EmailCodeSender,
   type EmailCodeSendOutcome,
   type IdentifierDigest,
+  isProofOfWorkDifficulty,
   type LadderPolicy,
   type MailPassBinding,
   type MailPassFlow,
@@ -47,6 +52,10 @@ export {
   type PasswordHardAction,
   type PasswordReplacement,
   type PasswordUpdates,
+  PROOF_OF_WORK_DEFAULT_DIFFICULTY,
+  PROOF_OF_WORK_MAX_DIFFICULTY,
+  PROOF_OF_WORK_MIN_DIFFICULTY,
+  PROOF_OF_WORK_PROVIDER,
   readSignInTransaction,
   REGISTRATION_NOT_ALLOWED,
   type RegistrationMail,

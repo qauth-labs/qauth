@@ -49,6 +49,15 @@ export type AccountRegistrationTransaction<Tx> = <T>(work: (tx: Tx) => Promise<T
 export interface AccountRegistrationPolicy<Tx> {
   /** Whether the realm and the client both allow registration (#640). */
   allowed(input: { readonly realmId: string; readonly clientId: string }): Promise<boolean>;
+  /**
+   * Whether the realm or the client requires the bot challenge at sign-up
+   * (#643): the realm's `botChallenge.requiredAtSignUp`, or the client's own
+   * requirement. Absent: none does.
+   */
+  challengeRequired?(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+  }): Promise<boolean>;
   /** The Argon2id hash of a password already in its stored form. */
   hash(password: string): Promise<string>;
   /** Whether `error` is the database's refusal of a duplicate credential. */
@@ -93,8 +102,12 @@ export function createRepositoryAccountRegistrations<Tx>(
   transaction: AccountRegistrationTransaction<Tx>,
   policy: AccountRegistrationPolicy<Tx>
 ): AccountRegistrations {
+  const { challengeRequired } = policy;
   const registrations: AccountRegistrations = {
     allowed: (input) => policy.allowed(input),
+    ...(challengeRequired === undefined
+      ? {}
+      : { challengeRequired: (input) => challengeRequired.call(policy, input) }),
     async create({ realmId, clientId, identifier, password, normalization }) {
       const passwordHash = await policy.hash(password);
       try {

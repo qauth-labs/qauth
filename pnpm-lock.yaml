@@ -1106,6 +1106,9 @@ importers:
       '@qauth-labs/server-breached-passwords':
         specifier: workspace:*
         version: link:../../../server/breached-passwords
+      '@qauth-labs/server-egress':
+        specifier: workspace:*
+        version: link:../../../server/egress
       '@qauth-labs/server-federation':
         specifier: workspace:*
         version: link:../../../server/federation
