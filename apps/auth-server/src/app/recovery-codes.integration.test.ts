@@ -25,7 +25,7 @@ import {
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
 import type { BackgroundTasks } from './helpers/background-tasks';
-import { createInteractionEngines, type InteractionEngines } from './helpers/interaction-engines';
+import type { InteractionEngines } from './helpers/interaction-engines';
 
 /**
  * THE RECOVERY CODES ON THE HOSTED PAGES (#649; ADR-017 Decisions 7 and 8,
@@ -144,7 +144,10 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
       ]);
       return original(realm, to, mail, context);
     };
-    // The account API's regeneration (ACC-02, #687) calls these.
+    // The account API's regeneration (ACC-02, #687) calls these. Imported
+    // after the boot, as the harness imports the app: the module reads the
+    // environment the boot sets, and shares the app's module instances.
+    const { createInteractionEngines } = await import('./helpers/interaction-engines');
     engines = createInteractionEngines(booted.app, { tasks: TASKS });
   }, 240_000);
 
