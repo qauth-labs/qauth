@@ -45,7 +45,23 @@ export type EmailCodeSender = (mail: {
   readonly expiresInSeconds: number;
   /** The code follows a correct first factor in the same transaction: it skips the per-address ceiling. */
   readonly afterFirstFactor: boolean;
+  /**
+   * A registration's code (#640; ADR-017 Decision 8): what the address is,
+   * which only the mail may tell. The step looks the same for all three.
+   *
+   * - `new_address`: no account holds it; the mail carries the code.
+   * - `account_exists`: an account holds it; the mail carries the code and
+   *   an "account exists" notice.
+   * - `withheld`: a disabled user holds it. Nothing is mailed, as at a quiet
+   *   send tier, and the code is counted on every cap all the same.
+   *
+   * Absent for every code of a sign-in.
+   */
+  readonly registration?: RegistrationMail;
 }) => Promise<EmailCodeSendOutcome>;
+
+/** What a registration's code mail says about its address (#640). */
+export type RegistrationMail = 'new_address' | 'account_exists' | 'withheld';
 
 /** What starting an upstream identity provider found (#639). */
 export type UpstreamStartOutcome =
@@ -132,10 +148,25 @@ export interface RoundContext {
    * of offering the first step.
    */
   readonly upstreamRoute?: UpstreamProviderEntry;
+  /**
+   * The flow the request asked for, frozen at round 0: `register` for
+   * `prompt=create` (#640; ADR-017 Decision 8), absent for a sign-in. A
+   * round of another flow than its transaction's ends the transaction.
+   */
+  readonly flow?: SignInFlow;
 }
 
-/** A completed sign-in: what the transport mints a session or a code from. */
-export interface CompletedSignIn {
+/** A flow other than a sign-in: registration (#640). */
+export type SignInFlow = 'register';
+
+/**
+ * A completed sign-in or registration: what the transport mints a session or
+ * a code from.
+ */
+export type CompletedSignIn = SignedIn | Registered;
+
+/** A completed sign-in. */
+export interface SignedIn {
   /** The user id. */
   readonly subject: string;
   /**
@@ -147,6 +178,24 @@ export interface CompletedSignIn {
   readonly amr: readonly AmrValue[];
   /** When the last authenticator succeeded, in epoch milliseconds. */
   readonly authTime: number;
+  readonly registered?: undefined;
+}
+
+/**
+ * A completed registration (#640; ADR-017 Decisions 8 and 10): the account
+ * was created after its mailbox was proved and its password passed the
+ * policy. No authenticator was presented, so it carries no `amr` and no
+ * `auth_time`, and the transport starts no session that could satisfy
+ * `max_age` or `prompt=login`.
+ */
+export interface Registered {
+  /** The new account's user id. */
+  readonly subject: string;
+  /** The address it was registered with, normalised. */
+  readonly identifier: string;
+  readonly registered: true;
+  readonly amr?: undefined;
+  readonly authTime?: undefined;
 }
 
 /** Why a round was refused. */
@@ -159,7 +208,10 @@ export type RefusalReason =
   | 'unavailable'
   /** The answer is malformed: a fault of the request (FiPA: `invalid_request`). */
   | 'invalid_answer'
-  /** The transport's request checks refused the round, with their own code. */
+  /**
+   * The transport's request checks refused the round, with their own code;
+   * or the registration gate did, with `registration_not_allowed` (#640).
+   */
   | 'request_refused';
 
 /** What the engine answers a round. */

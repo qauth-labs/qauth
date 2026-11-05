@@ -1,7 +1,7 @@
 import type { StepName } from '@qauth-labs/server-step-grammar';
 
 import type { LadderCounter } from './ports';
-import type { RoundEnvironment } from './round-limits';
+import type { RegistrationStartRound, RoundEnvironment } from './round-limits';
 import type { SignInTransaction } from './transaction';
 
 /**
@@ -88,6 +88,12 @@ export type CredentialLimitVerdict =
 export interface LimitsHook {
   round(round: HookRound): Promise<LimitVerdict>;
   reserve(round: CredentialRound): Promise<CredentialLimitVerdict>;
+  /**
+   * Count a registration start (#640; ADR-017 Decision 7, "Registration
+   * starts"): the first code a registration mails, new address or not.
+   * Absent, no start is capped.
+   */
+  reserveRegistrationStart?(round: RegistrationStartRound): Promise<LimitVerdict>;
 }
 
 /** The answer of the transport's request checks. */

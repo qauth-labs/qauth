@@ -7,6 +7,8 @@ import {
 
 import type {
   AccountDirectory,
+  AccountRegistration,
+  AccountRegistrations,
   AddressVerification,
   AddressVerifier,
   BoundFactor,
@@ -316,4 +318,56 @@ export function passwordAccount(
     others: [],
     ...overrides,
   };
+}
+
+/**
+ * Registration's ports over a {@link FakeDirectory} (#640): a gate that
+ * answers `allows`, and a creation that adds a verified password account,
+ * recording each call. An address the directory holds, or `conflict`, is a
+ * unique-constraint race.
+ */
+export class FakeRegistrations implements AccountRegistrations {
+  allows = true;
+  conflict = false;
+  readonly gates: { readonly realmId: string; readonly clientId: string }[] = [];
+  readonly created: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly identifier: string;
+    readonly password: string;
+    readonly normalization: PasswordNormalization;
+    readonly userId: string;
+  }[] = [];
+
+  constructor(readonly directory: FakeDirectory) {}
+
+  async allowed(input: { readonly realmId: string; readonly clientId: string }): Promise<boolean> {
+    this.gates.push(Object.freeze({ ...input }));
+    return this.allows;
+  }
+
+  async create(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly identifier: string;
+    readonly password: string;
+    readonly normalization: PasswordNormalization;
+  }): Promise<AccountRegistration> {
+    if (this.conflict || this.directory.accounts.has(input.identifier)) return { kind: 'conflict' };
+    const userId = `0199fa20-5e1a-7000-8000-${String(900 + this.created.length).padStart(12, '0')}`;
+    this.created.push(Object.freeze({ ...input, userId }));
+    this.directory.accounts.set(input.identifier, {
+      userId,
+      enabled: true,
+      verified: true,
+      admin: false,
+      password: {
+        disabled: false,
+        hash: fakeHash(input.password),
+        normalization: input.normalization,
+      },
+      others: [],
+    });
+    return { kind: 'created', userId };
+  }
 }

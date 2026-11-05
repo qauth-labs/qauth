@@ -1,5 +1,6 @@
 export {
   answerEmailCode,
+  countWrongEmailCode,
   EMAIL_CODE_HMAC_PATTERN,
   EMAIL_CODE_MAX_WRONG_ANSWERS,
   EMAIL_CODE_RESEND_AFTER_MS,
@@ -21,6 +22,7 @@ export {
 export {
   createSignInEngine,
   type EmailCodeDependencies,
+  REGISTRATION_NOT_ALLOWED,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInEngine,
   type SignInEngineDependencies,
@@ -62,6 +64,8 @@ export {
 } from './lib/ladder';
 export {
   type AccountDirectory,
+  type AccountRegistration,
+  type AccountRegistrations,
   type AddressVerification,
   type AddressVerifier,
   type AuditSink,
@@ -106,9 +110,13 @@ export type {
   EmailCodeSender,
   EmailCodeSendOutcome,
   RefusalReason,
+  Registered,
+  RegistrationMail,
   RoundAnswer,
   RoundContext,
   RoundResult,
+  SignedIn,
+  SignInFlow,
   UpstreamProof,
   UpstreamStarter,
   UpstreamStartOutcome,
