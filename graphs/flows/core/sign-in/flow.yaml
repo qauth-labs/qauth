@@ -25,7 +25,8 @@
 #   on an account whose only factor is its password, a code mailed to its address, as a reset asks for one. A check
 #   that fails never blocks the sign-in. The CER issue adds the screens (ui.yaml).
 # - A round that ends in a step keeps the transaction live: the next round's answer is a new event from that state. A
-#   refused round (`throttled`, `lockedOut`, `unavailable`, `requestRefused`, `botChallengeDue`, `answerRefused`)
+#   due bot challenge (`botChallengeDue`) ends the walk at its step: the pending step resumes after a right answer. A
+#   refused round (`throttled`, `lockedOut`, `unavailable`, `requestRefused`, `answerRefused`)
 #   keeps the transaction as far as the round took it (an identifier it fixed stays, nothing it refused is in it), and
 #   the next round starts from there; the graph ends the walk at the refusal, so that each refusal is one exit. A
 #   completed sign-in, a redirect and an ended transaction return no transaction: nothing can complete twice.
@@ -204,9 +205,28 @@ context:
       requestRefused: >-
         the transport's request checks refuse the round, such as acr_values, prompt=none or a frozen parameter at the
         FiPA endpoint
-      botChallengeDue: 'a soft threshold asks for a bot challenge'
+      botChallengeDue: >-
+        a soft threshold asks for a bot challenge (#643): of the limiters (an end-user IP, its bucket or the client
+        past its free failures) or of the ladder (the round's identifier past the password's or the email code's free
+        failures), while the transaction holds no unspent pass of an earlier challenge
       lockedOut: >-
         the identifier's ladder is inside a wait: the identifier HMAC's counter, whether or not an account holds it
+  # Whether the transport serves the captcha step: the Interaction API does; a FiPA client that did not list it in
+  # its first_party_policy.steps does not (#643).
+  captchaServed:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the transport does not serve the captcha step'
+      'true': 'the transport serves the captcha step'
+  # The bot challenge's provider, when a challenge is due: the built-in proof of work, or a hosted provider the
+  # egress client reaches (#643).
+  challengeProvider:
+    values: [answers, down]
+    initial: any
+    say:
+      answers: 'the provider can issue a challenge and check its answer'
+      down: 'no provider is registered, or the hosted provider cannot be reached or answers out of shape'
   # Whether the identifiers a round brings differ: from the one the transaction holds, or from each other.
   differentIdentifier:
     values: [false, true]
@@ -249,6 +269,8 @@ guards:
   limited: "gate == 'limited'"
   requestRefused: "gate == 'requestRefused'"
   botChallengeDue: "gate == 'botChallengeDue'"
+  challengeOffered: "gate == 'botChallengeDue' and captchaServed and challengeProvider == 'answers'"
+  challengeUnanswerable: "gate == 'botChallengeDue' and captchaServed and challengeProvider == 'down'"
   lockedOut: "gate == 'lockedOut'"
   malformedAnswer: "answer == 'malformed'"
   roundBringsIdentifier: "loginHint == 'given' or answer in ['identifier', 'passwordWithHint']"
@@ -424,13 +446,24 @@ states:
   checkingBotChallenge:
     title: Ask whether a bot challenge is due (rule 5)
     description: >-
-      PRO-19 decides when a soft threshold asks for one. A due challenge comes before every other step, so an eager
-      password is ignored and gives no password oracle.
+      PRO-19 (#643; ADR-017 Decision 7): a soft threshold of the limiters or of the ladder asks for one, in addition to
+      the delay, and a pass of an earlier challenge in this transaction answers it until a credential round spends
+      it. A due challenge comes before every other step, so an eager password is ignored and gives no password
+      oracle. A transport that does not serve the captcha step meets the delay and the 429 alone.
     always:
-      - guard: botChallengeDue
+      - guard: challengeUnanswerable
+        target: unavailable
+        effect: [waitFloor]
+        say: 'a bot challenge is due and no provider can answer it: refused, never waved through'
+      - guard: challengeOffered
         target: botChallengeDue
         effect: [waitFloor]
         say: 'a bot challenge is due; any other answer is ignored, and the floor is waited out'
+      - guard: botChallengeDue
+        target: takingIdentifier
+        say: >-
+          a bot challenge is due and the transport does not serve the captcha step: the round goes on, under the delay
+          and the 429 of the limiters and the ladder alone, never a redirect
       - target: takingIdentifier
         say: 'no bot challenge is due'
 
@@ -1014,13 +1047,21 @@ states:
 
   botChallengeDue:
     type: final
-    title: Hold the round for a bot challenge
+    title: Offer the bot challenge
     description: >-
-      PRO-19 offers the captcha step alone when the transport serves it, and the pending step resumes after it; a
-      transport that cannot serve it gets the limiter's delay and 429, never a redirect.
+      PRO-19 (#643): the captcha step alone, its puzzle kept in the transaction until it is answered. A right answer
+      leaves a pass that the next credential round spends, and the pending step resumes in the same round; a wrong one
+      is refused with captcha_failed and a new puzzle, and counted as a failed round on the limiters, so a stream of
+      wrong answers meets the hard 429. A provider that cannot check an answer refuses the round (unavailable). The
+      answer, captcha_token, is never logged or audited.
     response:
-      kind: refused
-      body: { reason: throttled, retryAfterSeconds: "the bot challenge's" }
+      kind: step
+      body:
+        current:
+          step: captcha
+          params: "the provider's: the built-in proof of work's challenge and difficulty, or a hosted provider's name and site key"
+        alternatives: []
+        personal: {}
 
   answerRefused:
     type: final
