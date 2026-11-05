@@ -111,10 +111,23 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /oauth/end-session/status',
   // The landing of a mailed pass link (#637).
   'GET /auth/pass',
+  // The upstream sign-in flow (#639): a provider button of the sign-in page,
+  // the start of a routed provider, and the callbacks of the realm's OpenID
+  // Connect providers.
+  'GET /ui/upstream/:type',
+  'GET /ui/upstream/:type/start',
+  'GET /upstream/:type/callback',
+  'POST /upstream/:type/callback',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */
 const DEFAULT_ROUTES_REMOVED_SINCE: ReadonlySet<string> = new Set(['GET /metrics']);
+
+/**
+ * The `GET` routes with no `HEAD` beside them: an AuthMethod's routes, which
+ * mount exactly the methods the AuthMethod declares (#600, #639).
+ */
+const GET_ROUTES_WITHOUT_HEAD: ReadonlySet<string> = new Set(['GET /upstream/:type/callback']);
 
 const MACHINE_CLIENT_ID = 'roles-machine-client';
 const MACHINE_SECRET = 'roles-machine-secret-of-at-least-32-characters';
@@ -193,7 +206,7 @@ describe('service roles (#495)', () => {
       [...DEFAULT_ROUTES_BEFORE_THE_MANIFEST, ...DEFAULT_ROUTES_ADDED_SINCE]
         .filter((operation) => !DEFAULT_ROUTES_REMOVED_SINCE.has(operation))
         .flatMap((operation) =>
-          operation.startsWith('GET ')
+          operation.startsWith('GET ') && !GET_ROUTES_WITHOUT_HEAD.has(operation)
             ? [operation, `HEAD ${operation.slice('GET '.length)}`]
             : [operation]
         )
