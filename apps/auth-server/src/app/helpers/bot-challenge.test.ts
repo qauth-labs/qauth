@@ -85,6 +85,33 @@ describe('createServerBotChallenge (#643)', () => {
     });
   });
 
+  it('answers a password reset with the proof of work, even with a hosted provider', async () => {
+    setEnv({
+      BOT_CHALLENGE_PROVIDER: 'hosted',
+      BOT_CHALLENGE_HOSTED_NAME: 'turnstile',
+      BOT_CHALLENGE_HOSTED_SITE_KEY: '0x4AAAAAAA',
+      BOT_CHALLENGE_HOSTED_SECRET: 'operator-secret',
+      BOT_CHALLENGE_HOSTED_VERIFY_URL: 'https://challenges.example.com/siteverify',
+    });
+    const request = vi.fn();
+    const { fastify } = sources(1, { request });
+    const provider = createServerBotChallenge(fastify, async () => REALM);
+    for (const flow of [undefined, 'register'] as const) {
+      expect(
+        await provider.params({ realmId: REALM_ID, clientId: 'web', ...(flow ? { flow } : {}) })
+      ).toMatchObject({ provider: 'hosted' });
+    }
+    const params = await provider.params({ realmId: REALM_ID, clientId: 'web', flow: 'reset' });
+    expect(params).toMatchObject({ provider: 'pow', difficulty: 1 });
+    // Its answer is checked in process, never sent to the hosted provider.
+    let nonce = 0;
+    while (!(await provider.verify({ realmId: REALM_ID, params, token: String(nonce) }))) {
+      nonce += 1;
+    }
+    expect(await provider.verify({ realmId: REALM_ID, params, token: 'x' })).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it('fails the boot when a hosted provider has no egress client to check through', () => {
     setEnv({
       BOT_CHALLENGE_PROVIDER: 'hosted',

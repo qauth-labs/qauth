@@ -2,6 +2,7 @@ import {
   type BotChallengeProvider,
   createProofOfWorkProvider,
   createSiteVerifyChallengeProvider,
+  PROOF_OF_WORK_PROVIDER,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import type { FastifyInstance } from 'fastify';
 
@@ -17,7 +18,10 @@ import type { RealmRow } from './request-realm';
  * so the strict content security policy needs no exception, and its
  * difficulty is the realm's `botChallenge.difficulty` policy, read from the
  * realm row on every challenge. `hosted` checks a hosted provider's token at
- * the one verify URL the operator configured, through the egress client.
+ * the one verify URL the operator configured, through the egress client, for
+ * a sign-in and a registration; a password reset still gets the proof of
+ * work, since a hosted provider's script may run on the sign-in and sign-up
+ * pages only (ADR-019 Decision 5).
  */
 
 /**
@@ -33,23 +37,32 @@ export function createServerBotChallenge(
     Partial<Pick<FastifyInstance, 'egress'>>,
   realmOf: (realmId: string) => Promise<RealmRow>
 ): BotChallengeProvider {
-  if (env.BOT_CHALLENGE_PROVIDER === 'hosted') {
-    if (!fastify.hasDecorator('egress') || fastify.egress === undefined) {
-      throw new TypeError(
-        'the hosted bot challenge needs the egress client, which is not registered'
-      );
-    }
-    return createSiteVerifyChallengeProvider({
-      egress: fastify.egress,
-      name: env.BOT_CHALLENGE_HOSTED_NAME ?? '',
-      siteKey: env.BOT_CHALLENGE_HOSTED_SITE_KEY ?? '',
-      secret: env.BOT_CHALLENGE_HOSTED_SECRET ?? '',
-      verifyUrl: env.BOT_CHALLENGE_HOSTED_VERIFY_URL ?? '',
-    });
-  }
-  return createProofOfWorkProvider({
+  const proofOfWork = createProofOfWorkProvider({
     difficulty: async ({ realmId }) =>
       fastify.policyStore.ofRealm(await realmOf(realmId)).policies.botChallenge.difficulty,
+  });
+  if (env.BOT_CHALLENGE_PROVIDER !== 'hosted') return proofOfWork;
+  if (!fastify.hasDecorator('egress') || fastify.egress === undefined) {
+    throw new TypeError(
+      'the hosted bot challenge needs the egress client, which is not registered'
+    );
+  }
+  const hosted = createSiteVerifyChallengeProvider({
+    egress: fastify.egress,
+    name: env.BOT_CHALLENGE_HOSTED_NAME ?? '',
+    siteKey: env.BOT_CHALLENGE_HOSTED_SITE_KEY ?? '',
+    secret: env.BOT_CHALLENGE_HOSTED_SECRET ?? '',
+    verifyUrl: env.BOT_CHALLENGE_HOSTED_VERIFY_URL ?? '',
+  });
+  return Object.freeze({
+    params: (round: Parameters<BotChallengeProvider['params']>[0]) =>
+      round.flow === 'reset' ? proofOfWork.params(round) : hosted.params(round),
+    // The params come from the transaction, which the server holds: they say
+    // which provider issued the challenge.
+    verify: (input: Parameters<BotChallengeProvider['verify']>[0]) =>
+      input.params.provider === PROOF_OF_WORK_PROVIDER
+        ? proofOfWork.verify(input)
+        : hosted.verify(input),
   });
 }
 

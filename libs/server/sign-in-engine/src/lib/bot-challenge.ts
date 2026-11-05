@@ -2,6 +2,8 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import { grammarStep, type StepParams } from '@qauth-labs/server-step-grammar';
 
+import type { SignInFlow } from './round';
+
 /**
  * THE BOT CHALLENGE'S PROVIDERS (PRO-19, #643; ADR-017 Decision 7, ADR-019
  * Decision 5): a provider-neutral verifier behind the `captcha` step.
@@ -33,6 +35,13 @@ export interface BotChallengeProvider {
   params(round: {
     readonly realmId: string;
     readonly clientId: string;
+    /**
+     * The transaction's flow, when it is not a sign-in: `register` or
+     * `reset`. A deployment whose hosted provider may run on the sign-in and
+     * sign-up pages alone (ADR-019 Decision 5) answers a reset with the
+     * built-in proof of work.
+     */
+    readonly flow?: SignInFlow;
   }): Promise<StepParams<'captcha'>>;
   /**
    * Check `token` against the params it was offered with: `true` when the

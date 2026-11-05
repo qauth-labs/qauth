@@ -96,9 +96,17 @@ function miss(params: StepParams<'captcha'>): string {
   }
 }
 
-/** The proof of work at {@link EASY}, counting its puzzles. */
+/**
+ * The proof of work at {@link EASY}, counting its puzzles. Its puzzles are
+ * fixed, the n-th one 32 bytes of n, so a test that compares two of them
+ * gets the same answer on every run.
+ */
 function easyProofOfWork(): BotChallengeProvider & { puzzles: number } {
-  const inner = createProofOfWorkProvider({ difficulty: () => EASY });
+  let drawn = 0;
+  const inner = createProofOfWorkProvider({
+    difficulty: () => EASY,
+    random: (size) => Buffer.alloc(size, (drawn += 1)),
+  });
   const provider = {
     puzzles: 0,
     async params(round: { readonly realmId: string; readonly clientId: string }) {
@@ -376,14 +384,39 @@ describe('rule 5: the answer', () => {
     expect(pending).toMatchObject({ offer: { current: { step: 'password' } } });
     // A credential round spends it; the same solution then answers nothing.
     const spent = await built.engine.advance(kept(pending), passwordAnswer(WRONG), ctx);
-    const next = offered(await built.engine.advance(kept(spent), null, ctx));
+    const asked = await built.engine.advance(kept(spent), null, ctx);
+    const next = offered(asked);
     expect(next).not.toEqual(params);
-    const replayed = await built.engine.advance(kept(spent), tokenAnswer(nonce), ctx);
-    if (!solvesProofOfWork(next, nonce)) {
-      expect(replayed).toMatchObject({
-        offer: { current: { step: 'captcha', error: 'captcha_failed' } },
+    // The fixed puzzles make this hold on every run: the old solution does
+    // not solve the puzzle now held, so the replay is checked against it.
+    expect(solvesProofOfWork(next, nonce)).toBe(false);
+    const replayed = await built.engine.advance(kept(asked), tokenAnswer(nonce), ctx);
+    expect(replayed).toMatchObject({
+      offer: { current: { step: 'captcha', error: 'captcha_failed' } },
+    });
+  });
+
+  it('tells the provider the flow its challenge is for, so a deployment can pick one by flow', async () => {
+    const seen: unknown[] = [];
+    const inner = easyProofOfWork();
+    const step = createCaptchaStep({
+      params: async (round) => {
+        seen.push(round.flow);
+        return inner.params(round);
+      },
+      verify: inner.verify,
+    });
+    const transaction = (flow?: 'register' | 'reset') =>
+      ({ ...(flow === undefined ? {} : { flow }) }) as SignInTransaction;
+    for (const flow of [undefined, 'register', 'reset'] as const) {
+      await step.params({
+        realmId: REALM,
+        clientId: CLIENT,
+        transaction: transaction(flow),
+        identifierHmac: async () => 'hmac',
       });
     }
+    expect(seen).toEqual([undefined, 'register', 'reset']);
   });
 
   it('refuses a wrong token with captcha_failed and a new puzzle, and counts it as a failed round', async () => {

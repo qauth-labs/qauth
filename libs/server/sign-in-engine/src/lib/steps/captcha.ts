@@ -18,9 +18,15 @@ export function createCaptchaStep(provider: BotChallengeProvider): StepHandler<'
   const handler: StepHandler<'captcha'> = {
     step: 'captcha',
     role: 'challenge',
-    params: async ({ realmId, clientId }) =>
+    params: async ({ realmId, clientId, transaction }) =>
       checkedChallengeParams(
-        await fromStore('botChallenge', () => provider.params({ realmId, clientId }))
+        await fromStore('botChallenge', () =>
+          provider.params({
+            realmId,
+            clientId,
+            ...(transaction.flow === undefined ? {} : { flow: transaction.flow }),
+          })
+        )
       ),
     personal: () => ({}),
     async verify({ realmId }, read) {
