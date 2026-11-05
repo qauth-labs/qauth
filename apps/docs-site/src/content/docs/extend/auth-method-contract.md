@@ -109,7 +109,10 @@ engine: verify(result) ──► VerifiedIdentity, checked, assurance capped
    identity it resolves (an `externalSub` of 1 to 255 characters of well-formed text with no
    control character, an assurance level, raw claims of JSON data within 64 KiB, which it copies
    and freezes; a claim that is `undefined` or a `Date` is not JSON data and makes the answer a
-   fault), then takes the attributes. The assurance level is capped: `completeUpstreamStep` takes
+   fault), then takes the attributes. The raw claims name the issuer that assigned
+   `externalSub`, as `rawClaims.iss`: a subject is unique only within its issuer (OpenID Connect
+   Core 1.0 §5.7), so the upstream sign-in flow (#639) stores the issuer with the credential,
+   refuses a later sign-in under another one, and refuses an identity that names none. The assurance level is capped: `completeUpstreamStep` takes
    `{ maxAssurance }` and lowers the method's level to it, `low` when the caller names none, since
    an upstream sign-in ranks with a password until an operator raises the ceiling for a provider
    it trusts more. Every attribute's `source` must equal the method's `type`: a method cannot
@@ -413,11 +416,12 @@ administration's (#714): the client is not a plugin package, so the plugin runti
 `realm_auth_method_plugins` (#600), which seals a plugin's secrets under contexts of its own, does
 not hold it.
 
-**What the sign-in flow must add.** `externalSub` is the provider's bare `sub`, and the type
-`oidc_<alias>` does not name the issuer, while only `iss` and `sub` together identify a person
-(OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer, so the upstream
-sign-in flow (#639) stores it with the credential and refuses a mismatch, or provider
-administration (#714) refuses an issuer change while credentials exist. The host opens the stored
+**How the sign-in flow ties the subject to its issuer.** `externalSub` is the provider's bare
+`sub`, and the type `oidc_<alias>` does not name the issuer, while only `iss` and `sub` together
+identify a person (OpenID Connect Core 1.0 §5.7). `rawClaims.iss` is always the checked issuer,
+and the upstream sign-in flow (#639) stores it with the credential and refuses a later sign-in
+under another issuer, so a provider re-pointed at another issuer never hands its subjects the
+old accounts. The host opens the stored
 config and builds the method's context as a signer caller that may decrypt the client secret and
 sign client assertions: `api` may do both, and `web`, which serves the sign-in pages where a
 method's routes mount, may do neither. So in a single deployment the host calls as `local`, as the
@@ -461,8 +465,8 @@ check the method failed:
   redirect or in a body the method posted (as a pushed authorization request does);
 - the provider's callback carries the binding back in the route's `bindingParameter`: the kit
   compares it as the host does, and calls the handler only when it matches. The callback ends in
-  an identity whose attributes carry the method's `type`, and a second sign-in of the same person
-  resolves the same `externalSub`;
+  an identity whose `rawClaims.iss` names its issuer and whose attributes carry the method's
+  `type`, and a second sign-in of the same person resolves the same `externalSub`;
 - PKCE with S256: an authorization request that asks for a code (`response_type=code`) carries
   `code_challenge_method=S256` and a `code_challenge`, and every token request the callback makes
   (`grant_type=authorization_code`) carries the `code_verifier` whose S256 is that challenge;

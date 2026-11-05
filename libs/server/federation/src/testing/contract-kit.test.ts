@@ -150,7 +150,7 @@ describe('checkAuthMethod, the contract test kit', () => {
           return {
             externalSub: result.sub,
             assuranceLevel: 'low' as const,
-            rawClaims: { sub: result.sub, email: result.email },
+            rawClaims: { iss: 'https://provider.example', sub: result.sub, email: result.email },
           };
         },
       };
@@ -160,6 +160,22 @@ describe('checkAuthMethod, the contract test kit', () => {
           "verify() resolved for a result it had already verified: a result signs one person in once",
         ]
       `);
+    });
+
+    it('one whose identity names no issuer', async () => {
+      const method = createSampleAuthMethod();
+      const unbound = {
+        ...method,
+        verify: async (input: unknown) => {
+          const identity = await method.verify(input);
+          const rawClaims = { ...identity.rawClaims };
+          delete rawClaims['iss'];
+          return { ...identity, rawClaims };
+        },
+      };
+      expect(await kitProblems(unbound)).toEqual([
+        'the identity names no issuer (rawClaims.iss): the sign-in flow binds a subject to its issuer, and refuses an identity without one',
+      ]);
     });
 
     it('one whose verify() accepts what no callback produced', async () => {

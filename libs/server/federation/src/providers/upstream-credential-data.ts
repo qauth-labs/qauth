@@ -9,10 +9,13 @@ import { z } from 'zod';
  *
  * - `kind` is {@link UPSTREAM_CREDENTIAL_KIND}, which tells such a row apart
  *   whatever its type.
- * - `iss` is the issuer whose ID token named the subject, when the provider
- *   has one (an OpenID Connect provider always does). A later sign-in whose
- *   issuer differs is refused: a subject is the provider's only together
- *   with its issuer.
+ * - `iss` is the issuer that named the subject (an OpenID Connect
+ *   provider's ID token `iss`; a plugin's `rawClaims.iss`, which the
+ *   AuthMethod contract requires). The sign-in flow writes it on every
+ *   credential it creates and refuses an identity without one; a later
+ *   sign-in whose issuer differs, and a row without one, is refused: a
+ *   subject is the provider's only together with its issuer (OpenID Connect
+ *   Core 1.0 §5.7).
  * - `verified` is whether the account counts as verified: `true` when the
  *   provider's verified switch was on as the account was created (ADR-020
  *   §3), `false` until QAuth verified the address itself.
