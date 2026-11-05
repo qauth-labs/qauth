@@ -1,0 +1,777 @@
+# The registration of a password account inside the sign-in engine (PRO-16, #640; ADR-017 Decisions 3 and 8, ADR-020
+# §3): the mailbox first, then the password, then the account. Written before the code (status: proposed), as ADR-021
+# Decision 4 asks of a new core flow. A transport starts it from an authorization request with prompt=create (OpenID
+# Connect Prompt Create 1.0), which the Interaction API turns into a registration interaction; the CER issue adds the
+# screens (ui.yaml), and PRO-22 the FiPA endpoint's wire form.
+#
+# - Like the sign-in engine (flows/core/sign-in), this flow has no screen and no HTTP route of its own: a transport
+#   calls the engine once a round, and every round runs the sign-in's rules up to rule 4 first (the transaction, the
+#   MFA policy, the limiters, the transport's request checks). So an exit here is the engine's answer, as data, named
+#   in camelCase; a step state ends the round with the transaction live, and the next round's answer is a new event
+#   from it, which goes through the registration's gate again.
+# - Registration is off unless both allow it, on every round: the realm's registration_allowed, served by the
+#   Interaction API, and the client's operator-set hosted_flows naming register (a native client's
+#   first_party_policy.flows). Nothing is mailed or written before the gate passes.
+# - The first answer is the same for every address: an 8-digit email_code with the purpose verify_account. Only the
+#   mail differs: a new address gets the code, an address an account holds gets the code and a notice that the account
+#   exists, and a disabled user's address gets nothing. A right code for a disabled user is answered as a wrong one,
+#   so nothing of that user changes.
+# - No account exists before the code and the password pass. It is created in one database transaction: the users
+#   row, the verified password credential with its NFC marker, the verified email attribute and the user.registered
+#   event. A registration signs nobody in: it completes with no amr and no auth_time (ADR-017 Decision 10).
+schema: delurio-graph/0
+kind: flow
+id: core.sign-up
+status: proposed
+domain: qauth
+title: Register a password account, the mailbox first
+summary: >-
+  A registration interaction asks for an address. The realm and the client must both allow sign-up, on every round.
+  The engine counts the registration start, mails an 8-digit code through the capped sender and asks for it, with the
+  same step for a new address and an existing one. A right code proves the mailbox. For an address no account holds,
+  the engine then asks for a new password, checks it against the realm's password policy and breach list, and creates
+  the account in one database transaction; the registration completes with no amr and no auth_time. For an address an
+  account holds, the person is helped to sign in to it instead.
+
+scope:
+  shows: >-
+    a registration's rounds, from the first round of a registration interaction to the account created or the person
+    sent on to sign in, round by round
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before the registration's gate, drawn by flows/core/sign-in: the transaction's checks,
+      the MFA policy, the limiters and the transport's request checks; and the bot challenge after the gate"
+    - "the authorization endpoint's prompt=create checks, drawn with the Interaction API's start of a registration in
+      flows/core/authorization: the openid scope, the realm and the client allowing sign-up, no max_age; this flow
+      starts once the interaction is open"
+    - "the identifier step's own rules, drawn by flows/core/sign-in: an answer that is not an address, a login_hint
+      prefilled, a different address on a later round, which ends the transaction"
+    - "the code's own rules, drawn by flows/core/account-verification: the 10 minutes, the minute before a resend, the
+      email-code ladder across transactions and the burn at the 5th wrong answer of a transaction. A registration's
+      code has 8 digits and goes out before any factor, so it counts toward the send caps' per-address ceiling"
+    - "the send caps' tiers (#637): which of them answers quietly (the step, the mail dropped) and which answers 429;
+      the mail is dispatched after the answer is built, so sent, dropped and not sent look alike"
+    - 'an unclaimed account (an account created by an administrator or an import, whose owner never set a password):
+      until PRO-17 (#641) decides its path, the person is helped to sign in to it like any other account'
+    - 'the sign-in that follows for an address an account holds, drawn by flows/core/sign-in from rule 7: its
+      password, and at rule 8 the address verified when it was not, since this transaction proved the mailbox'
+    - "the Interaction API's finish of a registration: it sets no session, and the authorization code it mints
+      carries no auth_time, no amr and no session; the consent screen follows as for a sign-in"
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+
+context:
+  # The realm's registration_allowed, and the Interaction API serving it, when the round reads the gate.
+  realmAllows:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the realm does not allow sign-up, or the deployment runs no Interaction API'
+      'true': "the realm's registration_allowed is on, and the Interaction API serves it"
+  # The client, when the round reads the gate.
+  clientAllows:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the client is gone or disabled, or its operator-set hosted_flows do not name register'
+      'true': 'the client is enabled and its hosted_flows name register'
+  # Whether the transport serves every step a registration needs, and the engine holds what it needs.
+  stepsServed:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the transport cannot serve identifier, email_code or new_password, or the engine lacks the ports'
+      'true': 'the transport serves identifier, email_code and new_password'
+  # The registration start cap of the limiters (ADR-017 Decision 7), when the first code is about to be mailed.
+  startCap:
+    values: [open, full]
+    initial: any
+    say:
+      open: 'the registration starts of this client and this IP are under their cap'
+      full: 'the registration start cap is full: REGISTRATION_RATE_LIMIT starts in its window'
+  # The send caps' answer to a code about to be mailed.
+  sendCaps:
+    values: [accepted, capped]
+    initial: any
+    say:
+      accepted: 'the send caps let the code through, or drop its mail quietly at the address-and-IP tier'
+      capped: 'a tier that answers 429 is full'
+  # Who holds the address when the engine reads it.
+  holder:
+    values: [nobody, enabled, disabled]
+    initial: any
+    say:
+      nobody: 'no account of the realm holds the address'
+      enabled: 'an enabled account holds the address'
+      disabled: 'a disabled account holds the address'
+  # The realm's password policy and breach list on the new password.
+  newPassword:
+    values: [accepted, rejected, listed, checkFailed]
+    initial: any
+    say:
+      accepted: "the policy accepts it, and the realm's breach list does not hold it or the realm checks none"
+      rejected: 'the policy refuses it: too short, too long, a blocklisted word or too weak'
+      listed: "the realm's breach list holds it"
+      checkFailed: 'the policy accepts it, and the breach-list lookup fails'
+  # Whether another registration took the address between the round's read and the write.
+  race:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'nobody took the address since the round read it'
+      'true': 'another transaction created an account with the address since the round read it'
+  # What the round brings: set by the event that starts it.
+  answer:
+    values: [none, address, rightCode, wrongCode, resend, newPassword]
+    initial: none
+  # the transaction holds the address the person gave
+  addressTaken: { values: [false, true], initial: false }
+  # the registration start was counted on the limiters, once, before the first code
+  startCounted: { values: [false, true], initial: false }
+  # the transaction holds a live code's salt and HMAC, never the code
+  codeHeld: { values: [false, true], initial: false }
+  # this round asked the capped sender to mail a code, dispatched after the answer
+  mailQueued: { values: [false, true], initial: false }
+  # what the queued mail says: the code alone, or the code and the notice that an account exists
+  mailKind:
+    values: [none, newAddress, accountExists]
+    initial: none
+  # this round compared an answered code with the held HMAC, in constant time
+  codeCompared: { values: [false, true], initial: false }
+  # a right code was taken: email_code is among the transaction's verified steps, with no amr
+  mailboxProved: { values: [false, true], initial: false }
+  # the new password passed the policy and the breach list (or a failed lookup accepted it)
+  passwordAccepted: { values: [false, true], initial: false }
+  # the account exists: the users row, the verified password credential and the verified email attribute
+  accountCreated: { values: [false, true], initial: false }
+  # this round wrote an audit record
+  audited: { values: [false, true], initial: false }
+  # a failed breach-list lookup was counted on the metric and recorded in the audit log
+  breachFailureRecorded: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # an amr value or an auth_time was issued: never, at registration
+  factorClaimed: { values: [false, true], initial: false }
+
+guards:
+  notServed: 'not stepsServed'
+  closed: 'not realmAllows or not clientAllows'
+  startFull: "startCap == 'full'"
+  capped: "sendCaps == 'capped'"
+  heldByNobody: "holder == 'nobody'"
+  heldByEnabled: "holder == 'enabled'"
+  heldByDisabled: "holder == 'disabled'"
+  addressHeld: "holder != 'nobody'"
+  newPasswordRejected: "newPassword == 'rejected'"
+  newPasswordListed: "newPassword == 'listed'"
+  raced: 'race'
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      answer: none
+      mailQueued: false
+      mailKind: none
+      codeCompared: false
+      audited: false
+      floorWaited: false
+  answerAddress: { set: { answer: address } }
+  answerRight: { set: { answer: rightCode } }
+  answerWrong: { set: { answer: wrongCode } }
+  answerResend: { set: { answer: resend } }
+  answerNewPassword: { set: { answer: newPassword } }
+  takeAddress: { set: { addressTaken: true } }
+  countStart: { set: { startCounted: true } }
+  holdCode: { set: { codeHeld: true } }
+  queueNewAddressMail: { set: { mailQueued: true, mailKind: newAddress } }
+  queueAccountExistsMail: { set: { mailQueued: true, mailKind: accountExists } }
+  compareCode: { set: { codeCompared: true } }
+  proveMailbox: { set: { mailboxProved: true, codeHeld: false } }
+  acceptPassword: { set: { passwordAccepted: true } }
+  createAccount: { set: { accountCreated: true } }
+  audit: { set: { audited: true } }
+  recordBreachFailure: { set: { breachFailureRecorded: true } }
+  waitFloor: { set: { floorWaited: true } }
+  # what the operator, another transaction or the clock may have changed by the next round
+  moveOn: { havoc: [realmAllows, clientAllows, startCap, sendCaps, holder, newPassword, race] }
+
+failures:
+  readingGate: { from: accountRegistrations, store: [unavailable] }
+  reservingStart: { from: roundLimits, store: [unavailable] }
+  readingMailHolder: { from: accountDirectory, store: [unavailable] }
+  issuingCode: { from: sendCaps, store: [unavailable] }
+  readingAnswerHolder: { from: accountDirectory, store: [unavailable] }
+  readingPasswordHolder: { from: accountDirectory, store: [unavailable] }
+  checkingNewBreachList:
+    from: breachList
+    lookup: [not_configured, list_not_loaded, lookup_blocked, lookup_failed, bad_response]
+  creatingAccount: { from: accountRegistrations, store: [unavailable] }
+
+# The main story: a new address, the code typed from the mail, a password the policy accepts, and the account created.
+main:
+  given:
+    realmAllows: true
+    clientAllows: true
+    stepsServed: true
+    startCap: open
+    sendCaps: accepted
+    holder: nobody
+    newPassword: accepted
+    race: false
+  events:
+    [
+      DONE,
+      ADDRESS,
+      DONE,
+      DONE,
+      DONE,
+      DONE,
+      RIGHT_CODE,
+      DONE,
+      DONE,
+      DONE,
+      NEW_PASSWORD,
+      DONE,
+      DONE,
+      DONE,
+      DONE,
+    ]
+
+initial: checkingSteps
+states:
+  checkingSteps:
+    title: Ask whether the registration can be served at all
+    description: >-
+      A registration needs the identifier, email_code and new_password steps, and the engine needs its registration,
+      email-code and password-update ports. A transport or an engine without them sends the person elsewhere.
+    always:
+      - guard: notServed
+        target: redirected
+        effect: [waitFloor]
+        say: 'a step or a port is missing: the engine answers a redirect, and the transaction ends'
+      - target: readingGate
+        say: 'every step is served'
+
+  readingGate:
+    title: Read whether the realm and the client both allow sign-up
+    description: >-
+      On every round, before anything is mailed or written (ADR-017 Decision 8): the realm's registration_allowed,
+      served by the Interaction API, and the client's operator-set hosted_flows naming register. The client is read
+      again, so a client disabled meanwhile allows nothing. A store error refuses the round.
+    invoke: { external: accountRegistrations }
+    on:
+      DONE:
+        - guard: closed
+          target: registrationClosed
+          effect: [audit, waitFloor]
+          say: 'the realm or the client does not allow sign-up: refused, audited as registration_closed'
+        - target: dispatching
+          say: 'both allow it'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the realm or the client cannot be read'
+
+  dispatching:
+    title: Go on from where the transaction is
+    description: >-
+      The transaction says how far the registration got: a proved mailbox, a held code, an address, or nothing yet.
+      The round's answer goes to the step it answers; an answer to another step is ignored, as every eager answer is.
+    always:
+      - guard: mailboxProved
+        target: readingPasswordHolder
+        say: 'the mailbox is proved: the address is read again before the password'
+      - guard: "codeHeld and answer == 'rightCode'"
+        target: comparingCode
+        say: 'the round answers the code with the right one'
+      - guard: "codeHeld and answer == 'wrongCode'"
+        target: comparingWrongCode
+        say: 'the round answers the code with another one'
+      - guard: "codeHeld and answer == 'resend'"
+        target: readingMailHolder
+        say: 'the round asks for a new code, a minute after the last; the count of wrong answers stays'
+      - guard: codeHeld
+        target: offeringCode
+        effect: [waitFloor]
+        say: 'the round carries no answer to the code: the same step, nothing mailed'
+      - guard: addressTaken
+        target: reservingStart
+        say: 'the transaction holds the address but no code yet: a cap refused the first one'
+      - guard: "answer == 'address'"
+        target: reservingStart
+        effect: [takeAddress]
+        say: 'the round gives the address: it is checked, normalised and kept, and never changes'
+      - target: offeringAddress
+        effect: [waitFloor]
+        say: 'nothing is named yet: the identifier step, alone'
+
+  reservingStart:
+    title: Count a registration start on the limiters
+    description: >-
+      Before the first code (ADR-017 Decision 7): the registration start cap, per client and per IP. A refused start
+      mails nothing and keeps nothing; a later round tries again.
+    invoke: { external: roundLimits }
+    on:
+      DONE:
+        - guard: startFull
+          target: startThrottled
+          effect: [audit, waitFloor]
+          say: 'the start cap is full: refused, audited as rate_limited, nothing mailed'
+        - target: readingMailHolder
+          effect: [countStart]
+          say: 'the start is counted'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the limiter store fails; nothing is mailed'
+
+  readingMailHolder:
+    title: Read who holds the address, for the mail
+    description: >-
+      Before every code it mints, the first and every resend: whether an account holds the address, and whether it is
+      enabled. It decides only the mail; the step and the answer are the same for every address.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        target: issuingCode
+        say: 'the holder is read'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the account directory fails; nothing is mailed'
+
+  issuingCode:
+    title: Issue an 8-digit code and ask the capped sender to mail it
+    description: >-
+      Eight digits from a CSPRNG and a salt of their own; the transaction keeps the salt and the keyed HMAC, never the
+      code, and a new code keeps the count of wrong answers. The send caps of PRO-14 count the request before anything
+      is kept. The mail says what the holder read: the code for a new address, the code and an "account exists" notice
+      for an enabled account, and nothing at all for a disabled one, whose code is still held so that the step is the
+      same.
+    invoke: { external: sendCaps }
+    on:
+      DONE:
+        - guard: capped
+          target: sendCapped
+          effect: [audit, waitFloor]
+          say: 'a tier that answers 429 is full: nothing is mailed or kept, send_capped is audited'
+        - guard: heldByDisabled
+          target: offeringCode
+          effect: [holdCode, waitFloor]
+          say: "a disabled user's address: the code is held, its mail withheld, and the user is not touched"
+        - guard: heldByEnabled
+          target: offeringCode
+          effect: [holdCode, queueAccountExistsMail, waitFloor]
+          say: 'an account holds the address: the code and the account-exists notice are queued'
+        - guard: heldByNobody
+          target: offeringCode
+          effect: [holdCode, queueNewAddressMail, waitFloor]
+          say: 'a new address: the code is queued'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send-cap store fails: nothing is mailed or kept'
+
+  comparingCode:
+    title: Compare the right answer with the held code, in constant time
+    description: >-
+      After the code's own rules (flows/core/account-verification): the limiters, then the email-code ladder, then the
+      answer's HMAC under the code's salt against the held one, in constant time. It is right; whether it is taken
+      depends on the holder.
+    always:
+      - target: readingAnswerHolder
+        effect: [compareCode]
+        say: 'the code is right'
+
+  comparingWrongCode:
+    title: Compare a wrong answer with the held code, in constant time
+    description: >-
+      The answer's HMAC differs from the held one: the transaction counts one wrong answer more, and the ladder one
+      failure more. The 5th of a transaction burns the code (flows/core/account-verification).
+    always:
+      - target: codeRefused
+        effect: [compareCode, audit, waitFloor]
+        say: 'refused with invalid_credentials, audited as invalid_code'
+
+  readingAnswerHolder:
+    title: Read the address's holder again, before the right code is taken
+    description: >-
+      A right code for a disabled user's address is answered exactly as a wrong one, and counted as one: the person
+      learns nothing, and nothing of the user changes. Any other holder, or none, lets the code be taken. A store error
+      refuses the round; the code stays live.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: heldByDisabled
+          target: codeRefused
+          effect: [audit, waitFloor]
+          say: "a disabled user's address: refused with invalid_credentials, counted, audited as account_disabled"
+        - target: readingPasswordHolder
+          effect: [proveMailbox, audit]
+          say: 'the code is taken: consumed, email_code joins the verified steps with no amr, audited as passed'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the account directory fails; the code stays live'
+
+  readingPasswordHolder:
+    title: Read whether an account holds the address now
+    description: >-
+      On every round once the mailbox is proved. An account that holds the address, created before the registration
+      or by another one since, is not registered again: the person is helped to sign in to it, the mailbox already
+      proved (ADR-017 Decision 8).
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: addressHeld
+          target: signInHelped
+          say: 'an account holds the address: the sign-in goes on with its first factor'
+        - guard: "answer == 'newPassword'"
+          target: checkingNewPassword
+          say: 'no account holds it, and the round brings a new password'
+        - target: offeringNewPassword
+          effect: [waitFloor]
+          say: 'no account holds it: the new password is asked for'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the account directory fails'
+
+  checkingNewPassword:
+    title: Check the new password against the realm's password policy
+    description: >-
+      The one password policy (ADR-017 Decision 8, #634): the length as typed, NFC, the realm's minimum length, the
+      whole-password blocklist with the address and the service and realm names as context words, and the score floor.
+    always:
+      - guard: newPasswordRejected
+        target: newPasswordRefused
+        effect: [audit, waitFloor]
+        say: 'the policy refuses it: the step again with password_rejected and its reasons'
+      - target: checkingNewBreachList
+        say: 'the policy accepts it'
+
+  checkingNewBreachList:
+    title: Check the new password against the realm's breach list
+    description: >-
+      The same check as every new password's, on the password in NFC, when the realm names a source. A listed one is
+      refused as blocklisted. A check that fails accepts it: counted on the metric and recorded in the audit log.
+    invoke: { external: breachList }
+    on:
+      DONE:
+        - guard: newPasswordListed
+          target: newPasswordRefused
+          effect: [audit, waitFloor]
+          say: 'the new password is listed: refused as blocklisted, audited as password_breached'
+        - guard: "newPassword == 'accepted'"
+          target: creatingAccount
+          effect: [acceptPassword]
+          say: 'the new password is not on the list, or the realm checks none'
+      FAIL.lookup:
+        guard: "newPassword == 'checkFailed'"
+        target: creatingAccount
+        effect: [acceptPassword, recordBreachFailure]
+        say: 'the check fails: counted and recorded, and the new password is accepted'
+
+  creatingAccount:
+    title: Create the account in one database transaction
+    description: >-
+      Only now, the mailbox and the password both passed: the users row, the password credential with the Argon2id
+      hash of the password in NFC, its normalisation marker and email_verified, the verified email attribute, and the
+      user.registered event, all in one database transaction. The unique constraint on the address decides a race; a
+      store error writes nothing, and the round is refused.
+    invoke: { external: accountRegistrations }
+    on:
+      DONE:
+        - guard: raced
+          target: registrationConflict
+          effect: [audit, waitFloor]
+          say: 'another account took the address meanwhile: nothing is written, audited as registration_conflict'
+        - target: registered
+          effect: [createAccount, audit, waitFloor]
+          say: 'the account is created: new_password joins the verified steps with no amr, audited as passed'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails: nothing is written'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringAddress:
+    title: Ask for the address
+    description: >-
+      The identifier step alone: no first factor, no upstream provider. The request's login_hint fills it in.
+    response:
+      kind: step
+      body:
+        current: { step: identifier, params: {} }
+        alternatives: []
+        personal: { identifier: "the request's login_hint, if it has one" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      ADDRESS:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerAddress]
+        say: 'the person types an address'
+
+  offeringCode:
+    title: Ask for the code
+    description: >-
+      The same step and the same personal data for a new address, an enabled account's address and a disabled
+      account's, answered no earlier than the floor: nothing in the answer, its body or its time, says whether an
+      account holds the address. Only the mail differs, and a disabled user's gets none.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: verify_account
+            length: 8
+            expires_in: 'the seconds the code has left, at most 600'
+            resend_after: 'the seconds until another code may be asked for, at most 60'
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer: the same step, nothing mailed'
+      RIGHT_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerRight]
+        say: 'the person types the code from the mail'
+      WRONG_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerWrong]
+        say: 'the person types another code'
+      RESEND:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerResend]
+        say: 'the person asks for a new code: an answer with no otp'
+
+  codeRefused:
+    title: Ask for the code again
+    description: >-
+      The same step with invalid_credentials; the code stays, and so does the count of wrong answers. A disabled
+      user's right code lands here too, alike.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: verify_account
+            length: 8
+            expires_in: 'the seconds the code has left, at most 600'
+            resend_after: 'the seconds until another code may be asked for, at most 60'
+          error: invalid_credentials
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      RIGHT_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerRight]
+        say: 'the person types the right code'
+      WRONG_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerWrong]
+        say: 'the person types another wrong code'
+      RESEND:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerResend]
+        say: 'the person asks for a new code'
+
+  offeringNewPassword:
+    title: Ask for a new password
+    description: >-
+      The new_password step with the purpose register, the realm's minimum length and the longest password accepted;
+      the personal data is the transaction's address. No account exists yet.
+    response:
+      kind: step
+      body:
+        current:
+          step: new_password
+          params:
+            purpose: register
+            min_length: "the realm's password.minLength"
+            max_length: 256
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer: the same step'
+      NEW_PASSWORD:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerNewPassword]
+        say: 'the person types a new password'
+
+  newPasswordRefused:
+    title: Ask for a new password again
+    description: >-
+      The same step with password_rejected and the reasons: too_short, too_long, blocklisted (a whole dictionary or
+      context word, or a password on the realm's breach list) or too_weak.
+    response:
+      kind: step
+      body:
+        current:
+          step: new_password
+          params:
+            purpose: register
+            min_length: "the realm's password.minLength"
+            max_length: 256
+            reasons: 'why the new password was refused'
+          error: password_rejected
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      NEW_PASSWORD:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerNewPassword]
+        say: 'the person types another new password'
+
+  # Exits
+
+  registered:
+    type: final
+    title: Complete the registration
+    description: >-
+      The account exists, and the transaction ends with it, so nothing completes twice. A registration signs nobody
+      in (ADR-017 Decision 10): the transport sets no session, and the code it mints carries no auth_time and no amr.
+    response:
+      kind: complete
+      body:
+        transaction: null
+        subject: "the new account's user id"
+        identifier: "the transaction's address, normalised"
+        registered: true
+
+  signInHelped:
+    type: final
+    title: Help the person sign in to the account that holds the address
+    description: >-
+      The engine goes on with the sign-in's rule 7, drawn by flows/core/sign-in: the account's first factor, offered
+      in this same round. Its rule 8 verifies an address not verified yet, as the mailbox is already proved.
+    response:
+      kind: continue
+      body:
+        verified: 'the transaction verified email_code with purpose verify_account; it adds no amr value'
+
+  registrationClosed:
+    type: final
+    title: Refuse a registration the realm or the client does not allow
+    description: >-
+      The transaction stays as the round found it. The Interaction API answers it as an interaction that has expired.
+    response:
+      kind: refused
+      body: { reason: request_refused, code: registration_not_allowed }
+
+  redirected:
+    type: final
+    title: Continue elsewhere
+    description: >-
+      The transport cannot serve a step the registration needs, or the engine lacks a port. The transaction ends, and
+      nothing is mailed or written.
+    response:
+      kind: redirect
+      body: { reason: step_not_available, transaction: null }
+
+  startThrottled:
+    type: final
+    title: Refuse a registration start over its cap
+    description: Nothing is mailed or kept; the transaction stays.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the start cap's" }
+
+  sendCapped:
+    type: final
+    title: Refuse the round for the send caps
+    description: The same 429 for every address. A code the transaction held stays live.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the send cap's" }
+
+  registrationConflict:
+    type: final
+    title: End the transaction for an address taken meanwhile
+    description: >-
+      Another transaction created an account with the address between the round's read and the write. Nothing was
+      written; the FiPA endpoint answers invalid_session, and the Interaction API starts again.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: >-
+      The gate, the limiters, the account directory, the send caps or the database cannot be reached: fail closed.
+      The transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: nothing-before-the-gate
+    never: >-
+      state in ['offeringAddress', 'offeringCode', 'codeRefused', 'offeringNewPassword', 'newPasswordRefused',
+      'registered', 'signInHelped', 'startThrottled', 'sendCapped', 'registrationConflict'] and (not realmAllows or
+      not clientAllows)
+    say: 'No registration step is offered, nothing is mailed and nothing is written unless the realm and the client allow it'
+  - id: no-account-before-the-code
+    never: 'accountCreated and not mailboxProved'
+    say: 'No account exists before the mailbox is proved'
+  - id: no-account-before-the-password
+    never: 'accountCreated and not passwordAccepted'
+    say: "No account exists before its password passes the realm's policy and breach list"
+  - id: an-account-only-for-a-free-address
+    never: "state == 'registered' and holder != 'nobody'"
+    say: 'An address an account holds is never registered again'
+  - id: no-factor-at-registration
+    never: 'factorClaimed'
+    say: 'A registration issues no amr value and no auth_time'
+  - id: a-disabled-users-address-gets-no-mail
+    never: "mailQueued and holder == 'disabled'"
+    say: "A disabled user's address is mailed nothing"
+  - id: a-disabled-users-code-is-never-taken
+    never: "mailboxProved and answer == 'rightCode' and holder == 'disabled'"
+    say: "A right code for a disabled user's address is answered as a wrong one, so nothing of that user changes"
+  - id: the-mail-says-who-holds-the-address
+    never: "(mailKind == 'newAddress' and holder != 'nobody') or (mailKind == 'accountExists' and holder != 'enabled')"
+    say: 'A new address gets the code alone; an enabled account gets the code and the account-exists notice'
+  - id: the-start-is-counted-first
+    never: 'codeHeld and not startCounted'
+    say: 'No code is held before the registration start was counted'
+  - id: nothing-mailed-when-capped
+    never: "state in ['sendCapped', 'startThrottled'] and mailQueued"
+    say: 'A start or a send the caps refuse mails nothing'
+  - id: compare-only-a-held-code
+    never: 'codeCompared and not startCounted'
+    say: 'A code is compared only once one was issued'
+  - id: every-refusal-is-audited
+    never: >-
+      state in ['registrationClosed', 'startThrottled', 'sendCapped', 'codeRefused', 'newPasswordRefused',
+      'registrationConflict', 'registered'] and not audited
+    say: 'Every refused answer and the created account write an audit record'
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringAddress', 'offeringCode', 'codeRefused', 'offeringNewPassword', 'newPasswordRefused',
+      'registered', 'registrationClosed', 'redirected', 'startThrottled', 'sendCapped', 'registrationConflict',
+      'unavailable'] and not floorWaited
+    say: >-
+      Every round that ends here answers no earlier than 500 ms after it arrived, so a new address and an existing one
+      take the same time
