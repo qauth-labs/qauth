@@ -230,6 +230,18 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
   }
 
   /**
+   * The server's warnings and errors in the current test: a refusal answers
+   * the same page whatever its cause, and a fault only its trace id, so an
+   * assertion on an answer carries them to say why.
+   */
+  const serverLog: string[] = [];
+
+  /** `body`, with the server's warnings and errors of this test after it. */
+  function withServerLog(body: string): string {
+    return serverLog.length === 0 ? body : `${body}\nserver log:\n${serverLog.join('')}`;
+  }
+
+  /**
    * Boot a deployment for the enclosing block with `environment` over the
    * base one, its egress through the test-only client, and before each test
    * reset it and seed the client and the two providers.
@@ -248,7 +260,10 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
           AUTHORIZE_RATE_LIMIT_LENIENT: '10000',
           ...environment,
         },
-        { egressClientFactory: createTestEgressClient }
+        {
+          egressClientFactory: createTestEgressClient,
+          logStream: { write: (line: string) => void serverLog.push(line) },
+        }
       );
     }, 240_000);
 
@@ -264,6 +279,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         return;
       }
       realmId = await seed(booted.app);
+      serverLog.length = 0;
     }, 120_000);
 
     return {
@@ -391,13 +407,13 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     routed: LightMyRequestResponse,
     type: string
   ): Promise<Started> {
-    expect(routed.statusCode, routed.body).toBe(302);
+    expect(routed.statusCode, withServerLog(routed.body)).toBe(302);
     const start = new URL(String(routed.headers['location']), ORIGIN);
     expect(start.pathname).toBe(`/ui/upstream/${type}/start`);
     const interactionId = start.searchParams.get('interaction') ?? '';
     expect(interactionId).toMatch(INTERACTION_ID);
     const page = await get(app, jar, `${start.pathname}${start.search}`);
-    expect(page.statusCode, page.body).toBe(200);
+    expect(page.statusCode, withServerLog(page.body)).toBe(200);
     expect(page.body).toContain(WAITING_TITLE);
     const link = /<a class="alt-action" href="([^"]+)"/.exec(page.body)?.[1];
     if (link === undefined) throw new Error('no provider link on the waiting page');
@@ -451,7 +467,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
     jar: CookieJar,
     callback: LightMyRequestResponse
   ): Promise<string> {
-    expect(callback.statusCode, callback.body).toBe(303);
+    expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
     expect(jar.get(SESSION_COOKIE)).toBeDefined();
     const back = pathOf(callback.headers['location']);
     expect(back.startsWith('/oauth/authorize?'), back).toBe(true);
@@ -825,7 +841,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
 
         const callback = await signInAtProvider(app, jar);
 
-        expect(callback.statusCode, callback.body).toBe(303);
+        expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
         codeAt(callback.headers['location']);
         expect(jar.get(SESSION_COOKIE)).toBeDefined();
         const { userId } = await credentialOf(app, server.realmId());
@@ -881,7 +897,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
           { key: 'name', value: 'Ada Lovelace', verified: false },
         ]);
         // The address QAuth has not verified: the ceremony page asks for an emailed code.
-        expect(callback.statusCode, callback.body).toBe(303);
+        expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
         const id = ceremonyIdOf(callback.headers['location']);
         expect((await stepOf(app, id)).step).toBe(EMAIL_CODE);
         expect(await codes(app)).toBe(0);
@@ -904,7 +920,7 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
 
         const routed = new CookieJar();
         const callback = await signInAtProvider(app, routed, PERSON, HIDDEN_TYPE);
-        expect(callback.statusCode, callback.body).toBe(303);
+        expect(callback.statusCode, withServerLog(callback.body)).toBe(303);
         codeAt(callback.headers['location']);
         expect(await credentialsOf(app, HIDDEN_TYPE)).toBe(1);
       });
