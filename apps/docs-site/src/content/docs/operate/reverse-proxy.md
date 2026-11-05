@@ -58,6 +58,16 @@ split.
      ceremony app must therefore put nothing under `/ui/assets/` but files named by a hash of their
      content. Serve any other file outside that prefix, where it gets `no-store`. The reference
      app's build already does this.
+
+   - One exception to the policy: a hosted bot-challenge provider's script hosts (ADR-019
+     Decision 5). The list is empty by default, and the built-in proof of work needs none. When
+     the auth server runs `BOT_CHALLENGE_PROVIDER=hosted`, the operator may name the provider's
+     hosts, and the proxy adds them to `script-src` and `frame-src` on the interaction page,
+     `/ui/interaction/*`, where a person signs in and signs up. No other page gets them. Accept
+     only a list of `https` host sources separated by spaces, such as
+     `https://challenges.cloudflare.com`, and drop any other value whole: a `;` in it would end
+     the directive and add another. By naming hosts, the operator accepts that the provider's
+     script runs where passwords are typed, as part of the realm's trusted computing base.
 7. **Let no upstream steer the proxy.** Ignore every response header that asks the proxy to fetch
    another location or file internally: nginx's `X-Accel-Redirect` and the other `X-Accel-*`
    headers, or their equivalent in another proxy. Otherwise the ceremony app could have the proxy
@@ -87,11 +97,12 @@ split.
 
 | File                       | Edit it? | What it holds                                                                                                              |
 | -------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `nginx.conf`               | No       | The `http` block: path normalisation, the separator and `Cache-Control` maps, and the default server (421, health).        |
+| `nginx.conf`               | No       | The `http` block: path normalisation, the separator, `Cache-Control` and CSP maps, and the default server (421, health).   |
 | `qauth/realm.conf`         | No       | The rules of a realm host: path variants, internal paths, `/ui/*` and its headers, and everything else to the auth server. |
 | `qauth/proxy-headers.conf` | No       | `Host`, the forwarded headers and the ignored `X-Accel-*` headers, for every proxied location.                             |
 | `site/upstreams.conf`      | Yes      | The addresses of the auth server and the ceremony app.                                                                     |
 | `site/realms.conf`         | Yes      | The realm hosts and their certificate paths. The hosts in it are examples.                                                 |
+| `site/bot-challenge.conf`  | Yes      | A hosted bot-challenge provider's script hosts, per realm host. Empty by default.                                          |
 | `test/`                    | No       | The CI test and its stub upstream.                                                                                         |
 
 Inside the container the files sit at `/etc/nginx/nginx.conf`, `/etc/nginx/qauth/` and
@@ -142,9 +153,18 @@ services:
 every rule above: the path refusals, the cookie stripping, the ceremony headers and the `404` on
 `/metrics` and `/internal/*`.
 
-The reference configuration leaves out a plain-HTTP listener and its redirect, IPv6 listeners, and
-a hosted bot-challenge provider's script hosts. ADR-019 Decision 5 lets an operator add those
-hosts to the policy of the sign-up and sign-in pages only; by default there are none.
+The reference configuration leaves out a plain-HTTP listener and its redirect, and IPv6 listeners.
+A hosted bot-challenge provider's script hosts go in `site/bot-challenge.conf`, by realm host:
+
+```nginx
+map $host $qauth_bot_challenge_hosts {
+    auth.example.com  "https://challenges.cloudflare.com";
+    default  "";
+}
+```
+
+An existing `site/` directory from an earlier release needs this file, with the empty default,
+or nginx refuses to start.
 
 ## The test
 

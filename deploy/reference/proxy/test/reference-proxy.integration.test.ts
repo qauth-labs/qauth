@@ -10,12 +10,17 @@
  * which side, and that a refused request reached neither. The certificate is
  * a throwaway one, made with `openssl` for this run and mounted as files.
  *
+ * A second proxy runs the same rules with a copy of `site/` whose
+ * `bot-challenge.conf` names a hosted bot challenge's script hosts (#643):
+ * a well-formed list for one realm host, and one that tries to add a
+ * directive for the other.
+ *
  * Needs Docker and `openssl`. Locally the suite skips without them; on CI it
  * fails instead, as the other container suites do.
  */
 import { execFile } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import type { IncomingHttpHeaders } from 'node:http';
 import { connect as http2Connect } from 'node:http2';
 import { request as httpsRequest } from 'node:https';
@@ -44,6 +49,23 @@ const REFERENCE_CSP =
   "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; " +
   "object-src 'none'; frame-ancestors 'none'";
 const IMMUTABLE = 'public, max-age=31536000, immutable';
+
+/** The script hosts the second proxy's `site/bot-challenge.conf` names for {@link REALM_HOST} (#643). */
+const CHALLENGE_HOSTS = 'https://challenges.example.net https://*.captcha.example.net:8443';
+/** The interaction page's policy on the second proxy, for {@link REALM_HOST}. */
+const HOSTED_CHALLENGE_CSP =
+  `default-src 'self'; base-uri 'self'; script-src 'self' ${CHALLENGE_HOSTS}; style-src 'self'; ` +
+  "img-src 'self' data:; font-src 'self' data:; connect-src 'self'; form-action 'self'; " +
+  `object-src 'none'; frame-src 'self' ${CHALLENGE_HOSTS}; frame-ancestors 'none'`;
+/** The second proxy's `site/bot-challenge.conf`: a list for one host, an injection for the other. */
+const HOSTED_CHALLENGE_SITE = `map $host $qauth_bot_challenge_hosts {
+    ${REALM_HOSTS[0]}  "${CHALLENGE_HOSTS}";
+    ${REALM_HOSTS[1]}  "https://challenges.example.net; script-src *";
+    default  "";
+}
+`;
+/** An interaction page, as the authorization endpoint sends a browser to it. */
+const INTERACTION_PAGE = `/ui/interaction/${'A'.repeat(43)}`;
 
 /** A QAuth session cookie and the wallet flow's binder cookie. */
 const QAUTH_COOKIES = '__Host-qauth_session=s3ss10n; __Host-qauth_wallet_flow=fl0w';
@@ -113,6 +135,8 @@ interface Echo {
 
 interface Stack {
   port: number;
+  /** The second proxy's port: the same rules, a site that names bot challenge script hosts. */
+  hostedChallengePort: number;
   ca: string;
   containers: { proxy: string; authServer: string; ceremonyApp: string };
 }
@@ -129,10 +153,16 @@ const started: string[] = [];
  */
 function send(
   path: string,
-  options: { host?: string; method?: string; headers?: Record<string, string> } = {}
+  options: {
+    host?: string;
+    method?: string;
+    headers?: Record<string, string>;
+    port?: number;
+  } = {}
 ): Promise<ProxyResponse> {
   if (stack === undefined) throw new Error('the stack is not running');
-  const { port, ca } = stack;
+  const { ca } = stack;
+  const port = options.port ?? stack.port;
   const host = options.host ?? REALM_HOST;
   const hostname = host.replace(/:\d+$/, '').toLowerCase();
   const knownHost = (REALM_HOSTS as readonly string[]).includes(hostname);
@@ -302,46 +332,64 @@ beforeAll(async () => {
     startStub('ceremony-app'),
   ]);
 
-  const proxy = await docker(
-    'run',
-    '--detach',
-    '--label',
-    'qauth-test=reference-proxy',
-    '--network',
-    network,
-    '--publish',
-    '127.0.0.1::443',
-    '--volume',
-    `${join(PROXY_ROOT, 'nginx.conf')}:/etc/nginx/nginx.conf:ro`,
-    '--volume',
-    `${join(PROXY_ROOT, 'qauth')}:/etc/nginx/qauth:ro`,
-    '--volume',
-    `${join(PROXY_ROOT, 'site')}:/etc/nginx/site:ro`,
-    '--volume',
-    `${certs}:/etc/nginx/certs:ro`,
-    NGINX_IMAGE
-  );
-  started.push(proxy);
-
-  const published = await docker('port', proxy, '443/tcp');
-  const port = Number(published.split('\n')[0].split(':').pop());
-  stack = {
-    port,
-    ca: await readFile(join(certs, 'fullchain.pem'), 'utf8'),
-    containers: { proxy, authServer, ceremonyApp },
+  /** The shipped rules in front of the stubs, with the site files of `site`; its port. */
+  const startProxy = async (site: string): Promise<{ container: string; port: number }> => {
+    if (network === undefined) throw new Error('no network');
+    const container = await docker(
+      'run',
+      '--detach',
+      '--label',
+      'qauth-test=reference-proxy',
+      '--network',
+      network,
+      '--publish',
+      '127.0.0.1::443',
+      '--volume',
+      `${join(PROXY_ROOT, 'nginx.conf')}:/etc/nginx/nginx.conf:ro`,
+      '--volume',
+      `${join(PROXY_ROOT, 'qauth')}:/etc/nginx/qauth:ro`,
+      '--volume',
+      `${site}:/etc/nginx/site:ro`,
+      '--volume',
+      `${certs}:/etc/nginx/certs:ro`,
+      NGINX_IMAGE
+    );
+    started.push(container);
+    const published = await docker('port', container, '443/tcp');
+    return { container, port: Number(published.split('\n')[0].split(':').pop()) };
   };
 
-  try {
-    await until('the proxy', async () => {
-      const response = await send('/health');
-      return response.status === 200 && response.headers['x-stub-upstream'] === 'auth-server';
-    });
-  } catch (error) {
-    const state = await docker('inspect', '--format', '{{json .State}}', proxy).catch(() => '');
-    throw new Error(
-      `${String(error)}\n--- proxy state ---\n${state}\n--- proxy log ---\n${await logsOf(proxy)}`,
-      { cause: error }
-    );
+  // The second proxy's site: the shipped one, with bot challenge script hosts.
+  const hostedSite = join(workDir, 'site');
+  await cp(join(PROXY_ROOT, 'site'), hostedSite, { recursive: true });
+  await writeFile(join(hostedSite, 'bot-challenge.conf'), HOSTED_CHALLENGE_SITE);
+
+  const [proxy, hostedProxy] = await Promise.all([
+    startProxy(join(PROXY_ROOT, 'site')),
+    startProxy(hostedSite),
+  ]);
+  stack = {
+    port: proxy.port,
+    hostedChallengePort: hostedProxy.port,
+    ca: await readFile(join(certs, 'fullchain.pem'), 'utf8'),
+    containers: { proxy: proxy.container, authServer, ceremonyApp },
+  };
+
+  for (const { container, port } of [proxy, hostedProxy]) {
+    try {
+      await until('the proxy', async () => {
+        const response = await send('/health', { port });
+        return response.status === 200 && response.headers['x-stub-upstream'] === 'auth-server';
+      });
+    } catch (error) {
+      const state = await docker('inspect', '--format', '{{json .State}}', container).catch(
+        () => ''
+      );
+      throw new Error(
+        `${String(error)}\n--- proxy state ---\n${state}\n--- proxy log ---\n${await logsOf(container)}`,
+        { cause: error }
+      );
+    }
   }
 }, 300_000);
 
@@ -594,6 +642,70 @@ describe('the reference proxy (#482)', () => {
 
       expect(response.headers['x-stub-upstream']).toBe('auth-server');
       expect(headerValues(response, 'set-cookie')).toEqual([cookie]);
+    });
+  });
+
+  describe('the bot challenge script hosts (#643)', () => {
+    /** The CSP of `response`, by directive. */
+    function directivesOf(response: ProxyResponse): Map<string, string[]> {
+      const [policy] = headerValues(response, 'content-security-policy');
+      return new Map(
+        (policy ?? '').split(';').map((directive) => {
+          const [name, ...sources] = directive.trim().split(/\s+/);
+          return [name ?? '', sources] as const;
+        })
+      );
+    }
+
+    it('keeps the strict CSP on the interaction page while no host is named', async () => {
+      if (!prerequisites) return;
+      const response = await send(INTERACTION_PAGE);
+
+      expect(echoOf(response)).toMatchObject({ upstream: 'ceremony-app', url: INTERACTION_PAGE });
+      expect(headerValues(response, 'content-security-policy')).toEqual([REFERENCE_CSP]);
+      expect(headerValues(response, 'referrer-policy')).toEqual(['no-referrer']);
+      expect(headerValues(response, 'cache-control')).toEqual(['no-store']);
+      expect(directivesOf(response).get('script-src')).toEqual(["'self'"]);
+    });
+
+    it('strips cookies on the interaction page, as on every /ui/* answer', async () => {
+      if (!prerequisites) return;
+      const response = await send(INTERACTION_PAGE, {
+        headers: { cookie: QAUTH_COOKIES, 'x-stub-set-cookie': 'theme=dark; Path=/' },
+      });
+
+      expect(echoOf(response).headers.cookie).toBeUndefined();
+      expect(response.headers['set-cookie']).toBeUndefined();
+    });
+
+    it('adds the named hosts to the script and frame sources of the interaction page only', async () => {
+      if (!prerequisites || stack === undefined) return;
+      const port = stack.hostedChallengePort;
+      const page = await send(INTERACTION_PAGE, { port });
+
+      expect(echoOf(page)).toMatchObject({ upstream: 'ceremony-app', url: INTERACTION_PAGE });
+      expect(headerValues(page, 'content-security-policy')).toEqual([HOSTED_CHALLENGE_CSP]);
+      expect(directivesOf(page).get('frame-ancestors')).toEqual(["'none'"]);
+      expect(headerValues(page, 'cache-control')).toEqual(['no-store']);
+
+      for (const path of ['/ui/login', '/ui/assets/index-BxY2abcd.js', '/ui/interactions/x']) {
+        const other = await send(path, { port });
+        expect(headerValues(other, 'content-security-policy'), path).toEqual([REFERENCE_CSP]);
+      }
+      const server = await send('/oauth/authorize', { port });
+      expect(headerValues(server, 'content-security-policy')).toEqual([
+        "script-src * 'unsafe-inline' 'unsafe-eval'",
+      ]);
+    });
+
+    it('drops a host list that would add a directive, leaving the strict CSP', async () => {
+      if (!prerequisites || stack === undefined) return;
+      const page = await send(INTERACTION_PAGE, {
+        port: stack.hostedChallengePort,
+        host: REALM_HOSTS[1],
+      });
+
+      expect(headerValues(page, 'content-security-policy')).toEqual([REFERENCE_CSP]);
     });
   });
 

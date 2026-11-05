@@ -10,6 +10,7 @@ The rules, the file layout and how to run it are in the operator docs:
 (`apps/docs-site/src/content/docs/operate/reverse-proxy.md`).
 
 - `nginx.conf` and `qauth/` are QAuth's rules. Do not edit them.
-- `site/` holds the two files you edit: the upstream addresses and the realm hosts.
+- `site/` holds the three files you edit: the upstream addresses, the realm hosts and a hosted bot
+  challenge's script hosts (empty by default).
 - `test/` runs this configuration, unchanged, in front of stub upstreams:
   `pnpm nx run reference-proxy:test-integration` (needs Docker and `openssl`).
