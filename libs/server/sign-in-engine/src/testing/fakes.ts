@@ -249,13 +249,15 @@ export class FakeCodeSender {
 /**
  * An address verifier over a {@link FakeDirectory}: it marks the account the
  * identifier names verified when it is the user's and enabled, recording
- * each call.
+ * each call. For an upstream provider's account (`upstream` set, #639) it
+ * marks the user's account, whatever its key.
  */
 export class FakeAddresses implements AddressVerifier {
   readonly calls: {
     readonly realmId: string;
     readonly userId: string;
     readonly identifier: string;
+    readonly upstream?: string;
   }[] = [];
 
   constructor(readonly directory: FakeDirectory) {}
@@ -264,8 +266,17 @@ export class FakeAddresses implements AddressVerifier {
     readonly realmId: string;
     readonly userId: string;
     readonly identifier: string;
+    readonly upstream?: string;
   }): Promise<AddressVerification> {
     this.calls.push(Object.freeze({ ...input }));
+    if (input.upstream !== undefined) {
+      const entry = [...this.directory.accounts].find(([, held]) => held.userId === input.userId);
+      if (entry === undefined) return { kind: 'refused', reason: 'subject_mismatch' };
+      const [key, held] = entry;
+      if (!held.enabled) return { kind: 'refused', reason: 'account_disabled' };
+      this.directory.accounts.set(key, { ...held, verified: true });
+      return { kind: 'verified' };
+    }
     const account = this.directory.accounts.get(input.identifier);
     if (account === undefined || account.userId !== input.userId || account.password === null) {
       return { kind: 'refused', reason: 'subject_mismatch' };

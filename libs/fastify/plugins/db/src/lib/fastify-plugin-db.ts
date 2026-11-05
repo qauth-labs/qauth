@@ -26,6 +26,7 @@ import {
   createRealmPublicKeysRepository,
   createRealmSecretsRepository,
   createRealmsRepository,
+  createRealmUpstreamProvidersRepository,
   createRefreshTokensRepository,
   createSessionsRepository,
   createSsfStreamsRepository,
@@ -46,6 +47,7 @@ import {
   type RealmPublicKeysRepository,
   type RealmSecretsRepository,
   type RealmsRepository,
+  type RealmUpstreamProvidersRepository,
   type RefreshTokensRepository,
   type SessionsRepository,
   type SsfStreamsRepository,
@@ -173,6 +175,14 @@ declare module 'fastify' {
        * on and its config. Secrets are stored encrypted.
        */
       realmAuthMethodPlugins: RealmAuthMethodPluginsRepository;
+      /**
+       * Each realm's generic upstream OpenID Connect providers (ADR-020,
+       * #639): the admin API adds, changes and removes them (#714), the
+       * sign-in pages list the enabled ones, and the upstream callback loads
+       * the one a sign-in went out through. The client secret in a provider's
+       * config is stored sealed.
+       */
+      realmUpstreamProviders: RealmUpstreamProvidersRepository;
     };
   }
 }
@@ -212,6 +222,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   realmPublicKeys: true,
   realmSecrets: true,
   realmAuthMethodPlugins: true,
+  realmUpstreamProviders: true,
 };
 
 /** Every repository the plugin can build, in the order of the type above. */
@@ -317,6 +328,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       realmPublicKeys: () => createRealmPublicKeysRepository(database.db),
       realmSecrets: () => createRealmSecretsRepository(database.db),
       realmAuthMethodPlugins: () => createRealmAuthMethodPluginsRepository(database.db),
+      realmUpstreamProviders: () => createRealmUpstreamProvidersRepository(database.db),
     };
     const loaded: Partial<Record<RepositoryName, unknown>> = {};
     for (const name of options.repositories ?? REPOSITORY_NAMES) {

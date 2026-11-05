@@ -6,7 +6,8 @@ import type {
 } from '@qauth-labs/server-step-grammar';
 
 import type { EmailCodePurpose } from './email-code';
-import type { AuditSink } from './ports';
+import type { AuditSink, UpstreamProviderEntry } from './ports';
+import type { ProvedAccount } from './steps/handler';
 import type { SignInTransaction } from './transaction';
 
 /** The answer a round carries, as the transport received it. */
@@ -45,6 +46,39 @@ export type EmailCodeSender = (mail: {
   readonly afterFirstFactor: boolean;
 }) => Promise<EmailCodeSendOutcome>;
 
+/** What starting an upstream identity provider found (#639). */
+export type UpstreamStartOutcome =
+  /** The provider's transaction is kept: the browser goes to `redirectTo`. */
+  | { readonly kind: 'started'; readonly redirectTo: string }
+  /** The provider could not be started (its discovery document cannot be read): nothing is kept. */
+  | { readonly kind: 'unavailable' };
+
+/**
+ * The transport's start of an upstream identity provider (#639), bound to the
+ * round's request: it calls the provider's AuthMethod `start()`, keeps the
+ * transaction it answers server-side, bound to the sign-in and to the
+ * browser's flow cookie, and answers where the browser goes. A throw is an
+ * outage of the transport's store, which refuses the round.
+ */
+export type UpstreamStarter = (provider: UpstreamProviderEntry) => Promise<UpstreamStartOutcome>;
+
+/**
+ * What an upstream provider's callback proved (#639), for
+ * `SignInEngine.completeUpstream`: the transport found the account by the
+ * provider's subject (never by an attribute), or created it.
+ */
+export interface UpstreamProof {
+  /** The provider the sign-in went out through, as the step listed it or the request routed to it. */
+  readonly provider: UpstreamProviderEntry;
+  /** The account that holds the provider's identity. */
+  readonly account: ProvedAccount;
+  /**
+   * The address the provider gave, normalised: what rule 8 verifies with an
+   * emailed code when the account is not verified. Absent when it gave none.
+   */
+  readonly address?: string;
+}
+
 /** What a round is for: the transport's view of the request, already checked by its own rules 1 and 2. */
 export interface RoundContext {
   readonly realm: { readonly id: string };
@@ -79,6 +113,18 @@ export interface RoundContext {
    * code: the inline verification of an account after its password (#638).
    */
   readonly sendCode?: EmailCodeSender;
+  /**
+   * The start of an upstream identity provider, bound to this round's request
+   * (#639). Without it the `upstream` step is never offered.
+   */
+  readonly startUpstream?: UpstreamStarter;
+  /**
+   * The provider the authorization request routes to (`qauth_upstream`,
+   * #639), which the transport checked the realm has enabled, hidden or not.
+   * At round 0, while nobody is named, the engine starts it at once instead
+   * of offering the first step.
+   */
+  readonly upstreamRoute?: UpstreamProviderEntry;
 }
 
 /** A completed sign-in: what the transport mints a session or a code from. */
@@ -118,6 +164,23 @@ export type RoundResult =
       readonly offer: StepOffer;
       /** The current step's personal data: at most the identifier the person gave. */
       readonly personal: Readonly<Record<string, unknown>>;
+    }
+  /**
+   * Send the browser to an upstream identity provider (#639): the person
+   * picked one, or the request routed to one. `offer` is the step the person
+   * picked it from, which stays the current step: the way back from the
+   * provider. The provider's callback completes the step
+   * (`SignInEngine.completeUpstream`).
+   */
+  | {
+      readonly kind: 'upstream';
+      readonly transaction: SignInTransaction;
+      readonly offer: StepOffer;
+      readonly personal: Readonly<Record<string, unknown>>;
+      /** The provider's type. */
+      readonly provider: string;
+      /** Where the browser goes: the provider's authorization request. */
+      readonly redirectTo: string;
     }
   /**
    * The sign-in is complete: the transport mints the session or the code,

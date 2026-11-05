@@ -100,6 +100,13 @@ function makeFastify() {
     },
     // The login page signs its CSRF cookie with the realm's cookie key (#493).
     signer: createFakeCookieSigner(),
+    repositories: {
+      // The realm's upstream providers (#639): none.
+      realmUpstreamProviders: {
+        listByRealm: vi.fn(async () => []),
+        find: vi.fn(async () => undefined),
+      },
+    },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   return { fastify: fastify as FastifyInstance, ctx, store };

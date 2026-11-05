@@ -10,12 +10,20 @@ import type { FactorType, MfaMode, MfaPolicy, SignInAccount } from './ports';
 /**
  * How strong each first factor is: a passkey above a password. A second
  * factor is not ranked: the MFA policy asks for it, the downgrade rule does
- * not. An upstream sign-in will rank with the password (#639).
+ * not. An upstream sign-in ranks with the password: {@link UPSTREAM_STRENGTH}.
  */
 export const FIRST_FACTOR_STRENGTH: Readonly<Partial<Record<FactorType, number>>> = Object.freeze({
   password: 1,
   passkey: 2,
 });
+
+/**
+ * How strong a sign-in through an upstream identity provider is (#639): with
+ * the password, below a passkey (ADR-017 Decision 4, decided 2026-10-23). An
+ * account that holds a passkey proves it after its upstream sign-in, whatever
+ * the MFA policy says.
+ */
+export const UPSTREAM_STRENGTH = 1;
 
 /** The strength of one factor type: 0 for a factor the downgrade rule does not rank. */
 export function factorStrength(factor: FactorType | undefined): number {
@@ -36,14 +44,19 @@ export function strongestBoundFactor(account: SignInAccount): number {
 /**
  * The strength of the strongest first factor the transaction proved.
  * `factorOf` names the factor each step proves: the engine passes its
- * handlers', so a step and its rank have one source.
+ * handlers', so a step and its rank have one source. An `upstream` step
+ * proves {@link UPSTREAM_STRENGTH}.
  */
 export function provenFactorStrength(
   verified: readonly OfferedStep[],
   factorOf: (step: StepName) => FactorType | undefined
 ): number {
   let strongest = 0;
-  for (const step of verified) strongest = Math.max(strongest, factorStrength(factorOf(step.step)));
+  for (const step of verified) {
+    const strength =
+      step.step === 'upstream' ? UPSTREAM_STRENGTH : factorStrength(factorOf(step.step));
+    strongest = Math.max(strongest, strength);
+  }
   return strongest;
 }
 

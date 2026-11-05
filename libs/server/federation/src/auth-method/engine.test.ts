@@ -182,7 +182,12 @@ describe('completeUpstreamStep', () => {
       identity: {
         externalSub: 'person',
         assuranceLevel: 'low',
-        rawClaims: { sub: 'person', email: 'person@example.com', email_verified: true },
+        rawClaims: {
+          iss: 'https://provider.example',
+          sub: 'person',
+          email: 'person@example.com',
+          email_verified: true,
+        },
       },
       attributes: [
         {

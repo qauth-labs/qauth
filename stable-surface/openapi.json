@@ -6325,6 +6325,16 @@
             "name": "login_hint",
             "required": false,
             "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "qauth_upstream",
+            "required": false,
+            "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed."
           }
         ],
         "x-qauth-stability": "stable",
@@ -6467,6 +6477,11 @@
                     "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it.",
                     "type": "string",
                     "maxLength": 254
+                  },
+                  "qauth_upstream": {
+                    "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed.",
+                    "type": "string",
+                    "maxLength": 64
                   }
                 },
                 "required": [
@@ -8235,6 +8250,16 @@
             "name": "login_hint",
             "required": false,
             "description": "OpenID Connect Core 1.0 §3.1.2.1: a hint at the identifier the person signs in with, at most 254 bytes in UTF-8. Where the sign-in runs as an interaction (INTERACTION_UI_ENABLED), it pre-fills the identifier step; the person may answer it with another identifier. The sign-in page ignores it."
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "qauth_upstream",
+            "required": false,
+            "description": "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed."
           }
         ],
         "x-qauth-stability": "stable",
@@ -8618,6 +8643,154 @@
         "responses": {
           "200": {
             "description": "Default Response"
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/upstream/{type}": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "A provider button of the sign-in page (#639): back to the page's authorization request, routed to the upstream provider `type` with `qauth_upstream`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "in": "query",
+            "name": "return_to",
+            "required": false
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "path",
+            "name": "type",
+            "required": true
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/upstream/{type}/start": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "Start the upstream provider `type` an authorization request routes to (#639), in the interaction the authorization endpoint started: the waiting page sends the browser to the provider.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "query",
+            "name": "interaction",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "path",
+            "name": "type",
+            "required": true
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           },
           "421": {
             "description": "Misdirected Request",

@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createSampleAuthMethod, SAMPLE_CONFIG } from '../../testing/sample-auth-method.fixture';
-import { type AuthMethodContextParts, createAuthMethodContext } from './context';
+import {
+  type AuthMethodContextParts,
+  createAuthMethodContext,
+  parseAuthMethodConfig,
+} from './context';
 import { AuthMethodConfigError } from './errors';
 
 /**
@@ -551,6 +555,40 @@ describe('createAuthMethodContext', () => {
     ]) {
       const { parts: given } = parts({ origin });
       expect(() => createAuthMethodContext(createSampleAuthMethod(), given)).toThrow();
+    }
+  });
+});
+
+/**
+ * The context's config check on its own (#639, from the review of #939): the
+ * admin API runs it before it writes a plugin's config, so a config the
+ * context would refuse is refused at the configure.
+ */
+describe('parseAuthMethodConfig', () => {
+  it('returns a copy of the parsed config, unfrozen, leaving the input alone', () => {
+    const raw = { ...SAMPLE_CONFIG, unknownMember: 'dropped' };
+    const config = parseAuthMethodConfig(createSampleAuthMethod(), raw);
+    expect(config).toEqual(SAMPLE_CONFIG);
+    expect(config).not.toBe(raw);
+    expect(raw.unknownMember).toBe('dropped');
+  });
+
+  it('refuses a parsed config that is not plain data, as the context does', () => {
+    const method = {
+      ...createSampleAuthMethod(),
+      configSchema: { safeParse: () => ({ success: true, data: { when: new Date() } }) },
+    } as unknown as Parameters<typeof parseAuthMethodConfig>[0];
+    expect(() => parseAuthMethodConfig(method, {})).toThrow(AuthMethodConfigError);
+  });
+
+  it('refuses a config the schema refuses, naming members and never their values', () => {
+    try {
+      parseAuthMethodConfig(createSampleAuthMethod(), { ...SAMPLE_CONFIG, tokenEndpoint: 'nope' });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(AuthMethodConfigError);
+      expect((error as AuthMethodConfigError).issues).toEqual(['tokenEndpoint: invalid_format']);
+      expect(JSON.stringify(error)).not.toContain('nope');
     }
   });
 });

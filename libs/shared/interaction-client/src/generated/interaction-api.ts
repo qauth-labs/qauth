@@ -50,6 +50,7 @@ export type StepName =
   | 'urn:qauth:ia:totp_setup:v1-rc.0'
   | 'urn:qauth:ia:consent:v1-rc.0'
   | 'urn:qauth:ia:select_account:v1-rc.0'
+  | 'urn:qauth:ia:upstream:v1-rc.0'
   | 'urn:qauth:ia:device_code:v1-rc.0'
   | 'urn:qauth:ia:device_confirm:v1-rc.0'
   | 'urn:qauth:ia:logout_confirm:v1-rc.0'
@@ -62,6 +63,7 @@ export type StepError =
   | 'password_rejected'
   | 'captcha_failed'
   | 'account_unavailable'
+  | 'provider_unavailable'
   | 'invalid_user_code'
   | (string & {});
 
@@ -81,6 +83,7 @@ export interface StepParams {
   'urn:qauth:ia:totp_setup:v1-rc.0'?: TotpSetupParams;
   'urn:qauth:ia:consent:v1-rc.0'?: ConsentParams;
   'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountParams;
+  'urn:qauth:ia:upstream:v1-rc.0'?: UpstreamParams;
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodeParams;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmParams;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmParams;
@@ -102,6 +105,7 @@ export type AnswerRequest =
   | TotpSetupAnswer
   | ConsentAnswer
   | SelectAccountAnswer
+  | UpstreamAnswer
   | DeviceCodeAnswer
   | DeviceConfirmAnswer
   | LogoutConfirmAnswer;
@@ -152,6 +156,7 @@ export interface StepPersonalData {
   'urn:qauth:ia:totp_setup:v1-rc.0'?: TotpSetupPersonalData;
   'urn:qauth:ia:consent:v1-rc.0'?: ConsentPersonalData;
   'urn:qauth:ia:select_account:v1-rc.0'?: SelectAccountPersonalData;
+  'urn:qauth:ia:upstream:v1-rc.0'?: UpstreamPersonalData;
   'urn:qauth:ia:device_code:v1-rc.0'?: DeviceCodePersonalData;
   'urn:qauth:ia:device_confirm:v1-rc.0'?: DeviceConfirmPersonalData;
   'urn:qauth:ia:logout_confirm:v1-rc.0'?: LogoutConfirmPersonalData;
@@ -662,6 +667,29 @@ export interface SelectAccountPersonalData {
     current: boolean;
   }>;
 }
+
+export interface UpstreamParams {
+  /** The realm’s upstream identity providers, in the order the screen shows them. */
+  providers: Array<{
+    /** The provider’s name, which the answer names. */
+    provider: string;
+    /** The provider’s name as the operator set it, for its button. */
+    name: string;
+    /** An absolute `https` URL on the realm origin of a PNG icon for the button. Nothing supplies one yet (#714). */
+    icon?: string;
+  }>;
+}
+
+/** An answer to `urn:qauth:ia:upstream:v1-rc.0`. */
+export interface UpstreamAnswer {
+  /** The step this request answers. */
+  type: 'urn:qauth:ia:upstream:v1-rc.0';
+  csrf: Csrf;
+  /** The `provider` of the entry the person picked. */
+  provider: string;
+}
+
+export type UpstreamPersonalData = Record<string, never>;
 
 export interface DeviceCodeParams {
   /** How many characters the code has, without the dash. */

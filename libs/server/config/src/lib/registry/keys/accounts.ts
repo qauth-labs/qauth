@@ -19,6 +19,16 @@ export const ACCOUNT_KEYS = defineKeys([
     docs: "Refuse a password login on the legacy login routes (`POST /auth/login`, `POST /ui/login`), with the same answer as a wrong password, until the account is verified (for a password account, by its confirmed email address); a sign-in through the Interaction API verifies an unverified account inline with an emailed code after its password instead, whatever this says; it seeds `accounts.requireVerifiedAccount` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
+    name: 'ALLOW_SIGN_UP',
+    tier: 'stable',
+    role: 'realm-seed',
+    seeds: 'accounts.allowSignUp',
+    owner: 'accounts',
+    default: 'false',
+    since: '0.2.0',
+    docs: "Whether a person may create a new account through the hosted sign-in (today, an upstream identity that no account holds yet creates one only while this is on, and the legacy `POST /auth/register` does not read it), that seeds `accounts.allowSignUp` of a new realm, and of a realm whose stored policies lack it at the first boot of the release that added it; once the realm has it, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is.",
+  },
+  {
     name: 'SYSTEM_CLIENT_ID',
     tier: 'advanced',
     role: 'deployment',

@@ -16,6 +16,8 @@ operations:
   GET /ui/login: { flow: [sign-in-page] }
   POST /ui/login: { flow: [sign-in-page] }
   GET /ui/resume/{handle}: { flow: [sign-in-page] }
+  GET /ui/upstream/{type}: { flow: [upstream-sign-in] }
+  GET /ui/upstream/{type}/start: { flow: [upstream-sign-in] }
   GET /ui/consent: { flow: [consent-page] }
   POST /ui/consent: { flow: [consent-page] }
   GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout] }

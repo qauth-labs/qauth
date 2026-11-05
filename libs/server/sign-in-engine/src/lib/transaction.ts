@@ -102,6 +102,14 @@ export interface SignInTransaction {
    * password, and so removes the action, meanwhile. Set at rule 8.
    */
   readonly updatePasswordRequired?: true;
+  /**
+   * The upstream identity provider this transaction last sent the person to
+   * (#639): only its callback may complete the transaction. Once that
+   * callback proved the account, `address` is the address the provider gave,
+   * which rule 8 verifies with an emailed code when the account is not
+   * verified (a provider whose verified switch is off).
+   */
+  readonly upstream?: { readonly provider: string; readonly address?: string };
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, and when it began. */
@@ -180,6 +188,12 @@ export const signInTransactionSchema = z.strictObject({
   emailCode: heldEmailCodeSchema.optional(),
   breachedPassword: z.literal(true).optional(),
   updatePasswordRequired: z.literal(true).optional(),
+  upstream: z
+    .strictObject({
+      provider: z.string().regex(/^[a-z][a-z0-9_]{0,62}$/),
+      address: z.string().min(3).max(254).optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -200,6 +214,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     emailCode,
     breachedPassword,
     updatePasswordRequired,
+    upstream,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -209,6 +224,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (breachedPassword === true && subject === undefined) return null;
   // A required action is read only once a factor fixed the subject.
   if (updatePasswordRequired === true && subject === undefined) return null;
+  // The provider's address is kept only once its callback fixed the subject.
+  if (upstream?.address !== undefined && subject === undefined) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -221,6 +238,14 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ...(emailCode === undefined ? {} : { emailCode }),
     ...(breachedPassword === undefined ? {} : { breachedPassword }),
     ...(updatePasswordRequired === undefined ? {} : { updatePasswordRequired }),
+    ...(upstream === undefined
+      ? {}
+      : {
+          upstream: {
+            provider: upstream.provider,
+            ...(upstream.address === undefined ? {} : { address: upstream.address }),
+          },
+        }),
   });
 }
 
@@ -230,10 +255,11 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
  * no key the schema refuses.
  */
 export function freezeTransaction(transaction: SignInTransaction): SignInTransaction {
-  const { emailCode, ...rest } = transaction;
+  const { emailCode, upstream, ...rest } = transaction;
   return Object.freeze({
     ...rest,
     verified: Object.freeze(transaction.verified.map((step) => Object.freeze({ ...step }))),
     ...(emailCode === undefined ? {} : { emailCode: Object.freeze({ ...emailCode }) }),
+    ...(upstream === undefined ? {} : { upstream: Object.freeze({ ...upstream }) }),
   });
 }

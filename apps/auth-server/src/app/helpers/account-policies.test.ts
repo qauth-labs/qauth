@@ -14,6 +14,7 @@ describe('accountPoliciesOf (#528)', () => {
   it('reads the verified-account gate, the password policy, the service name and the brute-force policy from the row it is given', () => {
     const from = sources({
       REQUIRE_VERIFIED_ACCOUNT: 'false',
+      ALLOW_SIGN_UP: 'true',
       PASSWORD_MIN_SCORE: '3',
       PASSWORD_MIN_LENGTH: '12',
       EMAIL_FROM_NAME: 'Acme Sign-in',
@@ -26,6 +27,7 @@ describe('accountPoliciesOf (#528)', () => {
 
     expect(accountPoliciesOf(from, realm)).toEqual({
       requireVerifiedAccount: false,
+      allowSignUp: true,
       passwordMinScore: 3,
       passwordMinLength: 12,
       serviceName: 'Acme Sign-in',
@@ -55,6 +57,7 @@ describe('accountPoliciesOf (#528)', () => {
   it("gives a realm seeded with no key the server's defaults: verified accounts, score 2, 5 failures in 900 s lock for 900 s, and the password policy's 15 characters (#634)", () => {
     expect(accountPoliciesOf(sources(), testRealm({ id: 'r', policiesVersion: 1 }))).toEqual({
       requireVerifiedAccount: true,
+      allowSignUp: false,
       passwordMinScore: 2,
       passwordMinLength: 15,
       serviceName: 'QAuth',

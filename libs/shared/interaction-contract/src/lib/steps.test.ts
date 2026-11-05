@@ -34,6 +34,7 @@ const INTERACTION_ONLY_STEPS = [
   'totp_setup',
   'consent',
   'select_account',
+  'upstream',
   'device_code',
   'device_confirm',
   'logout_confirm',
@@ -105,6 +106,7 @@ describe('the steps', () => {
       totp_setup: [],
       consent: [],
       select_account: [],
+      upstream: [],
       device_code: [],
       device_confirm: [],
       logout_confirm: [],
@@ -118,6 +120,7 @@ describe('the steps', () => {
       'password_rejected',
       'captcha_failed',
       'account_unavailable',
+      'provider_unavailable',
       'invalid_user_code',
     ]);
     for (const step of STEPS) {

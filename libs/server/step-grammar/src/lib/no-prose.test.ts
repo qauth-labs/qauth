@@ -151,7 +151,11 @@ function walk(
  * `const`, an `enum`, or a pattern that is not the display rule. A new
  * display value in a step's params must be added here on purpose.
  */
-const REALM_TEXT = new Set(['consent scopes.*.text', 'webauthn_create options.rp.name']);
+const REALM_TEXT = new Set([
+  'consent scopes.*.text',
+  'webauthn_create options.rp.name',
+  'upstream providers.*.name',
+]);
 
 /** Check one params object, keyed by its step's URN, against its step's schema. */
 function checkParams(urn: string, params: unknown) {

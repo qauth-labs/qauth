@@ -1,28 +1,17 @@
 import {
   type AnswerEncoding,
-  createArgon2PasswordVerifier,
-  createCheckedSignInEngine,
-  createRepositoryAccountDirectory,
-  createRepositoryAddressVerifier,
-  createRepositoryPasswordUpdates,
   type EmailCodeSender,
   interactionPersonalView,
   interactionStepView,
-  NO_SECOND_FACTOR_POLICY,
   readInteractionAnswer,
   type RoundContext,
   type RoundResult,
   signInAuditEvent,
   type SignInEngine,
   StepAnswerError,
-  storedStepOf,
   WEBAUTHN_CREATE_STEP_URN,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
-import {
-  BadRequestError,
-  TemporarilyUnavailableError,
-  TooManyRequestsError,
-} from '@qauth-labs/shared-errors';
+import { BadRequestError } from '@qauth-labs/shared-errors';
 import { ceremonyPagePath } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
@@ -42,7 +31,6 @@ import {
   LOGOUT_CONFIRM_STEP,
   type LogoutDecision,
 } from '../helpers/end-session';
-import { createEngineMailer, type EngineMailer } from '../helpers/engine-mail';
 import {
   answerInteraction,
   cancelInteraction,
@@ -53,19 +41,21 @@ import {
   readInteractionStep,
   refuseForbidden,
 } from '../helpers/interaction';
+import { createInteractionEngines, decisionOf } from '../helpers/interaction-engines';
 import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction-errors';
 import { InteractionExpiredError } from '../helpers/interaction-expired';
 import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
-import {
-  createServerEmailCodeDigest,
-  createServerLadderParts,
-  ladderEndUserIp,
-} from '../helpers/password-attempts';
+import { ladderEndUserIp } from '../helpers/password-attempts';
 import { createPeerAddressList, type PeerAddressList } from '../helpers/peer-address-list';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
 import { type RealmRow, requestRealm } from '../helpers/request-realm';
+import {
+  type UpstreamProviderCatalog,
+  upstreamProviderCatalog,
+} from '../helpers/upstream-providers';
+import { type UpstreamStarted, upstreamStarter } from '../helpers/upstream-sign-in';
 import { emitUserEvent } from '../helpers/user-events';
 
 /**
@@ -123,9 +113,6 @@ export const FORM_FIELD_LIMIT = 32;
 
 /** The longest member name a form post may carry: longer than any the grammar declares. */
 export const FORM_FIELD_NAME_LIMIT = 64;
-
-/** The `Retry-After` of an answer the engine refused because a store it needs failed. */
-const ENGINE_UNAVAILABLE_RETRY_SECONDS = 5;
 
 /** The realm's brand while the admin console sets none (#593): the contract's defaults. */
 const DEFAULT_BRAND = Object.freeze({ font: 'system', darkMode: 'enabled' });
@@ -399,142 +386,6 @@ async function respondStale(
   return respond(request, reply, encoding, { view });
 }
 
-/** The engines of a process, one per verified-account policy of a realm (#528). */
-interface InteractionEngines {
-  readonly of: (requireVerifiedAccount: boolean) => SignInEngine;
-  /** The capped sender of email codes (PRO-14, #637), bound to one request. */
-  readonly sendCode: (request: FastifyRequest) => EmailCodeSender;
-}
-
-/**
- * The engine's email codes through the process's capped mailer, for one
- * request: counted on every send cap that applies and, unless a tier stops
- * it, mailed after the answer is built. A code after the password skips the
- * per-address ceiling, so it never meets the ceiling notice whose pass the
- * flow names; the flow is the registration a verification completes, or the
- * reset a forced password update's recovery code stands for (#635).
- */
-function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailCodeSender {
-  return async (mail) => {
-    const realm = requestRealm(request);
-    if (mail.realmId !== realm.id) throw new Error('an email code for another realm');
-    const outcome = await mailer.sendCode(request, {
-      realm,
-      address: mail.address,
-      mail: {
-        template: 'code',
-        purpose: mail.purpose,
-        code: mail.code,
-        expiresInSeconds: mail.expiresInSeconds,
-      },
-      flow: mail.purpose === 'recovery' ? 'reset' : 'register',
-      afterFirstFactor: mail.afterFirstFactor,
-    });
-    return outcome.kind === 'capped'
-      ? { kind: 'capped', retryAfterSeconds: outcome.retryAfterSeconds }
-      : { kind: 'accepted' };
-  };
-}
-
-/**
- * The sign-in engine over the process's repositories, password hasher and
- * the per-account failure ladder its legacy login routes share (#615): one
- * account run of failures counts across every front door.
- *
- * Both engines verify an unverified account inline after its password, with
- * an emailed code (#638, ADR-017 Decision 8): `REQUIRE_VERIFIED_ACCOUNT` no
- * longer decides the Interaction API's answer, and an unverified account
- * never completes a sign-in here without its code.
- *
- * Both check a right password against the realm's breach list and ask for a
- * new one before completing when it is listed or the account holds an
- * `update_password` required action (#635, ADR-020 §3): after the account's
- * second factor, or after an 8-digit recovery code to its address. The new
- * password meets the realm's password policy and the breach list too.
- */
-function createInteractionEngines(fastify: FastifyInstance): InteractionEngines {
-  const mailer = createEngineMailer(fastify);
-  const ladder = createServerLadderParts(fastify, mailer.passwordDisabledNotices);
-  const emailCodes = {
-    digest: createServerEmailCodeDigest(fastify),
-    addresses: createRepositoryAddressVerifier(
-      {
-        userCredentials: fastify.repositories.userCredentials,
-        users: fastify.repositories.users,
-        userAttributes: fastify.repositories.userAttributes,
-      },
-      (work) => fastify.db.transaction(work),
-      fastify.log
-    ),
-  };
-  const realmOf = async (realmId: string) => {
-    const realm = await fastify.repositories.realms.findById(realmId);
-    if (realm === undefined) throw new Error('a password update for a realm that does not exist');
-    return realm;
-  };
-  const passwordUpdates = createRepositoryPasswordUpdates(
-    {
-      userCredentials: fastify.repositories.userCredentials,
-      users: fastify.repositories.users,
-      userRequiredActions: fastify.repositories.userRequiredActions,
-    },
-    (work) => fastify.db.transaction(work),
-    {
-      minLength: async (realmId) =>
-        accountPoliciesOf(fastify, await realmOf(realmId)).passwordMinLength,
-      // The one password policy (#634), as registration checks it: NFC, the
-      // minimum length, the blocklist with the address and the service and
-      // realm names as context words, and the score floor.
-      check: async ({ realmId, identifier, password }) => {
-        const realm = await realmOf(realmId);
-        const policies = accountPoliciesOf(fastify, realm);
-        const checked = fastify.passwordValidators
-          .forPolicy({ minLength: policies.passwordMinLength, minScore: policies.passwordMinScore })
-          .check(password, {
-            email: identifier,
-            serviceName: policies.serviceName,
-            realmName: realm.name,
-          });
-        return checked.valid
-          ? { kind: 'accepted', password: checked.password, normalization: checked.normalization }
-          : { kind: 'rejected', reasons: checked.reasons };
-      },
-      hash: (password) => fastify.passwordHasher.hashPassword(password),
-    }
-  );
-  const build = (requireVerifiedAccount: boolean) =>
-    createCheckedSignInEngine({
-      accounts: createRepositoryAccountDirectory(
-        {
-          users: fastify.repositories.users,
-          userCredentials: fastify.repositories.userCredentials,
-          adminGrants: fastify.repositories.adminGrants,
-          userRequiredActions: fastify.repositories.userRequiredActions,
-        },
-        fastify.log,
-        { hardActionArmed: ladder.hardActionArmed }
-      ),
-      passwords: createArgon2PasswordVerifier(fastify.passwordHasher, fastify.log),
-      // No MFA policy is stored yet: the password is the whole sign-in.
-      policy: NO_SECOND_FACTOR_POLICY,
-      identifierDigest: ladder.identifierDigest,
-      requireVerifiedAccount,
-      emailCodes,
-      breachCheck: fastify.breachedPasswords.engine,
-      passwordUpdates,
-      hooks: { ladder: ladder.ladder },
-      passwordHardAction: ladder.hardAction,
-      onUnavailable: (error) =>
-        fastify.log.error({ err: error, port: error.port }, 'sign-in engine store unavailable'),
-    });
-  const verified = build(true);
-  const unverified = build(false);
-  return {
-    of: (requireVerifiedAccount) => (requireVerifiedAccount ? verified : unverified),
-    sendCode: (request) => engineCodeSender(mailer, request),
-  };
-}
-
 /** A consent answer that finished its interaction: the step it answered, and what it said. */
 interface AnsweredConsent {
   readonly step: InteractionStep;
@@ -619,7 +470,15 @@ async function decideAnswer(
   answered: {
     readonly consent: (consent: AnsweredConsent) => void;
     readonly logout: (decision: LogoutDecision) => void;
-  }
+    /** An upstream provider the answer picked, and where the browser goes (#639). */
+    readonly upstream: (started: UpstreamStarted) => void;
+    /**
+     * The sign-in completed: whether an upstream provider proved the account
+     * (#639), for `user.signed_in`'s method.
+     */
+    readonly signedIn: (method: 'password' | 'upstream') => void;
+  },
+  catalog: UpstreamProviderCatalog
 ): Promise<InteractionDecision> {
   if (state.purpose === 'logout') return decideLogout(state, answer, answered.logout);
   if (state.step.name === CONSENT_STEP) return decideConsent(state, answer, answered.consent);
@@ -634,6 +493,21 @@ async function decideAnswer(
     receivedAt,
     ...ladderEndUserIp(request),
     sendCode,
+    // A pick of an upstream provider (#639) starts it, bound to this
+    // interaction once the round's state is written; the way back from the
+    // provider is this ceremony page.
+    startUpstream: upstreamStarter(
+      request.server,
+      request,
+      catalog,
+      {
+        interactionId: interactionIdOf(request),
+        revision: state.revision + 1,
+        mode: 'interaction',
+        wayBack: ceremonyPageUrl(request),
+      },
+      answered.upstream
+    ),
     audit: async (record) => {
       const event = signInAuditEvent(record);
       await emitUserEvent(request, event.type, event.data, {
@@ -657,73 +531,19 @@ async function decideAnswer(
     // The engine's transaction outlived its age, or could not be read: the
     // sign-in starts again at its first step, within the same interaction.
     result = await engine.advance(null, null, context(Date.now()));
+  } else if (result.kind === 'complete') {
+    // A sign-in an upstream provider proved, that a later step (a code)
+    // completed here: the provider is how the person signed in.
+    const throughUpstream =
+      state.signInTransaction?.verified.some((step) => step.step === 'upstream') === true;
+    answered.signedIn(throughUpstream ? 'upstream' : 'password');
   }
   return decisionOf(reply, result, answer.receivedAt);
 }
 
-/** The interaction's next state for an engine round's result. */
-function decisionOf(
-  reply: FastifyReply,
-  result: RoundResult,
-  receivedAt: number
-): InteractionDecision {
-  switch (result.kind) {
-    case 'step': {
-      const stored = storedStepOf(result.offer);
-      return {
-        kind: 'step',
-        step: {
-          ...stored,
-          params: { ...stored.params },
-          alternatives: [...stored.alternatives],
-          ...(stored.alternativeParams === undefined
-            ? {}
-            : { alternativeParams: { ...stored.alternativeParams } }),
-        },
-        personal: { ...result.personal },
-        signInTransaction: result.transaction,
-      };
-    }
-    case 'complete':
-      // The sign-in is done: the interaction finishes with it, under a new
-      // browser session (`authenticated` with no next step). The session's
-      // issue time is when the request came, before the account was read
-      // (#748).
-      return {
-        kind: 'authenticated',
-        signIn: {
-          userId: result.signIn.subject,
-          ...(result.signIn.identifier === undefined
-            ? {}
-            : { identifier: result.signIn.identifier }),
-          amr: [...result.signIn.amr],
-          issuedAt: receivedAt,
-        },
-      };
-    case 'refused':
-      switch (result.reason) {
-        case 'throttled':
-          reply.header('Retry-After', String(result.retryAfterSeconds));
-          throw new TooManyRequestsError('The sign-in is throttled.');
-        case 'unavailable':
-          throw new TemporarilyUnavailableError(ENGINE_UNAVAILABLE_RETRY_SECONDS, {
-            reason: 'sign-in engine store unavailable',
-          });
-        case 'invalid_answer':
-          throw new InvalidAnswerError('the engine refused the answer');
-        default:
-          // `transaction_ended` again after a fresh start, or a request check
-          // this transport does not register: an engine fault.
-          throw new Error(`the sign-in engine refused a round: ${result.reason}`);
-      }
-    case 'redirect':
-      // The Interaction API serves every step and registers no request check.
-      throw new Error(`the sign-in engine asked to continue elsewhere: ${result.reason}`);
-  }
-}
-
 export default async function (fastify: FastifyInstance) {
   const engines = createInteractionEngines(fastify);
+  const catalog = upstreamProviderCatalog(fastify);
 
   // The module's own body parsers: JSON and a plain form post, nothing else
   // (another media type is 415). Each keeps the body's size for the bound of
@@ -853,6 +673,8 @@ export default async function (fastify: FastifyInstance) {
       const engine = engines.of(accountPoliciesOf(fastify, realm).requireVerifiedAccount);
       let consent: AnsweredConsent | undefined;
       let logout: LogoutDecision | undefined;
+      let upstream: UpstreamStarted | undefined;
+      let signedInMethod: 'password' | 'upstream' = 'password';
       const result = await answerInteraction(
         request,
         reply,
@@ -872,13 +694,25 @@ export default async function (fastify: FastifyInstance) {
               logout: (decision) => {
                 logout = decision;
               },
-            }
+              upstream: (started) => {
+                upstream = started;
+              },
+              signedIn: (method) => {
+                signedInMethod = method;
+              },
+            },
+            catalog
           )
       );
       switch (result.kind) {
         case 'stale':
           return respondStale(request, reply, parsed.encoding);
         case 'step':
+          // An upstream provider was picked (#639): the browser goes to it,
+          // and its callback comes back to this interaction.
+          if (upstream !== undefined) {
+            return respond(request, reply, parsed.encoding, { location: upstream.redirectTo });
+          }
           return respond(request, reply, parsed.encoding, { view: result.view });
         case 'finished': {
           if (result.purpose === 'logout') {
@@ -904,7 +738,7 @@ export default async function (fastify: FastifyInstance) {
             await emitUserEvent(
               request,
               'urn:qauth:event:user.signed_in:v1-rc.0',
-              { method: 'password' },
+              { method: signedInMethod },
               { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
           }

@@ -70,6 +70,7 @@ Each step is named `urn:qauth:ia:<name>:v1-rc.0`. A step read names the current 
 | [`totp_setup`](#totp_setup)           | Interaction API | `otp`                    | `invalid_credentials`                 | —            | `identifier`, `secret`, `otpauth_uri`      |
 | [`consent`](#consent)                 | Interaction API | `decision`, `remember`   | —                                     | —            | `identifier`                               |
 | [`select_account`](#select_account)   | Interaction API | `account`                | `account_unavailable`                 | —            | `accounts`                                 |
+| [`upstream`](#upstream)               | Interaction API | `provider`               | `provider_unavailable`                | —            | —                                          |
 | [`device_code`](#device_code)         | Interaction API | `user_code`              | `invalid_user_code`                   | —            | —                                          |
 | [`device_confirm`](#device_confirm)   | Interaction API | `decision`               | —                                     | —            | `location`, `network`, `user_agent`        |
 | [`logout_confirm`](#logout_confirm)   | Interaction API | `decision`               | —                                     | —            | `accounts`                                 |
@@ -201,6 +202,15 @@ The account chooser for `prompt=select_account`, when the browser holds sessions
 
 - Params: —
 - Schema: [steps/select_account.json](/interaction/v1-rc.0/steps/select_account.json)
+
+### upstream
+
+`urn:qauth:ia:upstream:v1-rc.0` — Offers sign-in through an upstream identity provider.
+
+The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or creates one when the realm allows sign-up, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.
+
+- Params: `providers`
+- Schema: [steps/upstream.json](/interaction/v1-rc.0/steps/upstream.json)
 
 ### device_code
 

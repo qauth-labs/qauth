@@ -59,6 +59,11 @@ export {
   SignInStoreUnavailableError,
   type SignInTransaction,
   signInTransactionSchema,
+  type UpstreamProof,
+  type UpstreamProviderDirectory,
+  type UpstreamProviderEntry,
+  type UpstreamStarter,
+  type UpstreamStartOutcome,
 } from '@qauth-labs/server-sign-in-engine';
 // The step grammar's part the Interaction API's routes read (#616).
 export {

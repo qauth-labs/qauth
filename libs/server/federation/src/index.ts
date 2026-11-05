@@ -19,6 +19,7 @@ export * from './profiles/verifier-profiles';
 export type * from './providers/credential-provider.interface';
 export * from './providers/password.provider';
 export * from './providers/provider-registry';
+export * from './providers/upstream-credential-data';
 export * from './providers/wallet.provider';
 export * from './providers/wallet-credential-data';
 export * from './providers/webauthn.provider';

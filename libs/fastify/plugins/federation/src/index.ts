@@ -74,12 +74,28 @@ export {
   isAuthMethod,
   loadAuthMethodPlugins,
   MAX_AUTH_METHOD_SECRET_LENGTH,
+  parseAuthMethodConfig,
   skippedAuthMethodPluginMessage,
   startUpstreamStep,
   UPSTREAM_STEP_URN,
   withConfigMembers,
   withoutConfigMembers,
 } from '@qauth-labs/server-federation';
+
+// The upstream sign-in flow (#639): an upstream provider's credential data
+// (the issuer its subject is tied to, and whether the account counts as
+// verified), and the generic upstream OpenID Connect client (#601), whose
+// methods the flow builds per configured provider and whose stored config it
+// opens with the signer. Re-exported for the same boundary reason.
+export type { UpstreamCredentialData } from '@qauth-labs/server-federation';
+export {
+  isUpstreamCredentialData,
+  UPSTREAM_CREDENTIAL_KIND,
+  UPSTREAM_OIDC_TYPE_PATTERN,
+  upstreamCredentialDataSchema,
+} from '@qauth-labs/server-federation';
+export type { UpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
+export { createUpstreamOidcMethod, openUpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
 
 // Re-exported provider surface: app code (scope:app) may only depend on
 // fastify plugins (scope:fastify), never on server libs directly — routes and

@@ -928,6 +928,9 @@ importers:
       '@qauth-labs/server-federation':
         specifier: workspace:*
         version: link:../../../server/federation
+      '@qauth-labs/server-upstream-oidc':
+        specifier: workspace:*
+        version: link:../../../server/upstream-oidc
       fastify:
         specifier: 'catalog:'
         version: 5.12.7
@@ -950,9 +953,6 @@ importers:
       '@qauth-labs/server-keys':
         specifier: workspace:*
         version: link:../../../server/keys
-      '@qauth-labs/server-upstream-oidc':
-        specifier: workspace:*
-        version: link:../../../server/upstream-oidc
       '@vitest/coverage-v8':
         specifier: 'catalog:'
         version: 5.0.5(vitest@5.0.5)

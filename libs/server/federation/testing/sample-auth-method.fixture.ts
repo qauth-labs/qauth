@@ -202,7 +202,12 @@ export function createSampleAuthMethod(
       return {
         externalSub: result.sub,
         assuranceLevel: 'low',
-        rawClaims: { sub: result.sub, email: result.email, email_verified: result.emailVerified },
+        rawClaims: {
+          iss: PROVIDER,
+          sub: result.sub,
+          email: result.email,
+          email_verified: result.emailVerified,
+        },
       };
     },
 

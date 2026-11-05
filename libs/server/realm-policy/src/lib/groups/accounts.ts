@@ -12,6 +12,12 @@ import { policyField } from '../field';
  * not come out looser than the server is today. Switching it off lets an
  * unverified account sign in, which loosens what can authenticate an account
  * (ADR-019 Decision 7, `credential-path`).
+ *
+ * `allowSignUp` is off by default (ADR-017: only sign-up is off by default),
+ * so `false` is the stricter value: turning it on lets anyone create an
+ * account, a loosening of the same `credential-path` effect, the closed
+ * list's nearest to "who can create an account" (it changes which
+ * credentials or addresses can authenticate an account).
  */
 export const ACCOUNTS_POLICY_GROUP = {
   requireVerifiedAccount: policyField(z.boolean(), {
@@ -25,6 +31,20 @@ export const ACCOUNTS_POLICY_GROUP = {
     doc: {
       summary:
         "Whether the legacy login routes (`POST /auth/login`, `POST /ui/login`) refuse an unverified account's right password with the answer a wrong password gets; the Interaction API verifies such an account inline with an emailed code, whatever this says.",
+      link: groupDocsLink('accounts'),
+    },
+  }),
+  allowSignUp: policyField(z.boolean(), {
+    seedEnv: 'ALLOW_SIGN_UP',
+    default: false,
+    direction: 'false-is-stricter',
+    securityWhen: 'loosening',
+    effects: ['credential-path'],
+    secret: false,
+    environmentBound: false,
+    doc: {
+      summary:
+        'Whether a person may create a new account through the hosted sign-in: today, an upstream identity that no account holds yet (#639) creates one only while this is on, and the legacy `POST /auth/register` does not read it.',
       link: groupDocsLink('accounts'),
     },
   }),

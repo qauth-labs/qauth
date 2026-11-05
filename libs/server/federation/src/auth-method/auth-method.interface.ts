@@ -47,6 +47,11 @@ import type {
  * 4. The engine turns a `result` outcome into a `VerifiedIdentity` by calling
  *    `verify(result)`, checks it, and takes the attributes from
  *    `extractAttributes()`. Every attribute's `source` must equal `type`.
+ *    The identity's `rawClaims.iss` names the issuer that assigned its
+ *    `externalSub`: a subject is unique only within its issuer (OpenID
+ *    Connect Core 1.0 §5.7). The sign-in flow stores the issuer with the
+ *    credential, refuses a later sign-in under another one, and refuses an
+ *    identity that names none.
  *
  * `verify()` of an AuthMethod receives only what its own callback returned;
  * the engine calls it, once per result, and nothing else does. It still

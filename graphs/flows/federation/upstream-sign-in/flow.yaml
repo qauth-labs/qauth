@@ -1,0 +1,627 @@
+# The upstream sign-in flow (#639; ADR-020 §3 and its Appendix, ADR-017 Decision 4, ADR-002, ADR-003): a person signs
+# in, or signs up, through one of the realm's upstream identity providers. It is the sign-in flow's half of the upstream
+# step; federation.upstream-step is the AuthMethod contract's half, from the method's start() to the engine's
+# completion, and this graph takes each completion from there.
+#
+# - The walk runs from the person's pick (the `upstream` step of the Interaction API) or a routed request
+#   (`qauth_upstream=<type>` on the authorization request, from a provider link of /ui/login or a client that names the
+#   provider) through the provider's callback (GET or POST /upstream/<type>/callback) to the response. The provider
+#   link's own redirect (GET /ui/upstream/<type>) and the routed start (GET /ui/upstream/<type>/start) lead into
+#   `resolvingProvider`.
+# - Each exit is a final state named <error>.<cause>, one per distinct cause, with the response the browser gets. Every
+#   refusal shows the same error page with the request's trace id, so the exits differ only in the audited reason of
+#   user.sign_in_failed (`method: upstream`), which is the cause in the exit's name. A cancel or an error at the
+#   provider shows the provider-error page instead. No refusal sends anything to the client's redirect_uri.
+# - Two sign-in UIs run the same flow (`mode`): the server-rendered pages while INTERACTION_UI_ENABLED is off, which
+#   show no further step, and the Interaction API's ceremony page while it is on.
+# - `invoke: { external }` names a store or a library the domain graph holds no entity for: the pending sign-in store
+#   (Redis), the account creation transaction, the sign-in engine (core.sign-in) and the method's own start().
+schema: delurio-graph/0
+kind: flow
+id: federation.upstream-sign-in
+status: proposed
+domain: qauth
+title: Sign in, or sign up, through one of the realm's upstream identity providers
+summary: >-
+  The person picks a provider on the first sign-in step, or the authorization request names one with qauth_upstream
+  (a hidden provider too). The provider's method starts, and what it needs back (state, nonce, the PKCE verifier) is
+  kept server-side for ten minutes, bound to the interaction and to the browser's flow cookie; the waiting page sends
+  the browser to the provider. At the callback only the browser that started may take that pending sign-in, once. The
+  account is looked up by (realm, provider type, sub) alone, never by an email or another attribute; a known credential
+  stands only under the issuer it was created with, and an unknown one creates a user, the credential and the
+  provider's claims as attributes in one transaction, when the realm allows sign-up. The sign-in engine then applies
+  the realm's policy, an upstream sign-in ranking with a password: an account that holds a passkey still passes it.
+
+scope:
+  shows: the sign-in flow around the upstream step, from the pick or the routed request to the response
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what the method does between its start() and the engine's completion: federation.upstream-step"
+    - 'the sign-in engine rounds after the upstream step: the passkey, the MFA policy, the inline verification of an
+      address nobody vouched for (core.sign-in)'
+    - 'the review-your-details page of the ADM-09 profile schema, which is not built: an account is created with the
+      claims the provider gave'
+    - "the providers' admin API (#714): a provider is a row of realm_upstream_providers, or an enabled AuthMethod plugin"
+    - 'the per-address and per-realm rate limit on the callback, which answers 429 before the flow runs, as the sign-in
+      form does'
+
+context:
+  provider:
+    values: [on, off]
+    initial: any
+    say:
+      on: 'the realm has the provider on, hidden or not'
+      off: 'the realm has no provider of that type, or has it off'
+  startAnswer:
+    values: [started, unavailable]
+    initial: any
+    say:
+      started: "the provider's method starts and answers where the browser goes"
+      unavailable: "the method cannot start, such as when the provider's discovery document cannot be read"
+  arrival:
+    values: [sameBrowser, otherBrowser, taken]
+    initial: any
+    say:
+      sameBrowser: 'the browser that started brings the flow cookie the pending sign-in is bound to'
+      otherBrowser: 'a browser with no such flow cookie: a callback replayed in another browser, forwarded or forged'
+      taken: 'the pending sign-in was taken already: a replay in the same browser, or it expired'
+  completion:
+    values: [identity, declined, providerError, failed, fault]
+    initial: any
+    say:
+      identity: 'the method proved an identity, its assurance capped at low'
+      declined: 'the person cancelled or declined at the provider (error=access_denied)'
+      providerError: 'the provider answered another error'
+      failed: "the provider's answer failed a check, or the provider could not be reached"
+      fault: 'the method broke the AuthMethod contract'
+  credential:
+    values: [known, unknown]
+    initial: any
+    say:
+      known: "a credential of the provider's type holds the identity's sub in the realm"
+      unknown: 'none does, whatever another account holds as its email'
+  issuer:
+    values: [same, differs, missing]
+    initial: any
+    say:
+      same: "the identity's issuer (the ID token's iss) is the one the credential was created under"
+      differs: 'it is another issuer: the provider was re-pointed, or another issuer reuses the sub'
+      missing: 'the identity names no issuer (rawClaims.iss): an AuthMethod plugin that breaks the contract'
+  credentialState:
+    values: [active, disabled]
+    initial: any
+  vouching:
+    values: [on, off]
+    initial: any
+    say:
+      on: "the provider's verified switch is on: an account it creates counts as verified"
+      off: 'it is off: QAuth verifies the address of an account it creates with an emailed code'
+  address:
+    values: [given, none]
+    initial: any
+    say:
+      given: 'the provider gave an email'
+      none: 'it gave none'
+  signUp:
+    values: [allowed, off]
+    initial: any
+    say:
+      allowed: "the realm's sign-up switch (accounts.allowSignUp) is on"
+      off: 'it is off, the default'
+  furtherStep:
+    values: [none, passkey, verification]
+    initial: any
+    say:
+      none: 'the realm asks nothing more of the account'
+      passkey: 'the account holds a passkey, which ranks above an upstream sign-in, so the engine asks for it'
+      verification: >-
+        the account is not verified yet: the provider's verified switch was off when it was created, so QAuth
+        verifies the address the provider gave with an emailed code, whatever REQUIRE_VERIFIED_ACCOUNT says
+  engineAnswer:
+    values: [accepts, refuses]
+    initial: any
+    say:
+      accepts: 'the engine takes the proof'
+      refuses: 'it refuses it: the account is disabled, or the interaction moved on'
+  mode:
+    values: [pages, interaction]
+    initial: any
+    say:
+      pages: 'INTERACTION_UI_ENABLED is off: the server-rendered pages, which show no further step'
+      interaction: "INTERACTION_UI_ENABLED is on: the Interaction API's ceremony page shows any further step"
+  pendingTaken: { values: [false, true], initial: false }
+  accountCreated: { values: [false, true], initial: false }
+  signedIn: { values: [false, true], initial: false }
+
+guards:
+  providerOff: "provider == 'off'"
+  startUnavailable: "startAnswer == 'unavailable'"
+  notTheStartingBrowser: "arrival != 'sameBrowser'"
+  personDeclined: "completion == 'declined'"
+  providerErrored: "completion == 'providerError'"
+  checkFailed: "completion == 'failed'"
+  methodFault: "completion == 'fault'"
+  knownCredential: "credential == 'known'"
+  issuerDiffers: "issuer == 'differs'"
+  issuerMissing: "issuer == 'missing'"
+  cannotVerify: "vouching == 'off' and (address == 'none' or mode == 'pages')"
+  credentialDisabled: "credentialState == 'disabled'"
+  signUpOff: "signUp == 'off'"
+  engineRefuses: "engineAnswer == 'refuses'"
+  needsFurtherStep: "furtherStep != 'none'"
+  pagesMode: "mode == 'pages'"
+
+effects:
+  takePending: { set: { pendingTaken: true } }
+  createAccount: { set: { accountCreated: true } }
+  signIn: { set: { signedIn: true } }
+
+failures:
+  starting: { from: authMethodStart, rejected: [upstream_unavailable] }
+  keepingPending: { from: upstreamSignInStore, store: [upstream_unavailable] }
+  lookingUpCredential: { from: UserCredential.findByRealmProviderSub, server: [server_error] }
+  creatingAccount: { from: accountStore, server: [server_error] }
+  completingStep: { from: signInEngine, unavailable: [unavailable] }
+
+# The main story: a person with no account signs up through a listed provider, in a realm that allows sign-up, and the
+# pages send the browser back to the authorization request.
+main:
+  given:
+    provider: on
+    startAnswer: started
+    arrival: sameBrowser
+    completion: identity
+    credential: unknown
+    issuer: same
+    vouching: on
+    address: given
+    credentialState: active
+    signUp: allowed
+    furtherStep: none
+    engineAnswer: accepts
+    mode: pages
+  events: [PICK, DONE, DONE, BROWSER_RETURNS, DONE, DONE, DONE]
+
+initial: idle
+states:
+  idle:
+    title: Wait for a person who chooses an upstream provider
+    source: apps/auth-server/src/app/helpers/authorization-interaction.ts:101
+    on:
+      PICK:
+        target: resolvingProvider
+        say: >-
+          the person picks a provider: the upstream alternative of the first sign-in step (Interaction API), or a
+          provider link of /ui/login, which sends the browser back to the authorization request with qauth_upstream
+        source: apps/auth-server/src/app/routes/interaction-api.ts:494
+      ROUTE:
+        target: resolvingProvider
+        say: >-
+          an authorization request that needs a sign-in names a provider with qauth_upstream; a hidden provider is
+          reached this way only
+        source: apps/auth-server/src/app/routes/oauth/authorize.ts:163
+
+  resolvingProvider:
+    title: Find the provider among the realm's
+    description: >-
+      The realm's generic OpenID Connect providers (realm_upstream_providers, oidc_<alias>) and its enabled AuthMethod
+      plugins. A routed request with a type the realm has not, or has off, is not routed: the routing parameter is
+      ignored and the first sign-in step shows, so this flow never sees it; a provider link or a start for such a type
+      is refused here.
+    source: apps/auth-server/src/app/routes/ui/upstream.ts:132
+    always:
+      - guard: providerOff
+        target: bad_request.upstream_unavailable
+        say: 'the realm has no such provider on'
+        source: apps/auth-server/src/app/routes/ui/upstream.ts:133
+      - target: starting
+        say: 'the interaction starts the provider in its first round, recorded by the engine'
+        source: apps/auth-server/src/app/routes/ui/upstream.ts:158
+
+  starting:
+    title: Ask the provider's method to start
+    description: start() answers the provider's authorization request, the transaction and the binding (the state).
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:214
+    invoke: { external: authMethodStart }
+    on:
+      DONE:
+        target: keepingPending
+        say: 'start() answers'
+      FAIL.rejected:
+        target: bad_request.upstream_unavailable
+        say: 'start() rejects, or its answer fails a check; the browser goes nowhere'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:224
+
+  keepingPending:
+    title: Keep the pending sign-in, bound to the interaction and the flow cookie
+    description: >-
+      Redis keeps the transaction under a hash of its binding for ten minutes, with the interaction, the flow
+      cookie's binding and the way back to the first step. The transaction never reaches the browser.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:241
+    invoke: { external: upstreamSignInStore }
+    on:
+      DONE:
+        target: atProvider
+        say: >-
+          the waiting page (a meta refresh, a link for a browser that does not follow it, and the way back) sends the
+          browser to the provider; through the Interaction API, the answer's location does
+        source: apps/auth-server/src/app/routes/ui/upstream.ts:199
+      FAIL.store:
+        target: bad_request.upstream_unavailable
+        say: 'the store cannot keep it: the engine reports it, and nothing starts'
+
+  atProvider:
+    title: Wait while the person is at the provider
+    by: human
+    on:
+      BROWSER_RETURNS:
+        target: checkingPending
+        say: 'the provider sends the browser to /upstream/<type>/callback (a form_post is bounced to the GET route)'
+      ABANDON:
+        target: abandoned
+        say: 'the person never comes back'
+
+  checkingPending:
+    title: Hand the pending sign-in only to the browser that started it
+    description: >-
+      The callback's binding names the pending sign-in; it is read first, and taken once only when the request
+      carries the flow cookie it is bound to, of the same realm and provider type. A callback in another browser
+      spends nothing: the method never runs, no code is redeemed and the pending sign-in stays for its own browser.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:529
+    always:
+      - guard: notTheStartingBrowser
+        target: bad_request.transaction_mismatch
+        say: 'no pending sign-in for this browser: a replay in another browser, a forged callback, or a spent one'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:577
+      - target: completingCallback
+        effect: [takePending]
+        say: "the pending sign-in is taken and handed to the method's callback"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:549
+
+  completingCallback:
+    title: Turn the method's answer into the step's completion
+    description: federation.upstream-step's exits, one by one.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:571
+    always:
+      - guard: personDeclined
+        target: provider_error.declined
+        say: 'the person cancelled or declined at the provider'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:581
+      - guard: providerErrored
+        target: provider_error.provider_error
+        say: 'the provider answered another error'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:583
+      - guard: checkFailed
+        target: bad_request.invalid_response
+        say: "the provider's answer failed a check, or the provider could not be reached"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:600
+      - guard: methodFault
+        target: bad_request.method_fault
+        say: 'the method broke the contract; its error is logged for the operator'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:575
+      - guard: issuerMissing
+        target: bad_request.invalid_response
+        say: "the identity names no issuer: its sub could not be told apart from another issuer's"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:376
+      - target: lookingUpCredential
+        say: 'an identity and its attributes'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:611
+
+  lookingUpCredential:
+    title: Look the credential up by (realm, provider type, sub) alone
+    description: >-
+      Never by an email or another attribute: a person whose address another account holds gets an account of their
+      own, and nothing is matched or merged.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:383
+    invoke: { action: UserCredential.findByRealmProviderSub }
+    on:
+      DONE:
+        target: checkingCredential
+        say: 'one credential or none'
+      FAIL.server:
+        target: server_error.store
+        say: 'the database fails'
+
+  checkingCredential:
+    title: Decide what the credential found allows
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:388
+    always:
+      - guard: knownCredential and issuerDiffers
+        target: bad_request.issuer_mismatch
+        say: >-
+          the credential was created under another issuer: a sub is unique only within its issuer (OIDC Core §5.7), so
+          the old credential never signs in under the new one
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:397
+      - guard: knownCredential and credentialDisabled
+        target: bad_request.credential_disabled
+        say: 'the credential is disabled'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:400
+      - guard: knownCredential
+        target: completingStep
+        say: "the credential's user, and whether the account counts as verified, as its creation recorded"
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:408
+      - guard: signUpOff
+        target: bad_request.sign_up_disabled
+        say: 'an unknown identity, in a realm that does not allow sign-up'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:417
+      - guard: cannotVerify
+        target: bad_request.verification_unavailable
+        say: >-
+          an unknown identity the provider's verified switch leaves unverified, with no address for a code or on the
+          pages, which show no code step: it could never sign in, so nothing is written
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:428
+      - target: creatingAccount
+        say: 'an unknown identity, in a realm that allows sign-up'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:430
+
+  creatingAccount:
+    title: Create the user, the credential and the attributes in one transaction
+    description: >-
+      The credential holds the provider type (oidc_<alias> for a generic OpenID Connect provider), the sub, the
+      issuer (the ID token's iss) and whether the account counts as verified: yes, unless the provider's verified switch is off. Each
+      claim the method gave becomes an attribute whose source is the provider type; the email attribute is verified
+      only when the provider said so and the switch is on. user.registered (method upstream) commits with them. A
+      callback that loses the race to create the same identity reads the account the other created.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:431
+    invoke: { external: accountStore }
+    on:
+      DONE:
+        target: completingStep
+        effect: [createAccount]
+        say: 'a new account'
+      FAIL.server:
+        target: server_error.store
+        say: 'the database fails; nothing of the account is written'
+
+  completingStep:
+    title: Hand the account to the sign-in engine as proved by the upstream step
+    description: >-
+      The upstream step ranks with a password, below a passkey, under the realm's MFA policy. The interaction is
+      answered at the revision the start recorded, so a callback for an interaction that moved on is refused.
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:632
+    invoke: { external: signInEngine }
+    on:
+      DONE:
+        target: decidingRound
+        say: 'the engine answers its round'
+      FAIL.unavailable:
+        target: bad_request.unavailable
+        say: 'the interaction store or the failure ladder cannot answer'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:669
+
+  decidingRound:
+    title: Go on as the engine's round says
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:672
+    always:
+      - guard: engineRefuses
+        target: bad_request.refused
+        say: 'the engine refuses the proof, and audits why'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:654
+      - guard: needsFurtherStep and pagesMode
+        target: bad_request.step_not_available
+        say: 'a further step the pages cannot show: the sign-in fails closed'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:652
+      - guard: needsFurtherStep
+        target: step_continues.ceremony_page
+        say: 'a further step (the passkey, a code): the ceremony page shows it'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:675
+      - guard: pagesMode
+        target: signed_in.authorization_request
+        effect: [signIn]
+        say: 'signed in: the pages start the authorization request again under the new session'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:690
+      - target: code_issued
+        effect: [signIn]
+        say: 'signed in: the interaction finishes the authorization request as the Interaction API does'
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:693
+
+  # Exits: success
+
+  code_issued:
+    type: final
+    title: Send the authorization code to the client
+    description: user.signed_in (method upstream) is recorded, and the user's last login.
+    redirect: success
+    carries: [code, state, iss]
+    response:
+      status: 303
+      headers:
+        Location: redirect_uri with code, state when the request had one, and iss
+        Set-Cookie: '__Host-qauth_session, and __Host-qauth_flow without the finished interaction'
+        Cache-Control: no-store
+
+  signed_in.authorization_request:
+    type: final
+    title: Send the signed-in browser back to the authorization request
+    description: >-
+      user.signed_in (method upstream) is recorded. /oauth/authorize checks the request from scratch under the new
+      session, and goes on to the consent or the code.
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: '/oauth/authorize with the request the interaction held, without qauth_upstream'
+        Set-Cookie: __Host-qauth_session
+        Cache-Control: no-store
+
+  step_continues.ceremony_page:
+    type: final
+    title: Send the browser to the ceremony page for the next step
+    redirect: never
+    response:
+      status: 303
+      headers:
+        Location: "the interaction's ceremony page on the realm's issuer: <issuer>/ui/interaction/<the interaction id>"
+
+  # Exits: the person cancelled, or the provider failed them
+
+  provider_error.declined:
+    type: final
+    title: Show the provider-error page for a cancel at the provider
+    description: >-
+      user.sign_in_failed is recorded with the reason declined. Nothing goes to the client: the person has not refused
+      the client's request, and may pick another way.
+    redirect: never
+    response: &providerErrorPage
+      status: 200
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Cache-Control: no-store
+      body: >-
+        "Sign-in was not completed": the provider did not sign the person in, with "Choose another way to sign in", a
+        link to the first sign-in step
+
+  provider_error.provider_error:
+    type: final
+    title: Show the provider-error page for an error the provider answered
+    description: user.sign_in_failed is recorded with the reason provider_error.
+    redirect: never
+    response: *providerErrorPage
+
+  # Exits: refusals, all with the one error page
+
+  bad_request.upstream_unavailable:
+    type: final
+    title: Refuse a provider that is off or cannot start
+    description: user.sign_in_failed is recorded with the reason upstream_unavailable.
+    redirect: never
+    response: &errorPage
+      status: 400
+      headers:
+        Content-Type: text/html; charset=utf-8
+        Cache-Control: no-store
+      body: '"We could not sign you in", the same text for every failure, and the trace id: the request id'
+
+  bad_request.transaction_mismatch:
+    type: final
+    title: Refuse a callback with no pending sign-in for this browser
+    description: >-
+      user.sign_in_failed is recorded with the reason transaction_mismatch. No code is redeemed and no account is
+      created.
+    redirect: never
+    response: *errorPage
+
+  bad_request.invalid_response:
+    type: final
+    title: Refuse an answer of the provider that fails a check
+    description: >-
+      user.sign_in_failed is recorded with the method's reason: invalid_response, upstream_unavailable or
+      verification_refused.
+    redirect: never
+    response: *errorPage
+
+  bad_request.method_fault:
+    type: final
+    title: Refuse the answer of a method that broke the contract
+    description: user.sign_in_failed is recorded with the reason method_fault.
+    redirect: never
+    response: *errorPage
+
+  bad_request.issuer_mismatch:
+    type: final
+    title: Refuse a known sub under another issuer
+    description: user.sign_in_failed is recorded with the reason issuer_mismatch and the credential's user.
+    redirect: never
+    response: *errorPage
+
+  bad_request.credential_disabled:
+    type: final
+    title: Refuse a disabled credential
+    description: user.sign_in_failed is recorded with the reason credential_disabled.
+    redirect: never
+    response: *errorPage
+
+  bad_request.sign_up_disabled:
+    type: final
+    title: Refuse an unknown identity in a realm that does not allow sign-up
+    description: user.sign_in_failed is recorded with the reason sign_up_disabled. No account is created.
+    redirect: never
+    response: *errorPage
+
+  bad_request.verification_unavailable:
+    type: final
+    title: Refuse a new account nobody could verify
+    description: user.sign_in_failed is recorded with the reason verification_unavailable. No account is created.
+    redirect: never
+    response: *errorPage
+
+  bad_request.refused:
+    type: final
+    title: Refuse a proof the engine refuses
+    description: The engine records user.sign_in_failed with its own reason.
+    redirect: never
+    response: *errorPage
+
+  bad_request.step_not_available:
+    type: final
+    title: Refuse a sign-in the pages cannot finish
+    description: >-
+      user.sign_in_failed is recorded with the reason step_not_available. The account's passkey, or QAuth's own
+      verification, is asked only on the ceremony page.
+    redirect: never
+    response: *errorPage
+
+  bad_request.unavailable:
+    type: final
+    title: Refuse the callback when a store cannot answer
+    description: user.sign_in_failed is recorded with the reason unavailable.
+    redirect: never
+    response: *errorPage
+
+  server_error.store:
+    type: final
+    title: Fail on a database error
+    redirect: never
+    response:
+      status: 500
+      body: the error handler's problem document, with the trace id
+
+  abandoned:
+    type: final
+    title: The person did not come back
+    description: The pending sign-in expires after ten minutes, and the interaction with it.
+    leavesPage: true
+
+assertions:
+  - id: only-the-starting-browser-signs-in
+    never: 'signedIn and notTheStartingBrowser'
+    say: >-
+      A callback replayed in another browser, forwarded or forged never signs anyone in, and never takes the pending
+      sign-in
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:544
+  - id: a-foreign-callback-spends-nothing
+    never: 'pendingTaken and notTheStartingBrowser'
+    say: 'Only the browser whose flow cookie the start bound takes the pending sign-in'
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:548
+  - id: no-account-without-sign-up
+    never: 'accountCreated and signUpOff'
+    say: 'An unknown identity creates an account only in a realm that allows sign-up'
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:416
+  - id: no-account-that-could-never-sign-in
+    never: 'accountCreated and cannotVerify'
+    say: >-
+      A new account the provider does not vouch for is created only where QAuth can verify its address: on the
+      ceremony page, with an address
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:428
+  - id: no-subject-without-its-issuer
+    never: '(accountCreated or signedIn) and issuerMissing'
+    say: 'An identity that names no issuer neither creates an account nor signs in'
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:376
+  - id: no-account-for-a-known-identity
+    never: 'accountCreated and knownCredential'
+    say: 'A known credential signs its own user in; it never creates a second account'
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:388
+  - id: an-issuer-change-never-signs-in
+    never: 'signedIn and knownCredential and issuerDiffers'
+    say: 'A credential signs in only under the issuer it was created with'
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:397
+  - id: a-passkey-is-never-skipped
+    never: "signedIn and furtherStep == 'passkey'"
+    say: >-
+      An account that holds a passkey is not signed in by the provider alone, whatever the MFA policy: the passkey
+      ranks above an upstream sign-in
+    source: libs/server/sign-in-engine/src/lib/factors.ts:26
+  - id: a-cancel-is-not-a-failure
+    never: "state == 'provider_error.declined' and not personDeclined"
+    say: 'Only a cancel at the provider shows the cancel page'
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:581

@@ -131,6 +131,15 @@ export const authEnvSchema = z.object({
   REQUIRE_VERIFIED_ACCOUNT: strictBoolean(true),
 
   /**
+   * Whether a person may create a new account through the hosted sign-in
+   * (#639). Seeds a new realm's `accounts.allowSignUp`; the auth server reads
+   * each realm's own policy from the realm row. Defaults to `false`: an
+   * upstream identity no account holds yet ends at the generic error page.
+   * Parsed by {@link strictBoolean}; unset and blank mean `false`.
+   */
+  ALLOW_SIGN_UP: strictBoolean(false),
+
+  /**
    * Maximum registration attempts per window
    */
   REGISTRATION_RATE_LIMIT: z.coerce.number().int().min(1).default(3),

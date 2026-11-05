@@ -5,6 +5,7 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/server-federation": "workspace:*",
+    "@qauth-labs/server-upstream-oidc": "workspace:*",
     "fastify": "catalog:",
     "fastify-plugin": "catalog:",
     "tslib": "catalog:"
@@ -14,7 +15,6 @@
     "@qauth-labs/fastify-plugin-signer": "workspace:*",
     "@qauth-labs/server-egress": "workspace:*",
     "@qauth-labs/server-keys": "workspace:*",
-    "@qauth-labs/server-upstream-oidc": "workspace:*",
     "@vitest/coverage-v8": "catalog:",
     "@vitest/ui": "catalog:",
     "jose": "catalog:",

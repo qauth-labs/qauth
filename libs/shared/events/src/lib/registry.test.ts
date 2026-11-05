@@ -66,7 +66,7 @@ describe('the event type registry', () => {
 
   it('types each registered identifier and its data', () => {
     expectTypeOf<EventDataOf<'urn:qauth:event:user.signed_in:v1-rc.0'>>().toEqualTypeOf<{
-      method: 'password' | 'wallet';
+      method: 'password' | 'wallet' | 'upstream';
       verifierProfile?: string | undefined;
     }>();
     // @ts-expect-error an identifier the registry does not hold

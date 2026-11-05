@@ -55,20 +55,34 @@ export interface AuthMethodRouteHost {
    * `undefined` or `null` when there is no flow cookie or no such
    * transaction; anything but such an object reads as none.
    *
+   * `binding` is what the callback carries (`presentedUpstreamBinding`),
+   * unchecked, `undefined` when it carries none: a host that keys its pending
+   * transactions by their binding finds the transaction with it, and must
+   * still check that the request's flow cookie is the one the start bound
+   * (#639).
+   *
    * The mount compares the callback's binding with this one before it calls
    * {@link takeTransaction}, so a request that does not carry the binding
    * (a cross-site callback, a forged one) leaves the pending sign-in alone.
    */
-  peekTransaction(method: AuthMethod, request: FastifyRequest): Promise<unknown>;
+  peekTransaction(
+    method: AuthMethod,
+    request: FastifyRequest,
+    binding: string | undefined
+  ): Promise<unknown>;
   /**
    * Take the pending transaction of `method` that the request's flow cookie
    * names, once: the same `{ binding, transaction }` as
    * {@link peekTransaction}, and a second call for the same transaction
    * answers `undefined` (or `null`). `undefined` or `null` too when there is
    * no flow cookie or no such transaction. Anything but such an object reads
-   * as no transaction.
+   * as no transaction. `binding` as for {@link peekTransaction}.
    */
-  takeTransaction(method: AuthMethod, request: FastifyRequest): Promise<unknown>;
+  takeTransaction(
+    method: AuthMethod,
+    request: FastifyRequest,
+    binding: string | undefined
+  ): Promise<unknown>;
   /**
    * Hand a callback's outcome, unchecked, to the engine
    * (`completeUpstreamStep`), which answers the request.
@@ -98,6 +112,43 @@ export interface AuthMethodRoutesOptions {
 }
 
 /**
+ * Options of {@link mountAuthMethodRoutes} and
+ * {@link mountAuthMethodFamilyRoutes}.
+ *
+ * @experimental
+ */
+export interface AuthMethodRouteMountOptions {
+  /**
+   * More of each route's Fastify `config`, such as the `rateLimit` of the
+   * sign-in callbacks (#639). The `surface` stays `browser` whatever this
+   * says.
+   */
+  readonly config?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * A family of AuthMethods whose types are known only per request (#639):
+ * the realm's configured upstream OpenID Connect providers, each an
+ * `oidc_<alias>` type with the same routes. One route per declared route is
+ * mounted, under `/upstream/:type`; each request resolves its method from the
+ * type and the request (its realm), and runs that method's own route.
+ *
+ * @experimental
+ */
+export interface AuthMethodFamily {
+  /** The routes every member declares: a kind, a method and a path each, as a member's `routes` hold them. */
+  readonly routes: readonly AuthMethodRoute[];
+  /**
+   * The member for `type` in the request's realm, or `undefined` when the
+   * realm has none of that type: the route then answers as a path no route
+   * serves, through {@link notFound}.
+   */
+  resolve(type: string, request: FastifyRequest): Promise<AuthMethod | undefined>;
+  /** Answer a request for a type the realm has not: the `not_found` a path no route serves gets. */
+  notFound(request: FastifyRequest, reply: FastifyReply): Promise<unknown>;
+}
+
+/**
  * Mount the routes of every AuthMethod in `fastify.providerRegistry`, each
  * under `/upstream/<type>`. Register it after `federationPlugin`.
  *
@@ -123,7 +174,8 @@ export const authMethodRoutesPlugin = fp<AuthMethodRoutesOptions>(
 export function mountAuthMethodRoutes(
   fastify: FastifyInstance,
   method: AuthMethod,
-  host: AuthMethodRouteHost
+  host: AuthMethodRouteHost,
+  options: AuthMethodRouteMountOptions = {}
 ): void {
   // One snapshot of what the method declared, checked and then used for every
   // request: a method that changes its members later changes nothing here.
@@ -134,8 +186,7 @@ export function mountAuthMethodRoutes(
     throw new AuthMethodContractError(`The AuthMethod ${type}`, problems);
   }
   const prefix = authMethodRoutePrefix(type);
-  // `as const`: the auth server types `surface` as its RouteSurface union.
-  const config = { surface: 'browser' as const };
+  const config = routeConfig(options);
 
   for (const route of routes) {
     const url = `${prefix}${route.path}`;
@@ -161,6 +212,94 @@ export function mountAuthMethodRoutes(
       handler: async (request, reply) => handle(mounted, request, reply),
     });
   }
+}
+
+/**
+ * Mount the routes of a {@link AuthMethodFamily} under `/upstream/:type`
+ * (#639): one route per declared route, whose handler resolves the member of
+ * the request's type and runs that member's route of the same kind, method
+ * and path, as {@link mountAuthMethodRoutes} runs a mounted method's. A type
+ * that is no AuthMethod type, or one the realm has no member of, answers as a
+ * path no route serves. A method mounted at a fixed prefix, such as a plugin's,
+ * keeps its own routes: the router prefers them to these.
+ *
+ * @throws AuthMethodContractError when a declared route's path could leave
+ *   its prefix, or another route problem the registry checks
+ * @experimental
+ */
+export function mountAuthMethodFamilyRoutes(
+  fastify: FastifyInstance,
+  family: AuthMethodFamily,
+  host: AuthMethodRouteHost,
+  options: AuthMethodRouteMountOptions = {}
+): void {
+  const declared = Object.freeze([...family.routes]);
+  const problems = routeProblems(declared);
+  if (problems.length > 0) {
+    throw new AuthMethodContractError('An AuthMethod family', problems);
+  }
+  const config = routeConfig(options);
+  for (const route of declared) {
+    const sample = `${authMethodRoutePrefix('oidc_family')}${route.path}`;
+    if (new URL(sample, 'https://realm.invalid').pathname !== sample) {
+      throw new AuthMethodContractError('An AuthMethod family', [
+        `${route.method} ${route.path} would leave its prefix`,
+      ]);
+    }
+    fastify.route({
+      method: route.method,
+      url: `/upstream/:type${route.path}`,
+      config,
+      bodyLimit: MAX_ROUTE_BODY_BYTES,
+      exposeHeadRoute: false,
+      schema: hiddenFromOpenapi(),
+      handler: async (request, reply) => {
+        const { type } = request.params as { type?: unknown };
+        if (typeof type !== 'string' || authMethodTypeProblems(type).length > 0) {
+          return family.notFound(request, reply);
+        }
+        const method = await family.resolve(type, request);
+        if (method === undefined) return family.notFound(request, reply);
+        // The member's own snapshot, checked as a mounted method's is: its
+        // route of the same kind, method and path runs, never the template's.
+        const routes = Object.freeze([...method.routes]);
+        const own = routes.find(
+          (candidate) =>
+            candidate.kind === route.kind &&
+            candidate.method === route.method &&
+            candidate.path === route.path
+        );
+        if (
+          method.type !== type ||
+          own === undefined ||
+          routeProblems(routes).length > 0 ||
+          authMethodTypeProblems(method.type).length > 0
+        ) {
+          return host.complete(
+            method,
+            new AuthMethodFaultError(type, 'the resolved method does not declare this route'),
+            request,
+            reply
+          );
+        }
+        const mounted: MountedMethod = {
+          method,
+          type,
+          prefix: authMethodRoutePrefix(type),
+          routes,
+          route: own,
+          host,
+        };
+        return handle(mounted, request, reply);
+      },
+    });
+  }
+}
+
+/** A mounted route's Fastify `config`: the options' with the `browser` surface. */
+function routeConfig(options: AuthMethodRouteMountOptions): Record<string, unknown> {
+  // `as const`: the auth server types `surface` as its RouteSurface union.
+  return { ...options.config, surface: 'browser' as const };
 }
 
 /**
@@ -221,10 +360,10 @@ async function handle(
   const mismatch = () =>
     host.complete(method, { kind: 'failed', reason: 'transaction_mismatch' }, request, reply);
   const presented = presentedUpstreamBinding(route, seen);
-  if (!bindingMatches(await host.peekTransaction(method, request), presented)) {
+  if (!bindingMatches(await host.peekTransaction(method, request, presented), presented)) {
     return mismatch();
   }
-  const taken = await host.takeTransaction(method, request);
+  const taken = await host.takeTransaction(method, request, presented);
   // Again on what was taken: another start in the same browser may have
   // replaced the transaction between the two reads.
   if (!bindingMatches(taken, presented)) return mismatch();

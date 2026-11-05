@@ -152,8 +152,9 @@ interface KitRun {
  * 3. The provider's callback carries the binding back in the callback
  *    route's `bindingParameter` (`state` by default): the kit, like the host,
  *    hands the handler the transaction only when it does. It ends in an
- *    identity whose attributes carry the method's `type`; a second sign-in of
- *    the same person resolves the same `externalSub`.
+ *    identity whose `rawClaims.iss` names its issuer and whose attributes
+ *    carry the method's `type`; a second sign-in of the same person resolves
+ *    the same `externalSub`.
  * 4. When the authorization request asks for a code (`response_type=code`,
  *    in the redirect or a body the method posted), it carries
  *    `code_challenge_method=S256` and a `code_challenge` (RFC 7636; QAuth
@@ -266,6 +267,12 @@ async function runChecks(
   );
   if (completion.kind !== 'identity') {
     run.stop(`the provider's callback ended as ${describeOutcome(completion)}, not in an identity`);
+  }
+  const issuer = completion.identity.rawClaims['iss'];
+  if (typeof issuer !== 'string' || issuer.length === 0) {
+    run.fail(
+      'the identity names no issuer (rawClaims.iss): the sign-in flow binds a subject to its issuer, and refuses an identity without one'
+    );
   }
   const result = (happy as { result: unknown }).result;
 

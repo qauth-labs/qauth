@@ -1,4 +1,13 @@
-import { base64url, closedObject, displayText, EMPTY_OBJECT, host, object } from '../schema-kit';
+import {
+  array,
+  base64url,
+  closedObject,
+  displayText,
+  EMPTY_OBJECT,
+  host,
+  httpsUrl,
+  object,
+} from '../schema-kit';
 import { defineStep } from '../step-definition';
 import {
   accountIdentifier,
@@ -12,7 +21,7 @@ import {
  * The sign-in steps: who is signing in, and the factors that prove it.
  * `identifier`, `password`, `captcha`, `webauthn_get` and `totp` are the
  * steps of ADR-017 Decision 3 and are served by both transports;
- * `recovery_code` and `select_account` only by the Interaction API.
+ * `recovery_code`, `select_account` and `upstream` only by the Interaction API.
  */
 
 /** The authorization response the examples end in. */
@@ -322,5 +331,68 @@ export const selectAccount = defineStep({
     },
     alternatives: ['identifier'],
     next: { redirect: EXAMPLE_REDIRECT },
+  },
+});
+
+/** The pattern of an upstream provider's name: the AuthMethod `type` (`oidc_corp`). */
+const UPSTREAM_PROVIDER_PATTERN = '^[a-z][a-z0-9_]{0,62}$';
+
+/** An upstream provider's name, as the list carries it and the answer names it. */
+function upstreamProvider(description: string) {
+  return {
+    type: 'string',
+    minLength: 1,
+    maxLength: 63,
+    pattern: UPSTREAM_PROVIDER_PATTERN,
+    description,
+  };
+}
+
+export const upstream = defineStep({
+  name: 'upstream',
+  transports: ['interaction'],
+  summary: 'Offers sign-in through an upstream identity provider.',
+  description:
+    'The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or creates one when the realm allows sign-up, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.',
+  params: object(
+    {
+      providers: array(
+        object(
+          {
+            provider: upstreamProvider('The provider’s name, which the answer names.'),
+            name: displayText(
+              'realm',
+              64,
+              'The provider’s name as the operator set it, for its button.'
+            ),
+            icon: httpsUrl(
+              2048,
+              'An absolute `https` URL on the realm origin of a PNG icon for the button. Nothing supplies one yet (#714).'
+            ),
+          },
+          ['provider', 'name']
+        ),
+        1,
+        16,
+        'The realm’s upstream identity providers, in the order the screen shows them.'
+      ),
+    },
+    ['providers']
+  ),
+  personal: EMPTY_OBJECT,
+  answer: closedObject(
+    { provider: upstreamProvider('The `provider` of the entry the person picked.') },
+    ['provider']
+  ),
+  errors: ['provider_unavailable'],
+  amr: [],
+  example: {
+    params: { providers: [{ provider: 'oidc_corp', name: 'Example Corp' }] },
+    answer: { provider: 'oidc_corp' },
+    alternatives: ['identifier'],
+    next: {
+      redirect:
+        'https://idp.example.com/authorize?response_type=code&client_id=qauth&state=Qm9vbGVhbi1ub3QtYS1yZWFsLXN0YXRl',
+    },
   },
 });

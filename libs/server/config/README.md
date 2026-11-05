@@ -204,8 +204,8 @@ failed-login throttling: `LOG_PRETTY`, `REQUEST_ID_HEADER`, `METRICS_ENABLED`,
 `FAILED_LOGIN_TRACKING_ENABLED`, `FAILED_LOGIN_MAX_ATTEMPTS`,
 `FAILED_LOGIN_WINDOW`, `FAILED_LOGIN_LOCKOUT_DURATION`. (`LOG_LEVEL` itself lives
 in `baseEnvSchema`.) The four `FAILED_LOGIN_*` keys, `PASSWORD_MIN_LENGTH`,
-`PASSWORD_MIN_SCORE`, `PASSWORD_BREACH_LIST_SOURCE` and
-`REQUIRE_VERIFIED_ACCOUNT` are `realm-seed` keys: they seed a new realm's
+`PASSWORD_MIN_SCORE`, `PASSWORD_BREACH_LIST_SOURCE`,
+`REQUIRE_VERIFIED_ACCOUNT` and `ALLOW_SIGN_UP` are `realm-seed` keys: they seed a new realm's
 `bruteForce`, `password` and `accounts` policies, and the auth server reads a
 realm's own policies from the realm row (#528).
 

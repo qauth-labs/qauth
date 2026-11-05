@@ -146,7 +146,11 @@ const transaction = vi.fn<
 >(async (cb) => cb(TX));
 const fastify = {
   db: { transaction },
-  repositories: { oauthConsents: { upsertGrant } },
+  repositories: {
+    oauthConsents: { upsertGrant },
+    // The realm's upstream providers (#639): none.
+    realmUpstreamProviders: { listByRealm: async () => [], find: async () => undefined },
+  },
 } as unknown as FastifyInstance;
 const request = {} as FastifyRequest;
 const reply = {} as FastifyReply;

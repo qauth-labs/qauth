@@ -434,6 +434,22 @@ async function locateBound(request: FastifyRequest, id: unknown): Promise<Bound>
 }
 
 /**
+ * The flow binding of the live interaction `id` names, once the request's
+ * flow cookie is checked to bind it (#639): what an upstream provider's
+ * pending sign-in keeps, so that only this browser's callback takes it.
+ *
+ * @throws {InteractionExpiredError} when the id names no live interaction or
+ *   the flow cookie does not bind it
+ */
+export async function interactionFlowBinding(
+  request: FastifyRequest,
+  id: unknown
+): Promise<string> {
+  const bound = await locateBound(request, id);
+  return bound.record.flowBinding;
+}
+
+/**
  * {@link locateBound}, for an answer or a cancel: an interaction a mailed pass
  * opened (#637) is refused both until the start it carries is built (#642,
  * #644), after the binding is checked and before its turn is taken, so it

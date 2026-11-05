@@ -163,6 +163,16 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     },
 
     /**
+     * Every credential a user holds, of every provider type: the account a
+     * sign-in proved, read once with all its factors and upstream identities
+     * (#639). Bounded by the user's own credentials.
+     */
+    async findAllByUserId(userId: string, tx?: DbClient): Promise<UserCredential[]> {
+      const invoker = tx ?? defaultDb;
+      return invoker.select().from(userCredentials).where(eq(userCredentials.userId, userId));
+    },
+
+    /**
      * Replace `credential_data` wholesale (#238).
      *
      * @throws NotFoundError if the credential does not exist.

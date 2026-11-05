@@ -1,8 +1,8 @@
 # The upstream step as the AuthMethod contract defines it (#599, EXPERIMENTAL: the plugin API of ADR-018 §4): how a
 # method starts an upstream transaction, how its callback hands a result to the engine, and how the engine turns a
 # result into a VerifiedIdentity. It is the contract's half of the step, and it stops where the sign-in flow takes
-# over: #639 writes that flow's graph (the pages, the account lookup by (realm, type, externalSub), account creation,
-# MFA) and adds the step's params to ADR-017's step table.
+# over: federation.upstream-sign-in (#639) is that flow's graph (the pages, the account lookup by (realm, type,
+# externalSub), account creation, MFA), and ADR-017's step table holds the step's params.
 #
 # - Written before the engine code that drives it (#639) and the plugin runtime that builds the method's context
 #   (#600), so the status is proposed. Every state that the merged contract code already makes true carries its
@@ -172,8 +172,8 @@ states:
   offered:
     title: Offer the upstream step
     description: >-
-      The engine offers the step urn:qauth:ia:upstream:v1-rc.0 with the methods the realm has enabled, each with its
-      display name and icon. Its params and its place in ADR-017's step table come with #639.
+      The engine offers the step urn:qauth:ia:upstream:v1-rc.0 with the providers the realm lists, each with its
+      display name, as an alternative of the first sign-in step; ADR-017's step table holds its params (#639).
     source: libs/server/federation/src/auth-method/contract.ts:78
     on:
       PICK:

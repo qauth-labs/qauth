@@ -1,8 +1,10 @@
 import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
 import {
+  AuthMethodConfigError,
   configSpellsMemberOf,
   type InstalledAuthMethodPlugin,
   MAX_AUTH_METHOD_SECRET_LENGTH,
+  parseAuthMethodConfig,
   withConfigMembers,
   withoutConfigMembers,
 } from '@qauth-labs/fastify-plugin-federation';
@@ -449,16 +451,22 @@ function requireValidConfig(
   config: Readonly<Record<string, unknown>>,
   secrets: ReadonlyMap<string, string>
 ): void {
-  const parsed = plugin.method.configSchema.safeParse(
-    withConfigMembers(withoutConfigMembers(config, plugin.secretPaths), secrets)
-  );
-  if (parsed.success) return;
-  const members = parsed.error.issues
-    .map((issue) => `${issue.path.map(String).join('.') || '(root)'}: ${issue.code}`)
-    .slice(0, 16);
-  throw new BadRequestError(
-    `The configuration does not pass the plugin's config schema (${members.join('; ')})`
-  );
+  // The context's own check (#639, from the review of #939): the schema, and
+  // a parsed form of plain data, which the context copies and freezes. A
+  // config it would refuse is refused here, before the state is written, so
+  // a configure never makes every sign-in through the plugin fail.
+  try {
+    parseAuthMethodConfig(
+      plugin.method,
+      withConfigMembers(withoutConfigMembers(config, plugin.secretPaths), secrets)
+    );
+  } catch (error) {
+    if (!(error instanceof AuthMethodConfigError)) throw error;
+    const members = error.issues.slice(0, 16);
+    throw new BadRequestError(
+      `The configuration does not pass the plugin's config schema (${members.join('; ')})`
+    );
+  }
 }
 
 /** The plugin's row in the request's realm, in the handler's transaction. */

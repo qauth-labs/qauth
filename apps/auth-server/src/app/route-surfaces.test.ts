@@ -98,7 +98,9 @@ function maximalEnvironment(): Record<string, string> {
  * `GET /auth/verify`, is one; `POST /auth/verify` beside it is the JSON API.
  * So are the end-session endpoint and its status page (#675), which read and
  * clear the session cookie, and the landing of a mailed pass link (#637),
- * which sets the flow cookie of the interaction it starts.
+ * which sets the flow cookie of the interaction it starts. So is an upstream
+ * provider's callback (#639), which reads the flow cookie of the interaction
+ * whose sign-in it completes.
  */
 function isBrowserSessionRoute(route: RouteOptions): boolean {
   const { url } = route;
@@ -115,7 +117,8 @@ function isBrowserSessionRoute(route: RouteOptions): boolean {
     url.startsWith('/consents/') ||
     url === '/auth/link/wallet' ||
     url.startsWith('/auth/link/wallet/') ||
-    url === '/auth/pass'
+    url === '/auth/pass' ||
+    url.startsWith('/upstream/')
   );
 }
 

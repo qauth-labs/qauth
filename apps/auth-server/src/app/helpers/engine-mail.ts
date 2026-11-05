@@ -325,8 +325,15 @@ export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer
  * when a mail goes out, so a process may build this before the email plugin
  * registers; every process that holds the failure ladder registers it
  * (`service-roles.ts`).
+ *
+ * @param tasks - The background tasks its sends run on. Created here when
+ *   none is given, which registers an `onClose` hook: a caller that builds
+ *   the mailer after the server started creates them while it registers.
  */
-export function createEngineMailer(fastify: FastifyInstance): EngineMailer {
+export function createEngineMailer(
+  fastify: FastifyInstance,
+  tasks: BackgroundTasks = createBackgroundTasks(fastify)
+): EngineMailer {
   return createCappedMailer({
     caps: createRedisSendCaps(fastify.redis),
     digests: createServerDigests(fastify),
@@ -348,7 +355,7 @@ export function createEngineMailer(fastify: FastifyInstance): EngineMailer {
       sendEngineMail: (...args) => fastify.emailService.sendEngineMail(...args),
       canSend: (...args) => fastify.emailService.canSend(...args),
     },
-    tasks: createBackgroundTasks(fastify),
+    tasks,
     log: fastify.log,
     mockSends: env.NODE_ENV !== 'production',
   });

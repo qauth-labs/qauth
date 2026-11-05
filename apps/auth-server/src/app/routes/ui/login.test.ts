@@ -139,6 +139,11 @@ function makeFastify() {
         findByRealmProviderSub: vi.fn(),
         findById: vi.fn(),
       },
+      // The realm's upstream providers (#639): none.
+      realmUpstreamProviders: {
+        listByRealm: vi.fn(async () => []),
+        find: vi.fn(async () => undefined),
+      },
     },
     passwordHasher: {
       verifyPassword: vi.fn(),
@@ -1013,5 +1018,73 @@ describe('UI /ui/login — the per-account failure ladder (#615)', () => {
     );
     expect(sessions.service.create).not.toHaveBeenCalled();
     expect(ladder.reserved[0].account).toBeNull();
+  });
+});
+
+/**
+ * The realm's upstream providers on the sign-in page (#639): one plain link
+ * per listed provider, which works without JavaScript, back to the page's
+ * authorization request routed to the provider. Shown only when the page was
+ * opened for an authorization request.
+ */
+describe('UI /ui/login — upstream provider buttons (#639)', () => {
+  const ROWS = [
+    {
+      id: 'p1',
+      realmId: 'realm-1',
+      type: 'oidc_corp',
+      displayName: 'Example Corp',
+      displayOrder: 0,
+      hidden: false,
+      enabled: true,
+      marksVerified: true,
+      config: {},
+    },
+    {
+      id: 'p2',
+      realmId: 'realm-1',
+      type: 'oidc_hidden',
+      displayName: 'Hidden Corp',
+      displayOrder: 1,
+      hidden: true,
+      enabled: true,
+      marksVerified: true,
+      config: {},
+    },
+  ];
+
+  async function page(returnTo: string | undefined) {
+    const { fastify, ctx } = makeFastify();
+    (fastify.repositories.realmUpstreamProviders.listByRealm as unknown as Mock).mockResolvedValue(
+      ROWS
+    );
+    await loginRoute(fastify);
+    const { reply, state } = createReply();
+    await ctx.get!(
+      {
+        query: returnTo === undefined ? {} : { return_to: returnTo },
+        headers: {},
+        ip: '127.0.0.1',
+      },
+      reply
+    );
+    return state.body as string;
+  }
+
+  it('links each listed provider to its way in, carrying the return_to', async () => {
+    const body = await page('/ui/resume/handle-1');
+
+    expect(body).toContain('href="/ui/upstream/oidc_corp?return_to=%2Fui%2Fresume%2Fhandle-1"');
+    expect(body).toContain('>Sign in with Example Corp</a');
+    // A hidden provider is never listed.
+    expect(body).not.toContain('Hidden Corp');
+    expect(body).not.toContain('oidc_hidden');
+  });
+
+  it('lists no provider when the page was not opened for an authorization request', async () => {
+    for (const returnTo of [undefined, '/account']) {
+      const body = await page(returnTo);
+      expect(body).not.toContain('/ui/upstream/');
+    }
   });
 });
