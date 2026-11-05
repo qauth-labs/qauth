@@ -236,7 +236,23 @@ main:
     newPassword: accepted
     addressTaken: false
   events:
-    [DONE, START, DONE, DONE, DONE, RIGHT_CODE, DONE, DONE, DONE, NEW_PASSWORD, DONE, DONE, DONE, DONE, DONE]
+    [
+      DONE,
+      START,
+      DONE,
+      DONE,
+      DONE,
+      RIGHT_CODE,
+      DONE,
+      DONE,
+      DONE,
+      NEW_PASSWORD,
+      DONE,
+      DONE,
+      DONE,
+      DONE,
+      DONE,
+    ]
 
 initial: checkingSteps
 states:
