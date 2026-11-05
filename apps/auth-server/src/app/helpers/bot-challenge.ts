@@ -53,6 +53,8 @@ export function createServerBotChallenge(
     siteKey: env.BOT_CHALLENGE_HOSTED_SITE_KEY ?? '',
     secret: env.BOT_CHALLENGE_HOSTED_SECRET ?? '',
     verifyUrl: env.BOT_CHALLENGE_HOSTED_VERIFY_URL ?? '',
+    // Named to the egress client, whose allowlist entries name realms.
+    realmName: async ({ realmId }) => (await realmOf(realmId)).name,
   });
   return Object.freeze({
     params: (round: Parameters<BotChallengeProvider['params']>[0]) =>

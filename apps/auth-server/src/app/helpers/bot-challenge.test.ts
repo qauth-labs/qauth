@@ -18,7 +18,7 @@ import type { RealmRow } from './request-realm';
  */
 
 const REALM_ID = '0199fa20-0000-7000-8000-00000000aaaa';
-const REALM = { id: REALM_ID } as RealmRow;
+const REALM = { id: REALM_ID, name: 'acme' } as RealmRow;
 
 function sources(difficulty: number, egress?: { request: ReturnType<typeof vi.fn> }) {
   const ofRealm = vi.fn(() => ({ policies: { botChallenge: { difficulty } } }));
@@ -58,7 +58,7 @@ describe('createServerBotChallenge (#643)', () => {
     await expect(provider.params({ realmId: REALM_ID, clientId: 'web' })).rejects.toThrow();
   });
 
-  it('checks a hosted provider through the egress client, at the configured URL', async () => {
+  it('checks a hosted provider through the egress client, at the configured URL, naming the realm', async () => {
     setEnv({
       BOT_CHALLENGE_PROVIDER: 'hosted',
       BOT_CHALLENGE_HOSTED_NAME: 'turnstile',
@@ -82,6 +82,8 @@ describe('createServerBotChallenge (#643)', () => {
     expect(request.mock.calls[0]?.[0]).toMatchObject({
       method: 'POST',
       url: 'https://challenges.example.com/siteverify',
+      // The realm's name, which the egress allowlist's entries name.
+      realm: 'acme',
     });
   });
 

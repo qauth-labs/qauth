@@ -89,6 +89,29 @@ describe('the hosted bot challenge', () => {
       secret: SECRET,
       response: TOKEN,
     });
+    // No realm lookup configured: the check names no realm.
+    expect(request).not.toHaveProperty('realm');
+  });
+
+  it("names the check's realm to the egress client, whose allowlist entries name realms", async () => {
+    const { egress, sent } = answering(json({ success: true }));
+    const realmName = vi.fn(async ({ realmId }: { readonly realmId: string }) =>
+      realmId === REALM ? 'acme' : 'other'
+    );
+    const hosted = provider(egress, { realmName });
+    expect(await hosted.verify({ realmId: REALM, params: PARAMS, token: TOKEN })).toBe(true);
+    expect(realmName).toHaveBeenCalledWith({ realmId: REALM });
+    expect(sent[0]).toMatchObject({ source: 'operator', realm: 'acme' });
+    // A realm that cannot be named refuses the round, unchecked.
+    const unnamed = provider(egress, {
+      realmName: async () => {
+        throw new Error('no realm');
+      },
+    });
+    await expect(unnamed.verify({ realmId: REALM, params: PARAMS, token: TOKEN })).rejects.toThrow(
+      'no realm'
+    );
+    expect(sent).toHaveLength(1);
   });
 
   it('refuses a token the provider does not take, and one for other params unchecked', async () => {

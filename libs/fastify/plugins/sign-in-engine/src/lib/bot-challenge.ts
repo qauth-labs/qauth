@@ -86,6 +86,14 @@ export interface SiteVerifyChallengeOptions {
   readonly secret: string;
   /** Where tokens are checked: an absolute `https` URL with no user name, password, query or fragment. */
   readonly verifyUrl: string;
+  /**
+   * The name of the realm a check is for, from its id, named to the egress
+   * client: a verify host on a private address is reached only through an
+   * `EGRESS_ALLOWLIST_PATH` entry that names the realm. Unset, no check names
+   * a realm, and such a host is refused. A lookup that throws refuses the
+   * round, as the provider being down does.
+   */
+  readonly realmName?: (input: { readonly realmId: string }) => string | Promise<string>;
 }
 
 /**
@@ -126,7 +134,7 @@ export function createSiteVerifyChallengeProvider(
     throw new TypeError(`the hosted bot challenge verify URL ${problem}`);
   }
   const url = new URL(options.verifyUrl).href;
-  const { egress, secret } = options;
+  const { egress, secret, realmName } = options;
   const offered = Object.freeze(params);
 
   return Object.freeze({
@@ -134,9 +142,11 @@ export function createSiteVerifyChallengeProvider(
       return offered;
     },
     async verify({
+      realmId,
       params: answered,
       token,
     }: {
+      readonly realmId: string;
       readonly params: StepParams<'captcha'>;
       readonly token: string;
     }) {
@@ -149,6 +159,7 @@ export function createSiteVerifyChallengeProvider(
       ) {
         return false;
       }
+      const realm = realmName === undefined ? undefined : await realmName({ realmId });
       let status: number;
       let body: Buffer;
       try {
@@ -162,6 +173,7 @@ export function createSiteVerifyChallengeProvider(
           body: new URLSearchParams({ secret, response: token }).toString(),
           purpose: BOT_CHALLENGE_PURPOSE,
           source: 'operator',
+          ...(realm === undefined ? {} : { realm }),
           limits: BOT_CHALLENGE_LIMITS,
         });
         status = response.status;
