@@ -45,6 +45,13 @@
 >   agent URIs and the SCIM extension schema of ADR-014, and every format id.
 > - §6: the shared test-vector format is a release candidate, `qauth-vectors/1-rc.<M>`, until
 >   1.0.0, like the event types in §5.
+>
+> **Amended 2026-11-05** with the maintainer's decision of that day on where first-party plugins
+> live.
+>
+> - §3: a first-party plugin is one QAuth makes and releases, and it may live in its own
+>   repository. The GitHub provider plugin is the first example. Whether it joins the server's
+>   first-party list before 1.0 is decided when the plugin API leaves the experiment.
 
 ## Context
 
@@ -196,6 +203,13 @@ The PQC library in §7 implements it as experimental.
   Google, Microsoft, Apple, GitHub and My Number. GitHub offers no OIDC sign-in, so its plugin uses
   OAuth 2.0 and GitHub's user API. Decided 2026-10-10 (maintainer).
 - The plugin API is public and documented, and experimental in 1.0 (§4). It becomes stable in 1.x.
+- A first-party plugin is one QAuth makes and releases. It may live in its own repository, on a
+  version line of its own, and depend only on the published plugin SDK, as a third party's plugin
+  does; its release is QAuth's, under the same review. The first example is the GitHub provider
+  plugin. A first-party plugin that is not on the server's first-party list
+  (`FIRST_PARTY_AUTH_METHOD_PLUGINS`) loads like any package the operator installs: only while
+  `PLUGIN_API_ENABLED` is on. Whether that plugin joins the list before 1.0 is decided when the
+  plugin API leaves the experiment. Decided 2026-11-05 (maintainer).
 
 **Events**
 

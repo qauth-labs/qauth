@@ -41,8 +41,14 @@ import { requestRealm } from './request-realm';
 /**
  * The first-party plugins: the packages that load whatever
  * `PLUGIN_API_ENABLED` says. A fixed list in the server's code, never a
- * setting (#600): the first-party provider plugins of ADR-020 §4 add their
- * packages here as they ship (#671, #672, #673). Empty until then.
+ * setting (#600). Empty.
+ *
+ * A first-party plugin is one QAuth makes and releases, and it may live in
+ * its own repository (ADR-018 §3, amended 2026-11-05). The first such
+ * plugin, for example the GitHub one (#672), is not on this list: it loads,
+ * as any package the operator installs, only while the plugin API is on.
+ * Whether it joins the list before 1.0 is decided when the plugin API leaves
+ * the experiment.
  *
  * The generic upstream OIDC client (`@qauth-labs/server-upstream-oidc`,
  * #601) cannot go on this list as it is built: it is a factory that builds
