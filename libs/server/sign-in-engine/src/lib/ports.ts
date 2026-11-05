@@ -316,6 +316,18 @@ export interface AccountRegistrations {
    */
   allowed(input: { readonly realmId: string; readonly clientId: string }): Promise<boolean>;
   /**
+   * Whether a registration of this realm and client must pass a bot
+   * challenge before its address is asked for (#643; ADR-017 Decision 7,
+   * F1b): the realm's `botChallenge.requiredAtSignUp`, or the client's own
+   * requirement. Read on every round of a registration until the transaction
+   * passed one. Absent: a registration needs one only where a soft threshold
+   * asks for it, as every round does.
+   */
+  challengeRequired?(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+  }): Promise<boolean>;
+  /**
    * Create the account of `identifier`, whose mailbox the transaction proved:
    * in one database transaction, the `users` row, the verified `password`
    * credential holding an Argon2id hash of `password` (already in NFC) with

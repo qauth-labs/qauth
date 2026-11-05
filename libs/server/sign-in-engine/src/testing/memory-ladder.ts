@@ -95,6 +95,12 @@ export function createMemoryLadder(
           };
     },
     knownIps: (realmId, hmac) => new Map(known.get(knownKey(realmId, hmac)) ?? []),
+    async softThreshold({ realmId, identifierHmac, counters: names }) {
+      return names.some((factor) => {
+        const state = live(counterKey(realmId, identifierHmac, factor));
+        return state !== undefined && state.failures >= policyOf(factor).freeFailures;
+      });
+    },
     async reserve({ realmId, identifierHmac, factor, endUserIp }): Promise<LadderVerdict> {
       const key = counterKey(realmId, identifierHmac, factor);
       const policy = policyOf(factor);

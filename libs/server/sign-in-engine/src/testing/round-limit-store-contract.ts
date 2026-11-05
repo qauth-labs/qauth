@@ -320,6 +320,44 @@ export function describeRoundLimitStore(
       expect((await store.admitRound(client)).kind).toBe('admitted');
     });
 
+    it('says a round owes the bot challenge while a soft threshold of its IP, bucket or client holds', async (context) => {
+      const { credential, store, keys, advance } = await setup(context);
+      const soft = async (overrides: Partial<RoundLimitKeys>) => {
+        const decision = await store.admitRound(keys(overrides));
+        expect(decision.kind).toBe('admitted');
+        return decision.kind === 'admitted' && decision.softThreshold === true;
+      };
+      // The IP's own failures.
+      for (let i = 0; i < P.endUserIp.softFailures - 1; i += 1) {
+        await credential('failure', ip(1));
+      }
+      expect(await soft(ip(1))).toBe(false);
+      await credential('failure', ip(1));
+      expect(await soft(ip(1))).toBe(true);
+      // Another IP of the bucket does not owe it for this one.
+      expect(await soft(ip(2))).toBe(false);
+      // The bucket's distinct identifiers: every IP of the bucket owes it.
+      for (let i = 0; i <= P.ipBucket.maxIdentifiers; i += 1) {
+        await credential('failure', { ...ip(100 + i, 'bucket-b'), identifierHmac: `id-${i}` });
+      }
+      expect(await soft(ip(200, 'bucket-b'))).toBe(true);
+      expect(await soft(ip(200, 'bucket-c'))).toBe(false);
+      // The client's failure ratio.
+      const client = { clientKey: 'native-app' };
+      for (let i = 0; i < P.client.ratioMinRounds - 1; i += 1) {
+        await credential('failure', client);
+      }
+      expect(await soft(client)).toBe(false);
+      await credential('failure', client);
+      expect(await soft(client)).toBe(true);
+      expect(await soft({ clientKey: 'other-app' })).toBe(false);
+      // It ends with the windows.
+      advance(Math.max(P.endUserIp.windowMs, P.ipBucket.windowMs, P.client.windowMs));
+      expect(await soft(ip(1))).toBe(false);
+      expect(await soft(ip(200, 'bucket-b'))).toBe(false);
+      expect(await soft(client)).toBe(false);
+    });
+
     it('refuses the fourth registration start from one IP in an hour', async (context) => {
       const { store, keys, advance } = await setup(context);
       for (let i = 0; i < P.registrationStarts.endUserIp.limit; i += 1) {

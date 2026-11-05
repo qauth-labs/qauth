@@ -40,9 +40,11 @@ import type { SendWindow } from './send-caps';
  *
  * The soft action is a delay: while a soft threshold holds, its key admits
  * one credential round per `delayMs`, and an earlier one is refused with 429
- * and `Retry-After`, neither verified nor counted. The bot challenge (PRO-19,
- * #643) will take its place for a client that lists `captcha`; a client that
- * does not keeps the delay (ADR-017 Decision 4, rule 5). Each delay is the
+ * and `Retry-After`, neither verified nor counted. While it holds, every
+ * round of the key also owes the bot challenge (PRO-19, #643): `admitRound`
+ * says so, and a client that lists `captcha` gets the step before the pending
+ * one; a client that does not keeps only the delay (ADR-017 Decision 4,
+ * rule 5). Each delay is the
  * row's window over its hard limit or failure budget, so a key held to it
  * meets that limit no sooner than the window it is counted in.
  *
@@ -405,7 +407,16 @@ export type RoundLimitAlert = (typeof ROUND_LIMIT_ALERTS)[number];
 
 /** What a store decided about a round, a reservation or a registration start. */
 export type RoundLimitDecision =
-  | { readonly kind: 'admitted'; readonly alerts: readonly RoundLimitAlert[] }
+  | {
+      readonly kind: 'admitted';
+      readonly alerts: readonly RoundLimitAlert[];
+      /**
+       * `admitRound` only: a soft threshold of the round's IP, bucket or
+       * client row holds, so the round owes the bot challenge (PRO-19,
+       * #643; ADR-017 Decision 4, rule 5).
+       */
+      readonly softThreshold?: boolean;
+    }
   | {
       readonly kind: 'refused';
       readonly limit: RoundLimitName;
@@ -453,7 +464,8 @@ export interface RoundLimitStore {
   /**
    * Rule 3, every round: refuse one from an end-user IP inside its hard
    * block, or one above the client's rounds a minute; otherwise count it on
-   * the client's.
+   * the client's, and say whether a soft threshold of its IP, its bucket or
+   * its client holds (`softThreshold`), which asks for the bot challenge.
    */
   admitRound(keys: RoundLimitKeys): Promise<RoundLimitDecision>;
   /**
@@ -525,7 +537,12 @@ function retrySeconds(ms: number): number {
 
 /** A store's decision, checked: anything else is a store fault, which fails closed. */
 function checkedDecision(decision: RoundLimitDecision): RoundLimitDecision {
-  if (decision?.kind === 'admitted') return decision;
+  if (
+    decision?.kind === 'admitted' &&
+    (decision.softThreshold === undefined || typeof decision.softThreshold === 'boolean')
+  ) {
+    return decision;
+  }
   if (
     decision?.kind === 'refused' &&
     (ROUND_LIMITS as readonly string[]).includes(decision.limit) &&
@@ -599,7 +616,11 @@ export function createRoundLimiter(
 
   const verdictOf = (decision: RoundLimitDecision): LimitVerdict =>
     decision.kind === 'admitted'
-      ? Object.freeze({ kind: 'continue' })
+      ? Object.freeze(
+          decision.softThreshold === true
+            ? { kind: 'continue', softThreshold: true }
+            : { kind: 'continue' }
+        )
       : Object.freeze({
           kind: 'throttled',
           retryAfterSeconds: retrySeconds(decision.retryAfterMs),

@@ -1,5 +1,6 @@
 import {
   createInteractionMapper,
+  STEP_NAMES,
   STEP_URNS,
   type StepName,
   transactionAmr,
@@ -32,6 +33,9 @@ import type { SignInTransaction } from './transaction';
  * (#638; ADR-017 Decisions 5 and 8;
  * `graphs/flows/core/account-verification/flow.yaml`).
  */
+
+/** Every step but the bot challenge: a transport that cannot serve it (#643). */
+const WITHOUT_CAPTCHA: readonly StepName[] = STEP_NAMES.filter((name) => name !== 'captcha');
 
 const REALM = '0199fa20-0000-7000-8000-00000000aaaa';
 const CLIENT = 'native-app';
@@ -530,8 +534,10 @@ describe('the email-code ladder (ADR-017 Decision 7)', () => {
     const fifth = built.ladder.counter(REALM, hmac, 'email_code');
     expect(fifth?.failures).toBe(5);
     expect(fifth?.waitUntil).toBeGreaterThan(built.clock.now());
-    // The right code inside the wait: refused, not compared, the account unverified.
-    const ctx = context(built);
+    // The right code inside the wait: refused, not compared, the account
+    // unverified. The transport does not serve the bot challenge the
+    // threshold asks for (#643): the wait and the 429 alone.
+    const ctx = context(built, { serves: WITHOUT_CAPTCHA });
     const waited = await built.engine.advance(kept(b), codeAnswer(codeB), ctx);
     expect(waited).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 1 });
     expect(ctx.records).toEqual([
@@ -544,7 +550,11 @@ describe('the email-code ladder (ADR-017 Decision 7)', () => {
     expect(built.ladder.counter(REALM, hmac, 'password')).toBeUndefined();
     // Outside the wait the right code is accepted, and the counter cleared.
     built.clock.advance(1_000);
-    const done = await built.engine.advance(kept(waited), codeAnswer(codeB), context(built));
+    const done = await built.engine.advance(
+      kept(waited),
+      codeAnswer(codeB),
+      context(built, { serves: WITHOUT_CAPTCHA })
+    );
     expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
     expect(built.directory.accounts.get(IDENTIFIER)?.verified).toBe(true);
     expect(built.ladder.counter(REALM, hmac, 'email_code')).toBeUndefined();
