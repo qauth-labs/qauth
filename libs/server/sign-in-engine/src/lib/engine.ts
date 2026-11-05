@@ -399,6 +399,9 @@ interface RoundState {
   transaction: SignInTransaction;
 }
 
+/** The most providers the `upstream` step lists (#639): its schema's bound. */
+const MAX_UPSTREAM_PROVIDERS = 16;
+
 /** Something the engine can offer: a step handler, or the `upstream` step (#639). */
 interface Offerable {
   readonly step: StepName;
@@ -880,8 +883,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     /**
      * The `upstream` step's params for this round (#639): the realm's
      * providers, `null` when it offers none, when the engine has no provider
-     * directory, or when the transport can serve or start none. A list
-     * outside the step's schema is a store fault.
+     * directory, or when the transport can serve or start none. An entry
+     * outside the step's schema (a name the screen cannot show) is left out
+     * and reported, so one provider's bad row never stops the sign-in; a
+     * directory that answers no list is a store fault.
      */
     const upstreamProviders = async (): Promise<StepParams<'upstream'> | null> => {
       const directory = deps.upstream;
@@ -892,9 +897,20 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       ) {
         return null;
       }
-      const providers = await fromStore('upstream', () => directory.offered({ realmId, clientId }));
-      if (Array.isArray(providers) && providers.length === 0) return null;
-      const params = Array.isArray(providers) ? upstreamParams(providers) : null;
+      const providers: unknown = await fromStore('upstream', () =>
+        directory.offered({ realmId, clientId })
+      );
+      if (!Array.isArray(providers)) {
+        throw new SignInStoreUnavailableError('upstream', new Error('not a provider list'));
+      }
+      const shown = (providers as readonly UpstreamProviderEntry[]).filter(
+        (entry) => upstreamParams([entry]) !== null
+      );
+      if (shown.length < providers.length) {
+        report('upstream', new Error('a provider outside the upstream step’s schema was left out'));
+      }
+      if (shown.length === 0) return null;
+      const params = upstreamParams(shown.slice(0, MAX_UPSTREAM_PROVIDERS));
       if (params === null) {
         throw new SignInStoreUnavailableError('upstream', new Error('not a provider list'));
       }

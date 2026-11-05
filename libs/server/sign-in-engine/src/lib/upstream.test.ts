@@ -226,10 +226,33 @@ describe('the upstream step offered (#639)', () => {
     expect(JSON.stringify(first)).not.toContain('upstream');
   });
 
-  it('refuses a provider list outside the step’s schema as a store fault', async () => {
+  it('leaves out and reports a provider outside the step’s schema', async () => {
+    const reported: string[] = [];
     const built = build(undefined, {
-      providers: [{ provider: 'Not A Type', name: 'Bad' }] as UpstreamProviderEntry[],
+      providers: [{ provider: 'Not A Type', name: 'Bad' }, CORP] as UpstreamProviderEntry[],
+      onUnavailable: (error) => reported.push(error.port),
     });
+    const first = await built.engine.advance(null, null, context(built));
+    expect(first).toMatchObject({
+      kind: 'step',
+      offer: { alternatives: [{ step: 'upstream', params: { providers: [CORP] } }] },
+    });
+    expect(reported).toEqual(['upstream']);
+  });
+
+  it('lists at most sixteen providers', async () => {
+    const many = Array.from({ length: 20 }, (_, index) => ({
+      provider: `oidc_p${index}`,
+      name: `Provider ${index}`,
+    }));
+    const built = build(undefined, { providers: many });
+    const first = await built.engine.advance(null, null, context(built));
+    if (first.kind !== 'step') throw new Error('not a step');
+    expect(first.offer.alternatives[0]?.params).toEqual({ providers: many.slice(0, 16) });
+  });
+
+  it('refuses a directory that answers no list as a store fault', async () => {
+    const built = build(undefined, { providers: 'nope' as unknown as UpstreamProviderEntry[] });
     const first = await built.engine.advance(null, null, context(built));
     expect(first).toMatchObject({ kind: 'refused', reason: 'unavailable' });
   });
