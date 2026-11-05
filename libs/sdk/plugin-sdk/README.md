@@ -27,12 +27,14 @@ The contract is documented at
 ## Install
 
 ```bash
-npm install @qauth-labs/plugin-sdk@next zod
+npm install @qauth-labs/plugin-sdk@0.2.0-rc.1 zod
 ```
 
-Until QAuth 1.0, every release of the SDK is a release candidate on npm's
-`next` dist-tag (the first is `0.2.0-rc.1`), so install it by that tag or by
-its exact version. `zod` is a peer dependency: a method's config schema is a Zod 4 schema, and the
+Install the version of the QAuth release your plugin is for: the SDK carries
+QAuth's own version, and a server refuses a plugin written against another
+contract version ([Versions](#versions)). A release candidate is on npm's
+`next` dist-tag and a release on `latest`; until QAuth's first SDK release,
+`latest` holds only a deprecated `0.0.0` placeholder. `zod` is a peer dependency: a method's config schema is a Zod 4 schema, and the
 server reads it (its JSON Schema, its `writeOnly` marks) with its own copy.
 
 ## Write the method

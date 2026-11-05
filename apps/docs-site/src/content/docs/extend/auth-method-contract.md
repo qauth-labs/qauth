@@ -504,12 +504,13 @@ each entry point exports. `libs/sdk/plugin-sdk/examples/minimal-plugin` is a com
 OAuth 2.0 provider with PKCE: QAuth's release dry run installs the packed SDK into an empty
 project on every pull request, and builds and tests the example there.
 
-**Install the SDK.** The package carries QAuth's own version. A release candidate is on npm's
-`next` dist-tag, the first being `0.2.0-rc.1`, and a release is on `latest`. Zod is a peer
-dependency, so install it beside the SDK:
+**Install the SDK.** The package carries QAuth's own version: install the version of the QAuth
+release the plugin is for. A release candidate is on npm's `next` dist-tag, the first being
+`0.2.0-rc.1`, and a release is on `latest`; until the first release, `latest` holds only a
+deprecated `0.0.0` placeholder. Zod is a peer dependency, so install it beside the SDK:
 
 ```sh
-npm install @qauth-labs/plugin-sdk@next zod
+npm install @qauth-labs/plugin-sdk@0.2.0-rc.1 zod
 ```
 
 **Export the method.** The package's entry point exports its method as `authMethod`
