@@ -22,7 +22,11 @@ export interface ProofOfWorkParams {
 export interface ProofOfWorkOptions {
   /** Stops the search: the promise rejects with the signal's reason. */
   readonly signal?: AbortSignal;
-  /** The most nonces tried before giving up. 2^32 by default. */
+  /**
+   * The most nonces tried before giving up. 2^40 by default: at the highest
+   * difficulty a realm may set, 32 bits, a solution is all but certain well
+   * before it, and a nonce stays within the 16 digits the server takes.
+   */
   readonly maxAttempts?: number;
   /** The Web Crypto to hash with. The global `crypto.subtle` by default. */
   readonly subtle?: Pick<SubtleCrypto, 'digest'>;
@@ -67,7 +71,7 @@ export async function solveProofOfWork(
     throw new RangeError('not a proof of work');
   }
   const subtle = options.subtle ?? globalThis.crypto.subtle;
-  const maxAttempts = options.maxAttempts ?? 2 ** 32;
+  const maxAttempts = options.maxAttempts ?? 2 ** 40;
   const encoder = new TextEncoder();
   for (let start = 0; start < maxAttempts; start += BATCH) {
     options.signal?.throwIfAborted();
