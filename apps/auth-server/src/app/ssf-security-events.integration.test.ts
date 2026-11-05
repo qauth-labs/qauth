@@ -631,6 +631,8 @@ describe.each<Deployment>(['one process', 'split roles'])(
         tokenHash: app.jwtUtils.hashRefreshToken(refreshToken),
         familyCreatedAt: Date.now(),
         familySessionExpiresAt: null,
+        authTime: null,
+        amr: null,
         expiresAt: Date.now() + 3_600_000,
       });
       const added = await addSubject(app, who, streamId, userSubject(user.userId));
@@ -806,6 +808,8 @@ describe.each<Deployment>(['one process', 'split roles'])(
           tokenHash: app.jwtUtils.hashRefreshToken(`rt-${randomUUID()}`),
           familyCreatedAt: Date.now(),
           familySessionExpiresAt: null,
+          authTime: null,
+          amr: null,
           expiresAt: Date.now() + 3_600_000,
           resource,
         });

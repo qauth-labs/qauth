@@ -40,6 +40,21 @@ export interface BrowserSignIn {
    * after that read finds the session issued before it.
    */
   issuedAt?: number;
+  /**
+   * When the user authenticated, in epoch milliseconds: the sign-in engine's
+   * `authTime`, when its last authenticator succeeded. The session's
+   * `auth_time`, which `max_age` reads and every code minted under the session
+   * carries (#662). Absent, it is now.
+   */
+  authTime?: number;
+  /**
+   * The RFC 8176 methods the sign-in proved, such as `["pwd"]`: the engine's
+   * `amr`. Every code minted under the session carries them, and its ID
+   * token and access tokens assert them (#662). Absent or empty when the
+   * sign-in proved no method this server names (a wallet or upstream
+   * sign-in): the tokens then carry no `amr`.
+   */
+  amr?: readonly string[];
 }
 
 /**
@@ -67,7 +82,8 @@ export async function createBrowserSession(
   const session = await fastify.sessionService.create({
     realmId: signIn.realmId,
     userId: signIn.userId,
-    authTime: Date.now(),
+    authTime: signIn.authTime ?? Date.now(),
+    amr: signIn.amr ?? [],
     assuranceLevel: signIn.assuranceLevel ?? null,
     ipAddress: origin?.ip ?? null,
     userAgent: origin?.userAgent ?? null,

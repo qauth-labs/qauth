@@ -29,6 +29,7 @@ const GRANT: AuthorizationCodeGrant = {
   nonce: 'n-0S6_WzA2Mj',
   state: 'af0ifjsldkj',
   authTime: 1_700_000_000_000,
+  amr: ['pwd'],
   assuranceLevel: null,
   sessionExpiresAt: 1_700_086_400_000,
   dpopJkt: null,
@@ -110,6 +111,20 @@ describe('mintAuthorizationCode (ADR-017 Decision 10)', () => {
       { ...rowOf(GRANT), code, expiresAt: 1_800_000_000_000 + AUTHORIZATION_CODE_TTL_MS },
       tx,
     ]);
+  });
+
+  it('writes the sign-in methods as a list of their own, and none for a grant with none (#662)', async () => {
+    const amr = ['pwd', 'otp', 'mfa'];
+    const signedIn = stub();
+    await mintAuthorizationCode(signedIn.fastify, { ...GRANT, amr });
+    const written = signedIn.create.mock.calls[0]?.[0];
+    expect(written?.amr).toEqual(amr);
+    // A copy: the grant's list is never the row's.
+    expect(written?.amr).not.toBe(amr);
+
+    const registered = stub();
+    await mintAuthorizationCode(registered.fastify, { ...GRANT, authTime: null, amr: null });
+    expect(registered.create.mock.calls[0]?.[0]).toMatchObject({ authTime: null, amr: null });
   });
 
   it('opens its own READ COMMITTED transaction when the caller has none', async () => {

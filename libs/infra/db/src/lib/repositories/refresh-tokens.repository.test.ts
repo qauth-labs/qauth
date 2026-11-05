@@ -200,6 +200,8 @@ describe('the client token lock (#631)', () => {
       tokenHash: 'h'.repeat(64),
       familyCreatedAt: 1,
       familySessionExpiresAt: null,
+      authTime: null,
+      amr: null,
       expiresAt: 2,
       scopes: [],
     };

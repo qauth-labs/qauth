@@ -116,6 +116,8 @@ describe('seed-oauth-clients first-party profile (real Postgres)', () => {
       familyId: randomUUID(),
       familyCreatedAt: now,
       familySessionExpiresAt: null,
+      authTime: null,
+      amr: null,
       expiresAt: now + 3_600_000,
       scopes: [],
     });

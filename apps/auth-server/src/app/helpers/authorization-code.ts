@@ -55,8 +55,17 @@ export interface AuthorizationCodeGrant {
   readonly nonce: string | null;
   /** RFC 6749 §4.1.1 `state`. */
   readonly state: string | null;
-  /** When the end user authenticated (epoch ms), for the ID token's `auth_time`. */
+  /**
+   * When the end user authenticated (epoch ms), for the `auth_time` of the ID
+   * token and of every access token the code and its refresh family issue.
+   */
   readonly authTime: number | null;
+  /**
+   * The RFC 8176 methods of that authentication (#662), for the same tokens'
+   * `amr`. Null when none is known; never an empty list (the column's CHECK
+   * refuses one), and never without an `authTime`.
+   */
+  readonly amr: readonly string[] | null;
   /** The stored assurance level (`toStoredAssuranceLevel`), for the ID token's `acr`. */
   readonly assuranceLevel: string | null;
   /** The browser session's absolute end (epoch ms), which caps the refresh family. */
@@ -182,6 +191,7 @@ async function mintIn(
       codeChallengeMethod: 'S256' as const,
       nonce: grant.nonce,
       authTime: grant.authTime,
+      amr: grant.amr === null ? null : [...grant.amr],
       assuranceLevel: grant.assuranceLevel,
       sessionExpiresAt: grant.sessionExpiresAt,
       sessionId: grant.session?.sid ?? null,

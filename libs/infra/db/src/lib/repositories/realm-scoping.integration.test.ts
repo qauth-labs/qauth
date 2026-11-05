@@ -113,6 +113,8 @@ describe('realm scoping of id lookups (real Postgres, #489)', () => {
       familyId: randomUUID(),
       familyCreatedAt: now,
       familySessionExpiresAt: null,
+      authTime: null,
+      amr: null,
       expiresAt: now + 60_000,
       scopes: ['read'],
     });
