@@ -59,6 +59,7 @@ import { readIdentifier } from './identifier';
 import {
   type AccountDirectory,
   type AccountRegistrations,
+  type AccountResets,
   type AddressVerifier,
   type BreachCheckFailure,
   type BreachCheckVerdict,
@@ -73,15 +74,18 @@ import {
   type PasswordHardAction,
   type PasswordUpdates,
   type PasswordVerifier,
+  type SessionEpochReader,
   type SignInAccount,
   type SignInAuditReason,
   type SignInAuditRecord,
+  type SignInCandidate,
   SYSTEM_CLOCK,
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,
 } from './ports';
 import type {
   RegistrationMail,
+  ResetMail,
   RoundAnswer,
   RoundContext,
   RoundResult,
@@ -162,6 +166,19 @@ import {
  * address is helped to sign in to it: rule 7 on. The flow is graphed in
  * `graphs/flows/core/sign-up/flow.yaml`.
  *
+ * A password reset (#642; ADR-017 Decision 8) starts from rule 7's password
+ * step, which offers `password_reset` beside the password while the client
+ * may reset and the request asks for no fresh sign-in, or at round 0 for a
+ * transport that starts one (`RoundContext.flow` `reset`). Its own gate runs
+ * after rule 4 on every round. The mailbox comes first, with an 8-digit
+ * `recovery` code, the same step for every address, mailed only to an enabled
+ * account with a password; then any other authenticator the account holds,
+ * never an email code in its place; then the new password, and the write that
+ * replaces it and ends what the old one opened. It completes with no `amr` and
+ * no `auth_time`. A transaction that began before its account's last reset
+ * ends at its next round (the session epoch). The flow is graphed in
+ * `graphs/flows/core/password-reset/flow.yaml`.
+ *
  * Until a factor succeeds, nothing the engine answers depends on the account:
  * an unknown identifier, a password-only, passkey-only, disabled or locked
  * account and an unverified one under `REQUIRE_VERIFIED_ACCOUNT` get the same
@@ -233,6 +250,20 @@ export interface SignInEngineDependencies {
    * three, a registration is answered with a redirect.
    */
   readonly registrations?: AccountRegistrations;
+  /**
+   * The owner's password reset (#642; ADR-017 Decision 8): its gate and the
+   * write that replaces the password. A reset also needs `emailCodes` and
+   * `passwordUpdates`, whose policy sets the new password. Without all three
+   * the password step offers no reset, and a reset is answered with a
+   * redirect.
+   */
+  readonly resets?: AccountResets;
+  /**
+   * The accounts' session epochs (#642): a transaction that proved an account
+   * and began before that account's last reset ends at its next round.
+   * Without it no transaction is checked.
+   */
+  readonly sessionEpochs?: SessionEpochReader;
   readonly hooks?: SignInHooks;
   /**
    * The password ladder's hard action (#615): called when a failure counts at
@@ -354,6 +385,22 @@ const REGISTRATION_STEPS: readonly StepName[] = Object.freeze([
  */
 export const REGISTRATION_NOT_ALLOWED = 'registration_not_allowed';
 
+/** The steps a reset needs the transport to serve (#642). */
+const RESET_STEPS: readonly StepName[] = Object.freeze([
+  'password_reset',
+  'email_code',
+  'new_password',
+]);
+
+/** The step whose answer may carry a reset's address (#642): its start. */
+const RESET_STEPS_WITH_LOGIN_HINT: ReadonlySet<StepName> = new Set<StepName>(['password_reset']);
+
+/**
+ * The code of the refusal of a reset the client may not run (#642):
+ * `RoundResult` `request_refused`.
+ */
+export const RESET_NOT_ALLOWED = 'reset_not_allowed';
+
 /** Check the handlers a deployment adds, and order every handler by role. */
 function buildHandlers(deps: SignInEngineDependencies) {
   const identifier = createIdentifierStep();
@@ -460,6 +507,12 @@ interface Offerable {
   params(round: StepRound): unknown;
 }
 
+/** A reset's start (#642): the `password_reset` step, a path marker with no params. */
+const RESET_START: Offerable = Object.freeze({
+  step: 'password_reset',
+  params: () => Object.freeze({}),
+});
+
 /** The params of an `upstream` step listing `providers`, or `null` outside the step's schema. */
 function upstreamParams(
   providers: readonly UpstreamProviderEntry[]
@@ -486,7 +539,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     handlers.byStep.has(step) ||
     (step === 'email_code' && emailCodes !== undefined) ||
     (step === 'new_password' && deps.passwordUpdates !== undefined) ||
-    (step === 'upstream' && deps.upstream !== undefined);
+    (step === 'upstream' && deps.upstream !== undefined) ||
+    (step === 'password_reset' && deps.resets !== undefined);
   /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
   const report = (port: string, error: unknown) => {
     try {
@@ -588,7 +642,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     proof?: UpstreamProof
   ): Promise<RoundResult> {
     const now = clock.now();
-    if (context.flow !== undefined && context.flow !== 'register') {
+    if (context.flow !== undefined && context.flow !== 'register' && context.flow !== 'reset') {
       throw new Error('sign-in engine: an unknown flow');
     }
     const found =
@@ -614,8 +668,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       return endUnusable(answer, context, 'transaction_expired', proof);
     }
     // A transaction runs the flow it began with (#640): a sign-in never
-    // becomes a registration, nor a registration a sign-in.
-    if (found.flow !== context.flow) {
+    // becomes a registration, nor a registration a sign-in. A sign-in may
+    // become a reset at its password step (#642), and goes on as one on the
+    // rounds of the sign-in it was.
+    if (found.flow !== context.flow && !(found.flow === 'reset' && context.flow === undefined)) {
       return endUnusable(answer, context, 'transaction_invalid', proof);
     }
     // A subject without an identifier comes only from a discoverable factor,
@@ -657,6 +713,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const served = new Set<StepName>(context.serves ?? STEP_NAMES);
     /** A registration (#640), not a sign-in. */
     const registering = state.transaction.flow === 'register';
+    /** A password reset (#642), not a sign-in: one this round turns into a reset is not, yet. */
+    const resetting = state.transaction.flow === 'reset';
     const answeredName =
       answer !== null && typeof answer.step === 'string' ? stepNameOfUrn(answer.step) : undefined;
     /** The round's answer while no step has taken it. */
@@ -1176,6 +1234,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     /** Whether this transaction proved the mailbox: an email code answered right, for any purpose. */
     const provedMailbox = (): boolean =>
       state.transaction.verified.some((step) => step.step === 'email_code');
+    /** Whether the account has a factor beyond its password: a second factor or a passkey, disabled or not. */
+    const boundBeyondPassword = (current: SignInAccount): boolean =>
+      current.factors.some((factor) => factor.type !== 'password');
+    /** Whether this transaction proved a factor beyond the password. */
+    const provedBeyondPassword = (): boolean =>
+      state.transaction.verified.some((step) => {
+        const factor = factorOf(step.step);
+        return factor !== undefined && factor !== 'password';
+      });
 
     /**
      * The rounds of one emailed code (#638), whatever it is for: the inline
@@ -1200,7 +1267,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      *   not compared.
      * - The code is compared HMAC to HMAC, in constant time. A wrong one is
      *   counted, and the 5th of the transaction burns the code and ends it.
-     *   A right one that `takes` refuses is answered exactly as a wrong one.
+     *   A right one that `refuses` refuses is answered exactly as a wrong one.
      *   A right one taken clears the ladder's counter.
      */
     const codeRound = async (
@@ -1218,12 +1285,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         readonly beforeFirst?: () => Promise<RoundResult | null>;
         /** What each code's mail says about the address: a registration's (#640). */
         readonly registration?: () => Promise<RegistrationMail>;
+        /** Whether each code may be mailed: a reset's (#642). */
+        readonly reset?: () => Promise<ResetMail>;
         /**
-         * Whether a right code is taken; with `false` it is answered as a
-         * wrong one, audited with `refusedAs`.
+         * Why a right code may not be taken, read once it compared right: it
+         * is then answered exactly as a wrong one, and audited with that
+         * reason. `null` takes it.
          */
-        readonly takes?: () => Promise<boolean>;
-        readonly refusedAs?: SignInAuditReason;
+        readonly refuses?: () => Promise<SignInAuditReason | null>;
       }
     ): Promise<{ readonly result: RoundResult } | { readonly params: unknown }> => {
       const { sendCode } = context;
@@ -1249,6 +1318,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // (ADR-017 Decision 8): a disabled user's gets no mail.
         const registration =
           spec.registration === undefined ? undefined : await spec.registration();
+        // So does a reset (#642): only an enabled account with a password is
+        // mailed.
+        const reset = spec.reset === undefined ? undefined : await spec.reset();
         const issuedAt = clock.now();
         const code = generateEmailCode(length);
         const salt = generateEmailCodeSalt();
@@ -1262,6 +1334,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             expiresInSeconds: EMAIL_CODE_TTL_MS / 1000,
             afterFirstFactor: spec.afterFirstFactor,
             ...(registration === undefined ? {} : { registration }),
+            ...(reset === undefined ? {} : { reset }),
           })
         );
         if (sent?.kind === 'capped') {
@@ -1343,9 +1416,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       let answered = answerEmailCode(held, presented, at);
       let refusedAs: SignInAuditReason = 'invalid_code';
       // A right code that may not be taken gets the answer of a wrong one.
-      if (answered.kind === 'accepted' && spec.takes !== undefined && !(await spec.takes())) {
-        answered = countWrongEmailCode(held);
-        refusedAs = spec.refusedAs ?? 'invalid_code';
+      if (answered.kind === 'accepted' && spec.refuses !== undefined) {
+        const refused = await spec.refuses();
+        if (refused !== null) {
+          answered = countWrongEmailCode(held);
+          refusedAs = refused;
+        }
       }
       switch (answered.kind) {
         case 'wrong':
@@ -1449,14 +1525,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * the realm's password policy, then against its breach list (a listed
      * one is refused as `blocklisted`, a check that fails accepts it and is
      * recorded), and is then handed to `write`: the forced update's
-     * replacement, or a registration's creation (#640), which answers the
-     * round's result when it refused, else `null`. Returns the round's result
+     * replacement, a registration's creation (#640) or a reset's replacement
+     * (#642), which answers the round's result when it refused, else `null`. Returns the round's result
      * while the step is pending, or `null` once the password is set.
      */
     const askNewPassword = async (
       updates: PasswordUpdates,
       identifier: string,
-      purpose: 'update_required' | 'register',
+      purpose: 'update_required' | 'register' | 'reset',
       write: (password: string, normalization: PasswordNormalization) => Promise<RoundResult | null>
     ): Promise<RoundResult | null> => {
       const minLength = await fromStore('passwordUpdates', async () => {
@@ -1582,11 +1658,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             if (candidate === null) return 'new_address';
             return candidate.enabled ? 'account_exists' : 'withheld';
           },
-          takes: async () => {
+          refuses: async () => {
             const candidate = await readCandidate();
-            return candidate === null || candidate.enabled;
+            return candidate === null || candidate.enabled ? null : 'account_disabled';
           },
-          refusedAs: 'account_disabled',
         });
         if ('result' in answered) return answered.result;
         await codeTaken(answered.params);
@@ -1651,6 +1726,238 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       return null;
     };
+
+    /** The reset gate's verdict (#642): a value that is not a boolean is a store fault. */
+    const resetAllowed = async (resets: AccountResets): Promise<boolean> => {
+      const allowed: unknown = await fromStore('resets', () =>
+        resets.allowed({ realmId, clientId })
+      );
+      if (typeof allowed !== 'boolean') {
+        throw new SignInStoreUnavailableError('resets', new Error('not a gate verdict'));
+      }
+      return allowed;
+    };
+
+    /**
+     * Whether this round's password step offers a reset beside the password
+     * (#642; ADR-017 Decision 8): the engine holds the reset's ports, the
+     * transport serves its steps, the request asks for no fresh sign-in, and
+     * the client may reset. Nothing of the account decides it.
+     */
+    const resetOffered = async (): Promise<boolean> => {
+      const { resets } = deps;
+      if (resets === undefined || emailCodes === undefined || deps.passwordUpdates === undefined) {
+        return false;
+      }
+      if (!RESET_STEPS.every((step) => served.has(step)) || context.freshSignIn === true) {
+        return false;
+      }
+      return resetAllowed(resets);
+    };
+
+    /**
+     * Turn the sign-in into a reset (#642): the answer to the
+     * `password_reset` step its password step offered. The address it brings,
+     * if any, must be the one the transaction holds; a provider this sign-in
+     * went out to may no longer complete it. The reset's rounds go on at once.
+     */
+    const startReset = async (offer: StepOffer): Promise<RoundResult> => {
+      const before = state.transaction;
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('password_reset');
+      turn.pending = null;
+      const hint = (read.answer as StepAnswer<'password_reset'>).login_hint;
+      if (hint !== undefined) {
+        const brought = readIdentifier(hint);
+        if (brought === null) return invalidAnswer('password_reset');
+        if (brought !== state.transaction.identifier)
+          return ended('password_reset', 'subject_mismatch');
+      }
+      state.transaction = { ...state.transaction, upstream: undefined, flow: 'reset' };
+      return recover(before);
+    };
+
+    /**
+     * A reset's rounds (#642; ADR-017 Decision 8;
+     * `graphs/flows/core/password-reset/flow.yaml`), once its gate let the
+     * round through. `before` is the transaction as the round found it, which
+     * a round that fails before its start is recorded keeps.
+     *
+     * 1. The address: the `password_reset` step alone while the transaction
+     *    holds none, its answer's `login_hint` the address. The start is
+     *    recorded among the verified steps, so the transaction's `amr` is
+     *    none.
+     * 2. The mailbox: an 8-digit `recovery` code, the same step for every
+     *    address. Only an enabled account with a password is mailed; for any
+     *    other address a right code is answered exactly as a wrong one, so
+     *    nothing of a disabled user changes. A right code fixes the account.
+     * 3. Any other authenticator the account holds, a disabled one included:
+     *    proved before a new password, never an email code in its place. With
+     *    none the transport can serve, the person goes on elsewhere (on the
+     *    hosted pages, a recovery code once F2c adds them).
+     * 4. `new_password` with the purpose `reset`: the realm's password policy
+     *    and its breach list. Once it passes, {@link AccountResets.reset}
+     *    replaces the password and ends what the old one opened.
+     *
+     * It completes with no `amr` and no `auth_time` (ADR-017 Decision 10).
+     */
+    const recover = async (before: SignInTransaction): Promise<RoundResult> => {
+      const { resets, passwordUpdates: updates } = deps;
+      if (resets === undefined || emailCodes === undefined || updates === undefined) {
+        throw new Error('sign-in engine: a reset without its dependencies');
+      }
+      const { identifier } = state.transaction;
+      if (identifier === undefined) {
+        // The start was answered with no address: malformed.
+        if (turn.pending?.name === 'password_reset') return invalidAnswer('password_reset');
+        return offerStep(await offerOf([RESET_START]));
+      }
+      if (!state.transaction.verified.some((step) => step.step === 'password_reset')) {
+        // The start is recorded together with its audit record: a round that
+        // fails before the record is written keeps the transaction it found.
+        try {
+          if (turn.pending?.name === 'password_reset') {
+            // The start was the step asked for: its answer is read by the
+            // grammar like any other.
+            const read = readPending(await offerOf([RESET_START]));
+            if (read === null) {
+              state.transaction = before;
+              return await invalidAnswer('password_reset');
+            }
+            turn.pending = null;
+          }
+          state.transaction = {
+            ...state.transaction,
+            verified: [
+              ...state.transaction.verified,
+              { step: 'password_reset', params: {} } as OfferedStep,
+            ],
+          };
+          await audit('passed', 'password_reset');
+        } catch (error) {
+          state.transaction = before;
+          throw error;
+        }
+      }
+      // The same address again: nothing more to do with that answer.
+      if (turn.pending?.name === 'password_reset') turn.pending = null;
+
+      const readCandidate = () =>
+        fromStore('accounts', () => deps.accounts.findByIdentifier(realmId, identifier));
+      /** Whether `candidate` is mailed and reset: an enabled account with a password. */
+      const resettable = (candidate: SignInCandidate | null): candidate is SignInCandidate =>
+        candidate !== null && candidate.enabled && candidate.password !== null;
+      if (!provedMailbox()) {
+        const taken: { candidate: SignInCandidate | null } = { candidate: null };
+        const answered = await codeRound(emailCodes, {
+          purpose: RECOVERY,
+          length: emailCodeLength(RECOVERY, { afterPassword: false }),
+          address: identifier,
+          afterFirstFactor: false,
+          reset: async () => (resettable(await readCandidate()) ? 'account' : 'withheld'),
+          refuses: async () => {
+            taken.candidate = await readCandidate();
+            const { candidate } = taken;
+            if (candidate === null || candidate.password === null) return 'invalid_credentials';
+            return candidate.enabled ? null : 'account_disabled';
+          },
+        });
+        if ('result' in answered) return answered.result;
+        const { candidate } = taken;
+        if (!resettable(candidate))
+          throw new Error('sign-in engine: a reset code taken for nobody');
+        state.transaction = { ...state.transaction, subject: candidate.userId };
+        await codeTaken(answered.params);
+      }
+
+      const subject = state.transaction.subject;
+      if (subject === undefined) throw new Error('sign-in engine: a reset without its account');
+      /** The account again, every factor included; the round's end when it is gone or disabled. */
+      const readResetAccount = async (): Promise<SignInAccount | RoundResult> => {
+        const read = await fromStore('accounts', () =>
+          deps.accounts.findByUserId(realmId, subject)
+        );
+        if (read === null || read.userId !== subject) {
+          return ended('password_reset', 'subject_mismatch');
+        }
+        if (!read.enabled) return ended('password_reset', 'account_disabled');
+        return read;
+      };
+      const isAccount = (value: SignInAccount | RoundResult): value is SignInAccount =>
+        'factors' in value;
+      const account = await readResetAccount();
+      if (!isAccount(account)) return account;
+      // Any other authenticator the account holds is proved first: an email
+      // code never stands in for one (ADR-017 Decision 8). A disabled one
+      // still counts as bound, and with no usable one the reset cannot go on
+      // here.
+      if (boundBeyondPassword(account) && !provedBeyondPassword()) {
+        const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
+        const needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(
+          (handler) =>
+            served.has(handler.step) &&
+            !verifiedSteps.has(handler.step) &&
+            handler.factor !== undefined &&
+            handler.factor !== 'password' &&
+            (handler.usableBy?.(account) ?? false)
+        );
+        if (needed.length === 0) return redirect('step_not_available');
+        const offer = await offerOf(needed);
+        if (!answers(offer)) return offerStep(offer);
+        const result = await verifyPending(offer);
+        if (result !== null) return result;
+        const reread = await readResetAccount();
+        if (!isAccount(reread)) return reread;
+      }
+
+      const asked = await askNewPassword(
+        updates,
+        identifier,
+        'reset',
+        async (password, normalization) => {
+          const outcome = await fromStore('resets', () =>
+            resets.reset({
+              realmId,
+              clientId,
+              userId: subject,
+              identifier,
+              password,
+              normalization,
+            })
+          );
+          if (outcome?.kind === 'reset') return null;
+          const reason = outcome?.kind === 'refused' ? outcome.reason : undefined;
+          if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
+            throw new SignInStoreUnavailableError('resets', new Error('not a reset'));
+          }
+          return ended('new_password', reason);
+        }
+      );
+      if (asked !== null) return asked;
+      return Object.freeze({
+        kind: 'complete',
+        transaction: null,
+        signIn: Object.freeze({ subject, identifier, recovered: true as const }),
+      });
+    };
+
+    // A transaction that proved an account before that account's last reset
+    // ends (#642; ADR-017 Decision 8): the reset ended whatever the old
+    // password opened, a browser session and a transaction alike.
+    const { sessionEpochs } = deps;
+    if (sessionEpochs !== undefined && state.transaction.subject !== undefined) {
+      const userId = state.transaction.subject;
+      const notBefore = await fromStore('sessionEpochs', async () => {
+        const value: unknown = await sessionEpochs.notBefore({ realmId, userId });
+        if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0)) {
+          throw new Error('not a session epoch');
+        }
+        return value;
+      });
+      if (notBefore !== null && state.transaction.createdAt <= notBefore) {
+        return ended(roundStep(), 'reset_since');
+      }
+    }
 
     // Rule 8's input, read on every round and never kept: a policy that
     // cannot be read refuses the round (ADR-017 Decision 4).
@@ -1726,6 +2033,33 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
     }
 
+    // Rule 4, for a reset (#642; ADR-017 Decision 8): the client must allow
+    // it, on every round, before anything is mailed or written. A request
+    // that asks for a fresh sign-in is never reset: a reset proves no
+    // authenticator. A transport or an engine that cannot serve its steps
+    // sends the person elsewhere.
+    if (resetting) {
+      const { resets } = deps;
+      if (
+        resets === undefined ||
+        emailCodes === undefined ||
+        deps.passwordUpdates === undefined ||
+        !RESET_STEPS.every((step) => served.has(step))
+      ) {
+        return redirect('step_not_available');
+      }
+      if (context.freshSignIn === true) return redirect('request');
+      if (!(await resetAllowed(resets))) {
+        await audit('refused', roundStep(), 'reset_closed');
+        return Object.freeze({
+          kind: 'refused',
+          reason: 'request_refused',
+          code: RESET_NOT_ALLOWED,
+          transaction: freezeTransaction(state.transaction),
+        });
+      }
+    }
+
     // Rule 5: a due bot challenge comes before every other step. Any other
     // answer is ignored, so no password is checked while one is due.
     if (botChallenge !== undefined) {
@@ -1758,7 +2092,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const identifier = readIdentifier(context.loginHint);
       if (identifier !== null) brought.push({ identifier, step: 'identifier' });
     }
-    if (turn.pending !== null && STEPS_WITH_LOGIN_HINT.has(turn.pending.name)) {
+    // A reset's address comes with its start alone (#642).
+    const loginHintSteps = resetting ? RESET_STEPS_WITH_LOGIN_HINT : STEPS_WITH_LOGIN_HINT;
+    if (turn.pending !== null && loginHintSteps.has(turn.pending.name)) {
       const fields = turn.pending.answer.fields;
       if (isRecord(fields) && Object.hasOwn(fields, 'login_hint')) {
         const identifier = readIdentifier(fields['login_hint']);
@@ -1793,6 +2129,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return mismatch(step);
       }
     }
+
+    // A reset (#642): its own rounds, from its address to the new password.
+    if (resetting) return recover(beforeIdentifier);
 
     if (state.transaction.subject === undefined) {
       if (state.transaction.identifier === undefined && registering) {
@@ -1887,7 +2226,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // succeeds. Only an answer to it is verified; any other is ignored.
         const firstFactors = handlers.firstFactors.filter((handler) => served.has(handler.step));
         if (firstFactors.length === 0) return redirect('step_not_available');
-        const offer = await offerOf(firstFactors);
+        // The owner's reset beside it (#642), the same for every account: a
+        // registration helped to sign in is offered none.
+        const withReset = !registering && (await resetOffered());
+        const offer = await offerOf(withReset ? [...firstFactors, RESET_START] : firstFactors);
+        if (withReset && turn.pending?.name === 'password_reset') return startReset(offer);
         if (!answers(offer)) return offerStep(offer);
         const result = await verifyPending(offer);
         if (result !== null) return result;
@@ -1962,15 +2305,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         state.transaction.updatePasswordRequired === true ||
         current.requiredActions.includes('update_password')) &&
       current.factors.some((factor) => factor.type === 'password');
-    /** Whether the account has a factor beyond its password: a second factor or a passkey, disabled or not. */
-    const boundBeyondPassword = (current: SignInAccount): boolean =>
-      current.factors.some((factor) => factor.type !== 'password');
-    /** Whether this transaction proved a factor beyond the password. */
-    const provedBeyondPassword = (): boolean =>
-      state.transaction.verified.some((step) => {
-        const factor = factorOf(step.step);
-        return factor !== undefined && factor !== 'password';
-      });
     /**
      * The forced password update (#635; ADR-017 Decision 4, rule 8, decided
      * 2026-10-23), once every factor the sign-in needs is proved. The
