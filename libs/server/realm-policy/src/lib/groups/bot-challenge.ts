@@ -18,14 +18,14 @@ export const BOT_CHALLENGE_POLICY_GROUP = {
   requiredAtSignUp: policyField(z.boolean(), {
     seedEnv: 'BOT_CHALLENGE_REQUIRED_AT_SIGN_UP',
     default: false,
-    direction: 'false-is-stricter',
+    direction: 'true-is-stricter',
     securityWhen: 'loosening',
     effects: ['credential-path'],
     secret: false,
     environmentBound: false,
     doc: {
       summary:
-        'Whether every sign-up passes the bot challenge before its address is asked for, whatever the client; the hosted pages then need JavaScript to sign up, and a client that cannot serve the challenge cannot register.',
+        'Whether every `prompt=create` registration passes the bot challenge before its address is asked for, whatever the client; it then needs JavaScript, a client that cannot serve the challenge cannot register, and the legacy `POST /auth/register` ignores it.',
       link,
     },
   }),

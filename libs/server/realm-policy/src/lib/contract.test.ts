@@ -63,7 +63,7 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
   'bruteForce.lockoutSeconds': ['FAILED_LOGIN_LOCKOUT_DURATION', 'higher-is-stricter', 'loosening'],
   'botChallenge.requiredAtSignUp': [
     'BOT_CHALLENGE_REQUIRED_AT_SIGN_UP',
-    'false-is-stricter',
+    'true-is-stricter',
     'loosening',
   ],
   'botChallenge.difficulty': ['BOT_CHALLENGE_DIFFICULTY', 'higher-is-stricter', 'loosening'],
