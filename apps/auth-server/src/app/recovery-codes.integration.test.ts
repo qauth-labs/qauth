@@ -36,8 +36,9 @@ import type { InteractionEngines } from './helpers/interaction-engines';
  * passkey is served yet, so after the password the downgrade rule offers the
  * `recovery_code` step alone. It proves the issue's integration criteria:
  *
- * - A code stands in for the passkey once, adds no `amr` value (the session
- *   holds `pwd` alone), and is refused after; its use is recorded and mailed.
+ * - A code stands in for the passkey once, adds no `amr` value (the sign-in
+ *   the engine finishes with proves `pwd` alone), and is refused after; its
+ *   use is recorded and mailed.
  * - Regenerating a set invalidates every code of the old one and mails the
  *   user.
  * - The wrong codes are counted on the account, across transactions and IPs;
@@ -409,21 +410,25 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     expect(page.headers['cache-control']).toBe('no-store');
     expect(page.body).toContain('name="recovery_code"');
 
+    // The decision the answer route makes of the engine's result: the
+    // sign-in it finishes with, and the `amr` the interaction carries on.
+    const decided = vi.spyOn(await import('./helpers/interaction-engines'), 'decisionOf');
     // Typed in capitals with spaces: the same code.
     const done = await answer(signIn, RECOVERY_CODE, {
       recovery_code: first.toUpperCase().replaceAll('-', ' '),
     });
     expect(done.statusCode, done.body).toBe(303);
+    // The sign-in proved the password alone: no value for the code, and
+    // never mfa.
+    expect(decided.mock.results.map((result) => result.value)).toEqual([
+      {
+        kind: 'authenticated',
+        signIn: expect.objectContaining({ userId, amr: ['pwd'] }),
+      },
+    ]);
     const tokens = await exchange(await codeOf(signIn, done), signIn.verifier);
     expect(tokens.statusCode, tokens.body).toBe(200);
     expect(decodeJwtClaims((tokens.json() as { id_token: string }).id_token)['sub']).toBe(userId);
-    // The session the sign-in opened holds the password alone: no value
-    // for the code, and never mfa.
-    const [session] = await query<{ amr: string[] }>(
-      'SELECT amr FROM sessions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
-      [userId]
-    );
-    expect(session).toEqual({ amr: ['pwd'] });
 
     // Its use is recorded with the take, and the user is told what is left.
     expect(await eventsOf(USED_EVENT, userId)).toEqual([{ remaining: 9 }]);
