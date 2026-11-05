@@ -254,6 +254,12 @@ One package holds one method. Its `id` is the name the admin API gives the plugi
 same across versions of the package; its `type` is the segment of its routes,
 `/upstream/<type>/…`, and the value written to `user_credentials.provider_type`.
 
+**Taken names.** A plugin's `type` may not be a type QAuth writes itself
+(`RESERVED_AUTH_METHOD_TYPES`), which the registry and the kit refuse. Nor may it start with
+`oidc_`, and its `id` may not be `oidc`: the namespace belongs to the
+[generic OpenID Connect client](#the-generic-openid-connect-client). The kit lets these two pass,
+since it checks that client's methods too; the plugin loader refuses them, and the boot fails.
+
 **Secret members.** A member of the config schema marked `.meta({ writeOnly: true })` is a secret,
 such as a client secret. The runtime reads the marks from the schema's JSON Schema, from its input
 side and from its output side. A secret is a string, or a nullable one, at any depth of nested

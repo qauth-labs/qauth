@@ -27,10 +27,12 @@ The contract is documented at
 ## Install
 
 ```bash
-npm install @qauth-labs/plugin-sdk zod
+npm install @qauth-labs/plugin-sdk@next zod
 ```
 
-`zod` is a peer dependency: a method's config schema is a Zod 4 schema, and the
+Until QAuth 1.0, every release of the SDK is a release candidate on npm's
+`next` dist-tag (the first is `0.2.0-rc.1`), so install it by that tag or by
+its exact version. `zod` is a peer dependency: a method's config schema is a Zod 4 schema, and the
 server reads it (its JSON Schema, its `writeOnly` marks) with its own copy.
 
 ## Write the method
@@ -71,6 +73,12 @@ A method is handed only its context: its config for the realm, the egress
 client (every outbound call goes through it, never `fetch`), the signer (for a
 client assertion; no key) and a logger. It never sees a database, a cookie or a
 request header.
+
+Some names are taken. A method's `type` may not be one QAuth writes itself
+(`RESERVED_AUTH_METHOD_TYPES`), which the kit checks. Its `type` may not start
+with `oidc_`, and its `id` may not be `oidc`: both belong to QAuth's generic
+OpenID Connect client. The kit, which checks that client too, lets those two
+pass, and the server refuses them at boot.
 
 [`examples/minimal-plugin`](./examples/minimal-plugin) is a complete method
 for an OAuth 2.0 provider with PKCE and a userinfo endpoint, with its test.
