@@ -812,8 +812,8 @@ export const oauthClients = pgTable(
      * (ADR-017 Decision 8, question 13; issue #640): a JSON list of
      * `HOSTED_FLOWS` in shared-validation, as of #640 only `register`, which
      * lets the client start registration with `prompt=create` while the
-     * realm's `registration_allowed` is on too. NULL (every row no operator
-     * flagged) or an empty list allows none. Read only through
+     * realm allows sign-up too (`accounts.allowSignUp`). NULL (every row no
+     * operator flagged) or an empty list allows none. Read only through
      * `hostedFlowsOf()`, which fails closed on a value it does not know. A
      * `native_backend` client keeps its own list in `first_party_policy`.
      *

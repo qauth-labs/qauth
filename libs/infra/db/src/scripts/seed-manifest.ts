@@ -202,7 +202,7 @@ export const clientSpecSchema = z
     first_party_reason: z.string().trim().min(1).max(FIRST_PARTY_REASON_MAX_LENGTH).optional(),
     // ADR-017 Decision 8 (#640): the hosted flows this redirect-flow client
     // may start beyond sign-in. `["register"]` lets it start registration with
-    // `prompt=create`, while the realm's `registration_allowed` is on too.
+    // `prompt=create`, while the realm allows sign-up too (`accounts.allowSignUp`).
     // Operator-set only, like `first_party_profile`: no registration path
     // accepts it. Omitted ⇒ NULL ⇒ none; removed on `--rotate` ⇒ cleared.
     hosted_flows: hostedFlowsSchema.optional(),

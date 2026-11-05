@@ -144,6 +144,7 @@ http://localhost:3000/oauth/authorize
 | `nonce`                 | OIDC        | Bound into the ID token when issued.                                      |
 | `resource`              | no          | RFC 8707 target(s); binds the token `aud`. Repeat for multiple, up to 10. |
 | `login_hint`            | no          | At most 254 bytes in UTF-8; pre-fills an interaction's sign-in.           |
+| `prompt`                | no          | `none`, `login`, `consent`, or `create` to register. See below.           |
 | `qauth_upstream`        | no          | An upstream provider's type; starts the sign-in there. See below.         |
 
 `redirect_uri` and each `resource` are absolute URIs of at most 2048
@@ -162,6 +163,39 @@ names no provider the realm has on is ignored, as the parameter is when no
 sign-in is needed (a live session that satisfies the request, or
 `prompt=none`). At most 64 characters; QAuth-defined, so other authorization
 servers ignore it.
+
+#### Registration: `prompt=create`
+
+`prompt=create` ([OpenID Connect Prompt Create 1.0](https://openid.net/specs/openid-connect-prompt-create-1_0.html))
+sends the person to register a new password account instead of signing in.
+Discovery lists `create` in `prompt_values_supported` only while the realm
+allows sign-up. The request is refused, by a redirect to your `redirect_uri`
+with `state` and `iss`, when:
+
+| Cause                                                           | `error`               |
+| --------------------------------------------------------------- | --------------------- |
+| `scope` does not hold `openid`                                  | `invalid_request`     |
+| the realm does not allow sign-up, or the Interaction API is off | `invalid_request`     |
+| your client's `hosted_flows` do not name `register`             | `unauthorized_client` |
+| the request carries `max_age`: a registration signs nobody in   | `invalid_request`     |
+
+A client that registered itself gets these errors on a QAuth page instead of a
+redirect, as it gets every error before a sign-in. Which clients may register,
+and how the realm turns sign-up on, is the operator's choice:
+[Clients that may start a registration](/operate/docker/#clients-that-may-start-a-registration-hosted_flows).
+
+The registration asks for the address first, then for an 8-digit code mailed
+to it, then for a new password that meets the realm's password policy. The
+screens are the same whether or not an account already holds the address:
+only the mail differs, and an address that has an account gets help to sign in
+to it instead. The account is created once the code and the password pass. The
+consent screen follows as for a sign-in, and the client gets its code.
+
+A registration is not a sign-in: QAuth starts no browser session, and the ID
+token carries no `auth_time` and no `amr`. A request for a dangerous scope asks
+the person to sign in first. A browser that is already signed in can still
+register a new account, and its session stays as it was. `qauth_upstream` is
+ignored with `prompt=create`.
 
 #### Redirect URI matching
 
