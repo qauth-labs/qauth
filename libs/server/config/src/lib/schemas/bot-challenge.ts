@@ -80,10 +80,13 @@ export const botChallengeEnvSchema = z.object({
    * Seeds `botChallenge.requiredAtSignUp` of a new realm: whether every
    * sign-up in the realm passes the challenge first.
    */
-  BOT_CHALLENGE_REQUIRED_AT_SIGN_UP: z
-    .enum(['true', 'false', '1', '0'])
-    .default('false')
-    .transform((value) => value === 'true' || value === '1'),
+  BOT_CHALLENGE_REQUIRED_AT_SIGN_UP: z.preprocess(
+    blankAsUnset,
+    z
+      .enum(['true', 'false', '1', '0'])
+      .default('false')
+      .transform((value) => value === 'true' || value === '1')
+  ),
 
   /**
    * Seeds `botChallenge.difficulty` of a new realm: the leading zero bits the
