@@ -1,12 +1,9 @@
+import { AUTH_METHOD_CONTRACT } from '@qauth-labs/plugin-sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createSampleAuthMethod } from '../../testing/sample-auth-method.fixture';
-import {
-  AUTH_METHOD_CONTRACT,
-  UPSTREAM_OIDC_METHOD_ID,
-  UPSTREAM_OIDC_TYPE_PATTERN,
-} from './contract';
+import { UPSTREAM_OIDC_METHOD_ID, UPSTREAM_OIDC_TYPE_PATTERN } from './contract';
 import {
   AuthMethodPluginError,
   type ImportAuthMethodPlugin,

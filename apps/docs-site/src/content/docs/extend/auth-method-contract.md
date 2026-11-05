@@ -1,9 +1,9 @@
 ---
 title: The AuthMethod contract
-description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, and the test kit that checks a method against the contract.
+description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, the test kit that checks a method against the contract, and how to write a plugin in its own repository with @qauth-labs/plugin-sdk.
 sidebar:
   order: 6
-lastVerified: '2026-11-01'
+lastVerified: '2026-11-05'
 experimental: true
 ---
 
@@ -17,12 +17,14 @@ An **AuthMethod** is a sign-in method that plugs into QAuth's engine, such as an
 Connect provider. It extends the [`CredentialProvider`](/extend/adding-a-credential-provider/)
 interface of [ADR-003](/reference/records/adr/003-credential-provider-interface/):
 `CredentialProvider` stays the verification half, and AuthMethod adds what a method needs beyond
-verification. The contract lives in `libs/server/federation/src/auth-method/`.
+verification. The contract is the npm package `@qauth-labs/plugin-sdk` (`libs/sdk/plugin-sdk/`):
+a plugin is written against it in its own repository
+([below](#write-a-plugin-in-your-own-repository)), and the server imports it from there.
 
 ## What exists today
 
-The contract, the registry entries, the route mount, the test kit, the plugin runtime and the
-first method on the contract. With the plugin runtime, a deployment installs plugin packages, the
+The contract and its test kit, in the package `@qauth-labs/plugin-sdk`, the registry entries, the
+route mount, the plugin runtime and the first method on the contract. With the plugin runtime, a deployment installs plugin packages, the
 server loads them at boot, and an admin enables, configures and disables each one per realm
 ([below](#installing-and-enabling-a-plugin)). The first method is the generic OpenID Connect
 upstream client (#601, [below](#the-generic-openid-connect-client)): a library that builds one
@@ -34,7 +36,7 @@ AuthMethod and stays a plain provider whose `verify()` rejects; wallet sign-in k
 
 ## The contract
 
-`libs/server/federation/src/auth-method/auth-method.interface.ts` (`AuthMethod`):
+`libs/sdk/plugin-sdk/src/lib/auth-method.ts` (`AuthMethod`):
 
 | Member                | What it is                                                                                                                                                                   |
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -129,7 +131,7 @@ The graph of this step is `graphs/flows/federation/upstream-step/flow.yaml`.
 Plugin code is trusted code that runs in-process
 ([ADR-019](/reference/records/adr/019-deployment-topology-and-trust-boundaries/) Decision 12), and
 the contract hands it only what it needs. `createAuthMethodContext`
-(`libs/server/federation/src/auth-method/context.ts`) builds the context, with five members:
+(`libs/sdk/plugin-sdk/src/lib/context.ts`) builds the context, with five members:
 
 - `config`: the realm's config of the method, parsed by `configSchema`, copied and deep-frozen.
   It must be plain data (objects, arrays and primitives): a parsed config that holds a `Map`,
@@ -238,10 +240,10 @@ A plugin is an npm package that exports its method as `authMethod`
 
 ```ts
 // index.ts of @example/qauth-plugin-corp-sso
-import type { AuthMethod } from '@qauth-labs/server-federation';
+import { AUTH_METHOD_CONTRACT, type AuthMethod } from '@qauth-labs/plugin-sdk';
 
 export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = {
-  contract: 'qauth-auth-method/1-rc.0',
+  contract: AUTH_METHOD_CONTRACT, // 'qauth-auth-method/1-rc.0'
   type: 'corp_sso',
   id: 'corp-sso',
   // display, configSchema, steps, routes, start, verify, extractAttributes
@@ -251,6 +253,12 @@ export const authMethod: AuthMethod<CorpSsoConfig, CorpSsoTransaction> = {
 One package holds one method. Its `id` is the name the admin API gives the plugin, and stays the
 same across versions of the package; its `type` is the segment of its routes,
 `/upstream/<type>/…`, and the value written to `user_credentials.provider_type`.
+
+**Taken names.** A plugin's `type` may not be a type QAuth writes itself
+(`RESERVED_AUTH_METHOD_TYPES`), which the registry and the kit refuse. Nor may it start with
+`oidc_`, and its `id` may not be `oidc`: the namespace belongs to the
+[generic OpenID Connect client](#the-generic-openid-connect-client). The kit lets these two pass,
+since it checks that client's methods too; the plugin loader refuses them, and the boot fails.
 
 **Secret members.** A member of the config schema marked `.meta({ writeOnly: true })` is a secret,
 such as a client secret. The runtime reads the marks from the schema's JSON Schema, from its input
@@ -438,12 +446,11 @@ Each use checks again, since every call goes through the egress client.
 `checkAuthMethod(method, scenario)` is the one function a method's author calls, in any test
 runner. The author plays the provider: the scenario gives a config, answers the method's
 outbound calls, and says what the browser comes back with. It is test support: it comes from the
-`testing` entry point, never the main one, and it refuses to run with `NODE_ENV=production`,
-because it replaces the global `fetch` while it runs. Today the contract and the kit are exported
-from the workspace package `@qauth-labs/server-federation`, which is not published to npm.
+SDK's `/testing` entry point, never the main one, and it refuses to run with
+`NODE_ENV=production`, because it replaces the global `fetch` while it runs.
 
 ```ts
-import { checkAuthMethod } from '@qauth-labs/server-federation/testing';
+import { checkAuthMethod } from '@qauth-labs/plugin-sdk/testing';
 
 it('meets the AuthMethod contract', async () => {
   await checkAuthMethod(myMethod, {
@@ -484,6 +491,98 @@ check the method failed:
   length: a short one can match text that is no leak. It is a check for common leaks, not a proof
   that none exists.
 
-`libs/server/federation/testing/sample-auth-method.fixture.ts` is a sample method that passes,
-written the way a plugin would be; `libs/server/federation/src/testing/contract-kit.test.ts`
-shows the broken methods the kit refuses, each with the problems it reports.
+`libs/sdk/plugin-sdk/testing/sample-auth-method.fixture.ts` is a sample method that passes;
+`libs/sdk/plugin-sdk/src/testing/contract-kit.test.ts` shows the broken methods the kit refuses,
+each with the problems it reports.
+
+## Write a plugin in your own repository
+
+A plugin needs nothing of QAuth's own repository. The contract, its errors and static checks, and
+the test kit are the npm package `@qauth-labs/plugin-sdk`, which depends on no other QAuth package.
+It is experimental, like the contract it carries. Its README and its `api-report.md` list what
+each entry point exports. `libs/sdk/plugin-sdk/examples/minimal-plugin` is a complete plugin for an
+OAuth 2.0 provider with PKCE: QAuth's release dry run installs the packed SDK into an empty
+project on every pull request, and builds and tests the example there.
+
+**Install the SDK.** The package carries QAuth's own version: install the version of the QAuth
+release the plugin is for. A release candidate is on npm's `next` dist-tag, the first being
+`0.2.0-rc.1`, and a release is on `latest`; until the first release, `latest` holds only a
+deprecated `0.0.0` placeholder. Zod is a peer dependency, so install it beside the SDK:
+
+```sh
+npm install @qauth-labs/plugin-sdk@0.2.0-rc.1 zod
+```
+
+**Export the method.** The package's entry point exports its method as `authMethod`
+([above](#packaging-a-plugin)):
+
+```ts
+import { AUTH_METHOD_CONTRACT, type AuthMethod, UPSTREAM_STEP_URN } from '@qauth-labs/plugin-sdk';
+import { z } from 'zod';
+
+const configSchema = z.object({
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1).meta({ writeOnly: true }),
+});
+
+export const authMethod: AuthMethod<z.output<typeof configSchema>, CorpSsoTransaction> = {
+  contract: AUTH_METHOD_CONTRACT,
+  type: 'corp_sso',
+  id: 'corp-sso',
+  display: { name: 'Corp SSO' },
+  configSchema,
+  steps: [UPSTREAM_STEP_URN],
+  // routes, start, verify, extractAttributes
+};
+```
+
+`AUTH_METHOD_CONTRACT` is the contract version of the SDK release you install. A server refuses a
+plugin written against another version, so pin the SDK to the QAuth release you build for.
+
+**Run the kit.** `checkAuthMethod` comes from `@qauth-labs/plugin-sdk/testing` and works in any
+test runner ([above](#checking-a-method-the-contract-test-kit)). Under Node's own:
+
+```ts
+import { test } from 'node:test';
+
+import { checkAuthMethod } from '@qauth-labs/plugin-sdk/testing';
+
+import { authMethod } from './index.js';
+
+test('meets the AuthMethod contract', async () => {
+  await checkAuthMethod(authMethod, scenario);
+});
+```
+
+**Publish.** Publish the compiled JavaScript and its declarations: Node does not strip TypeScript
+types under `node_modules`. List `@qauth-labs/plugin-sdk` under `dependencies`, because the
+contract's constants are part of the method at run time. List `zod` under `peerDependencies`, so
+the method's schema is built with the server's Zod ([secret members](#packaging-a-plugin)):
+
+```json
+{
+  "name": "@example/qauth-plugin-corp-sso",
+  "type": "module",
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "dependencies": { "@qauth-labs/plugin-sdk": "0.2.0-rc.1" },
+  "peerDependencies": { "zod": "^4.6.7" }
+}
+```
+
+**What the operator does** ([above](#installing-and-enabling-a-plugin)):
+
+1. installs the package with the deployment, as any other dependency of the auth server;
+2. lists it by package name in `AUTH_METHOD_PLUGINS`;
+3. turns on `PLUGIN_API_ENABLED=true`. A plugin outside QAuth's first-party list loads only while
+   the switch is on. With the switch off, the boot logs a warning that names the package and says
+   why it was not loaded;
+4. enables and configures it per realm through the admin API's plugin operations.
+
+```sh
+AUTH_METHOD_PLUGINS=@example/qauth-plugin-corp-sso
+PLUGIN_API_ENABLED=true
+```
+
+A plugin is trusted code that runs in the server's process, beside its keys in a single
+deployment. Install only a package you trust as you trust the server.

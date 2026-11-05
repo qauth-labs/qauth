@@ -1,0 +1,17 @@
+{
+  // The plugin's own build, as in its own repository: Node's ESM, with
+  // declarations, from src/ into dist/. A published plugin ships JavaScript:
+  // Node does not strip TypeScript types under node_modules.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    "skipLibCheck": false
+  },
+  "include": ["src"]
+}

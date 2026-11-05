@@ -1,7 +1,5 @@
+import { type AuthMethod, AuthMethodContractError } from '@qauth-labs/plugin-sdk';
 import { z } from 'zod';
-
-import type { AuthMethod } from './auth-method.interface';
-import { AuthMethodContractError } from './errors';
 
 /**
  * The secret members of a method's config (#600, EXPERIMENTAL): the members

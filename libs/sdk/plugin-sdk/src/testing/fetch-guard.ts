@@ -9,8 +9,9 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * it, and the `qauth/no-direct-network` lint rule is what refuses those in
  * QAuth's own code.
  *
- * It lives under `src/testing/`, test support, because it replaces a global
- * that server code must not touch (`qauth/no-direct-network`).
+ * It lives under `src/testing/`, test support served from the
+ * `@qauth-labs/plugin-sdk/testing` entry point only, because it replaces a
+ * global that server code must not touch (`qauth/no-direct-network`).
  *
  * @experimental
  */

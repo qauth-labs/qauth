@@ -4,9 +4,15 @@ import type { RealmAuthMethodPlugin } from '@qauth-labs/fastify-plugin-db';
 import { AuthMethodConfigError } from '@qauth-labs/fastify-plugin-federation';
 import { AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { fixturePluginImporter, fixturePluginMethod } from '../../testing/auth-method-plugins';
+import {
+  INSTALLED_PLUGIN_ID,
+  INSTALLED_PLUGIN_TYPE,
+  type InstalledFixturePlugin,
+  installFixturePluginPackage,
+} from '../../testing/installed-auth-method-plugin';
 import { testRealm } from '../../testing/request-realm';
 import {
   AUTH_METHOD_PLUGIN_SIGNER_CALLER,
@@ -338,5 +344,55 @@ describe('loadDeploymentAuthMethodPlugins (#600)', () => {
         { firstParty: [PLUGIN_PACKAGE] }
       )
     ).rejects.toThrow(/refused unless NODE_ENV is test/);
+  });
+});
+
+describe('a plugin installed as a package (#1009)', () => {
+  // No importer: the loader's own import() resolves the package in
+  // node_modules, as a deployment's does.
+  let installed: InstalledFixturePlugin;
+
+  beforeAll(async () => {
+    installed = await installFixturePluginPackage();
+  });
+
+  afterAll(async () => {
+    await installed.remove();
+  });
+
+  it('loads with the plugin API on', async () => {
+    const log = silent();
+    const runtime = await loadDeploymentAuthMethodPlugins(log, {
+      packages: [installed.packageName],
+      pluginApiEnabled: true,
+      nodeEnv: 'test',
+    });
+
+    expect(runtime.installed.map((plugin) => [plugin.package, plugin.id, plugin.type])).toEqual([
+      [installed.packageName, INSTALLED_PLUGIN_ID, INSTALLED_PLUGIN_TYPE],
+    ]);
+    // Its secret member is read from the schema it built with the server's Zod.
+    expect(runtime.ofType(INSTALLED_PLUGIN_TYPE)?.secretPaths).toEqual(['clientSecret']);
+    expect(log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ authMethodPlugin: installed.packageName, firstParty: false }),
+      `AuthMethod plugin ${installed.packageName} loaded: ${INSTALLED_PLUGIN_ID} (${INSTALLED_PLUGIN_TYPE})`
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it('is skipped with the plugin API off, and the boot says why', async () => {
+    const log = silent();
+    const runtime = await loadDeploymentAuthMethodPlugins(log, {
+      packages: [installed.packageName],
+      pluginApiEnabled: false,
+      nodeEnv: 'test',
+    });
+
+    expect(runtime.installed).toEqual([]);
+    expect(log.warn).toHaveBeenCalledWith(
+      { authMethodPlugin: installed.packageName, reason: 'plugin-api-off' },
+      `The AuthMethod plugin ${installed.packageName} is not loaded: it is not a first-party plugin, and the experimental plugin API is off. Set PLUGIN_API_ENABLED=true to load it, or remove it from AUTH_METHOD_PLUGINS`
+    );
+    expect(log.info).not.toHaveBeenCalled();
   });
 });

@@ -12,7 +12,8 @@ You are working in the QAuth authentication core.
 Every authentication method implements the `CredentialProvider` interface:
 
 ```typescript
-// libs/server/federation/src/providers/credential-provider.interface.ts
+// libs/sdk/plugin-sdk/src/lib/credential-provider.ts (re-exported by
+// libs/server/federation/src/providers/credential-provider.interface.ts)
 export interface CredentialProvider {
   readonly type: string;
   verify(input: unknown): Promise<VerifiedIdentity>;

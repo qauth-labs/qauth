@@ -166,6 +166,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   declarations, an `exports` map, `engines` and its licence. `RELEASING.md` is
   the maintainer guide for both the images and the packages: release, rollback
   (deprecate, never unpublish) and the version rule.
+- **`@qauth-labs/plugin-sdk`: write a plugin in its own repository** ([#1009],
+  ADR-018 §4 and §6). The AuthMethod contract, the experimental item
+  `plugin-api`, is now the SDK package `@qauth-labs/plugin-sdk`, which depends
+  on no other QAuth package and takes Zod as a peer. Its main entry point holds
+  what a plugin imports: the `AuthMethod` interface and the types it uses (the
+  context, the egress client and the `CredentialProvider` half), the contract's
+  constants with `AUTH_METHOD_PLUGIN_EXPORT`, its errors and its static checks.
+  `/testing` holds the contract test kit, `checkAuthMethod`, and `/host` the
+  engine and context the server builds around a method. The server imports the
+  contract from the SDK and declares none of it again; a test fails on a
+  second copy. Like `resource-guard`, the package has an `api-report.md` that
+  CI checks and an Experimental README, and it is released through the npm
+  release workflow: the first publish is `0.2.0-rc.1`, on the `next` dist-tag.
+  The release dry run now builds and tests the SDK's example plugin
+  (`libs/sdk/plugin-sdk/examples/minimal-plugin`) against the packed tarball in
+  an empty project. The AuthMethod contract page gains _Write a plugin in your
+  own repository_. The `testing` entry point of
+  `@qauth-labs/server-federation`, a workspace package that was never
+  published, is gone: import the kit from `@qauth-labs/plugin-sdk/testing`.
+  The container image now deploys workspace packages with all their files
+  (`deployAllFiles`), since the image runs the server from source.
 - **A registry of configuration keys** ([#449], ADR-018 §5). Every environment
   key the auth server and the developer portal read has one entry in
   `libs/server/config/src/lib/registry/`: a tier (stable, advanced or
@@ -3059,6 +3080,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#968]: https://github.com/qauth-labs/qauth/issues/968
 [#969]: https://github.com/qauth-labs/qauth/issues/969
 [#982]: https://github.com/qauth-labs/qauth/issues/982
+[#1009]: https://github.com/qauth-labs/qauth/issues/1009
 
 ### Deprecated
 

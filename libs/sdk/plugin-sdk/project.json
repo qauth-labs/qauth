@@ -1,0 +1,32 @@
+{
+  "name": "plugin-sdk",
+  "$schema": "../../../node_modules/nx/schemas/project-schema.json",
+  "sourceRoot": "libs/sdk/plugin-sdk/src",
+  "projectType": "library",
+  "tags": ["scope:sdk", "type:sdk", "type:plugin-sdk"],
+  "targets": {
+    "typecheck": {
+      "options": {
+        "command": "tsgo -p tsconfig.lib.json --noEmit && tsgo -p tsconfig.spec.json --noEmit"
+      }
+    },
+    "build-npm": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": [
+        "default",
+        "{workspaceRoot}/LICENSE",
+        {
+          "externalDependencies": ["@typescript/native-preview"]
+        }
+      ],
+      "outputs": ["{projectRoot}/dist"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "commands": ["rm -rf dist", "tsgo -p tsconfig.npm.json"],
+        "parallel": false
+      }
+    }
+  },
+  "// targets": "to see all targets run: nx show project plugin-sdk --web"
+}

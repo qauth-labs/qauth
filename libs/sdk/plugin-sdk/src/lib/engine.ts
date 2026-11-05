@@ -1,9 +1,5 @@
-import type {
-  AssuranceLevel,
-  UserAttribute,
-  VerifiedIdentity,
-} from '../providers/credential-provider.interface';
-import { constantTimeEquals } from '../subject/subject-binding';
+import { timingSafeEqual } from 'node:crypto';
+
 import type {
   AuthMethod,
   AuthMethodContext,
@@ -11,7 +7,7 @@ import type {
   AuthMethodRouteRequest,
   UpstreamStart,
   UpstreamStartRequest,
-} from './auth-method.interface';
+} from './auth-method.js';
 import {
   AUTH_METHOD_ATTRIBUTE_KEY_PATTERN,
   AUTH_METHOD_BINDING_PATTERN,
@@ -23,8 +19,9 @@ import {
   MAX_UPSTREAM_TRANSACTION_BYTES,
   UPSTREAM_FAILURE_REASONS,
   type UpstreamFailureReason,
-} from './contract';
-import { AuthMethodFaultError } from './errors';
+} from './contract.js';
+import type { AssuranceLevel, UserAttribute, VerifiedIdentity } from './credential-provider.js';
+import { AuthMethodFaultError } from './errors.js';
 
 /**
  * The engine's half of the upstream step (#599): what it checks around the
@@ -162,7 +159,7 @@ export function presentedUpstreamBinding(
 
 /**
  * Whether the binding a callback carried is the pending transaction's, in
- * constant time (`constantTimeEquals`). `false` unless both are strings and
+ * constant time (`timingSafeEqual` over the UTF-8 bytes). `false` unless both are strings and
  * the expected one is a binding: a missing or repeated parameter never
  * matches, and neither does an empty one.
  *
@@ -178,6 +175,18 @@ export function upstreamBindingMatches(expected: unknown, presented: unknown): b
     AUTH_METHOD_BINDING_PATTERN.test(expected) &&
     constantTimeEquals(expected, presented)
   );
+}
+
+/**
+ * Whether two strings are equal, compared in constant time over their UTF-8
+ * bytes; a length mismatch answers `false` at once (the expected binding's
+ * length is no secret: the pattern fixes its range).
+ */
+function constantTimeEquals(left: string, right: string): boolean {
+  const a = Buffer.from(left, 'utf8');
+  const b = Buffer.from(right, 'utf8');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 /**

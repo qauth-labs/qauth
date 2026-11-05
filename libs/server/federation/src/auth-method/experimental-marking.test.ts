@@ -5,7 +5,7 @@ import { EXPERIMENTAL_ITEMS } from '@qauth-labs/shared-stability';
 import { describe, expect, it } from 'vitest';
 
 import * as federation from '../index';
-import { AUTH_METHOD_CONTRACT, AUTH_METHOD_STABILITY } from './contract';
+import { AUTH_METHOD_CONTRACT, AUTH_METHOD_STABILITY } from './index';
 
 /**
  * The contract is experimental (ADR-018 §4), and says so in three places: in
@@ -14,8 +14,12 @@ import { AUTH_METHOD_CONTRACT, AUTH_METHOD_STABILITY } from './contract';
  * this module carries `@experimental` in its TSDoc, which editors and API
  * extractors show), and in the docs (the registry item names its page, which
  * `@qauth-labs/shared-stability` checks carries `experimental: true`).
+ *
+ * The contract itself is declared in `@qauth-labs/plugin-sdk` (#1009), whose
+ * own test holds its declarations to the same rule; this one covers what the
+ * server declares around it.
  */
-const MODULE_DIRECTORIES = [__dirname, join(__dirname, '..', 'testing')];
+const MODULE_DIRECTORIES = [__dirname];
 
 /** Each exported declaration of a module, with the doc comment right above it. */
 function exportedDeclarations(source: string): { name: string; doc: string }[] {
@@ -49,17 +53,9 @@ describe('the AuthMethod contract is marked experimental', () => {
 
   it('finds the modules it is asserting about', () => {
     expect(files.map((file) => file.slice(file.lastIndexOf('src'))).sort()).toEqual([
-      'src/auth-method/auth-method.interface.ts',
-      'src/auth-method/context.ts',
       'src/auth-method/contract.ts',
-      'src/auth-method/engine.ts',
-      'src/auth-method/errors.ts',
-      'src/auth-method/parameters.ts',
       'src/auth-method/plugin-loader.ts',
       'src/auth-method/secret-members.ts',
-      'src/auth-method/validate.ts',
-      'src/testing/contract-kit.ts',
-      'src/testing/fetch-guard.ts',
     ]);
   });
 
@@ -72,7 +68,7 @@ describe('the AuthMethod contract is marked experimental', () => {
         if (!/@experimental\b/.test(doc)) unmarked.push(`${file}: ${name}`);
       }
     }
-    expect(declarations).toBeGreaterThan(50);
+    expect(declarations).toBeGreaterThan(10);
     expect(unmarked).toEqual([]);
   });
 

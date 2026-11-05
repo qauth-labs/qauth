@@ -2,7 +2,7 @@
 
 The generic upstream OpenID Connect client (#601): the relying-party side QAuth uses toward an
 upstream OpenID Provider. It is an **AuthMethod** (the experimental plugin contract of #599,
-`libs/server/federation/src/auth-method/`), one per configured provider, and it makes no account
+`@qauth-labs/plugin-sdk`), one per configured provider, and it makes no account
 decision: the upstream sign-in flow (#639) looks the identity up and decides.
 
 > **Experimental**, like the AuthMethod contract it implements. Nothing registers it in a running

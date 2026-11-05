@@ -1,5 +1,4 @@
-import type { CredentialProvider } from '../providers/credential-provider.interface';
-import type { AuthMethod } from './auth-method.interface';
+import type { AuthMethod } from './auth-method.js';
 import {
   AUTH_METHOD_BINDING_PARAMETER_PATTERN,
   AUTH_METHOD_CONTRACT,
@@ -13,8 +12,9 @@ import {
   MAX_AUTH_METHOD_DISPLAY_NAME_LENGTH,
   MAX_AUTH_METHOD_ICON_BYTES,
   RESERVED_AUTH_METHOD_TYPES,
-} from './contract';
-import { AuthMethodContractError } from './errors';
+} from './contract.js';
+import type { CredentialProvider } from './credential-provider.js';
+import { AuthMethodContractError } from './errors.js';
 
 /**
  * The static checks of the AuthMethod contract (#599): what a method must be

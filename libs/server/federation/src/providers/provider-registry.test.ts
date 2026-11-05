@@ -1,13 +1,15 @@
 import {
+  AUTH_METHOD_CONTRACT,
+  AuthMethodContractError,
+  isAuthMethod,
+} from '@qauth-labs/plugin-sdk';
+import {
   ProviderAlreadyRegisteredError,
   ProviderNotRegisteredError,
 } from '@qauth-labs/shared-errors';
 import { describe, expect, it } from 'vitest';
 
 import { createSampleAuthMethod } from '../../testing/sample-auth-method.fixture';
-import { AUTH_METHOD_CONTRACT } from '../auth-method/contract';
-import { AuthMethodContractError } from '../auth-method/errors';
-import { isAuthMethod } from '../auth-method/validate';
 import type {
   CredentialProvider,
   UserAttribute,

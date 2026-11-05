@@ -1,14 +1,10 @@
+import { assertAuthMethod, type AuthMethod } from '@qauth-labs/plugin-sdk';
+import { authMethodSnapshot, declaresAuthMethodContract } from '@qauth-labs/plugin-sdk/host';
 import {
   ProviderAlreadyRegisteredError,
   ProviderNotRegisteredError,
 } from '@qauth-labs/shared-errors';
 
-import type { AuthMethod } from '../auth-method/auth-method.interface';
-import {
-  assertAuthMethod,
-  authMethodSnapshot,
-  declaresAuthMethodContract,
-} from '../auth-method/validate';
 import type {
   CredentialProvider,
   UserAttribute,

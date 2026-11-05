@@ -24,7 +24,7 @@ alternatives; read this for what the code actually does at `HEAD`.
 
 ## The contract
 
-`libs/server/federation/src/providers/credential-provider.interface.ts:63`:
+`libs/sdk/plugin-sdk/src/lib/credential-provider.ts:74`:
 
 ```ts
 export interface CredentialProvider {
@@ -45,7 +45,7 @@ Changing it after rows exist orphans them.
 ### `verify(input: unknown): Promise<VerifiedIdentity>`
 
 Takes provider-specific input and returns a normalized identity
-(`libs/server/federation/src/providers/credential-provider.interface.ts:26`):
+(`libs/sdk/plugin-sdk/src/lib/credential-provider.ts:33`):
 
 | Field            | Meaning                                                                                                        |
 | ---------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -62,7 +62,7 @@ see [fail closed](#the-fail-closed-pattern) below.
 ### `extractAttributes(result): UserAttribute[]`
 
 Turns a successful verification into rows for `user_attributes`
-(`libs/server/federation/src/providers/credential-provider.interface.ts:44`): a `source`, an
+(`libs/sdk/plugin-sdk/src/lib/credential-provider.ts:53`): a `source`, an
 `attrKey`, an `attrValue`, a `verified` flag, and an optional `expiresAt`. `source` is what claim
 resolution ranks by, so it decides which value wins when two providers assert the same attribute.
 

@@ -1,9 +1,9 @@
-import type { AuthMethodParameters } from './auth-method.interface';
+import type { AuthMethodParameters } from './auth-method.js';
 import {
   MAX_AUTH_METHOD_PARAMETER_LENGTH,
   MAX_AUTH_METHOD_PARAMETER_VALUES,
   MAX_AUTH_METHOD_PARAMETERS,
-} from './contract';
+} from './contract.js';
 
 /**
  * The parameters a method's route handler sees (#599): the string and

@@ -12,6 +12,11 @@ import {
   type PemKeyPair,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import {
+  INSTALLED_PLUGIN_TYPE,
+  type InstalledFixturePlugin,
+  installFixturePluginPackage,
+} from '../testing/installed-auth-method-plugin';
 
 /**
  * THE PLUGIN RUNTIME AT BOOT (#600, ADR-019 Decision 12, ADR-018 §4 and §5),
@@ -20,7 +25,9 @@ import {
  * The suite boots the real app with fixture plugin packages: the harness
  * hands the loader an importer over fixture modules and, for the first-party
  * case, a first-party list (test support the app refuses outside
- * NODE_ENV=test). What it checks is what a deployment sees at boot: which
+ * NODE_ENV=test). One plugin is installed as a package instead (#1009), and
+ * those boots pass no test support: the loader imports it by name, as a
+ * deployment's does. What it checks is what a deployment sees at boot: which
  * plugins load, what the server logs, and which boots fail.
  *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
@@ -49,6 +56,7 @@ const MODULES = {
 describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => {
   let infra: E2eInfrastructure | undefined;
   let jwt: PemKeyPair | undefined;
+  let installed: InstalledFixturePlugin | undefined;
   let dockerUp = false;
 
   beforeAll(async () => {
@@ -56,9 +64,11 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
     jwt = await generateJwtPem();
+    installed = await installFixturePluginPackage();
   }, 240_000);
 
   afterAll(async () => {
+    await installed?.remove();
     await infra?.teardown();
   });
 
@@ -74,10 +84,13 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
     readonly callbackStatus: (type: string) => Promise<number>;
   }
 
-  /** Boot a deployment with `overrides` and the fixture plugins, observe it, and close it. */
+  /**
+   * Boot a deployment with `overrides` and the fixture plugins, observe it,
+   * and close it. `null` passes no test support: the loader's own `import()`.
+   */
   async function boot(
     overrides: Record<string, string>,
-    authMethodPlugins: BootAuthServerOptions['authMethodPlugins'] = {
+    authMethodPlugins: BootAuthServerOptions['authMethodPlugins'] | null = {
       importPackage: fixturePluginImporter(MODULES),
     }
   ): Promise<Booted> {
@@ -89,13 +102,13 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
         { ...baseEnvironment(infra, jwt), ...overrides },
         {
           logStream: { write: (line) => log.push(JSON.parse(line) as LogLine) },
-          authMethodPlugins,
+          ...(authMethodPlugins === null ? {} : { authMethodPlugins }),
         }
       );
       const app = booted.app;
       const methods = app.providerRegistry.authMethods().map((method) => method.type);
       const statuses = new Map<string, number>();
-      for (const type of ['corp_sso', 'fixture_sso']) {
+      for (const type of ['corp_sso', 'fixture_sso', INSTALLED_PLUGIN_TYPE]) {
         const response = await app.inject({ method: 'GET', url: `/upstream/${type}/callback` });
         statuses.set(type, response.statusCode);
       }
@@ -105,6 +118,11 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
     }
   }
 
+  /** The npm name of the plugin package the suite installed. */
+  const installedPackage = (): string => {
+    if (installed === undefined) throw new Error('the fixture package is not installed');
+    return installed.packageName;
+  };
   const pluginLines = (log: readonly LogLine[]) =>
     log.filter((line) => line['authMethodPlugin'] !== undefined);
   const experimentalLines = (log: readonly LogLine[]) =>
@@ -170,6 +188,40 @@ describe('the AuthMethod plugin runtime at boot (#600, real containers)', () => 
     expect(
       pluginLines(booted.log).map((line) => [line['authMethodPlugin'], line['reason']])
     ).toEqual([[THIRD_PARTY, 'plugin-api-off']]);
+    expect(experimentalLines(booted.log)).toEqual([]);
+  });
+
+  // Acceptance criterion (#1009): a plugin installed as a package, not a
+  // workspace project, loads at boot with the switch on.
+  it('loads a plugin installed as a package, imported by its name, with the switch on', async () => {
+    const name = installedPackage();
+    const booted = await boot({ AUTH_METHOD_PLUGINS: name, PLUGIN_API_ENABLED: 'true' }, null);
+
+    expect(booted.methods).toEqual([INSTALLED_PLUGIN_TYPE]);
+    expect(pluginLines(booted.log)).toEqual([]);
+    expect(experimentalLines(booted.log).map((line) => line['experimentalFeature'])).toEqual([
+      'plugin-api',
+      'plugin-api',
+    ]);
+    // Mounted, and off in the realm until an admin enables it: 404.
+    expect(await booted.callbackStatus(INSTALLED_PLUGIN_TYPE)).toBe(404);
+  });
+
+  // Acceptance criterion (#1009): with the switch off, the installed plugin
+  // is skipped and the boot says why.
+  it('skips a plugin installed as a package with the switch off, and logs why', async () => {
+    const name = installedPackage();
+    const booted = await boot({ AUTH_METHOD_PLUGINS: name }, null);
+
+    expect(booted.methods).toEqual([]);
+    expect(pluginLines(booted.log)).toEqual([
+      expect.objectContaining({
+        level: PINO_WARN_LEVEL,
+        authMethodPlugin: name,
+        reason: 'plugin-api-off',
+        msg: `The AuthMethod plugin ${name} is not loaded: it is not a first-party plugin, and the experimental plugin API is off. Set PLUGIN_API_ENABLED=true to load it, or remove it from AUTH_METHOD_PLUGINS`,
+      }),
+    ]);
     expect(experimentalLines(booted.log)).toEqual([]);
   });
 

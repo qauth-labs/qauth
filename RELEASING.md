@@ -46,8 +46,10 @@ OIDC identity, and npm accepts the packages through trusted publishing.
 3. **npm, per SDK package.** npm sets up a trusted publisher in the package's
    own settings page, so the package has to exist first.
    1. A placeholder `0.0.0`, published once by hand with 2FA and deprecated.
-      `@qauth-labs/resource-guard@0.0.0` is already published and deprecated.
-      For a later SDK, from an empty directory:
+      `@qauth-labs/resource-guard@0.0.0` is already published and deprecated;
+      `@qauth-labs/plugin-sdk` needs its placeholder and trusted publisher
+      before the first tag that releases it. For a later SDK, from an empty
+      directory:
       ```sh
       pkg='@qauth-labs/new-sdk'   # the new SDK's package name
       npm init --scope=@qauth-labs -y

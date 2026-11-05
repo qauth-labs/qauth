@@ -1,8 +1,8 @@
+import { AuthMethodContractError } from '@qauth-labs/plugin-sdk';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createSampleAuthMethod } from '../../testing/sample-auth-method.fixture';
-import { AuthMethodContractError } from './errors';
 import {
   authMethodSecretPaths,
   configMemberAt,

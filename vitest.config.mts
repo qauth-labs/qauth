@@ -39,6 +39,11 @@ export default defineConfig({
       // through the `upgrade-test:populate`, `:verify` and `:smoke` targets and
       // the `upgrade-test` CI job.
       '**/*.upgrade.test.ts',
+      // The plugin SDK's example (#1009) is a plugin in a repository of its
+      // own, tested with Node's test runner against the packed SDK
+      // (`scripts/sdk-release/smoke.mjs`). The SDK's own suite runs the same
+      // kit on it (`libs/sdk/plugin-sdk/src/example-plugin.test.ts`).
+      'libs/sdk/plugin-sdk/examples/**',
     ],
     coverage: {
       provider: 'v8',

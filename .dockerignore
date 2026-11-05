@@ -33,6 +33,19 @@ coverage
 .env.*.local
 .env.test
 
+# Secrets at any depth. A pattern here matches only at the context's root
+# unless it starts with `**/`, and `pnpm deploy` copies every file of a
+# workspace package into the auth-server image (`deployAllFiles` in
+# pnpm-workspace.yaml), so a registry token in a package's `.npmrc`, an
+# environment file or a KEK file beside a package would otherwise reach the
+# image of a local build.
+**/.npmrc
+**/.env
+**/.env.*
+!**/.env.example
+**/qauth-kek
+**/qauth-kek-previous
+
 # Documentation (except READMEs in libs/apps)
 *.md
 !apps/**/README.md

@@ -11,13 +11,19 @@
  * 2. Install the optional peers and import every entry again.
  * 3. Type-check a consumer that imports every entry, with `nodenext`
  *    resolution and the library checks on, so broken declarations fail here.
+ * 4. Build and test each example that is a project of its own (a directory of
+ *    `<projectRoot>/examples/` with a `tsconfig.json`), as someone outside the
+ *    workspace would: copied into the empty project, compiled with its own
+ *    tsconfig against the installed tarball, and every `*.test.js` it emits run
+ *    with Node's test runner. The plugin SDK's minimal plugin (#1009) is one:
+ *    it must type-check and pass the contract test kit.
  *
  * It needs network access to the npm registry for the package's dependencies.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 
 import { valueExportsFromReport } from './lib.mjs';
 
@@ -135,6 +141,44 @@ try {
   console.log('types: a nodenext consumer type-checks against every entry');
 } catch (error) {
   problems.push(`types: the consumer does not type-check:\n${error.stdout}${error.stderr}`);
+}
+
+// 4. The examples that are projects of their own.
+const examplesRoot = join(projectRoot, 'examples');
+const examples = existsSync(examplesRoot)
+  ? readdirSync(examplesRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter((example) => existsSync(join(examplesRoot, example, 'tsconfig.json')))
+  : [];
+for (const example of examples) {
+  const target = join(dir, 'examples', example);
+  cpSync(join(examplesRoot, example), target, {
+    recursive: true,
+    filter: (source) => !/[/\\](node_modules|dist)$/.test(source),
+  });
+  try {
+    run(process.execPath, [tsc, '-p', join(target, 'tsconfig.json')]);
+  } catch (error) {
+    problems.push(`example ${example}: does not build:\n${error.stdout}${error.stderr}`);
+    continue;
+  }
+  const tests = readdirSync(join(target, 'dist'), { recursive: true })
+    .map(String)
+    .filter((file) => file.endsWith('.test.js'))
+    .map((file) => join(target, 'dist', file));
+  if (tests.length === 0) {
+    problems.push(`example ${example}: its build emits no *.test.js to run`);
+    continue;
+  }
+  try {
+    run(process.execPath, ['--test', ...tests]);
+    console.log(
+      `example ${example}: builds against the tarball and passes ${tests.map((file) => relative(target, file)).join(', ')}`
+    );
+  } catch (error) {
+    problems.push(`example ${example}: its tests fail:\n${error.stdout}${error.stderr}`);
+  }
 }
 
 if (problems.length > 0) {
