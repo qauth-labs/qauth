@@ -203,8 +203,11 @@ the browser goes back to the authorization request under its new session. A
 cancel or an error at the provider shows a page with a way back to the first
 step; every other failure shows one error page with the request's trace id.
 Nothing of either reaches the client. These pages show no further step, so an
-account that holds a passkey is refused here: it signs in through the
-Interaction API's ceremony page (`INTERACTION_UI_ENABLED`), which asks for it.
+account that needs one is refused here: an unverified account in a realm that
+requires verified accounts, which the Interaction API's ceremony page
+(`INTERACTION_UI_ENABLED`) verifies with an emailed code. An account that holds
+a passkey is refused in both, since a passkey outranks an upstream sign-in and
+no passkey step is served yet (#651).
 
 ## `/ui/resume/{handle}`
 
