@@ -91,8 +91,9 @@ injectWorkspacePackages: true
 # (`dist`, README.md, LICENSE), so a deploy that honoured `files` would copy
 # none of their sources; the auth server runs `@qauth-labs/plugin-sdk` (#1009),
 # where the AuthMethod contract is declared, from its TypeScript sources under
-# tsx, as it runs every other workspace package. Every other package has no
-# `files` field, so this changes nothing else.
+# tsx, as it runs every other workspace package. It also copies the files
+# npm never packs, such as a package's `.npmrc`; .dockerignore keeps secrets
+# of that kind out of the image's build context.
 deployAllFiles: true
 onlyBuiltDependencies:
   - '@swc/core'
