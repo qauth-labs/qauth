@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A provider-neutral bot challenge in the sign-in engine** ([#643], ADR-017
+  Decisions 4 and 7, ADR-019 Decision 5). The engine's rule 5 asks for the
+  `captcha` step while a soft threshold holds: of the round limits (an
+  end-user IP, its bucket or a client past its free failures) or of the
+  failure ladder (the round's identifier past the password's or the email
+  code's free failures), in addition to the delay; and before a registration
+  when the realm's new `botChallenge.requiredAtSignUp` policy or the client's
+  new operator-set `registration_challenge` (migration 0063, the seed
+  manifest's `registration_challenge`) requires it. A right answer resumes the
+  pending step; a wrong one is refused with `captcha_failed` and counted as a
+  failed round on the limiters. No provider, or one that cannot be reached,
+  refuses the round as unavailable: the challenge is never waved through, and
+  never answered with a redirect. A transport that does not serve the step (a
+  FiPA client that did not list it) still meets the delay and the 429. The
+  default provider is a built-in proof of work (SHA-256, the realm's
+  `botChallenge.difficulty`, 18 leading zero bits by default) whose solver the
+  interaction client ships, so the strict CSP needs no exception.
+  `BOT_CHALLENGE_PROVIDER=hosted` checks a hosted provider's token instead,
+  with one form POST to `BOT_CHALLENGE_HOSTED_VERIFY_URL` through the egress
+  client (no redirect, 5 seconds, 16 KiB). The reference proxy's new
+  `site/bot-challenge.conf` names such a provider's script hosts per realm
+  host, empty by default; they are added to `script-src` and `frame-src` of
+  the interaction page alone. `captcha_token` is redacted from the logs and
+  never audited.
 - **Password reset inside the sign-in engine, and the session epoch** ([#642],
   ADR-017 Decisions 7, 8 and 10, ADR-019 Decision 3). With
   `INTERACTION_UI_ENABLED` on, the Interaction API's password step offers
@@ -3163,6 +3187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#640]: https://github.com/qauth-labs/qauth/issues/640
 [#641]: https://github.com/qauth-labs/qauth/issues/641
 [#642]: https://github.com/qauth-labs/qauth/issues/642
+[#643]: https://github.com/qauth-labs/qauth/issues/643
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
