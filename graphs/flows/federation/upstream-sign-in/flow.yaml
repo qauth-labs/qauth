@@ -256,7 +256,7 @@ states:
     on:
       BROWSER_RETURNS:
         target: checkingPending
-        say: "the provider sends the browser to /upstream/<type>/callback (a form_post is bounced to the GET route)"
+        say: 'the provider sends the browser to /upstream/<type>/callback (a form_post is bounced to the GET route)'
       ABANDON:
         target: abandoned
         say: 'the person never comes back'
@@ -604,7 +604,7 @@ assertions:
       ceremony page, with an address
     source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:428
   - id: no-subject-without-its-issuer
-    never: "(accountCreated or signedIn) and issuerMissing"
+    never: '(accountCreated or signedIn) and issuerMissing'
     say: 'An identity that names no issuer neither creates an account nor signs in'
     source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:376
   - id: no-account-for-a-known-identity
