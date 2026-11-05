@@ -71,6 +71,23 @@ export interface SignAccessTokenPayload {
    * token endpoint issues with `token_type: DPoP`. Omitted for a Bearer token.
    */
   cnf?: ConfirmationClaim;
+  /**
+   * When the end user authenticated, in epoch MILLISECONDS. Mapped to the
+   * RFC 9068 §2.2.1 `auth_time` claim (epoch SECONDS, floored) by
+   * {@link buildAccessTokenClaims}. The token endpoint passes the sign-in's
+   * time on every token an authorization code and its refresh family issue,
+   * the same value on each (#662). Omitted (claim absent) when no sign-in
+   * backs the token: client credentials, token exchange, a code from a
+   * registration or a reset.
+   */
+  authTime?: number;
+  /**
+   * RFC 9068 §2.2.1 `amr`: the RFC 8176 authentication methods of the
+   * sign-in behind the token, such as `["pwd"]`, the same on every token of
+   * one refresh family (#662). Omitted (claim absent) when empty or unknown,
+   * such as for a browser session created before the methods were stored.
+   */
+  amr?: readonly string[];
 }
 
 /**
@@ -114,6 +131,13 @@ export interface SignIdTokenPayload {
    * before the auth-time column existed.
    */
   authTime?: number;
+  /**
+   * OIDC Core §2 `amr`: the RFC 8176 authentication methods of the sign-in
+   * this token asserts, such as `["pwd"]` (#662). Omitted (claim absent) when
+   * empty or unknown: a code from a registration or a reset, or from a browser
+   * session created before the methods were stored.
+   */
+  amr?: readonly string[];
   /**
    * OIDC Core §2 `acr` — Authentication Context Class Reference, the assurance
    * level of the authentication event this token asserts (#237, ADR-004,
