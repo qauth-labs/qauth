@@ -1304,7 +1304,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ladder, and taken back when it was right, so parallel guesses meet the same
   limits as guesses sent one at a time. From 10 failed rounds of an IP in 15
   minutes, or failures for more than 20 distinct identifiers from its bucket,
-  the IP or the bucket gets one credential round per 30 seconds and `429`
+  the IP gets one credential round per 30 seconds and `429`
   with `Retry-After` for the others, neither verified nor counted; at 30
   failures every round of the IP gets `429` for 15 minutes. Crossing a
   threshold logs `a sign-in round limit was crossed` at `error` with the

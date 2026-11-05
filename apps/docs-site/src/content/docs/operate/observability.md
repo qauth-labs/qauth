@@ -266,10 +266,10 @@ it was right. The Interaction API keys the end-user IP as its rate limits
 do: an IPv6 client by its /64. The bucket is the IP's /24, or an IPv6
 client's /48.
 
-| Row         | At the soft threshold                                                                | At the hard limit                                      |
-| ----------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------ |
-| End-user IP | 10 failed rounds in 15 min: one credential round per 30 s, others `429`              | 30 failed rounds: every round `429` for 15 min, alerts |
-| Bucket      | failures for more than 20 distinct identifiers in 15 min: one round per 30 s, alerts |                                                        |
+| Row         | At the soft threshold                                                                                         | At the hard limit                                      |
+| ----------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| End-user IP | 10 failed rounds in 15 min: one credential round per 30 s, others `429`                                       | 30 failed rounds: every round `429` for 15 min, alerts |
+| Bucket      | failures for more than 20 distinct identifiers in 15 min: each IP of it one credential round per 30 s, alerts |                                                        |
 
 - **Alerts.** Crossing a row's threshold logs
   `a sign-in round limit was crossed` at `error`, once per key per window,

@@ -168,7 +168,7 @@ export function describeRoundLimitStore(
       expect(admitted.length).toBe(P.endUserIp.softFailures + 1);
     });
 
-    it('delays the whole bucket and alerts once it fails for more than 20 distinct identifiers in 15 minutes', async (context) => {
+    it('delays each IP of a bucket, and alerts, once the bucket fails for more than 20 distinct identifiers in 15 minutes', async (context) => {
       const { credential, advance } = await setup(context);
       const alerts: RoundLimitAlert[] = [];
       // The same identifier again and again counts once.
@@ -194,31 +194,45 @@ export function describeRoundLimitStore(
       const crossing = await credential('failure', { ...ip(51), identifierHmac: 'id-21' });
       expect(crossing.decision.kind).toBe('admitted');
       expect(crossing.alerts).toEqual(['ip_bucket_identifiers']);
-      // Any IP of the bucket now waits; another bucket does not.
+      // The IP that crossed waits.
       expect(
-        (await credential('failure', { ...ip(52), identifierHmac: 'id-22' })).decision
+        (await credential('failure', { ...ip(51), identifierHmac: 'id-22' })).decision
       ).toMatchObject({
         kind: 'refused',
         limit: 'ip_bucket_delay',
         retryAfterMs: P.ipBucket.delayMs,
       });
+      // Each other IP of the bucket gets one round, then waits: no IP holds
+      // the bucket's other addresses back.
       expect(
-        (await credential('failure', { ...ip(53, 'bucket-b'), identifierHmac: 'id-22' })).decision
-          .kind
+        (await credential('failure', { ...ip(52), identifierHmac: 'id-22' })).decision.kind
       ).toBe('admitted');
+      expect(
+        (await credential('failure', { ...ip(52), identifierHmac: 'id-23' })).decision
+      ).toMatchObject({
+        kind: 'refused',
+        limit: 'ip_bucket_delay',
+        retryAfterMs: P.ipBucket.delayMs,
+      });
+      // Another bucket does not wait.
+      for (let i = 0; i < 2; i += 1) {
+        expect(
+          (await credential('failure', { ...ip(53, 'bucket-b'), identifierHmac: 'id-22' })).decision
+            .kind
+        ).toBe('admitted');
+      }
       advance(P.ipBucket.delayMs);
-      const later = await credential('failure', { ...ip(54), identifierHmac: 'id-23' });
+      const later = await credential('failure', { ...ip(51), identifierHmac: 'id-24' });
       expect(later.decision.kind).toBe('admitted');
       // Alerted once per window.
       expect(later.alerts).toEqual([]);
-      // The identifiers age out of the window.
+      // The identifiers age out of the window, and the IPs wait no more.
       advance(P.ipBucket.windowMs);
-      expect(
-        (await credential('failure', { ...ip(55), identifierHmac: 'id-24' })).decision.kind
-      ).toBe('admitted');
-      expect(
-        (await credential('failure', { ...ip(56), identifierHmac: 'id-25' })).decision.kind
-      ).toBe('admitted');
+      for (let i = 0; i < 2; i += 1) {
+        expect(
+          (await credential('failure', { ...ip(55), identifierHmac: `id-${25 + i}` })).decision.kind
+        ).toBe('admitted');
+      }
     });
 
     it('counts sign-ins to one account once toward a client’s failure ratio', async (context) => {

@@ -134,15 +134,19 @@ export function createMemoryRoundLimits(
           );
         }
         ipSoft = failures.size >= p.endUserIp.softFailures;
+        if (round.ipBucketHmac !== undefined) {
+          const entries = log(
+            k(round, 'bucket', round.ipBucketHmac, 'failures'),
+            p.ipBucket.windowMs,
+            at
+          );
+          bucketSoft = distinct(entries) > p.ipBucket.maxIdentifiers;
+        }
+        // The row's delay is the IP's, whichever threshold holds: a bucket
+        // past its identifiers paces each of its IPs, never the bucket as one.
         const pace = markUntil(k(round, 'ip', ip, 'pace'));
         if (ipSoft && pace > at) return refused('end_user_ip_delay', pace - at);
-        if (round.ipBucketHmac !== undefined) {
-          const bucket = round.ipBucketHmac;
-          const entries = log(k(round, 'bucket', bucket, 'failures'), p.ipBucket.windowMs, at);
-          bucketSoft = distinct(entries) > p.ipBucket.maxIdentifiers;
-          const bucketPace = markUntil(k(round, 'bucket', bucket, 'pace'));
-          if (bucketSoft && bucketPace > at) return refused('ip_bucket_delay', bucketPace - at);
-        }
+        if (bucketSoft && pace > at) return refused('ip_bucket_delay', pace - at);
       }
       if (round.clientKey !== undefined) {
         const client = round.clientKey;
@@ -160,14 +164,11 @@ export function createMemoryRoundLimits(
         const ip = round.endUserIpHmac;
         logs.get(k(round, 'ip', ip, 'failures'))?.set(round.reservation, at);
         if (ipSoft) extend(k(round, 'ip', ip, 'pace'), at + p.endUserIp.delayMs);
-        if (round.ipBucketHmac !== undefined) {
-          const bucket = round.ipBucketHmac;
-          if (round.identifierHmac !== undefined) {
-            logs
-              .get(k(round, 'bucket', bucket, 'failures'))
-              ?.set(`${round.identifierHmac}:${round.reservation}`, at);
-          }
-          if (bucketSoft) extend(k(round, 'bucket', bucket, 'pace'), at + p.ipBucket.delayMs);
+        if (bucketSoft) extend(k(round, 'ip', ip, 'pace'), at + p.ipBucket.delayMs);
+        if (round.ipBucketHmac !== undefined && round.identifierHmac !== undefined) {
+          logs
+            .get(k(round, 'bucket', round.ipBucketHmac, 'failures'))
+            ?.set(`${round.identifierHmac}:${round.reservation}`, at);
         }
       }
       if (round.clientKey !== undefined) {
@@ -206,7 +207,7 @@ export function createMemoryRoundLimits(
             const bucket = round.ipBucketHmac;
             const entries = log(k(round, 'bucket', bucket, 'failures'), p.ipBucket.windowMs, at);
             if (distinct(entries) > p.ipBucket.maxIdentifiers) {
-              extend(k(round, 'bucket', bucket, 'pace'), at + p.ipBucket.delayMs);
+              extend(k(round, 'ip', ip, 'pace'), at + p.ipBucket.delayMs);
               if (claim(k(round, 'bucket', bucket, 'alert'), p.ipBucket.windowMs, at)) {
                 alerts.push('ip_bucket_identifiers');
               }

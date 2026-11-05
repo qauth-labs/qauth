@@ -167,7 +167,7 @@ wait is withdrawn.
 | Row                | Soft: a delay                                                                                         | Hard: `429`                        |
 | ------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------- |
 | End-user IP        | from 10 failed rounds in 15 minutes, one round per 30 s                                               | 30 failures: 15 minutes, any round |
-| The IP's bucket    | failed rounds for more than 20 distinct identifiers in 15 minutes, one round per 30 s, and an alert   |                                    |
+| The IP's bucket    | failures for more than 20 distinct identifiers in 15 minutes: each IP one round per 30 s, an alert    |                                    |
 | Client (FiPA only) | a failure ratio above 50 % over at least 200 rounds, or more than 300 failures, in 5 minutes, 1 per s | above 600 rounds a minute          |
 
 `ROUND_LIMIT_POLICY` holds the numbers; `roundLimitPolicy({ clientMaxRounds, registrationPerIp })`
@@ -175,7 +175,8 @@ derives the client's failure budget (a tenth of what `FIRST_PARTY_CLIENT_MAX_ROU
 minutes) and its delay from the rounds a minute, and takes the per-IP registration-start cap
 (3 an hour by default; 1,000 an hour per client). A delay is a pace: while a soft threshold holds,
 the row admits one credential round per delay and refuses the others with `Retry-After`, neither
-verified nor counted. The bot challenge (PRO-19, #643) will replace it. In `development`
+verified nor counted. The bucket only counts identifiers: past its threshold it paces each of its
+IPs, so one address cannot hold the other addresses of its network back. The bot challenge (PRO-19, #643) will replace it. In `development`
 (`RoundContext.environment`, ADR-008 §5) every count is tenfold and every delay a tenth;
 `staging`, `production` and an unknown value meet the numbers above.
 

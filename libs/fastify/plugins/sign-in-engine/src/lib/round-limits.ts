@@ -33,11 +33,12 @@ import {
  *
  * - `round-limits:{<realm>}:ip:<ip>:failures`, `…:block`, `…:pace`: an end-user
  *   IP's failed (and reserved) credential rounds, until when its hard block
- *   and its delay hold;
+ *   and its delay hold (the delay of its own failures, or of its bucket's
+ *   identifiers);
  * - `round-limits:{<realm>}:bucket:<bucket>:failures` (members
  *   `<identifier>:<reservation>`), `…:identifiers` (a hash of each
- *   identifier's live entries, so its length is the distinct count), `…:pace`
- *   and `…:alert`;
+ *   identifier's live entries, so its length is the distinct count) and
+ *   `…:alert`;
  * - `round-limits:{<realm>}:client:<client>:rounds` (every round, a minute),
  *   `…:credential` (its credential rounds: a reservation each, and one
  *   `a:<account>` per account that succeeded), `…:failures`, `…:pace` and
@@ -149,17 +150,19 @@ return {'admitted', '', 0, ''}
 
 /**
  * Reserve a credential round. KEYS: the IP's failures, block and pace; the
- * bucket's failures, identifiers and pace; the client's credential rounds,
+ * bucket's failures and identifiers; the client's credential rounds,
  * failures and pace. ARGV: now, flags (an IP, a bucket, an identifier, a
  * client), the reservation, the identifier HMAC, then the IP's window, soft
  * and hard failures and delay, the bucket's window, most identifiers and
  * delay, the client's window, ratio's fewest rounds, ratio percentage,
  * failure budget and delay.
  *
- * The order is the contract's: the IP's block, its hard limit and its delay,
- * the bucket's delay, the client's delay; then, admitted, the round counts as
- * a failed round of every row, and a soft threshold that holds starts its
- * delay. Returns `{'admitted'|'refused', limit, ms until it may come again}`.
+ * The order is the contract's: the IP's block, its hard limit, its delay
+ * while the IP's or its bucket's soft threshold holds, the client's delay;
+ * then, admitted, the round counts as a failed round of every row, and a
+ * soft threshold that holds starts its delay. The bucket only counts: its
+ * threshold paces each of its IPs, never the bucket as one. Returns
+ * `{'admitted'|'refused', limit, ms until it may come again}`.
  */
 export const RESERVE_CREDENTIAL_SCRIPT = `${PRELUDE}${PRUNE_BUCKET}
 local hasIp, hasBucket, hasId, hasClient = on(1), on(2), on(3), on(4)
@@ -175,65 +178,63 @@ if hasIp then
   local n = redis.call('ZCARD', KEYS[1])
   if n >= ipHard then return {'refused', 'end_user_ip', slot(KEYS[1], ipWindow, ipHard)} end
   ipIsSoft = n >= ipSoft
-  local pace = mark(KEYS[3])
-  if ipIsSoft and pace > now then return {'refused', 'end_user_ip_delay', pace - now} end
   if hasBucket then
     pruneBucket(bucketWindow)
     bucketIsSoft = redis.call('HLEN', KEYS[5]) > bucketMax
-    local bucketPace = mark(KEYS[6])
-    if bucketIsSoft and bucketPace > now then
-      return {'refused', 'ip_bucket_delay', bucketPace - now}
-    end
+  end
+  local pace = mark(KEYS[3])
+  if pace > now then
+    if ipIsSoft then return {'refused', 'end_user_ip_delay', pace - now} end
+    if bucketIsSoft then return {'refused', 'ip_bucket_delay', pace - now} end
   end
 end
 if hasClient then
+  prune(KEYS[6], clientWindow)
   prune(KEYS[7], clientWindow)
-  prune(KEYS[8], clientWindow)
-  local r = redis.call('ZCARD', KEYS[7])
-  local f = redis.call('ZCARD', KEYS[8])
+  local r = redis.call('ZCARD', KEYS[6])
+  local f = redis.call('ZCARD', KEYS[7])
   clientIsSoft = f > budget or (r >= ratioMin and f * 100 > ratioPct * r)
-  local pace = mark(KEYS[9])
+  local pace = mark(KEYS[8])
   if clientIsSoft and pace > now then return {'refused', 'client_delay', pace - now} end
 end
 if hasIp then
   redis.call('ZADD', KEYS[1], ms(now), res)
   redis.call('PEXPIRE', KEYS[1], ms(ipWindow))
   if ipIsSoft then extend(KEYS[3], now + ipDelay) end
-  if hasBucket then
-    if hasId then
-      redis.call('ZADD', KEYS[4], ms(now), identifier .. ':' .. res)
-      redis.call('HINCRBY', KEYS[5], identifier, 1)
-      redis.call('PEXPIRE', KEYS[4], ms(bucketWindow))
-      redis.call('PEXPIRE', KEYS[5], ms(bucketWindow))
-    end
-    if bucketIsSoft then extend(KEYS[6], now + bucketDelay) end
+  if bucketIsSoft then extend(KEYS[3], now + bucketDelay) end
+  if hasBucket and hasId then
+    redis.call('ZADD', KEYS[4], ms(now), identifier .. ':' .. res)
+    redis.call('HINCRBY', KEYS[5], identifier, 1)
+    redis.call('PEXPIRE', KEYS[4], ms(bucketWindow))
+    redis.call('PEXPIRE', KEYS[5], ms(bucketWindow))
   end
 end
 if hasClient then
+  redis.call('ZADD', KEYS[6], ms(now), res)
   redis.call('ZADD', KEYS[7], ms(now), res)
-  redis.call('ZADD', KEYS[8], ms(now), res)
+  redis.call('PEXPIRE', KEYS[6], ms(clientWindow))
   redis.call('PEXPIRE', KEYS[7], ms(clientWindow))
-  redis.call('PEXPIRE', KEYS[8], ms(clientWindow))
-  if clientIsSoft then extend(KEYS[9], now + clientDelay) end
+  if clientIsSoft then extend(KEYS[8], now + clientDelay) end
 end
 return {'admitted', '', 0}
 `;
 
 /**
  * Settle a credential round. KEYS: the IP's failures, block and pace; the
- * bucket's failures, identifiers, pace and alert; the client's credential
- * rounds, failures, pace, ratio alert and budget alert. ARGV: now, flags (an
- * IP, a bucket, an identifier, a client, an account), the outcome, the
+ * bucket's failures, identifiers and alert; the client's credential rounds,
+ * failures, pace, ratio alert and budget alert. ARGV: now, flags (an IP, a
+ * bucket, an identifier, a client, an account), the outcome, the
  * reservation, the identifier HMAC, the account's hash, then the IP's
  * window, soft and hard failures, block and delay, the bucket's window, most
  * identifiers and delay, the client's window, ratio's fewest rounds, ratio
  * percentage, failure budget and delay.
  *
  * A failure stays counted: at the IP's hard limit it blocks the IP (and
- * alerts, once per block); a soft threshold that holds starts its delay
- * again, and the bucket's and the client's alert once per window. A success
- * or a withdrawal takes the round back from every row; a success then counts
- * once for its account on the client's credential rounds. Returns the alerts.
+ * alerts, once per block); a soft threshold that holds starts the IP's (or
+ * the client's) delay again, and the bucket's and the client's alert once
+ * per window. A success or a withdrawal takes the round back from every
+ * row; a success then counts once for its account on the client's
+ * credential rounds. Returns the alerts.
  */
 export const SETTLE_CREDENTIAL_SCRIPT = `${PRELUDE}${PRUNE_BUCKET}
 local hasIp, hasBucket, hasId, hasClient, hasAccount = on(1), on(2), on(3), on(4), on(5)
@@ -254,23 +255,23 @@ if outcome == 'failure' then
     if hasBucket then
       pruneBucket(bucketWindow)
       if redis.call('HLEN', KEYS[5]) > bucketMax then
-        extend(KEYS[6], now + bucketDelay)
-        if claim(KEYS[7], bucketWindow) then table.insert(alerts, 'ip_bucket_identifiers') end
+        extend(KEYS[3], now + bucketDelay)
+        if claim(KEYS[6], bucketWindow) then table.insert(alerts, 'ip_bucket_identifiers') end
       end
     end
   end
   if hasClient then
+    prune(KEYS[7], clientWindow)
     prune(KEYS[8], clientWindow)
-    prune(KEYS[9], clientWindow)
-    local r = redis.call('ZCARD', KEYS[8])
-    local f = redis.call('ZCARD', KEYS[9])
+    local r = redis.call('ZCARD', KEYS[7])
+    local f = redis.call('ZCARD', KEYS[8])
     local ratio = r >= ratioMin and f * 100 > ratioPct * r
     local overBudget = f > budget
-    if ratio or overBudget then extend(KEYS[10], now + clientDelay) end
-    if ratio and claim(KEYS[11], clientWindow) then
+    if ratio or overBudget then extend(KEYS[9], now + clientDelay) end
+    if ratio and claim(KEYS[10], clientWindow) then
       table.insert(alerts, 'client_failure_ratio')
     end
-    if overBudget and claim(KEYS[12], clientWindow) then
+    if overBudget and claim(KEYS[11], clientWindow) then
       table.insert(alerts, 'client_failure_budget')
     end
   end
@@ -286,13 +287,13 @@ if hasIp then
   end
 end
 if hasClient then
-  redis.call('ZREM', KEYS[9], res)
+  redis.call('ZREM', KEYS[8], res)
   if outcome == 'withdrawn' then
-    redis.call('ZREM', KEYS[8], res)
+    redis.call('ZREM', KEYS[7], res)
   elseif hasAccount then
-    redis.call('ZREM', KEYS[8], res)
-    redis.call('ZADD', KEYS[8], ms(now), 'a:' .. account)
-    redis.call('PEXPIRE', KEYS[8], ms(clientWindow))
+    redis.call('ZREM', KEYS[7], res)
+    redis.call('ZADD', KEYS[7], ms(now), 'a:' .. account)
+    redis.call('PEXPIRE', KEYS[7], ms(clientWindow))
   end
 end
 return alerts
@@ -496,7 +497,6 @@ export function createRedisRoundLimits(
           r.ipKey('pace'),
           r.bucketKey('failures'),
           r.bucketKey('identifiers'),
-          r.bucketKey('pace'),
           r.clientKey('credential'),
           r.clientKey('failures'),
           r.clientKey('pace'),
@@ -545,7 +545,6 @@ export function createRedisRoundLimits(
           r.ipKey('pace'),
           r.bucketKey('failures'),
           r.bucketKey('identifiers'),
-          r.bucketKey('pace'),
           r.bucketKey('alert'),
           r.clientKey('credential'),
           r.clientKey('failures'),

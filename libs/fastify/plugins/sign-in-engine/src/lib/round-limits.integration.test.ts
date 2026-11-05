@@ -204,7 +204,7 @@ describe('the engine’s rounds over the Redis round limits', () => {
     expect(isRefusedCredential(await guess(engine, realmId, ip, 'later@example.com'))).toBe(true);
   });
 
-  it('delays a bucket and alerts once its rounds failed for more than 20 distinct identifiers', async (testCtx) => {
+  it('delays each IP of a bucket, and alerts, once its rounds failed for more than 20 distinct identifiers', async (testCtx) => {
     if (!dockerUp || redis === undefined) return testCtx.skip();
     const realmId = randomUUID();
     let now = Date.UTC(2026, 10, 5);
@@ -222,16 +222,32 @@ describe('the engine’s rounds over the Redis round limits', () => {
         ipBucketHmac: await ipDigest({ realmId, identifier: '203.0.113.0/24' }),
       },
     ]);
-    const delayed = await guess(engine, realmId, '203.0.113.200', 'user-22@example.com');
-    expect(delayed).toMatchObject({ kind: 'refused', reason: 'throttled' });
-    // Another bucket is not.
+    // The IP that crossed waits.
+    expect(await guess(engine, realmId, '203.0.113.21', 'user-22@example.com')).toMatchObject({
+      kind: 'refused',
+      reason: 'throttled',
+    });
+    // Any other IP of the bucket gets one round, then waits 30 s.
     expect(
-      isRefusedCredential(await guess(engine, realmId, '198.51.100.9', 'user-22@example.com'))
+      isRefusedCredential(await guess(engine, realmId, '203.0.113.200', 'user-23@example.com'))
     ).toBe(true);
+    expect(await guess(engine, realmId, '203.0.113.200', 'user-24@example.com')).toMatchObject({
+      kind: 'refused',
+      reason: 'throttled',
+      retryAfterSeconds: 30,
+    });
+    // Another bucket does not wait.
+    for (let i = 0; i < 2; i += 1) {
+      expect(
+        isRefusedCredential(await guess(engine, realmId, '198.51.100.9', `other-${i}@example.com`))
+      ).toBe(true);
+    }
     now += 30_000;
     expect(
-      isRefusedCredential(await guess(engine, realmId, '203.0.113.200', 'user-22@example.com'))
+      isRefusedCredential(await guess(engine, realmId, '203.0.113.21', 'user-25@example.com'))
     ).toBe(true);
+    // Alerted once per window.
+    expect(alerts).toHaveLength(1);
   });
 
   it('refuses the fourth registration start from one IP in an hour', async (testCtx) => {
