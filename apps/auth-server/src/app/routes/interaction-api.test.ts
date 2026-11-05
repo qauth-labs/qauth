@@ -260,6 +260,7 @@ async function buildApp(
     createMemoryInteractionRedis(sessions.redis) as unknown as FastifyInstance['redis']
   );
   instance.decorate('sessionService', sessions.service);
+  instance.decorate('sessionEpochs', sessions.epochs);
   instance.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
   updateLastLogin = vi.fn(async () => undefined);
   instance.decorate('repositories', {

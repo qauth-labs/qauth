@@ -180,6 +180,7 @@ async function buildApp(): Promise<FastifyInstance> {
     createMemoryInteractionRedis(sessions.redis) as unknown as FastifyInstance['redis']
   );
   instance.decorate('sessionService', sessions.service);
+  instance.decorate('sessionEpochs', sessions.epochs);
   instance.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
   verifyIdTokenHint = vi.fn(async (_realm: unknown, token: string) => {
     const hint = HINTS[token];

@@ -5,6 +5,7 @@ import type {
   EndedSession,
   ListedSession,
   SessionAssuranceLevel,
+  SessionEpochs,
   SessionRecord,
   SessionRevokedReason,
   SessionsEndedListener,
@@ -363,11 +364,14 @@ export interface FakeSideRecordSeed {
  * A fake session service, the Redis the side record lives in, and the signer
  * the cookie keys come from (#493), together: what a unit test of a route
  * that reads the session cookie needs. Put
- * {@link service} on `fastify.sessionService`, {@link signer} on
+ * {@link service} on `fastify.sessionService`, {@link epochs} on
+ * `fastify.sessionEpochs`, {@link signer} on
  * `fastify.signer`, and spread {@link redis} into `fastify.redis`.
  */
 export interface BrowserSessionFixture {
   service: FakeSessionService;
+  /** The users' session epochs (#642), on `fastify.sessionEpochs`: none was reset until a test says so. */
+  epochs: FakeSessionEpochs;
   redis: MemorySessionRedis;
   /** The cookie keys' signer: every realm has one. */
   signer: FakeCookieSigner;
@@ -382,14 +386,40 @@ export interface BrowserSessionFixture {
   sideRecord(session: Pick<BrowserSession, 'realmId' | 'sid'>): Promise<SessionSideRecord>;
 }
 
+/**
+ * The users' session epochs in memory (#642), as `fastify.sessionEpochs`
+ * serves them: `reset` records a user's reset at a time, and `lastReset`
+ * answers it, or `null` for a user never reset.
+ */
+export interface FakeSessionEpochs extends SessionEpochs {
+  reset(realmId: string, userId: string, at: number): void;
+}
+
+/** Create a {@link FakeSessionEpochs}. */
+export function createFakeSessionEpochs(): FakeSessionEpochs {
+  const resets = new Map<string, number>();
+  const key = (realmId: string, userId: string) => `${realmId}:${userId}`;
+  return {
+    reset: (realmId, userId, at) => {
+      resets.set(key(realmId, userId), at);
+    },
+    lastReset: async ({ realmId, userId }) => resets.get(key(realmId, userId)) ?? null,
+    publish: async ({ realmId, userId, advancedAt }) => {
+      resets.set(key(realmId, userId), advancedAt);
+    },
+  };
+}
+
 /** Create a {@link BrowserSessionFixture}. */
 export function createBrowserSessionFixture(): BrowserSessionFixture {
   const service = createFakeSessionService();
+  const epochs = createFakeSessionEpochs();
   const redis = createMemorySessionRedis();
   const signer = createFakeCookieSigner();
   const fastify = { redis } as unknown as FastifyInstance;
   return {
     service,
+    epochs,
     redis,
     signer,
     async signIn({ side, ...seed }) {

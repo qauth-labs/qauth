@@ -189,7 +189,8 @@ const PLUGIN_DEPENDENCIES: Readonly<Partial<Record<RolePlugin, readonly RolePlug
 /** The repositories a plugin reads through `fastify.repositories`. */
 export const PLUGIN_REPOSITORIES: Readonly<Partial<Record<RolePlugin, readonly RepositoryName[]>>> =
   {
-    sessions: ['realms', 'sessions'],
+    // The session epochs (#642) come with the session service.
+    sessions: ['realms', 'sessions', 'userSessionEpochs'],
     ssf: ['ssfStreams'],
   };
 

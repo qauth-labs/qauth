@@ -170,6 +170,7 @@ async function buildHarness(): Promise<Harness> {
   const redis = createMemoryInteractionRedis(sessions.redis);
   app.decorate('redis', redis as unknown as FastifyInstance['redis']);
   app.decorate('sessionService', sessions.service);
+  app.decorate('sessionEpochs', sessions.epochs);
   // The session cookie is signed with the realm's cookie key (#493).
   app.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
   const findCredential = vi.fn(async (realmId: string, providerType: string, sub: string) => {

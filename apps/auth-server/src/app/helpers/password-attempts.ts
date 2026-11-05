@@ -121,13 +121,17 @@ export interface ServerLadderParts {
  * API directly (#616). Both key an account by the same HMAC of the same
  * cookie key, so one run of failures counts across them.
  *
- * The hard action is never armed yet: it needs the owner's hosted password
- * reset (#642), the only way back from the disable, and it does not exist.
- * The notice that tells the owner (`notices`, #637) is wired, so the hard
- * action arms once the reset is on and the realm can send it. Until then the
- * ladder counts and makes attempts wait, the 100th consecutive failure only
- * logs a warning, and a disabled mark is ignored and cleared by the next
- * successful sign-in.
+ * The hard action is never armed yet. ADR-017 Decision 7 arms it only while
+ * every account it can reach has a way back that a third party cannot
+ * exhaust. The hosted reset exists now (#642), and clears the mark, but the
+ * start the disable notice's mailed pass carries is not answerable yet
+ * (`mailed_pass` interactions): without it, someone who keeps the address at
+ * its per-address send ceiling also keeps the owner's reset code from going
+ * out. The notice that tells the owner (`notices`, #637) is wired, so the
+ * hard action arms once that start is built and the realm can send it. Until
+ * then the ladder counts and makes attempts wait, the 100th consecutive
+ * failure only logs a warning, and a disabled mark is ignored and cleared by
+ * the next successful sign-in or reset.
  *
  * A rotation of the realm's cookie key changes every digest: every account's
  * run of failures and known IPs start afresh within a minute of it.
@@ -141,7 +145,8 @@ export function createServerLadderParts(
   const { identifierDigest, ipDigest } = createServerDigests(fastify);
   // One source for the arming and for the notice the hard action sends.
   const arming: HardActionArmingSources = {
-    // The hosted reset (#642) is not built: nothing can turn it on.
+    // The hosted reset (#642) exists, but the reset start a mailed pass
+    // carries does not yet: nothing can turn it on (see above).
     hostedReset: () => false,
     notices,
   };
