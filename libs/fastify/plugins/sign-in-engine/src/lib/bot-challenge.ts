@@ -5,6 +5,10 @@ import {
   PROOF_OF_WORK_PROVIDER,
 } from '@qauth-labs/server-sign-in-engine';
 import type { StepParams } from '@qauth-labs/server-step-grammar';
+import {
+  botChallengeProviderNameProblem,
+  botChallengeVerifyUrlProblem,
+} from '@qauth-labs/shared-validation';
 
 /**
  * A HOSTED BOT CHALLENGE (PRO-19, #643; ADR-017 Decision 7): a provider that
@@ -38,26 +42,6 @@ export const BOT_CHALLENGE_LIMITS: Readonly<Partial<EgressLimits>> = Object.free
   maxResponseBytes: 16 * 1024,
 });
 
-/**
- * Why `value` is not a token-check URL: an absolute `https` URL with no user
- * name, password, query or fragment. `undefined` when it is one. The message
- * names no value, so a caller may prefix the variable's name.
- */
-export function botChallengeVerifyUrlProblem(value: string): string | undefined {
-  if (!URL.canParse(value) || new URL(value).protocol !== 'https:') {
-    return 'must be an absolute https URL';
-  }
-  const url = new URL(value);
-  if (url.username !== '' || url.password !== '') {
-    return 'must not carry a user name or a password';
-  }
-  // `https://host/?` parses with an empty search, so the raw text is checked.
-  if (value.includes('?') || value.includes('#')) {
-    return 'must not carry a query or a fragment';
-  }
-  return undefined;
-}
-
 /** What {@link createSiteVerifyChallengeProvider} needs. */
 export interface SiteVerifyChallengeOptions {
   /** The egress client: the one way the check reaches the network. */
@@ -72,7 +56,7 @@ export interface SiteVerifyChallengeOptions {
   readonly siteKey: string;
   /** The operator's secret for the provider: sent to the verify URL alone, never logged. */
   readonly secret: string;
-  /** Where tokens are checked: see {@link botChallengeVerifyUrlProblem}. */
+  /** Where tokens are checked: an absolute `https` URL with no user name, password, query or fragment. */
   readonly verifyUrl: string;
 }
 
@@ -86,10 +70,12 @@ export interface SiteVerifyChallengeOptions {
 export function createSiteVerifyChallengeProvider(
   options: SiteVerifyChallengeOptions
 ): BotChallengeProvider {
-  if (options.name === PROOF_OF_WORK_PROVIDER) {
-    throw new TypeError(
-      `the hosted bot challenge provider may not be named ${PROOF_OF_WORK_PROVIDER}`
-    );
+  const nameProblem =
+    typeof options.name === 'string'
+      ? botChallengeProviderNameProblem(options.name)
+      : 'is not a string';
+  if (nameProblem !== undefined || options.name === PROOF_OF_WORK_PROVIDER) {
+    throw new TypeError(`the hosted bot challenge provider's name ${nameProblem ?? 'is reserved'}`);
   }
   let params: StepParams<'captcha'>;
   try {

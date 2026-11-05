@@ -7,7 +7,6 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   BOT_CHALLENGE_LIMITS,
   BOT_CHALLENGE_PURPOSE,
-  botChallengeVerifyUrlProblem,
   createSiteVerifyChallengeProvider,
   type SiteVerifyChallengeOptions,
 } from './bot-challenge';
@@ -164,7 +163,7 @@ describe('the hosted bot challenge', () => {
     ]) {
       expect(() => provider(egress, overrides), JSON.stringify(overrides)).toThrow(TypeError);
     }
-    expect(botChallengeVerifyUrlProblem(VERIFY_URL)).toBeUndefined();
+    expect(() => provider(egress)).not.toThrow();
   });
 });
 

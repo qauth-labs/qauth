@@ -10,6 +10,7 @@
     "@qauth-labs/server-sign-in-engine": "workspace:*",
     "@qauth-labs/server-step-grammar": "workspace:*",
     "@qauth-labs/shared-events": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
     "fastify": "catalog:",
     "fastify-plugin": "catalog:"
   },

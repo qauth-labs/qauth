@@ -1121,6 +1121,9 @@ importers:
       '@qauth-labs/shared-events':
         specifier: workspace:*
         version: link:../../../shared/events
+      '@qauth-labs/shared-validation':
+        specifier: workspace:*
+        version: link:../../../shared/validation
       fastify:
         specifier: 'catalog:'
         version: 5.12.7

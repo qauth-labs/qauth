@@ -34,6 +34,7 @@ const TABLE_DEFAULTS: RealmPolicies = {
   accounts: { requireVerifiedAccount: true, allowSignUp: false },
   password: { minLength: 15, minScore: 2, breachListSource: 'off' },
   bruteForce: { enabled: true, maxAttempts: 5, windowSeconds: 900, lockoutSeconds: 900 },
+  botChallenge: { requiredAtSignUp: false, difficulty: 18 },
   registration: {
     dynamicRegistrationAllowedScopes: ['openid', 'profile', 'email', 'offline_access'],
     cimd: { enabled: true, trustPolicy: 'accept-any-https', trustedDomains: [] },

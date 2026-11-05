@@ -107,6 +107,13 @@ needs what its strictest change needs.
 | `bruteForce.windowSeconds`  | `900`   | `FAILED_LOGIN_WINDOW`           | higher        | `security` when loosened (`credential-path`), else `write` | The window, in seconds, over which failed sign-ins are counted.                                                  |
 | `bruteForce.lockoutSeconds` | `900`   | `FAILED_LOGIN_LOCKOUT_DURATION` | higher        | `security` when loosened (`credential-path`), else `write` | How long, in seconds, a locked-out identifier is refused before any password check.                              |
 
+### `botChallenge`
+
+| Field                           | Default | Seeded from                         | Stricter when | Class                                                      | Description                                                                                                                                                                                                          |
+| ------------------------------- | ------- | ----------------------------------- | ------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `botChallenge.requiredAtSignUp` | `false` | `BOT_CHALLENGE_REQUIRED_AT_SIGN_UP` | `false`       | `security` when loosened (`credential-path`), else `write` | Whether every sign-up passes the bot challenge before its address is asked for, whatever the client; the hosted pages then need JavaScript to sign up, and a client that cannot serve the challenge cannot register. |
+| `botChallenge.difficulty`       | `18`    | `BOT_CHALLENGE_DIFFICULTY`          | higher        | `security` when loosened (`credential-path`), else `write` | How many leading zero bits the built-in proof of work asks for; each one doubles the work of the page that solves it, and 18 takes a browser a second or two.                                                        |
+
 ### `registration`
 
 | Field                                           | Default                                        | Seeded from                           | Stricter when                                            | Class                                                    | Description                                                                                                                                                                      |

@@ -61,6 +61,12 @@ const TABLE: Readonly<Record<string, readonly [string | null, string, string]>> 
   'bruteForce.maxAttempts': ['FAILED_LOGIN_MAX_ATTEMPTS', 'lower-is-stricter', 'loosening'],
   'bruteForce.windowSeconds': ['FAILED_LOGIN_WINDOW', 'higher-is-stricter', 'loosening'],
   'bruteForce.lockoutSeconds': ['FAILED_LOGIN_LOCKOUT_DURATION', 'higher-is-stricter', 'loosening'],
+  'botChallenge.requiredAtSignUp': [
+    'BOT_CHALLENGE_REQUIRED_AT_SIGN_UP',
+    'false-is-stricter',
+    'loosening',
+  ],
+  'botChallenge.difficulty': ['BOT_CHALLENGE_DIFFICULTY', 'higher-is-stricter', 'loosening'],
   'registration.dynamicRegistrationAllowedScopes': [
     'DEFAULT_DYNAMIC_REGISTRATION_SCOPES',
     'subset-is-stricter',
@@ -99,6 +105,7 @@ const GROUP_EFFECTS: Readonly<Record<string, readonly string[]>> = {
   accounts: ['credential-path'],
   password: ['credential-path'],
   bruteForce: ['credential-path'],
+  botChallenge: ['credential-path'],
   registration: ['token-content'],
   mail: ['credential-path'],
   posture: ['posture-loosening'],

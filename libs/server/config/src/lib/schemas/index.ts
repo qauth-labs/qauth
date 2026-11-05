@@ -20,6 +20,12 @@ export {
   PUBLISHED_SESSION_COOKIE_SECRETS,
 } from './auth';
 export { type BaseEnv, baseEnvSchema } from './base';
+export {
+  BOT_CHALLENGE_PROVIDERS,
+  type BotChallengeEnv,
+  botChallengeEnvSchema,
+  type BotChallengeProviderKind,
+} from './bot-challenge';
 export { type CryptoEnv, cryptoEnvSchema } from './crypto';
 export { type DatabaseEnv, databaseEnvSchema } from './database';
 export { type DpopEnv, dpopEnvSchema } from './dpop';
