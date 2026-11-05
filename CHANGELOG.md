@@ -34,7 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round instead of counting the visitor. The reference proxy's new
   `site/bot-challenge.conf` names such a provider's script hosts per realm
   host, empty by default; they are added to `script-src` and `frame-src` of
-  the interaction page alone. `captcha_token` is redacted from the logs and
+  the interaction page alone (`/ui/interaction/*`, which a password reset,
+  consent and the logout confirmation share). `captcha_token` is redacted
+  from the logs and
   never audited.
 - **Password reset inside the sign-in engine, and the session epoch** ([#642],
   ADR-017 Decisions 7, 8 and 10, ADR-019 Decision 3). With

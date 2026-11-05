@@ -63,7 +63,8 @@ split.
      Decision 5). The list is empty by default, and the built-in proof of work needs none. When
      the auth server runs `BOT_CHALLENGE_PROVIDER=hosted`, the operator may name the provider's
      hosts, and the proxy adds them to `script-src` and `frame-src` on the interaction page,
-     `/ui/interaction/*`, where a person signs in and signs up. No other page gets them. Accept
+     `/ui/interaction/*`, where a person signs in and signs up. No other path gets them, but a
+     password reset, consent and the logout confirmation share that path, so they get them too. Accept
      only a list of `https` host sources separated by spaces, such as
      `https://challenges.cloudflare.com`, and drop any other value whole: a `;` in it would end
      the directive and add another. By naming hosts, the operator accepts that the provider's
