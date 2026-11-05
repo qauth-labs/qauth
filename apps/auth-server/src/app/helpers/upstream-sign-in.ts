@@ -365,13 +365,16 @@ async function resolveAccount(
   realm: RealmRow,
   provider: RealmUpstreamProviderOf,
   identity: VerifiedIdentity,
-  attributes: readonly UserAttribute[]
+  attributes: readonly UserAttribute[],
+  mode: UpstreamSignInMode
 ): Promise<ResolvedAccount> {
   const { repositories } = fastify;
   const type = provider.method.type;
-  const claimed = identity.rawClaims['iss'];
-  const iss = typeof claimed === 'string' && claimed.length > 0 ? claimed : undefined;
-  if (iss !== undefined && iss.length > MAX_ISSUER_LENGTH) {
+  // Every identity names the issuer that assigned its subject (the AuthMethod
+  // contract, `rawClaims.iss`): one that does not could never be told apart
+  // from another issuer's subject of the same value, so it is refused.
+  const iss = identity.rawClaims['iss'];
+  if (typeof iss !== 'string' || iss.length === 0 || iss.length > MAX_ISSUER_LENGTH) {
     return { kind: 'refused', reason: 'invalid_response' };
   }
   // Twice at most: a callback that loses the race to create the same
@@ -391,7 +394,7 @@ async function resolveAccount(
         );
         return { kind: 'refused', reason: 'credential_invalid', userId: credential.userId };
       }
-      if ((data.data.iss ?? null) !== (iss ?? null)) {
+      if (data.data.iss !== iss) {
         return { kind: 'refused', reason: 'issuer_mismatch', userId: credential.userId };
       }
       if (credential.disabledAt !== null && credential.disabledAt !== undefined) {
@@ -413,6 +416,17 @@ async function resolveAccount(
     if (!accountPoliciesOf(fastify, realm).allowSignUp) {
       return { kind: 'refused', reason: 'sign_up_disabled' };
     }
+    // An account the provider's verified switch leaves unverified is verified
+    // inline with an emailed code before it may sign in (the engine's rule 8,
+    // ADR-017 Decision 8), at the address the provider gave. With no address,
+    // or on the pages, which show no such step, it could never sign in:
+    // refuse before anything is written rather than leave such an account.
+    if (
+      !provider.marksVerified &&
+      (mode === 'pages' || !attributes.some((attribute) => attribute.attrKey === 'email'))
+    ) {
+      return { kind: 'refused', reason: 'verification_unavailable' };
+    }
     try {
       const userId = await fastify.db.transaction(async (tx) => {
         const user = await repositories.users.create({ realmId: realm.id }, tx);
@@ -424,7 +438,7 @@ async function resolveAccount(
             externalSub: identity.externalSub,
             credentialData: {
               kind: UPSTREAM_CREDENTIAL_KIND,
-              ...(iss === undefined ? {} : { iss }),
+              iss,
               verified: provider.marksVerified,
             },
           },
@@ -494,13 +508,18 @@ export function upstreamRouteHost(
   /** The pending sign-in each request took, for its completion. */
   const takenBy = new WeakMap<FastifyRequest, PendingUpstreamSignIn>();
 
-  /** The provider of `method` in the request's realm, while it is on. */
+  /**
+   * The provider of `method`'s type in the request's realm, while it is on.
+   * By type, not by object: a plugin's routes are mounted from the provider
+   * registry's frozen snapshot of its method, which is another object than
+   * the plugin's own (the registry checked it), of the same type.
+   */
   const providerOf = async (
     method: AuthMethod,
     request: FastifyRequest
   ): Promise<RealmUpstreamProviderOf | undefined> => {
     const provider = await catalog.find(requestRealm(request).id, method.type);
-    return provider?.method === method ? provider : undefined;
+    return provider?.method.type === method.type ? provider : undefined;
   };
 
   /**
@@ -595,7 +614,8 @@ export function upstreamRouteHost(
       realm,
       provider,
       completion.identity,
-      completion.attributes
+      completion.attributes,
+      pending.mode
     );
     if (account.kind === 'refused') return refuse(account.reason, account.userId);
     const address = await providerAddress(fastify, account.userId, method.type);

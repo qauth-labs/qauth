@@ -203,11 +203,14 @@ the browser goes back to the authorization request under its new session. A
 cancel or an error at the provider shows a page with a way back to the first
 step; every other failure shows one error page with the request's trace id.
 Nothing of either reaches the client. These pages show no further step, so an
-account that needs one is refused here: an unverified account in a realm that
-requires verified accounts, which the Interaction API's ceremony page
-(`INTERACTION_UI_ENABLED`) verifies with an emailed code. An account that holds
-a passkey is refused in both, since a passkey outranks an upstream sign-in and
-no passkey step is served yet (#651).
+account that needs one is refused here: an account the provider's verified
+switch left unverified, whose address the Interaction API's ceremony page
+(`INTERACTION_UI_ENABLED`) verifies with an emailed code, whatever
+`REQUIRE_VERIFIED_ACCOUNT` says. With that switch off, these pages create no
+account at all, and neither does the ceremony page for a provider that gives no
+email: such an account could never sign in. An account that holds a passkey is
+refused in both, since a passkey outranks an upstream sign-in and no passkey
+step is served yet (#651).
 
 ## `/ui/resume/{handle}`
 

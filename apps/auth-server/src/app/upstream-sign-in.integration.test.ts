@@ -746,6 +746,28 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
       });
     });
 
+    describe("the provider's verified switch off", () => {
+      it('creates no account the pages could never sign in, and shows the error page', async () => {
+        const app = server.app();
+        await app.repositories.realmUpstreamProviders.update(server.realmId(), TYPE, {
+          marksVerified: false,
+        });
+        const usersBefore = await users(app);
+        const jar = new CookieJar();
+
+        // The pages show no code step, so the address QAuth would verify could never be.
+        const refused = await signInAtProvider(app, jar);
+
+        expectErrorPage(refused);
+        expect(jar.get(SESSION_COOKIE)).toBeUndefined();
+        expect(await users(app)).toBe(usersBefore);
+        expect(await credentialsOf(app, TYPE)).toBe(0);
+        expect(await events(app, REGISTERED)).toEqual([]);
+        expect(await codes(app)).toBe(0);
+        expect(await refusals(app)).toEqual(['verification_unavailable']);
+      });
+    });
+
     describe('without JavaScript', () => {
       it('goes from the sign-in page through the provider link and the waiting page to the code', async () => {
         const app = server.app();

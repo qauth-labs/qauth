@@ -216,4 +216,20 @@ describe('upstreamRouteHost (#639)', () => {
       );
     }
   );
+
+  it("finds the realm's provider for a copy of its method, as a plugin's routes are mounted from", async () => {
+    // The provider registry mounts a plugin's routes from a frozen snapshot of
+    // its method, another object than the one the catalog holds.
+    const snapshot = Object.freeze({ ...method });
+    const secret = mintFlowSecret();
+    park(secret);
+    const request = callback(secret);
+    await host.takeTransaction(snapshot, request, BINDING);
+    const { reply: answer, sent } = reply();
+
+    await host.complete(snapshot, { kind: 'declined' }, request, answer);
+
+    expect(sent.status).toBe(200);
+    expect(sent.body).toContain('Example Corp did not sign you in');
+  });
 });
