@@ -31,7 +31,7 @@ import {
   type SignInEngine,
   SignInStoreUnavailableError,
 } from '@qauth-labs/server-sign-in-engine';
-import { STEP_URNS } from '@qauth-labs/server-step-grammar';
+import { STEP_NAMES, STEP_URNS } from '@qauth-labs/server-step-grammar';
 import {
   applyQauthMigrations,
   requireDockerOrSkip,
@@ -179,9 +179,12 @@ describe('the failure ladder over real Redis and Postgres', () => {
     await Promise.all([postgres?.stop(), redisContainer?.stop()]);
   });
 
+  // A transport that does not serve the bot challenge (#643): past the free
+  // failures it meets the wait and the 429 alone.
   const context = (endUserIp?: string): RoundContext => ({
     realm: { id: realmId },
     client: { id: 'native-app' },
+    serves: STEP_NAMES.filter((name) => name !== 'captcha'),
     ...(endUserIp === undefined ? {} : { endUserIp }),
     audit: async () => undefined,
   });

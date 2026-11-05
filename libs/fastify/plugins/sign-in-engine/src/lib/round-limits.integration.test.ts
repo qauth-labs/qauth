@@ -14,13 +14,18 @@ import { randomUUID } from 'node:crypto';
 
 import { type CacheClient, createRedisConnection } from '@qauth-labs/infra-cache';
 import {
+  type BotChallengeProvider,
+  createCaptchaStep,
+  createProofOfWorkProvider,
   createRoundLimiter,
   createSignInEngine,
+  ROUND_LIMIT_POLICY,
   type RoundContext,
   type RoundLimitAlertEvent,
   type RoundLimitStore,
   type RoundResult,
   type SignInEngine,
+  solvesProofOfWork,
 } from '@qauth-labs/server-sign-in-engine';
 import {
   FakeDirectory,
@@ -28,7 +33,7 @@ import {
   FakePolicy,
 } from '@qauth-labs/server-sign-in-engine/src/testing/fakes';
 import { describeRoundLimitStore } from '@qauth-labs/server-sign-in-engine/src/testing/round-limit-store-contract';
-import { STEP_URNS } from '@qauth-labs/server-step-grammar';
+import { STEP_NAMES, STEP_URNS, type StepParams } from '@qauth-labs/server-step-grammar';
 import {
   requireDockerOrSkip,
   type StartedRedis,
@@ -130,8 +135,11 @@ describe('the Redis round limits’ keys', () => {
 });
 
 describe('the engine’s rounds over the Redis round limits', () => {
-  /** An engine whose every round meets the limiter, and the limiter's alerts. */
-  const engineOver = (store: RoundLimitStore) => {
+  /**
+   * An engine whose every round meets the limiter, and the limiter's alerts;
+   * with `captcha`, it serves the bot challenge through that provider.
+   */
+  const engineOver = (store: RoundLimitStore, captcha?: BotChallengeProvider) => {
     const alerts: RoundLimitAlertEvent[] = [];
     const limiter = createRoundLimiter(store, {
       ipDigest,
@@ -147,14 +155,21 @@ describe('the engine’s rounds over the Redis round limits', () => {
       identifierDigest,
       requireVerifiedAccount: true,
       hooks: { limits: limiter },
+      ...(captcha === undefined ? {} : { steps: [createCaptchaStep(captcha)] }),
       clock: { now: () => Date.now(), sleep: async () => undefined },
     });
     return { engine, limiter, alerts, passwords };
   };
-  const context = (realmId: string, endUserIp: string): RoundContext => ({
+  /**
+   * A round of the IP. Unless `challenge` says otherwise, through a transport
+   * that does not serve the bot challenge (#643), so a soft threshold meets
+   * the delay and the 429 alone.
+   */
+  const context = (realmId: string, endUserIp: string, challenge = false): RoundContext => ({
     realm: { id: realmId },
     client: { id: CLIENT },
     endUserIp,
+    ...(challenge ? {} : { serves: STEP_NAMES.filter((name) => name !== 'captcha') }),
     audit: async () => undefined,
   });
   const guess = (engine: SignInEngine, realmId: string, endUserIp: string, identifier: string) =>
@@ -168,6 +183,110 @@ describe('the engine’s rounds over the Redis round limits', () => {
     );
   const isRefusedCredential = (result: RoundResult) =>
     result.kind === 'step' && result.offer.current.error === 'invalid_credentials';
+
+  /** The proof of work at a difficulty a test solves at once. */
+  const easyProofOfWork = () => createProofOfWorkProvider({ difficulty: () => 4 });
+  const solve = (params: StepParams<'captcha'>, solves = true): string => {
+    for (let nonce = 0; ; nonce += 1) {
+      if (solvesProofOfWork(params, String(nonce)) === solves) return String(nonce);
+    }
+  };
+  const challengeOf = (result: RoundResult): StepParams<'captcha'> => {
+    if (result.kind !== 'step' || result.offer.current.step !== 'captcha') {
+      throw new Error(`expected the captcha step, got ${result.kind}`);
+    }
+    return result.offer.current.params as StepParams<'captcha'>;
+  };
+
+  it('offers the bot challenge once an IP’s soft threshold holds, and counts a wrong answer as a failed round (#643)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const realmId = randomUUID();
+    let now = Date.UTC(2026, 10, 5);
+    const { engine, passwords } = engineOver(
+      createRedisRoundLimits(redis, { now: () => now }),
+      easyProofOfWork()
+    );
+    const ip = '203.0.113.7';
+    const soft = ROUND_LIMIT_POLICY.endUserIp.softFailures;
+    for (let i = 0; i < soft; i += 1) {
+      expect(isRefusedCredential(await guess(engine, realmId, ip, `guess-${i}@example.com`))).toBe(
+        true
+      );
+      now += 30_000;
+    }
+    const verified = passwords.verifications;
+    // The next round of a transport that serves it is the challenge, and the
+    // password it brought is not checked.
+    let result = await engine.advance(
+      null,
+      { step: STEP_URNS.password, fields: { password: 'not it', login_hint: 'x@example.com' } },
+      context(realmId, ip, true)
+    );
+    challengeOf(result);
+    expect(passwords.verifications).toBe(verified);
+    // A right answer resumes the pending step.
+    const passed = await engine.advance(
+      result.transaction,
+      { step: STEP_URNS.captcha, fields: { captcha_token: solve(challengeOf(result)) } },
+      context(realmId, ip, true)
+    );
+    expect(passed.kind).toBe('step');
+    expect(passed.kind === 'step' && passed.offer.current.step).not.toBe('captcha');
+    // Each wrong answer is refused with captcha_failed and counted on the IP,
+    // until its hard limit blocks every round.
+    result = await engine.advance(null, null, context(realmId, ip, true));
+    for (let i = soft; i < ROUND_LIMIT_POLICY.endUserIp.hardFailures; i += 1) {
+      result = await engine.advance(
+        result.transaction,
+        { step: STEP_URNS.captcha, fields: { captcha_token: solve(challengeOf(result), false) } },
+        context(realmId, ip, true)
+      );
+      expect(result, `round ${i}`).toMatchObject({
+        kind: 'step',
+        offer: { current: { step: 'captcha', error: 'captcha_failed' } },
+      });
+      now += 30_000;
+    }
+    expect(await engine.advance(null, null, context(realmId, ip, true))).toMatchObject({
+      kind: 'refused',
+      reason: 'throttled',
+    });
+    expect(passwords.verifications).toBe(verified);
+  });
+
+  it('refuses a round whose challenge is due when no provider serves it, or the provider is down (#643)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const down: BotChallengeProvider = {
+      params: easyProofOfWork().params,
+      verify: async () => {
+        throw new Error('the provider is down');
+      },
+    };
+    for (const provider of [undefined, down]) {
+      const realmId = randomUUID();
+      let now = Date.UTC(2026, 10, 5);
+      const { engine, passwords } = engineOver(
+        createRedisRoundLimits(redis, { now: () => now }),
+        provider
+      );
+      const ip = '203.0.113.7';
+      for (let i = 0; i < ROUND_LIMIT_POLICY.endUserIp.softFailures; i += 1) {
+        await guess(engine, realmId, ip, `guess-${i}@example.com`);
+        now += 30_000;
+      }
+      const verified = passwords.verifications;
+      let result = await engine.advance(null, null, context(realmId, ip, true));
+      if (provider !== undefined) {
+        result = await engine.advance(
+          result.transaction,
+          { step: STEP_URNS.captcha, fields: { captcha_token: solve(challengeOf(result)) } },
+          context(realmId, ip, true)
+        );
+      }
+      expect(result).toMatchObject({ kind: 'refused', reason: 'unavailable' });
+      expect(passwords.verifications).toBe(verified);
+    }
+  });
 
   it('refuses every round from an IP for 15 minutes once 30 of its rounds failed', async (testCtx) => {
     if (!dockerUp || redis === undefined) return testCtx.skip();
