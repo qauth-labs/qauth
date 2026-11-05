@@ -122,17 +122,27 @@ end
 
 /**
  * Admit a round (rule 3). KEYS: the IP's block, the client's rounds log, the
- * client's rounds alert. ARGV: now, flags (an IP, a client), a member unique
- * to the round, the client's rounds a minute and its window.
- * Returns `{'admitted'|'refused', limit, ms until it may come again, alert}`.
+ * client's rounds alert, the bucket's failures and identifiers, the IP's
+ * failures, the client's credential rounds and failures. ARGV: now, flags
+ * (an IP, a client, a bucket), a member unique to the round, the client's
+ * rounds a minute and its window, then the IP's window and soft failures,
+ * the bucket's window and most identifiers, the client's window, ratio's
+ * fewest rounds, ratio percentage and failure budget.
+ *
+ * An admitted round also says whether a soft threshold of its IP, its
+ * bucket or its client holds, the thresholds that start a credential
+ * round's delay: the round then owes the bot challenge (#643).
+ * Returns `{'admitted'|'refused', limit, ms until it may come again, alert, soft}`.
  */
-export const ADMIT_ROUND_SCRIPT = `${PRELUDE}
-local hasIp, hasClient = on(1), on(2)
+export const ADMIT_ROUND_SCRIPT = `${PRELUDE}${PRUNE_BUCKET}
+local hasIp, hasClient, hasBucket = on(1), on(2), on(3)
 local member = ARGV[3]
 local maxRounds, window = num(4), num(5)
+local ipWindow, ipSoft, bucketWindow, bucketMax = num(6), num(7), num(8), num(9)
+local clientWindow, ratioMin, ratioPct, budget = num(10), num(11), num(12), num(13)
 if hasIp then
   local block = mark(KEYS[1])
-  if block > now then return {'refused', 'end_user_ip', block - now, ''} end
+  if block > now then return {'refused', 'end_user_ip', block - now, '', ''} end
 end
 if hasClient then
   prune(KEYS[2], window)
@@ -140,12 +150,29 @@ if hasClient then
     local wait = slot(KEYS[2], window, maxRounds)
     local alert = ''
     if claim(KEYS[3], window) then alert = 'client_rounds' end
-    return {'refused', 'client_rounds', wait, alert}
+    return {'refused', 'client_rounds', wait, alert, ''}
   end
   redis.call('ZADD', KEYS[2], ms(now), member)
   redis.call('PEXPIRE', KEYS[2], ms(window))
 end
-return {'admitted', '', 0, ''}
+local soft = false
+if hasIp then
+  prune(KEYS[6], ipWindow)
+  if redis.call('ZCARD', KEYS[6]) >= ipSoft then soft = true end
+  if hasBucket then
+    pruneBucket(bucketWindow)
+    if redis.call('HLEN', KEYS[5]) > bucketMax then soft = true end
+  end
+end
+if hasClient then
+  prune(KEYS[7], clientWindow)
+  prune(KEYS[8], clientWindow)
+  local r = redis.call('ZCARD', KEYS[7])
+  local f = redis.call('ZCARD', KEYS[8])
+  if f > budget or (r >= ratioMin and f * 100 > ratioPct * r) then soft = true end
+end
+if soft then return {'admitted', '', 0, '', '1'} end
+return {'admitted', '', 0, '', ''}
 `;
 
 /**
@@ -390,9 +417,13 @@ function alertsOf(values: readonly unknown[]): RoundLimitAlert[] {
 /** Read a decision script's reply, refusing any shape it never returns. */
 function decisionOf(reply: unknown): RoundLimitDecision {
   if (!Array.isArray(reply)) throw new Error('round limits: the script answered out of shape');
-  const [kind, limit, wait, alert] = reply as unknown[];
+  const [kind, limit, wait, alert, soft] = reply as unknown[];
   const alerts = alertsOf([alert]);
-  if (kind === 'admitted') return { kind: 'admitted', alerts };
+  if (kind === 'admitted') {
+    return soft === '1'
+      ? { kind: 'admitted', alerts, softThreshold: true }
+      : { kind: 'admitted', alerts };
+  }
   if (
     kind === 'refused' &&
     typeof limit === 'string' &&
@@ -471,13 +502,30 @@ export function createRedisRoundLimits(
       const reply = await run(
         ADMIT_ROUND_SCRIPT,
         ADMIT_ROUND_SCRIPT_SHA,
-        [r.ipKey('block'), r.clientKey('rounds'), r.clientKey('alert', 'rounds')],
+        [
+          r.ipKey('block'),
+          r.clientKey('rounds'),
+          r.clientKey('alert', 'rounds'),
+          r.bucketKey('failures'),
+          r.bucketKey('identifiers'),
+          r.ipKey('failures'),
+          r.clientKey('credential'),
+          r.clientKey('failures'),
+        ],
         [
           at,
-          flag(r.ip !== undefined) + flag(r.client !== undefined),
+          flag(r.ip !== undefined) + flag(r.client !== undefined) + flag(r.bucket !== undefined),
           uniqueMember(at),
           p.client.maxRounds,
           p.client.maxRoundsWindowMs,
+          p.endUserIp.windowMs,
+          p.endUserIp.softFailures,
+          p.ipBucket.windowMs,
+          p.ipBucket.maxIdentifiers,
+          p.client.windowMs,
+          p.client.ratioMinRounds,
+          p.client.ratioPercent,
+          p.client.failureBudget,
         ],
         'round'
       );

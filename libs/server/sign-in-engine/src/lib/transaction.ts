@@ -3,6 +3,7 @@ import {
   grammarStep,
   isStepName,
   type OfferedStep,
+  type StepParams,
 } from '@qauth-labs/server-step-grammar';
 import { z } from 'zod';
 
@@ -25,8 +26,9 @@ import type { SignInFlow } from './round';
  * Decision 4), no answer, no password, no code and no account state: only the
  * realm and the client it is for, when it began, who it is for, what it
  * proved, the HMAC of an email code it mailed (#638), whether the password
- * it proved was on the realm's breach list (#635), and whether it is a
- * registration (#640) or a password reset (#642).
+ * it proved was on the realm's breach list (#635), whether it is a
+ * registration (#640) or a password reset (#642), and the bot challenge it
+ * offered or passed (#643).
  *
  * It is not sealed: whoever can write it can claim any subject and any
  * verified step. The transport must keep it server-side, under an
@@ -125,6 +127,23 @@ export interface SignInTransaction {
    * authenticator the account holds is proved.
    */
   readonly flow?: SignInFlow;
+  /**
+   * The bot challenge this transaction offered and waits for (#643): the
+   * `captcha` step's params as they were offered (a proof of work's puzzle,
+   * or a hosted provider's name and site key). An answer is read against
+   * them, never against params computed anew, and they are dropped at the
+   * answer, right or wrong: a puzzle is solved once.
+   */
+  readonly captcha?: StepParams<'captcha'>;
+  /**
+   * A bot challenge was passed and no credential has been checked since
+   * (#643): the next credential round may go on while a soft threshold asks
+   * for a challenge. Checking a credential (a password, a code) spends it,
+   * right or wrong, so each attempt under a soft threshold costs a
+   * challenge; a round a limiter or the ladder refuses before the credential
+   * is checked leaves it.
+   */
+  readonly captchaPassed?: true;
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, when it began, and its flow. */
@@ -212,6 +231,14 @@ export const signInTransactionSchema = z.strictObject({
     })
     .optional(),
   flow: z.enum(['register', 'reset']).optional(),
+  captcha: z
+    .unknown()
+    .refine((value) => grammarStep('captcha').params.safeParse(value).success, {
+      message: 'params outside the captcha step’s schema',
+    })
+    .transform((value) => value as StepParams<'captcha'>)
+    .optional(),
+  captchaPassed: z.literal(true).optional(),
 });
 
 /**
@@ -234,6 +261,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     updatePasswordRequired,
     upstream,
     flow,
+    captcha,
+    captchaPassed,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -274,6 +303,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
           },
         }),
     ...(flow === undefined ? {} : { flow }),
+    ...(captcha === undefined ? {} : { captcha }),
+    ...(captchaPassed === undefined ? {} : { captchaPassed }),
   });
 }
 
@@ -283,11 +314,13 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
  * no key the schema refuses.
  */
 export function freezeTransaction(transaction: SignInTransaction): SignInTransaction {
-  const { emailCode, upstream, ...rest } = transaction;
+  const { emailCode, upstream, captcha, captchaPassed, ...rest } = transaction;
   return Object.freeze({
     ...rest,
     verified: Object.freeze(transaction.verified.map((step) => Object.freeze({ ...step }))),
     ...(emailCode === undefined ? {} : { emailCode: Object.freeze({ ...emailCode }) }),
     ...(upstream === undefined ? {} : { upstream: Object.freeze({ ...upstream }) }),
+    ...(captcha === undefined ? {} : { captcha: Object.freeze({ ...captcha }) }),
+    ...(captchaPassed === undefined ? {} : { captchaPassed }),
   });
 }

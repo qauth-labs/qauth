@@ -14,7 +14,12 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { ownershipRefusalOf, recordFirstPartyChange } from '../lib/first-party/first-party-change';
 import { oauthClients } from '../lib/schema';
 import type { Database, DbTransaction } from '../types';
-import { type ClientSpec, firstPartyColumnsOf, hostedFlowsColumnOf } from './seed-manifest';
+import {
+  type ClientSpec,
+  firstPartyColumnsOf,
+  hostedFlowsColumnOf,
+  registrationChallengeColumnOf,
+} from './seed-manifest';
 
 // Matches `DEFAULT_PASSWORD_CONFIG` in libs/server/password so hashes verify
 // against the same settings the auth-server uses at runtime.
@@ -268,6 +273,9 @@ export function buildInsert(realmId: string, spec: ClientSpec, clientSecretHash:
     // ADR-017 Decision 8 (#640): the hosted flows beyond sign-in, such as
     // `register`. NULL = none.
     hostedFlows: hostedFlowsColumnOf(spec),
+    // ADR-017 Decision 7 (#643): the registration's bot challenge. NULL = the
+    // realm's policy decides.
+    registrationChallenge: registrationChallengeColumnOf(spec),
     enabled: true,
     // The operator wrote this client, redirect URIs included, so it is the one
     // kind that receives authorization errors by automatic redirect
@@ -319,6 +327,8 @@ export function buildUpdate(spec: ClientSpec, clientSecretHash: string) {
     // Removed from the manifest ⇒ cleared (#640): the client no longer
     // starts registration.
     hostedFlows: hostedFlowsColumnOf(spec),
+    // Removed from the manifest ⇒ cleared (#643).
+    registrationChallenge: registrationChallengeColumnOf(spec),
     // A rotation rewrites every field from the manifest, redirect URIs
     // included, so the operator now vouches for the row as it stands
     // (ANT-2026-O8U3P920). This is also how an operator marks a client the

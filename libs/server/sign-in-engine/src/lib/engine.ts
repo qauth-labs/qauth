@@ -24,6 +24,7 @@ import {
   type PasswordRejectionReason,
 } from '@qauth-labs/shared-validation';
 
+import { checkedChallengeParams } from './bot-challenge';
 import {
   answerEmailCode,
   countWrongEmailCode,
@@ -132,7 +133,15 @@ import {
  *    verified, and before the account's ladder: inside a delay or past a
  *    hard limit it is refused, neither verified nor counted.
  * 4. The transport's request checks' hook.
- * 5. The bot challenge's hook: a due challenge comes before every other step.
+ * 5. The bot challenge (#643): due while a soft threshold of the limiters
+ *    (rule 3) or of the ladder (the round's identifier past its free
+ *    failures) holds, while a registration the realm or the client requires
+ *    one for has not passed one, or when the `botChallenge` hook says so. A
+ *    transport that serves the `captcha` step gets it before every other
+ *    step, once per credential round; the pending step resumes after it. One
+ *    that does not (a FiPA client that did not list it) meets the delay and
+ *    the hard 429 of rules 3 and 7 alone, never a redirect. With no provider
+ *    the round is refused, never passed.
  * 6. The identifier: the request's `login_hint`, else an answer's. The first
  *    one is fixed; a different one ends the transaction (`subject_mismatch`).
  *    With none, the identifier step, or a discoverable first factor before it
@@ -336,6 +345,13 @@ export interface SignInEngine {
  * other step the engine did not ask for is ignored, its `login_hint` too.
  */
 const STEPS_WITH_LOGIN_HINT: ReadonlySet<StepName> = new Set<StepName>(['identifier', 'password']);
+
+/**
+ * The ladder counters whose soft threshold asks for a bot challenge (#643;
+ * ADR-017 Decision 7, "bot challenge from F1b"): the password's and the email
+ * codes'. A second factor's counter joins with its step (#653).
+ */
+const CHALLENGE_LADDER_COUNTERS = Object.freeze(['password', 'email_code'] as const);
 
 /** An identifier HMAC: HMAC-SHA-256, base64url without padding. */
 const IDENTIFIER_HMAC_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -723,6 +739,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         answer !== null && answeredName !== undefined ? { name: answeredName, answer } : null,
     };
 
+    /** The keyed HMAC of `identifier`, checked: a key that answers anything else is a store fault. */
+    const digestOf = (identifier: string): Promise<string> =>
+      fromStore('identifierDigest', async () => {
+        const digest = await deps.identifierDigest({ realmId, identifier });
+        if (typeof digest !== 'string' || !IDENTIFIER_HMAC_PATTERN.test(digest)) {
+          throw new Error('not an identifier HMAC');
+        }
+        return digest;
+      });
     let hmac: Promise<string> | undefined;
     /**
      * The HMAC of the transaction's identifier or, for an account an upstream
@@ -732,14 +757,18 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const identifierHmac = (): Promise<string> => {
       const identifier = state.transaction.identifier ?? state.transaction.upstream?.address;
       if (identifier === undefined) throw new Error('sign-in engine: no identifier to digest');
-      hmac ??= fromStore('identifierDigest', async () => {
-        const digest = await deps.identifierDigest({ realmId, identifier });
-        if (typeof digest !== 'string' || !IDENTIFIER_HMAC_PATTERN.test(digest)) {
-          throw new Error('not an identifier HMAC');
-        }
-        return digest;
-      });
+      hmac ??= digestOf(identifier);
       return hmac;
+    };
+    /**
+     * Spend the bot challenge a transaction passed (#643): a credential was
+     * checked, right or wrong, so the next one under a soft threshold needs a
+     * new one.
+     */
+    const spendChallenge = (): void => {
+      if (state.transaction.captchaPassed === true) {
+        state.transaction = { ...state.transaction, captchaPassed: undefined };
+      }
     };
     const stepRound = (): StepRound =>
       Object.freeze({
@@ -1030,7 +1059,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // A credential round meets the limiters first (#636); a bot challenge's
       // answer carries no credential.
       let reservation: CredentialRoundReservation | null = null;
-      if (isCredentialAnswer(read.answer)) {
+      const credential = isCredentialAnswer(read.answer);
+      if (credential) {
         const limited = await reserveCredentialRound(read.step);
         if ('refused' in limited) return limited.refused;
         reservation = limited.reservation;
@@ -1039,6 +1069,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         params: read.params,
         answer: read.answer,
       });
+      // A credential that was checked spends the bot challenge passed for it.
+      if (credential && verdict.kind !== 'throttled') spendChallenge();
       switch (verdict.kind) {
         case 'refused':
           await settleRound(reservation, 'failure');
@@ -1061,17 +1093,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           );
           return result;
         }
-        case 'passed':
-          if (handler.role !== 'challenge') throw new Error(`sign-in engine: ${read.step} passed`);
-          state.transaction = {
-            ...state.transaction,
-            verified: [
-              ...state.transaction.verified,
-              { step: read.step, params: read.params } as OfferedStep,
-            ],
-          };
-          await audit('passed', read.step);
-          return null;
         default:
           throw new Error(`sign-in engine: ${read.step} answered ${verdict.kind}`);
       }
@@ -1411,7 +1432,9 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return { result: throttled(reservation.retryAfterSeconds) };
       }
       // A digest that fails leaves the attempt counted, as a store fault
-      // after the password's reservation does.
+      // after the password's reservation does. The code is checked now: it
+      // spends the bot challenge passed for it (#643).
+      spendChallenge();
       const presented = await digestCode(held.salt, otp);
       let answered = answerEmailCode(held, presented, at);
       let refusedAs: SignInAuditReason = 'invalid_code';
@@ -1990,8 +2013,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       environment,
     });
 
-    // Rule 3: the limiters, on every round (#636).
+    // Rule 3: the limiters, on every round (#636). A soft threshold that
+    // holds asks for a bot challenge at rule 5 (#643).
     const { limits, request, botChallenge } = hooks;
+    let limitsSoft = false;
     if (limits !== undefined) {
       const verdict = await fromStore('limits', () => limits.round(hookRound));
       if (verdict?.kind === 'throttled') {
@@ -2001,6 +2026,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (verdict?.kind !== 'continue') {
         throw new SignInStoreUnavailableError('limits', new Error('not a limit verdict'));
       }
+      limitsSoft = verdict.softThreshold === true;
     }
 
     // Rule 4: the transport's request checks.
@@ -2076,20 +2102,194 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
     }
 
-    // Rule 5: a due bot challenge comes before every other step. Any other
-    // answer is ignored, so no password is checked while one is due.
-    if (botChallenge !== undefined) {
-      const verdict = await fromStore('botChallenge', () => botChallenge(hookRound));
-      if (verdict.kind === 'due') {
-        const challenge = handlers.challenge;
-        if (challenge === undefined || !served.has(challenge.step)) {
-          return throttled(verdict.retryAfterSeconds);
-        }
-        const offer = await offerOf([challenge]);
-        if (!answers(offer)) return offerStep(offer);
-        const result = await verifyPending(offer);
-        if (result !== null) return result;
+    // Rule 5: the bot challenge (PRO-19, #643; ADR-017 Decisions 4 and 7).
+    // A due challenge comes before every other step; any other answer is
+    // ignored, so no password is checked and no code mailed while one is due.
+
+    /**
+     * The identifier this round is for, before rule 6 fixes it: the
+     * transaction's (or the address an upstream provider proved, #639), else
+     * the request's `login_hint`, else the one the
+     * pending answer brings (a password answer that names its account). Only
+     * the ladder's soft threshold reads it; rule 6 still decides which one the
+     * transaction holds, and ends one that brings another.
+     */
+    const roundIdentifier = (): string | undefined => {
+      const held = state.transaction.identifier ?? state.transaction.upstream?.address;
+      if (held !== undefined) return held;
+      if (context.loginHint !== undefined) {
+        const identifier = readIdentifier(context.loginHint);
+        if (identifier !== null) return identifier;
       }
+      const { pending } = turn;
+      const steps = resetting ? RESET_STEPS_WITH_LOGIN_HINT : STEPS_WITH_LOGIN_HINT;
+      if (pending === null || !steps.has(pending.name)) return undefined;
+      const fields = pending.answer.fields;
+      if (!isRecord(fields) || !Object.hasOwn(fields, 'login_hint')) return undefined;
+      return readIdentifier(fields['login_hint']) ?? undefined;
+    };
+    /** Whether the round's identifier is past its ladder's free failures (PRO-12). */
+    const ladderSoft = async (): Promise<boolean> => {
+      const peek = hooks.ladder;
+      if (peek?.softThreshold === undefined) return false;
+      const identifier = roundIdentifier();
+      if (identifier === undefined) return false;
+      const digest =
+        identifier === state.transaction.identifier
+          ? await identifierHmac()
+          : await digestOf(identifier);
+      const soft: unknown = await fromStore('ladder', () =>
+        peek.softThreshold?.({
+          realmId,
+          identifierHmac: digest,
+          counters: CHALLENGE_LADDER_COUNTERS,
+        })
+      );
+      if (typeof soft !== 'boolean') {
+        throw new SignInStoreUnavailableError('ladder', new Error('not a soft threshold'));
+      }
+      return soft;
+    };
+    /**
+     * Whether a registration still owes its challenge (#643): the realm or
+     * the client requires one, and this transaction has passed none.
+     */
+    const registrationOwesChallenge = async (): Promise<boolean> => {
+      const { registrations } = deps;
+      if (!registering || registrations?.challengeRequired === undefined) return false;
+      if (state.transaction.verified.some((step) => step.step === 'captcha')) return false;
+      const required: unknown = await fromStore('registrations', () =>
+        registrations.challengeRequired?.({ realmId, clientId })
+      );
+      if (typeof required !== 'boolean') {
+        throw new SignInStoreUnavailableError('registrations', new Error('not a requirement'));
+      }
+      return required;
+    };
+    /**
+     * Why a challenge is due this round, if one is: a registration that owes
+     * one, or, while the transaction holds no unspent pass, a soft threshold
+     * of the limiters or of the ladder, or the deployment's own hook.
+     */
+    const challengeDue = async (): Promise<'registration' | 'threshold' | null> => {
+      if (await registrationOwesChallenge()) return 'registration';
+      if (state.transaction.captchaPassed === true) return null;
+      // An upstream provider's callback (#639) carries the provider's proof,
+      // no credential anyone could guess here: holding it for a challenge
+      // would throw the proof away and send the person back to the provider.
+      // The rounds after it meet this rule as any other.
+      if (upstreamRound.proof !== undefined) return null;
+      if (limitsSoft || (await ladderSoft())) return 'threshold';
+      if (botChallenge === undefined) return null;
+      const verdict = await fromStore('botChallenge', () => botChallenge(hookRound));
+      if (verdict?.kind === 'due') return 'threshold';
+      if (verdict?.kind !== 'not_due') {
+        throw new SignInStoreUnavailableError('botChallenge', new Error('not a verdict'));
+      }
+      return null;
+    };
+    /**
+     * The challenge's offer: the one the transaction holds, or a new one from
+     * `handler`, kept in the transaction so its answer is read against what
+     * was offered. Offered alone: the pending step resumes after it.
+     */
+    const challengeOffer = async (handler: AnyStepHandler): Promise<StepOffer> => {
+      let params = state.transaction.captcha;
+      if (params === undefined) {
+        params = await fromStore('botChallenge', async () =>
+          checkedChallengeParams(await handler.params(stepRound()))
+        );
+        state.transaction = { ...state.transaction, captcha: params };
+      }
+      return Object.freeze({
+        current: Object.freeze({ step: 'captcha', params }),
+        alternatives: Object.freeze([]),
+      }) as StepOffer;
+    };
+    /**
+     * A wrong answer to the challenge is a failed round of the limiters
+     * (ADR-017 Decision 7): counted on the end-user IP, its bucket and the
+     * client as a wrong credential is, so a stream of wrong answers meets the
+     * hard 429. Inside a delay or past a hard limit the row holds the source
+     * back already, and nothing more is counted.
+     */
+    const countFailedChallenge = async (): Promise<void> => {
+      if (limits === undefined) return;
+      const verdict = await fromStore('limits', () =>
+        limits.reserve({
+          realmId,
+          clientId,
+          environment,
+          ...(context.endUserIp === undefined ? {} : { endUserIp: context.endUserIp }),
+        })
+      );
+      if (verdict?.kind === 'throttled') return;
+      if (verdict?.kind !== 'reserved' || typeof verdict.settle !== 'function') {
+        throw new SignInStoreUnavailableError('limits', new Error('not a reservation'));
+      }
+      await settleRound(verdict, 'failure');
+    };
+    /**
+     * The challenge's round: its offer, or the answer to it. A right answer
+     * leaves a pass the next credential round spends, and the rules go on
+     * (`null`); a wrong one is refused with `captcha_failed` and a new
+     * challenge. Either way the challenge it answered is gone.
+     */
+    const challengeRound = async (handler: AnyStepHandler): Promise<RoundResult | null> => {
+      const offer = await challengeOffer(handler);
+      if (turn.pending?.name !== 'captcha') return offerStep(offer);
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('captcha');
+      turn.pending = null;
+      state.transaction = { ...state.transaction, captcha: undefined };
+      const verdict: StepVerdict = await (handler as StepHandler).verify(stepRound(), {
+        params: read.params,
+        answer: read.answer,
+      });
+      if (verdict.kind === 'passed') {
+        const { verified } = state.transaction;
+        state.transaction = {
+          ...state.transaction,
+          captchaPassed: true,
+          // One record of a passed challenge is enough: the list stays short.
+          verified: verified.some((step) => step.step === 'captcha')
+            ? verified
+            : [...verified, { step: 'captcha', params: read.params } as OfferedStep],
+        };
+        await audit('passed', 'captcha');
+        return null;
+      }
+      if (verdict.kind !== 'refused') {
+        throw new Error(`sign-in engine: the captcha step answered ${verdict.kind}`);
+      }
+      await countFailedChallenge();
+      await audit('refused', 'captcha', verdict.audit.reason);
+      return offerStep(await challengeOffer(handler), verdict.error);
+    };
+
+    const due = await challengeDue();
+    if (due !== null) {
+      if (served.has('captcha')) {
+        // No provider: a due challenge refuses the round, never passes it.
+        const handler = handlers.challenge;
+        if (handler === undefined) {
+          throw new SignInStoreUnavailableError('botChallenge', new Error('no provider'));
+        }
+        const result = await challengeRound(handler);
+        if (result !== null) return result;
+      } else if (due === 'registration') {
+        // A client that cannot answer the challenge its registration
+        // requires: never sent to a browser in its place (ADR-017 Decision 7).
+        await audit('refused', roundStep(), 'registration_closed');
+        return Object.freeze({
+          kind: 'refused',
+          reason: 'request_refused',
+          code: REGISTRATION_NOT_ALLOWED,
+          transaction: freezeTransaction(state.transaction),
+        });
+      }
+      // A client that did not list `captcha`, under a soft threshold: the
+      // delay and the hard 429 of rules 3 and 7 alone (ADR-017 Decision 7).
     }
 
     // An upstream provider's callback (#639): it completes the step this

@@ -206,6 +206,11 @@ export const clientSpecSchema = z
     // Operator-set only, like `first_party_profile`: no registration path
     // accepts it. Omitted ⇒ NULL ⇒ none; removed on `--rotate` ⇒ cleared.
     hosted_flows: hostedFlowsSchema.optional(),
+    // ADR-017 Decision 7 (#643): a registration this client starts passes
+    // the bot challenge first, whatever the realm's policy. Operator-set
+    // only, like `hosted_flows`. Omitted or false ⇒ NULL ⇒ the realm's
+    // policy decides; removed on `--rotate` ⇒ cleared.
+    registration_challenge: z.boolean().optional(),
   })
   .strict()
   // RFC 7591 §2: "The `jwks_uri` and `jwks` parameters MUST NOT both be
@@ -485,6 +490,15 @@ export function firstPartyColumnsOf(spec: ClientSpec): ClientFirstPartyColumns {
 export function hostedFlowsColumnOf(spec: ClientSpec): string[] | null {
   const flows = spec.hosted_flows;
   return flows === undefined || flows.length === 0 ? null : [...flows];
+}
+
+/**
+ * The `registration_challenge` column a client entry writes (#643): `true`
+ * when the entry requires the challenge, NULL otherwise, so `--rotate`
+ * clears a requirement the manifest no longer names.
+ */
+export function registrationChallengeColumnOf(spec: ClientSpec): true | null {
+  return spec.registration_challenge === true ? true : null;
 }
 export type CimdClientSpec = z.infer<typeof cimdClientSpecSchema>;
 export type Manifest = z.infer<typeof manifestSchema>;

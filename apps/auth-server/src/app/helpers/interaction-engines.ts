@@ -4,6 +4,7 @@ import {
   type AccountRegistrations,
   type AccountResets,
   createArgon2PasswordVerifier,
+  createCaptchaStep,
   createCheckedSignInEngine,
   createRepositoryAccountDirectory,
   createRepositoryAccountRegistrations,
@@ -27,6 +28,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { accountPoliciesOf } from './account-policies';
 import { type BackgroundTasks } from './background-tasks';
+import { createServerBotChallenge, registrationChallengeRequired } from './bot-challenge';
 import { endBrowserSessions } from './browser-session';
 import { type CodeMail, createEngineMailer, type EngineMailer } from './engine-mail';
 import type { InteractionDecision } from './interaction';
@@ -173,6 +175,14 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * session epoch on every round of a sign-in that holds a user, so a reset
  * ends every sign-in in progress for its account.
  *
+ * Both ask for the bot challenge (#643; ADR-017 Decision 7, rule 5): the
+ * `captcha` step before a credential round while a soft threshold of the
+ * round limits or the failure ladder holds, and before a registration while
+ * the realm's `botChallenge.requiredAtSignUp` or the client's
+ * `registration_challenge` asks for it. The provider is the deployment's
+ * (`createServerBotChallenge`); a provider that cannot answer refuses the
+ * round, and the challenge is never waved through.
+ *
  * Building them registers an `onClose` hook for the mail's background tasks,
  * which Fastify refuses once the server started: a route that builds them
  * on its first request passes `tasks` it created while it registered.
@@ -203,6 +213,15 @@ export function createInteractionEngines(
     if (realm === undefined) throw new Error('a password update for a realm that does not exist');
     return realm;
   };
+  // The bot challenge (#643): the deployment's provider, built once; the
+  // proof of work's difficulty is read from the realm row on every challenge.
+  const captcha = createCaptchaStep(
+    createServerBotChallenge(fastify, async (realmId) => {
+      const realm = await fastify.repositories.realms.findById(realmId);
+      if (realm === undefined) throw new Error('a bot challenge for a realm that does not exist');
+      return realm;
+    })
+  );
   const passwordUpdates = createRepositoryPasswordUpdates(
     {
       userCredentials: fastify.repositories.userCredentials,
@@ -247,6 +266,17 @@ export function createInteractionEngines(
           if (realm === undefined) return false;
           const client = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
           return registrationAllowed(accountPoliciesOf(fastify, realm), client);
+        },
+        // Read again on every round, as `allowed` is. A realm that does not
+        // exist asks for the challenge: nothing registers there anyway.
+        challengeRequired: async ({ realmId, clientId }) => {
+          const realm = await fastify.repositories.realms.findById(realmId);
+          if (realm === undefined) return true;
+          const client = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
+          return registrationChallengeRequired(
+            fastify.policyStore.ofRealm(realm).policies.botChallenge,
+            client
+          );
         },
         hash: (password) => fastify.passwordHasher.hashPassword(password),
         isUniqueViolation: (error) => error instanceof UniqueConstraintError,
@@ -374,6 +404,7 @@ export function createInteractionEngines(
         notBefore: ({ realmId, userId }) => resetNotBefore(fastify, realmId, userId),
       },
       hooks: { ladder: ladder.ladder, limits },
+      steps: [captcha],
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
         fastify.log.error({ err: error, port: error.port }, 'sign-in engine store unavailable'),

@@ -635,6 +635,32 @@ describe('the Redis failure ladder', () => {
     expect(counter()).toBeUndefined();
     expect(await attempt()).toMatchObject({ kind: 'reserved' });
   });
+
+  it('says a soft threshold holds once a counter reached its free failures (#643)', async () => {
+    const { ladder, fail, advance, redis } = setup();
+    const soft = (counters: readonly ('password' | 'email_code')[] = ['password', 'email_code']) =>
+      ladder.softThreshold?.({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, counters });
+    expect(await soft()).toBe(false);
+    await fail(PASSWORD_LADDER_POLICY.freeFailures - 1);
+    expect(await soft()).toBe(false);
+    await fail(1);
+    expect(await soft()).toBe(true);
+    // Only the counters asked about; a counter without a ladder never crosses one.
+    expect(await soft(['email_code'])).toBe(false);
+    // It ends with the run.
+    advance(PASSWORD_LADDER_POLICY.retentionMs);
+    expect(await soft()).toBe(false);
+    // A counter out of shape is a fault, and a key part out of shape is refused.
+    redis.hashes.set(COUNTER, new Map([['n', 'many']]));
+    await expect(soft()).rejects.toThrow(/out of shape/);
+    await expect(
+      ladder.softThreshold?.({
+        realmId: 'a realm',
+        identifierHmac: IDENTIFIER_HMAC,
+        counters: ['password'],
+      })
+    ).rejects.toThrow(/out of shape/);
+  });
 });
 
 describe('isKnownEndUserIp (#637)', () => {

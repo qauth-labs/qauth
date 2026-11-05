@@ -175,6 +175,15 @@ services:
       # lookup's https URL. Blank is unset.
       BREACHED_PASSWORD_LIST_PATH:
       BREACHED_PASSWORD_RANGE_URL:
+      # Bot challenge (#643): the built-in proof of work unless the provider
+      # is `hosted`, which needs the four HOSTED keys. Blank is unset.
+      BOT_CHALLENGE_PROVIDER:
+      BOT_CHALLENGE_HOSTED_NAME:
+      BOT_CHALLENGE_HOSTED_SITE_KEY:
+      BOT_CHALLENGE_HOSTED_SECRET:
+      BOT_CHALLENGE_HOSTED_VERIFY_URL:
+      BOT_CHALLENGE_REQUIRED_AT_SIGN_UP:
+      BOT_CHALLENGE_DIFFICULTY:
       # Client-secret checks beyond this many waiting Argon2 jobs answer 503
       # with Retry-After at once instead of queueing.
       PASSWORD_HASH_QUEUE_LIMIT: ${PASSWORD_HASH_QUEUE_LIMIT:-32}

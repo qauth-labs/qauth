@@ -875,6 +875,29 @@ describe('audit events', () => {
     });
   });
 
+  it('maps the bot challenge’s records: a pass, and a refusal as captcha_failed (#643)', () => {
+    const passed = signInAuditEvent({ outcome: 'passed', step: 'captcha', identifierHmac: HMAC });
+    const refused = signInAuditEvent({
+      outcome: 'refused',
+      step: 'captcha',
+      reason: 'captcha_failed',
+      identifierHmac: HMAC,
+    });
+    expect(passed).toEqual({
+      type: 'urn:qauth:event:user.sign_in_step_passed:v1-rc.0',
+      data: { step: STEP_URNS.captcha, identifierHmac: HMAC },
+      userId: null,
+    });
+    expect(refused).toEqual({
+      type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      data: { method: 'password', reason: 'captcha_failed', identifierHmac: HMAC },
+      userId: null,
+    });
+    for (const event of [passed, refused]) {
+      expect(getEventType(event.type)?.data.safeParse(event.data).success).toBe(true);
+    }
+  });
+
   it('refuses a step it has no sign-in method for', () => {
     expect(() =>
       signInAuditEvent({

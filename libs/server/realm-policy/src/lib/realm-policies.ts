@@ -1,6 +1,7 @@
 import {
   applyKeyAliases,
   authEnvSchema,
+  botChallengeEnvSchema,
   CONFIG_KEY_REGISTRY,
   emailEnvSchema,
   envSchemaShape,
@@ -73,9 +74,14 @@ export type RealmPoliciesRepresentation = {
 
 /** The server's parser of each key of the env schemas whose keys seed the built-in groups. */
 const SERVER_ENV_PARSERS: ReadonlyMap<string, z.ZodType> = new Map(
-  [authEnvSchema, jwtEnvSchema, passwordEnvSchema, observabilityEnvSchema, emailEnvSchema].flatMap(
-    (schema) => Object.entries(envSchemaShape(schema))
-  )
+  [
+    authEnvSchema,
+    jwtEnvSchema,
+    passwordEnvSchema,
+    observabilityEnvSchema,
+    emailEnvSchema,
+    botChallengeEnvSchema,
+  ].flatMap((schema) => Object.entries(envSchemaShape(schema)))
 );
 
 /**

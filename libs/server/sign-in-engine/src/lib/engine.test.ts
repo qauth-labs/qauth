@@ -1,6 +1,7 @@
 import {
   createFipaMapper,
   createInteractionMapper,
+  STEP_NAMES,
   STEP_URNS,
   type StepName,
 } from '@qauth-labs/server-step-grammar';
@@ -41,6 +42,7 @@ import {
 } from './ports';
 import type { RoundAnswer, RoundContext, RoundResult } from './round';
 import { createRoundLimiter, ROUND_LIMIT_POLICY } from './round-limits';
+import { createCaptchaStep } from './steps/captcha';
 import type { AnyStepHandler, StepHandler, StepVerdict } from './steps/handler';
 import { SIGN_IN_TRANSACTION_MAX_AGE_MS, type SignInTransaction } from './transaction';
 
@@ -195,6 +197,9 @@ async function signIn(
   const second = await built.engine.advance(first.transaction, passwordAnswer(password), ctx);
   return { first, second };
 }
+
+/** Every step but the bot challenge: a transport that cannot serve it (#643). */
+const WITHOUT_CAPTCHA: readonly StepName[] = STEP_NAMES.filter((name) => name !== 'captcha');
 
 const interaction = createInteractionMapper();
 const fipa = createFipaMapper({ serves: ['identifier', 'password', 'password_reset'] });
@@ -548,17 +553,29 @@ describe('eager answers', () => {
   });
 
   it('ignores a password while a bot challenge is due, and checks nothing', async () => {
-    const hooks: SignInHooks = {
-      botChallenge: async () => ({ kind: 'due', retryAfterSeconds: 30 }),
-    };
-    const built = build(undefined, { hooks });
+    const hooks: SignInHooks = { botChallenge: async () => ({ kind: 'due' }) };
+    const built = build(undefined, {
+      hooks,
+      steps: [
+        createCaptchaStep({
+          params: async () => ({ provider: 'pow', challenge: 'c'.repeat(43), difficulty: 8 }),
+          verify: async () => true,
+        }),
+      ],
+    });
     const result = await built.engine.advance(
       null,
       passwordAnswer(PASSWORD, IDENTIFIER),
       context()
     );
-    expect(result).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 30 });
+    expect(result).toMatchObject({ kind: 'step', offer: { current: { step: 'captcha' } } });
     expect(built.passwords.verifications).toBe(0);
+    // With no provider, the due challenge refuses the round: never passed.
+    const bare = build(undefined, { hooks });
+    expect(
+      await bare.engine.advance(null, passwordAnswer(PASSWORD, IDENTIFIER), context())
+    ).toMatchObject({ kind: 'refused', reason: 'unavailable' });
+    expect(bare.passwords.verifications).toBe(0);
   });
 
   it('ignores an answer to a step the grammar does not know', async () => {
@@ -1482,8 +1499,7 @@ describe('the hooks', () => {
     const built = build(undefined, {
       steps: [captcha],
       hooks: {
-        botChallenge: async () =>
-          due ? { kind: 'due', retryAfterSeconds: 5 } : { kind: 'not_due' },
+        botChallenge: async () => (due ? { kind: 'due' } : { kind: 'not_due' }),
       },
     });
     const ctx = context({ loginHint: IDENTIFIER });
@@ -1517,14 +1533,15 @@ describe('the hooks', () => {
         identifierHmac: await fakeIdentifierDigest({ realmId: REALM, identifier: IDENTIFIER }),
       },
     ]);
-    // A transport that does not serve the captcha step gets the delay and 429.
+    // A transport that does not serve the captcha step gets no challenge:
+    // only the delay and the 429 of the limits hold it (rules 3 and 7).
     due = true;
     const native = await built.engine.advance(
       null,
       null,
       context({ loginHint: IDENTIFIER, serves: ['identifier', 'password'] })
     );
-    expect(native).toMatchObject({ kind: 'refused', reason: 'throttled', retryAfterSeconds: 5 });
+    expect(native).toMatchObject({ kind: 'step', offer: { current: { step: 'password' } } });
   });
 });
 
@@ -1904,11 +1921,13 @@ describe('the failure ladder (#615)', () => {
   });
 
   describe('on the memory ladder', () => {
+    // A transport that does not serve the bot challenge (#643): past the free
+    // failures it gets the wait and the 429 alone.
     const answerOnce = (built: Built, ip?: string) =>
       built.engine.advance(
         null,
         passwordAnswer(WRONG, IDENTIFIER),
-        context(ip === undefined ? {} : { endUserIp: ip })
+        context({ serves: WITHOUT_CAPTCHA, ...(ip === undefined ? {} : { endUserIp: ip }) })
       );
 
     it('lets parallel attempts, each in its own transaction, reach the verifier no more often than one at a time', async () => {
@@ -2247,12 +2266,20 @@ describe('the round limits (#636)', () => {
         perClient: false,
       });
       const built = build({}, { hooks: { limits: limiter } });
-      /** One wrong password for an identifier of its own, from the IP. */
+      /**
+       * One wrong password for an identifier of its own, from the IP, through
+       * a transport that does not serve the bot challenge (#643): the delay
+       * and the 429 alone.
+       */
       const guess = (i: number) =>
         built.engine.advance(
           null,
           passwordAnswer(WRONG, `guess-${i}@example.com`),
-          context({ endUserIp: IP, ...(environment === undefined ? {} : { environment }) })
+          context({
+            endUserIp: IP,
+            serves: WITHOUT_CAPTCHA,
+            ...(environment === undefined ? {} : { environment }),
+          })
         );
       return { built, guess, advance: (ms: number) => (now += ms) };
     };

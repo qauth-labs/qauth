@@ -13,8 +13,14 @@ import type { SignInTransaction } from './transaction';
  * | -------------- | ---- | ------------------------------------------- |
  * | `limits`       | 3, 7 | PRO-13 (#636): per client, per end-user IP  |
  * | `request`      | 4    | each transport's request checks (#628, #665)|
- * | `botChallenge` | 5    | PRO-19 (#643)                               |
+ * | `botChallenge` | 5    | a deployment's own reason for a challenge   |
  * | `ladder`       | 3, 7 | PRO-12 (#615): reserve before verify        |
+ *
+ * The bot challenge itself (PRO-19, #643) is the engine's rule 5: the
+ * `limits` hook and the `ladder` hook say when a soft threshold holds, the
+ * registration port when a sign-up requires one, and the `captcha` step
+ * handler (`createCaptchaStep`) offers and checks it. `botChallenge` only
+ * adds a reason of the deployment's own.
  */
 
 /** What a hook sees of a round: never an answer's fields, so never a password or a code. */
@@ -38,7 +44,16 @@ export interface HookRound {
 
 /** The answer of the limiters. */
 export type LimitVerdict =
-  | { readonly kind: 'continue' }
+  | {
+      readonly kind: 'continue';
+      /**
+       * A soft threshold of a row holds for this round (PRO-13, ADR-017
+       * Decision 7: the end-user IP's failures, its bucket's identifiers, the
+       * client's ratio or budget): a bot challenge is due (#643), on top of
+       * the delay the row's reservations keep.
+       */
+      readonly softThreshold?: boolean;
+    }
   | { readonly kind: 'throttled'; readonly retryAfterSeconds: number };
 
 /** A credential round the limiters reserve before its credential is verified (#636). */
@@ -104,15 +119,14 @@ export type RequestVerdict =
   /** Continue in a browser (`prompt=consent`, a dangerous scope at the FiPA endpoint). */
   | { readonly kind: 'redirect' };
 
-/** The answer of the bot challenge. */
-export type BotChallengeVerdict =
-  | { readonly kind: 'not_due' }
-  /**
-   * A challenge is due. The engine offers the `captcha` step when a handler
-   * for it is registered and the transport serves it; otherwise the round is
-   * throttled for `retryAfterSeconds`, never redirected (ADR-017 Decision 7).
-   */
-  | { readonly kind: 'due'; readonly retryAfterSeconds: number };
+/**
+ * The answer of the `botChallenge` hook: a reason of the deployment's own to
+ * ask for a challenge, beside the engine's (a soft threshold, a sign-up that
+ * requires one). A due challenge is met as the engine's are (rule 5, #643):
+ * the `captcha` step for a transport that serves it, once per credential
+ * round; the delay and the hard 429 alone for one that does not.
+ */
+export type BotChallengeVerdict = { readonly kind: 'not_due' } | { readonly kind: 'due' };
 
 /** What settling a reserved attempt found. */
 export interface LadderSettlement {
@@ -180,6 +194,18 @@ export interface LadderHook {
      */
     readonly endUserIp?: string;
   }): Promise<LadderVerdict>;
+  /**
+   * Whether any of `counters` of the identifier has reached its soft
+   * threshold: a run of at least the ladder's `freeFailures` consecutive
+   * counted failures, the point from which every attempt waits (ADR-017
+   * Decision 7: "bot challenge from F1b"). A bot challenge is then due (#643).
+   * It reads and writes nothing else. Absent: the ladder never asks for one.
+   */
+  softThreshold?(input: {
+    readonly realmId: string;
+    readonly identifierHmac: string;
+    readonly counters: readonly LadderCounter[];
+  }): Promise<boolean>;
 }
 
 export interface SignInHooks {

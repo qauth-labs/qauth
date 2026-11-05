@@ -5,6 +5,7 @@ import {
   assuranceEnvSchema,
   authEnvSchema,
   baseEnvSchema,
+  botChallengeEnvSchema,
   ceremonyAppPeerProblems,
   databaseEnvSchema,
   dpopEnvSchema,
@@ -83,6 +84,10 @@ export const envSchema = z
     ...databaseEnvSchema.shape,
     ...redisEnvSchema.shape,
     ...passwordEnvSchema.shape,
+    // The bot challenge (#643): its provider, and the two keys that seed a
+    // realm's `botChallenge` policy. A hosted provider's settings are checked
+    // together below.
+    ...botChallengeEnvSchema.shape,
     ...authEnvSchema.shape,
     ...rateLimitEnvSchema.shape,
     ...emailEnvSchema.shape,
@@ -212,6 +217,26 @@ export const envSchema = z
         message:
           "SESSION_COOKIE_SECRET is set to a value QAuth's examples published, which production refuses: anyone can sign session cookies with it. Set it to a new strong secret of at least 32 characters, for example `openssl rand -base64 48`: at boot it replaces the realm's stored cookie key, which may be that published value. Remove the variable only after that boot.",
       });
+    }
+
+    // #643 — a hosted bot-challenge provider needs its name, site key,
+    // secret and verify URL: without one of them every challenge would fail,
+    // and every round that owes one would be refused.
+    if (env.BOT_CHALLENGE_PROVIDER === 'hosted') {
+      for (const key of [
+        'BOT_CHALLENGE_HOSTED_NAME',
+        'BOT_CHALLENGE_HOSTED_SITE_KEY',
+        'BOT_CHALLENGE_HOSTED_SECRET',
+        'BOT_CHALLENGE_HOSTED_VERIFY_URL',
+      ] as const) {
+        if (env[key] === undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `${key} is required when BOT_CHALLENGE_PROVIDER is hosted (#643).`,
+          });
+        }
+      }
     }
 
     // #541 — the OTLP exporter variables are process-wide: another

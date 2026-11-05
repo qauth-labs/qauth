@@ -64,6 +64,57 @@ describe('the OTLP exporter variables', () => {
   });
 });
 
+/** A hosted bot-challenge provider (#643) needs every one of its settings. */
+describe('the bot challenge’s provider', () => {
+  const env = (extra: Record<string, string>) => ({
+    DATABASE_URL: 'postgresql://qauth@127.0.0.1:5432/qauth',
+    JWT_ISSUER: 'https://auth.example.com',
+    EMAIL_FROM_ADDRESS: 'no-reply@auth.example.com',
+    EMAIL_BASE_URL: 'https://auth.example.com',
+    ...extra,
+  });
+  const hosted = {
+    BOT_CHALLENGE_PROVIDER: 'hosted',
+    BOT_CHALLENGE_HOSTED_NAME: 'turnstile',
+    BOT_CHALLENGE_HOSTED_SITE_KEY: '0x4AAAAAAA',
+    BOT_CHALLENGE_HOSTED_SECRET: 'the-secret-value',
+    BOT_CHALLENGE_HOSTED_VERIFY_URL: 'https://challenges.cloudflare.com/turnstile/v0/siteverify',
+  };
+  const issuesOf = (extra: Record<string, string>) => {
+    const result = envSchema.safeParse(env(extra));
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+  };
+
+  it('is the built-in proof of work by default, with no hosted setting', () => {
+    const parsed = envSchema.parse(env({}));
+    expect(parsed.BOT_CHALLENGE_PROVIDER).toBe('pow');
+    expect(parsed.BOT_CHALLENGE_DIFFICULTY).toBe(18);
+    expect(parsed.BOT_CHALLENGE_REQUIRED_AT_SIGN_UP).toBe(false);
+  });
+
+  it('takes a hosted provider with all four settings', () => {
+    expect(issuesOf(hosted)).toEqual([]);
+  });
+
+  it('refuses a hosted provider without one of them, naming it and no value', () => {
+    for (const key of Object.keys(hosted).filter((name) => name !== 'BOT_CHALLENGE_PROVIDER')) {
+      const { [key as keyof typeof hosted]: _, ...rest } = hosted;
+      expect(issuesOf(rest), key).toContain(key);
+    }
+    const result = envSchema.safeParse(
+      env({ ...hosted, BOT_CHALLENGE_HOSTED_VERIFY_URL: 'http://example.com/x' })
+    );
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result.error?.issues)).not.toContain('the-secret-value');
+  });
+
+  it('refuses pow as a hosted provider’s name', () => {
+    expect(issuesOf({ ...hosted, BOT_CHALLENGE_HOSTED_NAME: 'pow' })).toContain(
+      'BOT_CHALLENGE_HOSTED_NAME'
+    );
+  });
+});
+
 /**
  * The admin API's listener (#511) is a second server of the same process, so
  * it cannot share the public port.

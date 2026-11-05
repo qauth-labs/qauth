@@ -10,7 +10,11 @@ It does no I/O of its own: everything it reads or calls is a port. The auth serv
 in `@qauth-labs/fastify-plugin-sign-in-engine`.
 
 ```ts
-import { createSignInEngine, NO_SECOND_FACTOR_POLICY } from '@qauth-labs/server-sign-in-engine';
+import {
+  createCaptchaStep,
+  createSignInEngine,
+  NO_SECOND_FACTOR_POLICY,
+} from '@qauth-labs/server-sign-in-engine';
 
 const engine = createSignInEngine({
   accounts, // AccountDirectory: what a password needs before it is checked; the whole account after
@@ -24,9 +28,9 @@ const engine = createSignInEngine({
   registrations, // AccountRegistrations: registration's gate and account creation (#640)
   resets, // AccountResets: the password reset's gate and its write (#642)
   sessionEpochs, // SessionEpochReader: each user's last reset, read on every round (#642)
-  hooks: { ladder, limits }, // ladder: #615; limits: #636; request, botChallenge: later issues
+  hooks: { ladder, limits }, // ladder: #615; limits: #636; request: later issues; botChallenge: optional (#643)
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
-  steps: [], // the steps later issues add
+  steps: [createCaptchaStep(provider)], // the bot challenge (#643), and the steps later issues add
 });
 
 const result = await engine.advance(transaction, answer, {
@@ -77,8 +81,13 @@ authentication, run before the call). The first unmet rule produces the answer.
    above the client's rounds a minute, is refused as `throttled`. See
    [The round limits](#the-round-limits).
 3. The `request` hook (rule 4): the transport's request checks (#628, #665).
-4. The `botChallenge` hook (rule 5; PRO-19, #643). A due challenge comes before every other step:
-   the `captcha` step when a handler for it is registered and the transport serves it, else a 429.
+4. The bot challenge (rule 5; PRO-19, #643). It is due when a registration owes it, or, while the
+   transaction holds no unspent pass, when a soft threshold holds or the optional `botChallenge`
+   hook says so. See [The bot challenge](#the-bot-challenge). A due challenge comes before every
+   other step, in addition to the delay: the `captcha` step alone when the transport serves it.
+   Without a handler for it, or with a provider that cannot answer, the round is refused as
+   `unavailable`: a due challenge is never waved through. A transport that does not serve
+   `captcha` meets the delay and the 429 alone, never a redirect.
 5. The identifier (rule 6): the request's `login_hint`, else an answer's (the identifier step's,
    or a password answer's; no other answer's). It is checked (an email address of at most 254 bytes)
    and normalised. The first one is fixed; a different one ends the transaction, audited as
@@ -184,7 +193,9 @@ minutes) and its delay from the rounds a minute, and takes the per-IP registrati
 (3 an hour by default; 1,000 an hour per client). A delay is a pace: while a soft threshold holds,
 the row admits one credential round per delay and refuses the others with `Retry-After`, neither
 verified nor counted. The bucket only counts identifiers: past its threshold it paces each of its
-IPs, so one address cannot hold the other addresses of its network back. The bot challenge (PRO-19, #643) will replace it. In `development`
+IPs, so one address cannot hold the other addresses of its network back. While a soft threshold
+of its IP, its bucket or its client holds, a round also owes the bot challenge (rule 5), in
+addition to the delay: the store says so on the round's `continue` verdict (`softThreshold`). In `development`
 (`RoundContext.environment`, ADR-008 §5) every count is tenfold and every delay a tenth;
 `staging`, `production` and an unknown value meet the numbers above.
 
@@ -195,6 +206,44 @@ the same rules, for tests. An alert (an IP blocked, a bucket past its identifier
 its ratio, its budget or its rounds a minute) goes to `onAlert` once per window, with the key's
 HMAC, never an address. `reserveRegistrationStart` caps registration starts for the registration
 steps (#640).
+
+## The bot challenge
+
+`createCaptchaStep(provider)` (`src/lib/steps/captcha.ts`) is the `captcha` step (PRO-19, #643;
+ADR-017 Decision 7), passed in `steps`. It is due:
+
+- when a registration owes it: `registrations.challengeRequired` says the realm or the client
+  requires one, and the transaction has passed none (see [Registration](#registration));
+- while the transaction holds no unspent pass, when a soft threshold holds: the `limits` hook's
+  (`softThreshold` on its `continue` verdict) or the ladder's (`ladder.softThreshold`: the round's
+  identifier past the password's or the email code's free failures, `CHALLENGE_LADDER_COUNTERS`);
+- or when the optional `botChallenge` hook answers `due`.
+
+The puzzle it offers is kept in the transaction until it is answered, so the answer is read
+against what was offered. A right answer leaves a pass, which the next credential round spends,
+and the pending step resumes in the same round. A wrong one is refused with `captcha_failed` and
+a new puzzle, and counted as a failed round on the limiters (`limits.reserve`, settled as a
+failure), so a stream of wrong answers meets the hard 429. The answer, `captcha_token`, is at most
+4096 bytes, and is never logged, audited or put in an error.
+
+A `BotChallengeProvider` issues the params and checks a token; a throw is an outage, which refuses
+the round. Two exist:
+
+- `createProofOfWorkProvider({ difficulty })`, the default: a 256-bit random `challenge`, solved by
+  the smallest decimal nonce whose SHA-256 over `<challenge>:<nonce>` starts with `difficulty`
+  zero bits (1 to 32; the realm's `botChallenge.difficulty`, 18 by default, about 2^18 hashes).
+  The server checks it in one hash. The page's solver is `solveProofOfWork` in
+  `@qauth-labs/shared-interaction-client`, served from the realm origin.
+- `createSiteVerifyChallengeProvider` in `@qauth-labs/fastify-plugin-sign-in-engine`: a hosted
+  provider that takes a form `POST` of the secret and the token and answers `success`, reached
+  through the egress client at the one verify URL the operator configured. A `false` whose
+  `error-codes` blame the secret, the site key or the provider is an outage, not a wrong token.
+
+A provider's `params` learns the transaction's `flow`, so a deployment can pick one by flow: the
+auth server answers a password reset with the proof of work even when a hosted provider is
+configured, since that provider's script may run on the sign-in and sign-up pages only (ADR-019
+Decision 5). The callback round of an upstream provider (#639) is never held for a challenge: it
+carries the provider's proof, which a challenge would throw away.
 
 ## The email code
 
@@ -240,6 +289,11 @@ The transaction keeps its flow from round 0: a round of another flow ends it.
   `request_refused` with `registration_not_allowed` (`REGISTRATION_NOT_ALLOWED`), audited as
   `registration_closed`, and nothing is mailed or written. An engine or a transport that cannot
   serve the identifier, `email_code` and `new_password` steps answers `redirect`.
+- **The bot challenge**, after the gate, when `registrations.challengeRequired` says the realm
+  (`botChallenge.requiredAtSignUp`) or the client (its operator-set `registration_challenge`)
+  requires one: the `captcha` step, once a transaction, before anything is mailed. A transport
+  that does not serve `captcha` is refused as `request_refused` with `registration_not_allowed`,
+  never sent to a browser in its place.
 - **The address**, alone: the identifier step, with no factor and no upstream provider beside it.
 - **The mailbox**: an 8-digit `email_code` with the purpose `verify_account`, the same step for a
   new address and for one an account holds, in body and in timing. The first code is a
@@ -381,8 +435,10 @@ authenticator.
 
 - The per-transaction budgets of the FiPA `auth_session` (rounds, failures per step) are #647's.
 - An answer is read against the params the engine computes for the round, not a stored copy of the
-  ones it offered: a challenge handler whose params change every round needs the offered params kept
-  first.
+  ones it offered. The `captcha` step keeps its offered params in the transaction (#643); another
+  challenge handler whose params change every round needs the same first.
+- ADR-017 Decision 7 counts an end-user IP that changes within a transaction as a soft threshold.
+  The transaction does not hold the IP, so that one is not applied yet.
 - The policy has no storage yet: `NO_SECOND_FACTOR_POLICY` is the default until it has one.
 - A due password update in a transaction that holds no identifier (a discoverable passkey that
   proved the account by itself, #651) answers `redirect`: the mailbox code needs the identifier.

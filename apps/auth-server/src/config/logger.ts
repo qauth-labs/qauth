@@ -44,6 +44,9 @@ export const LOG_REDACT_PATHS = [
   // An emailed code, as an answer to the email_code step carries it (#638).
   'otp',
   '*.otp',
+  // A bot challenge's answer, as the captcha step carries it (#643).
+  'captcha_token',
+  '*.captcha_token',
   'secret',
   '*.secret',
   'authorization',

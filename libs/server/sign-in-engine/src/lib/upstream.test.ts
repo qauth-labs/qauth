@@ -13,6 +13,7 @@ import {
   passwordAccount,
   recordingAudit,
 } from '../testing/fakes';
+import { createProofOfWorkProvider } from './bot-challenge';
 import { createSignInEngine, type SignInEngineDependencies } from './engine';
 import type { Clock, SignInAccount, UpstreamProviderEntry } from './ports';
 import type {
@@ -22,6 +23,7 @@ import type {
   UpstreamProof,
   UpstreamStarter,
 } from './round';
+import { createCaptchaStep } from './steps/captcha';
 import type { AnyStepHandler } from './steps/handler';
 import type { SignInTransaction } from './transaction';
 
@@ -351,6 +353,25 @@ describe('the upstream provider’s callback (#639)', () => {
     if (done.kind !== 'complete') throw new Error('not complete');
     expect(done.signIn.identifier).toBeUndefined();
     expect(ctx.records).toContainEqual({ outcome: 'passed', step: 'upstream', userId: USER });
+  });
+
+  it('completes the callback when a bot challenge came due after the pick: the proof is not thrown away (#643)', async () => {
+    let due = false;
+    const built = build(upstreamAccount(), {
+      steps: [createCaptchaStep(createProofOfWorkProvider({ difficulty: () => 4 }))],
+      hooks: { botChallenge: async () => ({ kind: due ? 'due' : 'not_due' }) },
+    });
+    const ctx = context(built);
+    const transaction = await picked(built, ctx);
+    const other = await picked(built, ctx);
+    due = true;
+    const done = await built.engine.completeUpstream(transaction, proof(), ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { subject: USER } });
+    // A round that carries no proof meets the challenge as any other.
+    expect(await built.engine.advance(other, null, ctx)).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'captcha' } },
+    });
   });
 
   it('asks an account with a passkey for it, MFA off: upstream ranks below a passkey', async () => {

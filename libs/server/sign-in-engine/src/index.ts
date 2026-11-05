@@ -1,4 +1,18 @@
 export {
+  type BotChallengeProvider,
+  checkedChallengeParams,
+  createProofOfWorkProvider,
+  isProofOfWorkDifficulty,
+  leadingZeroBits,
+  PROOF_OF_WORK_DEFAULT_DIFFICULTY,
+  PROOF_OF_WORK_MAX_DIFFICULTY,
+  PROOF_OF_WORK_MIN_DIFFICULTY,
+  PROOF_OF_WORK_PROVIDER,
+  proofOfWorkInput,
+  type ProofOfWorkProviderOptions,
+  solvesProofOfWork,
+} from './lib/bot-challenge';
+export {
   answerEmailCode,
   countWrongEmailCode,
   EMAIL_CODE_HMAC_PATTERN,
@@ -180,6 +194,7 @@ export {
   type SendCapStore,
   type SendWindow,
 } from './lib/send-caps';
+export { createCaptchaStep } from './lib/steps/captcha';
 export {
   type AnyStepHandler,
   type ProvedAccount,

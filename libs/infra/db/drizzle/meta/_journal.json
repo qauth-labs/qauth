@@ -442,6 +442,13 @@
       "when": 1793892483469,
       "tag": "0062_user_session_epochs",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1793902123960,
+      "tag": "0063_client_registration_challenge",
+      "breakpoints": true
     }
   ]
 }

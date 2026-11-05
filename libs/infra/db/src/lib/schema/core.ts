@@ -825,6 +825,21 @@ export const oauthClients = pgTable(
      * another JSON type (CHECK `oauth_clients_hosted_flows_array`).
      */
     hostedFlows: jsonb('hosted_flows').$type<string[] | null>(),
+    /**
+     * Whether a registration this client starts must pass the bot challenge
+     * first (ADR-017 Decision 7, F1b's per-client requirement; issue #643),
+     * whatever the realm's `botChallenge.requiredAtSignUp` says. `true`
+     * requires it; NULL (every row no operator flagged) or `false` leaves it
+     * to the realm. A client that cannot serve the `captcha` step is then
+     * refused registration, never sent to the browser in its place.
+     *
+     * OPERATOR-SET, NEVER SELF-ASSERTED, like `hosted_flows`: the
+     * `db:seed-oauth-clients` manifest writes it, and later a
+     * `qauth:admin:security` operation (ADR-019 Decision 7). The repository's
+     * `create` and `upsertCimdClient` write NULL whatever they are given, and
+     * `UpdateOAuthClient` excludes it, so no route can set or clear it.
+     */
+    registrationChallenge: boolean('registration_challenge'),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),

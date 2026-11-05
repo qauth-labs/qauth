@@ -12,6 +12,9 @@
 # - Registration is off unless both allow it, on every round: the realm's accounts.allowSignUp, served by the
 #   Interaction API, and the client's operator-set hosted_flows naming register (a native client's
 #   first_party_policy.flows). Nothing is mailed or written before the gate passes.
+# - The realm's botChallenge.requiredAtSignUp or the client's operator-set registration_challenge asks for the bot
+#   challenge after the gate (#643; ADR-017 Decision 7), once a transaction: nothing is mailed before it is passed. A
+#   transport that does not serve the captcha step is refused, never sent to a browser in its place.
 # - The first answer is the same for every address: an 8-digit email_code with the purpose verify_account. Only the
 #   mail differs: a new address gets the code, an address an account holds gets the code and a notice that the account
 #   exists, and a disabled user's address gets nothing. A right code for a disabled user is answered as a wrong one,
@@ -40,7 +43,8 @@ scope:
   world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
   outOfView:
     - "what every round runs before the registration's gate, drawn by flows/core/sign-in: the transaction's checks,
-      the MFA policy, the limiters and the transport's request checks; and the bot challenge after the gate"
+      the MFA policy, the limiters and the transport's request checks; and the bot challenge a soft threshold asks for
+      after the gate, as for a sign-in"
     - "the authorization endpoint's prompt=create checks, drawn with the Interaction API's start of a registration in
       flows/core/authorization: the openid scope, the realm and the client allowing sign-up, no max_age; this flow
       starts once the interaction is open"
@@ -97,6 +101,28 @@ context:
     say:
       accepted: 'the send caps let the code through, or drop its mail quietly at the address-and-IP tier'
       capped: 'a tier that answers 429 is full'
+  # Whether the round owes the bot challenge a registration may require (#643).
+  challenge:
+    values: [notRequired, owed, passed]
+    initial: any
+    say:
+      notRequired: "neither the realm's botChallenge.requiredAtSignUp nor the client's registration_challenge is on"
+      owed: 'the realm or the client requires the challenge, and this transaction has not passed it'
+      passed: 'this transaction passed the challenge: a registration asks for it once'
+  # Whether the transport serves the captcha step: the Interaction API does; a FiPA client that did not list it does not.
+  captchaServed:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the transport does not serve the captcha step'
+      'true': 'the transport serves the captcha step'
+  # The bot challenge's provider, when the registration owes the challenge.
+  challengeProvider:
+    values: [answers, down]
+    initial: any
+    say:
+      answers: 'the provider can issue a challenge and check its answer'
+      down: 'no provider is registered, or the hosted provider cannot be reached or answers out of shape'
   # Who holds the address when the engine reads it.
   holder:
     values: [nobody, enabled, disabled]
@@ -157,6 +183,9 @@ context:
 guards:
   notServed: 'not stepsServed'
   closed: 'not realmAllows or not clientAllows'
+  challengeOwed: "challenge == 'owed'"
+  challengeOffered: "challenge == 'owed' and captchaServed and challengeProvider == 'answers'"
+  challengeUnanswerable: "challenge == 'owed' and captchaServed and challengeProvider == 'down'"
   startFull: "startCap == 'full'"
   capped: "sendCaps == 'capped'"
   heldByNobody: "holder == 'nobody'"
@@ -194,6 +223,7 @@ effects:
   audit: { set: { audited: true } }
   recordBreachFailure: { set: { breachFailureRecorded: true } }
   waitFloor: { set: { floorWaited: true } }
+  passChallenge: { set: { challenge: passed } }
   # what the operator, another transaction or the clock may have changed by the next round
   moveOn: { havoc: [realmAllows, clientAllows, startCap, sendCaps, holder, newPassword, race] }
 
@@ -267,12 +297,36 @@ states:
           target: registrationClosed
           effect: [audit, waitFloor]
           say: 'the realm or the client does not allow sign-up: refused, audited as registration_closed'
-        - target: dispatching
+        - target: checkingChallenge
           say: 'both allow it'
       FAIL.store:
         target: unavailable
         effect: [waitFloor]
         say: 'the realm or the client cannot be read'
+
+  checkingChallenge:
+    title: Ask whether the registration owes the bot challenge (rule 5)
+    description: >-
+      After the gate and before anything is mailed (#643; ADR-017 Decision 7): the realm's
+      botChallenge.requiredAtSignUp or the client's operator-set registration_challenge, read again on every round,
+      until this transaction passed the challenge. A store error refuses the round.
+    always:
+      - guard: challengeUnanswerable
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the challenge is owed and no provider can answer it: refused, never waved through'
+      - guard: challengeOffered
+        target: offeringChallenge
+        effect: [waitFloor]
+        say: 'the challenge is owed: the captcha step alone, and any other answer this round is ignored'
+      - guard: challengeOwed
+        target: registrationClosed
+        effect: [audit, waitFloor]
+        say: >-
+          the challenge is owed and the transport does not serve the captcha step: refused as registration_closed,
+          never sent to a browser in its place
+      - target: dispatching
+        say: 'no challenge is owed'
 
   dispatching:
     title: Go on from where the transaction is
@@ -518,6 +572,28 @@ states:
         effect: [newRound, moveOn, answerAddress]
         say: 'the person types an address'
 
+  offeringChallenge:
+    title: Ask for the bot challenge
+    description: >-
+      The captcha step alone, its puzzle kept in the transaction until it is answered. A right answer passes it, and
+      the registration goes on from where it was; a wrong one is refused with captcha_failed and a new puzzle, and
+      counted as a failed round on the limiters. The answer is never logged or audited.
+    response:
+      kind: step
+      body:
+        current: { step: captcha, params: "the provider's" }
+        alternatives: []
+        personal: {}
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer to the challenge, or a wrong one: the challenge again'
+      CHALLENGE_PASSED:
+        target: checkingSteps
+        effect: [newRound, moveOn, passChallenge]
+        say: 'a right answer to the challenge'
+
   offeringCode:
     title: Ask for the code
     description: >-
@@ -735,6 +811,9 @@ assertions:
     say: >-
       No registration step is offered, nothing is mailed and nothing is written unless the realm and the client allow
       it
+  - id: nothing-mailed-while-the-challenge-is-owed
+    never: "(mailQueued or accountCreated) and challenge == 'owed'"
+    say: 'Nothing is mailed or written while the registration owes the bot challenge'
   - id: no-account-before-the-code
     never: 'accountCreated and not mailboxProved'
     say: 'No account exists before the mailbox is proved'
@@ -772,9 +851,9 @@ assertions:
     say: 'Every refused answer and the created account write an audit record'
   - id: every-round-waits-the-floor
     never: >-
-      state in ['offeringAddress', 'offeringCode', 'codeRefused', 'offeringNewPassword', 'newPasswordRefused',
-      'registered', 'registrationClosed', 'redirected', 'startThrottled', 'sendCapped', 'registrationConflict',
-      'unavailable'] and not floorWaited
+      state in ['offeringAddress', 'offeringChallenge', 'offeringCode', 'codeRefused', 'offeringNewPassword',
+      'newPasswordRefused', 'registered', 'registrationClosed', 'redirected', 'startThrottled', 'sendCapped',
+      'registrationConflict', 'unavailable'] and not floorWaited
     say: >-
       Every round that ends here answers no earlier than 500 ms after it arrived, so a new address and an existing one
       take the same time

@@ -1,5 +1,6 @@
 import { ACCOUNTS_POLICY_GROUP } from './accounts';
 import { ADMIN_POLICY_GROUP } from './admin';
+import { BOT_CHALLENGE_POLICY_GROUP } from './bot-challenge';
 import { BRUTE_FORCE_POLICY_GROUP } from './brute-force';
 import {
   createMailTransportRule,
@@ -19,6 +20,7 @@ export type { MailTransportRuleOptions };
 export {
   ACCOUNTS_POLICY_GROUP,
   ADMIN_POLICY_GROUP,
+  BOT_CHALLENGE_POLICY_GROUP,
   BRUTE_FORCE_POLICY_GROUP,
   createMailTransportRule,
   MAIL_POLICY_GROUP,
@@ -43,6 +45,7 @@ export const BUILT_IN_POLICY_GROUPS = Object.freeze({
   accounts: ACCOUNTS_POLICY_GROUP,
   password: PASSWORD_POLICY_GROUP,
   bruteForce: BRUTE_FORCE_POLICY_GROUP,
+  botChallenge: BOT_CHALLENGE_POLICY_GROUP,
   registration: REGISTRATION_POLICY_GROUP,
   mail: MAIL_POLICY_GROUP,
   posture: POSTURE_POLICY_GROUP,

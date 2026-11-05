@@ -5,10 +5,12 @@
   "main": "src/index.ts",
   "dependencies": {
     "@qauth-labs/server-breached-passwords": "workspace:*",
+    "@qauth-labs/server-egress": "workspace:*",
     "@qauth-labs/server-federation": "workspace:*",
     "@qauth-labs/server-sign-in-engine": "workspace:*",
     "@qauth-labs/server-step-grammar": "workspace:*",
     "@qauth-labs/shared-events": "workspace:*",
+    "@qauth-labs/shared-validation": "workspace:*",
     "fastify": "catalog:",
     "fastify-plugin": "catalog:"
   },

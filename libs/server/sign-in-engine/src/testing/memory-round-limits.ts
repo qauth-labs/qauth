@@ -75,8 +75,10 @@ export function createMemoryRoundLimits(
     decisions.push(decision);
     return decision;
   };
-  const admitted = (): RoundLimitDecision => {
-    const decision: RoundLimitDecision = { kind: 'admitted', alerts: [] };
+  const admitted = (softThreshold = false): RoundLimitDecision => {
+    const decision: RoundLimitDecision = softThreshold
+      ? { kind: 'admitted', alerts: [], softThreshold: true }
+      : { kind: 'admitted', alerts: [] };
     decisions.push(decision);
     return decision;
   };
@@ -113,7 +115,35 @@ export function createMemoryRoundLimits(
         }
         rounds.set(`${at}:${rounds.size}:${Math.random()}`, at);
       }
-      return admitted();
+      // A soft threshold of any row asks for the bot challenge (#643): the
+      // same thresholds that start a credential round's delay.
+      let soft = false;
+      if (keys.endUserIpHmac !== undefined) {
+        const failures = log(
+          k(keys, 'ip', keys.endUserIpHmac, 'failures'),
+          p.endUserIp.windowMs,
+          at
+        );
+        soft ||= failures.size >= p.endUserIp.softFailures;
+        if (keys.ipBucketHmac !== undefined) {
+          const entries = log(
+            k(keys, 'bucket', keys.ipBucketHmac, 'failures'),
+            p.ipBucket.windowMs,
+            at
+          );
+          soft ||= distinct(entries) > p.ipBucket.maxIdentifiers;
+        }
+      }
+      if (keys.clientKey !== undefined) {
+        const client = keys.clientKey;
+        const credential = log(k(keys, 'client', client, 'credential'), p.client.windowMs, at);
+        const failures = log(k(keys, 'client', client, 'failures'), p.client.windowMs, at);
+        soft ||=
+          failures.size > p.client.failureBudget ||
+          (credential.size >= p.client.ratioMinRounds &&
+            failures.size * 100 > p.client.ratioPercent * credential.size);
+      }
+      return admitted(soft);
     },
 
     async reserveCredential(round) {
