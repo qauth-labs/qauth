@@ -387,6 +387,8 @@ export class FakeResets implements AccountResets {
   allows = true;
   readonly gates: { readonly realmId: string; readonly clientId: string }[] = [];
   readonly resets: AccountReset[] = [];
+  /** Each user's session epoch, as the resets advanced it. */
+  readonly epochOf = new Map<string, number>();
 
   constructor(
     readonly directory: FakeDirectory,
@@ -419,7 +421,9 @@ export class FakeResets implements AccountResets {
       ),
     });
     this.epochs?.advance(input.userId, this.now());
-    return { kind: 'reset' };
+    const epoch = (this.epochOf.get(input.userId) ?? 0) + 1;
+    this.epochOf.set(input.userId, epoch);
+    return { kind: 'reset', epoch };
   }
 }
 

@@ -242,6 +242,12 @@ export interface Recovered {
   /** The address the reset proved, normalised. */
   readonly identifier: string;
   readonly recovered: true;
+  /**
+   * The session epoch the reset advanced the account to. A later reset of
+   * the account ends what this one finished: the transport keeps it with
+   * the authorization request the reset completed.
+   */
+  readonly epoch: number;
   readonly registered?: undefined;
   readonly amr?: undefined;
   readonly authTime?: undefined;

@@ -286,6 +286,27 @@ describe('the reset’s first code', () => {
     expect(built.resets.resets).toEqual([]);
   });
 
+  it('takes nothing of an unclaimed account: no mail, and its right code is answered as a wrong one', async () => {
+    // Its address was never proved: someone other than the mailbox owner may
+    // have created it, and a reset would keep its sub (#641 ends it instead).
+    const built = build([[ADDRESS, passwordAccount(USER, PASSWORD, { verified: false })]]);
+    const ctx = context(built);
+    const code = await toCode(built, ctx);
+    expect(built.sender.sent.map((mail) => mail.reset)).toEqual(['withheld']);
+    const answered = await built.engine.advance(kept(code), codeAnswer(built.sender.last), ctx);
+    expect(answered).toMatchObject({
+      kind: 'step',
+      offer: { current: { ...RECOVERY_CODE, error: 'invalid_credentials' } },
+    });
+    expect(kept(answered).subject).toBeUndefined();
+    expect(ctx.records.at(-1)).toMatchObject({
+      outcome: 'refused',
+      step: 'email_code',
+      reason: 'account_unclaimed',
+    });
+    expect(built.resets.resets).toEqual([]);
+  });
+
   it('refuses a wrong code and keeps the transaction', async () => {
     const built = build();
     const ctx = context(built);
@@ -391,7 +412,6 @@ describe('a password-only account', () => {
       [
         ADDRESS,
         passwordAccount(USER, PASSWORD, {
-          verified: false,
           password: { disabled: true, hash: fakeHash(PASSWORD) },
           requiredActions: ['update_password'],
         }),
@@ -414,7 +434,7 @@ describe('a password-only account', () => {
     expect(done).toEqual({
       kind: 'complete',
       transaction: null,
-      signIn: { subject: USER, identifier: ADDRESS, recovered: true },
+      signIn: { subject: USER, identifier: ADDRESS, recovered: true, epoch: 1 },
     });
     expect(built.resets.resets).toEqual([
       {
@@ -519,7 +539,7 @@ describe('an account with another authenticator', () => {
     expect(done).toEqual({
       kind: 'complete',
       transaction: null,
-      signIn: { subject: USER, identifier: ADDRESS, recovered: true },
+      signIn: { subject: USER, identifier: ADDRESS, recovered: true, epoch: 1 },
     });
   });
 

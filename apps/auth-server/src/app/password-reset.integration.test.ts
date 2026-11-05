@@ -24,6 +24,7 @@ import {
   resetE2eState,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
+import { NOT_VALID_BEFORE_MARGIN_MS } from './helpers/account-validity';
 
 /**
  * THE OWNER'S PASSWORD RESET INSIDE THE ENGINE, AND THE SESSION EPOCH (#642;
@@ -45,6 +46,10 @@ import {
  * - The "password changed" notice goes out once per reset.
  * - A disabled user gets no mail and no change.
  *
+ * And what the reviews of #642 added: a code a sign-in with the old password
+ * minted is never exchanged after the reset, and an unclaimed account (its
+ * address never proved) is not reset until #641 ends such an account.
+ *
  * Locally the suite skips when no Docker daemon is reachable; on CI it fails
  * (`requireDockerOrSkip`).
  */
@@ -57,6 +62,7 @@ const OWNER_EMAIL = 'reset-owner@example.test';
 const UNKNOWN_EMAIL = 'nobody-here@example.test';
 const DISABLED_EMAIL = 'reset-disabled@example.test';
 const PASSKEY_EMAIL = 'reset-passkey@example.test';
+const UNCLAIMED_EMAIL = 'reset-unclaimed@example.test';
 const IDENTIFIER = stepUrn('identifier');
 const PASSWORD = stepUrn('password');
 const PASSWORD_RESET = stepUrn('password_reset');
@@ -417,8 +423,10 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     expect(oldTokens.statusCode, oldTokens.body).toBe(200);
     const oldRefreshToken = (oldTokens.json() as { refresh_token?: string }).refresh_token;
     if (oldRefreshToken === undefined) throw new Error('the sign-in started no refresh family');
-    // While its session lives, that browser gets a code without a sign-in.
-    expect(locationOf(await authorize(before.jar)).startsWith(REDIRECT_URI)).toBe(true);
+    // While its session lives, that browser gets a code without a sign-in:
+    // one such code is held, not exchanged, until after the reset.
+    const held = pkcePair();
+    const heldCode = await codeOf(before.jar, await authorize(before.jar, {}, held.challenge));
 
     // Two wrong passwords count on the password's ladder; a second factor's
     // counter and the password's disabled mark are set as the ladder sets them.
@@ -487,6 +495,10 @@ describe('the password reset and the session epoch (#642, real containers)', () 
       [userId]
     );
     expect(revoked.length).toBeGreaterThan(0);
+    // Nor is a code the old password's sign-in minted ever exchanged.
+    const heldExchange = await exchange(heldCode, held.verifier);
+    expect(heldExchange.statusCode, heldExchange.body).toBe(400);
+    expect(heldExchange.json()).toMatchObject({ error: 'invalid_grant' });
     // The older browser session is refused: the next request signs in again.
     const ended = await query<{ revoked_reason: string | null }>(
       'SELECT revoked_reason FROM sessions WHERE user_id = $1',
@@ -508,11 +520,15 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     const sent = await mailed(OWNER_EMAIL, 2);
     expect(sent.map((mail) => mail.template)).toEqual(['code', 'password_changed']);
 
-    // The new password signs in.
+    // The new password signs in. A session created within the margin after
+    // the reset (the clocks of two nodes may differ by that much) counts as
+    // older than it, so the sign-in waits it out.
+    await new Promise((resolve) => setTimeout(resolve, NOT_VALID_BEFORE_MARGIN_MS + 100));
     const next = await atPasswordStep(OWNER_EMAIL);
     const withNew = await answer(next.jar, next.id, PASSWORD, { password: NEW_PASSWORD_VALUE });
     expect(withNew.statusCode, withNew.body).toBe(303);
     expect(next.jar.header() ?? '').toContain('qauth_session');
+    expect(locationOf(await authorize(next.jar)).startsWith(REDIRECT_URI)).toBe(true);
   });
 
   it('offers no reset under prompt=login or max_age', async () => {
@@ -607,6 +623,38 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     await answer(other.jar, other.id, PASSWORD_RESET);
     await mailed(OWNER_EMAIL, 1);
     expect(mails.get(DISABLED_EMAIL) ?? []).toEqual([]);
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('mails an unclaimed account nothing and changes nothing of it, until #641 ends such an account', async () => {
+    const userId = await registerPasswordAccount(server(), UNCLAIMED_EMAIL);
+    // Its address never proved, as `/auth/register` leaves an account until
+    // its owner follows the mailed link.
+    await query(
+      `UPDATE user_credentials SET credential_data = credential_data || '{"email_verified": false}'::jsonb
+        WHERE user_id = $1 AND provider_type = 'password'`,
+      [userId]
+    );
+    mails.clear();
+    const snapshot = async () => ({
+      credentials: await query('SELECT * FROM user_credentials WHERE user_id = $1', [userId]),
+      epochs: await query('SELECT * FROM user_session_epochs WHERE user_id = $1', [userId]),
+    });
+    const before = await snapshot();
+
+    const { jar, id } = await atPasswordStep(UNCLAIMED_EMAIL);
+    const started = await answer(jar, id, PASSWORD_RESET);
+    // The ordinary answer: the code step, as for any address.
+    expect(started.statusCode, started.body).toBe(303);
+    expect((await read(id)).step).toBe(EMAIL_CODE);
+
+    // A reset of another account after it: its mail goes out, so the
+    // dispatch ran, and none went to the unclaimed account's address.
+    await registerPasswordAccount(server(), OWNER_EMAIL);
+    const other = await atPasswordStep(OWNER_EMAIL);
+    await answer(other.jar, other.id, PASSWORD_RESET);
+    await mailed(OWNER_EMAIL, 1);
+    expect(mails.get(UNCLAIMED_EMAIL) ?? []).toEqual([]);
     expect(await snapshot()).toEqual(before);
   });
 });

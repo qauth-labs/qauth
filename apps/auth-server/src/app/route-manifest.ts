@@ -350,6 +350,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'realmUpstreamProviders',
       'sessions',
       'userCredentials',
+      'userSessionEpochs',
       'users',
     ],
     load: () => import('./routes/oauth/authorize'),

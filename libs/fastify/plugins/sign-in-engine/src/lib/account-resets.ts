@@ -64,6 +64,10 @@ export interface AccountResetRepositories<Tx> {
   readonly refreshTokens: {
     revokeAllForUser(userId: string, reason?: string, tx?: Tx): Promise<void>;
   };
+  readonly authorizationCodes: {
+    /** Mark every unredeemed code of the user used, so none is exchanged. */
+    invalidateForUser(userId: string, tx?: Tx): Promise<number>;
+  };
   readonly userSessionEpochs: {
     advance(
       input: { readonly realmId: string; readonly userId: string; readonly at: number },
@@ -105,8 +109,10 @@ export interface AccountResetPolicy<Tx> {
    * What follows the commit, none of which can roll it back: end the user's
    * browser sessions, publish the new epoch to its cache, clear the
    * password's failure ladder and send the "password changed" notice. It
-   * must not throw: a failure is the policy's to report. The epoch in
-   * Postgres already refuses every older session and transaction.
+   * must not throw: a failure is the policy's to report. Every reader of
+   * the epoch that goes to Postgres refuses every older session and
+   * transaction at once; one that reads the cache does once the cached value
+   * is replaced or expires.
    */
   committed(reset: CommittedReset): Promise<void>;
 }
@@ -134,6 +140,9 @@ export const RESET_REFRESH_REVOCATION_REASON = 'password_reset';
  *   mailbox;
  * - removes the `update_password` required action;
  * - revokes every refresh family of the user;
+ * - invalidates every authorization code of the user not yet exchanged: a
+ *   code a sign-in with the old password minted would otherwise start a new
+ *   refresh family after the reset;
  * - advances the user's session epoch;
  * - records the reset's event.
  *
@@ -198,6 +207,7 @@ export function createRepositoryAccountResets<Tx>(
           );
           await stores.userRequiredActions.remove(realmId, userId, 'update_password', tx);
           await stores.refreshTokens.revokeAllForUser(userId, RESET_REFRESH_REVOCATION_REASON, tx);
+          await stores.authorizationCodes.invalidateForUser(userId, tx);
           const { epoch, advancedAt } = await stores.userSessionEpochs.advance(
             { realmId, userId, at: now() },
             tx
@@ -216,7 +226,7 @@ export function createRepositoryAccountResets<Tx>(
       );
       if ('refused' in outcome) return outcome.refused;
       await policy.committed(outcome.committed);
-      return { kind: 'reset' };
+      return { kind: 'reset', epoch: outcome.committed.epoch };
     },
   };
   return Object.freeze(resets);

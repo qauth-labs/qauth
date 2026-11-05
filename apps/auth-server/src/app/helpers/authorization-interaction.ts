@@ -406,8 +406,10 @@ export interface FinishedAuthorization {
 /**
  * Who an interaction's transaction decides the request for: the browser
  * session it holds, while it is live, still its user's and the account may
- * still use it; or the account it registered (#640), while the account is
- * enabled. `null` otherwise, and for a transaction in which nobody signed in.
+ * still use it; or the account it registered (#640) or reset (#642), while
+ * the account is enabled and no reset came after (its session epoch, read
+ * from Postgres, is still the one the transaction finished at). `null`
+ * otherwise, and for a transaction in which nobody signed in.
  */
 async function transactionSubject(
   fastify: FastifyInstance,
@@ -420,6 +422,10 @@ async function transactionSubject(
     // An account disabled since it was registered gets nothing; the request
     // goes on at a sign-in, which refuses it.
     if (user === undefined || accountCredentialRefusal(user, Date.now()) !== null) return null;
+    // A reset since the interaction finished ended whatever it finished: a
+    // consent still pending is no longer decided for the account.
+    const epoch = await fastify.repositories.userSessionEpochs.find(realmId, transaction.userId);
+    if ((epoch?.epoch ?? 0) > (transaction.sessionEpoch ?? 0)) return null;
     return { registered: true, realmId, userId: transaction.userId };
   }
   if (transaction.sid === undefined) return null;

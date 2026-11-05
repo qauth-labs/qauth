@@ -242,9 +242,11 @@ export type InteractionDecision =
    * or reset an account's password (#642): the interaction finishes for it,
    * as `finished` does, with no browser session, no `amr` and no
    * `auth_time`. Only an authorization interaction in which nobody has
-   * signed in registers or resets.
+   * signed in registers or resets. `sessionEpoch` is the account's session
+   * epoch it finished at: 0 for a new account, the one the reset advanced
+   * to for a reset.
    */
-  | { readonly kind: 'registered'; readonly userId: string };
+  | { readonly kind: 'registered'; readonly userId: string; readonly sessionEpoch: number };
 
 /** What {@link answerInteraction} did. */
 export type InteractionAnswerResult =
@@ -1038,6 +1040,7 @@ async function settleAnswer(
       userId: decision.userId,
       amr: [],
       registered: true,
+      sessionEpoch: decision.sessionEpoch,
     };
     await answered('finished', { ...taken, transaction: registered });
     return finishedOf(taken, registered, { secrets, expiresAt: taken.expiresAt });

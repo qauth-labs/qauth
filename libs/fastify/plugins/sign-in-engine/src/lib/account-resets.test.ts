@@ -83,6 +83,12 @@ function build(options: Options = {}) {
         write('refresh_families', { userId, reason }, tx);
       },
     },
+    authorizationCodes: {
+      invalidateForUser: async (userId, tx) => {
+        write('authorization_codes', { userId }, tx);
+        return 2;
+      },
+    },
     userSessionEpochs: {
       advance: async (input, tx) => {
         write('epoch', input, tx);
@@ -118,7 +124,7 @@ describe('createRepositoryAccountResets', () => {
   it('replaces the password, verifies the address and ends what the old one opened, in one transaction', async () => {
     const { resets, policy, committed } = build();
 
-    await expect(resets.reset(RESET)).resolves.toEqual({ kind: 'reset' });
+    await expect(resets.reset(RESET)).resolves.toEqual({ kind: 'reset', epoch: 3 });
 
     expect(policy.hash).toHaveBeenCalledWith(RESET.password);
     const reset = {
@@ -158,6 +164,8 @@ describe('createRepositoryAccountResets', () => {
         data: { userId: USER, reason: RESET_REFRESH_REVOCATION_REASON },
         tx: 'tx-1',
       },
+      // A code the old password's sign-in minted is never exchanged.
+      { what: 'authorization_codes', data: { userId: USER }, tx: 'tx-1' },
       { what: 'epoch', data: { realmId: REALM, userId: USER, at: AT }, tx: 'tx-1' },
       { what: 'event', data: reset, tx: 'tx-1' },
     ]);
@@ -189,7 +197,7 @@ describe('createRepositoryAccountResets', () => {
   });
 
   it('rolls everything back when a write fails, and runs nothing after it', async () => {
-    for (const failAt of ['refresh_families', 'epoch', 'event']) {
+    for (const failAt of ['refresh_families', 'authorization_codes', 'epoch', 'event']) {
       const { resets, writes, policy } = build({ failAt });
       await expect(resets.reset(RESET)).rejects.toThrow(`${failAt} failed`);
       expect(writes).toEqual([]);

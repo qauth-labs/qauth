@@ -181,6 +181,14 @@ export const interactionTransactionSchema = z.strictObject({
    * `auth_time`.
    */
   registered: z.literal(true).optional(),
+  /**
+   * With `registered`: the account's session epoch when the interaction
+   * finished (#642), 0 for a new account. A later reset of the account
+   * advances it, and the request is then no longer decided for the account:
+   * it asks for a sign-in. Joined version 2 without a new version: a record
+   * without it reads as epoch 0.
+   */
+  sessionEpoch: z.int().nonnegative().optional(),
 });
 
 export type InteractionTransaction = z.infer<typeof interactionTransactionSchema>;

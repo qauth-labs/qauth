@@ -278,6 +278,7 @@ export function createInteractionEngines(
       userAttributes: fastify.repositories.userAttributes,
       userRequiredActions: fastify.repositories.userRequiredActions,
       refreshTokens: fastify.repositories.refreshTokens,
+      authorizationCodes: fastify.repositories.authorizationCodes,
       userSessionEpochs: fastify.repositories.userSessionEpochs,
     },
     (work) => fastify.db.transaction(work),
@@ -305,8 +306,10 @@ export function createInteractionEngines(
         );
       },
       // None of these can undo the reset, and none may fail it: each failure
-      // is logged. The epoch in Postgres already refuses every older session
-      // and sign-in, whatever its cache says.
+      // is logged. The epoch in Postgres refuses every older session and
+      // sign-in, but a reader that finds the user's epoch cached keeps the
+      // old value until the publish replaces it or it expires (60 s), and
+      // the sessions the step below ends stay in their own cache if it fails.
       committed: async ({ realmId, userId, identifier, advancedAt }) => {
         const after = async (step: string, work: () => Promise<unknown>) => {
           try {
@@ -418,8 +421,14 @@ export function decisionOf(
         // the mailbox, not a factor, proved the account. Either way the
         // interaction finishes for the account with no browser session, no
         // `amr` and no `auth_time`, as a request decided for it with no
-        // sign-in: a step-up, `max_age` or `prompt=login` asks for one.
-        return { kind: 'registered', userId: result.signIn.subject };
+        // sign-in: a step-up, `max_age` or `prompt=login` asks for one. The
+        // session epoch it leaves the account at goes with the request: a
+        // later reset ends it (a new account has none).
+        return {
+          kind: 'registered',
+          userId: result.signIn.subject,
+          sessionEpoch: result.signIn.recovered === true ? result.signIn.epoch : 0,
+        };
       }
       // The sign-in is done: the interaction finishes with it, under a new
       // browser session (`authenticated` with no next step). The session's

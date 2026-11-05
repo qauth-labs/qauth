@@ -333,8 +333,12 @@ export interface AccountRegistrations {
 
 /** What replacing a password at a reset found (#642). */
 export type AccountResetOutcome =
-  /** The password is replaced, and everything the old one opened ended. */
-  | { readonly kind: 'reset' }
+  /**
+   * The password is replaced, and everything the old one opened ended. The
+   * session epoch the reset advanced the account to comes back: whatever the
+   * reset finishes is ended by a later reset of the account.
+   */
+  | { readonly kind: 'reset'; readonly epoch: number }
   /**
    * Nothing was written: the address's password credential is not the
    * subject's (`subject_mismatch`), or the user is disabled
@@ -538,6 +542,14 @@ export const SIGN_IN_AUDIT_REASONS = [
    * does.
    */
   'reset_since',
+  /**
+   * The account's address was never proved: it is unclaimed (ADR-017
+   * Decision 8), and someone other than the mailbox owner may have created
+   * it. A reset would keep its `sub`, so its right code is answered as a
+   * wrong one and nothing changes, until #641 ends such an account at this
+   * proof and gives the mailbox owner a new one.
+   */
+  'account_unclaimed',
 ] as const;
 export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 

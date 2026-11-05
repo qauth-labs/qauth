@@ -1844,9 +1844,18 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
 
       const readCandidate = () =>
         fromStore('accounts', () => deps.accounts.findByIdentifier(realmId, identifier));
-      /** Whether `candidate` is mailed and reset: an enabled account with a password. */
+      /**
+       * Whether `candidate` is mailed and reset: an enabled account with a
+       * password whose address was proved. An unclaimed account (an address
+       * never proved, ADR-017 Decision 8) is not: a reset would keep a `sub`
+       * someone other than the mailbox owner may have created, until #641
+       * ends such an account at this proof.
+       */
       const resettable = (candidate: SignInCandidate | null): candidate is SignInCandidate =>
-        candidate !== null && candidate.enabled && candidate.password !== null;
+        candidate !== null &&
+        candidate.enabled &&
+        candidate.verified &&
+        candidate.password !== null;
       if (!provedMailbox()) {
         const taken: { candidate: SignInCandidate | null } = { candidate: null };
         const answered = await codeRound(emailCodes, {
@@ -1859,7 +1868,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             taken.candidate = await readCandidate();
             const { candidate } = taken;
             if (candidate === null || candidate.password === null) return 'invalid_credentials';
-            return candidate.enabled ? null : 'account_disabled';
+            if (!candidate.enabled) return 'account_disabled';
+            return candidate.verified ? null : 'account_unclaimed';
           },
         });
         if ('result' in answered) return answered.result;
@@ -1910,6 +1920,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         if (!isAccount(reread)) return reread;
       }
 
+      const written: { epoch?: number } = {};
       const asked = await askNewPassword(
         updates,
         identifier,
@@ -1925,7 +1936,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
               normalization,
             })
           );
-          if (outcome?.kind === 'reset') return null;
+          if (outcome?.kind === 'reset') {
+            written.epoch = outcome.epoch;
+            return null;
+          }
           const reason = outcome?.kind === 'refused' ? outcome.reason : undefined;
           if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
             throw new SignInStoreUnavailableError('resets', new Error('not a reset'));
@@ -1934,10 +1948,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         }
       );
       if (asked !== null) return asked;
+      const { epoch } = written;
+      if (epoch === undefined) throw new Error('sign-in engine: a reset completed unwritten');
       return Object.freeze({
         kind: 'complete',
         transaction: null,
-        signIn: Object.freeze({ subject, identifier, recovered: true as const }),
+        signIn: Object.freeze({ subject, identifier, recovered: true as const, epoch }),
       });
     };
 

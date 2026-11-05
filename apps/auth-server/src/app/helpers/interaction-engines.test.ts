@@ -41,6 +41,7 @@ describe('decisionOf: a registration (#640)', () => {
     expect(decisionOf(reply, result, RECEIVED_AT)).toEqual({
       kind: 'registered',
       userId: 'user-new',
+      sessionEpoch: 0,
     });
   });
 
@@ -133,12 +134,14 @@ describe('a password reset (#642)', () => {
     const result: RoundResult = {
       kind: 'complete',
       transaction: null,
-      signIn: { subject: 'user-1', identifier: 'alice@example.com', recovered: true },
+      signIn: { subject: 'user-1', identifier: 'alice@example.com', recovered: true, epoch: 4 },
     };
 
+    // The epoch the reset advanced to goes with the request (a later reset ends it).
     expect(decisionOf(reply, result, RECEIVED_AT)).toEqual({
       kind: 'registered',
       userId: 'user-1',
+      sessionEpoch: 4,
     });
   });
 
