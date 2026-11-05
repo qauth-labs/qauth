@@ -31,6 +31,7 @@ import {
   createSsfStreamsRepository,
   createUserAttributesRepository,
   createUserCredentialsRepository,
+  createUserRequiredActionsRepository,
   createUsersRepository,
   type Database,
   type DatabasePool,
@@ -50,6 +51,7 @@ import {
   type SsfStreamsRepository,
   type UserAttributesRepository,
   type UserCredentialsRepository,
+  type UserRequiredActionsRepository,
   type UsersRepository,
 } from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';
@@ -74,6 +76,13 @@ declare module 'fastify' {
       apiKeys: ApiKeysRepository;
       userCredentials: UserCredentialsRepository;
       userAttributes: UserAttributesRepository;
+      /**
+       * The actions users must take at their next sign-in (#635): the admin
+       * API and the account console's "this wasn't me" add them, and the
+       * sign-in engine reads a user's pending actions and deletes each once
+       * it is done.
+       */
+      userRequiredActions: UserRequiredActionsRepository;
       /**
        * OID4VP presentation-request states (ADR-004, #233). Decorated
        * unconditionally like every other repository — the WALLET FLOW is gated
@@ -188,6 +197,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   apiKeys: true,
   userCredentials: true,
   userAttributes: true,
+  userRequiredActions: true,
   oid4vpRequestStates: true,
   events: true,
   eventDeliveries: true,
@@ -290,6 +300,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       apiKeys: () => createApiKeysRepository(database.db),
       userCredentials: () => createUserCredentialsRepository(database.db),
       userAttributes: () => createUserAttributesRepository(database.db),
+      userRequiredActions: () => createUserRequiredActionsRepository(database.db),
       oid4vpRequestStates: () => createOid4vpRequestStatesRepository(database.db),
       events: sharedEvents,
       eventDeliveries: () => createEventDeliveriesRepository(database.db),

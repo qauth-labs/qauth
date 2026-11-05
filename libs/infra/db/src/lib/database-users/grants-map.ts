@@ -133,6 +133,12 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   ssf_streams: { api: SIUD, delivery: S },
   user_attributes: { web: SIU, api: SIU },
   user_credentials: { web: SIU, api: SIU },
+  // The actions a user must take at the next sign-in (#635): the sign-in
+  // engine, on `web`, reads and deletes a user's rows; `api` (the account
+  // console's "this wasn't me") and `admin` (an admin's request) add them.
+  // `SELECT` stays with `INSERT` for the `RETURNING` of the write. Nothing
+  // updates a row.
+  user_required_actions: { web: SID, api: SI, admin: SI },
   user_roles: {},
   // `api` creates accounts; `web` and `api` record sign-ins; `admin` finds
   // the account behind an admin token. No role deletes one.

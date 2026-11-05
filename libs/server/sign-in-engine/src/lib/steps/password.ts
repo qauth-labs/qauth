@@ -9,6 +9,8 @@ import {
 } from '../hooks';
 import type {
   AccountDirectory,
+  BreachCheckVerdict,
+  BreachedPasswordCheck,
   PasswordHardAction,
   PasswordVerifier,
   SignInAccount,
@@ -27,6 +29,36 @@ export interface PasswordStepDependencies {
   readonly requireVerifiedAccount: boolean;
   /** Told when settling a reservation or the hard action failed: reported, never answered. */
   readonly onSettleFailure?: (error: SignInStoreUnavailableError) => void;
+  /** The realm's breach list (#635), checked once a password proved its account. */
+  readonly breachCheck?: BreachedPasswordCheck;
+}
+
+/**
+ * Check `password` against the realm's breach list. A port that throws, or
+ * answers something else than a verdict, is a failed check: no breach-list
+ * check ever blocks a sign-in (ADR-020 §3, #635).
+ */
+export async function checkBreachList(
+  check: BreachedPasswordCheck | undefined,
+  realmId: string,
+  password: string
+): Promise<BreachCheckVerdict> {
+  if (check === undefined) return Object.freeze({ kind: 'off' });
+  try {
+    const verdict = await check.check({ realmId, password });
+    switch (verdict?.kind) {
+      case 'off':
+      case 'not_listed':
+      case 'listed':
+        return Object.freeze({ kind: verdict.kind });
+      case 'failed':
+        return Object.freeze({ kind: 'failed', failure: verdict.failure });
+      default:
+        return Object.freeze({ kind: 'failed', failure: 'unavailable' });
+    }
+  } catch {
+    return Object.freeze({ kind: 'failed', failure: 'unavailable' });
+  }
 }
 
 /**
@@ -60,6 +92,11 @@ export interface PasswordStepDependencies {
  *    account whose address is not proved yet (verified inline, #638) the
  *    end-user IP is not made known and the mark stays: whoever chose the
  *    password need not own the address.
+ * 6. Check the right password against the realm's breach list (#635), as it
+ *    was verified: QAuth keeps only the hash, so this is the one moment it
+ *    can. The verdict travels with the proof; a listed password asks for a
+ *    new one in rule 8, and a check that fails changes nothing but the record.
+ *    Only a right password is checked, so no refusal costs a lookup.
  *
  * Settling and the hard action never change the answer: the attempt is
  * already counted as a failure, so a settle that fails is reported and leaves
@@ -134,12 +171,13 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
         password !== undefined && password !== null && !password.disabled ? password.hash : null;
       const presented = read.answer.password;
       let valid = false;
+      let asHashed = presented;
       if (hash === null) {
         await fromStore('passwords', () => deps.passwords.verifyDecoy(presented));
       } else {
         // In NFC when the credential records the marker of the one password
         // policy, as typed when it records none (#634).
-        const asHashed = passwordForVerification(presented, password?.normalization);
+        asHashed = passwordForVerification(presented, password?.normalization);
         valid = await fromStore('passwords', () => deps.passwords.verify(hash, asHashed));
       }
 
@@ -171,6 +209,7 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
       if (password?.ignoredMark === true && candidate.verified) {
         await hardAction(() => deps.hardAction.clearIgnoredMark(target(candidate.userId)));
       }
+      const breachCheck = await checkBreachList(deps.breachCheck, round.realmId, asHashed);
       return {
         kind: 'proved',
         account: {
@@ -178,6 +217,7 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
           enabled: candidate.enabled,
           verified: candidate.verified,
         },
+        ...(breachCheck.kind === 'off' ? {} : { breachCheck }),
       };
     },
   };

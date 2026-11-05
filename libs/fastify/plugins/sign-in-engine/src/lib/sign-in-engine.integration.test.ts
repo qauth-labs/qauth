@@ -18,6 +18,7 @@ import {
   createDatabase,
   createRealmsRepository,
   createUserCredentialsRepository,
+  createUserRequiredActionsRepository,
   createUsersRepository,
   type DatabaseInstance,
 } from '@qauth-labs/infra-db';
@@ -82,7 +83,12 @@ describe('the sign-in engine over the server adapters (real Postgres)', () => {
     const log = { error: () => undefined };
     engine = createSignInEngine({
       accounts: createRepositoryAccountDirectory(
-        { users, userCredentials, adminGrants: createAdminGrantsRepository(db) },
+        {
+          users,
+          userCredentials,
+          adminGrants: createAdminGrantsRepository(db),
+          userRequiredActions: createUserRequiredActionsRepository(db),
+        },
         log
       ),
       passwords: createArgon2PasswordVerifier(hasher, log),

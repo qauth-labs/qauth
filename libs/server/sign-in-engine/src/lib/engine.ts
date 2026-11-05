@@ -11,8 +11,16 @@ import {
   type StepName,
   stepNameOfUrn,
   type StepOffer,
+  type StepParams,
   transactionAmr,
 } from '@qauth-labs/server-step-grammar';
+import {
+  PASSWORD_MAX_LENGTH,
+  PASSWORD_MIN_LENGTH_FLOOR,
+  PASSWORD_NORMALIZATION_NFC,
+  PASSWORD_REJECTION_REASONS,
+  type PasswordRejectionReason,
+} from '@qauth-labs/shared-validation';
 
 import {
   answerEmailCode,
@@ -40,6 +48,9 @@ import { readIdentifier } from './identifier';
 import {
   type AccountDirectory,
   type AddressVerifier,
+  type BreachCheckFailure,
+  type BreachCheckVerdict,
+  type BreachedPasswordCheck,
   type Clock,
   type EmailCodeDigest,
   type IdentifierDigest,
@@ -48,6 +59,7 @@ import {
   type MfaPolicyReader,
   NO_HARD_ACTION,
   type PasswordHardAction,
+  type PasswordUpdates,
   type PasswordVerifier,
   type SignInAccount,
   type SignInAuditReason,
@@ -63,7 +75,7 @@ import type {
   StepVerdict,
 } from './steps/handler';
 import { createIdentifierStep } from './steps/identifier';
-import { createPasswordStep } from './steps/password';
+import { checkBreachList, createPasswordStep } from './steps/password';
 import { fromStore, SignInStoreUnavailableError } from './store';
 import {
   freezeTransaction,
@@ -104,7 +116,12 @@ import {
  *    (#638): an emailed code, never a factor, whatever
  *    `REQUIRE_VERIFIED_ACCOUNT` says, before the second factor the policy
  *    asks for. An account that lacks the second factor the policy requires
- *    gets the set-up step first, never a code.
+ *    gets the set-up step first, never a code. Then the forced password
+ *    update (#635): a password on the realm's breach list, or an
+ *    `update_password` required action, asks for a new password before the
+ *    sign-in completes, after a factor beyond the password (the account's
+ *    second factor or passkey) or, on an account whose only factor is its
+ *    password, a code mailed to its address.
  * 9. Complete: the transport mints the session or the code.
  *
  * Until a factor succeeds, nothing the engine answers depends on the account:
@@ -156,6 +173,21 @@ export interface SignInEngineDependencies {
    * is on, and signs in while it is off.
    */
   readonly emailCodes?: EmailCodeDependencies;
+  /**
+   * The realm's breach list (#635, ADR-020 §3): a right password is checked
+   * against it, and a listed one asks for a new password before the sign-in
+   * completes; a new password is checked against it too. A check that fails
+   * never blocks a sign-in: it is recorded as an `unchecked` audit record.
+   * Without it nothing is checked.
+   */
+  readonly breachCheck?: BreachedPasswordCheck;
+  /**
+   * The forced password update (#635): the realm's policy for a new password
+   * and the write that replaces it. Without it, a sign-in that owes a new
+   * password (a listed one, or an `update_password` required action) is
+   * answered with a redirect, never completed.
+   */
+  readonly passwordUpdates?: PasswordUpdates;
   readonly hooks?: SignInHooks;
   /**
    * The password ladder's hard action (#615): called when a failure counts at
@@ -216,8 +248,12 @@ const TRANSACTION_ENDED: RoundResult = Object.freeze({
   transaction: null,
 });
 
-/** The steps no role may take: an email code is never an authenticator (ADR-017 Decision 5). */
-const NEVER_A_FACTOR: readonly StepName[] = Object.freeze(['email_code']);
+/**
+ * The steps no role may take: an email code is never an authenticator
+ * (ADR-017 Decision 5), and a new password proves nothing; both are the
+ * engine's own.
+ */
+const NEVER_A_FACTOR: readonly StepName[] = Object.freeze(['email_code', 'new_password']);
 
 /**
  * An email code that verifies an account after its password: 6 digits
@@ -226,7 +262,17 @@ const NEVER_A_FACTOR: readonly StepName[] = Object.freeze(['email_code']);
  * no transport yet.
  */
 const VERIFY_ACCOUNT = 'verify_account' as const;
-const VERIFY_ACCOUNT_LENGTH = emailCodeLength(VERIFY_ACCOUNT, { afterPassword: true });
+
+/**
+ * An email code that proves the mailbox of an account whose only factor is
+ * its password, before a forced password update (#635): the purpose and the 8
+ * digits of a reset's code, as ADR-017 Decision 4 rule 8 asks ("as a reset
+ * does", decided 2026-10-23).
+ */
+const RECOVERY = 'recovery' as const;
+
+/** The email-code purposes of a sign-in: verifying an address, and proving a mailbox before a forced update. */
+type SignInCodePurpose = typeof VERIFY_ACCOUNT | typeof RECOVERY;
 
 /** Check the handlers a deployment adds, and order every handler by role. */
 function buildHandlers(deps: SignInEngineDependencies) {
@@ -240,6 +286,7 @@ function buildHandlers(deps: SignInEngineDependencies) {
     // and rule 8 verifies its address (#638, ADR-017 Decision 8).
     requireVerifiedAccount: deps.requireVerifiedAccount && deps.emailCodes === undefined,
     ...(deps.onUnavailable === undefined ? {} : { onSettleFailure: deps.onUnavailable }),
+    ...(deps.breachCheck === undefined ? {} : { breachCheck: deps.breachCheck }),
   });
   const extra = deps.steps ?? [];
   const byStep = new Map<StepName, AnyStepHandler>([
@@ -334,9 +381,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   const factorOf = (step: StepName) => handlers.byStep.get(step)?.factor;
   const { emailCodes } = deps;
   const ladder = deps.hooks?.ladder ?? NO_LADDER;
-  /** Whether the engine answers `step` itself: a handler's, or the email code of the inline verification. */
+  /**
+   * Whether the engine answers `step` itself: a handler's, the email code of
+   * the inline verification, or the new password of the forced update.
+   */
   const knows = (step: StepName) =>
-    handlers.byStep.has(step) || (step === 'email_code' && emailCodes !== undefined);
+    handlers.byStep.has(step) ||
+    (step === 'email_code' && emailCodes !== undefined) ||
+    (step === 'new_password' && deps.passwordUpdates !== undefined);
   /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
   const report = (port: string, error: unknown) => {
     try {
@@ -506,6 +558,25 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       await context.audit(Object.freeze(record));
     };
 
+    /**
+     * Record that `step`'s answer was accepted without its breach-list check,
+     * which could not be made (#635): never a refusal.
+     */
+    const unchecked = async (step: StepName, failure: BreachCheckFailure): Promise<void> => {
+      const { subject } = state.transaction;
+      if (subject === undefined)
+        throw new Error('sign-in engine: an unchecked step without a subject');
+      await context.audit(
+        Object.freeze({
+          outcome: 'unchecked',
+          step,
+          reason: 'breach_check_failed',
+          failure,
+          userId: subject,
+        })
+      );
+    };
+
     const ended = async (step: StepName, reason: SignInAuditReason): Promise<RoundResult> => {
       await audit('ended', step, reason);
       return TRANSACTION_ENDED;
@@ -565,9 +636,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           : Object.freeze({ ...offer.current, error } as StepOffer['current']);
       const handler = handlers.byStep.get(current.step) as StepHandler | undefined;
       const { identifier } = state.transaction;
-      // The email code's screen names the address the code went to.
+      // The email code's screen names the address the code went to, and the
+      // new password's the account it is for.
       const personal =
-        current.step === 'email_code'
+        current.step === 'email_code' || current.step === 'new_password'
           ? identifier === undefined
             ? {}
             : { identifier }
@@ -642,7 +714,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const prove = async (
       offer: StepOffer,
       account: ProvedAccount,
-      read: ReadAnswer
+      read: ReadAnswer,
+      breachCheck?: BreachCheckVerdict
     ): Promise<RoundResult | null> => {
       // Another user's proof ends the transaction, whatever that user's state.
       const { subject, identifier } = state.transaction;
@@ -675,8 +748,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           { step: read.step, params: read.params } as OfferedStep,
         ],
         authTime: clock.now(),
+        // A password on the realm's breach list must be replaced before the
+        // sign-in completes (#635): rule 8 asks for a new one.
+        ...(breachCheck?.kind === 'listed' ? { breachedPassword: true as const } : {}),
       };
       await audit('passed', read.step);
+      if (breachCheck?.kind === 'failed') await unchecked(read.step, breachCheck.failure);
       return null;
     };
 
@@ -706,7 +783,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           if (handler.role !== 'first_factor' && handler.role !== 'second_factor') {
             throw new Error(`sign-in engine: ${read.step} proved an account`);
           }
-          return prove(offer, verdict.account, read);
+          return prove(offer, verdict.account, read, verdict.breachCheck);
         case 'passed':
           if (handler.role !== 'challenge') throw new Error(`sign-in engine: ${read.step} passed`);
           state.transaction = {
@@ -738,7 +815,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * names, after a factor proved its account (#638; ADR-017 Decisions 5
      * and 8; `graphs/flows/core/account-verification/flow.yaml`). Returns the
      * round's result while the code is pending, or `null` once the address
-     * is verified and the rules go on.
+     * is verified and the rules go on. With the purpose `recovery` it proves
+     * the mailbox of a password-only account before a forced password update
+     * (#635), with the same rounds and an 8-digit code; the address is
+     * marked verified all the same, which it already is.
      *
      * - The first round mails a 6-digit code through the capped sender and
      *   offers `email_code` with `verify_account`; a cap that answers 429
@@ -759,8 +839,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      */
     const verifyAddress = async (
       codes: EmailCodeDependencies,
-      subject: string
+      subject: string,
+      purpose: SignInCodePurpose
     ): Promise<RoundResult | null> => {
+      const length = emailCodeLength(purpose, { afterPassword: true });
       const { identifier } = state.transaction;
       // A subject a discoverable factor named holds no address to mail, and
       // a transport that cannot serve the step cannot take the code.
@@ -786,14 +868,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
        */
       const issue = async (previous?: HeldEmailCode): Promise<RoundResult | null> => {
         const issuedAt = clock.now();
-        const code = generateEmailCode(VERIFY_ACCOUNT_LENGTH);
+        const code = generateEmailCode(length);
         const salt = generateEmailCodeSalt();
         const hmac = await digestCode(salt, code);
         const sent = await fromStore('sendCode', () =>
           sendCode({
             realmId,
             address: identifier,
-            purpose: VERIFY_ACCOUNT,
+            purpose,
             code,
             expiresInSeconds: EMAIL_CODE_TTL_MS / 1000,
             afterFirstFactor: true,
@@ -809,8 +891,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         state.transaction = {
           ...state.transaction,
           emailCode: heldEmailCode({
-            purpose: VERIFY_ACCOUNT,
-            length: VERIFY_ACCOUNT_LENGTH,
+            purpose,
+            length,
             salt,
             hmac,
             issuedAt,
@@ -1087,16 +1169,205 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const subject = state.transaction.subject;
     if (subject === undefined) throw new Error('sign-in engine: rule 8 without a subject');
     const readAccount = (): Promise<SignInAccount | null> =>
-      fromStore('accounts', () => deps.accounts.findByUserId(realmId, subject));
+      fromStore('accounts', async () => {
+        const read = await deps.accounts.findByUserId(realmId, subject);
+        // A directory that reads no required actions could let an owed
+        // update pass: a store fault, never an empty list.
+        if (read !== null && !Array.isArray(read.requiredActions)) {
+          throw new Error('an account without its required actions');
+        }
+        return read;
+      });
     const provenAccount = await readAccount();
     if (provenAccount === null || provenAccount.userId !== subject)
       return ended('identifier', 'subject_mismatch');
     if (!provenAccount.enabled) return ended('identifier', 'account_disabled');
     let account: SignInAccount = provenAccount;
+    // An `update_password` this transaction saw stays owed to it (#635):
+    // another sign-in that sets a new password, and so removes the action,
+    // never releases this one, which proved only the old password.
+    if (
+      provenAccount.requiredActions.includes('update_password') &&
+      state.transaction.updatePasswordRequired !== true &&
+      !state.transaction.verified.some((step) => step.step === 'new_password')
+    ) {
+      state.transaction = { ...state.transaction, updatePasswordRequired: true };
+    }
     // An address this transaction has still to verify: the account's is not
     // proved, and no code of this transaction proved it.
     const addressPending = (current: SignInAccount): boolean =>
       !current.verified && !state.transaction.verified.some((step) => step.step === 'email_code');
+    /** Whether this transaction set a new password: the forced update is done. */
+    const passwordUpdated = (): boolean =>
+      state.transaction.verified.some((step) => step.step === 'new_password');
+    /**
+     * Whether the sign-in must set a new password before it completes
+     * (#635): the password it proved is on the realm's breach list, or the
+     * account holds an `update_password` required action; and the account
+     * has a password to replace.
+     */
+    const updateDue = (current: SignInAccount): boolean =>
+      !passwordUpdated() &&
+      (state.transaction.breachedPassword === true ||
+        state.transaction.updatePasswordRequired === true ||
+        current.requiredActions.includes('update_password')) &&
+      current.factors.some((factor) => factor.type === 'password');
+    /** Whether the account has a factor beyond its password: a second factor or a passkey, disabled or not. */
+    const boundBeyondPassword = (current: SignInAccount): boolean =>
+      current.factors.some((factor) => factor.type !== 'password');
+    /** Whether this transaction proved a factor beyond the password. */
+    const provedBeyondPassword = (): boolean =>
+      state.transaction.verified.some((step) => {
+        const factor = factorOf(step.step);
+        return factor !== undefined && factor !== 'password';
+      });
+    /** Whether this transaction proved the account's mailbox: an email code answered right, for any purpose. */
+    const provedMailbox = (): boolean =>
+      state.transaction.verified.some((step) => step.step === 'email_code');
+
+    /**
+     * The `new_password` step of the forced update (#635; ADR-017 Decision 8):
+     * offered with `update_required` and the realm's minimum length. An
+     * answer is checked against the realm's password policy, then against
+     * its breach list (a listed one is refused as `blocklisted`, a check that
+     * fails accepts it and is recorded), and then replaces the password,
+     * clearing the `update_password` required action. Returns the round's
+     * result while the step is pending, or `null` once the password is set.
+     */
+    const askNewPassword = async (
+      updates: PasswordUpdates,
+      subject: string,
+      identifier: string
+    ): Promise<RoundResult | null> => {
+      const minLength = await fromStore('passwordUpdates', async () => {
+        const value = await updates.minLength(realmId);
+        if (
+          !Number.isInteger(value) ||
+          value < PASSWORD_MIN_LENGTH_FLOOR ||
+          value > PASSWORD_MAX_LENGTH
+        ) {
+          throw new Error('not a minimum password length');
+        }
+        return value;
+      });
+      const params: StepParams<'new_password'> = Object.freeze({
+        purpose: 'update_required',
+        min_length: minLength,
+        max_length: PASSWORD_MAX_LENGTH,
+      });
+      const offerWith = (reasons?: readonly PasswordRejectionReason[]): StepOffer =>
+        Object.freeze({
+          current: Object.freeze({
+            step: 'new_password',
+            params: Object.freeze(
+              reasons === undefined ? params : { ...params, reasons: [...reasons] }
+            ),
+          }),
+          alternatives: Object.freeze([]),
+        }) as StepOffer;
+      const offer = offerWith();
+      const refuse = async (
+        reasons: readonly PasswordRejectionReason[],
+        reason: SignInAuditReason
+      ): Promise<RoundResult> => {
+        await audit('refused', 'new_password', reason);
+        return offerStep(offerWith(reasons), 'password_rejected');
+      };
+      // An answer to another step is ignored, as every eager answer is.
+      if (turn.pending?.name !== 'new_password') return offerStep(offer);
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('new_password');
+      turn.pending = null;
+      const chosen = (read.answer as StepAnswer<'new_password'>).new_password;
+      const checked = await fromStore('passwordUpdates', async () => {
+        const result = await updates.check({ realmId, identifier, password: chosen });
+        if (result?.kind === 'rejected') {
+          const known = PASSWORD_REJECTION_REASONS as readonly unknown[];
+          if (
+            !Array.isArray(result.reasons) ||
+            result.reasons.length === 0 ||
+            !result.reasons.every((reason) => known.includes(reason)) ||
+            new Set(result.reasons).size !== result.reasons.length
+          ) {
+            throw new Error('not a password policy refusal');
+          }
+          return result;
+        }
+        if (
+          result?.kind !== 'accepted' ||
+          typeof result.password !== 'string' ||
+          result.normalization !== PASSWORD_NORMALIZATION_NFC
+        ) {
+          throw new Error('not a password policy check');
+        }
+        return result;
+      });
+      if (checked.kind === 'rejected') return refuse(checked.reasons, 'password_rejected');
+      // The new password must itself pass the breach list: a listed one is
+      // the blocklist's refusal (NIST SP 800-63B-4 §3.1.1.2 counts breach
+      // corpora among the values a verifier blocks).
+      const breach = await checkBreachList(deps.breachCheck, realmId, checked.password);
+      if (breach.kind === 'listed') return refuse(['blocklisted'], 'password_breached');
+      const replaced = await fromStore('passwordUpdates', () =>
+        updates.replace({
+          realmId,
+          userId: subject,
+          identifier,
+          password: checked.password,
+          normalization: checked.normalization,
+        })
+      );
+      if (replaced?.kind !== 'replaced') {
+        const reason = replaced?.kind === 'refused' ? replaced.reason : undefined;
+        if (reason !== 'account_disabled' && reason !== 'subject_mismatch') {
+          throw new SignInStoreUnavailableError('passwordUpdates', new Error('not a replacement'));
+        }
+        return ended('new_password', reason);
+      }
+      state.transaction = {
+        ...state.transaction,
+        verified: [
+          ...state.transaction.verified,
+          { step: 'new_password', params: read.params } as OfferedStep,
+        ],
+      };
+      await audit('passed', 'new_password');
+      if (breach.kind === 'failed') await unchecked('new_password', breach.failure);
+      return null;
+    };
+
+    /**
+     * The forced password update (#635; ADR-017 Decision 4, rule 8, decided
+     * 2026-10-23), once every factor the sign-in needs is proved. The
+     * password alone never sets a new one: an account with a factor beyond
+     * it proved that factor in the loop above; an account whose only factor
+     * is its password proves its mailbox first, with an 8-digit code as a
+     * reset asks, unless a code this transaction took for that mailbox (its
+     * inline verification) already did. A transport that cannot serve the
+     * steps, an engine built without them, and a transaction with no
+     * identifier to name the password are answered with a redirect: the
+     * sign-in never completes while an update is due.
+     */
+    const forcedUpdate = async (
+      current: SignInAccount,
+      subject: string
+    ): Promise<RoundResult | null> => {
+      const updates = deps.passwordUpdates;
+      const { identifier } = state.transaction;
+      if (updates === undefined || identifier === undefined || !served.has('new_password')) {
+        return redirect('step_not_available');
+      }
+      if (boundBeyondPassword(current)) {
+        if (!provedBeyondPassword()) {
+          throw new Error('sign-in engine: a forced update before the factor beyond the password');
+        }
+      } else if (!provedMailbox()) {
+        if (emailCodes === undefined) return redirect('step_not_available');
+        const result = await verifyAddress(emailCodes, subject, RECOVERY);
+        if (result !== null) return result;
+      }
+      return askNewPassword(updates, subject, identifier);
+    };
 
     for (;;) {
       const current: SignInAccount = account;
@@ -1120,7 +1391,22 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         // a code. One that has it verifies its address first: rule 8 asks for
         // the verification before the second factor (ADR-017 Decision 4).
         if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
-          const result = await verifyAddress(emailCodes, subject);
+          const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
+          if (result !== null) return result;
+        }
+      } else if (updateDue(current) && boundBeyondPassword(current) && !provedBeyondPassword()) {
+        // The forced update (#635): an account with a factor beyond its
+        // password proves it first, so a person who knows only the password,
+        // a listed one above all, sets no new one (ADR-017 Decision 4, rule
+        // 8). An email code never stands in for that factor; a disabled one
+        // still counts as bound, and with no usable one the sign-in cannot
+        // go on here.
+        needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(
+          (handler) =>
+            candidate(handler) && handler.factor !== undefined && handler.factor !== 'password'
+        );
+        if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
+          const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
           if (result !== null) return result;
         }
       }
@@ -1144,7 +1430,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // of verified it before that factor, above, or was redirected to the
     // set-up step: never a code in its place.
     if (emailCodes !== undefined && addressPending(account)) {
-      const result = await verifyAddress(emailCodes, subject);
+      const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
+      if (result !== null) return result;
+    }
+
+    // Rule 8: the forced password update (#635), after every factor the
+    // sign-in needs and the address verified, before any session or code.
+    if (updateDue(account)) {
+      const result = await forcedUpdate(account, subject);
       if (result !== null) return result;
     }
 

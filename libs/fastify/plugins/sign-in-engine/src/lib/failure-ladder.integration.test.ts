@@ -16,6 +16,7 @@ import {
   createDatabase,
   createRealmsRepository,
   createUserCredentialsRepository,
+  createUserRequiredActionsRepository,
   createUsersRepository,
   type DatabaseInstance,
 } from '@qauth-labs/infra-db';
@@ -142,7 +143,12 @@ describe('the failure ladder over real Redis and Postgres', () => {
     buildEngine = (store, timeoutMs) =>
       createSignInEngine({
         accounts: createRepositoryAccountDirectory(
-          { users, userCredentials, adminGrants: createAdminGrantsRepository(db) },
+          {
+            users,
+            userCredentials,
+            adminGrants: createAdminGrantsRepository(db),
+            userRequiredActions: createUserRequiredActionsRepository(db),
+          },
           silent,
           { hardActionArmed: armed }
         ),

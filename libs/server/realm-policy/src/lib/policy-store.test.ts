@@ -725,6 +725,7 @@ describe('createPolicyStore — seedRealms', () => {
           'tokens.developmentAccessTokenLifespanSeconds',
           'password.minLength',
           'password.minScore',
+          'password.breachListSource',
         ],
       },
     ]);

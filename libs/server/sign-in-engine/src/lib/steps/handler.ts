@@ -5,7 +5,13 @@ import type {
   StepParams,
 } from '@qauth-labs/server-step-grammar';
 
-import type { FactorType, SignInAccount, SignInAuditReason, SignInCandidate } from '../ports';
+import type {
+  BreachCheckVerdict,
+  FactorType,
+  SignInAccount,
+  SignInAuditReason,
+  SignInCandidate,
+} from '../ports';
 import type { SignInTransaction } from '../transaction';
 
 /**
@@ -76,7 +82,17 @@ export type StepVerdict =
    * ladder as a failure); the engine refuses any it still proves, with the
    * step's `invalid_credentials`, and never fixes the subject.
    */
-  | { readonly kind: 'proved'; readonly account: ProvedAccount }
+  | {
+      readonly kind: 'proved';
+      readonly account: ProvedAccount;
+      /**
+       * What the realm's breach list said of the password that proved it
+       * (#635): only the password step checks one, once the password is right.
+       * `listed` asks for a new password before the sign-in completes;
+       * `failed` is recorded and changes nothing else.
+       */
+      readonly breachCheck?: BreachCheckVerdict;
+    }
   /** The bot challenge was solved. */
   | { readonly kind: 'passed' }
   /** The answer was refused: the step is offered again with `error`, from the step's closed set. */

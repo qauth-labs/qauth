@@ -3,11 +3,13 @@ import {
   passwordCredentialDataSchema,
   WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/server-federation';
-import type {
-  AccountDirectory,
-  BoundFactor,
-  SignInAccount,
-  SignInCandidate,
+import {
+  type AccountDirectory,
+  type BoundFactor,
+  REQUIRED_ACTIONS,
+  type RequiredAction,
+  type SignInAccount,
+  type SignInCandidate,
 } from '@qauth-labs/server-sign-in-engine';
 
 /** A `user_credentials` row, as far as the directory reads it. */
@@ -46,6 +48,15 @@ export interface AccountDirectoryRepositories {
   readonly adminGrants: {
     listLive(realmId: string, userId: string): Promise<readonly unknown[]>;
   };
+  /** The account's pending required actions (#635, `user_required_actions`). */
+  readonly userRequiredActions: {
+    listForUser(realmId: string, userId: string): Promise<readonly { readonly action: string }[]>;
+  };
+}
+
+/** Whether `action` is one the engine knows; the table's check allows no other. */
+function isRequiredAction(action: string): action is RequiredAction {
+  return (REQUIRED_ACTIONS as readonly string[]).includes(action);
 }
 
 /** Where the directory reports a row it cannot read: data corruption, never a user's doing. */
@@ -85,7 +96,9 @@ export interface AccountDirectoryOptions {
  *   the password is checked, not four. It is verified when every password
  *   credential's `email_verified` says so (none has an address to prove: a
  *   passkey or a wallet is its primary identity); a credential whose data
- *   cannot be read is not verified.
+ *   cannot be read is not verified. It reads the account's pending required
+ *   actions too (#635): an `update_password` among them makes the sign-in
+ *   ask for a new password before it completes.
  * - A credential the failure ladder's hard action marked
  *   (`user_credentials.disabled_at`, #615) is disabled only while the hard
  *   action is armed, which is asked only when a mark is there. It still counts
@@ -157,6 +170,16 @@ export function createRepositoryAccountDirectory(
         await stores.userCredentials.findAllByUserIdAndType(user.id, WEBAUTHN_PROVIDER_TYPE)
       );
       const grants = await stores.adminGrants.listLive(realmId, user.id);
+      const pending = await stores.userRequiredActions.listForUser(realmId, user.id);
+      const requiredActions: RequiredAction[] = [];
+      for (const { action } of pending) {
+        if (isRequiredAction(action)) {
+          if (!requiredActions.includes(action)) requiredActions.push(action);
+        } else {
+          // The table's check makes this impossible; never a reason to drop the others.
+          log.error({ userId: user.id }, 'unknown required action on a user');
+        }
+      }
       const disabled = await disabledOf(realmId, [...passwords, ...passkeys]);
       const factors: BoundFactor[] = [
         ...passwords.map((_, index) => ({
@@ -178,6 +201,7 @@ export function createRepositoryAccountDirectory(
         admin: grants.length > 0,
         verified,
         factors: Object.freeze(factors),
+        requiredActions: Object.freeze(requiredActions),
       });
     },
   });

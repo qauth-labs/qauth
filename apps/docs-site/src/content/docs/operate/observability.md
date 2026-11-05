@@ -339,24 +339,25 @@ QAuth exposes Prometheus metrics in text exposition format at
 port. The endpoint includes default process/runtime metrics plus QAuth counters
 and gauges:
 
-| Metric                                             | Type    | Labels               | Meaning                                                                  |
-| -------------------------------------------------- | ------- | -------------------- | ------------------------------------------------------------------------ |
-| `qauth_login_attempts_total`                       | counter | `result`, `reason`   | Login outcomes (success/failure).                                        |
-| `qauth_tokens_issued_total`                        | counter | `type`, `grant_type` | Tokens issued by type and grant.                                         |
-| `qauth_client_secret_checks_shed_total`            | counter | none                 | Client-secret checks refused with 503 because the Argon2 queue was full. |
-| `qauth_job_runs_total`                             | counter | `job`, `result`      | Background job runs by outcome.                                          |
-| `qauth_events_oldest_unread_age_seconds`           | gauge   | none                 | Seconds the oldest committed event has been held back from readers.      |
-| `qauth_events_telemetry_dropped_total`             | counter | `reason`             | Event log records not exported; present only when the export is on.      |
-| `qauth_events_pending`                             | gauge   | `kind`               | Event deliveries not finished yet, by delivery route.                    |
-| `qauth_events_delivery_lag_seconds`                | gauge   | none                 | Seconds the oldest event that waits for a delivery has waited.           |
-| `qauth_events_delivery_attempts_total`             | counter | `kind`, `result`     | Event delivery attempts by route and result.                             |
-| `qauth_events_delivery_signer_held`                | gauge   | none                 | Deliveries this node holds because the signer is unavailable.            |
-| `qauth_events_delivery_signer_held_oldest_seconds` | gauge   | none                 | Seconds since this node first held the oldest of them.                   |
-| `qauth_events_retention_deleted_total`             | counter | `category`           | Events the retention job deleted, by category.                           |
-| `qauth_events_oldest_age_seconds`                  | gauge   | `category`           | Seconds since each category's oldest stored event was written.           |
-| `qauth_session_cache_lookups_total`                | counter | `result`             | Browser session cache reads; `hit` over all is the cache hit rate.       |
-| `qauth_session_postgres_reads_total`               | counter | `result`             | Postgres reads of a browser session.                                     |
-| `qauth_session_last_seen_writes_total`             | counter | `result`             | Conditional writes of a browser session's last-seen time.                |
+| Metric                                             | Type    | Labels                       | Meaning                                                                  |
+| -------------------------------------------------- | ------- | ---------------------------- | ------------------------------------------------------------------------ |
+| `qauth_login_attempts_total`                       | counter | `result`, `reason`           | Login outcomes (success/failure).                                        |
+| `qauth_tokens_issued_total`                        | counter | `type`, `grant_type`         | Tokens issued by type and grant.                                         |
+| `qauth_client_secret_checks_shed_total`            | counter | none                         | Client-secret checks refused with 503 because the Argon2 queue was full. |
+| `qauth_job_runs_total`                             | counter | `job`, `result`              | Background job runs by outcome.                                          |
+| `qauth_events_oldest_unread_age_seconds`           | gauge   | none                         | Seconds the oldest committed event has been held back from readers.      |
+| `qauth_events_telemetry_dropped_total`             | counter | `reason`                     | Event log records not exported; present only when the export is on.      |
+| `qauth_events_pending`                             | gauge   | `kind`                       | Event deliveries not finished yet, by delivery route.                    |
+| `qauth_events_delivery_lag_seconds`                | gauge   | none                         | Seconds the oldest event that waits for a delivery has waited.           |
+| `qauth_events_delivery_attempts_total`             | counter | `kind`, `result`             | Event delivery attempts by route and result.                             |
+| `qauth_events_delivery_signer_held`                | gauge   | none                         | Deliveries this node holds because the signer is unavailable.            |
+| `qauth_events_delivery_signer_held_oldest_seconds` | gauge   | none                         | Seconds since this node first held the oldest of them.                   |
+| `qauth_events_retention_deleted_total`             | counter | `category`                   | Events the retention job deleted, by category.                           |
+| `qauth_events_oldest_age_seconds`                  | gauge   | `category`                   | Seconds since each category's oldest stored event was written.           |
+| `qauth_session_cache_lookups_total`                | counter | `result`                     | Browser session cache reads; `hit` over all is the cache hit rate.       |
+| `qauth_session_postgres_reads_total`               | counter | `result`                     | Postgres reads of a browser session.                                     |
+| `qauth_session_last_seen_writes_total`             | counter | `result`                     | Conditional writes of a browser session's last-seen time.                |
+| `qauth_breached_password_checks_total`             | counter | `source`, `result`, `reason` | Breach-list checks of a password: hits, misses and failed checks.        |
 
 Label values, as emitted today. The plugin
 (`apps/auth-server/src/app/plugins/metrics.ts`) does not constrain them, so treat
@@ -398,6 +399,15 @@ each list as **open** — a new call site can add a value without a schema chang
   (60 seconds by default) per session. The session service that counts these
   is in place, but the hosted pages do not use it yet, so they stay at zero for
   now.
+- `source` on `qauth_breached_password_checks_total` is the realm's
+  `password.breachListSource`, `local` or `k_anonymity` (a realm set to `off`
+  checks nothing and counts nothing). `result` is `listed`, `not_listed` or
+  `failed`; `reason` is empty but on a failure, where it is `not_configured`
+  (the deployment did not set up the realm's source), `list_not_loaded` (the
+  local list has not loaded), `lookup_blocked` (the egress client refused the
+  range host), `lookup_failed` or `bad_response`. A failed check never blocks a
+  sign-in, a password update or a registration; each one is also written as the
+  `user.password_breach_check_failed` event.
 
 ### Who can read the metrics
 

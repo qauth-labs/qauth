@@ -19,6 +19,8 @@ const engine = createSignInEngine({
   identifierDigest, // the identifier's keyed HMAC
   requireVerifiedAccount: true, // REQUIRE_VERIFIED_ACCOUNT: decides only without emailCodes
   emailCodes: { digest, addresses }, // the inline verification of an unverified account (#638)
+  breachCheck, // BreachedPasswordCheck: the realm's breach list (#635); none checks nothing
+  passwordUpdates, // PasswordUpdates: the forced password update (#635); none redirects it
   hooks: { ladder }, // limits, request, botChallenge: later issues fill them; ladder: #615
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [], // the steps later issues add
@@ -84,7 +86,9 @@ authentication, run before the call). The first unmet rule produces the answer.
    meet answers `redirect`: an account that lacks the second factor the policy requires gets the
    set-up step, never a code. With `emailCodes`, an account whose address is not verified yet is
    verified inline before the second factor is asked for, or before completing when none is: see
-   [The email code](#the-email-code).
+   [The email code](#the-email-code). Then a password update that is due (a password on the breach
+   list, or an `update_password` required action) is asked for before completing: see
+   [The forced password update](#the-forced-password-update).
 8. Complete (rule 9).
 
 ## What holds for every round
@@ -172,6 +176,46 @@ verifies the address before the sign-in completes. The flow is graphed in
 An engine built without `emailCodes` keeps the gate: an unverified account's right password is
 refused like a wrong one under `REQUIRE_VERIFIED_ACCOUNT`, and signs in while it is off.
 
+## The forced password update
+
+With `breachCheck` (#635; ADR-018 §3, ADR-020 §3, ADR-017 Decision 8), a password that proved its
+account is checked against the realm's breach list, in the form it was verified (NFC when the
+credential records it). Only a right password is checked: a wrong one, and the dummy verification of
+an identifier no account holds, never reach the list. The port answers `off` (the realm's setting
+is off: nothing changes), `not_listed`, `listed` or `failed`; a port that throws counts as
+`failed` (`unavailable`). **A failed check never blocks a sign-in**: the sign-in goes on as if the
+password were not listed, and the round writes an `unchecked` audit record naming the failure
+(`breach_check_failed`). A listed password is remembered in the transaction (`breachedPassword`).
+
+A password update is due when the password proved the account and was listed, or the account holds
+an `update_password` required action (`SignInAccount.requiredActions`, read with the whole account;
+a directory that reads none fails closed). An action the transaction saw is remembered in it
+(`updatePasswordRequired`): another sign-in that sets a new password, and so removes the action,
+never releases one that proved only the old password. It is never asked for before the rest of
+rule 8:
+
+- An account with a factor beyond the password (TOTP, a passkey) proves that factor first, whatever
+  the MFA policy says; an email code never stands in for it. When no registered, served step can
+  ask for it, the answer is `redirect`.
+- A password-only account proves its mailbox first: an 8-digit `email_code` with the purpose
+  `recovery`, as a reset does. A code the transaction already took for the mailbox (the inline
+  verification of an unverified address) counts, and no second one is mailed.
+
+Then the engine asks for `new_password` with the purpose `update_required` (`min_length` from
+`passwordUpdates.minLength`, `max_length` 256). Until the update is written no code or session is
+issued, and every eager answer (a new password before the mailbox code or the factor) is ignored.
+A new password is checked against the realm's password policy and then the breach list; a refused
+one is asked for again with `password_rejected` and its reasons (a listed one as `blocklisted`),
+audited as `password_rejected` or `password_breached`. A failed check of the new password does not
+refuse it, and is recorded the same way. `passwordUpdates.replace` writes the new hash and clears
+the `update_password` required action; an account that was disabled meanwhile, or that is not the
+transaction's subject, ends the transaction. The update adds no `amr` value: the sign-in completes
+with the `amr` of the factors that proved it.
+
+An update the sign-in cannot run answers `redirect`: an engine built without `passwordUpdates`, a
+transport that does not serve `new_password`, a password-only account in an engine built without
+`emailCodes`, and a transaction that holds no identifier.
+
 ## Audit records
 
 Each processed step writes one record through the round's `audit` sink: `passed`, `refused` or
@@ -183,8 +227,10 @@ request checks' (`request_refused`) and a malformed answer (`invalid_answer`) ar
 records, and a transaction the round may not use (`transaction_invalid`, `transaction_expired`) an
 `ended` one that names nobody. Such a record names the step the answer names when the engine has a
 handler for it, else the identifier step. A record never holds a password, a code or the
-identifier. A sink that fails fails the round. The adapters map them onto
-`user.sign_in_step_passed` and `user.sign_in_failed`.
+identifier. A sink that fails fails the round. A breach-list check that failed adds an `unchecked`
+record after the step's own (`breach_check_failed`, with the failure), naming the subject. The
+adapters map them onto `user.sign_in_step_passed`, `user.sign_in_failed` and
+`user.password_breach_check_failed`.
 
 ## Adding a step
 
@@ -194,8 +240,9 @@ use it, its params and personal data, and how it verifies an answer the step gra
 read. A first factor may be `discoverable` (a passkey that names the account by itself): it is
 offered before any identifier, and after the password once one is held. A handler refuses a
 disabled account itself, settling its ladder as a failure. Passkeys (#651) and TOTP (#653) come this
-way; `totp` only as a second factor. An `email_code` step handler is refused when the engine is
-built: the email code is the engine's own, and never an authenticator.
+way; `totp` only as a second factor. An `email_code` or `new_password` step handler is refused when
+the engine is built: the email code and the forced update are the engine's own, and never an
+authenticator.
 
 ## Known gaps, for the issues that follow
 
@@ -204,3 +251,7 @@ built: the email code is the engine's own, and never an authenticator.
   ones it offered: a challenge handler whose params change every round needs the offered params kept
   first.
 - The policy has no storage yet: `NO_SECOND_FACTOR_POLICY` is the default until it has one.
+- A due password update in a transaction that holds no identifier (a discoverable passkey that
+  proved the account by itself, #651) answers `redirect`: the mailbox code needs the identifier.
+- Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
+  `complete_profile` wait for the steps that set them up.

@@ -207,56 +207,57 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 
 ## Event types
 
-| Type                                                                                                   | Category | Severity | Since  |
-| ------------------------------------------------------------------------------------------------------ | -------- | -------- | ------ |
-| [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                      | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                            | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                  | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.client_session_ended:v1-rc.0`](#userclient_session_ended-v1-rc0)                | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                  | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                        | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                          | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                          | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                  | user     | info     | v0.2.0 |
-| [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                                  | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.administrative:v1-rc.0`](#consentadministrative-v1-rc0)                      | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                                      | user     | info     | v0.2.0 |
-| [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                          | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                          | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:token.family_revoked:v1-rc.0`](#tokenfamily_revoked-v1-rc0)                          | user     | critical | v0.2.0 |
-| [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                                        | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)                    | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                              | user     | info     | v0.2.0 |
-| [`urn:qauth:event:token.introspection_failed:v1-rc.0`](#tokenintrospection_failed-v1-rc0)              | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:userinfo.served:v1-rc.0`](#userinfoserved-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:userinfo.request_failed:v1-rc.0`](#userinforequest_failed-v1-rc0)                    | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:client.created:v1-rc.0`](#clientcreated-v1-rc0)                                      | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.updated:v1-rc.0`](#clientupdated-v1-rc0)                                      | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.deleted:v1-rc.0`](#clientdeleted-v1-rc0)                                      | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)                        | user     | info     | v0.2.0 |
-| [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                  | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                  | admin    | info     | v0.2.0 |
-| [`urn:qauth:event:client.first_party_changed:v1-rc.0`](#clientfirst_party_changed-v1-rc0)              | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:client.verified_domain_changed:v1-rc.0`](#clientverified_domain_changed-v1-rc0)      | admin    | warning  | v0.2.0 |
-| [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                    | user     | info     | v0.2.0 |
-| [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                        | user     | info     | v0.2.0 |
-| [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                              | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)          | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.created:v1-rc.0`](#interactioncreated-v1-rc0)                            | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.answered:v1-rc.0`](#interactionanswered-v1-rc0)                          | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.cancelled:v1-rc.0`](#interactioncancelled-v1-rc0)                        | user     | info     | v0.2.0 |
-| [`urn:qauth:event:interaction.expired:v1-rc.0`](#interactionexpired-v1-rc0)                            | user     | info     | v0.2.0 |
-| [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                        | user     | warning  | v0.2.0 |
-| [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0) | user     | info     | v0.2.0 |
-| [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                        | admin    | critical | v0.2.0 |
-| [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                          | admin    | info     | v0.2.0 |
+| Type                                                                                                    | Category | Severity | Since  |
+| ------------------------------------------------------------------------------------------------------- | -------- | -------- | ------ |
+| [`urn:qauth:event:user.signed_in:v1-rc.0`](#usersigned_in-v1-rc0)                                       | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.sign_in_failed:v1-rc.0`](#usersign_in_failed-v1-rc0)                             | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.sign_in_step_passed:v1-rc.0`](#usersign_in_step_passed-v1-rc0)                   | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.password_breach_check_failed:v1-rc.0`](#userpassword_breach_check_failed-v1-rc0) | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.signed_out:v1-rc.0`](#usersigned_out-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.client_session_ended:v1-rc.0`](#userclient_session_ended-v1-rc0)                 | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.sign_out_failed:v1-rc.0`](#usersign_out_failed-v1-rc0)                           | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                   | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
+| [`urn:qauth:event:step_up.elevated:v1-rc.0`](#step_upelevated-v1-rc0)                                   | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.granted:v1-rc.0`](#consentgranted-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.administrative:v1-rc.0`](#consentadministrative-v1-rc0)                       | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.denied:v1-rc.0`](#consentdenied-v1-rc0)                                       | user     | info     | v0.2.0 |
+| [`urn:qauth:event:consent.revoked:v1-rc.0`](#consentrevoked-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.issued:v1-rc.0`](#tokenissued-v1-rc0)                                           | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.request_failed:v1-rc.0`](#tokenrequest_failed-v1-rc0)                           | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:token.family_revoked:v1-rc.0`](#tokenfamily_revoked-v1-rc0)                           | user     | critical | v0.2.0 |
+| [`urn:qauth:event:token.revoked:v1-rc.0`](#tokenrevoked-v1-rc0)                                         | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.revocation_failed:v1-rc.0`](#tokenrevocation_failed-v1-rc0)                     | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:token.introspected:v1-rc.0`](#tokenintrospected-v1-rc0)                               | user     | info     | v0.2.0 |
+| [`urn:qauth:event:token.introspection_failed:v1-rc.0`](#tokenintrospection_failed-v1-rc0)               | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:userinfo.served:v1-rc.0`](#userinfoserved-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:userinfo.request_failed:v1-rc.0`](#userinforequest_failed-v1-rc0)                     | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:client.created:v1-rc.0`](#clientcreated-v1-rc0)                                       | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.updated:v1-rc.0`](#clientupdated-v1-rc0)                                       | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.deleted:v1-rc.0`](#clientdeleted-v1-rc0)                                       | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.secret_rotated:v1-rc.0`](#clientsecret_rotated-v1-rc0)                         | user     | info     | v0.2.0 |
+| [`urn:qauth:event:client.suspended:v1-rc.0`](#clientsuspended-v1-rc0)                                   | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:client.suspension_lifted:v1-rc.0`](#clientsuspension_lifted-v1-rc0)                   | admin    | info     | v0.2.0 |
+| [`urn:qauth:event:client.first_party_changed:v1-rc.0`](#clientfirst_party_changed-v1-rc0)               | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:client.verified_domain_changed:v1-rc.0`](#clientverified_domain_changed-v1-rc0)       | admin    | warning  | v0.2.0 |
+| [`urn:qauth:event:api_key.created:v1-rc.0`](#api_keycreated-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:api_key.revoked:v1-rc.0`](#api_keyrevoked-v1-rc0)                                     | user     | info     | v0.2.0 |
+| [`urn:qauth:event:wallet.linked:v1-rc.0`](#walletlinked-v1-rc0)                                         | user     | info     | v0.2.0 |
+| [`urn:qauth:event:wallet.link_failed:v1-rc.0`](#walletlink_failed-v1-rc0)                               | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:wallet.presentation_received:v1-rc.0`](#walletpresentation_received-v1-rc0)           | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.created:v1-rc.0`](#interactioncreated-v1-rc0)                             | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.answered:v1-rc.0`](#interactionanswered-v1-rc0)                           | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.cancelled:v1-rc.0`](#interactioncancelled-v1-rc0)                         | user     | info     | v0.2.0 |
+| [`urn:qauth:event:interaction.expired:v1-rc.0`](#interactionexpired-v1-rc0)                             | user     | info     | v0.2.0 |
+| [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                         | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0)  | user     | info     | v0.2.0 |
+| [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                         | admin    | critical | v0.2.0 |
+| [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
 
 ### user.signed_in v1-rc.0
 
@@ -301,6 +302,20 @@ The sign-in engine accepted an answer to one step of a sign-in: the identifier, 
 | ---------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `step`           | string | yes      | The step whose answer was accepted.                                                                                                                                                                                            |
 | `identifierHmac` | string | no       | A keyed HMAC (HMAC-SHA-256, base64url) of the identifier the person typed, so repeated attempts at one identifier can be correlated without revealing it. Absent when the attempt named a known user, who is then the subject. |
+
+### user.password_breach_check_failed v1-rc.0
+
+QAuth could not check a password against the realm's breach list (the local list was not loaded, or the range lookup failed or was refused) and took it as not listed: a failed check never blocks a sign-in, a password update or a registration. The subject is the account whose password it was, when one exists.
+
+- Identifier: `urn:qauth:event:user.password_breach_check_failed:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.password_breach_check_failed.v1-rc.0.json](/schemas/events/user.password_breach_check_failed.v1-rc.0.json)
+
+| Member   | Type   | Required | Meaning                                                                                                                                                             |
+| -------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`   | string | no       | The sign-in step whose password was checked: the password, or a new password. Absent for a registration through `POST /auth/register`.                              |
+| `reason` | string | yes      | Why the check failed: `not_configured`, `list_not_loaded`, `lookup_blocked`, `lookup_failed`, `bad_response` or `unavailable`. The set may grow in a minor release. |
 
 ### user.signed_out v1-rc.0
 

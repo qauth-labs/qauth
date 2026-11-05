@@ -56,6 +56,14 @@ export interface AppMetrics {
    * `result` = `written` | `skipped` (another node wrote first) | `error`.
    */
   sessionLastSeenWrites: Counter<'result'>;
+  /**
+   * Breach-list checks of a password (#635), by `source` = `local` |
+   * `k_anonymity`, `result` = `listed` | `not_listed` | `failed`, and
+   * `reason` for a failure (`not_configured`, `list_not_loaded`,
+   * `lookup_blocked`, `lookup_failed`, `bad_response`), else empty. A realm
+   * whose source is `off` checks nothing and counts nothing.
+   */
+  breachedPasswordChecks: Counter<'source' | 'result' | 'reason'>;
 }
 
 declare module 'fastify' {
@@ -139,6 +147,13 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       registers: [registry],
     });
 
+    const breachedPasswordChecks = new Counter({
+      name: 'qauth_breached_password_checks_total',
+      help: 'Breach-list checks of a password by source and outcome.',
+      labelNames: ['source', 'result', 'reason'] as const,
+      registers: [registry],
+    });
+
     // The event store's read lag (#457): how long the oldest committed event
     // has been held back from readers by an older transaction still open. It
     // is read from the database at each scrape, so it exists only when the
@@ -211,6 +226,7 @@ export const metricsPlugin = fp<FastifyPluginOptions>(
       sessionCacheLookups,
       sessionPostgresReads,
       sessionLastSeenWrites,
+      breachedPasswordChecks,
     };
     fastify.decorate('metrics', metrics);
 

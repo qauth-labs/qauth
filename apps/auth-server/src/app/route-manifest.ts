@@ -55,6 +55,9 @@ import type { FastifyPluginAsync } from 'fastify';
  * - `failureLadder`: `fastify.passwordAttempts`, the per-account failure
  *   ladder the legacy login routes reserve on before a password is read
  *   (#615, ADR-017 Decision 7).
+ * - `breachedPasswords`: `fastify.breachedPasswords`, the breach list new and
+ *   presented passwords are checked against (#635): the local list, loaded
+ *   once per process, and the range lookup through the egress client.
  */
 export const ROLE_PLUGINS = [
   'dpop',
@@ -68,6 +71,7 @@ export const ROLE_PLUGINS = [
   'eventDelivery',
   'egress',
   'failureLadder',
+  'breachedPasswords',
 ] as const;
 
 /** One of {@link ROLE_PLUGINS}. */
@@ -128,7 +132,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
   {
     module: 'interaction-api',
     roles: ['web'],
-    plugins: ['dpop', 'egress', 'email', 'jwt', 'password', 'sessions'],
+    plugins: ['breachedPasswords', 'dpop', 'egress', 'email', 'jwt', 'password', 'sessions'],
     repositories: [
       'adminGrants',
       'authorizationCodes',
@@ -139,6 +143,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
       'sessions',
       'userAttributes',
       'userCredentials',
+      'userRequiredActions',
       'users',
     ],
     load: () => import('./routes/interaction-api'),
@@ -229,7 +234,7 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     module: 'auth/register',
     prefix: '/auth',
     roles: ['api'],
-    plugins: ['email', 'federation', 'password'],
+    plugins: ['breachedPasswords', 'email', 'federation', 'password'],
     repositories: [
       'emailVerificationTokens',
       'events',

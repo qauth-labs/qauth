@@ -23,7 +23,8 @@ import {
  * It holds no policy (the MFA policy is read on every round, ADR-017
  * Decision 4), no answer, no password, no code and no account state: only the
  * realm and the client it is for, when it began, who it is for, what it
- * proved, and the HMAC of an email code it mailed (#638).
+ * proved, the HMAC of an email code it mailed (#638), and whether the password
+ * it proved was on the realm's breach list (#635).
  *
  * It is not sealed: whoever can write it can claim any subject and any
  * verified step. The transport must keep it server-side, under an
@@ -86,6 +87,21 @@ export interface SignInTransaction {
    * no `authTime`.
    */
   readonly emailCode?: HeldEmailCode;
+  /**
+   * The password this transaction proved is on the realm's breach list
+   * (#635): the sign-in completes only once a new password is set (the
+   * `new_password` step with `update_required` among the verified steps). Set
+   * by the password step, since QAuth keeps only the hash and can check a
+   * password only when the person types it.
+   */
+  readonly breachedPassword?: true;
+  /**
+   * The account held an `update_password` required action when this
+   * transaction read it (#635): the sign-in completes only once this
+   * transaction set a new password, even if another sign-in updates the
+   * password, and so removes the action, meanwhile. Set at rule 8.
+   */
+  readonly updatePasswordRequired?: true;
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, and when it began. */
@@ -162,6 +178,8 @@ export const signInTransactionSchema = z.strictObject({
   verified: z.array(verifiedStepSchema).max(MAX_VERIFIED_STEPS),
   authTime: z.int().positive().optional(),
   emailCode: heldEmailCodeSchema.optional(),
+  breachedPassword: z.literal(true).optional(),
+  updatePasswordRequired: z.literal(true).optional(),
 });
 
 /**
@@ -171,12 +189,26 @@ export const signInTransactionSchema = z.strictObject({
 export function readSignInTransaction(value: unknown): SignInTransaction | null {
   const parsed = signInTransactionSchema.safeParse(value);
   if (!parsed.success) return null;
-  const { realmId, clientId, createdAt, identifier, subject, verified, authTime, emailCode } =
-    parsed.data;
+  const {
+    realmId,
+    clientId,
+    createdAt,
+    identifier,
+    subject,
+    verified,
+    authTime,
+    emailCode,
+    breachedPassword,
+    updatePasswordRequired,
+  } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
   // names the account by itself.)
   if ((authTime === undefined) !== (subject === undefined)) return null;
+  // Only a password that proved the subject is checked against a breach list.
+  if (breachedPassword === true && subject === undefined) return null;
+  // A required action is read only once a factor fixed the subject.
+  if (updatePasswordRequired === true && subject === undefined) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -187,6 +219,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     verified,
     ...(authTime === undefined ? {} : { authTime }),
     ...(emailCode === undefined ? {} : { emailCode }),
+    ...(breachedPassword === undefined ? {} : { breachedPassword }),
+    ...(updatePasswordRequired === undefined ? {} : { updatePasswordRequired }),
   });
 }
 

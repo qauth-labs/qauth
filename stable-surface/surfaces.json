@@ -411,6 +411,15 @@
       "stability": "stable"
     },
     {
+      "name": "event-user-password-breach-check-failed-v1",
+      "description": "The urn:qauth:event:user.password_breach_check_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #635).",
+      "format": "json-schema",
+      "role": "both",
+      "generator": "pnpm exec nx run shared-events:schema-export --skip-nx-cache",
+      "path": "apps/docs-site/public/schemas/events/user.password_breach_check_failed.v1-rc.0.json",
+      "stability": "stable"
+    },
+    {
       "name": "event-user-sign-out-failed-v1",
       "description": "The urn:qauth:event:user.sign_out_failed:v1-rc.0 event: the envelope with that type's data (ADR-018 §5, #456).",
       "format": "json-schema",

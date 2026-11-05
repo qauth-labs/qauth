@@ -191,7 +191,7 @@ describe('policy store over the realms table (integration)', () => {
     await store.update(realm.id, { password: { minScore: 4 } }, { expectedVersion: 2 });
     expect((await store.get(realm.id))?.policies).toEqual({
       ...read?.policies,
-      password: { minLength: 15, minScore: 4 },
+      password: { minLength: 15, minScore: 4, breachListSource: 'off' },
     });
   });
 
@@ -251,6 +251,7 @@ describe('policy store over the realms table (integration)', () => {
           ? {
               minLength: PASSWORD_POLICY_GROUP.minLength,
               minimumScore: PASSWORD_POLICY_GROUP.minScore,
+              breachListSource: PASSWORD_POLICY_GROUP.breachListSource,
             }
           : shape
       );
@@ -287,6 +288,7 @@ describe('policy store over the realms table (integration)', () => {
     expect((stored['policies'] as Record<string, unknown>)['password']).toEqual({
       minLength: 15,
       minimumScore: 4,
+      breachListSource: 'off',
     });
     expect((await next.seedRealms()).upgraded).toEqual([]);
     // A node of the previous release, during the roll, reads it with its own
@@ -391,11 +393,17 @@ describe('policy store over the realms table (integration)', () => {
     const report = await storeOn(db()).seedRealms();
 
     expect(report.completed).toEqual([
-      { realmId: id, realmName: 'partial', paths: ['password.minLength', 'password.minScore'] },
+      {
+        realmId: id,
+        realmName: 'partial',
+        paths: ['password.minLength', 'password.minScore', 'password.breachListSource'],
+      },
     ]);
     expect(await row(id)).toMatchObject({
       policies_version: (version as number) + 1,
-      policies: expect.objectContaining({ password: { minLength: 15, minScore: 3 } }),
+      policies: expect.objectContaining({
+        password: { minLength: 15, minScore: 3, breachListSource: 'off' },
+      }),
     });
     expect((await storeOn(db()).seedRealms()).completed).toEqual([]);
   });

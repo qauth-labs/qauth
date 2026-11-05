@@ -1,4 +1,6 @@
 import {
+  BREACH_LIST_SOURCES,
+  breachRangeUrlProblem,
   DEFAULT_PASSWORD_MIN_LENGTH,
   PASSWORD_MIN_LENGTH_CEILING,
   PASSWORD_MIN_LENGTH_FLOOR,
@@ -47,6 +49,55 @@ export const passwordEnvSchema = z.object({
       .min(PASSWORD_MIN_LENGTH_FLOOR)
       .max(PASSWORD_MIN_LENGTH_CEILING)
       .default(DEFAULT_PASSWORD_MIN_LENGTH)
+  ),
+
+  /**
+   * Where a new realm checks new and presented passwords against a breach
+   * list (#635, ADR-017 Decision 8): the seed of a new realm's
+   * `password.breachListSource`. `off` (the default), `local` (the list at
+   * `BREACHED_PASSWORD_LIST_PATH`) or `k_anonymity` (the range lookup at
+   * `BREACHED_PASSWORD_RANGE_URL`). Blank is unset, so the default.
+   */
+  PASSWORD_BREACH_LIST_SOURCE: z.preprocess(
+    blankAsUnset,
+    z.enum(BREACH_LIST_SOURCES).default('off')
+  ),
+
+  /**
+   * The operator's local breach list (#635): one SHA-1 of a breached password
+   * per line, 40 hex characters, optionally followed by `:<count>`, at most
+   * 5,000,000 distinct digests (a longer list does not load). The server
+   * loads it at boot, and again without a restart within 30 seconds of the
+   * file changing; a load that fails keeps the list in use. Unset or blank: no local list, and a
+   * realm whose source is `local` gets a failed check, which never blocks a
+   * sign-in.
+   */
+  BREACHED_PASSWORD_LIST_PATH: z.preprocess(blankAsUnset, z.string().optional()),
+
+  /**
+   * The URL of the k-anonymity range lookup (#635), such as
+   * `https://api.pwnedpasswords.com/range/`: the first five hex characters of
+   * a password's SHA-1 are appended to its path, and nothing else of the
+   * password leaves the server. Reached through the egress client as an
+   * operator destination. An absolute `https` URL with no user name or
+   * password, query or fragment, whose path ends with `/`; any other value
+   * fails the boot. Read as the
+   * URL parser writes it, so `https://host` is `https://host/` and the prefix
+   * always lands in the path. Unset or blank: no lookup, and a realm whose
+   * source is `k_anonymity` gets a failed check, which never blocks a sign-in.
+   */
+  BREACHED_PASSWORD_RANGE_URL: z.preprocess(
+    blankAsUnset,
+    z
+      .string()
+      .superRefine((value, ctx) => {
+        const problem = breachRangeUrlProblem(value);
+        if (problem !== undefined) {
+          ctx.addIssue({ code: 'custom', message: `BREACHED_PASSWORD_RANGE_URL ${problem}` });
+        }
+      })
+      .transform((value) => new URL(value).href)
+      .optional()
   ),
 
   /**

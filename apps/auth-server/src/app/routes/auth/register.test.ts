@@ -161,6 +161,10 @@ function createFastifyStub() {
     // The realm's password policy (#528, #634), read from the request's realm
     // row: the seeded defaults, 15 characters and score 2.
     policyStore: testPolicyStore(),
+    // The realm's breach list (#635): off, as a realm starts.
+    breachedPasswords: {
+      check: vi.fn().mockResolvedValue({ kind: 'off' }),
+    },
     passwordHasher: {
       hashPassword: vi.fn().mockResolvedValue('$argon2id$hashed'),
     },
@@ -721,6 +725,76 @@ describe('POST /auth/register', () => {
         }),
         TX
       );
+    });
+  });
+
+  describe("the realm's breach list (#635, ADR-020 §3)", () => {
+    const STRONG = 'a quiet violet tram crosses nine rivers';
+
+    async function registerAgainst(result: unknown) {
+      const { fastify, ctx } = createFastifyStub();
+      (fastify.breachedPasswords.check as unknown as Mock).mockResolvedValue(result);
+      await registerRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+      const request = { ...requestFixture(), body: { email: 'new@example.com', password: STRONG } };
+      const reply = createReply();
+      const error = await ctx.handler(request, reply).then(
+        () => undefined,
+        (caught: Error) => caught
+      );
+      return { fastify, error, reply };
+    }
+
+    it('refuses a listed password as blocklisted, before hashing or writing anything', async () => {
+      const { fastify, error } = await registerAgainst({ kind: 'listed', source: 'local' });
+
+      expect(error).toBeInstanceOf(WeakPasswordError);
+      expect((error as WeakPasswordError).reasons).toEqual(['blocklisted']);
+      expect(fastify.passwordHasher.hashPassword).not.toHaveBeenCalled();
+      expect(fastify.db.transaction).not.toHaveBeenCalled();
+      // The password as it is stored (NFC), in the request's realm.
+      expect(fastify.breachedPasswords.check).toHaveBeenCalledExactlyOnceWith(REALM, STRONG);
+    });
+
+    it('registers when the password is not listed, or the realm checks nothing', async () => {
+      for (const result of [{ kind: 'not_listed', source: 'k_anonymity' }, { kind: 'off' }]) {
+        const { fastify, error, reply } = await registerAgainst(result);
+        expect(error).toBeUndefined();
+        expect(reply.state.statusCode).toBe(202);
+        expect(fastify.db.transaction).toHaveBeenCalledOnce();
+      }
+      expect(emitUserEventMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:user.password_breach_check_failed:v1-rc.0',
+        expect.anything(),
+        expect.anything()
+      );
+    });
+
+    it('lets the registration through when the check fails, and records the event', async () => {
+      const { fastify, error, reply } = await registerAgainst({
+        kind: 'failed',
+        source: 'k_anonymity',
+        reason: 'lookup_failed',
+      });
+
+      expect(error).toBeUndefined();
+      expect(reply.state.statusCode).toBe(202);
+      expect(fastify.db.transaction).toHaveBeenCalledOnce();
+      expect(emitUserEventMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'urn:qauth:event:user.password_breach_check_failed:v1-rc.0',
+        { reason: 'lookup_failed' },
+        { realmId: REALM.id, userId: null, actor: 'user' }
+      );
+    });
+
+    it('checks nothing for a password the policy refused, or a body naming another realm', async () => {
+      const weak = await registerWith('abcabcabc');
+      expect(weak.fastify.breachedPasswords.check).not.toHaveBeenCalled();
+      const elsewhere = await registerWith(STRONG, { realmId: 'realm-2' });
+      expect(elsewhere.error).toBeInstanceOf(BadRequestError);
+      expect(elsewhere.fastify.breachedPasswords.check).not.toHaveBeenCalled();
     });
   });
 

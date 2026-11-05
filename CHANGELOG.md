@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Breached-password check and the forced password update** ([#635],
+  ADR-020 §3, ADR-017 Decisions 4 and 8, NIST SP 800-63B-4 §3.1.1.2). A realm
+  chooses in the new policy `password.breachListSource` which breach list
+  passwords are checked against: `off` (the default, seeded from
+  `PASSWORD_BREACH_LIST_SOURCE`; nothing changes), `local` (the operator's
+  file of SHA-1 digests at `BREACHED_PASSWORD_LIST_PATH`, at most 5,000,000,
+  loaded at boot and again within 30 seconds of the file changing) or `k_anonymity` (a range lookup at
+  `BREACHED_PASSWORD_RANGE_URL`, such as Have I Been Pwned's, that sends only
+  the first five hex characters of the password's SHA-1, padded, through the
+  egress client, with no redirect and a three-second limit). `POST
+  /auth/register` refuses a listed password as `blocklisted`. In the
+  Interaction API, a correct password on the list, or an account holding the
+  new `update_password` required action (table `user_required_actions`,
+  migration 0059: `update_password`, `setup_mfa`, `setup_passkey`,
+  `complete_profile`), does not complete the sign-in: an account with a second
+  factor proves it first, a password-only account an 8-digit `recovery` code
+  to its address (a `verify_account` code the sign-in already took counts),
+  and then the `new_password` step with `purpose: "update_required"` asks for
+  a new password that meets the realm's policy and is not on the list. Until
+  it is set, no code or session is issued. A check that fails (a list that
+  did not load, a lookup that failed or was refused) never blocks a sign-in, a
+  password update or a registration: it is counted on
+  `qauth_breached_password_checks_total` with its reason and written as the
+  new `user.password_breach_check_failed` event. The check at sign-in and the
+  forced update run only in the Interaction API, which `/oauth/authorize`
+  uses while `INTERACTION_UI_ENABLED` is on; the legacy `/auth/login` and
+  `/ui/login`, the default browser path, check neither the list nor
+  `update_password` until they move onto the sign-in engine ([#709]). No route
+  writes `update_password` yet: the admin API ([#700]) and the account's
+  "this wasn't me" ([#689]) will.
 - **Back-channel logout** ([#624], OpenID Connect Back-Channel Logout 1.0,
   ADR-019 Decisions 4, 8 and 9, ADR-017 F0). A client may register
   `backchannel_logout_uri` and `backchannel_logout_session_required` through
@@ -3005,11 +3035,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#631]: https://github.com/qauth-labs/qauth/issues/631
 [#633]: https://github.com/qauth-labs/qauth/issues/633
 [#634]: https://github.com/qauth-labs/qauth/issues/634
+[#635]: https://github.com/qauth-labs/qauth/issues/635
 [#637]: https://github.com/qauth-labs/qauth/issues/637
 [#639]: https://github.com/qauth-labs/qauth/issues/639
 [#642]: https://github.com/qauth-labs/qauth/issues/642
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#675]: https://github.com/qauth-labs/qauth/issues/675
+[#689]: https://github.com/qauth-labs/qauth/issues/689
+[#700]: https://github.com/qauth-labs/qauth/issues/700
+[#709]: https://github.com/qauth-labs/qauth/issues/709
 [#714]: https://github.com/qauth-labs/qauth/issues/714
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#845]: https://github.com/qauth-labs/qauth/issues/845

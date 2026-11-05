@@ -370,6 +370,45 @@ export const DEFAULT_PASSWORD_POLICY: PasswordPolicy = Object.freeze({
 });
 
 /**
+ * Where a realm checks new and presented passwords against a breach list
+ * (#635, ADR-017 Decision 8): nowhere, an operator-supplied list, or a
+ * k-anonymity range lookup. `password.breachListSource` holds one; ordered
+ * from loosest to strictest.
+ */
+export const BREACH_LIST_SOURCES = ['off', 'local', 'k_anonymity'] as const;
+
+/** One of {@link BREACH_LIST_SOURCES}. */
+export type BreachListSource = (typeof BREACH_LIST_SOURCES)[number];
+
+/**
+ * What is wrong with `value` as the URL of the breach list's k-anonymity range
+ * lookup (`BREACHED_PASSWORD_RANGE_URL`, #635), or `undefined`: it must be an
+ * absolute `https` URL with no user name or password, query or fragment, whose
+ * path ends with `/` (a bare origin's path is `/`), since the first five hex
+ * characters of a SHA-1 are appended to its path. The
+ * message names no value, so a caller may prefix the variable's name.
+ */
+export function breachRangeUrlProblem(value: string): string | undefined {
+  if (!URL.canParse(value) || new URL(value).protocol !== 'https:') {
+    return 'must be an absolute https URL';
+  }
+  const url = new URL(value);
+  if (url.username !== '' || url.password !== '') {
+    return 'must not carry a user name or a password';
+  }
+  // `https://host/?` parses with an empty search, so the raw text is checked.
+  if (value.includes('?') || value.includes('#')) {
+    return 'must not carry a query or a fragment';
+  }
+  // The prefix is appended to the path: `…/range` would ask for `…/range48D3F`,
+  // and every lookup would fail at run time instead of the boot.
+  if (!url.pathname.endsWith('/')) {
+    return "must end its path with '/'";
+  }
+  return undefined;
+}
+
+/**
  * What the password is chosen in, for the blocklist's context words (NIST SP
  * 800-63B-4 §3.1.1.2: "context-specific words, such as the name of the
  * service, the username, and derivatives thereof").

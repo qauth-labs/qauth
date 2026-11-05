@@ -185,6 +185,7 @@ describe('what each role loads (the boot-time list)', () => {
       'sessions',
       'egress',
       'failureLadder',
+      'breachedPasswords',
     ]);
   });
 

@@ -174,6 +174,8 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'user.sign_in_step_passed':
     'One step of a sign-in; the sign-in itself is the entry (`signed_in`).',
   'user.sign_out_failed': 'A refused sign-out changes nothing on the account.',
+  'user.password_breach_check_failed':
+    'A breach-list check QAuth could not make changes nothing on the account; the operator watches it.',
   'user.client_session_ended':
     'The notice to one app that a session ended, for back-channel logout; the end of the session is the entry.',
   'user.registered': 'The account’s creation, older than the log for most accounts.',
