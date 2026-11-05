@@ -58,10 +58,26 @@ export type EmailCodeSender = (mail: {
    * Absent for every code of a sign-in.
    */
   readonly registration?: RegistrationMail;
+  /**
+   * A reset's code (#642; ADR-017 Decision 8): whether it may be mailed. The
+   * step looks the same either way.
+   *
+   * - `account`: an enabled account holds the address with a password; the
+   *   mail carries the code.
+   * - `withheld`: any other address (no account, no password, a disabled
+   *   user). Nothing is mailed, as at a quiet send tier, and the code is
+   *   counted on every cap all the same.
+   *
+   * Absent for every code that is not a reset's.
+   */
+  readonly reset?: ResetMail;
 }) => Promise<EmailCodeSendOutcome>;
 
 /** What a registration's code mail says about its address (#640). */
 export type RegistrationMail = 'new_address' | 'account_exists' | 'withheld';
+
+/** Whether a reset's code may be mailed to its address (#642). */
+export type ResetMail = 'account' | 'withheld';
 
 /** What starting an upstream identity provider found (#639). */
 export type UpstreamStartOutcome =
@@ -150,20 +166,31 @@ export interface RoundContext {
   readonly upstreamRoute?: UpstreamProviderEntry;
   /**
    * The flow the request asked for, frozen at round 0: `register` for
-   * `prompt=create` (#640; ADR-017 Decision 8), absent for a sign-in. A
-   * round of another flow than its transaction's ends the transaction.
+   * `prompt=create` (#640; ADR-017 Decision 8), `reset` for a transport that
+   * starts a reset on its own (the FiPA endpoint's `password_reset` start,
+   * #642), absent for a sign-in. A round of another flow than its
+   * transaction's ends the transaction, with one exception: a sign-in that
+   * turned into a reset at its password step (#642) goes on as a reset on
+   * the rounds of a sign-in.
    */
   readonly flow?: SignInFlow;
+  /**
+   * The request asks for a fresh sign-in: `max_age` or `prompt=login`. A
+   * reset proves no authenticator, so it can never satisfy one (ADR-017
+   * Decision 8): it is never offered, and a reset transaction is answered
+   * with a redirect (#642).
+   */
+  readonly freshSignIn?: boolean;
 }
 
-/** A flow other than a sign-in: registration (#640). */
-export type SignInFlow = 'register';
+/** A flow other than a sign-in: registration (#640), or the owner's password reset (#642). */
+export type SignInFlow = 'register' | 'reset';
 
 /**
- * A completed sign-in or registration: what the transport mints a session or
- * a code from.
+ * A completed sign-in, registration or reset: what the transport mints a
+ * session or a code from.
  */
-export type CompletedSignIn = SignedIn | Registered;
+export type CompletedSignIn = SignedIn | Registered | Recovered;
 
 /** A completed sign-in. */
 export interface SignedIn {
@@ -179,6 +206,7 @@ export interface SignedIn {
   /** When the last authenticator succeeded, in epoch milliseconds. */
   readonly authTime: number;
   readonly registered?: undefined;
+  readonly recovered?: undefined;
 }
 
 /**
@@ -194,6 +222,33 @@ export interface Registered {
   /** The address it was registered with, normalised. */
   readonly identifier: string;
   readonly registered: true;
+  readonly recovered?: undefined;
+  readonly amr?: undefined;
+  readonly authTime?: undefined;
+}
+
+/**
+ * A completed password reset (#642; ADR-017 Decisions 8 and 10): the
+ * account's mailbox, and every other authenticator it holds, were proved,
+ * and its password replaced. A reset proves the mailbox, not an
+ * authenticator, so it carries no `amr` and no `auth_time`, and the
+ * transport starts no session that could satisfy `max_age` or
+ * `prompt=login`: for a password-only account it is an email-recovery
+ * sign-in at mailbox assurance.
+ */
+export interface Recovered {
+  /** The account's user id. */
+  readonly subject: string;
+  /** The address the reset proved, normalised. */
+  readonly identifier: string;
+  readonly recovered: true;
+  /**
+   * The session epoch the reset advanced the account to. A later reset of
+   * the account ends what this one finished: the transport keeps it with
+   * the authorization request the reset completed.
+   */
+  readonly epoch: number;
+  readonly registered?: undefined;
   readonly amr?: undefined;
   readonly authTime?: undefined;
 }
@@ -210,7 +265,8 @@ export type RefusalReason =
   | 'invalid_answer'
   /**
    * The transport's request checks refused the round, with their own code;
-   * or the registration gate did, with `registration_not_allowed` (#640).
+   * or the registration gate did, with `registration_not_allowed` (#640); or
+   * the reset gate, with `reset_not_allowed` (#642).
    */
   | 'request_refused';
 

@@ -22,6 +22,8 @@ const engine = createSignInEngine({
   breachCheck, // BreachedPasswordCheck: the realm's breach list (#635); none checks nothing
   passwordUpdates, // PasswordUpdates: the forced password update (#635); none redirects it
   registrations, // AccountRegistrations: registration's gate and account creation (#640)
+  resets, // AccountResets: the password reset's gate and its write (#642)
+  sessionEpochs, // SessionEpochReader: each user's last reset, read on every round (#642)
   hooks: { ladder, limits }, // ladder: #615; limits: #636; request, botChallenge: later issues
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [], // the steps later issues add
@@ -37,18 +39,19 @@ const result = await engine.advance(transaction, answer, {
   environment, // the client's effective environment (ADR-008 §7): development relaxes the limits
   audit, // where the round's audit records go
   sendCode, // the capped sender of email codes (#637), bound to the request
-  flow, // 'register' for prompt=create (#640); absent for a sign-in
+  flow, // 'register' for prompt=create (#640), 'reset' for a reset (#642); absent for a sign-in
+  freshSignIn, // max_age or prompt=login: a reset is never offered (#642)
 });
 ```
 
 `advance` returns one of:
 
-| `kind`     | Meaning                                                                                                     |
-| ---------- | ----------------------------------------------------------------------------------------------------------- |
-| `step`     | the next step, or the same step again with its error: a `StepOffer` and its personal data                   |
-| `complete` | the sign-in is complete: `subject`, `identifier`, `amr`, `authTime`; a registration's: `registered`, no amr |
-| `redirect` | continue elsewhere: a step the sign-in needs does not exist yet or is not served (FiPA: `redirect_to_web`)  |
-| `refused`  | `transaction_ended`, `throttled`, `unavailable`, `invalid_answer` or `request_refused`                      |
+| `kind`     | Meaning                                                                                                                             |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `step`     | the next step, or the same step again with its error: a `StepOffer` and its personal data                                           |
+| `complete` | the sign-in is complete: `subject`, `identifier`, `amr`, `authTime`; a registration's: `registered`, a reset's: `recovered`, no amr |
+| `redirect` | continue elsewhere: a step the sign-in needs does not exist yet or is not served (FiPA: `redirect_to_web`)                          |
+| `refused`  | `transaction_ended`, `throttled`, `unavailable`, `invalid_answer` or `request_refused`                                              |
 
 The transaction it returns is the one to keep for the next round; `signInTransactionSchema` checks
 it when it is read back. It holds the realm and the client it is for, when round 0 began, the
@@ -99,6 +102,7 @@ authentication, run before the call). The first unmet rule produces the answer.
 8. Complete (rule 9).
 
 A registration runs the same rules with its own gate and steps: see [Registration](#registration).
+So does a password reset: see [Password reset](#password-reset).
 
 ## What holds for every round
 
@@ -260,6 +264,51 @@ The transaction keeps its flow from round 0: a round of another flow ends it.
   proved, since the same person proved the mailbox and the password. Until PRO-17 (#641) ends an
   unclaimed account instead, that holds for one too.
 
+## Password reset
+
+With `resets`, `emailCodes` and `passwordUpdates`, the engine resets a password (#642; ADR-017
+Decision 8). The flow is graphed in
+[`graphs/flows/core/password-reset/flow.yaml`](../../../graphs/flows/core/password-reset/flow.yaml).
+A reset starts from the `password_reset` step: the alternative rule 7 offers beside the first
+factors, the same for every address, or round 0 of a round whose `flow` is `reset`. Its answer
+turns the transaction into a reset; a `login_hint` it brings must name the address the transaction
+holds, else the transaction ends. A transaction keeps its flow from then on, and a reset never
+goes upstream.
+
+- **The gate**, on every round: `resets.allowed` must say that the realm and the client allow the
+  `reset` flow. Closed, the reset is not offered, and a round of a reset is refused as
+  `request_refused` with `reset_not_allowed` (`RESET_NOT_ALLOWED`), audited as `reset_closed`. An
+  engine or a transport that cannot serve `password_reset`, `email_code` and `new_password` does
+  not offer it, and answers a reset `redirect`. **Under `max_age` or `prompt=login`**
+  (`freshSignIn`) it is never offered, and a round of a reset answers `redirect` (`request`): a
+  reset proves no factor, so it can never satisfy them.
+- **The mailbox**: an 8-digit `email_code` with the purpose `recovery`, the same step for every
+  address, in body and in timing. Only the mail tells them apart (`sendCode`'s `reset`: `account`
+  for an enabled account with a password and a verified address; `withheld` for every other
+  address, counted on every cap and never mailed). A code answered for a disabled user, an unknown
+  address, an account without a password or an unclaimed account (its address never verified) is
+  answered and counted as a wrong one: nothing of that user changes. An unclaimed account may be
+  someone else's squat on the address, and a reset would keep its `sub` (audited as
+  `account_unclaimed`): PRO-17 (#641) ends such an account at the first mailbox proof instead.
+- **Every other authenticator** the account holds (a passkey, TOTP), disabled or not, is proved
+  next, with any registered, served step that proves it; an email code never stands in for it.
+  When none can, the answer is `redirect` and nothing is written.
+- **The new password**: `new_password` with the purpose `reset`, through the realm's password
+  policy and its breach list, as for every new password. Every eager answer before is ignored.
+  `resets.reset` writes it and ends what the old password opened (see the adapter); an account
+  disabled meanwhile, or that is no longer the transaction's subject, ends the transaction.
+- **The completion** is `recovered: true` with neither `amr` nor `authTime`: a reset proves the
+  mailbox, not a factor (ADR-017 Decision 10). The transaction of a reset holds its subject with no
+  `auth_time`. The completion carries the session epoch the reset advanced to (`epoch`), so the
+  transport can end whatever the reset finished at a later reset.
+
+**The session epoch.** With `sessionEpochs`, every round of a transaction that holds a subject
+reads the time of that user's last reset (`notBefore`, a margin included); a transaction created
+no later ends (`reset_since`). A reset therefore ends every live interaction of the user that is
+still in the engine. Two resets of one account whose last rounds run at the same time can both
+write: the check runs at the start of each round, not in the reset's write. A read that fails
+refuses the round as `unavailable`.
+
 ## The forced password update
 
 With `breachCheck` (#635; ADR-018 §3, ADR-020 §3, ADR-017 Decision 8), a password that proved its
@@ -339,5 +388,8 @@ authenticator.
   proved the account by itself, #651) answers `redirect`: the mailbox code needs the identifier.
 - A registration for an unclaimed account (a password account whose address is not proved) is
   helped to sign in to it; PRO-17 (#641) ends that account and registers the mailbox owner instead.
+  A reset of one is withheld (no mail, no change) until #641 applies the same rule there.
+- No step can prove a passkey in a hosted reset until the passkey (#651) and recovery-code steps are
+  registered: such an account is answered `redirect` until then, and keeps its password.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
   `complete_profile` wait for the steps that set them up.

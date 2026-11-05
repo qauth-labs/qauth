@@ -268,6 +268,7 @@ describe('the SETs of mapped event types (#540)', () => {
   const userSignedOut = typeOf('user.signed_out');
   const userDisabled = typeOf('user.disabled');
   const userEnabled = typeOf('user.enabled');
+  const userPasswordReset = typeOf('user.password_reset');
   const consentRevoked = typeOf('consent.revoked');
   const tokenFamilyRevoked = typeOf('token.family_revoked');
   const tokenRevoked = typeOf('token.revoked');
@@ -311,6 +312,8 @@ describe('the SETs of mapped event types (#540)', () => {
       category: 'admin',
       actor: { type: 'operator_cli', id: 'root' },
     }),
+    // The owner's password reset (#642), from the client the sign-in was for.
+    [userPasswordReset.type]: event(userPasswordReset.type, { client: { id: 'notes-app' } }),
     [consentRevoked.type]: event(consentRevoked.type, {
       client: { id: 'receiver' },
       data: { consentId: '0192a000-0000-7000-8000-0000000000c1', revokedRefreshCount: 2 },
@@ -441,6 +444,26 @@ describe('the SETs of mapped event types (#540)', () => {
         events: { [uri]: { event_timestamp: SECONDS, initiating_entity: 'admin' } },
       });
     }
+  });
+
+  it('sends the owner’s password reset as CAEP credential-change about the user, by the user (#642)', async () => {
+    const { outcome, claims, hasSubject } = await signed(SAMPLES[userPasswordReset.type]);
+    expect(outcome).toEqual({ ok: true, statusCode: 202 });
+    expect(hasSubject).toHaveBeenCalledWith(STREAM, { type: 'user', id: USER });
+    expect(claims).toEqual({
+      jti: EVENT_ID,
+      iat: SECONDS,
+      aud: 'receiver',
+      sub_id: { format: 'iss_sub', iss: ISSUER, sub: USER },
+      events: {
+        [CAEP_CREDENTIAL_CHANGE]: {
+          credential_type: 'password',
+          change_type: 'update',
+          event_timestamp: SECONDS,
+          initiating_entity: 'user',
+        },
+      },
+    });
   });
 
   it('sends an API key change as CAEP credential-change about the key’s client, by its administrator', async () => {

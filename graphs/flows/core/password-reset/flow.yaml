@@ -1,0 +1,876 @@
+# The password reset of the sign-in engine (PRO-11, #642; ADR-017 Decisions 7 and 8, ADR-019 Decision 3): the mailbox
+# first, then any other authenticator the account holds, then the new password, then one write that replaces it and
+# ends what the old password opened. Written before the code (status: proposed), as ADR-021 Decision 4 asks of a new
+# core flow. The CER issue adds the screens (ui.yaml), and PRO-22 the FiPA endpoint's wire form.
+#
+# - Like the sign-in engine (flows/core/sign-in), this flow has no screen and no HTTP route of its own: a transport
+#   calls the engine once a round, and every round runs the sign-in's rules up to rule 4 first (the transaction, the
+#   MFA policy, the limiters, the transport's request checks). So an exit here is the engine's answer, as data, named
+#   in camelCase; a step state ends the round with the transaction live, and the next round's answer is a new event
+#   from it, which goes through the reset's gate again.
+# - A reset starts in two ways: a transport that starts the transaction as a reset (the password_reset step first,
+#   whose answer carries the address), or the sign-in's password step, which offers password_reset beside the
+#   password while nobody is proved and the round may reset; its answer turns the sign-in into a reset with the
+#   address it already holds. Never under max_age or prompt=login: a reset proves no authenticator, so it cannot
+#   satisfy either.
+# - The first answer is the same for every address: an 8-digit email_code with the purpose recovery. Only the mail
+#   differs: an enabled account with a password and a proved address gets the code, and every other address (no
+#   account, no password, a disabled user, an unclaimed account) gets nothing, while the send caps count it alike. A
+#   right code for any of those is answered as a wrong one, so nothing of a disabled user or an unclaimed account
+#   changes. An unclaimed account (a password and an address never proved) may be someone else's squat on the
+#   address: a reset would keep its sub, so it waits for PRO-17 (#641), which ends such an account at the first
+#   mailbox proof.
+# - An email code never stands in for an authenticator: an account that holds a passkey or a TOTP, disabled or not,
+#   proves it next, or the reset goes on elsewhere (on the hosted pages, a recovery code, once F2c adds them).
+# - One database transaction replaces the hash, marks the address verified, clears the password's disabled mark and
+#   its update_password required action, revokes every refresh family of the user, advances the user's session
+#   epoch and records the reset. Then the user's browser sessions end, the password's ladder counters clear, and the
+#   "password changed" notice goes out once. The reset completes with no amr and no auth_time (ADR-017 Decision 10).
+schema: delurio-graph/0
+kind: flow
+id: core.password-reset
+status: proposed
+domain: qauth
+title: Reset a password, the mailbox first, never past another authenticator
+summary: >-
+  A reset asks for an address, or takes the one the sign-in holds. The client must allow the reset flow, on every
+  round, and the request must not ask for a fresh sign-in. The engine mails an 8-digit recovery code through the capped
+  sender, only to an enabled account with a password and a proved address, and asks for it with the same step for
+  every address. A right
+  code proves the mailbox and fixes the account. An account with a passkey or a TOTP proves it next. Then the engine
+  asks for a new password, checks it against the realm's policy and breach list, and in one database transaction
+  replaces the hash, verifies the address, clears the password's disabled mark, revokes every refresh family and
+  advances the session epoch; the user's sessions end, the password's counters clear and the notice is mailed. The
+  reset completes with no amr and no auth_time.
+
+scope:
+  shows: >-
+    a reset's rounds, from the round that starts it to the password replaced, round by round
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before the reset's gate, drawn by flows/core/sign-in: the transaction's checks, the MFA
+      policy, the limiters and the transport's request checks; the bot challenge after the gate; and the end of a
+      transaction that proved an account before that account's last reset (the session epoch)"
+    - "the sign-in's password step, drawn by flows/core/sign-in: it offers password_reset beside the password while
+      nobody is proved, the reset is allowed and the request asks for no fresh sign-in, and its answer starts this flow
+      with the address it holds"
+    - "the code's own rules, drawn by flows/core/account-verification: the 10 minutes, the minute before a resend, the
+      email-code ladder across transactions and the burn at the 5th wrong answer of a transaction. A reset's code has 8
+      digits and goes out before any factor, so it counts toward the send caps' per-address ceiling"
+    - "the send caps' tiers (#637): which of them answers quietly (the step, the mail dropped) and which answers 429;
+      the mail is dispatched after the answer is built, so sent, dropped and not sent look alike"
+    - "the other authenticator's own step and ladder, drawn by flows/core/sign-in's rule 8: a passkey's or a TOTP's
+      verification, its throttling and its refusal"
+    - 'ending an unclaimed account (a password and an address never proved) at the first mailbox proof and
+      registering the mailbox owner, PRO-17 (#641): until then this flow treats it as it treats a disabled user'
+    - "the transport's finish of a reset: it sets no browser session, and the authorization code it mints carries no
+      auth_time and no amr; the consent screen follows as for a sign-in"
+    - "resolveBrowserSession, which treats a browser session created before the user's session epoch as absent and
+      clears its cookie: Postgres holds the epoch, Redis caches it"
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+
+context:
+  # Whether the client may run the reset flow when the round reads the gate: on the Interaction API, a usable client
+  # (the hosted pages offer the reset to every client); at the FiPA endpoint, a first_party_policy listing reset.
+  resetAllows:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the client is gone, disabled or suspended, or its policy does not list the reset flow'
+      'true': 'the client may run the reset flow'
+  # Whether the transport serves every step a reset needs, and the engine holds what it needs.
+  stepsServed:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the transport cannot serve password_reset, email_code or new_password, or the engine lacks the ports'
+      'true': 'the transport serves password_reset, email_code and new_password'
+  # Whether the authorization request asks for a fresh sign-in.
+  freshSignIn:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the request carries no max_age and no prompt=login'
+      'true': 'the request carries max_age or prompt=login'
+  # The send caps' answer to a code about to be mailed.
+  sendCaps:
+    values: [accepted, capped]
+    initial: any
+    say:
+      accepted: 'the send caps let the code through, or drop its mail quietly at the address-and-IP tier'
+      capped: 'a tier that answers 429 is full'
+  # Who holds the address when the engine reads it.
+  holder:
+    values: [nobody, enabled, disabled, unclaimed]
+    initial: any
+    say:
+      nobody: 'no account of the realm holds the address with a password'
+      enabled: 'an enabled account holds the address with a password, its address proved'
+      disabled: 'a disabled account holds the address with a password'
+      unclaimed: 'an enabled account holds the address with a password, its address never proved'
+  # The other authenticators the account holds, beside its password.
+  otherFactor:
+    values: [none, usable, unusable]
+    initial: any
+    say:
+      none: 'the account holds no passkey and no TOTP'
+      usable: 'the account holds a passkey or a TOTP whose step the transport serves'
+      unusable: 'the account holds one the transport cannot serve: a disabled one, or one with no step yet'
+  # The realm's password policy and breach list on the new password.
+  newPassword:
+    values: [accepted, rejected, listed, checkFailed]
+    initial: any
+    say:
+      accepted: "the policy accepts it, and the realm's breach list does not hold it or the realm checks none"
+      rejected: 'the policy refuses it: too short, too long, a blocklisted word or too weak'
+      listed: "the realm's breach list holds it"
+      checkFailed: 'the policy accepts it, and the breach-list lookup fails'
+  # What the round brings: set by the event that starts it.
+  answer:
+    values: [none, start, rightCode, wrongCode, resend, rightFactor, wrongFactor, newPassword]
+    initial: none
+  # the transaction holds the address: given at the start, or held by the sign-in that turned into this reset
+  addressTaken:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the reset started on its own, with no address yet'
+      'true': "the sign-in's password step started it, with the address it held"
+  # the transaction holds a live code's salt and HMAC, never the code
+  codeHeld: { values: [false, true], initial: false }
+  # this round asked the capped sender to mail a code, dispatched after the answer
+  mailQueued: { values: [false, true], initial: false }
+  # this round compared an answered code with the held HMAC, in constant time
+  codeCompared: { values: [false, true], initial: false }
+  # a right code was taken: email_code is among the transaction's verified steps, and the account is fixed
+  mailboxProved: { values: [false, true], initial: false }
+  # the account's other authenticator was proved in this transaction
+  factorProved: { values: [false, true], initial: false }
+  # the new password passed the policy and the breach list (or a failed lookup accepted it)
+  passwordAccepted: { values: [false, true], initial: false }
+  # the new hash is stored, the address verified, the password's disabled mark and update_password action cleared
+  passwordReplaced: { values: [false, true], initial: false }
+  # every refresh family of the user is revoked
+  familiesRevoked: { values: [false, true], initial: false }
+  # the user's session epoch moved on, so every browser session created before it is absent
+  epochAdvanced: { values: [false, true], initial: false }
+  # the user's live browser sessions ended
+  sessionsEnded: { values: [false, true], initial: false }
+  # the password's ladder counters were cleared; a second factor's never are
+  passwordCountersCleared: { values: [false, true], initial: false }
+  # the "password changed" notice was queued
+  noticeQueued: { values: [false, true], initial: false }
+  # a second factor's counter or disabled mark changed: never
+  secondFactorTouched: { values: [false, true], initial: false }
+  # this round wrote an audit record
+  audited: { values: [false, true], initial: false }
+  # a failed breach-list lookup was counted on the metric and recorded in the audit log
+  breachFailureRecorded: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # an amr value or an auth_time was issued: never, at a reset
+  factorClaimed: { values: [false, true], initial: false }
+
+guards:
+  notServed: 'not stepsServed'
+  closed: 'not resetAllows'
+  capped: "sendCaps == 'capped'"
+  mailable: "holder == 'enabled'"
+  notMailable: "holder != 'enabled'"
+  factorPending: "otherFactor != 'none' and not factorProved"
+  newPasswordRejected: "newPassword == 'rejected'"
+  newPasswordListed: "newPassword == 'listed'"
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      answer: none
+      mailQueued: false
+      codeCompared: false
+      audited: false
+      floorWaited: false
+  answerStart: { set: { answer: start } }
+  answerRight: { set: { answer: rightCode } }
+  answerWrong: { set: { answer: wrongCode } }
+  answerResend: { set: { answer: resend } }
+  answerRightFactor: { set: { answer: rightFactor } }
+  answerWrongFactor: { set: { answer: wrongFactor } }
+  answerNewPassword: { set: { answer: newPassword } }
+  takeAddress: { set: { addressTaken: true } }
+  holdCode: { set: { codeHeld: true } }
+  queueCodeMail: { set: { mailQueued: true } }
+  compareCode: { set: { codeCompared: true } }
+  proveMailbox: { set: { mailboxProved: true, codeHeld: false } }
+  proveFactor: { set: { factorProved: true } }
+  acceptPassword: { set: { passwordAccepted: true } }
+  replacePassword:
+    set: { passwordReplaced: true, familiesRevoked: true, epochAdvanced: true }
+  endSessions: { set: { sessionsEnded: true, passwordCountersCleared: true } }
+  queueNotice: { set: { noticeQueued: true } }
+  audit: { set: { audited: true } }
+  recordBreachFailure: { set: { breachFailureRecorded: true } }
+  waitFloor: { set: { floorWaited: true } }
+  # what the operator, another transaction or the clock may have changed by the next round
+  moveOn: { havoc: [resetAllows, sendCaps, holder, otherFactor, newPassword] }
+
+failures:
+  readingGate: { from: accountResets, store: [unavailable] }
+  readingMailHolder: { from: accountDirectory, store: [unavailable] }
+  issuingCode: { from: sendCaps, store: [unavailable] }
+  readingAnswerHolder: { from: accountDirectory, store: [unavailable] }
+  readingAccount: { from: accountDirectory, store: [unavailable] }
+  verifyingFactor: { from: factorStep, store: [unavailable] }
+  checkingNewBreachList:
+    from: breachList
+    lookup: [not_configured, list_not_loaded, lookup_blocked, lookup_failed, bad_response]
+  resetting: { from: accountResets, store: [unavailable] }
+  endingSessions: { from: sessionService, store: [unavailable] }
+
+# The main story: a reset started on its own, the address of an enabled password-only account, the code typed from
+# the mail, a password the policy accepts, and the password replaced.
+main:
+  given:
+    resetAllows: true
+    stepsServed: true
+    freshSignIn: false
+    sendCaps: accepted
+    holder: enabled
+    otherFactor: none
+    newPassword: accepted
+    addressTaken: false
+  events:
+    [
+      DONE,
+      START,
+      DONE,
+      DONE,
+      DONE,
+      RIGHT_CODE,
+      DONE,
+      DONE,
+      DONE,
+      NEW_PASSWORD,
+      DONE,
+      DONE,
+      DONE,
+      DONE,
+      DONE,
+    ]
+
+initial: checkingSteps
+states:
+  checkingSteps:
+    title: Ask whether the reset can be served here at all
+    description: >-
+      A reset needs the password_reset, email_code and new_password steps, and the engine needs its reset, email-code
+      and password-update ports. A request that asks for a fresh sign-in (max_age, prompt=login) never resets: a reset
+      proves no authenticator, so the person goes on in a browser sign-in instead.
+    always:
+      - guard: notServed
+        target: redirected
+        effect: [waitFloor]
+        say: 'a step or a port is missing: the engine answers a redirect, and the transaction ends'
+      - guard: freshSignIn
+        target: freshSignInRequired
+        effect: [waitFloor]
+        say: 'the request asks for a fresh sign-in: the engine answers a redirect, and the transaction ends'
+      - target: readingGate
+        say: 'every step is served, and no fresh sign-in is asked for'
+
+  readingGate:
+    title: Read whether the client may run the reset flow
+    description: >-
+      On every round, before anything is mailed or written (ADR-017 Decision 8): the client is read again, so a client
+      disabled or suspended meanwhile allows nothing. A store error refuses the round.
+    invoke: { external: accountResets }
+    on:
+      DONE:
+        - guard: closed
+          target: resetClosed
+          effect: [audit, waitFloor]
+          say: 'the client may not reset: refused, audited as reset_closed'
+        - target: dispatching
+          say: 'the client may reset'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the client cannot be read'
+
+  dispatching:
+    title: Go on from where the transaction is
+    description: >-
+      The transaction says how far the reset got: a proved mailbox, a held code, an address, or nothing yet. The
+      round's answer goes to the step it answers; an answer to another step is ignored, as every eager answer is.
+    always:
+      - guard: mailboxProved
+        target: readingAccount
+        say: 'the mailbox is proved: the account is read again'
+      - guard: "codeHeld and answer == 'rightCode'"
+        target: comparingCode
+        say: 'the round answers the code with the right one'
+      - guard: "codeHeld and answer == 'wrongCode'"
+        target: comparingWrongCode
+        say: 'the round answers the code with another one'
+      - guard: "codeHeld and answer == 'resend'"
+        target: readingMailHolder
+        say: 'the round asks for a new code, a minute after the last; the count of wrong answers stays'
+      - guard: codeHeld
+        target: offeringCode
+        effect: [waitFloor]
+        say: 'the round carries no answer to the code: the same step, nothing mailed'
+      - guard: addressTaken
+        target: readingMailHolder
+        say: 'the transaction holds the address but no code yet: the first code'
+      - guard: "answer == 'start'"
+        target: readingMailHolder
+        effect: [takeAddress]
+        say: 'the round gives the address: it is checked, normalised and kept, and never changes'
+      - target: offeringStart
+        effect: [waitFloor]
+        say: 'nothing is named yet: the password_reset step, alone'
+
+  readingMailHolder:
+    title: Read who holds the address, for the mail
+    description: >-
+      Before every code it mints, the first and every resend: whether an enabled account holds the address with a
+      password, and whether that address was proved. It decides only the mail; the step and the answer are the same
+      for every address.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        target: issuingCode
+        say: 'the holder is read'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the account directory fails; nothing is mailed'
+
+  issuingCode:
+    title: Issue an 8-digit recovery code and ask the capped sender to mail it
+    description: >-
+      Eight digits from a CSPRNG and a salt of their own; the transaction keeps the salt and the keyed HMAC, never the
+      code, and a new code keeps the count of wrong answers. The send caps count the request for every address before
+      anything is kept. Only an enabled account with a password and a proved address is mailed; every other address
+      gets nothing, its code still held so that the step is the same.
+    invoke: { external: sendCaps }
+    on:
+      DONE:
+        - guard: capped
+          target: sendCapped
+          effect: [audit, waitFloor]
+          say: 'a tier that answers 429 is full: nothing is mailed or kept, send_capped is audited'
+        - guard: mailable
+          target: offeringCode
+          effect: [holdCode, queueCodeMail, waitFloor]
+          say: 'an enabled account with a password: the code is queued'
+        - guard: notMailable
+          target: offeringCode
+          effect: [holdCode, waitFloor]
+          say: 'no account, no password, a disabled user or an unclaimed account: the code is held, nothing is mailed'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send-cap store fails: nothing is mailed or kept'
+
+  comparingCode:
+    title: Compare the right answer with the held code, in constant time
+    description: >-
+      After the code's own rules (flows/core/account-verification): the limiters, then the email-code ladder, then the
+      answer's HMAC under the code's salt against the held one, in constant time. It is right; whether it is taken
+      depends on the holder.
+    always:
+      - target: readingAnswerHolder
+        effect: [compareCode]
+        say: 'the code is right'
+
+  comparingWrongCode:
+    title: Compare a wrong answer with the held code, in constant time
+    description: >-
+      The answer's HMAC differs from the held one: the transaction counts one wrong answer more, and the ladder one
+      failure more. The 5th of a transaction burns the code (flows/core/account-verification).
+    always:
+      - target: codeRefused
+        effect: [compareCode, audit, waitFloor]
+        say: 'refused with invalid_credentials, audited as invalid_code'
+
+  readingAnswerHolder:
+    title: Read the address's holder again, before the right code is taken
+    description: >-
+      A right code is taken only for an enabled account with a password and a proved address. For any other address
+      it is answered exactly as a wrong one, and counted as one: the person learns nothing, and nothing of a disabled
+      user or an unclaimed account changes (audited as account_disabled or account_unclaimed). Taken, the code fixes
+      the transaction's account. A store error refuses the round; the code stays live.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: notMailable
+          target: codeRefused
+          effect: [audit, waitFloor]
+          say: 'no account, no password, a disabled user or an unclaimed account: refused with invalid_credentials, counted, audited'
+        - target: readingAccount
+          effect: [proveMailbox, audit]
+          say: 'the code is taken: consumed, email_code joins the verified steps with no amr, the account is fixed'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the account directory fails; the code stays live'
+
+  readingAccount:
+    title: Read the account again, every authenticator included
+    description: >-
+      On every round once the mailbox is proved. A disabled account, or one no longer there, ends the reset with
+      nothing written. An account that holds a passkey or a TOTP, a disabled one included, proves it before any new
+      password: an email code never stands in for an authenticator. One the transport cannot serve sends the person
+      elsewhere.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: notMailable
+          target: accountEnded
+          effect: [audit, waitFloor]
+          say: 'the account is disabled or gone: the transaction ends, audited, nothing written'
+        - guard: "factorPending and otherFactor == 'unusable'"
+          target: redirected
+          effect: [waitFloor]
+          say: 'the account holds an authenticator the transport cannot serve: a redirect, the transaction ends'
+        - guard: "factorPending and answer in ['rightFactor', 'wrongFactor']"
+          target: verifyingFactor
+          say: 'the round answers the other authenticator'
+        - guard: factorPending
+          target: offeringFactor
+          effect: [waitFloor]
+          say: 'the account holds a passkey or a TOTP: it is asked for next'
+        - guard: "answer == 'newPassword'"
+          target: checkingNewPassword
+          say: 'every authenticator is proved, and the round brings a new password'
+        - target: offeringNewPassword
+          effect: [waitFloor]
+          say: 'every authenticator is proved: the new password is asked for'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the account directory fails'
+
+  verifyingFactor:
+    title: Verify the account's other authenticator
+    description: >-
+      The step's own handler, as at the sign-in's rule 8: its limiters and ladder, then its verification, for the
+      account the code fixed. A proof of another account ends the transaction.
+    invoke: { external: factorStep }
+    on:
+      DONE:
+        - guard: "answer == 'wrongFactor'"
+          target: factorRefused
+          effect: [audit, waitFloor]
+          say: 'the answer is wrong: refused with invalid_credentials, audited'
+        - target: offeringNewPassword
+          effect: [proveFactor, audit, waitFloor]
+          say: 'the authenticator is proved: the new password is asked for'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'a store the step needs fails'
+
+  checkingNewPassword:
+    title: Check the new password against the realm's password policy
+    description: >-
+      The one password policy (ADR-017 Decision 8, #634): the length as typed, NFC, the realm's minimum length, the
+      whole-password blocklist with the address and the service and realm names as context words, and the score floor.
+    always:
+      - guard: newPasswordRejected
+        target: newPasswordRefused
+        effect: [audit, waitFloor]
+        say: 'the policy refuses it: the step again with password_rejected and its reasons'
+      - target: checkingNewBreachList
+        say: 'the policy accepts it'
+
+  checkingNewBreachList:
+    title: Check the new password against the realm's breach list
+    description: >-
+      The same check as every new password's, on the password in NFC, when the realm names a source. A listed one is
+      refused as blocklisted. A check that fails accepts it: counted on the metric and recorded in the audit log.
+    invoke: { external: breachList }
+    on:
+      DONE:
+        - guard: newPasswordListed
+          target: newPasswordRefused
+          effect: [audit, waitFloor]
+          say: 'the new password is listed: refused as blocklisted, audited as password_breached'
+        - guard: "newPassword == 'accepted'"
+          target: resetting
+          effect: [acceptPassword]
+          say: 'the new password is not on the list, or the realm checks none'
+      FAIL.lookup:
+        guard: "newPassword == 'checkFailed'"
+        target: resetting
+        effect: [acceptPassword, recordBreachFailure]
+        say: 'the check fails: counted and recorded, and the new password is accepted'
+
+  resetting:
+    title: Replace the password in one database transaction
+    description: >-
+      The user is read again and must be enabled. Then, in one database transaction: the password credential's hash
+      and normalisation marker through the credential repository's password update, which also marks its address
+      verified and clears its disabled mark; the email attribute verified; the update_password required action
+      removed; every refresh family of the user revoked; the user's session epoch advanced; and the reset recorded. A
+      second factor's counter and disabled mark are never touched. A store error writes nothing.
+    invoke: { external: accountResets }
+    on:
+      DONE:
+        - guard: notMailable
+          target: accountEnded
+          effect: [audit, waitFloor]
+          say: 'the account was disabled meanwhile: nothing is written, the transaction ends'
+        - target: endingSessions
+          effect: [replacePassword]
+          say: 'the password is replaced, the families revoked and the epoch advanced, all committed together'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails: nothing is written'
+
+  endingSessions:
+    title: End the user's sessions and clear the password's counters, then send the notice
+    description: >-
+      After the commit: every browser session of the user created before the epoch ends in Postgres and in its cache,
+      the epoch's cache entry is replaced, the password's failure-ladder counter is cleared (never a second factor's),
+      and the "password changed" notice is queued, once. A store error here is logged and changes nothing: the epoch
+      in Postgres already refuses every older session.
+    invoke: { external: sessionService }
+    on:
+      DONE:
+        target: recovered
+        effect: [endSessions, queueNotice, audit, waitFloor]
+        say: 'the sessions end, the counters clear, the notice is queued, new_password is audited as passed'
+      FAIL.store:
+        target: recovered
+        effect: [queueNotice, audit, waitFloor]
+        say: 'a store fails after the commit: logged; the epoch refuses the older sessions all the same'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringStart:
+    title: Ask for the address
+    description: >-
+      The password_reset step alone; its answer carries the address as login_hint. The request's login_hint fills it
+      in.
+    response:
+      kind: step
+      body:
+        current: { step: password_reset, params: {} }
+        alternatives: []
+        personal: {}
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      START:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerStart]
+        say: 'the person gives an address'
+
+  offeringCode:
+    title: Ask for the code
+    description: >-
+      The same step and the same personal data for every address, answered no earlier than the floor: nothing in the
+      answer, its body or its time, says whether an account holds the address. Only the mail differs.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: recovery
+            length: 8
+            expires_in: 'the seconds the code has left, at most 600'
+            resend_after: 'the seconds until another code may be asked for, at most 60'
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer: the same step, nothing mailed'
+      RIGHT_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerRight]
+        say: 'the person types the code from the mail'
+      WRONG_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerWrong]
+        say: 'the person types another code'
+      RESEND:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerResend]
+        say: 'the person asks for a new code: an answer with no otp'
+
+  codeRefused:
+    title: Ask for the code again
+    description: >-
+      The same step with invalid_credentials; the code stays, and so does the count of wrong answers. A right code for
+      an address the reset may not change lands here too, alike.
+    response:
+      kind: step
+      body:
+        current:
+          step: email_code
+          params:
+            purpose: recovery
+            length: 8
+            expires_in: 'the seconds the code has left, at most 600'
+            resend_after: 'the seconds until another code may be asked for, at most 60'
+          error: invalid_credentials
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      RIGHT_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerRight]
+        say: 'the person types the right code'
+      WRONG_CODE:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerWrong]
+        say: 'the person types another wrong code'
+      RESEND:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerResend]
+        say: 'the person asks for a new code'
+
+  offeringFactor:
+    title: Ask for the account's other authenticator
+    description: >-
+      The passkey or the TOTP the account holds, as the sign-in's rule 8 offers it; never an email code in its place.
+    response:
+      kind: step
+      body:
+        current: { step: "the account's webauthn_get or totp step", params: "the step's own" }
+        alternatives: "the account's other authenticators the transport serves"
+        personal: "the step's own"
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      RIGHT_FACTOR:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerRightFactor]
+        say: 'the person proves the authenticator'
+      WRONG_FACTOR:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerWrongFactor]
+        say: 'the person answers it wrongly'
+
+  factorRefused:
+    title: Ask for the other authenticator again
+    description: The same step with invalid_credentials.
+    response:
+      kind: step
+      body:
+        current:
+          step: "the account's webauthn_get or totp step"
+          params: "the step's own"
+          error: invalid_credentials
+        alternatives: "the account's other authenticators the transport serves"
+        personal: "the step's own"
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      RIGHT_FACTOR:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerRightFactor]
+        say: 'the person proves the authenticator'
+      WRONG_FACTOR:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerWrongFactor]
+        say: 'the person answers it wrongly again'
+
+  offeringNewPassword:
+    title: Ask for a new password
+    description: >-
+      The new_password step with the purpose reset, the realm's minimum length and the longest password accepted; the
+      personal data is the transaction's address.
+    response:
+      kind: step
+      body:
+        current:
+          step: new_password
+          params:
+            purpose: reset
+            min_length: "the realm's password.minLength"
+            max_length: 256
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer: the same step'
+      NEW_PASSWORD:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerNewPassword]
+        say: 'the person types a new password'
+
+  newPasswordRefused:
+    title: Ask for a new password again
+    description: >-
+      The same step with password_rejected and the reasons: too_short, too_long, blocklisted (a whole dictionary or
+      context word, or a password on the realm's breach list) or too_weak.
+    response:
+      kind: step
+      body:
+        current:
+          step: new_password
+          params:
+            purpose: reset
+            min_length: "the realm's password.minLength"
+            max_length: 256
+            reasons: 'why the new password was refused'
+          error: password_rejected
+        alternatives: []
+        personal: { identifier: "the transaction's address" }
+    on:
+      ROUND:
+        target: checkingSteps
+        effect: [newRound, moveOn]
+        say: 'the next round carries no answer'
+      NEW_PASSWORD:
+        target: checkingSteps
+        effect: [newRound, moveOn, answerNewPassword]
+        say: 'the person types another new password'
+
+  # Exits
+
+  recovered:
+    type: final
+    title: Complete the reset
+    description: >-
+      The password is replaced, and the transaction ends with it, so nothing completes twice. A reset proves the
+      mailbox, not an authenticator (ADR-017 Decision 10): the transport sets no session, and the code it mints carries
+      no auth_time and no amr, so it never satisfies max_age, prompt=login or a step-up.
+    response:
+      kind: complete
+      body:
+        transaction: null
+        subject: "the account's user id"
+        identifier: "the transaction's address, normalised"
+        recovered: true
+
+  resetClosed:
+    type: final
+    title: Refuse a reset the client may not run
+    description: >-
+      The transaction stays as the round found it. The Interaction API answers it as an interaction that has expired.
+    response:
+      kind: refused
+      body: { reason: request_refused, code: reset_not_allowed }
+
+  redirected:
+    type: final
+    title: Continue elsewhere
+    description: >-
+      The transport cannot serve a step the reset needs, the engine lacks a port, or the account holds an
+      authenticator the transport cannot serve. The transaction ends, and nothing is written.
+    response:
+      kind: redirect
+      body: { reason: step_not_available, transaction: null }
+
+  freshSignInRequired:
+    type: final
+    title: Continue elsewhere, for a request that asks for a fresh sign-in
+    description: >-
+      A reset under max_age or prompt=login: the person signs in in a browser instead. The transaction ends, and
+      nothing is mailed or written.
+    response:
+      kind: redirect
+      body: { reason: request, transaction: null }
+
+  sendCapped:
+    type: final
+    title: Refuse the round for the send caps
+    description: The same 429 for every address. A code the transaction held stays live.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the send cap's" }
+
+  accountEnded:
+    type: final
+    title: End the transaction for an account disabled or gone
+    description: >-
+      The account the code fixed is disabled or no longer there. Nothing is written and nothing is mailed; the FiPA
+      endpoint answers invalid_session, and the Interaction API starts again.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: >-
+      The gate, the account directory, the send caps, the other authenticator's store or the database cannot be
+      reached: fail closed. The transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: nothing-before-the-gate
+    never: >-
+      state in ['offeringStart', 'offeringCode', 'codeRefused', 'offeringFactor', 'factorRefused',
+      'offeringNewPassword', 'newPasswordRefused', 'recovered', 'sendCapped'] and not resetAllows
+    say: 'No reset step is offered, nothing is mailed and nothing is written unless the client may reset'
+  - id: never-under-a-fresh-sign-in
+    never: >-
+      state in ['offeringStart', 'offeringCode', 'codeRefused', 'offeringFactor', 'factorRefused',
+      'offeringNewPassword', 'newPasswordRefused', 'recovered'] and freshSignIn
+    say: 'A request that carries max_age or prompt=login is never reset'
+  - id: no-change-before-the-mailbox
+    never: 'passwordReplaced and not mailboxProved'
+    say: 'Nothing is written before the mailbox is proved'
+  - id: email-never-stands-in
+    never: "passwordReplaced and otherFactor != 'none' and not factorProved"
+    say: 'An account with a passkey or a TOTP never resets with its mailbox alone'
+  - id: no-change-before-the-password
+    never: 'passwordReplaced and not passwordAccepted'
+    say: "No password is replaced before the new one passes the realm's policy and breach list"
+  - id: only-an-enabled-account-is-mailed
+    never: "mailQueued and holder != 'enabled'"
+    say: >-
+      Only an enabled account with a password and a proved address is mailed a code; a disabled user, an unclaimed
+      account and an unknown address get nothing
+  - id: a-disabled-user-is-never-changed
+    never: "state == 'recovered' and holder != 'enabled'"
+    say: 'A disabled user is never reset'
+  - id: the-reset-ends-what-the-old-password-opened
+    never: "state == 'recovered' and not (familiesRevoked and epochAdvanced and noticeQueued)"
+    say: 'A completed reset revoked every refresh family, advanced the epoch and queued the notice'
+  - id: a-second-factor-is-never-touched
+    never: 'secondFactorTouched'
+    say: "A reset never clears a second factor's counter or disabled mark"
+  - id: no-factor-at-reset
+    never: 'factorClaimed'
+    say: 'A reset issues no amr value and no auth_time'
+  - id: compare-only-a-held-code
+    never: 'codeCompared and not addressTaken'
+    say: 'A code is compared only once the transaction holds the address it went to'
+  - id: every-refusal-is-audited
+    never: >-
+      state in ['resetClosed', 'sendCapped', 'codeRefused', 'factorRefused', 'newPasswordRefused', 'accountEnded',
+      'recovered'] and not audited
+    say: 'Every refused answer and the completed reset write an audit record'
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringStart', 'offeringCode', 'codeRefused', 'offeringFactor', 'factorRefused',
+      'offeringNewPassword', 'newPasswordRefused', 'recovered', 'resetClosed', 'redirected', 'freshSignInRequired',
+      'sendCapped', 'accountEnded', 'unavailable'] and not floorWaited
+    say: >-
+      Every round that ends here answers no earlier than 500 ms after it arrived, so an existing address and an unknown
+      one take the same time

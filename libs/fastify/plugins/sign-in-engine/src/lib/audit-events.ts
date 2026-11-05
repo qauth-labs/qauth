@@ -41,6 +41,8 @@ const STEP_METHODS: Readonly<
   password: 'password',
   email_code: 'password',
   new_password: 'password',
+  // A reset's start (#642): the password is what it replaces.
+  password_reset: 'password',
   upstream: 'upstream',
 });
 

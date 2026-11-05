@@ -238,12 +238,15 @@ export type InteractionDecision =
   /** The interaction is done: the caller completes or denies the request. */
   | { readonly kind: 'finished' }
   /**
-   * The answer registered a new account (#640; ADR-017 Decisions 8 and 10):
-   * the interaction finishes for it, as `finished` does, with no browser
-   * session, no `amr` and no `auth_time`. Only an authorization interaction
-   * in which nobody has signed in registers.
+   * The answer registered a new account (#640; ADR-017 Decisions 8 and 10),
+   * or reset an account's password (#642): the interaction finishes for it,
+   * as `finished` does, with no browser session, no `amr` and no
+   * `auth_time`. Only an authorization interaction in which nobody has
+   * signed in registers or resets. `sessionEpoch` is the account's session
+   * epoch it finished at: 0 for a new account, the one the reset advanced
+   * to for a reset.
    */
-  | { readonly kind: 'registered'; readonly userId: string };
+  | { readonly kind: 'registered'; readonly userId: string; readonly sessionEpoch: number };
 
 /** What {@link answerInteraction} did. */
 export type InteractionAnswerResult =
@@ -795,7 +798,7 @@ export type InteractionAnswerTarget =
  *   transport (#616) must submit credential steps by `fetch`, or guard a form
  *   post against a double submit, so a second click never sends the answer
  *   again with the old cookie.
- * - `registered`: a new account (#640). The interaction ends as at
+ * - `registered`: a new account (#640), or a password reset (#642). The interaction ends as at
  *   `finished`, and its transaction names the account (`registered: true`)
  *   with no session, no `amr` and no `auth_time`: the request is decided for
  *   it, and its code carries neither.
@@ -1037,6 +1040,7 @@ async function settleAnswer(
       userId: decision.userId,
       amr: [],
       registered: true,
+      sessionEpoch: decision.sessionEpoch,
     };
     await answered('finished', { ...taken, transaction: registered });
     return finishedOf(taken, registered, { secrets, expiresAt: taken.expiresAt });

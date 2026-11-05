@@ -28,6 +28,17 @@ export {
 } from './lib/redis-session-cache';
 export { InvalidSessionCursorError, SESSION_CURSOR_MAX_LENGTH } from './lib/session-cursor';
 export {
+  createSessionEpochs,
+  DEFAULT_SESSION_EPOCH_CACHE_TIMEOUT_MS,
+  DEFAULT_SESSION_EPOCH_CACHE_TTL_SECONDS,
+  sessionEpochCacheKey,
+  type SessionEpochOwner,
+  type SessionEpochRedisClient,
+  type SessionEpochs,
+  type SessionEpochsOptions,
+  type SessionEpochStore,
+} from './lib/session-epochs';
+export {
   createSessionService,
   DEFAULT_SESSION_CACHE_TIMEOUT_MS,
   DEFAULT_SESSION_CACHE_TTL_SECONDS,

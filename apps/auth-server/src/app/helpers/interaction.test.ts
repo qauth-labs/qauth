@@ -119,8 +119,8 @@ type DecisionSpec =
       step?: InteractionStep;
       personal?: Record<string, unknown>;
     }
-  /** A registration finished the interaction (#640). */
-  | { kind: 'registered'; userId: string }
+  /** A registration (#640) or a reset (#642) finished the interaction. */
+  | { kind: 'registered'; userId: string; sessionEpoch: number }
   | { kind: 'finished' };
 
 /**
@@ -170,6 +170,7 @@ async function buildHarness(): Promise<Harness> {
   const redis = createMemoryInteractionRedis(sessions.redis);
   app.decorate('redis', redis as unknown as FastifyInstance['redis']);
   app.decorate('sessionService', sessions.service);
+  app.decorate('sessionEpochs', sessions.epochs);
   // The session cookie is signed with the realm's cookie key (#493).
   app.decorate('signer', sessions.signer as unknown as FastifyInstance['signer']);
   const findCredential = vi.fn(async (realmId: string, providerType: string, sub: string) => {
@@ -695,6 +696,7 @@ describe('a registration that finishes the interaction (#640)', () => {
     const answered = await owner.answerWithCsrf(id, await owner.csrf(id), {
       kind: 'registered',
       userId: USER_A,
+      sessionEpoch: 0,
     });
 
     expect(answered.statusCode, answered.body).toBe(200);
@@ -704,7 +706,12 @@ describe('a registration that finishes the interaction (#640)', () => {
       transaction: Record<string, unknown>;
     };
     expect(result.kind).toBe('finished');
-    expect(result.transaction).toEqual({ userId: USER_A, amr: [], registered: true });
+    expect(result.transaction).toEqual({
+      userId: USER_A,
+      amr: [],
+      registered: true,
+      sessionEpoch: 0,
+    });
     expect(result.request.prompt).toBe('create');
     // Nobody signed in: no session cookie, and the flow secret is gone.
     expect(owner.cookies.has(SESSION_COOKIE_NAME)).toBe(false);
@@ -730,6 +737,7 @@ describe('a registration that finishes the interaction (#640)', () => {
     const answered = await owner.answerWithCsrf(id, await owner.csrf(id), {
       kind: 'registered',
       userId: USER_A,
+      sessionEpoch: 0,
     });
 
     expect(answered.statusCode).toBe(500);

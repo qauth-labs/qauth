@@ -145,6 +145,8 @@ const TX = { tx: true };
 const upsertGrant = vi.fn();
 /** The account a registered transaction names (#640): enabled, never disabled. */
 const findUser = vi.fn();
+/** Its session epoch (#642): never reset, unless a test says otherwise. */
+const findEpoch = vi.fn();
 const transaction = vi.fn<
   (cb: (tx: unknown) => Promise<unknown>, options?: unknown) => Promise<unknown>
 >(async (cb) => cb(TX));
@@ -153,6 +155,7 @@ const fastify = {
   repositories: {
     oauthConsents: { upsertGrant },
     users: { findById: findUser },
+    userSessionEpochs: { find: findEpoch },
     // The realm's upstream providers (#639): none.
     realmUpstreamProviders: { listByRealm: async () => [], find: async () => undefined },
   },
@@ -176,6 +179,7 @@ beforeEach(() => {
   readSessionSideRecord.mockResolvedValue({});
   mintAuthorizationCode.mockResolvedValue({ code: 'c0de' });
   upsertGrant.mockResolvedValue({});
+  findEpoch.mockResolvedValue(undefined);
   findUser.mockImplementation(async (realmId: string, id: string) => ({
     id,
     realmId,
@@ -894,6 +898,44 @@ describe('a registration (#640)', () => {
     });
   }
 
+  it('decides the request of a reset for the account at the epoch the reset advanced to (#642)', async () => {
+    decideAuthorization.mockResolvedValue({
+      kind: 'code',
+      location: 'https://notes.example.com/cb',
+    });
+    findEpoch.mockResolvedValue({ epoch: 2, advancedAt: 1_700_000_000_000 });
+
+    await finishAuthorization(fastify, request, reply, {
+      ...finished({ ...REGISTERED, sessionEpoch: 2 }),
+      request: REQUEST,
+    });
+
+    expect(findEpoch).toHaveBeenCalledWith(REALM.id, NEW_USER);
+    expect(decideAuthorization).toHaveBeenCalledWith(fastify, request, TARGET, REQUEST, {
+      registered: true,
+      realmId: REALM.id,
+      userId: NEW_USER,
+    });
+  });
+
+  for (const [name, sessionEpoch] of [
+    ['a reset after a registration', undefined],
+    ['a later reset', 2],
+  ] as const) {
+    it(`decides with no subject after ${name} of the account (#642)`, async () => {
+      decideAuthorization.mockResolvedValue({ kind: 'sign_in' });
+      findEpoch.mockResolvedValue({ epoch: 3, advancedAt: 1_700_000_000_000 });
+      const transaction = sessionEpoch === undefined ? REGISTERED : { ...REGISTERED, sessionEpoch };
+
+      await finishAuthorization(fastify, request, reply, {
+        ...finished(transaction),
+        request: CREATE_REQUEST,
+      });
+
+      expect(decideAuthorization).toHaveBeenCalledWith(fastify, request, TARGET, REQUEST, null);
+    });
+  }
+
   it('continues with a consent for the account: no session, no personal data, and no registration again', async () => {
     decideAuthorization.mockResolvedValue({
       kind: 'consent',
@@ -975,6 +1017,15 @@ describe('a registration (#640)', () => {
 
     it('sends an account disabled since its registration to a sign-in, minting nothing', async () => {
       findUser.mockResolvedValue({ id: NEW_USER, enabled: false, notValidBefore: Date.now() });
+
+      await finishConsent(fastify, realmRequest, reply, consentOf(['openid', 'email']));
+
+      expect(mintAuthorizationCode).not.toHaveBeenCalled();
+      expect(continueInteraction).toHaveBeenCalledOnce();
+    });
+
+    it('sends an account reset since the interaction finished to a sign-in, minting nothing (#642)', async () => {
+      findEpoch.mockResolvedValue({ epoch: 1, advancedAt: Date.now() });
 
       await finishConsent(fastify, realmRequest, reply, consentOf(['openid', 'email']));
 

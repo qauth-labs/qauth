@@ -331,6 +331,81 @@ export interface AccountRegistrations {
   }): Promise<AccountRegistration>;
 }
 
+/** What replacing a password at a reset found (#642). */
+export type AccountResetOutcome =
+  /**
+   * The password is replaced, and everything the old one opened ended. The
+   * session epoch the reset advanced the account to comes back: whatever the
+   * reset finishes is ended by a later reset of the account.
+   */
+  | { readonly kind: 'reset'; readonly epoch: number }
+  /**
+   * Nothing was written: the address's password credential is not the
+   * subject's (`subject_mismatch`), or the user is disabled
+   * (`account_disabled`). The transaction ends.
+   */
+  | { readonly kind: 'refused'; readonly reason: 'account_disabled' | 'subject_mismatch' };
+
+/** One reset's write (#642): the account, its address and the new password. */
+export interface AccountReset {
+  readonly realmId: string;
+  readonly clientId: string;
+  /** The account the reset's mailbox proof fixed. */
+  readonly userId: string;
+  /** The address the reset proved, normalised: the password credential's `external_sub`. */
+  readonly identifier: string;
+  /** The new password, in the stored form the password policy's check returned. */
+  readonly password: string;
+  readonly normalization: PasswordNormalization;
+}
+
+/**
+ * The owner's password reset (#642; ADR-017 Decision 8, ADR-019 Decision 3):
+ * its gate and the write that replaces the password. The new password's
+ * policy and the breach list are the forced update's ({@link PasswordUpdates},
+ * {@link BreachedPasswordCheck}): one password policy for every new password.
+ * Every method that throws refuses the round.
+ */
+export interface AccountResets {
+  /**
+   * Whether the client may run the reset flow: on the Interaction API, a
+   * usable client (the hosted pages offer it to every one); at the FiPA
+   * endpoint, a `first_party_policy.flows` that lists `reset`. Read on every
+   * round of a reset, and before the password step offers one.
+   */
+  allowed(input: { readonly realmId: string; readonly clientId: string }): Promise<boolean>;
+  /**
+   * Replace the password of `userId`, whose mailbox (and every other
+   * authenticator it holds) the transaction proved. In one database
+   * transaction: the `password` credential's hash and normalisation marker,
+   * its address marked verified, its disabled mark cleared (never a second
+   * factor's), the `update_password` required action removed, every refresh
+   * family of the user revoked, and the user's session epoch advanced. Once
+   * that commits: the user's browser sessions end, the password's failure
+   * counters clear, and the "password changed" notice goes out, once. A
+   * failure after the commit is logged and changes nothing: the epoch
+   * already refuses every older session.
+   */
+  reset(input: AccountReset): Promise<AccountResetOutcome>;
+}
+
+/**
+ * The accounts' session epochs (#642; ADR-017 Decision 8, ADR-019 Decision
+ * 3): when each account's password was last reset. A sign-in transaction
+ * that began at or before that time ends at its next round, as a browser
+ * session created before it is absent: a reset ends whatever the old
+ * password opened.
+ */
+export interface SessionEpochReader {
+  /**
+   * The time, in epoch milliseconds, at or before which a transaction of the
+   * account no longer counts: when its password was last reset, with the
+   * transport's allowance for clock skew. `null` when it never was. A throw
+   * refuses the round.
+   */
+  notBefore(input: { readonly realmId: string; readonly userId: string }): Promise<number | null>;
+}
+
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;
 export type MfaMode = (typeof MFA_MODES)[number];
 
@@ -456,6 +531,25 @@ export const SIGN_IN_AUDIT_REASONS = [
    * (#640): nothing was created, and the transaction ends.
    */
   'registration_conflict',
+  /**
+   * The client may not run the reset flow (#642): the round of a reset was
+   * refused, with nothing mailed or written.
+   */
+  'reset_closed',
+  /**
+   * The account's password was reset after the transaction began (#642): the
+   * transaction ends, as every browser session created before the reset
+   * does.
+   */
+  'reset_since',
+  /**
+   * The account's address was never proved: it is unclaimed (ADR-017
+   * Decision 8), and someone other than the mailbox owner may have created
+   * it. A reset would keep its `sub`, so its right code is answered as a
+   * wrong one and nothing changes, until #641 ends such an account at this
+   * proof and gives the mailbox owner a new one.
+   */
+  'account_unclaimed',
 ] as const;
 export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 

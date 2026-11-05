@@ -152,7 +152,7 @@ describe('a registration round 0', () => {
     const stored = JSON.parse(JSON.stringify(kept(result)));
     expect(readSignInTransaction(stored)?.flow).toBe('register');
     expect(readSignInTransaction({ ...stored, upstream: { provider: 'oidc_corp' } })).toBeNull();
-    expect(readSignInTransaction({ ...stored, flow: 'reset' })).toBeNull();
+    expect(readSignInTransaction({ ...stored, flow: 'recover' })).toBeNull();
   });
 });
 

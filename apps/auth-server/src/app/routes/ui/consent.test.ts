@@ -196,6 +196,7 @@ function makeFastify() {
       getIssuer: () => ISSUER,
     },
     sessionService: sessions.service,
+    sessionEpochs: sessions.epochs,
     signer: sessions.signer,
     redis: sessions.redis,
     // The realm's policies (#534): a CIMD client resolves under the seeded

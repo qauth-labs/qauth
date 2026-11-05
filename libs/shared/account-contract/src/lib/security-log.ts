@@ -93,7 +93,7 @@ export const SECURITY_LOG_KINDS = {
   },
   password_changed: {
     description: 'The account’s password was changed.',
-    sources: [planned('user.password_changed', 685)],
+    sources: [registered('user.password_reset'), planned('user.password_changed', 685)],
     reportable: false,
   },
   credential_added: {

@@ -293,6 +293,7 @@ function makeFastify() {
       verifyAccessToken: vi.fn(),
     },
     sessionService: sessions.service,
+    sessionEpochs: sessions.epochs,
     signer: sessions.signer,
     sessionUtils: {
       getSession: vi.fn(),

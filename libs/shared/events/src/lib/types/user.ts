@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
 import { defineEventType } from '../definition';
-import { CAEP_SESSION_REVOKED, RISC_ACCOUNT_DISABLED, RISC_ACCOUNT_ENABLED } from '../ssf-mapping';
+import {
+  CAEP_CREDENTIAL_CHANGE,
+  CAEP_SESSION_REVOKED,
+  RISC_ACCOUNT_DISABLED,
+  RISC_ACCOUNT_ENABLED,
+} from '../ssf-mapping';
 import {
   FIRST_RELEASE,
   identifierHmac,
@@ -187,6 +192,32 @@ export const userRegistrationFailed = defineEventType({
 });
 
 /**
+ * The owner's password reset (#642; ADR-017 Decision 8), recorded in the
+ * transaction that replaced the password: an emailed code proved the
+ * mailbox, and any other authenticator the account holds proved it too.
+ */
+export const userPasswordReset = defineEventType({
+  name: 'user.password_reset',
+  version: 1,
+  rc: 0,
+  description:
+    "A person reset their account's password: an emailed code proved the mailbox, every other authenticator the account holds proved it too, and a new password replaced the old one. Every refresh token and browser session the account held ends with it, and so does every sign-in in progress for it.",
+  category: 'user',
+  severity: 'info',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({}),
+  security: true,
+  ssf: {
+    event: CAEP_CREDENTIAL_CHANGE,
+    members: {
+      credential_type: { value: 'password' },
+      change_type: { value: 'update' },
+    },
+  },
+});
+
+/**
  * An operator's switch of an account (#748). Until the admin API has user
  * operations (#681), the `db:disable-user` operator tool is the one path that
  * emits these, in the transaction of the change.
@@ -234,6 +265,7 @@ export const USER_EVENT_TYPES = [
   userSignOutFailed,
   userRegistered,
   userRegistrationFailed,
+  userPasswordReset,
   userDisabled,
   userEnabled,
 ] as const;

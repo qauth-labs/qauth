@@ -186,6 +186,25 @@ export interface UserCredentialsRepository {
   ): Promise<UserCredential>;
   setEmailVerified(id: string, tx?: DbClient): Promise<UserCredential>;
   /**
+   * Replace the password of the realm's `password` credential `id` (#642),
+   * in one statement: `passwordData` is the password's part of
+   * `credential_data` as the password provider builds it
+   * (`buildPasswordCredentialData`: `password_hash`, `email_verified` and,
+   * when there is one, `password_normalization`). It replaces those three
+   * keys (a marker `passwordData` does not carry is dropped), keeps every
+   * other key, and clears the failure ladder's disabled mark (#615). A second
+   * factor's credential is never touched: only a `password` row matches.
+   *
+   * @returns the credential; `undefined` when the realm holds no `password`
+   *   credential `id`
+   */
+  updatePassword(
+    realmId: string,
+    id: string,
+    passwordData: Readonly<Record<string, unknown>>,
+    tx?: DbClient
+  ): Promise<UserCredential | undefined>;
+  /**
    * Set the hard action's disabled mark on the credential `(realm,
    * provider type, external_sub)` names (ADR-017 Decision 7, #615), only
    * when it has none.

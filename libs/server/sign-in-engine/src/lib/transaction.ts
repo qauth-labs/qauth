@@ -26,7 +26,7 @@ import type { SignInFlow } from './round';
  * realm and the client it is for, when it began, who it is for, what it
  * proved, the HMAC of an email code it mailed (#638), whether the password
  * it proved was on the realm's breach list (#635), and whether it is a
- * registration (#640).
+ * registration (#640) or a password reset (#642).
  *
  * It is not sealed: whoever can write it can claim any subject and any
  * verified step. The transport must keep it server-side, under an
@@ -114,8 +114,15 @@ export interface SignInTransaction {
   readonly upstream?: { readonly provider: string; readonly address?: string };
   /**
    * The flow, when it is not a sign-in: `register` for a registration
-   * (#640), set at round 0 from the request's `prompt=create`. It never
-   * changes; a round of another flow ends the transaction.
+   * (#640), set at round 0 from the request's `prompt=create`; `reset` for
+   * the owner's password reset (#642), set at round 0 by a transport that
+   * starts one, or by the answer to the `password_reset` step a sign-in's
+   * password step offered. Once set it never changes; a round of another
+   * flow ends the transaction.
+   *
+   * A reset's subject is fixed by its mailbox, an emailed code that is no
+   * factor: it holds a subject with no `authTime` until another
+   * authenticator the account holds is proved.
    */
   readonly flow?: SignInFlow;
 }
@@ -204,7 +211,7 @@ export const signInTransactionSchema = z.strictObject({
       address: z.string().min(3).max(254).optional(),
     })
     .optional(),
-  flow: z.literal('register').optional(),
+  flow: z.enum(['register', 'reset']).optional(),
 });
 
 /**
@@ -230,8 +237,14 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
-  // names the account by itself.)
-  if ((authTime === undefined) !== (subject === undefined)) return null;
+  // names the account by itself.) A reset's mailbox fixes its subject with no
+  // auth_time (#642): an emailed code is no factor.
+  if (authTime !== undefined && subject === undefined) return null;
+  if (subject !== undefined && authTime === undefined && flow !== 'reset') return null;
+  // A reset names its account by the address it proves, and never goes out
+  // to an upstream provider (#642).
+  if (flow === 'reset' && identifier === undefined && subject !== undefined) return null;
+  if (flow === 'reset' && upstream !== undefined) return null;
   // Only a password that proved the subject is checked against a breach list.
   if (breachedPassword === true && subject === undefined) return null;
   // A required action is read only once a factor fixed the subject.

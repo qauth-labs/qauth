@@ -8,6 +8,7 @@ import { eventRequest } from '@qauth-labs/shared-events';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { accountCredentialRefusal } from './account-validity';
+import { predatesReset } from './password-reset';
 import { requestRealm } from './request-realm';
 import {
   clearSessionCookie,
@@ -94,6 +95,8 @@ export async function createBrowserSession(
  *   - the account was disabled after the session began, and enabled again
  *     since (#748): a session nobody used while the account was disabled does
  *     not come back with it
+ *   - the session was created no later than the user's last password reset
+ *     (the session epoch, #642): the reset ended what the old password opened
  *
  * The caller is responsible for deciding what to do with a null result —
  * e.g. redirect to the login page, or render an error. A cookie that does not
@@ -139,21 +142,31 @@ export async function resolveBrowserSession(
 
 /**
  * Whether the account behind a live session may still use it. One that is
- * gone or disabled, or was disabled after the session began (#748), may not:
- * the session is ended, so nothing can keep using it, and the caller treats it
- * as no sign-in.
+ * gone or disabled, or was disabled after the session began (#748), may not;
+ * nor may a session created no later than the user's last password reset
+ * (#642). The session is ended, so nothing can keep using it, and the caller
+ * treats it as no sign-in. An epoch that cannot be read throws: a session is
+ * never kept unchecked.
  */
 async function keepUsableSession(
   fastify: FastifyInstance,
   session: BrowserSession
 ): Promise<boolean> {
   const user = await fastify.repositories.users.findById(session.realmId, session.userId);
-  if (user && accountCredentialRefusal(user, session.createdAt) === null) return true;
+  let ended: SessionRevokedReason | null = 'admin';
+  if (user && accountCredentialRefusal(user, session.createdAt) === null) {
+    const lastReset = await fastify.sessionEpochs.lastReset({
+      realmId: session.realmId,
+      userId: session.userId,
+    });
+    ended = predatesReset(lastReset, session.createdAt) ? 'reset' : null;
+  }
+  if (ended === null) return true;
   await endBrowserSession(
     fastify,
     session.realmId,
     session.sid,
-    'admin',
+    ended,
     SYSTEM_ACTOR,
     session.userId
   );
@@ -235,17 +248,22 @@ export async function endBrowserSession(
  * and are cleared on their next request.
  *
  * @param realmId - the user's realm: a session is only ever ended in it
+ * @param ending - why: a sign-out everywhere by default, or the user's
+ *   password reset (#642)
  */
 export async function endBrowserSessions(
   fastify: FastifyInstance,
   realmId: string,
-  userId: string
+  userId: string,
+  ending: {
+    readonly reason: Extract<SessionRevokedReason, 'sign_out_everywhere' | 'reset'>;
+  } = { reason: 'sign_out_everywhere' }
 ): Promise<string[]> {
   const { sessions } = await fastify.sessionService.revokeAllForUser({
     realmId,
     userId,
-    reason: 'sign_out_everywhere',
-    // The user signs themselves out.
+    reason: ending.reason,
+    // The user signs themselves out, or reset their password (#642).
     actor: { type: 'user', id: userId },
   });
   const sids = sessions.map(({ session }) => session.id);

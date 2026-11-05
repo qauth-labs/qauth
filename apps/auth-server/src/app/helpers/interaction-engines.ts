@@ -2,15 +2,18 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import {
   type AccountRegistrations,
+  type AccountResets,
   createArgon2PasswordVerifier,
   createCheckedSignInEngine,
   createRepositoryAccountDirectory,
   createRepositoryAccountRegistrations,
+  createRepositoryAccountResets,
   createRepositoryAddressVerifier,
   createRepositoryPasswordUpdates,
   type EmailCodeSender,
   NO_SECOND_FACTOR_POLICY,
   REGISTRATION_NOT_ALLOWED,
+  RESET_NOT_ALLOWED,
   type RoundResult,
   type SignInEngine,
   storedStepOf,
@@ -24,12 +27,14 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { accountPoliciesOf } from './account-policies';
 import { type BackgroundTasks } from './background-tasks';
+import { endBrowserSessions } from './browser-session';
 import { type CodeMail, createEngineMailer, type EngineMailer } from './engine-mail';
 import type { InteractionDecision } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
+import { resetAllowed, resetNotBefore } from './password-reset';
 import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
 import { createServerRoundLimiter } from './round-limits';
@@ -54,24 +59,31 @@ export interface InteractionEngines {
   readonly sendCode: (request: FastifyRequest) => EmailCodeSender;
   /**
    * Run `rounds` (the engine's rounds for one request) as that request's
-   * (#640): a registration they complete records its `user.registered` event
-   * with the request's trace id, address and user agent. A registration
-   * outside it fails, closed: its transaction rolls back.
+   * (#640): a registration they complete records its `user.registered` event,
+   * and a reset its `user.password_reset` (#642), with the request's trace
+   * id, address and user agent. A registration or a reset outside it fails,
+   * closed: its transaction rolls back.
    */
   readonly forRequest: <T>(request: FastifyRequest, rounds: () => Promise<T>) => Promise<T>;
 }
 
 /**
  * The request the engine's rounds run for, while one of them registers an
- * account (#640). The engine's ports live as long as the process and a
+ * account (#640) or resets a password (#642). The engine's ports live as long as the process and a
  * request one round, so the registration port reads the request here rather
  * than through a parameter, as the wallet verifier's status audit does
  * (`wallet-verification.ts`).
  */
 const roundRequests = new AsyncLocalStorage<FastifyRequest>();
 
-/** The mail a registration's code goes out in, by what the engine decided for the address (#640). */
+/**
+ * The mail a code goes out in, by what the engine decided for the address: a
+ * registration's (#640), or a reset's (#642).
+ */
 export function codeMailOf(mail: Parameters<EmailCodeSender>[0]): CodeMail | undefined {
+  // An address a reset may not change (no account, no password, a disabled
+  // user): counted as any other, mailed nothing (ADR-017 Decision 8).
+  if (mail.reset === 'withheld') return undefined;
   switch (mail.registration) {
     // A disabled account's address: counted as any other, mailed nothing
     // (ADR-017 Decision 8; the answer is the same either way).
@@ -148,6 +160,18 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * after an 8-digit code proved the mailbox and a new password met the realm's
  * policy. The account, its verified password credential, its verified email
  * attribute and its `user.registered` event commit in one transaction.
+ *
+ * Both reset a password (#642; ADR-017 Decision 8) from the password step,
+ * while the hosted pages are on and the client is usable (`resetAllowed`),
+ * read again on every round: an 8-digit recovery code to an enabled account
+ * with a password, any other authenticator the account holds, then a new
+ * password that meets the realm's policy. The new password, the verified
+ * address, the refresh families' revocation, the session epoch and the
+ * `user.password_reset` event commit in one transaction; then the browser
+ * sessions end, the epoch's cache is written, the password's failure ladder
+ * is cleared and the "password changed" notice goes out. Both read the
+ * session epoch on every round of a sign-in that holds a user, so a reset
+ * ends every sign-in in progress for its account.
  *
  * Building them registers an `onClose` hook for the mail's background tasks,
  * which Fastify refuses once the server started: a route that builds them
@@ -247,6 +271,78 @@ export function createInteractionEngines(
         },
       }
     );
+  const resets: AccountResets = createRepositoryAccountResets<EventTransaction>(
+    {
+      userCredentials: fastify.repositories.userCredentials,
+      users: fastify.repositories.users,
+      userAttributes: fastify.repositories.userAttributes,
+      userRequiredActions: fastify.repositories.userRequiredActions,
+      refreshTokens: fastify.repositories.refreshTokens,
+      authorizationCodes: fastify.repositories.authorizationCodes,
+      userSessionEpochs: fastify.repositories.userSessionEpochs,
+    },
+    (work) => fastify.db.transaction(work),
+    {
+      allowed: async ({ realmId, clientId }) =>
+        resetAllowed(await fastify.repositories.oauthClients.findByClientId(realmId, clientId)),
+      hash: (password) => fastify.passwordHasher.hashPassword(password),
+      recorded: async ({ realmId, clientId, userId }, tx) => {
+        const request = roundRequests.getStore();
+        if (request === undefined) {
+          throw new Error('a password reset outside the request that asked for it');
+        }
+        // The reset's event commits with the new password (ADR-019 Decision 8).
+        await emitUserEvent(
+          request,
+          'urn:qauth:event:user.password_reset:v1-rc.0',
+          {},
+          {
+            tx,
+            realmId,
+            userId,
+            clientId: clientId.length <= EVENT_CLIENT_ID_MAX_LENGTH ? clientId : null,
+            actor: 'user',
+          }
+        );
+      },
+      // None of these can undo the reset, and none may fail it: each failure
+      // is logged. The epoch in Postgres refuses every older session and
+      // sign-in, but a reader that finds the user's epoch cached keeps the
+      // old value until the publish replaces it or it expires (60 s), and
+      // the sessions the step below ends stay in their own cache if it fails.
+      committed: async ({ realmId, userId, identifier, advancedAt }) => {
+        const after = async (step: string, work: () => Promise<unknown>) => {
+          try {
+            await work();
+          } catch (error) {
+            fastify.log.error(
+              { err: error, realmId, step },
+              'a password reset committed, but a step after it failed'
+            );
+          }
+        };
+        await after('epoch_cache', () =>
+          fastify.sessionEpochs.publish({ realmId, userId, advancedAt })
+        );
+        await after('browser_sessions', () =>
+          endBrowserSessions(fastify, realmId, userId, { reason: 'reset' })
+        );
+        // The password's run of failures, never a second factor's.
+        await after('failure_ladder', async () =>
+          ladder.ladder.reset({
+            realmId,
+            identifierHmac: await ladder.identifierDigest({ realmId, identifier }),
+            factor: 'password',
+          })
+        );
+        await after('notice', async () =>
+          mailer.sendUncounted(await realmOf(realmId), identifier, {
+            template: 'password_changed',
+          })
+        );
+      },
+    }
+  );
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(
@@ -271,6 +367,12 @@ export function createInteractionEngines(
       // identifier step on a round whose transport can start one.
       upstream: upstreamProviderDirectory(fastify),
       registrations,
+      resets,
+      // The session epoch (#642): a sign-in in progress that began before
+      // its account's last reset ends.
+      sessionEpochs: {
+        notBefore: ({ realmId, userId }) => resetNotBefore(fastify, realmId, userId),
+      },
       hooks: { ladder: ladder.ladder, limits },
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
@@ -313,12 +415,20 @@ export function decisionOf(
       };
     }
     case 'complete':
-      if (result.signIn.registered === true) {
+      if (result.signIn.registered === true || result.signIn.recovered === true) {
         // A registration (#640; ADR-017 Decisions 8 and 10): the account
-        // exists, verified, and nobody signed in. The interaction finishes
-        // for the new account with no browser session, no `amr` and no
-        // `auth_time`.
-        return { kind: 'registered', userId: result.signIn.subject };
+        // exists, verified, and nobody signed in. Or a password reset (#642):
+        // the mailbox, not a factor, proved the account. Either way the
+        // interaction finishes for the account with no browser session, no
+        // `amr` and no `auth_time`, as a request decided for it with no
+        // sign-in: a step-up, `max_age` or `prompt=login` asks for one. The
+        // session epoch it leaves the account at goes with the request: a
+        // later reset ends it (a new account has none).
+        return {
+          kind: 'registered',
+          userId: result.signIn.subject,
+          sessionEpoch: result.signIn.recovered === true ? result.signIn.epoch : 0,
+        };
       }
       // The sign-in is done: the interaction finishes with it, under a new
       // browser session (`authenticated` with no next step). The session's
@@ -347,10 +457,12 @@ export function decisionOf(
         case 'invalid_answer':
           throw new InvalidAnswerError('the engine refused the answer');
         case 'request_refused':
-          // The realm or the client stopped allowing registration since the
-          // interaction started (#640): it ends as an expired one does, and
-          // nothing was created.
-          if (result.code === REGISTRATION_NOT_ALLOWED) throw new InteractionExpiredError();
+          // The realm or the client stopped allowing registration (#640), or
+          // the client a reset (#642), since the interaction started: it ends
+          // as an expired one does, and nothing was created or changed.
+          if (result.code === REGISTRATION_NOT_ALLOWED || result.code === RESET_NOT_ALLOWED) {
+            throw new InteractionExpiredError();
+          }
           throw new Error(`the sign-in engine refused a round: ${result.code}`);
         default:
           // `transaction_ended` again after a fresh start, or a request check

@@ -54,6 +54,7 @@ const DECORATOR_PLUGINS: Readonly<Record<string, RolePlugin>> = {
   emailService: 'email',
   emailVerificationTokenUtils: 'email',
   sessionService: 'sessions',
+  sessionEpochs: 'sessions',
   ssf: 'ssf',
   egress: 'egress',
   passwordAttempts: 'failureLadder',

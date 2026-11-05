@@ -52,6 +52,7 @@ beforeEach(() => {
   fastify = {
     repositories: { users },
     sessionService: sessions.service,
+    sessionEpochs: sessions.epochs,
     signer: sessions.signer,
     redis: sessions.redis,
     log: { warn: vi.fn() },
@@ -331,6 +332,59 @@ describe('resolveBrowserSession', () => {
     expect(headers['Set-Cookie']).toBeUndefined();
   });
 
+  it('revokes a session created no later than the user’s last password reset (#642)', async () => {
+    const { session, cookie } = await sessions.signIn({
+      realmId: REALM.id,
+      userId: USER_ID,
+      side: { csrfToken: 'tok' },
+    });
+    // The reset came after the session; a session created within the margin
+    // after it counts as before it, as for a disablement.
+    sessions.epochs.reset(REALM.id, USER_ID, session.createdAt - 500);
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toBeNull();
+    expect(sessions.service.revoke).toHaveBeenCalledWith({
+      realmId: REALM.id,
+      sid: session.sid,
+      reason: 'reset',
+      actor: { type: 'system' },
+      userId: USER_ID,
+    });
+    expect(sessions.redis.hashes.size).toBe(0);
+    expect(headers['Set-Cookie']).toContain('Max-Age=0');
+  });
+
+  it('keeps a session created after the last password reset, and one of a user never reset (#642)', async () => {
+    const { session, cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+    const { reply, headers } = makeReply();
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toEqual(
+      session
+    );
+
+    sessions.epochs.reset(REALM.id, USER_ID, session.createdAt - 60_000);
+    // Another realm's reset of the same id is not this user's.
+    sessions.epochs.reset(OTHER_REALM.id, USER_ID, session.createdAt + 60_000);
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).resolves.toEqual(
+      session
+    );
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(headers['Set-Cookie']).toBeUndefined();
+  });
+
+  it('fails, and keeps the session and its cookie, when the session epoch cannot be read (#642)', async () => {
+    const { session, cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
+    vi.spyOn(sessions.epochs, 'lastReset').mockRejectedValueOnce(new Error('postgres down'));
+    const { reply, headers } = makeReply();
+
+    await expect(resolveBrowserSession(fastify, makeRequest(cookie), reply)).rejects.toThrow(
+      'postgres down'
+    );
+    expect(sessions.service.revoke).not.toHaveBeenCalled();
+    expect(sessions.service.sessions.has(session.sid)).toBe(true);
+    expect(headers['Set-Cookie']).toBeUndefined();
+  });
+
   it('revokes the session of a user that no longer exists', async () => {
     users.findById.mockResolvedValue(undefined);
     const { session, cookie } = await sessions.signIn({ realmId: REALM.id, userId: USER_ID });
@@ -442,6 +496,21 @@ describe('endBrowserSessions (logout ends every session)', () => {
 
     expect(sessions.redis.del).not.toHaveBeenCalled();
     expect(sessions.redis.hashes.size).toBe(1);
+  });
+
+  it('ends them for a password reset with that reason (#642)', async () => {
+    const a = await createBrowserSession(fastify, makeRequest(), {
+      realmId: REALM.id,
+      userId: USER_ID,
+    });
+
+    await expect(
+      endBrowserSessions(fastify, REALM.id, USER_ID, { reason: 'reset' })
+    ).resolves.toEqual([a.sid]);
+    expect(sessions.service.revokeAllForUser).toHaveBeenCalledExactlyOnceWith({
+      ...SIGN_OUT_EVERYWHERE,
+      reason: 'reset',
+    });
   });
 
   it('ends nothing for a user with no live session', async () => {

@@ -137,6 +137,7 @@ async function buildServer(
     verifyAccessToken: vi.fn(),
   } as never);
   fastify.decorate('sessionService', sessions.service as never);
+  fastify.decorate('sessionEpochs', sessions.epochs as never);
   // The session cookie is verified with the realm cookie key the signer
   // hands out (#493).
   fastify.decorate('signer', sessions.signer as never);

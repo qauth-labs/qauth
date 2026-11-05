@@ -2,10 +2,12 @@ import { CACHE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-cache';
 import { DATABASE_PLUGIN_NAME } from '@qauth-labs/fastify-plugin-db';
 import {
   createRedisSessionCache,
+  createSessionEpochs,
   createSessionService,
   type EndedSession,
   type RealmSessionLifetimes,
   type SessionClientRecord,
+  type SessionEpochs,
   type SessionMetrics,
   type SessionRevocationBatch,
   type SessionService,
@@ -24,6 +26,12 @@ declare module 'fastify' {
      * source of truth, Redis as a cache, last-seen writes throttled.
      */
     sessionService: SessionService;
+    /**
+     * Each user's session epoch (#642): when the password was last reset,
+     * from Postgres through a Redis cache. A session or a sign-in in progress
+     * created no later is treated as absent.
+     */
+    sessionEpochs: SessionEpochs;
   }
 }
 
@@ -166,7 +174,9 @@ export function repositorySessionStore(
 /**
  * The browser session service (ADR-019 Decision 3, issue #469), over the
  * database plugin's repositories and the cache plugin's Redis client, which
- * must be registered first. Decorates `fastify.sessionService`.
+ * must be registered first. Decorates `fastify.sessionService`, and
+ * `fastify.sessionEpochs` over the users' session epochs (#642) with the same
+ * cache time.
  *
  * It only builds the service: nothing touches Postgres or Redis until a
  * session is created or read, so a boot with no reachable database still
@@ -183,6 +193,22 @@ export const sessionServicePlugin = fp<SessionServicePluginOptions>(
         logger: fastify.log,
         ...(options.metrics ? { metrics: options.metrics } : {}),
         ...(options.now ? { now: options.now } : {}),
+      })
+    );
+    fastify.decorate(
+      'sessionEpochs',
+      createSessionEpochs({
+        store: {
+          find: (realmId, userId) => fastify.repositories.userSessionEpochs.find(realmId, userId),
+        },
+        redis: fastify.redis,
+        logger: fastify.log,
+        ...(options.settings.cacheTtlSeconds === undefined
+          ? {}
+          : { cacheTtlSeconds: options.settings.cacheTtlSeconds }),
+        ...(options.settings.cacheTimeoutMs === undefined
+          ? {}
+          : { cacheTimeoutMs: options.settings.cacheTimeoutMs }),
       })
     );
   },

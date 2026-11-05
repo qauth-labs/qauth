@@ -499,6 +499,11 @@ async function decideAnswer(
     client: { id: state.request.client_id },
     // `prompt=create` (#640): the engine's rounds are a registration's.
     ...(state.request.prompt === 'create' ? { flow: 'register' as const } : {}),
+    // `prompt=login` and `max_age` ask for a fresh sign-in, which a password
+    // reset never is (#642; ADR-017 Decision 8): no reset is offered.
+    ...(state.request.prompt === 'login' || state.request.max_age !== undefined
+      ? { freshSignIn: true }
+      : {}),
     receivedAt,
     ...ladderEndUserIp(request),
     environment,
@@ -541,10 +546,20 @@ async function decideAnswer(
     // The engine's transaction outlived its age, or could not be read: the
     // sign-in starts again at its first step, within the same interaction.
     result = await engine.advance(null, null, context(Date.now()));
-  } else if (result.kind === 'complete' && result.signIn.registered !== true) {
+  } else if (result.kind === 'redirect' && state.signInTransaction?.flow === 'reset') {
+    // A password reset needs a step these pages cannot ask for yet: the
+    // account holds an authenticator (a passkey, TOTP) no registered step
+    // proves (#642; ADR-017 Decision 8). Email never stands in for it, so the
+    // reset ends as an expired interaction does, and nothing was changed.
+    throw new InteractionExpiredError();
+  } else if (
+    result.kind === 'complete' &&
+    result.signIn.registered !== true &&
+    result.signIn.recovered !== true
+  ) {
     // A sign-in an upstream provider proved, that a later step (a code)
     // completed here: the provider is how the person signed in. A
-    // registration (#640) signs nobody in.
+    // registration (#640) and a password reset (#642) sign nobody in.
     const throughUpstream =
       state.signInTransaction?.verified.some((step) => step.step === 'upstream') === true;
     answered.signedIn(throughUpstream ? 'upstream' : 'password');
@@ -747,7 +762,9 @@ export default async function (fastify: FastifyInstance) {
           }
           const { userId, registered } = result.transaction;
           // A registration (#640) signed nobody in: the account's own event,
-          // `user.registered`, committed with it.
+          // `user.registered`, committed with it. Nor did a password reset
+          // (#642), finished the same way: `user.password_reset` committed
+          // with the new password.
           if (userId !== undefined && registered !== true) {
             await fastify.repositories.users.updateLastLogin(realm.id, userId);
             await emitUserEvent(

@@ -9,6 +9,9 @@ import type {
   AccountDirectory,
   AccountRegistration,
   AccountRegistrations,
+  AccountReset,
+  AccountResetOutcome,
+  AccountResets,
   AddressVerification,
   AddressVerifier,
   BoundFactor,
@@ -23,6 +26,7 @@ import type {
   PasswordUpdates,
   PasswordVerifier,
   RequiredAction,
+  SessionEpochReader,
   SignInAccount,
   SignInAuditRecord,
   SignInCandidate,
@@ -369,5 +373,74 @@ export class FakeRegistrations implements AccountRegistrations {
       others: [],
     });
     return { kind: 'created', userId };
+  }
+}
+
+/**
+ * The reset's ports over a {@link FakeDirectory} (#642): a gate that answers
+ * `allows`, and a write that replaces the password of the account the
+ * address names when it is the user's and enabled, clearing its disabled
+ * mark and its `update_password` action and verifying its address, and
+ * advancing the user's epoch in `epochs` at `now()`. Each call is recorded.
+ */
+export class FakeResets implements AccountResets {
+  allows = true;
+  readonly gates: { readonly realmId: string; readonly clientId: string }[] = [];
+  readonly resets: AccountReset[] = [];
+  /** Each user's session epoch, as the resets advanced it. */
+  readonly epochOf = new Map<string, number>();
+
+  constructor(
+    readonly directory: FakeDirectory,
+    readonly epochs?: FakeSessionEpochs,
+    readonly now: () => number = Date.now
+  ) {}
+
+  async allowed(input: { readonly realmId: string; readonly clientId: string }): Promise<boolean> {
+    this.gates.push(Object.freeze({ ...input }));
+    return this.allows;
+  }
+
+  async reset(input: AccountReset): Promise<AccountResetOutcome> {
+    const account = this.directory.accounts.get(input.identifier);
+    if (account === undefined || account.userId !== input.userId || account.password === null) {
+      return { kind: 'refused', reason: 'subject_mismatch' };
+    }
+    if (!account.enabled) return { kind: 'refused', reason: 'account_disabled' };
+    this.resets.push(Object.freeze({ ...input }));
+    this.directory.accounts.set(input.identifier, {
+      ...account,
+      verified: true,
+      password: {
+        disabled: false,
+        hash: fakeHash(input.password),
+        normalization: input.normalization,
+      },
+      requiredActions: (account.requiredActions ?? []).filter(
+        (action) => action !== 'update_password'
+      ),
+    });
+    this.epochs?.advance(input.userId, this.now());
+    const epoch = (this.epochOf.get(input.userId) ?? 0) + 1;
+    this.epochOf.set(input.userId, epoch);
+    return { kind: 'reset', epoch };
+  }
+}
+
+/** Session epochs in memory (#642): `notBefore` is the last advance, recording each read. */
+export class FakeSessionEpochs implements SessionEpochReader {
+  readonly reads: string[] = [];
+  readonly advancedAt = new Map<string, number>();
+
+  advance(userId: string, at: number): void {
+    this.advancedAt.set(userId, at);
+  }
+
+  async notBefore(input: {
+    readonly realmId: string;
+    readonly userId: string;
+  }): Promise<number | null> {
+    this.reads.push(input.userId);
+    return this.advancedAt.get(input.userId) ?? null;
   }
 }

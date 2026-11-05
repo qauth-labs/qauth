@@ -1,5 +1,6 @@
 import {
   REGISTRATION_NOT_ALLOWED,
+  RESET_NOT_ALLOWED,
   type RoundResult,
   type SignInTransaction,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
@@ -13,7 +14,7 @@ import { InteractionExpiredError } from './interaction-expired';
 
 /**
  * The interaction's next state for an engine round, and the mail of a code,
- * for a registration (#640). The rounds themselves are the engine's
+ * for a registration (#640) and a password reset (#642). The rounds themselves are the engine's
  * (`registration.test.ts` in the engine library).
  */
 
@@ -40,6 +41,7 @@ describe('decisionOf: a registration (#640)', () => {
     expect(decisionOf(reply, result, RECEIVED_AT)).toEqual({
       kind: 'registered',
       userId: 'user-new',
+      sessionEpoch: 0,
     });
   });
 
@@ -116,5 +118,60 @@ describe('codeMailOf: what a code mail says about its address (#640)', () => {
 
   it("mails nothing to a disabled account's address", () => {
     expect(codeMailOf({ ...MAIL, registration: 'withheld' })).toBeUndefined();
+  });
+});
+
+describe('a password reset (#642)', () => {
+  const RESET_TRANSACTION: SignInTransaction = {
+    ...TRANSACTION,
+    identifier: 'alice@example.com',
+    subject: 'user-1',
+    verified: [{ step: 'password_reset', params: {} }],
+    flow: 'reset',
+  };
+
+  it('finishes the interaction for the account as a registration does: no session, no amr, no auth_time', () => {
+    const result: RoundResult = {
+      kind: 'complete',
+      transaction: null,
+      signIn: { subject: 'user-1', identifier: 'alice@example.com', recovered: true, epoch: 4 },
+    };
+
+    // The epoch the reset advanced to goes with the request (a later reset ends it).
+    expect(decisionOf(reply, result, RECEIVED_AT)).toEqual({
+      kind: 'registered',
+      userId: 'user-1',
+      sessionEpoch: 4,
+    });
+  });
+
+  it('ends the interaction as an expired one when the client may no longer reset', () => {
+    const result: RoundResult = {
+      kind: 'refused',
+      reason: 'request_refused',
+      code: RESET_NOT_ALLOWED,
+      transaction: RESET_TRANSACTION,
+    };
+
+    expect(() => decisionOf(reply, result, RECEIVED_AT)).toThrow(InteractionExpiredError);
+  });
+
+  it('mails the recovery code to an account it may reset, and nothing to any other address', () => {
+    const mail = {
+      realmId: 'realm-1',
+      address: 'alice@example.com',
+      purpose: 'recovery',
+      code: '12345678',
+      expiresInSeconds: 600,
+      afterFirstFactor: false,
+    } as const;
+
+    expect(codeMailOf({ ...mail, reset: 'account' })).toEqual({
+      template: 'code',
+      purpose: 'recovery',
+      code: '12345678',
+      expiresInSeconds: 600,
+    });
+    expect(codeMailOf({ ...mail, reset: 'withheld' })).toBeUndefined();
   });
 });

@@ -10,6 +10,16 @@ import type { NewUserCredential, UserCredential, UserCredentialsRepository } fro
 import { DbClient } from '../db';
 import { userCredentials } from '../schema/identity';
 
+/** The `provider_type` of a password credential (`PASSWORD_PROVIDER_TYPE` of `@qauth-labs/server-federation`). */
+const PASSWORD_PROVIDER_TYPE = 'password';
+
+/**
+ * The keys of `credential_data` a password credential's password owns
+ * (`passwordCredentialDataSchema` of `@qauth-labs/server-federation`): what
+ * {@link UserCredentialsRepository.updatePassword} replaces.
+ */
+const PASSWORD_DATA_KEYS = `{password_hash,email_verified,password_normalization}`;
+
 /**
  * Factory for the `user_credentials` repository (ADR-002/ADR-003, #228).
  *
@@ -221,6 +231,37 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
       if (!credential) {
         throw new NotFoundError('UserCredential', id);
       }
+      return credential;
+    },
+
+    /**
+     * Replace a `password` credential's password (#642): the owner's reset.
+     * One statement, so a concurrent writer of a sibling key keeps it: the
+     * three keys the password shape owns are dropped and `passwordData`
+     * merged in, and the disabled mark cleared with them.
+     */
+    async updatePassword(
+      realmId: string,
+      id: string,
+      passwordData: Readonly<Record<string, unknown>>,
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [credential] = await invoker
+        .update(userCredentials)
+        .set({
+          credentialData: sql`(${userCredentials.credentialData} - ${PASSWORD_DATA_KEYS}::text[]) || ${JSON.stringify(passwordData)}::jsonb`,
+          disabledAt: null,
+          updatedAt: Date.now(),
+        })
+        .where(
+          and(
+            eq(userCredentials.realmId, realmId),
+            eq(userCredentials.id, id),
+            eq(userCredentials.providerType, PASSWORD_PROVIDER_TYPE)
+          )
+        )
+        .returning();
       return credential;
     },
 

@@ -213,6 +213,7 @@ function makeFastify(realm: RealmRow = REALM) {
     },
     sessionUtils,
     sessionService: sessions.service,
+    sessionEpochs: sessions.epochs,
     signer: sessions.signer,
     redis: { ...createRedis(), ...sessions.redis },
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },

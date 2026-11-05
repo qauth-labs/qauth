@@ -175,10 +175,20 @@ export const interactionTransactionSchema = z.strictObject({
   /**
    * The user was registered, not authenticated (#640; ADR-017 Decisions 8
    * and 10): `userId` is the new account, and there is no browser session and
-   * no `auth_time`. The authorization request is decided for that account,
-   * and its code carries neither `amr` nor `auth_time`.
+   * no `auth_time`. A password reset (#642) finishes the same way: the
+   * mailbox proved the account, not a factor. The authorization request is
+   * decided for that account, and its code carries neither `amr` nor
+   * `auth_time`.
    */
   registered: z.literal(true).optional(),
+  /**
+   * With `registered`: the account's session epoch when the interaction
+   * finished (#642), 0 for a new account. A later reset of the account
+   * advances it, and the request is then no longer decided for the account:
+   * it asks for a sign-in. Joined version 2 without a new version: a record
+   * without it reads as epoch 0.
+   */
+  sessionEpoch: z.int().nonnegative().optional(),
 });
 
 export type InteractionTransaction = z.infer<typeof interactionTransactionSchema>;
