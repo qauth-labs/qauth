@@ -90,7 +90,21 @@ stage with npm and copy its directory there:
   SDK, sit inside its directory and travel with it;
 - **without its peer dependencies** (`--omit=peer`), so it takes `zod` from the server: a plugin's
   config schema must be built with the server's Zod, or the boot cannot read its secret members;
-- **without install scripts** (`--ignore-scripts`), and at an exact version.
+- **without install scripts** (`--ignore-scripts`);
+- **from a lockfile you have read** (`npm ci`), at an exact version. Without a lockfile, npm
+  resolves the ranges of the plugin's own dependencies again at every build, so a rebuild can put
+  code nobody has read into the server.
+
+Keep the plugin's `package.json` and `package-lock.json` in your build context, here in
+`plugins/`. Write them once without installing anything, and read the lockfile before you commit
+it:
+
+```bash
+mkdir plugins && cd plugins
+npm init --yes > /dev/null
+npm install --package-lock-only --save-exact --omit=dev --omit=peer \
+  --install-strategy=nested --ignore-scripts @example/qauth-plugin-corp-sso@1.2.3
+```
 
 ```dockerfile
 # syntax=docker/dockerfile:1.7
@@ -100,9 +114,8 @@ ARG QAUTH_IMAGE=ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest>
 # The build stage writes the files the server will run: pin it by digest too.
 FROM node:26-alpine@sha256:<digest> AS plugin
 WORKDIR /plugin
-RUN npm init --yes > /dev/null \
- && npm install --omit=dev --omit=peer --install-strategy=nested --ignore-scripts \
-      @example/qauth-plugin-corp-sso@1.2.3
+COPY plugins/package.json plugins/package-lock.json ./
+RUN npm ci --omit=dev --omit=peer --install-strategy=nested --ignore-scripts
 
 FROM ${QAUTH_IMAGE}
 COPY --from=plugin --chown=nodejs:nodejs \
@@ -126,6 +139,8 @@ realm admin then enables and configures the plugin through the admin API
 
 A plugin release is built for one QAuth contract version, so rebuild this image at every QAuth
 upgrade with the plugin version made for the new release; a mismatch stops the boot and says so.
+Move the lockfile to that version with the same `npm install --package-lock-only` in `plugins/`,
+and read its diff before you commit it.
 Your image is no longer the digest QAuth signed: verify the base digest before you build on it,
 and pin the build stage by digest as well. `npm audit signatures` in the build stage checks that
 the registry's signatures and attestations are valid, not who built the package: to know that,
@@ -136,8 +151,8 @@ in the server's process, beside its keys in a single deployment, so add only a p
 as you trust the server.
 
 For example, QAuth's own GitHub plugin, `@qauth-labs/plugin-github`, installs this way: the
-end-to-end suite of its repository builds its test image with this recipe on the released server
-image, and its README names the plugin version made for each QAuth release.
+end-to-end suite of its repository installs it with these flags into the released server image,
+and its README names the plugin version made for each QAuth release.
 The example's sources are in [qauth-labs/plugin-github](https://github.com/qauth-labs/plugin-github).
 
 ## What a release runs

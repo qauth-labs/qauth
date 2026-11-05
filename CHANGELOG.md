@@ -196,8 +196,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FIRST_PARTY_AUTH_METHOD_PLUGINS`, so it loads only with
   `PLUGIN_API_ENABLED=true`, like any package the operator installs. The
   _Published images_ page gains _Add a plugin to the image_: a Dockerfile that
-  installs a plugin package with npm (nested, without its peer dependencies,
-  so it takes the server's Zod) and copies it into `/app/node_modules` of the
+  installs a plugin package with npm from a lockfile the operator has read
+  (nested, without its peer dependencies, so it takes the server's Zod) and
+  copies it into `/app/node_modules` of the
   published `auth-server` image. The AuthMethod contract page names the plugin
   as its example of a plugin in its own repository. The server itself is
   unchanged: it loads such a package as it is.
