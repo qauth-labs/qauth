@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chooses in the new policy `password.breachListSource` which breach list
   passwords are checked against: `off` (the default, seeded from
   `PASSWORD_BREACH_LIST_SOURCE`; nothing changes), `local` (the operator's
-  file of SHA-1 digests at `BREACHED_PASSWORD_LIST_PATH`, loaded at boot and
-  again within 30 seconds of the file changing) or `k_anonymity` (a range lookup at
+  file of SHA-1 digests at `BREACHED_PASSWORD_LIST_PATH`, at most 5,000,000,
+  loaded at boot and again within 30 seconds of the file changing) or `k_anonymity` (a range lookup at
   `BREACHED_PASSWORD_RANGE_URL`, such as Have I Been Pwned's, that sends only
   the first five hex characters of the password's SHA-1, padded, through the
   egress client, with no redirect and a three-second limit). `POST

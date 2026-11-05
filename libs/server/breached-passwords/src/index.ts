@@ -21,6 +21,8 @@ export {
   createReloadableBreachList,
   loadLocalBreachList,
   type LocalBreachList,
+  type LocalBreachListOptions,
+  MAX_LOCAL_BREACH_LIST_DIGESTS,
   parseLocalBreachList,
   type ReloadableBreachList,
 } from './lib/operator-list';

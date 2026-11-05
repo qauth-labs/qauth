@@ -461,7 +461,9 @@ services:
     # Bounded memory, and back up after a crash or an out-of-memory kill. 1 GiB
     # holds the Node heap plus the concurrent Argon2id hashes (half of
     # UV_THREADPOOL_SIZE, PASSWORD_MEMORY_COST each); raise it if you raise
-    # either.
+    # either, or if you set BREACHED_PASSWORD_LIST_PATH: the local list takes
+    # 20 bytes a digest (100 MB at its 5,000,000 limit), and about three times
+    # that while a reload builds the next one.
     mem_limit: 1g
     restart: unless-stopped
     ports:

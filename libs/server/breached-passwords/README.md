@@ -79,8 +79,15 @@ anything else is malformed: the load fails with a `BreachListError` naming the l
 the line.
 
 The file is read as a stream, and the digests are held as one sorted buffer of 20-byte digests
-without repeats, searched by binary search: ten million digests take 200 MB. A sorted file (the
+without repeats, searched by binary search: five million digests take 100 MB. A sorted file (the
 downloader's is) is not sorted again; an unsorted one is.
+
+A list holds at most `MAX_LOCAL_BREACH_LIST_DIGESTS` (5,000,000) distinct digests, or the
+`maxDigests` the loaders are given. The read stops at the first digest past it and the load fails
+with a `BreachListError` naming that line, before the buffer grows for it: a whole corpus (the
+downloader's full output is far more) cannot exhaust the node's memory. Keep its most common
+passwords instead. While a reload builds the next list beside the one in use, the two take up to
+about 320 MB at the limit.
 
 `createReloadableBreachList(path)` loads nothing until `reload()` is called. A reload that loads the
 whole file replaces the list; one that fails keeps the list in use and says why. Calls made while a

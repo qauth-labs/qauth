@@ -10,6 +10,7 @@ import {
   createReloadableBreachList,
   loadLocalBreachList,
   type LocalBreachList,
+  MAX_LOCAL_BREACH_LIST_DIGESTS,
   parseLocalBreachList,
 } from './operator-list';
 
@@ -156,6 +157,49 @@ describe('parseLocalBreachList: order and repeats', () => {
     expectHolds(list, [lowest, highest, A]);
     expect(list.has(`${'0'.repeat(39)}1`)).toBe(false);
     expect(list.has(`${'F'.repeat(39)}E`)).toBe(false);
+  });
+});
+
+describe('the size of a list', () => {
+  it('holds at most five million distinct digests by default', () => {
+    expect(MAX_LOCAL_BREACH_LIST_DIGESTS).toBe(5_000_000);
+  });
+
+  it('refuses a list past maxDigests, naming the line of the first digest past it', () => {
+    const digests = ascending(A, B, C);
+    expect(parseLocalBreachList(digests.join('\n'), { maxDigests: 3 }).size).toBe(3);
+    expect(() => parseLocalBreachList([...digests, ABSENT].join('\n'), { maxDigests: 3 })).toThrow(
+      expect.objectContaining({
+        name: 'BreachListError',
+        lineNumber: 4,
+        message: expect.stringContaining('past the 3 digests'),
+      })
+    );
+  });
+
+  it('counts distinct digests: a repeat of the line before does not count', () => {
+    const list = parseLocalBreachList([A, `${A}:2`, B, B.toLowerCase()].join('\n'), {
+      maxDigests: 2,
+    });
+    expect(list.size).toBe(2);
+    expectHolds(list, [A, B]);
+  });
+
+  it('refuses a maxDigests that holds no digest', () => {
+    expect(() => parseLocalBreachList(A, { maxDigests: 0 })).toThrow(TypeError);
+    expect(() => parseLocalBreachList(A, { maxDigests: 1.5 })).toThrow(TypeError);
+  });
+
+  it('stops reading a file at the first digest past maxDigests, and the reload keeps the list in use', async () => {
+    const path = await listFile([A, B].join('\n'));
+    const reloadable = createReloadableBreachList(path, { maxDigests: 2 });
+    expect(await reloadable.reload()).toEqual({ loaded: true, size: 2 });
+    await writeFile(path, ascending(A, B, C).join('\n'));
+    const result = await reloadable.reload();
+    expect(result.loaded).toBe(false);
+    expect(result.loaded === false && result.error).toBeInstanceOf(BreachListError);
+    expect(reloadable.current()?.size).toBe(2);
+    await expect(loadLocalBreachList(path, { maxDigests: 2 })).rejects.toThrow(/line 3/);
   });
 });
 

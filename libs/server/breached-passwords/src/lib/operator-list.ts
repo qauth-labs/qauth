@@ -7,7 +7,7 @@ import { BreachListError } from './errors';
 /**
  * The operator's local breach list (#635): the SHA-1 digests of breached
  * passwords, held as one sorted buffer of 20-byte digests without repeats and
- * searched by binary search. A list of ten million digests takes 200 MB, and
+ * searched by binary search. A list of five million digests takes 100 MB, and
  * no string per digest.
  */
 export interface LocalBreachList {
@@ -30,6 +30,21 @@ const DIGEST_LINE = /^[0-9A-Fa-f]{40}(?::[0-9]+)?$/;
 
 /** Digests the first buffer holds; it doubles as the list grows. */
 const INITIAL_CAPACITY = 4096;
+
+/**
+ * The most distinct digests a local list may hold: 5,000,000, 100 MB in
+ * memory, and up to about 320 MB while a reload builds the next list beside
+ * the one in use. A longer list fails to load, before it takes more, so a
+ * whole corpus (every Have I Been Pwned digest is far more) cannot exhaust a
+ * node's memory: keep its most common passwords instead.
+ */
+export const MAX_LOCAL_BREACH_LIST_DIGESTS = 5_000_000;
+
+/** How a local list is read. */
+export interface LocalBreachListOptions {
+  /** The most distinct digests the list may hold; {@link MAX_LOCAL_BREACH_LIST_DIGESTS} by default. */
+  readonly maxDigests?: number;
+}
 
 /** The list over `digests`: sorted 20-byte digests without repeats. */
 function sortedDigestList(digests: Buffer): LocalBreachList {
@@ -60,14 +75,26 @@ function sortedDigestList(digests: Buffer): LocalBreachList {
  * output does, and is then neither copied into an index nor sorted again.
  */
 class DigestCollector {
-  #bytes = Buffer.alloc(INITIAL_CAPACITY * SHA1_BYTES);
+  readonly #maxDigests: number;
+  #bytes: Buffer;
+  /** The digest of the line being taken, before it is known to be new. */
+  readonly #digest = Buffer.alloc(SHA1_BYTES);
   #count = 0;
   #sorted = true;
+
+  constructor(maxDigests: number) {
+    if (!Number.isSafeInteger(maxDigests) || maxDigests < 1) {
+      throw new TypeError('a breach list holds at least one digest');
+    }
+    this.#maxDigests = maxDigests;
+    this.#bytes = Buffer.alloc(Math.min(INITIAL_CAPACITY, maxDigests) * SHA1_BYTES);
+  }
 
   /**
    * Take line `lineNumber` (1-based). A blank line, or one starting with `#`,
    * is skipped; a malformed one throws a {@link BreachListError} naming its
-   * number, never its content.
+   * number, never its content, and so does a digest past the list's
+   * `maxDigests`, before the buffer grows for it.
    */
   add(rawLine: string, lineNumber: number): void {
     let line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
@@ -79,21 +106,28 @@ class DigestCollector {
         { lineNumber }
       );
     }
+    this.#digest.write(line.slice(0, 40), 0, SHA1_BYTES, 'hex');
     const offset = this.#count * SHA1_BYTES;
-    if (offset + SHA1_BYTES > this.#bytes.length) {
-      const grown = Buffer.alloc(this.#bytes.length * 2);
-      this.#bytes.copy(grown, 0, 0, offset);
-      this.#bytes = grown;
-    }
-    this.#bytes.write(line.slice(0, 40), offset, SHA1_BYTES, 'hex');
     if (this.#count > 0) {
       const previous = offset - SHA1_BYTES;
       // The sign of this digest - the previous one.
-      const order = this.#bytes.compare(this.#bytes, previous, offset, offset, offset + SHA1_BYTES);
+      const order = this.#digest.compare(this.#bytes, previous, offset);
       // A repeat of the line before is dropped here; other repeats, after the sort.
       if (order === 0) return;
       if (order < 0) this.#sorted = false;
     }
+    if (this.#count >= this.#maxDigests) {
+      throw new BreachListError(
+        `breach list line ${lineNumber} goes past the ${this.#maxDigests} digests a list may hold`,
+        { lineNumber }
+      );
+    }
+    if (offset + SHA1_BYTES > this.#bytes.length) {
+      const grown = Buffer.alloc(Math.min(this.#bytes.length * 2, this.#maxDigests * SHA1_BYTES));
+      this.#bytes.copy(grown, 0, 0, offset);
+      this.#bytes = grown;
+    }
+    this.#digest.copy(this.#bytes, offset);
     this.#count += 1;
   }
 
@@ -148,8 +182,11 @@ class DigestCollector {
  *
  * @throws BreachListError naming the line number of the first malformed line
  */
-export function parseLocalBreachList(text: string): LocalBreachList {
-  const collector = new DigestCollector();
+export function parseLocalBreachList(
+  text: string,
+  options: LocalBreachListOptions = {}
+): LocalBreachList {
+  const collector = new DigestCollector(options.maxDigests ?? MAX_LOCAL_BREACH_LIST_DIGESTS);
   const lines = text.split(/\r\n|\n|\r/);
   for (let index = 0; index < lines.length; index += 1) {
     collector.add(lines[index] ?? '', index + 1);
@@ -167,12 +204,19 @@ export function parseLocalBreachList(text: string): LocalBreachList {
  * `HASH:COUNT` form, whose count is ignored); blank lines and lines starting
  * with `#` are skipped; CRLF line ends are accepted. Anything else is
  * malformed and fails the whole load. The lines need not be sorted, and
- * repeats are kept once.
+ * repeats are kept once. A list of more than `maxDigests` distinct digests
+ * ({@link MAX_LOCAL_BREACH_LIST_DIGESTS} by default) fails the load too, as
+ * soon as the reader meets the first digest past it.
  *
  * @throws BreachListError when the file cannot be read, or naming the line
- *   number, never the content, of the first malformed line
+ *   number, never the content, of the first malformed line or of the first
+ *   digest past `maxDigests`
  */
-export async function loadLocalBreachList(path: string): Promise<LocalBreachList> {
+export async function loadLocalBreachList(
+  path: string,
+  options: LocalBreachListOptions = {}
+): Promise<LocalBreachList> {
+  const collector = new DigestCollector(options.maxDigests ?? MAX_LOCAL_BREACH_LIST_DIGESTS);
   let handle: FileHandle | undefined;
   try {
     handle = await open(path, 'r');
@@ -188,7 +232,6 @@ export async function loadLocalBreachList(path: string): Promise<LocalBreachList
   }
   const stream = handle.createReadStream({ encoding: 'utf8' });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
-  const collector = new DigestCollector();
   let lineNumber = 0;
   try {
     for await (const line of lines) {
@@ -239,13 +282,16 @@ export interface ReloadableBreachList {
  * {@link ReloadableBreachList.reload}: the auth server calls it at boot, and
  * again when the file changes.
  */
-export function createReloadableBreachList(path: string): ReloadableBreachList {
+export function createReloadableBreachList(
+  path: string,
+  options: LocalBreachListOptions = {}
+): ReloadableBreachList {
   let list: LocalBreachList | null = null;
   let loading: Promise<BreachListReloadResult> | null = null;
 
   const load = async (): Promise<BreachListReloadResult> => {
     try {
-      const next = await loadLocalBreachList(path);
+      const next = await loadLocalBreachList(path, options);
       list = next;
       return { loaded: true, size: next.size };
     } catch (error) {
