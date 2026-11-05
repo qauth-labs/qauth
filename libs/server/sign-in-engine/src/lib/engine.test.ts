@@ -1321,7 +1321,7 @@ describe('the hooks', () => {
     const events: string[] = [];
     const ladder: LadderHook = {
       reserve: async ({ identifierHmac, factor }) => {
-        events.push(`reserve:${factor}:${identifierHmac.length}`);
+        events.push(`reserve:${factor}:${identifierHmac?.length}`);
         return {
           kind: 'reserved',
           settle: async (outcome) => {

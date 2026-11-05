@@ -171,41 +171,57 @@ export type LadderVerdict =
   /** Inside a wait: the attempt is refused, neither verified nor counted. */
   | { readonly kind: 'wait'; readonly retryAfterSeconds: number };
 
+/**
+ * Whose counters a ladder call reads: an identifier's keyed HMAC, whether or
+ * not an account holds it (the password, the email codes), or, for a counter
+ * only a holder of the first factor reaches, the account itself (the
+ * recovery codes, #649; ADR-017 Decision 7: "(realm, user, authenticator
+ * type)"). The two never share a counter.
+ */
+export type LadderSubject =
+  | { readonly identifierHmac: string; readonly userId?: never }
+  | { readonly userId: string; readonly identifierHmac?: never };
+
 /** The per-account failure ladder (PRO-12, #615). */
 export interface LadderHook {
   /**
    * Reserve an attempt before its credential is verified: one atomic store
    * operation reads the wait, refuses an attempt inside it, and otherwise
    * counts the attempt as a failure until it settles. Keyed on the
-   * identifier's HMAC, whether or not an account holds it.
+   * identifier's HMAC, whether or not an account holds it, or on the account
+   * for the recovery codes' counter.
    */
-  reserve(input: {
-    readonly realmId: string;
-    readonly identifierHmac: string;
-    /**
-     * The counter: a factor's, or `email_code`, the wrong email codes'
-     * (#638), a separate counter under the same key that is never a factor.
-     */
-    readonly factor: LadderCounter;
-    /**
-     * The end-user IP, as the limiters key it (an IPv6 address by its /64):
-     * one with a successful sign-in to the account in the ladder's known-IP
-     * window skips the wait and still counts. Absent: no exemption.
-     */
-    readonly endUserIp?: string;
-  }): Promise<LadderVerdict>;
+  reserve(
+    input: LadderSubject & {
+      readonly realmId: string;
+      /**
+       * The counter: a factor's, `email_code`, the wrong email codes' (#638), a
+       * separate counter under the same key that is never a factor, or
+       * `recovery_code`, the wrong recovery codes' (#649), keyed on the user.
+       */
+      readonly factor: LadderCounter;
+      /**
+       * The end-user IP, as the limiters key it (an IPv6 address by its /64):
+       * one with a successful sign-in to the account in the ladder's known-IP
+       * window skips the wait and still counts. Absent: no exemption.
+       */
+      readonly endUserIp?: string;
+    }
+  ): Promise<LadderVerdict>;
   /**
-   * Whether any of `counters` of the identifier has reached its soft
-   * threshold: a run of at least the ladder's `freeFailures` consecutive
-   * counted failures, the point from which every attempt waits (ADR-017
-   * Decision 7: "bot challenge from F1b"). A bot challenge is then due (#643).
-   * It reads and writes nothing else. Absent: the ladder never asks for one.
+   * Whether any of `counters` of the identifier (or of the account) has
+   * reached its soft threshold: a run of at least the ladder's `freeFailures`
+   * consecutive counted failures, the point from which every attempt waits
+   * (ADR-017 Decision 7: "bot challenge from F1b"). A bot challenge is then
+   * due (#643). It reads and writes nothing else. Absent: the ladder never
+   * asks for one.
    */
-  softThreshold?(input: {
-    readonly realmId: string;
-    readonly identifierHmac: string;
-    readonly counters: readonly LadderCounter[];
-  }): Promise<boolean>;
+  softThreshold?(
+    input: LadderSubject & {
+      readonly realmId: string;
+      readonly counters: readonly LadderCounter[];
+    }
+  ): Promise<boolean>;
 }
 
 export interface SignInHooks {

@@ -19,6 +19,7 @@ import {
   recordingAudit,
 } from '../testing/fakes';
 import { createMemoryLadder } from '../testing/memory-ladder';
+import { createMemoryRecoveryCodes } from '../testing/memory-recovery-codes';
 import {
   createSignInEngine,
   RESET_NOT_ALLOWED,
@@ -554,6 +555,35 @@ describe('an account with another authenticator', () => {
     const result = await toAfterCode(built, ctx);
     expect(result).toEqual({ kind: 'redirect', reason: 'step_not_available', transaction: null });
     expect(built.resets.resets).toEqual([]);
+  });
+
+  it('takes a recovery code in its place on the hosted pages, and the reset goes on (#649)', async () => {
+    const codes = createMemoryRecoveryCodes();
+    const built = build(
+      [
+        [
+          ADDRESS,
+          passwordAccount(USER, PASSWORD, { others: [{ type: 'passkey', disabled: false }] }),
+        ],
+      ],
+      { recoveryCodes: codes }
+    );
+    const { codes: set } = await codes.issue({ realmId: REALM, userId: USER });
+    const ctx = context(built);
+    const afterCode = await toAfterCode(built, ctx);
+    expect(afterCode).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'recovery_code', params: {} }, alternatives: [] },
+    });
+    const taken = await built.engine.advance(
+      kept(afterCode),
+      answer('recovery_code', { recovery_code: set[0] as string }),
+      ctx
+    );
+    expect(taken).toMatchObject({ kind: 'step', offer: { current: RESET_PASSWORD_STEP } });
+    expect(codes.usedNotices).toEqual([{ realmId: REALM, userId: USER }]);
+    const done = await built.engine.advance(kept(taken), newPasswordAnswer(NEW_PASSWORD), ctx);
+    expect(done).toMatchObject({ kind: 'complete', signIn: { recovered: true } });
   });
 
   it('counts a disabled one all the same', async () => {

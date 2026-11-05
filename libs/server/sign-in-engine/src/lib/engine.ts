@@ -53,7 +53,9 @@ import {
   type CredentialRoundReservation,
   type HookRound,
   type LadderReservation,
+  type LadderSettlement,
   NO_LADDER,
+  NOTHING_DUE,
   type SignInHooks,
 } from './hooks';
 import { readIdentifier } from './identifier';
@@ -75,6 +77,8 @@ import {
   type PasswordHardAction,
   type PasswordUpdates,
   type PasswordVerifier,
+  type RecoveryCodes,
+  type RecoveryCodeStatus,
   type SessionEpochReader,
   type SignInAccount,
   type SignInAuditReason,
@@ -84,6 +88,7 @@ import {
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,
 } from './ports';
+import { RECOVERY_CODE_COUNT, RECOVERY_CODE_PATTERN } from './recovery-codes';
 import type {
   RegistrationMail,
   ResetMail,
@@ -273,6 +278,18 @@ export interface SignInEngineDependencies {
    * Without it no transaction is checked.
    */
   readonly sessionEpochs?: SessionEpochReader;
+  /**
+   * The accounts' recovery codes (#649; ADR-017 Decision 8). With them, on a
+   * transport that serves the step (the Interaction API), `recovery_code` is
+   * offered after the first factor beside the factor rule 8 asks for, while
+   * the account holds an unused code; a taken code stands in for that factor
+   * with no `amr` value. And a sign-in that proved a factor beyond the
+   * password on an account that holds no set shows a new one once
+   * (`recovery_codes`) before it completes. The wrong codes are counted on
+   * the ladder's `recovery_code` counter, keyed on the account. Without them
+   * neither step is offered.
+   */
+  readonly recoveryCodes?: RecoveryCodes;
   readonly hooks?: SignInHooks;
   /**
    * The password ladder's hard action (#615): called when a failure counts at
@@ -364,10 +381,25 @@ const TRANSACTION_ENDED: RoundResult = Object.freeze({
 
 /**
  * The steps no role may take: an email code is never an authenticator
- * (ADR-017 Decision 5), and a new password proves nothing; both are the
- * engine's own.
+ * (ADR-017 Decision 5), a new password proves nothing, and a recovery code
+ * stands in for a factor without being one (ADR-017 Decision 8); all are the
+ * engine's own, as is showing a new set of recovery codes.
  */
-const NEVER_A_FACTOR: readonly StepName[] = Object.freeze(['email_code', 'new_password']);
+const NEVER_A_FACTOR: readonly StepName[] = Object.freeze([
+  'email_code',
+  'new_password',
+  'recovery_code',
+  'recovery_codes',
+]);
+
+/** The ladder counters of an account rather than an identifier: the recovery codes' (#649). */
+const ACCOUNT_LADDER_COUNTERS = Object.freeze(['recovery_code'] as const);
+
+/** The `recovery_code` step (#649): it has no params. */
+const RECOVERY_CODE_STEP: Offerable = Object.freeze({
+  step: 'recovery_code',
+  params: () => Object.freeze({}),
+});
 
 /**
  * An email code that verifies an account after its password: 6 digits
@@ -545,7 +577,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   // The step grammar's one answer reader, shared with both transports.
   const grammar = createInteractionMapper();
   const factorOf = (step: StepName) => handlers.byStep.get(step)?.factor;
-  const { emailCodes } = deps;
+  const { emailCodes, recoveryCodes } = deps;
   const ladder = deps.hooks?.ladder ?? NO_LADDER;
   /**
    * Whether the engine answers `step` itself: a handler's, the email code of
@@ -556,7 +588,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     (step === 'email_code' && emailCodes !== undefined) ||
     (step === 'new_password' && deps.passwordUpdates !== undefined) ||
     (step === 'upstream' && deps.upstream !== undefined) ||
-    (step === 'password_reset' && deps.resets !== undefined);
+    (step === 'password_reset' && deps.resets !== undefined) ||
+    ((step === 'recovery_code' || step === 'recovery_codes') && recoveryCodes !== undefined);
   /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
   const report = (port: string, error: unknown) => {
     try {
@@ -589,11 +622,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   const settleCode = async (
     reservation: LadderReservation,
     outcome: 'success' | 'failure'
-  ): Promise<void> => {
+  ): Promise<LadderSettlement> => {
     try {
-      await reservation.settle(outcome);
+      return await reservation.settle(outcome);
     } catch (error) {
       report('ladder', error);
+      return NOTHING_DUE;
     }
   };
 
@@ -912,7 +946,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         ...(options.preferred === true && alternatives.length > 0 ? { required: false } : {}),
       } as StepOffer);
     };
-    const offerStep = (offer: StepOffer, error?: StepErrorCode): RoundResult => {
+    const offerStep = (
+      offer: StepOffer,
+      error?: StepErrorCode,
+      shown?: Readonly<Record<string, unknown>>
+    ): RoundResult => {
       const current =
         error === undefined
           ? offer.current
@@ -920,17 +958,22 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const handler = handlers.byStep.get(current.step) as StepHandler | undefined;
       // The email code's screen names the address the code went to (for an
       // account an upstream provider proved, the address it gave, #639), and
-      // the new password's the account it is for.
+      // the new password's and the recovery code's the account it is for. A
+      // new set of recovery codes is shown as this round's alone (#649).
       const identifier =
         current.step === 'email_code'
           ? (state.transaction.identifier ?? state.transaction.upstream?.address)
           : state.transaction.identifier;
       const personal =
-        current.step === 'email_code' || current.step === 'new_password'
-          ? identifier === undefined
-            ? {}
-            : { identifier }
-          : (handler?.personal?.(stepRound()) ?? {});
+        shown !== undefined
+          ? shown
+          : current.step === 'email_code' ||
+              current.step === 'new_password' ||
+              current.step === 'recovery_code'
+            ? identifier === undefined
+              ? {}
+              : { identifier }
+            : (handler?.personal?.(stepRound()) ?? {});
       return Object.freeze({
         kind: 'step',
         transaction: freezeTransaction(state.transaction),
@@ -1264,6 +1307,197 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const factor = factorOf(step.step);
         return factor !== undefined && factor !== 'password';
       });
+    /**
+     * Whether this transaction took a recovery code (#649): it stands in for
+     * the factor rule 8 asked for, once, and adds no `amr` value.
+     */
+    const tookRecoveryCode = (): boolean =>
+      state.transaction.verified.some((step) => step.step === 'recovery_code');
+    /**
+     * Whether this transaction met the factor beyond the password: proved it,
+     * or took a recovery code in its place (ADR-017 Decision 8). An email
+     * code never stands in for it.
+     */
+    const metBeyondPassword = (): boolean => provedBeyondPassword() || tookRecoveryCode();
+    /** What the account holds of recovery codes, checked: anything else is a store fault. */
+    const recoveryStatus = (codes: RecoveryCodes, subject: string): Promise<RecoveryCodeStatus> =>
+      fromStore('recoveryCodes', async () => {
+        const status: unknown = await codes.status({ realmId, userId: subject });
+        const value = status as Partial<RecoveryCodeStatus> | null;
+        if (
+          value === null ||
+          typeof value !== 'object' ||
+          typeof value.issued !== 'boolean' ||
+          !Number.isSafeInteger(value.unused) ||
+          (value.unused as number) < 0 ||
+          (value.unused as number) > RECOVERY_CODE_COUNT ||
+          (!value.issued && value.unused !== 0)
+        ) {
+          throw new Error('not a recovery-code status');
+        }
+        return { issued: value.issued, unused: value.unused as number };
+      });
+    /**
+     * The recovery code an offer of rule 8 adds after the factor's own steps
+     * (#649; ADR-017 Decisions 4 and 8): on a transport that serves it (the
+     * hosted pages), for an account that holds an unused code, once per
+     * transaction. None otherwise: a FiPA client is sent to the hosted pages
+     * only when no step of the factor is left to it.
+     */
+    const recoveryAlternative = async (subject: string): Promise<Offerable[]> => {
+      if (recoveryCodes === undefined || !served.has('recovery_code') || tookRecoveryCode()) {
+        return [];
+      }
+      const status = await recoveryStatus(recoveryCodes, subject);
+      return status.unused > 0 ? [RECOVERY_CODE_STEP] : [];
+    };
+    /**
+     * Verify the pending `recovery_code` answer of `offer` (#649; ADR-017
+     * Decisions 7 and 8). Returns the round's result when the answer ends the
+     * round, or `null` once the code is taken and the rules go on.
+     *
+     * A code is a credential round: the limiters first (#636), then the
+     * account's `recovery_code` counter of the ladder, with no end-user IP,
+     * so no known IP skips its wait; inside a delay or a wait nothing is
+     * checked or counted. A taken code clears that counter and no other; it
+     * joins the verified steps with no `amr` value and leaves `auth_time`
+     * as it was. A wrong one is counted, and at or past the ladder's hard
+     * ceiling the user and the operator are told.
+     */
+    const redeemPending = async (
+      offer: StepOffer,
+      subject: string
+    ): Promise<RoundResult | null> => {
+      const codes = recoveryCodes;
+      if (codes === undefined) throw new Error('sign-in engine: a recovery code without its port');
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('recovery_code');
+      turn.pending = null;
+      const { recovery_code: typed } = read.answer as StepAnswer<'recovery_code'>;
+      const limited = await reserveCredentialRound('recovery_code');
+      if ('refused' in limited) return limited.refused;
+      const roundReservation = limited.reservation;
+      const reservation = await fromStore('ladder', () =>
+        ladder.reserve({ realmId, userId: subject, factor: 'recovery_code' })
+      );
+      if (reservation.kind === 'wait') {
+        await settleRound(roundReservation, 'withdrawn');
+        await audit('refused', 'recovery_code', 'locked_out');
+        return throttled(reservation.retryAfterSeconds);
+      }
+      // A store error from here leaves the attempt counted. The code is
+      // checked now: it spends the bot challenge passed for it (#643).
+      spendChallenge();
+      const redeemed: unknown = await fromStore('recoveryCodes', () =>
+        codes.redeem({ realmId, userId: subject, clientId, code: typed })
+      );
+      const kind = (redeemed as { kind?: unknown } | null)?.kind;
+      if (kind === 'redeemed') {
+        await settleCode(reservation, 'success');
+        await settleRound(roundReservation, 'success', subject);
+        state.transaction = {
+          ...state.transaction,
+          verified: [
+            ...state.transaction.verified,
+            { step: 'recovery_code', params: read.params } as OfferedStep,
+          ],
+        };
+        await audit('passed', 'recovery_code');
+        return null;
+      }
+      if (kind !== 'refused') {
+        throw new SignInStoreUnavailableError('recoveryCodes', new Error('not a redemption'));
+      }
+      const settled = await settleCode(reservation, 'failure');
+      await settleRound(roundReservation, 'failure');
+      if (settled.ceilingReached) {
+        // A notice that fails changes no answer: the code is refused anyway.
+        try {
+          await codes.ceilingReached({ realmId, userId: subject });
+        } catch (error) {
+          report('recoveryCodes', error);
+        }
+      }
+      return refuseAnswer(offer, 'recovery_code', 'invalid_credentials', 'invalid_credentials');
+    };
+    /**
+     * Verify the pending answer of an offer that rule 8 or a reset made after
+     * the first factor: a recovery code, or a factor's own step.
+     */
+    const verifyAfterFirstFactor = (
+      offer: StepOffer,
+      subject: string
+    ): Promise<RoundResult | null> =>
+      turn.pending?.name === 'recovery_code' ? redeemPending(offer, subject) : verifyPending(offer);
+    /** The `recovery_codes` step: the set's size alone. */
+    const recoveryCodesOffer = (): StepOffer =>
+      Object.freeze({
+        current: Object.freeze({
+          step: 'recovery_codes',
+          params: Object.freeze({ count: RECOVERY_CODE_COUNT }),
+        }),
+        alternatives: Object.freeze([]),
+      }) as StepOffer;
+    /**
+     * A new set of recovery codes, shown once before the sign-in completes
+     * (#649; ADR-017 Decision 8, `graphs/flows/core/recovery-code`). Owed
+     * when the account holds a factor beyond the password, this transaction
+     * proved one, and the account holds no set: the first enrolment of a
+     * second factor binds it within a transaction that proves it (#651,
+     * #653). A transaction that took a code holds a set already.
+     *
+     * The codes go to this round's answer alone, as the step's personal
+     * data; the transaction marks only that a set waits to be confirmed. The
+     * confirmation records `recovery_codes` among the verified steps, with no
+     * `amr` value. A round that brings none issues a new set, which replaces
+     * the one shown: nothing kept it. A transport that cannot show a set (a
+     * FiPA client) gets a redirect. Returns the round's result, or `null`
+     * once nothing is owed.
+     */
+    const showRecoveryCodes = async (
+      codes: RecoveryCodes,
+      current: SignInAccount,
+      subject: string
+    ): Promise<RoundResult | null> => {
+      const waiting = state.transaction.recoveryCodesShown === true;
+      if (!waiting) {
+        if (!boundBeyondPassword(current) || !provedBeyondPassword() || tookRecoveryCode()) {
+          return null;
+        }
+        if ((await recoveryStatus(codes, subject)).issued) return null;
+      }
+      if (!served.has('recovery_codes')) return redirect('step_not_available');
+      const offer = recoveryCodesOffer();
+      if (waiting && turn.pending?.name === 'recovery_codes') {
+        const read = readPending(offer);
+        if (read === null) return invalidAnswer('recovery_codes');
+        turn.pending = null;
+        state.transaction = {
+          ...state.transaction,
+          recoveryCodesShown: undefined,
+          verified: [
+            ...state.transaction.verified,
+            { step: 'recovery_codes', params: read.params } as OfferedStep,
+          ],
+        };
+        await audit('passed', 'recovery_codes');
+        return null;
+      }
+      const issued = await fromStore('recoveryCodes', async () => {
+        const set: unknown = (await codes.issue({ realmId, userId: subject }))?.codes;
+        if (
+          !Array.isArray(set) ||
+          set.length !== RECOVERY_CODE_COUNT ||
+          new Set(set).size !== set.length ||
+          !set.every((code) => typeof code === 'string' && RECOVERY_CODE_PATTERN.test(code))
+        ) {
+          throw new Error('not a recovery-code set');
+        }
+        return set as string[];
+      });
+      state.transaction = { ...state.transaction, recoveryCodesShown: true };
+      return offerStep(offer, undefined, Object.freeze({ codes: Object.freeze([...issued]) }));
+    };
 
     /**
      * The rounds of one emailed code (#638), whatever it is for: the inline
@@ -1921,12 +2155,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const account = await readResetAccount();
       if (!isAccount(account)) return account;
       // Any other authenticator the account holds is proved first: an email
-      // code never stands in for one (ADR-017 Decision 8). A disabled one
-      // still counts as bound, and with no usable one the reset cannot go on
+      // code never stands in for one (ADR-017 Decision 8); on the hosted
+      // pages a recovery code may (#649). A disabled one still counts as
+      // bound, and with no usable one and no code the reset cannot go on
       // here.
-      if (boundBeyondPassword(account) && !provedBeyondPassword()) {
+      if (boundBeyondPassword(account) && !metBeyondPassword()) {
         const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
-        const needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(
+        const needed: Offerable[] = [...handlers.secondFactors, ...handlers.firstFactors].filter(
           (handler) =>
             served.has(handler.step) &&
             !verifiedSteps.has(handler.step) &&
@@ -1934,10 +2169,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
             handler.factor !== 'password' &&
             (handler.usableBy?.(account) ?? false)
         );
+        needed.push(...(await recoveryAlternative(subject)));
         if (needed.length === 0) return redirect('step_not_available');
         const offer = await offerOf(needed);
         if (!answers(offer)) return offerStep(offer);
-        const result = await verifyPending(offer);
+        const result = await verifyAfterFirstFactor(offer, subject);
         if (result !== null) return result;
         const reread = await readResetAccount();
         if (!isAccount(reread)) return reread;
@@ -2151,6 +2387,30 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       return soft;
     };
     /**
+     * Whether the account the transaction proved is past its recovery codes'
+     * free failures (#649; ADR-017 Decision 7: the second-factor row's
+     * "bot challenge from F1b"). Read only once a factor fixed the subject,
+     * and only by an engine that offers recovery codes.
+     */
+    const accountLadderSoft = async (): Promise<boolean> => {
+      const peek = hooks.ladder;
+      const userId = state.transaction.subject;
+      if (
+        peek?.softThreshold === undefined ||
+        userId === undefined ||
+        recoveryCodes === undefined
+      ) {
+        return false;
+      }
+      const soft: unknown = await fromStore('ladder', () =>
+        peek.softThreshold?.({ realmId, userId, counters: ACCOUNT_LADDER_COUNTERS })
+      );
+      if (typeof soft !== 'boolean') {
+        throw new SignInStoreUnavailableError('ladder', new Error('not a soft threshold'));
+      }
+      return soft;
+    };
+    /**
      * Whether a registration still owes its challenge (#643): the realm or
      * the client requires one, and this transaction has passed none.
      */
@@ -2179,7 +2439,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       // would throw the proof away and send the person back to the provider.
       // The rounds after it meet this rule as any other.
       if (upstreamRound.proof !== undefined) return null;
-      if (limitsSoft || (await ladderSoft())) return 'threshold';
+      if (limitsSoft || (await ladderSoft()) || (await accountLadderSoft())) return 'threshold';
       if (botChallenge === undefined) return null;
       const verdict = await fromStore('botChallenge', () => botChallenge(hookRound));
       if (verdict?.kind === 'due') return 'threshold';
@@ -2543,7 +2803,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         return redirect('step_not_available');
       }
       if (boundBeyondPassword(current)) {
-        if (!provedBeyondPassword()) {
+        if (!metBeyondPassword()) {
           throw new Error('sign-in engine: a forced update before the factor beyond the password');
         }
       } else if (!provedMailbox()) {
@@ -2579,17 +2839,32 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         served.has(handler.step) &&
         !verifiedSteps.has(handler.step) &&
         (handler.usableBy?.(current) ?? false);
-      let needed: AnyStepHandler[] | null = null;
+      let needed: Offerable[] | null = null;
       const strongest = strongestBoundFactor(current);
-      if (provenFactorStrength(state.transaction.verified, factorOf) < strongest) {
+      if (
+        provenFactorStrength(state.transaction.verified, factorOf) < strongest &&
+        !tookRecoveryCode()
+      ) {
         // The downgrade rule: only a factor as strong as the strongest bound
-        // one, a disabled one included, completes the sign-in.
-        needed = handlers.firstFactors.filter(
-          (handler) => candidate(handler) && factorStrength(handler.factor) >= strongest
-        );
+        // one, a disabled one included, completes the sign-in; on the hosted
+        // pages a recovery code may stand in for it (ADR-017 Decision 4).
+        needed = [
+          ...handlers.firstFactors.filter(
+            (handler) => candidate(handler) && factorStrength(handler.factor) >= strongest
+          ),
+          ...(await recoveryAlternative(subject)),
+        ];
       } else if (secondFactorRequired(policy, current) && !provesMfa(state.transaction.verified)) {
-        // The MFA policy: the transaction's amr must carry mfa.
-        needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(candidate);
+        // The MFA policy: the transaction's amr must carry mfa. A recovery
+        // code never makes it: it stands in for a lost second factor, and a
+        // new one is bound before the sign-in completes (ADR-017 Decision 8):
+        // the set-up step, which no transport serves until #651 and #653 add
+        // one, so after a code only a factor the account still holds is
+        // offered, and with none the round is a redirect.
+        needed = [
+          ...[...handlers.secondFactors, ...handlers.firstFactors].filter(candidate),
+          ...(await recoveryAlternative(subject)),
+        ];
         // An account that lacks the factor gets the set-up step, below, never
         // a code. One that has it verifies its address first: rule 8 asks for
         // the verification before the second factor (ADR-017 Decision 4).
@@ -2597,17 +2872,21 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
           if (result !== null) return result;
         }
-      } else if (updateDue(current) && boundBeyondPassword(current) && !provedBeyondPassword()) {
+      } else if (updateDue(current) && boundBeyondPassword(current) && !metBeyondPassword()) {
         // The forced update (#635): an account with a factor beyond its
         // password proves it first, so a person who knows only the password,
         // a listed one above all, sets no new one (ADR-017 Decision 4, rule
-        // 8). An email code never stands in for that factor; a disabled one
-        // still counts as bound, and with no usable one the sign-in cannot
-        // go on here.
-        needed = [...handlers.secondFactors, ...handlers.firstFactors].filter(
-          (handler) =>
-            candidate(handler) && handler.factor !== undefined && handler.factor !== 'password'
-        );
+        // 8). An email code never stands in for that factor, and a recovery
+        // code may, on the hosted pages; a disabled one still counts as
+        // bound, and with no usable one and no code the sign-in cannot go on
+        // here.
+        needed = [
+          ...[...handlers.secondFactors, ...handlers.firstFactors].filter(
+            (handler) =>
+              candidate(handler) && handler.factor !== undefined && handler.factor !== 'password'
+          ),
+          ...(await recoveryAlternative(subject)),
+        ];
         if (needed.length > 0 && emailCodes !== undefined && addressPending(current)) {
           const result = await verifyAddress(emailCodes, subject, VERIFY_ACCOUNT);
           if (result !== null) return result;
@@ -2618,7 +2897,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       if (needed.length === 0) return redirect('step_not_available');
       const offer = await offerOf(needed);
       if (!answers(offer)) return offerStep(offer);
-      const result = await verifyPending(offer);
+      const result = await verifyAfterFirstFactor(offer, subject);
       if (result !== null) return result;
       const reread = await readAccount();
       if (reread === null || reread.userId !== subject)
@@ -2641,6 +2920,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     // sign-in needs and the address verified, before any session or code.
     if (updateDue(account)) {
       const result = await forcedUpdate(account, subject);
+      if (result !== null) return result;
+    }
+
+    // Rule 8: a new set of recovery codes, shown once (#649; ADR-017
+    // Decision 8), after everything else the sign-in owes.
+    if (recoveryCodes !== undefined) {
+      const result = await showRecoveryCodes(recoveryCodes, account, subject);
       if (result !== null) return result;
     }
 

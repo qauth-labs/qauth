@@ -297,7 +297,7 @@ states:
             most once a day) and the operator are told
         - target: codeRefused
           effect: [checkCode, audit, waitFloor]
-          say: 'a wrong or used code: refused with invalid_credentials, counted, audited as invalid_code'
+          say: 'a wrong or used code: refused with invalid_credentials, counted, audited as invalid_credentials'
       FAIL.store:
         target: unavailable
         effect: [waitFloor]

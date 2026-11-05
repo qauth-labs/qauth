@@ -144,6 +144,13 @@ export interface SignInTransaction {
    * is checked leaves it.
    */
   readonly captchaPassed?: true;
+  /**
+   * A recovery-code set this transaction issued waits for the person to
+   * confirm they saved it (#649): rule 8 offers `recovery_codes` until they
+   * do. The codes themselves are kept nowhere, so a round that brings no
+   * confirmation issues a new set, which replaces the one shown.
+   */
+  readonly recoveryCodesShown?: true;
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, when it began, and its flow. */
@@ -239,6 +246,7 @@ export const signInTransactionSchema = z.strictObject({
     .transform((value) => value as StepParams<'captcha'>)
     .optional(),
   captchaPassed: z.literal(true).optional(),
+  recoveryCodesShown: z.literal(true).optional(),
 });
 
 /**
@@ -263,6 +271,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     flow,
     captcha,
     captchaPassed,
+    recoveryCodesShown,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -282,6 +291,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (upstream?.address !== undefined && subject === undefined) return null;
   // A registration never goes out to an upstream provider (#640).
   if (flow === 'register' && upstream !== undefined) return null;
+  // A recovery-code set is issued only to the account a factor proved (#649).
+  if (recoveryCodesShown === true && (subject === undefined || authTime === undefined)) return null;
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -305,6 +316,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ...(flow === undefined ? {} : { flow }),
     ...(captcha === undefined ? {} : { captcha }),
     ...(captchaPassed === undefined ? {} : { captchaPassed }),
+    ...(recoveryCodesShown === undefined ? {} : { recoveryCodesShown }),
   });
 }
 
@@ -314,7 +326,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
  * no key the schema refuses.
  */
 export function freezeTransaction(transaction: SignInTransaction): SignInTransaction {
-  const { emailCode, upstream, captcha, captchaPassed, ...rest } = transaction;
+  const { emailCode, upstream, captcha, captchaPassed, recoveryCodesShown, ...rest } = transaction;
   return Object.freeze({
     ...rest,
     verified: Object.freeze(transaction.verified.map((step) => Object.freeze({ ...step }))),
@@ -322,5 +334,6 @@ export function freezeTransaction(transaction: SignInTransaction): SignInTransac
     ...(upstream === undefined ? {} : { upstream: Object.freeze({ ...upstream }) }),
     ...(captcha === undefined ? {} : { captcha: Object.freeze({ ...captcha }) }),
     ...(captchaPassed === undefined ? {} : { captchaPassed }),
+    ...(recoveryCodesShown === undefined ? {} : { recoveryCodesShown }),
   });
 }

@@ -60,6 +60,7 @@ export {
   type LadderHook,
   type LadderReservation,
   type LadderSettlement,
+  type LadderSubject,
   type LadderSuccessOptions,
   type LadderVerdict,
   type LimitsHook,
@@ -76,6 +77,7 @@ export {
   type LadderPolicy,
   ladderWaitMs,
   PASSWORD_LADDER_POLICY,
+  RECOVERY_CODE_LADDER_POLICY,
 } from './lib/ladder';
 export {
   type AccountDirectory,
@@ -112,6 +114,10 @@ export {
   type PasswordReplacement,
   type PasswordUpdates,
   type PasswordVerifier,
+  type RecoveryCodeAccount,
+  type RecoveryCodeRedemption,
+  type RecoveryCodes,
+  type RecoveryCodeStatus,
   REQUIRED_ACTIONS,
   type RequiredAction,
   type SessionEpochReader,
@@ -124,6 +130,21 @@ export {
   type UpstreamProviderDirectory,
   type UpstreamProviderEntry,
 } from './lib/ports';
+export {
+  createRecoveryCodeService,
+  generateRecoveryCode,
+  generateRecoveryCodeSet,
+  normalizeRecoveryCode,
+  type RandomBytes,
+  RECOVERY_CODE_BITS,
+  RECOVERY_CODE_COUNT,
+  RECOVERY_CODE_PATTERN,
+  type RecoveryCodeHasher,
+  type RecoveryCodeService,
+  type RecoveryCodeServiceDependencies,
+  type RecoveryCodeStore,
+  type StoredRecoveryCode,
+} from './lib/recovery-codes';
 export type {
   CompletedSignIn,
   EmailCodeSender,

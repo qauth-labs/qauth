@@ -17,11 +17,13 @@ export const FACTOR_TYPES = ['password', 'passkey', 'totp'] as const;
 export type FactorType = (typeof FACTOR_TYPES)[number];
 
 /**
- * A counter of the failure ladder (#615): one per factor, and the email
- * codes' (#638, ADR-017 Decision 7: "the same key, a separate counter"),
- * which counts wrong codes and is never a factor.
+ * A counter of the failure ladder (#615): one per factor, the email codes'
+ * (#638, ADR-017 Decision 7: "the same key, a separate counter"), which
+ * counts wrong codes and is never a factor, and the recovery codes' (#649),
+ * keyed on the account rather than the identifier: only a holder of the
+ * first factor reaches one.
  */
-export const LADDER_COUNTERS = [...FACTOR_TYPES, 'email_code'] as const;
+export const LADDER_COUNTERS = [...FACTOR_TYPES, 'email_code', 'recovery_code'] as const;
 export type LadderCounter = (typeof LADDER_COUNTERS)[number];
 
 /**
@@ -416,6 +418,61 @@ export interface SessionEpochReader {
    * refuses the round.
    */
   notBefore(input: { readonly realmId: string; readonly userId: string }): Promise<number | null>;
+}
+
+/** One account of a realm, as the recovery-code port names it. */
+export interface RecoveryCodeAccount {
+  readonly realmId: string;
+  readonly userId: string;
+}
+
+/** What the account holds of recovery codes (#649). */
+export interface RecoveryCodeStatus {
+  /** Whether the account holds a set, used up or not. */
+  readonly issued: boolean;
+  /** How many codes of the set are still unused: 0 to 10. */
+  readonly unused: number;
+}
+
+/** What a recovery code answered at sign-in did (#649). */
+export type RecoveryCodeRedemption =
+  /** An unused code of the account's set: it is used now, and the user is told. */
+  | { readonly kind: 'redeemed' }
+  /** No unused code of the set: a wrong code, a used one, or one another round took first. */
+  | { readonly kind: 'refused' };
+
+/**
+ * The accounts' recovery codes (#649; ADR-017 Decision 8, ADR-018 §3). A set
+ * is 10 codes of 80 bits from a CSPRNG, stored only as salted hashes from the
+ * password hasher and used once each (`createRecoveryCodeService` holds those
+ * rules over a store). On the hosted pages a code stands in for the factor
+ * rule 8 asks for after the first factor; it adds no `amr` value and never
+ * `mfa`. A throw refuses the round, as a store outage does.
+ */
+export interface RecoveryCodes {
+  /** What the account holds. */
+  status(input: RecoveryCodeAccount): Promise<RecoveryCodeStatus>;
+  /**
+   * Replace the account's set, if any, with a new one, and return its codes
+   * in their shown form. They are returned once and never kept: the engine
+   * hands them to the round's answer alone.
+   */
+  issue(input: RecoveryCodeAccount): Promise<{ readonly codes: readonly string[] }>;
+  /**
+   * Take `code`, as the person typed it, if it is an unused code of the
+   * account's set: it is marked used in the write that takes it, so it works
+   * once, and the "a recovery code was used" notice goes out. The check costs
+   * the same however many codes are left.
+   */
+  redeem(
+    input: RecoveryCodeAccount & { readonly clientId: string; readonly code: string }
+  ): Promise<RecoveryCodeRedemption>;
+  /**
+   * A wrong code counted at or past the recovery-code ladder's hard ceiling,
+   * 100 in a row (ADR-017 Decision 7): tell the user, at most once a day, and
+   * the operator. A failure here is reported and changes no answer.
+   */
+  ceilingReached(input: RecoveryCodeAccount): Promise<void>;
 }
 
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;
