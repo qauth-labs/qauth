@@ -91,8 +91,8 @@ describe('a set of recovery codes', () => {
     }
     // Salted: no two hashes alike, even of one code.
     expect(new Set(store.rows.map((row) => row.hash)).size).toBe(10);
-    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10 });
-    expect(await codes.status(OTHER)).toEqual({ issued: false, unused: 0 });
+    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10, confirmed: false });
+    expect(await codes.status(OTHER)).toEqual({ issued: false, unused: 0, confirmed: false });
   });
 });
 
@@ -107,7 +107,7 @@ describe('redeeming a recovery code', () => {
     expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code })).toEqual({
       kind: 'refused',
     });
-    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 9 });
+    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 9, confirmed: false });
     // The others still work, typed as the person may type them.
     const other = (set[7] as string).toUpperCase().replace(/-/g, ' ');
     expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: other })).toEqual({
@@ -124,7 +124,7 @@ describe('redeeming a recovery code', () => {
         kind: 'refused',
       });
     }
-    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10 });
+    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10, confirmed: false });
     expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: mine[0] as string })).toEqual({
       kind: 'redeemed',
     });
@@ -169,7 +169,7 @@ describe('redeeming a recovery code', () => {
     const { codes: old } = await codes.issue(ACCOUNT);
     await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: old[0] as string });
     const { codes: fresh } = await codes.issue(ACCOUNT);
-    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10 });
+    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10, confirmed: false });
     for (const code of old) {
       expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code })).toEqual({
         kind: 'refused',

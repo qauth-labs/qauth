@@ -40,6 +40,7 @@ interface FakeRow {
   userId: string;
   codeHash: string;
   usedAt?: number;
+  confirmedAt?: number;
 }
 
 function setup() {
@@ -53,7 +54,14 @@ function setup() {
         return {
           issued: mine.length > 0,
           unused: mine.filter((row) => row.usedAt === undefined).length,
+          confirmed: mine.length > 0 && mine.every((row) => row.confirmedAt !== undefined),
         };
+      },
+      async confirmSet({ realmId, userId, confirmedAt }, tx) {
+        writesIn.push(tx);
+        for (const row of rows) {
+          if (row.realmId === realmId && row.userId === userId) row.confirmedAt ??= confirmedAt;
+        }
       },
       async findUnused(realmId, userId) {
         return rows
@@ -143,7 +151,11 @@ describe('the recovery codes over the repository (#649)', () => {
       expect(stored).not.toContain(code);
       expect(stored).not.toContain(code.replaceAll('-', ''));
     }
-    await expect(codes.status(ACCOUNT)).resolves.toEqual({ issued: true, unused: 10 });
+    await expect(codes.status(ACCOUNT)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
   });
 
   it('takes a code once, records its use in the take’s transaction, and tells the user after', async () => {
@@ -159,7 +171,11 @@ describe('the recovery codes over the repository (#649)', () => {
     expect(writesIn).toContain(takenIn);
     expect(committed).toHaveBeenCalledTimes(1);
     expect(committed).toHaveBeenCalledWith(use);
-    await expect(codes.status(ACCOUNT)).resolves.toEqual({ issued: true, unused: 9 });
+    await expect(codes.status(ACCOUNT)).resolves.toEqual({
+      issued: true,
+      unused: 9,
+      confirmed: false,
+    });
   });
 
   it('refuses a wrong code with no record and no notice', async () => {
@@ -177,7 +193,11 @@ describe('the recovery codes over the repository (#649)', () => {
     used.mockRejectedValueOnce(new Error('event store down'));
     await expect(redeem(codes, set[0])).rejects.toThrow('event store down');
     expect(committed).not.toHaveBeenCalled();
-    await expect(codes.status(ACCOUNT)).resolves.toEqual({ issued: true, unused: 10 });
+    await expect(codes.status(ACCOUNT)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
     await expect(redeem(codes, set[0])).resolves.toEqual({ kind: 'redeemed' });
   });
 
@@ -187,7 +207,11 @@ describe('the recovery codes over the repository (#649)', () => {
     failCommit();
     await expect(redeem(codes, set[0])).rejects.toThrow('commit failed');
     expect(committed).not.toHaveBeenCalled();
-    await expect(codes.status(ACCOUNT)).resolves.toEqual({ issued: true, unused: 10 });
+    await expect(codes.status(ACCOUNT)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
   });
 
   it('reports a notice that fails after the take, and the code stays used', async () => {
@@ -196,7 +220,11 @@ describe('the recovery codes over the repository (#649)', () => {
     committed.mockRejectedValueOnce(new Error('mail down'));
     await expect(redeem(codes, set[0])).resolves.toEqual({ kind: 'redeemed' });
     expect(report).toHaveBeenCalledWith(expect.any(Error), 'the recovery-code-used notice');
-    await expect(codes.status(ACCOUNT)).resolves.toEqual({ issued: true, unused: 9 });
+    await expect(codes.status(ACCOUNT)).resolves.toEqual({
+      issued: true,
+      unused: 9,
+      confirmed: false,
+    });
   });
 
   it('regenerates: every code of the old set stops working, and the user is told', async () => {
@@ -209,6 +237,19 @@ describe('the recovery codes over the repository (#649)', () => {
       await expect(redeem(codes, code)).resolves.toEqual({ kind: 'refused' });
     }
     await expect(redeem(codes, fresh[0])).resolves.toEqual({ kind: 'redeemed' });
+  });
+
+  it('confirms the set the person saved, and a regenerated set waits for its own confirmation', async () => {
+    const { codes } = setup();
+    await codes.issue(ACCOUNT);
+    await codes.confirm(ACCOUNT);
+    await expect(codes.status(ACCOUNT)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: true,
+    });
+    await codes.regenerate(ACCOUNT);
+    await expect(codes.status(ACCOUNT)).resolves.toMatchObject({ confirmed: false });
   });
 
   it('passes the ceiling on to the caller', async () => {

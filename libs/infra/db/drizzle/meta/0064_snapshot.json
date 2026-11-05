@@ -6062,6 +6062,12 @@
           "type": "bigint",
           "primaryKey": false,
           "notNull": false
+        },
+        "confirmed_at": {
+          "name": "confirmed_at",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {
@@ -6147,6 +6153,10 @@
         "user_recovery_codes_used_at_positive": {
           "name": "user_recovery_codes_used_at_positive",
           "value": "\"user_recovery_codes\".\"used_at\" IS NULL OR \"user_recovery_codes\".\"used_at\" > 0"
+        },
+        "user_recovery_codes_confirmed_at_positive": {
+          "name": "user_recovery_codes_confirmed_at_positive",
+          "value": "\"user_recovery_codes\".\"confirmed_at\" IS NULL OR \"user_recovery_codes\".\"confirmed_at\" > 0"
         }
       },
       "isRLSEnabled": false

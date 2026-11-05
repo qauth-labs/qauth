@@ -1,8 +1,10 @@
 -- #649 (ADR-017 Decision 8, ADR-018 §3): each account's recovery codes, one
 -- row per code of its current set, 10 to a set. A row holds only the code's
 -- salted hash from the password hasher, never the code, and `used_at` once the
--- one write that takes it (`UPDATE … WHERE used_at IS NULL`) has run. A new set
--- replaces the old one in one transaction. One new table, and no change to a
+-- one write that takes it (`UPDATE … WHERE used_at IS NULL`) has run, and
+-- `confirmed_at` once the person confirmed they saved the set: a set nobody
+-- confirmed is shown again, as a new one. A new set replaces the old one in one
+-- transaction. One new table, and no change to a
 -- row of any other, so the previous release keeps working on the new schema
 -- during a rolling upgrade: it never reads or writes the table. Forward-only:
 -- nothing is rewritten.
@@ -25,9 +27,11 @@ CREATE TABLE "user_recovery_codes" (
 	"code_hash" text NOT NULL,
 	"created_at" bigint NOT NULL,
 	"used_at" bigint,
+	"confirmed_at" bigint,
 	CONSTRAINT "user_recovery_codes_code_hash_not_empty" CHECK (length("user_recovery_codes"."code_hash") > 0),
 	CONSTRAINT "user_recovery_codes_created_at_positive" CHECK ("user_recovery_codes"."created_at" > 0),
-	CONSTRAINT "user_recovery_codes_used_at_positive" CHECK ("user_recovery_codes"."used_at" IS NULL OR "user_recovery_codes"."used_at" > 0)
+	CONSTRAINT "user_recovery_codes_used_at_positive" CHECK ("user_recovery_codes"."used_at" IS NULL OR "user_recovery_codes"."used_at" > 0),
+	CONSTRAINT "user_recovery_codes_confirmed_at_positive" CHECK ("user_recovery_codes"."confirmed_at" IS NULL OR "user_recovery_codes"."confirmed_at" > 0)
 );
 --> statement-breakpoint
 ALTER TABLE "user_recovery_codes" ADD CONSTRAINT "user_recovery_codes_realm_id_realms_id_fk" FOREIGN KEY ("realm_id") REFERENCES "public"."realms"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

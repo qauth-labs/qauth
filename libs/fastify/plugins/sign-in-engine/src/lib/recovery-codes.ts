@@ -36,7 +36,7 @@ export interface RecoveryCodeRepositories<Tx> {
       realmId: string,
       userId: string,
       tx?: Tx
-    ): Promise<{ readonly issued: boolean; readonly unused: number }>;
+    ): Promise<{ readonly issued: boolean; readonly unused: number; readonly confirmed: boolean }>;
     findUnused(
       realmId: string,
       userId: string,
@@ -60,6 +60,10 @@ export interface RecoveryCodeRepositories<Tx> {
       },
       tx?: Tx
     ): Promise<boolean>;
+    confirmSet(
+      input: { readonly realmId: string; readonly userId: string; readonly confirmedAt: number },
+      tx?: Tx
+    ): Promise<void>;
   };
 }
 
@@ -109,7 +113,9 @@ export interface RepositoryRecoveryCodes extends RecoveryCodes {
    * Replace the account's set with a new one and return its codes, to be
    * shown once; every code of the old set stops working, and the
    * "recovery codes were regenerated" notice goes out once the new set is
-   * stored. The caller requires a fresh authentication first (ACC-02, #687).
+   * stored. The caller requires a fresh authentication first (ACC-02, #687),
+   * and calls `confirm` once the person says they saved the codes: an
+   * unconfirmed set is replaced by the next sign-in that owes one.
    */
   regenerate(account: RecoveryCodeAccount): Promise<{ readonly codes: readonly string[] }>;
 }
@@ -140,6 +146,7 @@ export function createRepositoryRecoveryCodes<Tx>(
       const rows = await codes.findUnused(realmId, userId);
       return rows.map((row) => ({ id: row.id, hash: row.codeHash }));
     },
+    confirm: ({ realmId, userId, at }) => codes.confirmSet({ realmId, userId, confirmedAt: at }),
     replace: ({ realmId, userId, hashes, at }) =>
       codes.replaceSet({ realmId, userId, codeHashes: hashes, createdAt: at }),
     async take({ realmId, userId, id, at, clientId }) {
@@ -165,6 +172,7 @@ export function createRepositoryRecoveryCodes<Tx>(
     status: service.status,
     issue: service.issue,
     redeem: service.redeem,
+    confirm: service.confirm,
     async regenerate(account: RecoveryCodeAccount) {
       const issued = await service.issue(account);
       await after('the recovery-codes-regenerated notice', () => options.regenerated(account));

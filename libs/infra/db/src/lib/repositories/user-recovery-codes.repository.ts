@@ -18,6 +18,8 @@ export interface UserRecoveryCodeStatus {
   readonly issued: boolean;
   /** How many of its codes are unused. */
   readonly unused: number;
+  /** Whether the person confirmed they saved the set: `false` while it holds none. */
+  readonly confirmed: boolean;
 }
 
 /** One unused code of an account's set. */
@@ -48,9 +50,17 @@ export interface MarkRecoveryCodeUsedInput {
   readonly usedAt: number;
 }
 
+/** What {@link UserRecoveryCodesRepository.confirmSet} writes. */
+export interface ConfirmRecoveryCodeSetInput {
+  readonly realmId: string;
+  readonly userId: string;
+  /** When the person confirmed they saved the set, in epoch ms on the auth server's clock. */
+  readonly confirmedAt: number;
+}
+
 /** The recovery-code repository (#649). */
 export interface UserRecoveryCodesRepository {
-  /** Whether the account holds a set, and how many of its codes are unused. */
+  /** Whether the account holds a set, how many of its codes are unused, and whether it is confirmed. */
   status(realmId: string, userId: string, tx?: DbClient): Promise<UserRecoveryCodeStatus>;
   /** The account's unused codes; none when it holds no set. */
   findUnused(realmId: string, userId: string, tx?: DbClient): Promise<UnusedRecoveryCode[]>;
@@ -70,6 +80,12 @@ export interface UserRecoveryCodesRepository {
    * already (by another round too) or is not the account's.
    */
   markUsed(input: MarkRecoveryCodeUsedInput, tx?: DbClient): Promise<boolean>;
+  /**
+   * Mark the account's set confirmed: the person said they saved it. A set
+   * confirmed before keeps its time, and an account with no set is left as
+   * it is.
+   */
+  confirmSet(input: ConfirmRecoveryCodeSetInput, tx?: DbClient): Promise<void>;
 }
 
 /** A time in epoch ms that a row may hold. */
@@ -96,11 +112,17 @@ export function createUserRecoveryCodesRepository(
         .select({
           total: sql<number>`count(*)::int`,
           unused: sql<number>`count(*) FILTER (WHERE ${userRecoveryCodes.usedAt} IS NULL)::int`,
+          // Every row of a set holds the same mark; NULL when there is no row.
+          confirmed: sql<boolean | null>`bool_and(${userRecoveryCodes.confirmedAt} IS NOT NULL)`,
         })
         .from(userRecoveryCodes)
         .where(ofAccount(realmId, userId));
       const total = row?.total ?? 0;
-      return { issued: total > 0, unused: row?.unused ?? 0 };
+      return {
+        issued: total > 0,
+        unused: row?.unused ?? 0,
+        confirmed: total > 0 && row?.confirmed === true,
+      };
     },
 
     async findUnused(realmId, userId, tx) {
@@ -150,6 +172,14 @@ export function createUserRecoveryCodesRepository(
         )
         .returning({ id: userRecoveryCodes.id });
       return taken.length === 1;
+    },
+
+    async confirmSet({ realmId, userId, confirmedAt }, tx) {
+      checkedTime(confirmedAt, 'confirmation time');
+      await (tx ?? defaultDb)
+        .update(userRecoveryCodes)
+        .set({ confirmedAt })
+        .where(and(ofAccount(realmId, userId), isNull(userRecoveryCodes.confirmedAt)));
     },
   };
 }

@@ -23,6 +23,7 @@ export interface MemoryRecoveryCodeRow {
   readonly createdAt: number;
   usedAt: number | null;
   usedBy: string | null;
+  confirmedAt: number | null;
 }
 
 export interface MemoryRecoveryCodeStore extends RecoveryCodeStore {
@@ -43,7 +44,14 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
     loseNextRace: false,
     async status(account: RecoveryCodeAccount) {
       const set = of(account);
-      return { issued: set.length > 0, unused: set.filter((row) => row.usedAt === null).length };
+      return {
+        issued: set.length > 0,
+        unused: set.filter((row) => row.usedAt === null).length,
+        confirmed: set.length > 0 && set.every((row) => row.confirmedAt !== null),
+      };
+    },
+    async confirm({ realmId, userId, at }: RecoveryCodeAccount & { at: number }) {
+      for (const row of of({ realmId, userId })) row.confirmedAt ??= at;
     },
     async unused(account: RecoveryCodeAccount) {
       return of(account)
@@ -67,6 +75,7 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
           createdAt: at,
           usedAt: null,
           usedBy: null,
+          confirmedAt: null,
         });
       }
     },
@@ -147,6 +156,7 @@ export function createMemoryRecoveryCodes(now: () => number = Date.now): MemoryR
     ceilingNotices,
     status: service.status,
     issue: service.issue,
+    confirm: service.confirm,
     async redeem(input) {
       const redeemed = await service.redeem(input);
       if (redeemed.kind === 'redeemed') {

@@ -60,11 +60,19 @@ describe('recovery codes (real Postgres, #649)', () => {
 
   it('holds no set until one is issued, then 10 unused codes', async () => {
     const { realmId, userId } = await seedUser('realm-issue');
-    await expect(codes.status(realmId, userId)).resolves.toEqual({ issued: false, unused: 0 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: false,
+      unused: 0,
+      confirmed: false,
+    });
     await expect(codes.findUnused(realmId, userId)).resolves.toEqual([]);
 
     await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
-    await expect(codes.status(realmId, userId)).resolves.toEqual({ issued: true, unused: 10 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
     const unused = await codes.findUnused(realmId, userId);
     expect(unused.map((code) => code.codeHash).sort()).toEqual([...HASHES].sort());
   });
@@ -81,7 +89,11 @@ describe('recovery codes (real Postgres, #649)', () => {
     await expect(codes.markUsed({ realmId, userId, id: first.id, usedAt: 3_000 })).resolves.toBe(
       false
     );
-    await expect(codes.status(realmId, userId)).resolves.toEqual({ issued: true, unused: 9 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 9,
+      confirmed: false,
+    });
     const [row] = await db()
       .select({ usedAt: userRecoveryCodes.usedAt })
       .from(userRecoveryCodes)
@@ -110,7 +122,47 @@ describe('recovery codes (real Postgres, #649)', () => {
     await expect(codes.status(theirs.realmId, theirs.userId)).resolves.toEqual({
       issued: true,
       unused: 10,
+      confirmed: false,
     });
+  });
+
+  it('confirms the set the person saved, and a new set is unconfirmed until its own confirmation', async () => {
+    const { realmId, userId } = await seedUser('realm-confirm');
+    // No set: nothing to confirm, and nothing written.
+    await codes.confirmSet({ realmId, userId, confirmedAt: 1_500 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: false,
+      unused: 0,
+      confirmed: false,
+    });
+
+    await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
+    await codes.confirmSet({ realmId, userId, confirmedAt: 2_000 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: true,
+    });
+    // A second confirmation keeps the first one's time.
+    await codes.confirmSet({ realmId, userId, confirmedAt: 3_000 });
+    const rows = await db()
+      .select({ confirmedAt: userRecoveryCodes.confirmedAt })
+      .from(userRecoveryCodes)
+      .where(eq(userRecoveryCodes.userId, userId));
+    expect(new Set(rows.map((row) => row.confirmedAt))).toEqual(new Set([2_000]));
+
+    await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES.map((hash) => `${hash}-new`),
+      createdAt: 4_000,
+    });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
+    await expect(codes.confirmSet({ realmId, userId, confirmedAt: 0 })).rejects.toThrow(RangeError);
   });
 
   it('invalidates every code of the old set when a new one replaces it', async () => {
@@ -123,7 +175,11 @@ describe('recovery codes (real Postgres, #649)', () => {
 
     const fresh = HASHES.map((hash) => `${hash}-new`);
     await codes.replaceSet({ realmId, userId, codeHashes: fresh, createdAt: 3_000 });
-    await expect(codes.status(realmId, userId)).resolves.toEqual({ issued: true, unused: 10 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
     const now = await codes.findUnused(realmId, userId);
     expect(now.map((code) => code.codeHash).sort()).toEqual([...fresh].sort());
     for (const code of old) {
@@ -144,7 +200,11 @@ describe('recovery codes (real Postgres, #649)', () => {
         createdAt: 1_001,
       }),
     ]);
-    await expect(codes.status(realmId, userId)).resolves.toEqual({ issued: true, unused: 10 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
   });
 
   it('refuses a user of another realm, and writes nothing', async () => {
@@ -161,6 +221,7 @@ describe('recovery codes (real Postgres, #649)', () => {
     await expect(codes.status(mine.realmId, mine.userId)).resolves.toEqual({
       issued: false,
       unused: 0,
+      confirmed: false,
     });
   });
 
@@ -168,6 +229,10 @@ describe('recovery codes (real Postgres, #649)', () => {
     const { realmId, userId } = await seedUser('realm-cascade');
     await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
     await db().delete(users).where(eq(users.id, userId));
-    await expect(codes.status(realmId, userId)).resolves.toEqual({ issued: false, unused: 0 });
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: false,
+      unused: 0,
+      confirmed: false,
+    });
   });
 });

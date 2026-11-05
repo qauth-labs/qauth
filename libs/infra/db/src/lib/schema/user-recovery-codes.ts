@@ -10,7 +10,8 @@ import { realms, users } from './core';
  * its salted hash from the password hasher (Argon2id, the PHC string). On the
  * hosted pages a code stands in for a lost factor after the first factor, and
  * is used once: `used_at` is set by the one write that takes it
- * (`UPDATE … WHERE used_at IS NULL`).
+ * (`UPDATE … WHERE used_at IS NULL`). `confirmed_at` marks the set the
+ * person confirmed they saved.
  *
  * A new set replaces the old one in one transaction, so every code of the old
  * set stops working. The user must belong to `realm_id`
@@ -38,6 +39,13 @@ export const userRecoveryCodes = pgTable(
     createdAt: bigint('created_at', { mode: 'number' }).notNull(),
     /** When the code was used, in epoch ms; `NULL` while it is unused. */
     usedAt: bigint('used_at', { mode: 'number' }),
+    /**
+     * When the person confirmed they saved the set, in epoch ms; `NULL` until
+     * then. Every row of a set holds the same value. A set nobody confirmed
+     * was never seen for sure (a closed tab, a lost answer), so the next
+     * sign-in that owes one shows a new set in its place.
+     */
+    confirmedAt: bigint('confirmed_at', { mode: 'number' }),
   },
   (t) => [
     foreignKey({
@@ -53,6 +61,10 @@ export const userRecoveryCodes = pgTable(
     check('user_recovery_codes_created_at_positive', sql`${t.createdAt} > 0`),
     // Not ordered against `created_at`: two servers' clocks may disagree.
     check('user_recovery_codes_used_at_positive', sql`${t.usedAt} IS NULL OR ${t.usedAt} > 0`),
+    check(
+      'user_recovery_codes_confirmed_at_positive',
+      sql`${t.confirmedAt} IS NULL OR ${t.confirmedAt} > 0`
+    ),
   ]
 );
 

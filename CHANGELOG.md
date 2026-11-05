@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which stops working. On the hosted pages alone, two Interaction-API-only
   steps serve them: `recovery_codes` shows a new set once and needs the
   person's confirmation that it is saved, when a sign-in proved a factor
-  beyond the password of an account with no set; `recovery_code` redeems a
+  beyond the password of an account with no confirmed set (one nobody
+  confirmed is replaced); `recovery_code` redeems a
   code in place of the factor rule 8 asks for after the password. A code
   adds no `amr` value and never `mfa`, so an MFA policy still asks for a
   second factor after it; the FiPA endpoint answers `redirect_to_web`. Wrong

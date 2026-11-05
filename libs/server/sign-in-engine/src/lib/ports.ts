@@ -432,6 +432,11 @@ export interface RecoveryCodeStatus {
   readonly issued: boolean;
   /** How many codes of the set are still unused: 0 to 10. */
   readonly unused: number;
+  /**
+   * Whether the person confirmed they saved the set: `false` while the
+   * account holds none. A set nobody confirmed is owed again.
+   */
+  readonly confirmed: boolean;
 }
 
 /** What a recovery code answered at sign-in did (#649). */
@@ -473,6 +478,12 @@ export interface RecoveryCodes {
    * the operator. A failure here is reported and changes no answer.
    */
   ceilingReached(input: RecoveryCodeAccount): Promise<void>;
+  /**
+   * Mark the account's set confirmed: the person said they saved it. Until
+   * then the set counts as never seen, and the next sign-in that owes one
+   * shows a new set in its place.
+   */
+  confirm(input: RecoveryCodeAccount): Promise<void>;
 }
 
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;

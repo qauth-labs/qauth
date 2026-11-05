@@ -1328,14 +1328,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           value === null ||
           typeof value !== 'object' ||
           typeof value.issued !== 'boolean' ||
+          typeof value.confirmed !== 'boolean' ||
           !Number.isSafeInteger(value.unused) ||
           (value.unused as number) < 0 ||
           (value.unused as number) > RECOVERY_CODE_COUNT ||
-          (!value.issued && value.unused !== 0)
+          (!value.issued && (value.unused !== 0 || value.confirmed))
         ) {
           throw new Error('not a recovery-code status');
         }
-        return { issued: value.issued, unused: value.unused as number };
+        return { issued: value.issued, unused: value.unused as number, confirmed: value.confirmed };
       });
     /**
      * The recovery code an offer of rule 8 adds after the factor's own steps
@@ -1442,15 +1443,17 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * A new set of recovery codes, shown once before the sign-in completes
      * (#649; ADR-017 Decision 8, `graphs/flows/core/recovery-code`). Owed
      * when the account holds a factor beyond the password, this transaction
-     * proved one, and the account holds no set: the first enrolment of a
-     * second factor binds it within a transaction that proves it (#651,
-     * #653). A transaction that took a code holds a set already.
+     * proved one, and the account holds no set the person confirmed: the
+     * first enrolment of a second factor binds it within a transaction that
+     * proves it (#651, #653), and a set nobody confirmed (a closed tab, a
+     * lost answer) was never seen for sure. A transaction that took a code
+     * holds a set already.
      *
      * The codes go to this round's answer alone, as the step's personal
      * data; the transaction marks only that a set waits to be confirmed. The
-     * confirmation records `recovery_codes` among the verified steps, with no
-     * `amr` value. A round that brings none issues a new set, which replaces
-     * the one shown: nothing kept it. A transport that cannot show a set (a
+     * confirmation marks the set confirmed in the store and records
+     * `recovery_codes` among the verified steps, with no `amr` value. A round
+     * that brings none issues a new set, which replaces the one shown. A transport that cannot show a set (a
      * FiPA client) gets a redirect. Returns the round's result, or `null`
      * once nothing is owed.
      */
@@ -1464,7 +1467,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         if (!boundBeyondPassword(current) || !provedBeyondPassword() || tookRecoveryCode()) {
           return null;
         }
-        if ((await recoveryStatus(codes, subject)).issued) return null;
+        const status = await recoveryStatus(codes, subject);
+        if (status.issued && status.confirmed) return null;
       }
       if (!served.has('recovery_codes')) return redirect('step_not_available');
       const offer = recoveryCodesOffer();
@@ -1472,6 +1476,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const read = readPending(offer);
         if (read === null) return invalidAnswer('recovery_codes');
         turn.pending = null;
+        await fromStore('recoveryCodes', () => codes.confirm({ realmId, userId: subject }));
         state.transaction = {
           ...state.transaction,
           recoveryCodesShown: undefined,

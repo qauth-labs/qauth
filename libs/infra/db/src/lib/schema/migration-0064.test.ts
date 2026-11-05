@@ -72,6 +72,7 @@ describe('migration 0064 (user recovery codes)', () => {
     expect(create).toContain('"code_hash" text NOT NULL');
     expect(create).toContain('"created_at" bigint NOT NULL');
     expect(create).toContain('"used_at" bigint,');
+    expect(create).toContain('"confirmed_at" bigint,');
     expect(create).not.toMatch(/"code"\s/);
     expect(create).toContain(
       'CONSTRAINT "user_recovery_codes_code_hash_not_empty" CHECK (length("user_recovery_codes"."code_hash") > 0)'
@@ -81,6 +82,9 @@ describe('migration 0064 (user recovery codes)', () => {
     );
     expect(create).toContain(
       'CONSTRAINT "user_recovery_codes_used_at_positive" CHECK ("user_recovery_codes"."used_at" IS NULL OR "user_recovery_codes"."used_at" > 0)'
+    );
+    expect(create).toContain(
+      'CONSTRAINT "user_recovery_codes_confirmed_at_positive" CHECK ("user_recovery_codes"."confirmed_at" IS NULL OR "user_recovery_codes"."confirmed_at" > 0)'
     );
   });
 

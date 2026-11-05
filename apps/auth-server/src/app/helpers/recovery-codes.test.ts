@@ -44,7 +44,7 @@ describe('the server recovery codes (#649)', () => {
   beforeEach(() => {
     vi.mocked(emitUserEvent).mockClear();
     repos = {
-      status: vi.fn(async () => ({ issued: true, unused: 9 })),
+      status: vi.fn(async () => ({ issued: true, unused: 9, confirmed: true })),
       findUnused: vi.fn(async () => [{ id: 'code-1', codeHash: `h:${NORMALIZED}` }]),
       replaceSet: vi.fn(async () => undefined),
       markUsed: vi.fn(async () => true),

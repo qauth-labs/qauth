@@ -114,11 +114,13 @@ export interface StoredRecoveryCode {
 
 /** Where the sets live: the auth server's is `user_recovery_codes`. */
 export interface RecoveryCodeStore {
-  /** Whether the account holds a set, and how many of its codes are unused. */
+  /** Whether the account holds a set, how many of its codes are unused, and whether it is confirmed. */
   status(account: RecoveryCodeAccount): Promise<RecoveryCodeStatus>;
   /** The unused codes of the account's set: none when it holds none. */
   unused(account: RecoveryCodeAccount): Promise<readonly StoredRecoveryCode[]>;
-  /** Replace the account's set, if any, with these hashes, in one write. */
+  /** Mark the account's set confirmed at `at`, if it holds one not confirmed yet. */
+  confirm(account: RecoveryCodeAccount & { readonly at: number }): Promise<void>;
+  /** Replace the account's set, if any, with these hashes, in one write: the new set is unconfirmed. */
   replace(
     account: RecoveryCodeAccount & { readonly hashes: readonly string[]; readonly at: number }
   ): Promise<void>;
@@ -147,7 +149,7 @@ export interface RecoveryCodeServiceDependencies {
 }
 
 /** The recovery codes' rules over a store: what the engine's port needs but the notices. */
-export type RecoveryCodeService = Pick<RecoveryCodes, 'status' | 'issue' | 'redeem'>;
+export type RecoveryCodeService = Pick<RecoveryCodes, 'status' | 'issue' | 'redeem' | 'confirm'>;
 
 /**
  * The recovery codes over `store` and the password hasher.
@@ -169,7 +171,9 @@ export function createRecoveryCodeService(
   const clock = deps.clock ?? SYSTEM_CLOCK;
   const random = deps.random ?? randomBytes;
   const makeDecoy = (): Promise<string> => {
-    const made = hasher.hash(base32(random(32)));
+    // On a later microtask: a hasher that throws fails the first redemption,
+    // never the engine's construction.
+    const made = Promise.resolve().then(() => hasher.hash(base32(random(32))));
     // Awaited, and its failure met, by the first redemption.
     made.catch(() => undefined);
     return made;
@@ -188,6 +192,9 @@ export function createRecoveryCodeService(
 
   return Object.freeze({
     status: (account: RecoveryCodeAccount) => store.status(account),
+
+    confirm: (account: RecoveryCodeAccount) =>
+      store.confirm({ realmId: account.realmId, userId: account.userId, at: clock.now() }),
 
     async issue(account: RecoveryCodeAccount) {
       const codes = generateRecoveryCodeSet(random);

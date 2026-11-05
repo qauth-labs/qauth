@@ -160,8 +160,11 @@ async function signIn(built: Built, ctx: RoundContext = context()): Promise<Roun
 }
 
 /** Issue the account a set, as its first second factor's enrolment will. */
+/** A set the person saved: issued and confirmed. */
 async function issued(built: Built): Promise<readonly string[]> {
-  return (await built.codes.issue({ realmId: REALM, userId: USER })).codes;
+  const { codes } = await built.codes.issue({ realmId: REALM, userId: USER });
+  await built.codes.confirm({ realmId: REALM, userId: USER });
+  return codes;
 }
 
 const recoveryCounter = (built: Built) =>
@@ -197,6 +200,7 @@ describe('a recovery code in place of a lost factor', () => {
     expect(await built.codes.status({ realmId: REALM, userId: USER })).toEqual({
       issued: true,
       unused: 9,
+      confirmed: true,
     });
     // The same code again, in a new sign-in: refused.
     const again = await signIn(built);
@@ -457,6 +461,11 @@ describe('a new set of recovery codes, shown once', () => {
       ctx
     );
     expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'otp', 'mfa'] } });
+    // The set is the person's now: confirmed in the store.
+    await expect(built.codes.status({ realmId: REALM, userId: USER })).resolves.toMatchObject({
+      issued: true,
+      confirmed: true,
+    });
     // The codes shown are the account's.
     expect(
       await built.codes.redeem({
@@ -490,6 +499,32 @@ describe('a new set of recovery codes, shown once', () => {
         code: before[0] as string,
       })
     ).toEqual({ kind: 'refused' });
+  });
+
+  it('is shown again, as a new set, at the next sign-in when nobody confirmed the one shown', async () => {
+    const { built, ctx } = enrolled();
+    // The page was closed before the confirmation: the set is stored, unseen for sure.
+    const lost = await provedTotp(built, ctx);
+    if (lost.kind !== 'step') throw new Error('no step');
+    const unseen = (lost.personal as { codes: string[] }).codes;
+    await expect(built.codes.status({ realmId: REALM, userId: USER })).resolves.toMatchObject({
+      issued: true,
+      confirmed: false,
+    });
+
+    const next = await provedTotp(built, ctx);
+    expect(next).toMatchObject({ kind: 'step', offer: { current: { step: 'recovery_codes' } } });
+    if (next.kind !== 'step') throw new Error('no step');
+    expect((next.personal as { codes: string[] }).codes).not.toEqual(unseen);
+    expect(built.codes.store.rows).toHaveLength(10);
+    const done = await built.engine.advance(
+      kept(next),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete' });
+    // Confirmed, the set is not shown again.
+    expect(await provedTotp(built, ctx)).toMatchObject({ kind: 'complete' });
   });
 
   it('refuses a confirmation that is not true', async () => {
