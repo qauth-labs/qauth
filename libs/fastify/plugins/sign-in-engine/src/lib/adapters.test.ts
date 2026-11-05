@@ -898,6 +898,29 @@ describe('audit events', () => {
     }
   });
 
+  it('maps the recovery codes’ records as the password sign-in’s (#649)', () => {
+    const refused = signInAuditEvent({
+      outcome: 'refused',
+      step: 'recovery_code',
+      reason: 'invalid_credentials',
+      userId: USER,
+    });
+    const passed = signInAuditEvent({ outcome: 'passed', step: 'recovery_codes', userId: USER });
+    expect(refused).toEqual({
+      type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      data: { method: 'password', reason: 'invalid_credentials' },
+      userId: USER,
+    });
+    expect(passed).toEqual({
+      type: 'urn:qauth:event:user.sign_in_step_passed:v1-rc.0',
+      data: { step: STEP_URNS.recovery_codes },
+      userId: USER,
+    });
+    for (const event of [passed, refused]) {
+      expect(getEventType(event.type)?.data.safeParse(event.data).success).toBe(true);
+    }
+  });
+
   it('refuses a step it has no sign-in method for', () => {
     expect(() =>
       signInAuditEvent({

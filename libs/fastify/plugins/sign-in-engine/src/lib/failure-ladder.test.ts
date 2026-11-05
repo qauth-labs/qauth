@@ -5,6 +5,7 @@ import {
   type LadderReservation,
   type LadderVerdict,
   PASSWORD_LADDER_POLICY,
+  RECOVERY_CODE_LADDER_POLICY,
 } from '@qauth-labs/server-sign-in-engine';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -12,6 +13,7 @@ import {
   createRedisFailureLadder,
   isKnownEndUserIp,
   LADDER_MAX_KNOWN_IPS,
+  ladderAccountCounterKey,
   ladderCounterKey,
   ladderKnownIpsKey,
   type LadderRedis,
@@ -615,6 +617,73 @@ describe('the Redis failure ladder', () => {
     if (right.kind !== 'reserved') throw new Error('expected a reservation');
     await right.settle('success');
     expect(redis.hashes.has(ladderCounterKey(REALM, IDENTIFIER_HMAC, 'email_code'))).toBe(false);
+  });
+
+  it('keeps the wrong recovery codes on a counter of the account by default: no known IP, a hard ceiling at 100 (#649)', async () => {
+    let clock = Date.UTC(2026, 10, 1);
+    const redis = new FakeRedis(() => clock);
+    const digest = vi.fn(async ({ identifier }: { realmId: string; identifier: string }) =>
+      hmacOf('ip', identifier)
+    );
+    const ladder = createRedisFailureLadder(redis, { ipDigest: digest, now: () => clock });
+    const USER = '0199fa20-0000-7000-8000-00000000bbbb';
+    const ceiling = RECOVERY_CODE_LADDER_POLICY.hardCeiling ?? 0;
+    expect(ceiling).toBe(100);
+    const code = (endUserIp: string) =>
+      ladder.reserve({ realmId: REALM, userId: USER, factor: 'recovery_code', endUserIp });
+    const key = ladderAccountCounterKey(REALM, USER, 'recovery_code');
+    expect(key).toBe(`sign-in-ladder:{${REALM}:user:${USER}}:recovery_code`);
+    // A success from an address makes it known to no counter of the account.
+    const first = await code(IP);
+    if (first.kind !== 'reserved') throw new Error('expected a reservation');
+    await first.settle('success');
+    expect(redis.sets.size).toBe(0);
+    const settled = [];
+    for (let i = 0; i < ceiling; i += 1) {
+      const verdict = await code(i % 2 === 0 ? IP : OTHER_IP);
+      if (verdict.kind !== 'reserved') throw new Error(`expected a reservation at ${i}`);
+      settled.push(await verdict.settle('failure'));
+      clock += RECOVERY_CODE_LADDER_POLICY.maxWaitMs;
+    }
+    expect(redis.hashes.get(key)?.get('n')).toBe('100');
+    expect(settled.slice(0, 99).every((due) => !due.ceilingReached)).toBe(true);
+    expect(settled[99]).toEqual({ ceilingReached: true });
+    // Every address waits, the one a success came from too.
+    const past = await code(IP);
+    if (past.kind !== 'reserved') throw new Error('expected a reservation past the ceiling');
+    expect(await past.settle('failure')).toEqual({ ceilingReached: true });
+    expect(await code(IP)).toMatchObject({ kind: 'wait' });
+    expect(await code(OTHER_IP)).toMatchObject({ kind: 'wait' });
+    // No identifier's counter was touched, and no address was digested.
+    expect([...redis.hashes.keys()]).toEqual([key]);
+    expect(digest).not.toHaveBeenCalled();
+    expect(
+      await ladder.softThreshold?.({ realmId: REALM, userId: USER, counters: ['recovery_code'] })
+    ).toBe(true);
+  });
+
+  it('keys each counter on its own subject only: the account’s on a user, the others on an identifier (#649)', async () => {
+    const ladder = createRedisFailureLadder(new FakeRedis(() => 0), { ipDigest });
+    const USER = '0199fa20-0000-7000-8000-00000000bbbb';
+    await expect(
+      ladder.reserve({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, factor: 'recovery_code' })
+    ).rejects.toThrow(/the recovery_code counter is the account's/);
+    await expect(
+      ladder.reserve({ realmId: REALM, userId: USER, factor: 'password' })
+    ).rejects.toThrow(/the password counter is an identifier's/);
+    await expect(
+      ladder.reserve({ realmId: REALM, userId: 'a}:b', factor: 'recovery_code' })
+    ).rejects.toThrow(/out of shape/);
+    await expect(
+      ladder.softThreshold?.({ realmId: REALM, userId: USER, counters: ['password'] })
+    ).rejects.toThrow(/an identifier's/);
+    await expect(
+      ladder.softThreshold?.({
+        realmId: REALM,
+        identifierHmac: IDENTIFIER_HMAC,
+        counters: ['recovery_code'],
+      })
+    ).rejects.toThrow(/the account's/);
   });
 
   it('clears the counter and makes no IP known on a success settled without it (#638)', async () => {

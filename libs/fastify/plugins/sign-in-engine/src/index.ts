@@ -13,6 +13,7 @@ export * from './lib/password-attempts';
 export * from './lib/password-hard-action';
 export * from './lib/password-updates';
 export * from './lib/password-verifier';
+export * from './lib/recovery-codes';
 export * from './lib/round-limits';
 export * from './lib/send-caps';
 // What the auth server works with, from the engine library it may not import.
@@ -57,6 +58,11 @@ export {
   PROOF_OF_WORK_MIN_DIFFICULTY,
   PROOF_OF_WORK_PROVIDER,
   readSignInTransaction,
+  RECOVERY_CODE_COUNT,
+  RECOVERY_CODE_LADDER_POLICY,
+  RECOVERY_CODE_PATTERN,
+  type RecoveryCodeAccount,
+  type RecoveryCodes,
   REGISTRATION_NOT_ALLOWED,
   type RegistrationMail,
   REQUIRED_ACTIONS,

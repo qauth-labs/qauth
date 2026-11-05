@@ -9,9 +9,11 @@ import {
   type LadderPolicy,
   type LadderReservation,
   type LadderSettlement,
+  type LadderSubject,
   type LadderVerdict,
   NOTHING_DUE,
   PASSWORD_LADDER_POLICY,
+  RECOVERY_CODE_LADDER_POLICY,
 } from '@qauth-labs/server-sign-in-engine';
 
 /**
@@ -48,7 +50,13 @@ import {
  *   skips the wait only while fewer than `knownIpFreeFailures` of the run's
  *   counted failures came from known IPs (the counter's `k`), since many
  *   clients may share it (#968); failures from other addresses never use
- *   the bound up.
+ *   the bound up;
+ * - `sign-in-ladder:{<realm id>:user:<user id>}:recovery_code`: the wrong
+ *   recovery codes of an account (#649, ADR-017 Decision 8), keyed on the
+ *   user rather than an identifier, so every identifier of the account,
+ *   every transaction and every IP meet one counter. Its ladder knows no IP
+ *   (`knownIpMs` 0), so its known-IP key is never written. A user part holds
+ *   a `:`, which no HMAC does, so it never meets an identifier's key.
  *
  * The braces are a Redis Cluster hash tag: both keys of an account sit in one
  * slot, so one script may read the one and write the other.
@@ -212,6 +220,17 @@ export function ladderKnownIpsKey(realmId: string, identifierHmac: string) {
   return `${LADDER_KEY_PREFIX}:{${realmId}:${identifierHmac}}:known-ips`;
 }
 
+/** The counter key of one counter of one account (the recovery codes', #649) in one realm. */
+export function ladderAccountCounterKey(realmId: string, userId: string, factor: LadderCounter) {
+  return ladderCounterKey(realmId, `user:${userId}`, factor);
+}
+
+/**
+ * The counters keyed on the account rather than an identifier (#649): the
+ * wrong recovery codes, shared by every identifier of the account.
+ */
+const ACCOUNT_COUNTERS: ReadonlySet<LadderCounter> = new Set<LadderCounter>(['recovery_code']);
+
 /** What a key part may hold: a realm id or an HMAC, so no caller can splice another key. */
 const KEY_PART = /^[A-Za-z0-9_-]{1,64}$/;
 
@@ -247,6 +266,7 @@ export function createRedisFailureLadder(
     ...(options.policies ?? {
       password: PASSWORD_LADDER_POLICY,
       email_code: EMAIL_CODE_LADDER_POLICY,
+      recovery_code: RECOVERY_CODE_LADDER_POLICY,
     }),
   });
   for (const policy of Object.values(policies)) if (policy !== undefined) checkLadderPolicy(policy);
@@ -280,18 +300,42 @@ export function createRedisFailureLadder(
     }
   };
 
-  async function reserve(input: {
-    readonly realmId: string;
-    readonly identifierHmac: string;
-    readonly factor: LadderCounter;
-    readonly endUserIp?: string;
-  }): Promise<LadderVerdict> {
-    const { realmId, identifierHmac, factor, endUserIp } = input;
+  /**
+   * The key part of a counter's subject: the identifier HMAC, or `user:` and
+   * the user id for a counter of the account (#649). A counter is keyed on
+   * the one its ladder names, never on the other (fail closed).
+   */
+  const subjectPart = (realmId: string, subject: LadderSubject, factor: LadderCounter): string => {
+    const { identifierHmac, userId } = subject;
+    if (ACCOUNT_COUNTERS.has(factor)) {
+      if (userId === undefined || identifierHmac !== undefined) {
+        throw new Error(`sign-in ladder: the ${factor} counter is the account's`);
+      }
+      if (!KEY_PART.test(realmId) || !KEY_PART.test(userId)) {
+        throw new Error('sign-in ladder: a realm id or a user id out of shape');
+      }
+      return `user:${userId}`;
+    }
+    if (identifierHmac === undefined || userId !== undefined) {
+      throw new Error(`sign-in ladder: the ${factor} counter is an identifier's`);
+    }
+    keyParts(realmId, identifierHmac);
+    return identifierHmac;
+  };
+
+  async function reserve(
+    input: LadderSubject & {
+      readonly realmId: string;
+      readonly factor: LadderCounter;
+      readonly endUserIp?: string;
+    }
+  ): Promise<LadderVerdict> {
+    const { realmId, factor, endUserIp } = input;
     const policy = policies[factor];
     if (policy === undefined) throw new Error(`sign-in ladder: no ladder for ${factor}`);
-    keyParts(realmId, identifierHmac);
-    const counter = ladderCounterKey(realmId, identifierHmac, factor);
-    const known = ladderKnownIpsKey(realmId, identifierHmac);
+    const part = subjectPart(realmId, input, factor);
+    const counter = ladderCounterKey(realmId, part, factor);
+    const known = ladderKnownIpsKey(realmId, part);
     const ip =
       policy.knownIpMs > 0 && endUserIp !== undefined && endUserIp !== ''
         ? await options.ipDigest({ realmId, identifier: endUserIp })
@@ -357,13 +401,13 @@ export function createRedisFailureLadder(
     // A counter at or past its free failures makes its next attempt wait:
     // the soft threshold that asks for the bot challenge (#643). A counter
     // without a ladder counts nothing, so it never crosses one.
-    async softThreshold({ realmId, identifierHmac, counters }) {
-      keyParts(realmId, identifierHmac);
+    async softThreshold(input) {
+      const { realmId, counters } = input;
       const read = await Promise.all(
         counters.flatMap((factor) => {
           const policy = policies[factor];
           if (policy === undefined) return [];
-          const counter = ladderCounterKey(realmId, identifierHmac, factor);
+          const counter = ladderCounterKey(realmId, subjectPart(realmId, input, factor), factor);
           return [
             bounded(redis.hget(counter, 'n'), timeoutMs, 'soft threshold').then((value) => ({
               policy,

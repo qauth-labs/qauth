@@ -222,6 +222,29 @@ describe('createRedisSendCaps (#637)', () => {
     expect(RESERVE_SEND_SCRIPT).not.toMatch(/\blocal until\b/);
   });
 
+  it('claims the recovery codes’ 100-failures notice on a key of its own (#649)', async () => {
+    const redis = fakeRedis(1);
+    const store = createRedisSendCaps(redis, { now: () => NOW });
+
+    expect(
+      await store.claimNotice({
+        realmId: REALM,
+        addressHmac: 'account-hmac',
+        kind: 'recovery_codes_failed',
+      })
+    ).toBe(true);
+    expect(redis.calls[0]?.keys).toEqual([
+      sendCapKey(REALM, 'notice', 'recovery_codes_failed', 'account-hmac'),
+    ]);
+    await expect(
+      store.claimNotice({
+        realmId: REALM,
+        addressHmac: 'account-hmac',
+        kind: 'recovery_code_used' as never,
+      })
+    ).rejects.toThrow('not a once-a-day notice');
+  });
+
   it('releases a notice through its own script, on the claim’s key', async () => {
     const redis = fakeRedis(1);
     const store = createRedisSendCaps(redis, { now: () => NOW });
