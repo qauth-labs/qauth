@@ -354,6 +354,35 @@ export function createRedisFailureLadder(
 
   const ladder: RedisFailureLadder = {
     reserve,
+    // A counter at or past its free failures makes its next attempt wait:
+    // the soft threshold that asks for the bot challenge (#643). A counter
+    // without a ladder counts nothing, so it never crosses one.
+    async softThreshold({ realmId, identifierHmac, counters }) {
+      keyParts(realmId, identifierHmac);
+      const read = await Promise.all(
+        counters.flatMap((factor) => {
+          const policy = policies[factor];
+          if (policy === undefined) return [];
+          const counter = ladderCounterKey(realmId, identifierHmac, factor);
+          return [
+            bounded(redis.hget(counter, 'n'), timeoutMs, 'soft threshold').then((value) => ({
+              policy,
+              value,
+            })),
+          ];
+        })
+      );
+      let soft = false;
+      for (const { policy, value } of read) {
+        if (value === null) continue;
+        const failures = Number(value);
+        if (!Number.isSafeInteger(failures) || failures < 0) {
+          throw new Error('sign-in ladder: a counter answered out of shape');
+        }
+        if (failures >= policy.freeFailures) soft = true;
+      }
+      return soft;
+    },
     async reset({ realmId, identifierHmac, factor }) {
       keyParts(realmId, identifierHmac);
       await bounded(
