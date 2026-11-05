@@ -472,6 +472,11 @@ async function decideAnswer(
     readonly logout: (decision: LogoutDecision) => void;
     /** An upstream provider the answer picked, and where the browser goes (#639). */
     readonly upstream: (started: UpstreamStarted) => void;
+    /**
+     * The sign-in completed: whether an upstream provider proved the account
+     * (#639), for `user.signed_in`'s method.
+     */
+    readonly signedIn: (method: 'password' | 'upstream') => void;
   },
   catalog: UpstreamProviderCatalog
 ): Promise<InteractionDecision> {
@@ -526,6 +531,12 @@ async function decideAnswer(
     // The engine's transaction outlived its age, or could not be read: the
     // sign-in starts again at its first step, within the same interaction.
     result = await engine.advance(null, null, context(Date.now()));
+  } else if (result.kind === 'complete') {
+    // A sign-in an upstream provider proved, that a later step (a code)
+    // completed here: the provider is how the person signed in.
+    const throughUpstream =
+      state.signInTransaction?.verified.some((step) => step.step === 'upstream') === true;
+    answered.signedIn(throughUpstream ? 'upstream' : 'password');
   }
   return decisionOf(reply, result, answer.receivedAt);
 }
@@ -663,6 +674,7 @@ export default async function (fastify: FastifyInstance) {
       let consent: AnsweredConsent | undefined;
       let logout: LogoutDecision | undefined;
       let upstream: UpstreamStarted | undefined;
+      let signedInMethod: 'password' | 'upstream' = 'password';
       const result = await answerInteraction(
         request,
         reply,
@@ -684,6 +696,9 @@ export default async function (fastify: FastifyInstance) {
               },
               upstream: (started) => {
                 upstream = started;
+              },
+              signedIn: (method) => {
+                signedInMethod = method;
               },
             },
             catalog
@@ -723,7 +738,7 @@ export default async function (fastify: FastifyInstance) {
             await emitUserEvent(
               request,
               'urn:qauth:event:user.signed_in:v1-rc.0',
-              { method: 'password' },
+              { method: signedInMethod },
               { realmId: realm.id, userId, clientId: eventClientIdOf(result), actor: 'user' }
             );
           }

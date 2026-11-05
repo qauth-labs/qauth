@@ -1231,6 +1231,49 @@ describe('the events of a client whose id is longer than an event holds (#616)',
   });
 });
 
+describe('the method of user.signed_in (#639)', () => {
+  /** The `user.signed_in` event's data of the sign-in that completes after `round`. */
+  async function signedInAfter(round: typeof PASSWORD_ROUND): Promise<unknown> {
+    engine.advance.mockResolvedValueOnce(round).mockResolvedValueOnce(COMPLETE_ROUND);
+    const browser = new Browser();
+    const id = await browser.start();
+    await browser.send(id, 'answer', {
+      type: IDENTIFIER,
+      csrf: (await browser.read(id)).csrf,
+      login_hint: 'alice@example.com',
+    });
+    const response = await browser.send(id, 'answer', {
+      type: PASSWORD,
+      csrf: (await browser.read(id)).csrf,
+      password: 'correct horse',
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    return vi
+      .mocked(emitUserEvent)
+      .mock.calls.find(([, type]) => type === 'urn:qauth:event:user.signed_in:v1-rc.0')?.[2];
+  }
+
+  it('is upstream when a provider proved the account before the step that completed', async () => {
+    const afterUpstream = {
+      ...PASSWORD_ROUND,
+      transaction: {
+        ...PASSWORD_ROUND.transaction,
+        verified: [
+          {
+            step: 'upstream',
+            params: { providers: [{ provider: 'oidc_corp', name: 'Example Corp' }] },
+          },
+        ],
+      },
+    };
+    expect(await signedInAfter(afterUpstream)).toEqual({ method: 'upstream' });
+  });
+
+  it('is password otherwise', async () => {
+    expect(await signedInAfter(PASSWORD_ROUND)).toEqual({ method: 'password' });
+  });
+});
+
 describe('the rate limits (#616)', () => {
   beforeEach(async () => {
     await app.close();
