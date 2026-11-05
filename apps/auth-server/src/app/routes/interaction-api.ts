@@ -497,6 +497,8 @@ async function decideAnswer(
   const context = (receivedAt: number): RoundContext => ({
     realm: { id: realmId },
     client: { id: state.request.client_id },
+    // `prompt=create` (#640): the engine's rounds are a registration's.
+    ...(state.request.prompt === 'create' ? { flow: 'register' as const } : {}),
     receivedAt,
     ...ladderEndUserIp(request),
     environment,
@@ -539,9 +541,10 @@ async function decideAnswer(
     // The engine's transaction outlived its age, or could not be read: the
     // sign-in starts again at its first step, within the same interaction.
     result = await engine.advance(null, null, context(Date.now()));
-  } else if (result.kind === 'complete') {
+  } else if (result.kind === 'complete' && result.signIn.registered !== true) {
     // A sign-in an upstream provider proved, that a later step (a code)
-    // completed here: the provider is how the person signed in.
+    // completed here: the provider is how the person signed in. A
+    // registration (#640) signs nobody in.
     const throughUpstream =
       state.signInTransaction?.verified.some((step) => step.step === 'upstream') === true;
     answered.signedIn(throughUpstream ? 'upstream' : 'password');
@@ -688,28 +691,30 @@ export default async function (fastify: FastifyInstance) {
         reply,
         { id: interactionIdOf(request), csrf: memberOf(fields, 'csrf') },
         (state) =>
-          decideAnswer(
-            request,
-            reply,
-            engine,
-            engines.sendCode(request),
-            { fields, encoding: parsed.encoding, receivedAt },
-            state,
-            {
-              consent: (answered) => {
-                consent = answered;
+          engines.forRequest(request, () =>
+            decideAnswer(
+              request,
+              reply,
+              engine,
+              engines.sendCode(request),
+              { fields, encoding: parsed.encoding, receivedAt },
+              state,
+              {
+                consent: (answered) => {
+                  consent = answered;
+                },
+                logout: (decision) => {
+                  logout = decision;
+                },
+                upstream: (started) => {
+                  upstream = started;
+                },
+                signedIn: (method) => {
+                  signedInMethod = method;
+                },
               },
-              logout: (decision) => {
-                logout = decision;
-              },
-              upstream: (started) => {
-                upstream = started;
-              },
-              signedIn: (method) => {
-                signedInMethod = method;
-              },
-            },
-            catalog
+              catalog
+            )
           )
       );
       switch (result.kind) {
@@ -740,8 +745,10 @@ export default async function (fastify: FastifyInstance) {
               location: await finishConsent(fastify, request, reply, { ...result, ...consent }),
             });
           }
-          const { userId } = result.transaction;
-          if (userId !== undefined) {
+          const { userId, registered } = result.transaction;
+          // A registration (#640) signed nobody in: the account's own event,
+          // `user.registered`, committed with it.
+          if (userId !== undefined && registered !== true) {
             await fastify.repositories.users.updateLastLogin(realm.id, userId);
             await emitUserEvent(
               request,

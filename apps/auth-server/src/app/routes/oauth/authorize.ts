@@ -9,6 +9,7 @@ import { sendAuthorizationError } from '../../helpers/authorization-error';
 import {
   authorizationInteractionStart,
   recordUnshowableConsent,
+  registrationInteractionStart,
 } from '../../helpers/authorization-interaction';
 import {
   type AuthorizationOutcome,
@@ -20,10 +21,12 @@ import { resolveBrowserSession } from '../../helpers/browser-session';
 import { startInteraction } from '../../helpers/interaction';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
+import { createPromptRefusal } from '../../helpers/registration';
 import {
   type RealmUpstreamProviderOf,
   upstreamProviderCatalog,
 } from '../../helpers/upstream-providers';
+import { emitUserEvent } from '../../helpers/user-events';
 import { type AuthorizeQuery, authorizeQuerySchema } from '../../schemas/oauth';
 
 /**
@@ -90,6 +93,13 @@ function withoutUpstreamRoute(query: AuthorizeQuery): AuthorizeQuery {
  * issues the code (helpers/authorization-interaction.ts). `prompt=none`
  * starts no interaction in either mode.
  *
+ * `prompt=create` (#640; OpenID Connect Prompt Create 1.0) starts a
+ * registration: an interaction whose sign-in engine rounds create a password
+ * account once an emailed code proved the mailbox and a new password met the
+ * realm's policy. Only with the `openid` scope, while the realm allows sign-up
+ * and the client's `hosted_flows` name `register`, and without `max_age`
+ * (`createPromptRefusal`); a browser already signed in registers all the same.
+ *
  * An operator-flagged first-party client (ADR-017 Decision 9) skips the
  * screen without a stored consent for its non-dangerous scopes: the
  * administrative consent, audited on every code as `consent.administrative`.
@@ -144,6 +154,9 @@ export default async function (fastify: FastifyInstance) {
       return sendAuthorizationError(reply, checked.client, query.redirect_uri, checked.params);
     }
     const { target } = checked;
+
+    // `prompt=create` (#640): a registration, whatever session the browser has.
+    if (query.prompt === 'create') return startRegistration(request, reply, target, query);
 
     // User authentication: the browser session cookie. The legacy Bearer
     // path is retired (#524), so an `Authorization` header counts for
@@ -248,6 +261,45 @@ export default async function (fastify: FastifyInstance) {
     // interaction holds the request without it.
     const held = withoutUpstreamRoute(query);
     const started = await startInteraction(request, reply, { request: held, ...start });
+    return reply.redirect(ceremonyPagePath(started.id), 302);
+  };
+
+  /**
+   * `prompt=create` (#640; ADR-017 Decisions 3 and 8): refused, before the
+   * person sees any page, unless the request asks for `openid`, the realm and
+   * the client both allow registration and it carries no `max_age`
+   * (`createPromptRefusal`); each refusal is recorded as
+   * `authorization.failed`. Otherwise an interaction starts at the identifier
+   * step, the request held without its routing parameter: an upstream
+   * provider never registers here.
+   */
+  const startRegistration = async (
+    request: FastifyRequest,
+    reply: FastifyReply,
+    target: AuthorizationTarget,
+    query: AuthorizeQuery
+  ) => {
+    const refusal = createPromptRefusal(target.realm, target.client, query);
+    if (refusal !== null) {
+      await emitUserEvent(
+        request,
+        'urn:qauth:event:authorization.failed:v1-rc.0',
+        { error: refusal.error, reason: refusal.reason },
+        target.clientEvent
+      );
+      return sendAuthorizationError(reply, target.client, query.redirect_uri, {
+        error: refusal.error,
+        error_description: refusal.description,
+        state: query.state ?? undefined,
+        iss: target.iss,
+      });
+    }
+    const browserSession = await resolveBrowserSession(fastify, request, reply);
+    const held = withoutUpstreamRoute(query);
+    const started = await startInteraction(request, reply, {
+      request: held,
+      ...registrationInteractionStart(held, browserSession),
+    });
     return reply.redirect(ceremonyPagePath(started.id), 302);
   };
 

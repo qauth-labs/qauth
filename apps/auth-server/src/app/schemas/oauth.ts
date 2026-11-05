@@ -88,6 +88,14 @@ export const loginHintParamSchema = z
  * realm has on is ignored, as it is with `prompt=none` and for a browser
  * already signed in.
  */
+/**
+ * The `prompt` values `/oauth/authorize` accepts (OpenID Connect Core 1.0
+ * §3.1.2.1; `create` from Initiating User Registration via OpenID Connect
+ * 1.0, #640). Discovery's `prompt_values_supported` lists them, `create` only
+ * while the realm allows sign-up.
+ */
+export const PROMPT_VALUES = ['none', 'login', 'consent', 'create'] as const;
+
 export const upstreamRouteParamSchema = z.string().max(64).optional().meta({
   description:
     "QAuth's direct-routing parameter: the type of one of the realm's upstream identity providers (`oidc_<alias>`), hidden ones included. When the request needs a sign-in, the sign-in starts at that provider instead of the first sign-in step. A value that names no provider the realm has on is ignored, as it is when no sign-in is needed.",
@@ -310,9 +318,11 @@ export const authorizeQuerySchema = z.object({
   // OIDC Core §3.1.2.1 step-up parameters (ADR-007 §2, #185). `prompt` forces
   // a fresh authentication (`login`) or re-consent (`consent`); `max_age`
   // bounds, in seconds, how old the existing authentication may be before a
-  // re-authentication is required (`0` ⇒ always re-authenticate). Only the
-  // values QAuth acts on are accepted; anything else is rejected at the edge.
-  prompt: z.enum(['none', 'login', 'consent']).optional(),
+  // re-authentication is required (`0` ⇒ always re-authenticate). `create`
+  // (Initiating User Registration via OpenID Connect 1.0, #640) starts a
+  // registration, where the realm and the client allow it. Only the values
+  // QAuth acts on are accepted; anything else is rejected at the edge.
+  prompt: z.enum(PROMPT_VALUES).optional(),
   max_age: maxAgeParamSchema,
   resource: resourceParamSchema,
   // RFC 9449 §10 (#480): the thumbprint of the DPoP key to bind the code to.

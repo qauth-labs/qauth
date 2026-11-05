@@ -172,6 +172,13 @@ export const interactionTransactionSchema = z.strictObject({
     .array(z.string().regex(/^[a-z][a-z0-9_]{0,31}$/))
     .max(16)
     .readonly(),
+  /**
+   * The user was registered, not authenticated (#640; ADR-017 Decisions 8
+   * and 10): `userId` is the new account, and there is no browser session and
+   * no `auth_time`. The authorization request is decided for that account,
+   * and its code carries neither `amr` nor `auth_time`.
+   */
+  registered: z.literal(true).optional(),
 });
 
 export type InteractionTransaction = z.infer<typeof interactionTransactionSchema>;
