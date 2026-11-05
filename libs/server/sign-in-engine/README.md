@@ -28,6 +28,7 @@ const engine = createSignInEngine({
   registrations, // AccountRegistrations: registration's gate and account creation (#640)
   resets, // AccountResets: the password reset's gate and its write (#642)
   sessionEpochs, // SessionEpochReader: each user's last reset, read on every round (#642)
+  recoveryCodes, // RecoveryCodes: a lost factor's recovery codes (#649); none offers none
   hooks: { ladder, limits }, // ladder: #615; limits: #636; request: later issues; botChallenge: optional (#643)
   passwordHardAction, // the ladder's hard action at its ceiling; none by default
   steps: [createCaptchaStep(provider)], // the bot challenge (#643), and the steps later issues add
@@ -103,7 +104,9 @@ authentication, run before the call). The first unmet rule produces the answer.
    strongest bound factor; a disabled factor still counts as bound), then the MFA policy just read
    (a policy that requires a second factor needs `mfa` in the `amr`). A rule no registered step can
    meet answers `redirect`: an account that lacks the second factor the policy requires gets the
-   set-up step, never a code. With `emailCodes`, an account whose address is not verified yet is
+   set-up step, never a code. On a transport that serves `recovery_code`, a recovery code may stand
+   in for the factor these rules ask for: see [Recovery codes](#recovery-codes). With
+   `emailCodes`, an account whose address is not verified yet is
    verified inline before the second factor is asked for, or before completing when none is: see
    [The email code](#the-email-code). Then a password update that is due (a password on the breach
    list, or an `update_password` required action) is asked for before completing: see
@@ -345,8 +348,9 @@ goes upstream.
   someone else's squat on the address, and a reset would keep its `sub` (audited as
   `account_unclaimed`): PRO-17 (#641) ends such an account at the first mailbox proof instead.
 - **Every other authenticator** the account holds (a passkey, TOTP), disabled or not, is proved
-  next, with any registered, served step that proves it; an email code never stands in for it.
-  When none can, the answer is `redirect` and nothing is written.
+  next, with any registered, served step that proves it; an email code never stands in for it, and
+  a recovery code may, on a transport that serves `recovery_code` (#649). When none can, the answer
+  is `redirect` and nothing is written.
 - **The new password**: `new_password` with the purpose `reset`, through the realm's password
   policy and its breach list, as for every new password. Every eager answer before is ignored.
   `resets.reset` writes it and ends what the old password opened (see the adapter); an account
@@ -362,6 +366,42 @@ no later ends (`reset_since`). A reset therefore ends every live interaction of 
 still in the engine. Two resets of one account whose last rounds run at the same time can both
 write: the check runs at the start of each round, not in the reset's write. A read that fails
 refuses the round as `unavailable`.
+
+## Recovery codes
+
+With `recoveryCodes`, a lost second factor is recovered with a recovery code (#649; ADR-017
+Decisions 7 and 8, ADR-018 §3). The flow is graphed in
+[`graphs/flows/core/recovery-code/flow.yaml`](../../../graphs/flows/core/recovery-code/flow.yaml).
+Both steps are Interaction-API-only: a transport that does not serve them (the FiPA endpoint, by
+its `serves`) never sees them, and a round that needs one answers `redirect` (FiPA:
+`redirect_to_web`).
+
+- **A set** (`createRecoveryCodeService`, `src/lib/recovery-codes.ts`) is 10 codes of 80 bits
+  each from the CSPRNG, shown as `xxxx-xxxx-xxxx-xxxx` in lowercase base32 and typed back with any
+  case, spaces and dashes. Only salted hashes from the password hasher (Argon2id) are stored. A
+  code is checked against every unused hash of the set, padded to 10 with a decoy, so the check
+  costs the same however many are left, and it is taken in one conditional write: it works once.
+  Issuing a set replaces the old one, every code of which stops working.
+- **Redemption** (`recovery_code`, its answer `recovery_code`): after the first factor, rule 8
+  offers it beside the factor's own steps (the downgrade rule's, the MFA policy's, the forced
+  update's factor beyond the password) while the account holds an unused code, once a transaction.
+  It stands in for that factor and adds no `amr` value, never `mfa`, and leaves `auth_time` as the
+  first factor set it. So an MFA policy is never met by a code: the factor the account still holds
+  is asked for next, and with none the round is `redirect` to bind a new one (the set-up steps of
+  #651 and #653). A wrong code is refused with `invalid_credentials`, the same for a wrong code, a
+  used one and one of another set.
+- **The ladder.** Wrong codes count on the `recovery_code` counter of the failure ladder, keyed on
+  the account rather than an identifier, so every transaction and every end-user IP share it, and
+  a right password never clears it (`RECOVERY_CODE_LADDER_POLICY`): from 5 failures the next
+  attempt waits 2^(n−5) seconds up to 15 minutes, no known IP skips the wait, and once the account
+  is past its free failures the `captcha` step comes before the next answer is read. Each wrong
+  code counted at or past the hard ceiling of 100 calls `recoveryCodes.ceilingReached`, which tells
+  the user and the operator; a failure there changes no answer. A right code clears the counter.
+- **A new set, shown once** (`recovery_codes`, its params `{ count: 10 }`): a sign-in that proved
+  a factor beyond the password, of an account with no set, issues one before it completes. The
+  codes are the round's personal data alone; the step is answered `acknowledged: true`, and a round
+  without that confirmation issues a new set in place of the one shown. A transport that does not
+  serve it answers `redirect`.
 
 ## The forced password update
 
@@ -445,7 +485,12 @@ authenticator.
 - A registration for an unclaimed account (a password account whose address is not proved) is
   helped to sign in to it; PRO-17 (#641) ends that account and registers the mailbox owner instead.
   A reset of one is withheld (no mail, no change) until #641 applies the same rule there.
-- No step can prove a passkey in a hosted reset until the passkey (#651) and recovery-code steps are
-  registered: such an account is answered `redirect` until then, and keeps its password.
+- No step can prove a passkey in a hosted reset until the passkey step (#651) is registered: such an
+  account is answered `redirect` until then, unless a recovery code stands in for it (#649), and
+  keeps its password.
+- A recovery code stands in only after the first factor. A passkey-only account (PRO-30) has none
+  before its passkey, so a code in place of that passkey waits for the passkey step (#651) and
+  #655; such an account gets its set when it first proves the passkey, as every account with a
+  factor beyond the password does.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
   `complete_profile` wait for the steps that set them up.

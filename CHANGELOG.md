@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Recovery codes for a lost second factor** ([#649], ADR-017 Decisions 7
+  and 8, ADR-018 §3; `graphs/flows/core/recovery-code`). A set is 10 codes of
+  80 bits each from the CSPRNG, shown once as `xxxx-xxxx-xxxx-xxxx` and
+  stored only as salted Argon2id hashes from the password hasher in the new
+  `user_recovery_codes` table (migration 0064). A code is checked against
+  every unused hash of the set, padded to 10, and taken in one conditional
+  write, so it works once; a new set replaces the old one, every code of
+  which stops working. On the hosted pages alone, two Interaction-API-only
+  steps serve them: `recovery_codes` shows a new set once and needs the
+  person's confirmation that it is saved, when a sign-in proved a factor
+  beyond the password of an account with no set; `recovery_code` redeems a
+  code in place of the factor rule 8 asks for after the password. A code
+  adds no `amr` value and never `mfa`, so an MFA policy still asks for a
+  second factor after it; the FiPA endpoint answers `redirect_to_web`. Wrong
+  codes count on a new `recovery_code` counter of the failure ladder keyed
+  on the account (`sign-in-ladder:{<realm>:user:<user>}:recovery_code`),
+  shared by every transaction and end-user IP and never cleared by a right
+  password: from 5 failures the bot challenge comes first and each attempt
+  waits up to 15 minutes, with no known-IP exemption. At 100 in a row the
+  operator is alerted (`an account's wrong recovery codes reached the
+  ceiling`) and the account mailed, once a day. Three new engine mails, none
+  of which a realm can switch off: `recovery_code_used` (with the codes
+  left), `recovery_codes_regenerated` and `recovery_codes_failed`; two new
+  events, `user.recovery_code_used` and `user.recovery_codes_failed`. The
+  pages are server-rendered in the current `/ui` style,
+  `GET /ui/recovery-code/{id}` and `GET /ui/recovery-codes/{id}`, posting to
+  the Interaction API's answer endpoint. Regenerating a set from the
+  account API (ACC-02) and redemption for a passkey-only account follow in
+  their own issues.
 - **A provider-neutral bot challenge in the sign-in engine** ([#643], ADR-017
   Decisions 4 and 7, ADR-019 Decision 5). The engine's rule 5 asks for the
   `captcha` step while a soft threshold holds: of the round limits (an
@@ -3194,6 +3223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#642]: https://github.com/qauth-labs/qauth/issues/642
 [#643]: https://github.com/qauth-labs/qauth/issues/643
 [#646]: https://github.com/qauth-labs/qauth/issues/646
+[#649]: https://github.com/qauth-labs/qauth/issues/649
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689

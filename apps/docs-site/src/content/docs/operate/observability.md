@@ -223,6 +223,14 @@ does not depend on the realm's `bruteForce` policy: a realm whose lock is off
   ceiling; the hard action is unarmed, so the password stays usable`, with the
   realm and the user. A mark found while the hard action is unarmed is
   ignored, and the next successful sign-in clears it and logs a warning.
+- **Recovery codes.** Wrong recovery codes have a counter of their own, keyed
+  on the account (`sign-in-ladder:{<realm id>:user:<user id>}:recovery_code`),
+  so every transaction and address shares it and a right password does not
+  clear it. From 5 failures each attempt waits as above, with no known-IP
+  exemption. At 100 in a row the operator is alerted with the `error` log
+  `an account's wrong recovery codes reached the ceiling`, with the realm and
+  the user, the account is mailed and `user.recovery_codes_failed` is
+  recorded, once a day per account; nothing is disabled.
 
 ### Per-address send caps
 
