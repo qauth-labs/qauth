@@ -24,11 +24,14 @@ export const oauthError = () =>
     'The OAuth or OpenID Connect `error` code the request was refused with, such as `invalid_grant`.'
   );
 
-/** Why something was refused, as a `snake_case` code. Never an exception message. */
-export const reason = () =>
-  snakeCode().describe(
-    'Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.'
-  );
+/**
+ * Why something was refused or failed, as a `snake_case` code. Never an
+ * exception message. An event whose codes differ from a refusal's names them
+ * in `description`.
+ */
+export const reason = (
+  description = 'Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.'
+) => snakeCode().describe(description);
 
 /** A step name of the Interaction API, `urn:qauth:ia:<name>:v<N>` or a release candidate of it. */
 export const stepName = (description: string) =>

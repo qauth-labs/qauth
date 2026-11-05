@@ -93,7 +93,9 @@ export const userPasswordBreachCheckFailed = defineEventType({
     step: stepName(
       'The sign-in step whose password was checked: the password, or a new password. Absent for a registration through `POST /auth/register`.'
     ).optional(),
-    reason: reason(),
+    reason: reason(
+      'Why the check failed: `not_configured`, `list_not_loaded`, `lookup_blocked`, `lookup_failed`, `bad_response` or `unavailable`. The set may grow in a minor release.'
+    ),
   }),
 });
 

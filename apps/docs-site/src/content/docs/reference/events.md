@@ -312,10 +312,10 @@ QAuth could not check a password against the realm's breach list (the local list
 - Subject: `user`, when known
 - Schema: [user.password_breach_check_failed.v1-rc.0.json](/schemas/events/user.password_breach_check_failed.v1-rc.0.json)
 
-| Member   | Type   | Required | Meaning                                                                                                                                |
-| -------- | ------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `step`   | string | no       | The sign-in step whose password was checked: the password, or a new password. Absent for a registration through `POST /auth/register`. |
-| `reason` | string | yes      | Why, as a `snake_case` code such as `invalid_credentials`. The set may grow in a minor release.                                        |
+| Member   | Type   | Required | Meaning                                                                                                                                                             |
+| -------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `step`   | string | no       | The sign-in step whose password was checked: the password, or a new password. Absent for a registration through `POST /auth/register`.                              |
+| `reason` | string | yes      | Why the check failed: `not_configured`, `list_not_loaded`, `lookup_blocked`, `lookup_failed`, `bad_response` or `unavailable`. The set may grow in a minor release. |
 
 ### user.signed_out v1-rc.0
 

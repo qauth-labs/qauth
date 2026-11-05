@@ -1164,13 +1164,17 @@ realm policy `password.breachListSource` is `off` in every realm after the
 upgrade (the first node of this release gives every realm the seed
 `PASSWORD_BREACH_LIST_SOURCE`, `off` when unset), so nothing changes until an
 operator turns it on. Set `BREACHED_PASSWORD_LIST_PATH` (a file of SHA-1
-digests, 40 hex characters a line, with an optional `:count`) for `local`, or
+digests, 40 hex characters a line, with an optional `:count`, at most
+5,000,000 of them) for `local`, or
 `BREACHED_PASSWORD_RANGE_URL` (an `https` URL whose path ends with `/`, such
 as `https://api.pwnedpasswords.com/range/`) for `k_anonymity`; a private
 mirror needs an `EGRESS_ALLOWLIST_PATH` entry naming the realms that use it.
 Each node loads the local list at boot and again within 30 seconds of the file
 changing (a new modification time, size or inode, so a file renamed into place
-counts); a reload that fails keeps the list it had. A realm that names a source the
+counts); a reload that fails keeps the list it had. A longer list does not load:
+keep a corpus's most common passwords, not the whole corpus, and give each node
+about 20 bytes a digest of memory, three times that while a reload builds the
+next list. A realm that names a source the
 deployment did not set up gets a failed check on every password, which lets
 the sign-in through and is counted and recorded: watch
 `qauth_breached_password_checks_total{result="failed"}` after turning a
@@ -1191,6 +1195,22 @@ ask for (no route writes it yet). During a rolling upgrade a node of the
 previous release neither checks the list nor reads that table, and cannot read
 a sign-in that a node of this release has marked for a password update: that
 sign-in starts again on the older node and completes as before.
+
+A deployment whose migration runner grants the roles' database users
+([above](#each-role-can-connect-as-a-database-user-of-its-own)), or whose roles
+connect as the one user that owns the tables, needs nothing. One that applies
+the grants of each role's user by hand gives them the new table before the new
+version starts, by applying the statements of `databaseUserGrantStatements`
+from `@qauth-labs/infra-db` again or with the ones they add:
+
+```sql
+GRANT SELECT, INSERT, DELETE ON TABLE "user_required_actions" TO <web_role>;
+GRANT SELECT, INSERT ON TABLE "user_required_actions" TO <api_role>, <admin_role>;
+```
+
+Nothing checks the grants at boot. Without the `web` one, every password
+sign-in through the Interaction API is refused as unavailable, with
+`permission denied for table user_required_actions` in the log.
 
 ## Upgrading within 1.x
 
