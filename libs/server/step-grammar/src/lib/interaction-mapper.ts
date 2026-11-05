@@ -68,6 +68,7 @@ export const INTERACTION_STEP_MAPPERS: InteractionMapperTable = Object.freeze({
   totp_setup: same,
   consent: same,
   select_account: same,
+  upstream: same,
   device_code: same,
   device_confirm: same,
   logout_confirm: same,

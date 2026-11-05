@@ -1061,6 +1061,73 @@
       }
     },
     {
+      "id": "upstream",
+      "input": {
+        "step": {
+          "type": "urn:qauth:ia:upstream:v1-rc.0",
+          "params": {
+            "providers": [
+              {
+                "provider": "oidc_corp",
+                "name": "Example Corp"
+              }
+            ]
+          },
+          "answer": {
+            "provider": "oidc_corp"
+          },
+          "personal": {},
+          "amr": []
+        },
+        "alternatives": [
+          {
+            "type": "urn:qauth:ia:identifier:v1-rc.0",
+            "params": {}
+          }
+        ],
+        "fipa": {
+          "iss": "https://auth.example.com",
+          "auth_session": "YXV0aC1zZXNzaW9uLWhhbmRsZS1vZi0zMi1ieXRlcyE",
+          "interaction_types_supported": [
+            "urn:qauth:ia:identifier:v1-rc.0",
+            "urn:qauth:ia:password:v1-rc.0",
+            "urn:qauth:ia:email_code:v1-rc.0",
+            "urn:qauth:ia:new_password:v1-rc.0",
+            "urn:qauth:ia:password_reset:v1-rc.0",
+            "urn:qauth:ia:captcha:v1-rc.0",
+            "urn:qauth:ia:webauthn_get:v1-rc.0",
+            "urn:qauth:ia:webauthn_create:v1-rc.0",
+            "urn:qauth:ia:totp:v1-rc.0",
+            "urn:qauth:ia:upstream:v1-rc.0"
+          ]
+        }
+      },
+      "expected": {
+        "interaction": {
+          "step": "urn:qauth:ia:upstream:v1-rc.0",
+          "alternatives": ["urn:qauth:ia:identifier:v1-rc.0"],
+          "params": {
+            "urn:qauth:ia:upstream:v1-rc.0": {
+              "providers": [
+                {
+                  "provider": "oidc_corp",
+                  "name": "Example Corp"
+                }
+              ]
+            },
+            "urn:qauth:ia:identifier:v1-rc.0": {}
+          }
+        },
+        "fipa": {
+          "status": 403,
+          "body": {
+            "error": "redirect_to_web",
+            "iss": "https://auth.example.com"
+          }
+        }
+      }
+    },
+    {
       "id": "device-code",
       "input": {
         "step": {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { defineStep } from '../grammar';
 import {
+  array,
   base64url,
   constant,
   displayText,
@@ -12,6 +13,8 @@ import {
   integerEnum,
   matching,
   object,
+  URI_CHARACTERS,
+  uriMatching,
 } from '../zod-kit';
 import {
   accountIdentifier,
@@ -26,7 +29,7 @@ import {
  * The sign-in steps: who is signing in, and the factors that prove it.
  * `identifier`, `password`, `captcha`, `webauthn_get` and `totp` are the
  * steps of ADR-017 Decision 3 and may be served by both transports;
- * `recovery_code` and `select_account` only by the Interaction API.
+ * `recovery_code`, `select_account` and `upstream` only by the Interaction API.
  */
 
 /** The identifier step's personal data: the request's `login_hint` as a prefill (#628). */
@@ -179,5 +182,42 @@ export const selectAccount = defineStep({
     account: base64url(22, 64, 'The `account` reference of the chosen entry.'),
   }),
   errors: ['account_unavailable'],
+  amr: [],
+});
+
+/** The pattern of an upstream provider's name: the AuthMethod `type` (`oidc_corp`). */
+const UPSTREAM_PROVIDER_PATTERN = '^[a-z][a-z0-9_]{0,62}$';
+
+/** An upstream provider's name, as the list carries it and the answer names it. */
+function upstreamProvider(description: string) {
+  return matching(z.string().min(1).max(63), UPSTREAM_PROVIDER_PATTERN).meta({ description });
+}
+
+export const upstream = defineStep({
+  name: 'upstream',
+  transports: ['interaction'],
+  params: object({
+    providers: array(
+      object({
+        provider: upstreamProvider('The provider’s name, which the answer names.'),
+        name: displayText(
+          'realm',
+          64,
+          'The provider’s name as the operator set it, for its button.'
+        ),
+        icon: uriMatching(
+          2048,
+          `^https://${URI_CHARACTERS}+$`,
+          'An absolute `https` URL on the realm origin of a PNG icon for the button. Nothing supplies one yet (#714).'
+        ).optional(),
+      }),
+      1,
+      16,
+      'The realm’s upstream identity providers, in the order the screen shows them.'
+    ),
+  }),
+  personal: EMPTY_OBJECT,
+  answer: object({ provider: upstreamProvider('The `provider` of the entry the person picked.') }),
+  errors: ['provider_unavailable'],
   amr: [],
 });

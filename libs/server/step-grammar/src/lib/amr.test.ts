@@ -66,6 +66,13 @@ describe('what adds nothing to a transaction’s amr', () => {
     expect(transactionAmr([step('password'), step('recovery_code')])).toEqual(['pwd']);
   });
 
+  it('a sign-in through an upstream provider adds no value of its own (ADR-017 Decision 4)', () => {
+    const upstream = step('upstream', stepNamed('upstream').example.step.params);
+    expect(transactionAmr([upstream])).toBeUndefined();
+    expect(transactionAmr([upstream, totp])).toEqual(['otp']);
+    expect(transactionAmr([upstream, passkey])).toEqual(['pop', 'mfa']);
+  });
+
   it('a forced password update after the sign-in keeps the sign-in’s amr', () => {
     expect(transactionAmr([step('password'), totp, newPassword('update_required')])).toEqual([
       'pwd',

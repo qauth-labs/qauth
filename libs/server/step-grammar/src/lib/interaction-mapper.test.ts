@@ -206,14 +206,19 @@ describe('the Interaction API mapper', () => {
   });
 
   // The contract's `maxItems` for `alternatives`. Today's grammar cannot
-  // exceed it: 17 steps, less the current one and the bot challenge, which is
-  // never an alternative, leave 15. The check is there for the steps to come.
+  // exceed it: 18 steps, less the current one and the bot challenge, which is
+  // never an alternative, leave 16, one more than the cap. No offer names them
+  // all (the engine offers a handful beside a step), so the longest offer
+  // leaves out `upstream`, the step that took the grammar past the cap (#639).
+  // The check is there for the steps to come.
   it('carries at most the contract’s maximum of alternatives, and accepts the longest offer the grammar allows', () => {
     const { schemas } = INTERACTION_OPENAPI['components'] as {
       schemas: { Interaction: { properties: { alternatives: { maxItems: number } } } };
     };
     expect(MAX_INTERACTION_ALTERNATIVES).toBe(schemas.Interaction.properties.alternatives.maxItems);
-    const all = STEP_NAMES.filter((name) => name !== 'password' && name !== 'captcha');
+    const all = STEP_NAMES.filter(
+      (name) => name !== 'password' && name !== 'captcha' && name !== 'upstream'
+    );
     expect(all).toHaveLength(MAX_INTERACTION_ALTERNATIVES);
     const view = mapper.stepView({
       current: { step: 'password', params: {} },

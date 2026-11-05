@@ -15,6 +15,7 @@ import {
   recoveryCode,
   selectAccount,
   totp,
+  upstream,
   webauthnGet,
 } from './sign-in';
 
@@ -39,6 +40,7 @@ export const STEPS: readonly StepDefinition[] = [
   totpSetup,
   consent,
   selectAccount,
+  upstream,
   deviceCode,
   deviceConfirm,
   logoutConfirm,

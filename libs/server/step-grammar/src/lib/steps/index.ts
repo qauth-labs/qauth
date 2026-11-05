@@ -17,6 +17,7 @@ import {
   recoveryCode,
   selectAccount,
   totp,
+  upstream,
   webauthnGet,
 } from './sign-in';
 
@@ -42,6 +43,7 @@ export const STEP_LIST = Object.freeze([
   totpSetup,
   consent,
   selectAccount,
+  upstream,
   deviceCode,
   deviceConfirm,
   logoutConfirm,

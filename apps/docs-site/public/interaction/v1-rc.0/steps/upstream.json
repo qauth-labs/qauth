@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.qauth.dev/interaction/v1-rc.0/steps/upstream.json",
+  "title": "urn:qauth:ia:upstream:v1-rc.0",
+  "description": "The person picks one of the realm’s upstream identity providers: generic OpenID Connect, or an AuthMethod plugin. It is offered beside the `identifier` step, before anyone is named, alike for every account (ADR-017 Decision 4). An answer names one provider of the list; the answer’s result is a redirect to the provider (`result: redirect`, or `303` to it for a form post). The provider sends the browser back to `/upstream/<provider>/callback` on the realm host, which checks the answer against the transaction kept server-side for this interaction and its flow cookie, signs in the account that holds that upstream identity, or creates one when the realm allows sign-up, and continues the interaction: the next step’s ceremony page, or the final redirect. A sign-in through a provider ranks with the password in the downgrade rule, below a passkey (ADR-017 Decision 4), and adds no `amr` value. A provider an operator hides is not listed here and stays reachable through the authorization request’s `qauth_upstream` parameter. Works without JavaScript: each provider is a button of a plain form post.",
+  "x-qauth-transports": [
+    "interaction"
+  ],
+  "type": "object",
+  "properties": {
+    "type": {
+      "const": "urn:qauth:ia:upstream:v1-rc.0",
+      "description": "The step name."
+    },
+    "params": {
+      "$ref": "#/$defs/params"
+    },
+    "answer": {
+      "$ref": "#/$defs/answer"
+    },
+    "personal": {
+      "$ref": "#/$defs/personal"
+    },
+    "error": {
+      "$ref": "#/$defs/error"
+    },
+    "amr": {
+      "$ref": "#/$defs/amr"
+    }
+  },
+  "required": [
+    "type",
+    "params",
+    "answer",
+    "personal",
+    "amr"
+  ],
+  "examples": [
+    {
+      "type": "urn:qauth:ia:upstream:v1-rc.0",
+      "params": {
+        "providers": [
+          {
+            "provider": "oidc_corp",
+            "name": "Example Corp"
+          }
+        ]
+      },
+      "answer": {
+        "provider": "oidc_corp"
+      },
+      "personal": {},
+      "amr": []
+    }
+  ],
+  "$defs": {
+    "params": {
+      "type": "object",
+      "properties": {
+        "providers": {
+          "type": "array",
+          "description": "The realm’s upstream identity providers, in the order the screen shows them.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 63,
+                "pattern": "^[a-z][a-z0-9_]{0,62}$",
+                "description": "The provider’s name, which the answer names."
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0](?:[^<>\\p{C}\\p{Zl}\\p{Zp}\\u115F\\u1160\\u3164\\uFFA0]*[^<>\\p{C}\\p{Z}\\u115F\\u1160\\u3164\\uFFA0])?$",
+                "x-qauth-display": "realm",
+                "description": "The provider’s name as the operator set it, for its button."
+              },
+              "icon": {
+                "type": "string",
+                "format": "uri",
+                "maxLength": 2048,
+                "pattern": "^https://[!#-;=?-\\[\\]-~]+$",
+                "description": "An absolute `https` URL on the realm origin of a PNG icon for the button. Nothing supplies one yet (#714)."
+              }
+            },
+            "required": [
+              "provider",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 1,
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "providers": [
+            {
+              "provider": "oidc_corp",
+              "name": "Example Corp"
+            }
+          ]
+        }
+      ]
+    },
+    "answer": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 63,
+          "pattern": "^[a-z][a-z0-9_]{0,62}$",
+          "description": "The `provider` of the entry the person picked."
+        }
+      },
+      "required": [
+        "provider"
+      ],
+      "additionalProperties": false,
+      "examples": [
+        {
+          "provider": "oidc_corp"
+        }
+      ]
+    },
+    "personal": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "examples": [
+        {}
+      ]
+    },
+    "error": {
+      "type": "string",
+      "enum": [
+        "provider_unavailable"
+      ],
+      "description": "Why the last answer was refused. A closed set."
+    },
+    "amr": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "const": [],
+      "description": "The RFC 8176 `amr` values a successful answer adds to the transaction: none, because the step proves no authenticator."
+    }
+  }
+}

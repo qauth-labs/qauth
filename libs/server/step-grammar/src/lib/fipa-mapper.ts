@@ -82,6 +82,7 @@ export const FIPA_STEP_MAPPERS: FipaMapperTable = Object.freeze({
   totp_setup: INTERACTION_ONLY,
   consent: INTERACTION_ONLY,
   select_account: INTERACTION_ONLY,
+  upstream: INTERACTION_ONLY,
   device_code: INTERACTION_ONLY,
   device_confirm: INTERACTION_ONLY,
   logout_confirm: INTERACTION_ONLY,
