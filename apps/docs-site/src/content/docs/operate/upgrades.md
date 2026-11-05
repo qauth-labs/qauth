@@ -1219,7 +1219,8 @@ the owner's password reset
 ([#642](https://github.com/qauth-labs/qauth/issues/642)). Migration 0062 adds
 the `user_session_epochs` table: one row per user, written by the reset in the
 transaction that replaces the password. Every browser session created before a
-user's last reset is ended at its next use. The auth server caches each user's
+user's last reset, or within a second after it (the margin for the clocks of
+two nodes), is ended at its next use. The auth server caches each user's
 epoch in Redis for up to 60 seconds; Postgres stays the source of truth, and a
 reset overwrites the cached value at once. The migration adds one table and
 changes no row of another, so a node of the previous release keeps working on

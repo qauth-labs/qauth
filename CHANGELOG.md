@@ -15,22 +15,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `password_reset` beside the password, to every usable client; a request with
   `prompt=login` or `max_age` offers none. The reset asks for an 8-digit
   `recovery` code with the same step and timing for every address (only an
-  enabled account with a password is mailed), then for any other authenticator
+  enabled account with a password and a verified address is mailed; an
+  unclaimed account, whose address was never verified, gets no mail and no
+  change until [#641] ends such an account at the first mailbox proof), then
+  for any other authenticator
   the account holds (a disabled one included; email never stands in for it),
   then `new_password` with `purpose: "reset"` under the realm's password policy
   and breach list. One database transaction then replaces the password
   through the credential repository's new `updatePassword`, marks the address
   verified, clears the password's disabled mark and a pending
-  `update_password`, revokes every refresh token of the user, advances the
-  user's session epoch and records `user.password_reset` (sent over SSF as a
+  `update_password`, revokes every refresh token of the user, invalidates
+  every authorization code of the user not yet exchanged, advances the user's
+  session epoch and records `user.password_reset` (sent over SSF as a
   CAEP credential change). After it the password's failure counter is cleared
   (a second factor's is not), every browser session of the user ends, and the
   owner gets a "password changed" mail. The session epoch is the new
   `user_session_epochs` table (migration 0062; the `web` role's database user
   is granted it), cached in Redis for up to 60 seconds: a browser session
-  created before it is treated as absent and its cookie cleared, and a sign-in
-  that began before it ends. A reset signs nobody in: no browser session, and
-  the code and the ID token carry no `auth_time` and no `amr`. Until the
+  created before it (or within a second after it, the margin for the clocks of
+  two nodes) is treated as absent and its cookie cleared, and a sign-in that
+  began before it ends. A reset signs nobody in: no browser session, and the
+  code and the ID token carry no `auth_time` and no `amr`. A registration or a
+  reset that waits at its consent screen is no longer decided for the account
+  once a later reset has advanced its epoch: it asks for a sign-in instead. Until the
   passkey and TOTP steps are served, an account that holds one cannot finish a
   reset on these pages. The flow is graphed in
   `graphs/flows/core/password-reset`.

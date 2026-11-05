@@ -14,9 +14,12 @@
 #   address it already holds. Never under max_age or prompt=login: a reset proves no authenticator, so it cannot
 #   satisfy either.
 # - The first answer is the same for every address: an 8-digit email_code with the purpose recovery. Only the mail
-#   differs: an enabled account with a password gets the code, and every other address (no account, no password, a
-#   disabled user) gets nothing, while the send caps count it alike. A right code for any of those is answered as a
-#   wrong one, so nothing of a disabled user changes.
+#   differs: an enabled account with a password and a proved address gets the code, and every other address (no
+#   account, no password, a disabled user, an unclaimed account) gets nothing, while the send caps count it alike. A
+#   right code for any of those is answered as a wrong one, so nothing of a disabled user or an unclaimed account
+#   changes. An unclaimed account (a password and an address never proved) may be someone else's squat on the
+#   address: a reset would keep its sub, so it waits for PRO-17 (#641), which ends such an account at the first
+#   mailbox proof.
 # - An email code never stands in for an authenticator: an account that holds a passkey or a TOTP, disabled or not,
 #   proves it next, or the reset goes on elsewhere (on the hosted pages, a recovery code, once F2c adds them).
 # - One database transaction replaces the hash, marks the address verified, clears the password's disabled mark and
@@ -32,7 +35,8 @@ title: Reset a password, the mailbox first, never past another authenticator
 summary: >-
   A reset asks for an address, or takes the one the sign-in holds. The client must allow the reset flow, on every
   round, and the request must not ask for a fresh sign-in. The engine mails an 8-digit recovery code through the capped
-  sender, only to an enabled account with a password, and asks for it with the same step for every address. A right
+  sender, only to an enabled account with a password and a proved address, and asks for it with the same step for
+  every address. A right
   code proves the mailbox and fixes the account. An account with a passkey or a TOTP proves it next. Then the engine
   asks for a new password, checks it against the realm's policy and breach list, and in one database transaction
   replaces the hash, verifies the address, clears the password's disabled mark, revokes every refresh family and
@@ -57,8 +61,8 @@ scope:
       the mail is dispatched after the answer is built, so sent, dropped and not sent look alike"
     - "the other authenticator's own step and ladder, drawn by flows/core/sign-in's rule 8: a passkey's or a TOTP's
       verification, its throttling and its refusal"
-    - 'an unclaimed account (a password and an address never proved): until PRO-17 (#641) ends it at the first
-      mailbox proof, the reset goes on with it like any other account'
+    - 'ending an unclaimed account (a password and an address never proved) at the first mailbox proof and
+      registering the mailbox owner, PRO-17 (#641): until then this flow treats it as it treats a disabled user'
     - "the transport's finish of a reset: it sets no browser session, and the authorization code it mints carries no
       auth_time and no amr; the consent screen follows as for a sign-in"
     - "resolveBrowserSession, which treats a browser session created before the user's session epoch as absent and
@@ -98,12 +102,13 @@ context:
       capped: 'a tier that answers 429 is full'
   # Who holds the address when the engine reads it.
   holder:
-    values: [nobody, enabled, disabled]
+    values: [nobody, enabled, disabled, unclaimed]
     initial: any
     say:
       nobody: 'no account of the realm holds the address with a password'
-      enabled: 'an enabled account holds the address with a password'
+      enabled: 'an enabled account holds the address with a password, its address proved'
       disabled: 'a disabled account holds the address with a password'
+      unclaimed: 'an enabled account holds the address with a password, its address never proved'
   # The other authenticators the account holds, beside its password.
   otherFactor:
     values: [none, usable, unusable]
@@ -330,7 +335,8 @@ states:
     title: Read who holds the address, for the mail
     description: >-
       Before every code it mints, the first and every resend: whether an enabled account holds the address with a
-      password. It decides only the mail; the step and the answer are the same for every address.
+      password, and whether that address was proved. It decides only the mail; the step and the answer are the same
+      for every address.
     invoke: { external: accountDirectory }
     on:
       DONE:
@@ -346,8 +352,8 @@ states:
     description: >-
       Eight digits from a CSPRNG and a salt of their own; the transaction keeps the salt and the keyed HMAC, never the
       code, and a new code keeps the count of wrong answers. The send caps count the request for every address before
-      anything is kept. Only an enabled account with a password is mailed; every other address gets nothing, its code
-      still held so that the step is the same.
+      anything is kept. Only an enabled account with a password and a proved address is mailed; every other address
+      gets nothing, its code still held so that the step is the same.
     invoke: { external: sendCaps }
     on:
       DONE:
@@ -362,7 +368,7 @@ states:
         - guard: notMailable
           target: offeringCode
           effect: [holdCode, waitFloor]
-          say: 'no account, no password or a disabled user: the code is held, nothing is mailed'
+          say: 'no account, no password, a disabled user or an unclaimed account: the code is held, nothing is mailed'
       FAIL.store:
         target: unavailable
         effect: [waitFloor]
@@ -392,16 +398,17 @@ states:
   readingAnswerHolder:
     title: Read the address's holder again, before the right code is taken
     description: >-
-      A right code is taken only for an enabled account with a password. For any other address it is answered exactly
-      as a wrong one, and counted as one: the person learns nothing, and nothing of a disabled user changes. Taken, the
-      code fixes the transaction's account. A store error refuses the round; the code stays live.
+      A right code is taken only for an enabled account with a password and a proved address. For any other address
+      it is answered exactly as a wrong one, and counted as one: the person learns nothing, and nothing of a disabled
+      user or an unclaimed account changes (audited as account_disabled or account_unclaimed). Taken, the code fixes
+      the transaction's account. A store error refuses the round; the code stays live.
     invoke: { external: accountDirectory }
     on:
       DONE:
         - guard: notMailable
           target: codeRefused
           effect: [audit, waitFloor]
-          say: 'no account, no password or a disabled user: refused with invalid_credentials, counted, audited'
+          say: 'no account, no password, a disabled user or an unclaimed account: refused with invalid_credentials, counted, audited'
         - target: readingAccount
           effect: [proveMailbox, audit]
           say: 'the code is taken: consumed, email_code joins the verified steps with no amr, the account is fixed'
@@ -836,7 +843,9 @@ assertions:
     say: "No password is replaced before the new one passes the realm's policy and breach list"
   - id: only-an-enabled-account-is-mailed
     never: "mailQueued and holder != 'enabled'"
-    say: 'Only an enabled account with a password is mailed a code; a disabled user, an unknown address get nothing'
+    say: >-
+      Only an enabled account with a password and a proved address is mailed a code; a disabled user, an unclaimed
+      account and an unknown address get nothing
   - id: a-disabled-user-is-never-changed
     never: "state == 'recovered' and holder != 'enabled'"
     say: 'A disabled user is never reset'

@@ -284,9 +284,12 @@ goes upstream.
   reset proves no factor, so it can never satisfy them.
 - **The mailbox**: an 8-digit `email_code` with the purpose `recovery`, the same step for every
   address, in body and in timing. Only the mail tells them apart (`sendCode`'s `reset`: `account`
-  for an enabled account with a password; `withheld` for every other address, counted on every
-  cap and never mailed). A code answered for a disabled user, an unknown address or an account
-  without a password is answered and counted as a wrong one: nothing of that user changes.
+  for an enabled account with a password and a verified address; `withheld` for every other
+  address, counted on every cap and never mailed). A code answered for a disabled user, an unknown
+  address, an account without a password or an unclaimed account (its address never verified) is
+  answered and counted as a wrong one: nothing of that user changes. An unclaimed account may be
+  someone else's squat on the address, and a reset would keep its `sub` (audited as
+  `account_unclaimed`): PRO-17 (#641) ends such an account at the first mailbox proof instead.
 - **Every other authenticator** the account holds (a passkey, TOTP), disabled or not, is proved
   next, with any registered, served step that proves it; an email code never stands in for it.
   When none can, the answer is `redirect` and nothing is written.
@@ -296,13 +299,15 @@ goes upstream.
   disabled meanwhile, or that is no longer the transaction's subject, ends the transaction.
 - **The completion** is `recovered: true` with neither `amr` nor `authTime`: a reset proves the
   mailbox, not a factor (ADR-017 Decision 10). The transaction of a reset holds its subject with no
-  `auth_time`.
+  `auth_time`. The completion carries the session epoch the reset advanced to (`epoch`), so the
+  transport can end whatever the reset finished at a later reset.
 
 **The session epoch.** With `sessionEpochs`, every round of a transaction that holds a subject
 reads the time of that user's last reset (`notBefore`, a margin included); a transaction created
-no later ends (`reset_since`). A reset therefore ends every live interaction of the user, and of
-two resets racing for one account only the first writes. A read that fails refuses the round as
-`unavailable`.
+no later ends (`reset_since`). A reset therefore ends every live interaction of the user that is
+still in the engine. Two resets of one account whose last rounds run at the same time can both
+write: the check runs at the start of each round, not in the reset's write. A read that fails
+refuses the round as `unavailable`.
 
 ## The forced password update
 
@@ -383,7 +388,7 @@ authenticator.
   proved the account by itself, #651) answers `redirect`: the mailbox code needs the identifier.
 - A registration for an unclaimed account (a password account whose address is not proved) is
   helped to sign in to it; PRO-17 (#641) ends that account and registers the mailbox owner instead.
-  A reset of one sets its password on the first proof; #641 applies the same rule there.
+  A reset of one is withheld (no mail, no change) until #641 applies the same rule there.
 - No step can prove a passkey in a hosted reset until the passkey (#651) and recovery-code steps are
   registered: such an account is answered `redirect` until then, and keeps its password.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and

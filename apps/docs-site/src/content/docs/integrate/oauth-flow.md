@@ -203,15 +203,22 @@ With the Interaction API on (`INTERACTION_UI_ENABLED`), the password step of a
 sign-in offers a reset beside the password, to every client the realm serves.
 It asks for an 8-digit code mailed to the address, then for a new password that
 meets the realm's password policy. The screens are the same for every address:
-only an account with a password gets the code, and a disabled account gets no
-mail and no change. An account that also holds a passkey or another
+only an account with a password and a verified address gets the code. A
+disabled account gets no mail and no change, and neither does an account whose
+address was never verified, until such an account is replaced at the first
+proof of its mailbox
+([#641](https://github.com/qauth-labs/qauth/issues/641)). An account that also
+holds a passkey or another
 authenticator must prove it before the new password; until those steps are
 served on these pages, such a reset ends as an expired interaction and changes
 nothing.
 
 A reset ends everything the old password opened: every refresh token of the
-user is revoked, every browser session and every sign-in in progress that
-began before it is ended, and the owner is mailed that the password changed.
+user is revoked, every authorization code not yet exchanged is invalidated,
+every browser session and every sign-in in progress that began before it is
+ended, and the owner is mailed that the password changed. A session that began
+within a second after the reset is ended too: that margin covers the clocks of
+two server nodes.
 Like a registration, a reset is not a sign-in: QAuth starts no browser
 session, and the ID token carries no `auth_time` and no `amr`. A request that
 asks for a fresh sign-in, with `prompt=login` or `max_age`, offers no reset.
