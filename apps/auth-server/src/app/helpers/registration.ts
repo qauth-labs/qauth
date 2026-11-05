@@ -1,6 +1,7 @@
 import { clientAllowsHostedFlow } from '@qauth-labs/shared-validation';
 
 import { env } from '../../config/env';
+import { isClientUsable } from './client-status';
 
 /**
  * WHO MAY REGISTER (#640; ADR-017 Decisions 3 and 8). A registration needs
@@ -34,17 +35,25 @@ export function realmOffersRegistration(realm: RealmSignUp): boolean {
 
 /**
  * Whether `client` may register accounts in `realm`: the realm offers sign-up
- * ({@link realmOffersRegistration}), and the client is enabled and its
- * `hosted_flows` name `register`. Fail-closed: no client, a disabled one, or a
- * flow list that is not well formed allows nothing.
+ * ({@link realmOffersRegistration}), and the client is usable (enabled and not
+ * suspended, `isClientUsable`) and its `hosted_flows` name `register`.
+ * Fail-closed: no client, a disabled or suspended one, or a flow list that is
+ * not well formed allows nothing.
  */
 export function registrationAllowed(
   realm: RealmSignUp,
-  client: { readonly hostedFlows?: unknown; readonly enabled?: boolean } | null | undefined
+  client: RegisteringClient | null | undefined
 ): boolean {
   if (!realmOffersRegistration(realm)) return false;
-  if (client === null || client === undefined || client.enabled === false) return false;
+  if (client === null || client === undefined || !isClientUsable(client)) return false;
   return clientAllowsHostedFlow(client, 'register');
+}
+
+/** What the gate reads of a client: its status and its operator-set flows. */
+export interface RegisteringClient {
+  readonly hostedFlows?: unknown;
+  readonly enabled: boolean;
+  readonly suspended?: boolean | null;
 }
 
 /** Why `/oauth/authorize` refuses a `prompt=create` request, for the client and the event. */
@@ -80,7 +89,7 @@ function requestsOpenId(scope: string | undefined): boolean {
  */
 export function createPromptRefusal(
   realm: RealmSignUp,
-  client: { readonly hostedFlows?: unknown; readonly enabled?: boolean },
+  client: RegisteringClient,
   query: { readonly scope?: string; readonly max_age?: number }
 ): CreatePromptRefusal | null {
   if (!requestsOpenId(query.scope)) {

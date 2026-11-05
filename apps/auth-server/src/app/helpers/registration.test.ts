@@ -35,10 +35,12 @@ describe('registrationAllowed', () => {
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, hostedFlows: null })).toBe(false);
   });
 
-  it('allows nothing for no client, a disabled client or a flow list that is not well formed', () => {
+  it('allows nothing for no client, a disabled or suspended client or a flow list that is not well formed', () => {
     expect(registrationAllowed(OPEN_REALM, null)).toBe(false);
     expect(registrationAllowed(OPEN_REALM, undefined)).toBe(false);
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, enabled: false })).toBe(false);
+    expect(registrationAllowed(OPEN_REALM, { ...CLIENT, suspended: true })).toBe(false);
+    expect(registrationAllowed(OPEN_REALM, { ...CLIENT, suspended: false })).toBe(true);
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, hostedFlows: 'register' })).toBe(false);
     expect(registrationAllowed(OPEN_REALM, { ...CLIENT, hostedFlows: [1] })).toBe(false);
   });
@@ -51,7 +53,7 @@ describe('createPromptRefusal', () => {
 
   it('refuses without openid first, whatever else holds', () => {
     for (const scope of [undefined, 'email', 'openidx email']) {
-      expect(createPromptRefusal(CLOSED_REALM, {}, { scope })).toMatchObject({
+      expect(createPromptRefusal(CLOSED_REALM, { enabled: true }, { scope })).toMatchObject({
         error: 'invalid_request',
         reason: 'create_without_openid',
       });
