@@ -97,7 +97,8 @@ stage with npm and copy its directory there:
 # The QAuth release, by the digest you verified above.
 ARG QAUTH_IMAGE=ghcr.io/qauth-labs/qauth/auth-server@sha256:<digest>
 
-FROM node:26-alpine AS plugin
+# The build stage writes the files the server will run: pin it by digest too.
+FROM node:26-alpine@sha256:<digest> AS plugin
 WORKDIR /plugin
 RUN npm init --yes > /dev/null \
  && npm install --omit=dev --omit=peer --install-strategy=nested --ignore-scripts \
@@ -126,7 +127,11 @@ realm admin then enables and configures the plugin through the admin API
 A plugin release is built for one QAuth contract version, so rebuild this image at every QAuth
 upgrade with the plugin version made for the new release; a mismatch stops the boot and says so.
 Your image is no longer the digest QAuth signed: verify the base digest before you build on it,
-and the plugin's provenance with `npm audit signatures` in the build stage. Plugin code runs
+and pin the build stage by digest as well. `npm audit signatures` in the build stage checks that
+the registry's signatures and attestations are valid, not who built the package: to know that,
+read the version's provenance (on npmjs.com, or the attestation at
+`npm view <package>@<version> dist.attestations.url`) and check that it names the plugin's own
+repository and release workflow. Plugin code runs
 in the server's process, beside its keys in a single deployment, so add only a package you trust
 as you trust the server.
 
