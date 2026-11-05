@@ -168,7 +168,7 @@ context:
     say:
       absent: 'the request carries no prompt=create'
       withoutOpenid: 'prompt=create without the openid scope'
-      notOffered: "prompt=create with openid, and the realm's registration_allowed is off"
+      notOffered: "prompt=create with openid, and the realm's accounts.allowSignUp is off"
       clientNotAllowed: >-
         prompt=create with openid, the realm allows sign-up, and the client's operator-set hosted_flows do not name
         register
@@ -461,7 +461,7 @@ states:
     title: Check a request for a registration
     description: >-
       prompt=create (#640; OpenID Connect Prompt Create 1.0; ADR-017 Decisions 3 and 8), refused before the person
-      sees any page unless the request asks for openid, the realm offers sign-up (its registration_allowed, served by
+      sees any page unless the request asks for openid, the realm offers sign-up (its accounts.allowSignUp, served by
       the Interaction API, so never with INTERACTION_UI_ENABLED off), the client's operator-set hosted_flows name
       register, and the request carries no max_age, which asks for a sign-in a registration never gives. Each refusal
       records authorization.failed with its reason. A browser session, if any, is read and carried in; it ends nothing.

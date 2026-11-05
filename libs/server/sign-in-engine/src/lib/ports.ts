@@ -310,7 +310,7 @@ export type AccountRegistration =
 export interface AccountRegistrations {
   /**
    * Whether the realm and the client both allow registration: the realm's
-   * `registration_allowed`, and the client's allowed flows (a redirect-flow
+   * sign-up switch, and the client's allowed flows (a redirect-flow
    * client's `hosted_flows`, a native client's `first_party_policy.flows`)
    * listing `register`. Read on every round of a registration.
    */

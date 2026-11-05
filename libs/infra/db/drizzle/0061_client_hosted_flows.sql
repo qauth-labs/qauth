@@ -1,7 +1,7 @@
 -- #640 (ADR-017 Decision 8, question 13): the hosted flows a redirect-flow
 -- client may start beyond sign-in, as a JSON list; as of #640 only `register`,
 -- which lets the client start registration with `prompt=create` while the
--- realm's `registration_allowed` is on too. Operator-set: the
+-- realm allows sign-up too. Operator-set: the
 -- `db:seed-oauth-clients` manifest writes it, and no registration path can.
 -- A new nullable column with no default, so every existing row reads NULL,
 -- which allows no hosted flow, and the previous release, which never names

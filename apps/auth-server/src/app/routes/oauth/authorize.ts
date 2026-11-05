@@ -5,6 +5,7 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 
 import { env } from '../../../config/env';
 import { AUTHORIZE_BODY_LIMIT_BYTES } from '../../constants';
+import { accountPoliciesOf } from '../../helpers/account-policies';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
 import {
   authorizationInteractionStart,
@@ -279,7 +280,11 @@ export default async function (fastify: FastifyInstance) {
     target: AuthorizationTarget,
     query: AuthorizeQuery
   ) => {
-    const refusal = createPromptRefusal(target.realm, target.client, query);
+    const refusal = createPromptRefusal(
+      accountPoliciesOf(fastify, target.realm),
+      target.client,
+      query
+    );
     if (refusal !== null) {
       await emitUserEvent(
         request,

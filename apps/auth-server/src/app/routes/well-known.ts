@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { env } from '../../config/env';
 import { listEnabledExperimental } from '../../config/experimental-features';
 import { JWKS_CACHE_CONTROL } from '../constants';
+import { accountPoliciesOf } from '../helpers/account-policies';
 import { cimdPolicyOf } from '../helpers/cimd-policy';
 import {
   buildAuthorizationServerMetadata,
@@ -91,8 +92,9 @@ export default async function (fastify: FastifyInstance) {
     // carries the route that sends them.
     backchannelLogoutSupported: true,
     // OpenID Connect Prompt Create 1.0 §4.2 (#640): `create` is listed only
-    // while the realm offers sign-up.
-    registrationOffered: realmOffersRegistration(realm),
+    // while the realm offers sign-up (its `accounts.allowSignUp`), read off the
+    // resolver's row as the CIMD policy is.
+    registrationOffered: realmOffersRegistration(accountPoliciesOf(fastify, realm)),
     experimentalItems,
   });
 

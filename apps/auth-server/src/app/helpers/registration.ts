@@ -4,20 +4,32 @@ import { env } from '../../config/env';
 
 /**
  * WHO MAY REGISTER (#640; ADR-017 Decisions 3 and 8). A registration needs
- * both the realm and the client: the realm's `registration_allowed`, and the
+ * both the realm and the client: the realm's sign-up switch, and the
  * client's operator-set `hosted_flows` naming `register`. QAuth registers
  * accounts only through the Interaction API, so a deployment without it
  * (`INTERACTION_UI_ENABLED` off) offers no registration at all.
+ *
+ * The realm's switch is its `accounts.allowSignUp` policy (#639), seeded by
+ * `ALLOW_SIGN_UP` and off by default: the one switch that also decides
+ * whether an upstream identity creates an account, stored on the realm row
+ * as ADR-020 keeps every login setting. ADR-017 names the older
+ * `realms.registration_allowed` column, which nothing writes; it stays
+ * unread.
  */
 
+/** The realm's sign-up policy: its `accounts.allowSignUp` (`accountPoliciesOf`). */
+export interface RealmSignUp {
+  readonly allowSignUp: boolean;
+}
+
 /**
- * Whether the realm offers sign-up at all: its `registration_allowed`, served
+ * Whether the realm offers sign-up at all: its `accounts.allowSignUp`, served
  * by the Interaction API. Discovery lists `create` among the
  * `prompt_values_supported` only while this holds (OpenID Connect Prompt
  * Create 1.0 §4.2).
  */
-export function realmOffersRegistration(realm: { readonly registrationAllowed: boolean }): boolean {
-  return realm.registrationAllowed && env.INTERACTION_UI_ENABLED;
+export function realmOffersRegistration(realm: RealmSignUp): boolean {
+  return realm.allowSignUp && env.INTERACTION_UI_ENABLED;
 }
 
 /**
@@ -27,7 +39,7 @@ export function realmOffersRegistration(realm: { readonly registrationAllowed: b
  * flow list that is not well formed allows nothing.
  */
 export function registrationAllowed(
-  realm: { readonly registrationAllowed: boolean },
+  realm: RealmSignUp,
   client: { readonly hostedFlows?: unknown; readonly enabled?: boolean } | null | undefined
 ): boolean {
   if (!realmOffersRegistration(realm)) return false;
@@ -67,7 +79,7 @@ function requestsOpenId(scope: string | undefined): boolean {
  *    says, and a registration signs nobody in (ADR-017 Decision 8).
  */
 export function createPromptRefusal(
-  realm: { readonly registrationAllowed: boolean },
+  realm: RealmSignUp,
   client: { readonly hostedFlows?: unknown; readonly enabled?: boolean },
   query: { readonly scope?: string; readonly max_age?: number }
 ): CreatePromptRefusal | null {

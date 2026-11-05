@@ -10,7 +10,8 @@
  * `native_backend` client keeps its own list in `first_party_policy.flows`.
  *
  * - `register`: the client may start registration with `prompt=create`. The
- *   realm's `registration_allowed` must allow it too: both are required.
+ *   realm's sign-up switch (`accounts.allowSignUp`) must allow it too: both
+ *   are required.
  *
  * Reset and the verification of an account need no flag: the hosted pages
  * offer them whenever the hosted pages are on (ADR-017 phase F2a).

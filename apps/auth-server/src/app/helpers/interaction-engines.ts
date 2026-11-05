@@ -222,7 +222,7 @@ export function createInteractionEngines(
           const realm = await fastify.repositories.realms.findById(realmId);
           if (realm === undefined) return false;
           const client = await fastify.repositories.oauthClients.findByClientId(realmId, clientId);
-          return registrationAllowed(realm, client);
+          return registrationAllowed(accountPoliciesOf(fastify, realm), client);
         },
         hash: (password) => fastify.passwordHasher.hashPassword(password),
         isUniqueViolation: (error) => error instanceof UniqueConstraintError,

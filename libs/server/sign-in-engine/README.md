@@ -231,7 +231,7 @@ graphed in [`graphs/flows/core/sign-up/flow.yaml`](../../../graphs/flows/core/si
 The transaction keeps its flow from round 0: a round of another flow ends it.
 
 - **The gate**, after the request checks, on every round: `registrations.allowed` must say that
-  the realm (`registration_allowed`) and the client (a redirect-flow client's `hosted_flows`, a
+  the realm (its sign-up switch) and the client (a redirect-flow client's `hosted_flows`, a
   native client's `first_party_policy.flows`) both allow it. Otherwise the round is refused as
   `request_refused` with `registration_not_allowed` (`REGISTRATION_NOT_ALLOWED`), audited as
   `registration_closed`, and nothing is mailed or written. An engine or a transport that cannot

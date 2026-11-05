@@ -9,7 +9,7 @@
 #   MFA policy, the limiters, the transport's request checks). So an exit here is the engine's answer, as data, named
 #   in camelCase; a step state ends the round with the transaction live, and the next round's answer is a new event
 #   from it, which goes through the registration's gate again.
-# - Registration is off unless both allow it, on every round: the realm's registration_allowed, served by the
+# - Registration is off unless both allow it, on every round: the realm's accounts.allowSignUp, served by the
 #   Interaction API, and the client's operator-set hosted_flows naming register (a native client's
 #   first_party_policy.flows). Nothing is mailed or written before the gate passes.
 # - The first answer is the same for every address: an 8-digit email_code with the purpose verify_account. Only the
@@ -61,13 +61,14 @@ scope:
       round of its own'
 
 context:
-  # The realm's registration_allowed, and the Interaction API serving it, when the round reads the gate.
+  # The realm's accounts.allowSignUp (ALLOW_SIGN_UP seeds it), and the Interaction API serving it, when the round
+  # reads the gate.
   realmAllows:
     values: [false, true]
     initial: any
     say:
       'false': 'the realm does not allow sign-up, or the deployment runs no Interaction API'
-      'true': "the realm's registration_allowed is on, and the Interaction API serves it"
+      'true': "the realm's accounts.allowSignUp is on, and the Interaction API serves it"
   # The client, when the round reads the gate.
   clientAllows:
     values: [false, true]
@@ -256,7 +257,7 @@ states:
   readingGate:
     title: Read whether the realm and the client both allow sign-up
     description: >-
-      On every round, before anything is mailed or written (ADR-017 Decision 8): the realm's registration_allowed,
+      On every round, before anything is mailed or written (ADR-017 Decision 8): the realm's accounts.allowSignUp,
       served by the Interaction API, and the client's operator-set hosted_flows naming register. The client is read
       again, so a client disabled meanwhile allows nothing. A store error refuses the round.
     invoke: { external: accountRegistrations }
@@ -731,7 +732,9 @@ assertions:
       state in ['offeringAddress', 'offeringCode', 'codeRefused', 'offeringNewPassword', 'newPasswordRefused',
       'registered', 'signInHelped', 'startThrottled', 'sendCapped', 'registrationConflict'] and (not realmAllows or
       not clientAllows)
-    say: 'No registration step is offered, nothing is mailed and nothing is written unless the realm and the client allow it'
+    say: >-
+      No registration step is offered, nothing is mailed and nothing is written unless the realm and the client allow
+      it
   - id: no-account-before-the-code
     never: 'accountCreated and not mailboxProved'
     say: 'No account exists before the mailbox is proved'

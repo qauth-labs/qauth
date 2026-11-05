@@ -44,8 +44,8 @@ async function buildApp(overrides?: {
   cimd?: CimdPolicy;
   /** A policy store in place of the test one, for a realm whose stored policies fail to read. */
   policyStore?: unknown;
-  /** Whether the request's realm allows sign-up (#640). */
-  registrationAllowed?: boolean;
+  /** The request realm's `accounts.allowSignUp` (#640); the seeded default (off) when absent. */
+  allowSignUp?: boolean;
 }) {
   const app = Fastify({ logger: false });
 
@@ -74,7 +74,12 @@ async function buildApp(overrides?: {
     (overrides?.policyStore ??
       testPolicyStore(
         {},
-        overrides?.cimd === undefined ? {} : { registration: { cimd: overrides.cimd } }
+        {
+          ...(overrides?.cimd === undefined ? {} : { registration: { cimd: overrides.cimd } }),
+          ...(overrides?.allowSignUp === undefined
+            ? {}
+            : { accounts: { allowSignUp: overrides.allowSignUp } }),
+        }
       )) as never
   );
   supplyRequestRealm(
@@ -82,7 +87,6 @@ async function buildApp(overrides?: {
     testRealm({
       id: 'realm-1',
       issuer: overrides?.realmIssuer ?? ISSUER,
-      registrationAllowed: overrides?.registrationAllowed ?? false,
     })
   );
 
@@ -352,9 +356,9 @@ describe('GET /.well-known/openid-configuration', () => {
 
 describe('prompt_values_supported follows whether the realm offers sign-up (#640)', () => {
   /** The OpenID Provider metadata's `prompt_values_supported`, for a realm and a deployment. */
-  async function promptValues(registrationAllowed: boolean, interactionUi: boolean) {
+  async function promptValues(allowSignUp: boolean, interactionUi: boolean) {
     mockEnv['INTERACTION_UI_ENABLED'] = interactionUi;
-    const app = await buildApp({ registrationAllowed });
+    const app = await buildApp({ allowSignUp });
     try {
       const res = await app.inject({ method: 'GET', url: '/.well-known/openid-configuration' });
       expect(res.statusCode).toBe(200);
@@ -378,7 +382,7 @@ describe('prompt_values_supported follows whether the realm offers sign-up (#640
 
   it('is an OpenID Provider member: the RFC 8414 document does not carry it', async () => {
     mockEnv['INTERACTION_UI_ENABLED'] = true;
-    const app = await buildApp({ registrationAllowed: true });
+    const app = await buildApp({ allowSignUp: true });
     try {
       const res = await app.inject({
         method: 'GET',

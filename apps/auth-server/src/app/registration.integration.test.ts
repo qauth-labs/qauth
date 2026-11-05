@@ -123,9 +123,19 @@ describe('registration through prompt=create (#640, real containers)', () => {
     return rows;
   }
 
-  /** Whether the realm allows sign-up, as an operator sets it. */
+  /**
+   * Whether the realm allows sign-up, as an operator sets it: its
+   * `accounts.allowSignUp`, through the policy store at the counter it has
+   * now, the resolver's host cache dropped so the next request reads the row.
+   */
   async function realmAllowsSignUp(allowed: boolean): Promise<void> {
-    await query('UPDATE realms SET registration_allowed = $2 WHERE id = $1', [realmId, allowed]);
+    const current = await server().policyStore.get(realmId);
+    if (current === undefined) throw new Error(`no policies for realm ${realmId}`);
+    await server().policyStore.update(
+      realmId,
+      { accounts: { allowSignUp: allowed } },
+      { expectedVersion: current.version }
+    );
     server().realmHostCache.clear();
   }
 

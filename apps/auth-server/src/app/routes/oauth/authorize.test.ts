@@ -3341,8 +3341,6 @@ describe('GET /oauth/authorize — the routing parameter qauth_upstream (#639)',
 });
 
 describe('GET /oauth/authorize — prompt=create (#640)', () => {
-  /** A realm that allows sign-up. */
-  const SIGN_UP_REALM = testRealm({ id: 'realm-1', registrationAllowed: true });
   /** A client whose operator-set flow list names `register`. */
   const REGISTERING_CLIENT = { ...CLIENT, scopes: ['openid', 'email'], hostedFlows: ['register'] };
   const CREATE_QUERY = { prompt: 'create', scope: 'openid email' };
@@ -3354,16 +3352,24 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
     mutableEnv.INTERACTION_UI_ENABLED = false;
   });
 
-  /** The endpoint, for `query`, in `realm`, with `client`, and signed in when asked. */
+  /**
+   * The endpoint, for `query`, with `client`, in a realm whose
+   * `accounts.allowSignUp` is `signUp` (on unless asked), and signed in when
+   * asked.
+   */
   async function create(
     query: Record<string, unknown>,
     options: {
-      readonly realm?: RealmRow;
+      readonly signUp?: boolean;
       readonly client?: Record<string, unknown>;
       readonly signedIn?: boolean;
     } = {}
   ) {
     const { fastify, ctx, sessions } = makeFastify();
+    fastify.policyStore = testPolicyStore(
+      {},
+      { accounts: { allowSignUp: options.signUp ?? true } }
+    ) as unknown as typeof fastify.policyStore;
     await authorizeRoute(fastify);
     (fastify.repositories.oauthClients.findByClientId as unknown as Mock).mockResolvedValue(
       options.client ?? REGISTERING_CLIENT
@@ -3391,7 +3397,7 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
         url: '/oauth/authorize',
         headers,
         ip: '127.0.0.1',
-        realm: options.realm ?? SIGN_UP_REALM,
+        realm: REALM,
       },
       reply
     );
@@ -3460,7 +3466,7 @@ describe('GET /oauth/authorize — prompt=create (#640)', () => {
   });
 
   it('refuses prompt=create in a realm that does not allow sign-up with invalid_request', async () => {
-    const { state } = await create({}, { realm: testRealm({ id: 'realm-1' }) });
+    const { state } = await create({}, { signUp: false });
     expectRefused(state, 'invalid_request', 'registration_not_offered');
   });
 

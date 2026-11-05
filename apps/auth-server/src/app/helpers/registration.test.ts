@@ -7,8 +7,8 @@ import { createPromptRefusal, realmOffersRegistration, registrationAllowed } fro
 
 /** Who may register (#640; ADR-017 Decisions 3 and 8): the realm and the client, both. */
 
-const OPEN_REALM = { registrationAllowed: true };
-const CLOSED_REALM = { registrationAllowed: false };
+const OPEN_REALM = { allowSignUp: true };
+const CLOSED_REALM = { allowSignUp: false };
 const CLIENT = { enabled: true, hostedFlows: ['register'] };
 const QUERY = { scope: 'openid email' };
 
@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe('realmOffersRegistration', () => {
-  it("follows the realm's registration_allowed while the Interaction API is on", () => {
+  it("follows the realm's accounts.allowSignUp while the Interaction API is on", () => {
     expect(realmOffersRegistration(OPEN_REALM)).toBe(true);
     expect(realmOffersRegistration(CLOSED_REALM)).toBe(false);
   });
