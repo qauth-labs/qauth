@@ -131,6 +131,14 @@ export interface ResolvedClient {
    */
   firstPartyProfile: string | null;
   firstPartyPolicy: unknown;
+  /**
+   * `oauth_clients.hosted_flows` (ADR-017 Decision 8, #640): operator-set,
+   * never self-asserted. Read only through `hostedFlowsOf` (shared-validation),
+   * which fails closed; the `prompt=create` gate rests on it. Optional so a
+   * partially shaped object type-checks; absent reads as none, and a CIMD row
+   * always holds null.
+   */
+  hostedFlows?: unknown;
   metadata: Record<string, unknown> | null;
 }
 

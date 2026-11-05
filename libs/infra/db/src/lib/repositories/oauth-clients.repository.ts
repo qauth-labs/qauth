@@ -30,21 +30,26 @@ function ownedBy(realmId: string, developerId: string) {
 }
 
 /**
- * The first-party columns as every application write leaves them: empty
- * (ADR-017 Decision 2, #631). Spread last, so no caller's value survives.
+ * The operator-set columns as every application write leaves them: empty.
+ * The first-party profile, its policy and its reason (ADR-017 Decision 2,
+ * #631), and the hosted flows (ADR-017 Decision 8, #640), so no registration
+ * path lets a client allow its own sign-up. Spread last, so no caller's value
+ * survives.
  */
 const NOT_FIRST_PARTY = {
   firstPartyProfile: null,
   firstPartyPolicy: null,
   firstPartyReason: null,
+  hostedFlows: null,
 } as const;
 
 /**
- * `data` without the first-party columns, which `update` never writes
- * (ADR-017 Decision 2, #631). `UpdateOAuthClient` already leaves them out,
- * but only at compile time: a caller that spreads a wider object, or casts,
- * would otherwise set or clear a profile through an ordinary update. Removed,
- * not nulled, so an update leaves the operator's profile as it is.
+ * `data` without the operator-set columns of {@link NOT_FIRST_PARTY}, which
+ * `update` never writes (ADR-017 Decisions 2 and 8, #631, #640).
+ * `UpdateOAuthClient` already leaves them out, but only at compile time: a
+ * caller that spreads a wider object, or casts, would otherwise set or clear
+ * a profile or a hosted flow through an ordinary update. Removed, not nulled,
+ * so an update leaves the operator's values as they are.
  */
 function withoutFirstPartyColumns<T extends object>(data: T): T {
   const copy = { ...data } as Record<string, unknown>;

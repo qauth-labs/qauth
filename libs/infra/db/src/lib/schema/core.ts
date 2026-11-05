@@ -807,6 +807,24 @@ export const oauthClients = pgTable(
      * recorded in the `client.first_party_changed` event.
      */
     firstPartyReason: text('first_party_reason'),
+    /**
+     * The hosted flows a redirect-flow client may start beyond sign-in
+     * (ADR-017 Decision 8, question 13; issue #640): a JSON list of
+     * `HOSTED_FLOWS` in shared-validation, as of #640 only `register`, which
+     * lets the client start registration with `prompt=create` while the
+     * realm's `registration_allowed` is on too. NULL (every row no operator
+     * flagged) or an empty list allows none. Read only through
+     * `hostedFlowsOf()`, which fails closed on a value it does not know. A
+     * `native_backend` client keeps its own list in `first_party_policy`.
+     *
+     * OPERATOR-SET, NEVER SELF-ASSERTED, like the first-party profile: the
+     * `db:seed-oauth-clients` manifest writes it, and later a
+     * `qauth:admin:security` operation (ADR-019 Decision 7). The repository's
+     * `create` and `upsertCimdClient` write NULL whatever they are given, and
+     * `UpdateOAuthClient` excludes it, so no route can set it. A list, never
+     * another JSON type (CHECK `oauth_clients_hosted_flows_array`).
+     */
+    hostedFlows: jsonb('hosted_flows').$type<string[] | null>(),
     metadata: jsonb('metadata').$type<Record<string, unknown> | null>(),
     createdAt: bigint('created_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
     updatedAt: bigint('updated_at', { mode: 'number' }).notNull().default(EPOCH_MS_NOW),
@@ -891,6 +909,11 @@ export const oauthClients = pgTable(
     check(
       'oauth_clients_first_party_policy_object',
       sql`${t.firstPartyPolicy} IS NULL OR jsonb_typeof(${t.firstPartyPolicy}) = 'object'`
+    ),
+    // #640: the hosted flows are a list, so the reader never has to guess.
+    check(
+      'oauth_clients_hosted_flows_array',
+      sql`${t.hostedFlows} IS NULL OR jsonb_typeof(${t.hostedFlows}) = 'array'`
     ),
   ]
 );
