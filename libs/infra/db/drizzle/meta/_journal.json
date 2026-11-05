@@ -435,6 +435,13 @@
       "when": 1793884722867,
       "tag": "0061_client_hosted_flows",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1793892483469,
+      "tag": "0062_user_session_epochs",
+      "breakpoints": true
     }
   ]
 }

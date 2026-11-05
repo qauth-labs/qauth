@@ -68,6 +68,12 @@ describe('the grants map (#498)', () => {
     });
   });
 
+  it('lets web alone read and advance the session epochs (#642)', () => {
+    expect(TABLE_GRANTS['user_session_epochs']).toEqual({
+      web: ['SELECT', 'INSERT', 'UPDATE'],
+    });
+  });
+
   it("lets web read the realm's upstream providers and admin manage them (#639)", () => {
     expect(TABLE_GRANTS['realm_upstream_providers']).toEqual({
       web: ['SELECT'],

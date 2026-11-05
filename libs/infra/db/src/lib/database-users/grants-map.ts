@@ -145,6 +145,11 @@ export const TABLE_GRANTS: TableGrants = Object.freeze({
   // updates a row.
   user_required_actions: { web: SID, api: SI, admin: SI },
   user_roles: {},
+  // Each user's session epoch (#642): the owner's password reset, on `web`,
+  // advances it (an upsert: `INSERT … ON CONFLICT DO UPDATE`), and the
+  // browser-session lookup and the sign-in engine, on `web`, read it. Nothing
+  // deletes a row but the user's or the realm's cascade.
+  user_session_epochs: { web: SIU },
   // `api` creates accounts; `web` and `api` record sign-ins; `admin` finds
   // the account behind an admin token. No role deletes one.
   users: { web: SIU, api: SIU, admin: S },
