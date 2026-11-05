@@ -60,6 +60,10 @@ describe('buildLoggerOptions', () => {
     expect(LOG_REDACT_PATHS).toContain('*.otp');
     expect(LOG_REDACT_PATHS).toContain('captcha_token');
     expect(LOG_REDACT_PATHS).toContain('*.captcha_token');
+    expect(LOG_REDACT_PATHS).toContain('recovery_code');
+    expect(LOG_REDACT_PATHS).toContain('*.recovery_code');
+    expect(LOG_REDACT_PATHS).toContain('codes');
+    expect(LOG_REDACT_PATHS).toContain('*.codes');
   });
 
   it('redacts passwords, tokens, secrets, authorization headers and cookies in log output', async () => {
