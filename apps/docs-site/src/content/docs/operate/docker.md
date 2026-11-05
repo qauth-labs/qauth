@@ -835,6 +835,24 @@ Registration is off unless two operators' switches both allow it:
   the authorization challenge endpoint. On `/oauth/authorize` it registers
   only through `hosted_flows`, like every other client.
 
+### A bot challenge before a client's registrations (`registration_challenge`)
+
+A registration can be made to pass the bot challenge before its address is
+asked for: for every client of a realm, with the realm's
+`botChallenge.requiredAtSignUp` policy ([Realm policies](/reference/realm-policies/)),
+or for one client, with `"registration_challenge": true` on its entry in the
+`db:seed-oauth-clients` manifest.
+
+- With the built-in proof of work (`BOT_CHALLENGE_PROVIDER=pow`, the default),
+  the page solves a puzzle from the realm origin, so it needs JavaScript; a
+  person without it is told so, and the registration is refused, never
+  passed.
+- A client that cannot serve the `captcha` step is refused the registration
+  it requires, never sent to the browser in its place.
+- Like `hosted_flows`, only the manifest writes it: dynamic registration,
+  `POST /api/clients` and a CIMD document never do, so no client can lift its
+  own. `--rotate` clears it when the entry no longer names it.
+
 ### Outbound calls and the egress allowlist
 
 The outbound calls the server makes for a configuration value or a request (the

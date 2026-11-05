@@ -127,3 +127,28 @@ describe('hosted_flows rows (#640)', () => {
     }
   });
 });
+
+describe('registration_challenge rows (#643)', () => {
+  const spec = (overrides: Record<string, unknown> = {}): ClientSpec =>
+    clientSpecSchema.parse({
+      client_id: 'notes-app',
+      name: 'Notes',
+      grant_types: ['authorization_code'],
+      redirect_uris: ['https://notes.example.com/callback'],
+      hosted_flows: ['register'],
+      ...overrides,
+    });
+
+  it('writes the requirement on a new client and on a rotation', () => {
+    const entry = spec({ registration_challenge: true });
+    expect(buildInsert('realm-id', entry, 'hash').registrationChallenge).toBe(true);
+    expect(buildUpdate(entry, 'hash').registrationChallenge).toBe(true);
+  });
+
+  it('writes NULL for an entry without it, so a rotation clears it', () => {
+    for (const entry of [spec(), spec({ registration_challenge: false })]) {
+      expect(buildInsert('realm-id', entry, 'hash').registrationChallenge).toBeNull();
+      expect(buildUpdate(entry, 'hash').registrationChallenge).toBeNull();
+    }
+  });
+});

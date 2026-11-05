@@ -32,15 +32,17 @@ function ownedBy(realmId: string, developerId: string) {
 /**
  * The operator-set columns as every application write leaves them: empty.
  * The first-party profile, its policy and its reason (ADR-017 Decision 2,
- * #631), and the hosted flows (ADR-017 Decision 8, #640), so no registration
- * path lets a client allow its own sign-up. Spread last, so no caller's value
- * survives.
+ * #631), the hosted flows (ADR-017 Decision 8, #640), so no registration
+ * path lets a client allow its own sign-up, and the registration's bot
+ * challenge (ADR-017 Decision 7, #643), so none sets or lifts its own.
+ * Spread last, so no caller's value survives.
  */
 const NOT_FIRST_PARTY = {
   firstPartyProfile: null,
   firstPartyPolicy: null,
   firstPartyReason: null,
   hostedFlows: null,
+  registrationChallenge: null,
 } as const;
 
 /**

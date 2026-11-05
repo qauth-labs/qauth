@@ -78,6 +78,9 @@ export type UpdateOAuthClient = Partial<
     // #640: the hosted flows are operator-set too (ADR-017 Decision 8), so a
     // client cannot allow its own sign-up.
     | 'hostedFlows'
+    // #643: so is the registration's bot challenge (ADR-017 Decision 7), so a
+    // client cannot lift its own.
+    | 'registrationChallenge'
   >
 > & {
   updatedAt?: number;

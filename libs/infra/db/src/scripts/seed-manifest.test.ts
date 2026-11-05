@@ -6,6 +6,7 @@ import {
   isCimdClientIdShape,
   manifestSchema,
   parseManifest,
+  registrationChallengeColumnOf,
 } from './seed-manifest';
 
 /**
@@ -822,5 +823,37 @@ describe('hosted flows (#640, ADR-017 Decision 8)', () => {
     expect(machine.error?.issues.map((issue) => issue.message).join('\n')).toContain(
       'hosted_flows requires the authorization_code grant'
     );
+  });
+});
+
+describe('the registration challenge (#643, ADR-017 Decision 7)', () => {
+  const webClient = {
+    client_id: 'notes-web',
+    name: 'Notes',
+    grant_types: ['authorization_code', 'refresh_token'],
+    redirect_uris: ['https://notes.example.com/callback'],
+    hosted_flows: ['register'],
+  };
+
+  function parse(client: Record<string, unknown>) {
+    return manifestSchema.safeParse({ realm: 'master', clients: [client] });
+  }
+
+  it('writes true for a client that requires it, and NULL otherwise', () => {
+    const cases: [Record<string, unknown>, true | null][] = [
+      [{ ...webClient, registration_challenge: true }, true],
+      [{ ...webClient, registration_challenge: false }, null],
+      [webClient, null],
+    ];
+    for (const [client, column] of cases) {
+      const parsed = parse(client);
+      expect(parsed.success).toBe(true);
+      const spec = parsed.data?.clients?.[0];
+      expect(spec && registrationChallengeColumnOf(spec)).toBe(column);
+    }
+  });
+
+  it('refuses anything but a boolean', () => {
+    expect(parse({ ...webClient, registration_challenge: 'yes' }).success).toBe(false);
   });
 });

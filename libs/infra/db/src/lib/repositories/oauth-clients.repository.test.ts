@@ -151,6 +151,7 @@ const FIRST_PARTY_COLUMNS = [
   '"first_party_policy"',
   '"first_party_reason"',
   '"hosted_flows"',
+  '"registration_challenge"',
 ] as const;
 
 /** What a caller might try to pass: a profile with its policy and reason, and a hosted flow. */
@@ -159,6 +160,7 @@ const FLAGGED = {
   firstPartyPolicy: { flows: ['login'] },
   firstPartyReason: 'Our own app',
   hostedFlows: ['register'],
+  registrationChallenge: true,
 };
 
 // #631 (ADR-017 Decision 2): first-partyness is operator-set. The paths that
@@ -257,6 +259,15 @@ describe('UpdateOAuthClient', () => {
     // @ts-expect-error -- nor can an update clear it.
     const clear: UpdateOAuthClient = { hostedFlows: null };
     expect([allow, clear]).toHaveLength(2);
+  });
+
+  // #643: only the operator sets or lifts a client's registration challenge.
+  it('cannot carry the registration challenge', () => {
+    // @ts-expect-error -- `registrationChallenge` is operator state, not an update field.
+    const lift: UpdateOAuthClient = { registrationChallenge: false };
+    // @ts-expect-error -- nor can an update set it.
+    const set: UpdateOAuthClient = { registrationChallenge: true };
+    expect([lift, set]).toHaveLength(2);
   });
 });
 
