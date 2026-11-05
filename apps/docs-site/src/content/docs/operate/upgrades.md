@@ -1212,6 +1212,34 @@ Nothing checks the grants at boot. Without the `web` one, every password
 sign-in through the Interaction API is refused as unavailable, with
 `permission denied for table user_required_actions` in the log.
 
+### Password reset and the session epoch
+
+With `INTERACTION_UI_ENABLED` on, the Interaction API's password step offers
+the owner's password reset
+([#642](https://github.com/qauth-labs/qauth/issues/642)). Migration 0062 adds
+the `user_session_epochs` table: one row per user, written by the reset in the
+transaction that replaces the password. Every browser session created before a
+user's last reset is ended at its next use. The auth server caches each user's
+epoch in Redis for up to 60 seconds; Postgres stays the source of truth, and a
+reset overwrites the cached value at once. The migration adds one table and
+changes no row of another, so a node of the previous release keeps working on
+the new schema during a rolling upgrade: it neither reads nor writes the table,
+and so does not end a session a reset made older until it reaches a node of
+this release.
+
+A deployment whose migration runner grants the roles' database users, or whose
+roles connect as the one user that owns the tables, needs nothing. One that
+applies the grants by hand gives the `web` role's user the new table before the
+new version starts:
+
+```sql
+GRANT SELECT, INSERT, UPDATE ON TABLE "user_session_epochs" TO <web_role>;
+```
+
+Without it, every request that reads a browser session (the authorization
+endpoint among them) and every Interaction API sign-in fails, with
+`permission denied for table user_session_epochs` in the log.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]

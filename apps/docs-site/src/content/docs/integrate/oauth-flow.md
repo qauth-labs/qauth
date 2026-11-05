@@ -197,6 +197,25 @@ the person to sign in first. A browser that is already signed in can still
 register a new account, and its session stays as it was. `qauth_upstream` is
 ignored with `prompt=create`.
 
+#### Password reset
+
+With the Interaction API on (`INTERACTION_UI_ENABLED`), the password step of a
+sign-in offers a reset beside the password, to every client the realm serves.
+It asks for an 8-digit code mailed to the address, then for a new password that
+meets the realm's password policy. The screens are the same for every address:
+only an account with a password gets the code, and a disabled account gets no
+mail and no change. An account that also holds a passkey or another
+authenticator must prove it before the new password; until those steps are
+served on these pages, such a reset ends as an expired interaction and changes
+nothing.
+
+A reset ends everything the old password opened: every refresh token of the
+user is revoked, every browser session and every sign-in in progress that
+began before it is ended, and the owner is mailed that the password changed.
+Like a registration, a reset is not a sign-in: QAuth starts no browser
+session, and the ID token carries no `auth_time` and no `amr`. A request that
+asks for a fresh sign-in, with `prompt=login` or `max_age`, offers no reset.
+
 #### Redirect URI matching
 
 `redirect_uri` is compared with the client's registered set (or, for a

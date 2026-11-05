@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Password reset inside the sign-in engine, and the session epoch** ([#642],
+  ADR-017 Decisions 7, 8 and 10, ADR-019 Decision 3). With
+  `INTERACTION_UI_ENABLED` on, the Interaction API's password step offers
+  `password_reset` beside the password, to every usable client; a request with
+  `prompt=login` or `max_age` offers none. The reset asks for an 8-digit
+  `recovery` code with the same step and timing for every address (only an
+  enabled account with a password is mailed), then for any other authenticator
+  the account holds (a disabled one included; email never stands in for it),
+  then `new_password` with `purpose: "reset"` under the realm's password policy
+  and breach list. One database transaction then replaces the password
+  through the credential repository's new `updatePassword`, marks the address
+  verified, clears the password's disabled mark and a pending
+  `update_password`, revokes every refresh token of the user, advances the
+  user's session epoch and records `user.password_reset` (sent over SSF as a
+  CAEP credential change). After it the password's failure counter is cleared
+  (a second factor's is not), every browser session of the user ends, and the
+  owner gets a "password changed" mail. The session epoch is the new
+  `user_session_epochs` table (migration 0062; the `web` role's database user
+  is granted it), cached in Redis for up to 60 seconds: a browser session
+  created before it is treated as absent and its cookie cleared, and a sign-in
+  that began before it ends. A reset signs nobody in: no browser session, and
+  the code and the ID token carry no `auth_time` and no `amr`. Until the
+  passkey and TOTP steps are served, an account that holds one cannot finish a
+  reset on these pages. The flow is graphed in
+  `graphs/flows/core/password-reset`.
 - **Registration with `prompt=create`** ([#640], ADR-017 Decisions 3, 8 and
   10, ADR-020 §3, OpenID Connect Prompt Create 1.0). `/oauth/authorize`
   accepts `prompt=create`, which starts a registration interaction in the
