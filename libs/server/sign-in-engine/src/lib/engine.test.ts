@@ -22,7 +22,7 @@ import {
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInEngineDependencies,
 } from './engine';
-import { type LadderHook, NOTHING_DUE, type SignInHooks } from './hooks';
+import { type LadderHook, type LimitsHook, NOTHING_DUE, type SignInHooks } from './hooks';
 import { PASSWORD_LADDER_POLICY } from './ladder';
 import {
   type Clock,
@@ -78,6 +78,14 @@ function manualClock(start = T0): Clock & { slept: number[]; advance(ms: number)
     advance: (ms) => {
       now += ms;
     },
+  };
+}
+
+/** A limiter that refuses every round at rule 3 for `retryAfterSeconds`. */
+function limitsThrottling(retryAfterSeconds: number): LimitsHook {
+  return {
+    round: async () => ({ kind: 'throttled', retryAfterSeconds }),
+    reserve: async () => ({ kind: 'throttled', retryAfterSeconds }),
   };
 }
 
@@ -1337,16 +1345,21 @@ describe('the hooks', () => {
 
   it('refuses the round for a limiter, the request checks, or a store the hooks need', async () => {
     const cases: [SignInHooks, Partial<RoundResult>][] = [
-      [
-        { limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) },
-        { reason: 'throttled' },
-      ],
+      [{ limits: limitsThrottling(9) }, { reason: 'throttled' }],
       [
         { request: async () => ({ kind: 'refuse', code: 'unmet_authentication_requirements' }) },
         { reason: 'request_refused' },
       ],
       [{ request: async () => ({ kind: 'redirect' }) }, { kind: 'redirect' }],
-      [{ limits: async () => Promise.reject(new Error('redis down')) }, { reason: 'unavailable' }],
+      [
+        {
+          limits: {
+            round: async () => Promise.reject(new Error('redis down')),
+            reserve: async () => Promise.reject(new Error('redis down')),
+          },
+        },
+        { reason: 'unavailable' },
+      ],
       [
         { ladder: { reserve: async () => Promise.reject(new Error('redis down')) } },
         { reason: 'unavailable' },
@@ -1366,7 +1379,7 @@ describe('the hooks', () => {
 
   it('audits a round a limiter or the request checks refused, under the identifier the transaction holds', async () => {
     const cases: [SignInHooks, string][] = [
-      [{ limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) }, 'rate_limited'],
+      [{ limits: limitsThrottling(9) }, 'rate_limited'],
       [
         { request: async () => ({ kind: 'refuse', code: 'unmet_authentication_requirements' }) },
         'request_refused',
@@ -1381,13 +1394,20 @@ describe('the hooks', () => {
 
       // Once the transaction holds one: the record names its HMAC.
       let throttle = false;
-      const gated: SignInHooks = Object.fromEntries(
-        Object.entries(hooks).map(([name, hook]) => [
-          name,
-          async (round: never) =>
-            throttle ? (hook as (r: never) => unknown)(round) : { kind: 'continue' },
-        ])
-      );
+      const { limits, request } = hooks;
+      const gated: SignInHooks = {
+        ...(limits === undefined
+          ? {}
+          : {
+              limits: {
+                round: async (round) => (throttle ? limits.round(round) : { kind: 'continue' }),
+                reserve: (round) => limits.reserve(round),
+              },
+            }),
+        ...(request === undefined
+          ? {}
+          : { request: async (round) => (throttle ? request(round) : { kind: 'continue' }) }),
+      };
       const held = build(undefined, { hooks: gated });
       const round0 = await held.engine.advance(null, null, context({ loginHint: IDENTIFIER }));
       throttle = true;
@@ -1406,7 +1426,7 @@ describe('the hooks', () => {
 
   it('names a refused round by the identifier step when the answer names a step it has no handler for', async () => {
     const built = build(undefined, {
-      hooks: { limits: async () => ({ kind: 'throttled', retryAfterSeconds: 9 }) },
+      hooks: { limits: limitsThrottling(9) },
     });
     const ctx = context();
     await built.engine.advance(null, answer('totp', { otp: '123456' }), ctx);
@@ -1418,7 +1438,10 @@ describe('the hooks', () => {
   it('runs the hooks in the rule order and never shows them an answer’s fields', async () => {
     const seen: string[] = [];
     const hooks: SignInHooks = {
-      limits: async (round) => (seen.push(`limits:${JSON.stringify(round)}`), { kind: 'continue' }),
+      limits: {
+        round: async (round) => (seen.push(`limits:${JSON.stringify(round)}`), { kind: 'continue' }),
+        reserve: async () => ({ kind: 'reserved', settle: async () => undefined }),
+      },
       request: async (round) => (seen.push(`request:${round.answered}`), { kind: 'continue' }),
       botChallenge: async (round) => (seen.push(`bot:${round.answered}`), { kind: 'not_due' }),
     };

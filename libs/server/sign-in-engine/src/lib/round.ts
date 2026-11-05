@@ -7,6 +7,7 @@ import type {
 
 import type { EmailCodePurpose } from './email-code';
 import type { AuditSink, UpstreamProviderEntry } from './ports';
+import type { RoundEnvironment } from './round-limits';
 import type { ProvedAccount } from './steps/handler';
 import type { SignInTransaction } from './transaction';
 
@@ -105,6 +106,12 @@ export interface RoundContext {
    * exemption reads it; absent, no attempt is exempt.
    */
   readonly endUserIp?: string;
+  /**
+   * The client's effective environment (ADR-008 §7: the stricter of the
+   * client's and its realm's ceiling). `development` relaxes the limiters
+   * (ADR-008 §5); `staging`, `production` and absent keep production values.
+   */
+  readonly environment?: RoundEnvironment;
   /** Where the round's audit records go. */
   readonly audit: AuditSink;
   /**
