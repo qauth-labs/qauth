@@ -29,13 +29,15 @@ import { WEBAUTHN_PROVIDER_TYPE } from '../providers/webauthn.provider';
  */
 
 const FEDERATION_SOURCE = resolve(__dirname, '..');
+/** The library's test support beside `src/`, which its suites import. */
+const FEDERATION_TEST_SUPPORT = resolve(__dirname, '../../testing');
 const SDK_SOURCE = resolve(__dirname, '../../../../sdk/plugin-sdk/src');
 const SDK_ENTRIES = ['index.ts', 'host.ts', 'testing/index.ts'].map((entry) =>
   join(SDK_SOURCE, entry)
 );
 const FEDERATION_ENTRY = join(FEDERATION_SOURCE, 'index.ts');
 
-/** Every `.ts` module of this library's source, tests left out. */
+/** Every `.ts` module under `directory`, tests left out. */
 function federationModules(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
@@ -66,13 +68,22 @@ function declaredNames(statement: ts.Statement): string[] {
 
 const inSdk = (file: string) => resolve(file).startsWith(SDK_SOURCE + sep);
 
+/**
+ * Every module of this library, each a root of the program below: a copy in a
+ * module that no entry point reaches yet is still a second copy.
+ */
+const FEDERATION_FILES = [
+  ...federationModules(FEDERATION_SOURCE),
+  ...federationModules(FEDERATION_TEST_SUPPORT),
+];
+
 // Building one TypeScript program over both libraries takes a few seconds,
 // more while CI runs every project's suite at once.
 describe(
   'the AuthMethod contract has one copy, in @qauth-labs/plugin-sdk',
   { timeout: 60_000 },
   () => {
-    const program = ts.createProgram([...SDK_ENTRIES, FEDERATION_ENTRY], {
+    const program = ts.createProgram([...SDK_ENTRIES, ...FEDERATION_FILES], {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
       moduleResolution: ts.ModuleResolutionKind.Bundler,
@@ -124,9 +135,12 @@ describe(
 
     it('declares no name the SDK exports in any of its modules', () => {
       const copies: string[] = [];
-      for (const file of federationModules(FEDERATION_SOURCE)) {
+      // A path that stopped matching would leave nothing to check.
+      expect(FEDERATION_FILES.length).toBeGreaterThan(60);
+      expect(FEDERATION_FILES).toContain(join(FEDERATION_SOURCE, 'auth-method/contract.ts'));
+      for (const file of FEDERATION_FILES) {
         const source = program.getSourceFile(file);
-        if (source === undefined) continue;
+        if (source === undefined) throw new Error(`${file} is not part of the program`);
         for (const statement of source.statements) {
           for (const name of declaredNames(statement)) {
             if (sdkNames.has(name)) copies.push(`${relative(FEDERATION_SOURCE, file)}: ${name}`);
