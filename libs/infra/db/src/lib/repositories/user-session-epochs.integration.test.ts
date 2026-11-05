@@ -17,7 +17,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { UserCredentialsRepository } from '../../types';
-import { realms, users,userSessionEpochs } from '../schema';
+import { realms, users, userSessionEpochs } from '../schema';
 import { type IntegrationDb, setupIntegrationDb } from './integration-setup';
 import { createUserCredentialsRepository } from './user-credentials.repository';
 import {
