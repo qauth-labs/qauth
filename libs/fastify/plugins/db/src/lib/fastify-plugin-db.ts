@@ -33,6 +33,7 @@ import {
   createUserAttributesRepository,
   createUserCredentialsRepository,
   createUserRequiredActionsRepository,
+  createUserSessionEpochsRepository,
   createUsersRepository,
   type Database,
   type DatabasePool,
@@ -54,6 +55,7 @@ import {
   type UserAttributesRepository,
   type UserCredentialsRepository,
   type UserRequiredActionsRepository,
+  type UserSessionEpochsRepository,
   type UsersRepository,
 } from '@qauth-labs/infra-db';
 import type { FastifyInstance } from 'fastify';
@@ -85,6 +87,13 @@ declare module 'fastify' {
        * it is done.
        */
       userRequiredActions: UserRequiredActionsRepository;
+      /**
+       * Each user's session epoch (#642): when the password was last reset.
+       * A reset advances it in its transaction; the session service's epoch
+       * cache reads it, and a browser session or a sign-in in progress
+       * created before it is treated as absent.
+       */
+      userSessionEpochs: UserSessionEpochsRepository;
       /**
        * OID4VP presentation-request states (ADR-004, #233). Decorated
        * unconditionally like every other repository — the WALLET FLOW is gated
@@ -208,6 +217,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   userCredentials: true,
   userAttributes: true,
   userRequiredActions: true,
+  userSessionEpochs: true,
   oid4vpRequestStates: true,
   events: true,
   eventDeliveries: true,
@@ -312,6 +322,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       userCredentials: () => createUserCredentialsRepository(database.db),
       userAttributes: () => createUserAttributesRepository(database.db),
       userRequiredActions: () => createUserRequiredActionsRepository(database.db),
+      userSessionEpochs: () => createUserSessionEpochsRepository(database.db),
       oid4vpRequestStates: () => createOid4vpRequestStatesRepository(database.db),
       events: sharedEvents,
       eventDeliveries: () => createEventDeliveriesRepository(database.db),

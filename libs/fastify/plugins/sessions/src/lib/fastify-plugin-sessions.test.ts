@@ -255,6 +255,48 @@ describe('sessionServicePlugin', () => {
     await app.close();
   });
 
+  it('decorates the session epochs, read from Postgres through the cache (#642)', async () => {
+    const app = Fastify({ logger: false });
+    const find = vi.fn(async () => ({ epoch: 2, advancedAt: 1_000 }));
+    const redis = { get: vi.fn(async () => null), set: vi.fn(async () => 'OK') };
+    await app.register(
+      fp(
+        async (instance) => {
+          instance.decorate('repositories', {
+            ...repositories(undefined).repos,
+            userSessionEpochs: { find },
+          } as never);
+        },
+        { name: DATABASE_PLUGIN_NAME }
+      )
+    );
+    await app.register(
+      fp(
+        async (instance) => {
+          instance.decorate('redis', redis as never);
+        },
+        { name: CACHE_PLUGIN_NAME }
+      )
+    );
+    await app.register(sessionServicePlugin, {
+      settings: { defaultMaxLifespanSeconds: 86_400, cacheTtlSeconds: 30 },
+    });
+    await app.ready();
+
+    await expect(app.sessionEpochs.lastReset({ realmId: REALM, userId: ROW.userId })).resolves.toBe(
+      1_000
+    );
+    expect(find).toHaveBeenCalledWith(REALM, ROW.userId);
+    expect(redis.set).toHaveBeenCalledWith(
+      `session-epoch:${REALM}:{${ROW.userId}}`,
+      JSON.stringify({ v: 1, advancedAt: 1_000 }),
+      'PX',
+      30_000,
+      'NX'
+    );
+    await app.close();
+  });
+
   it('refuses to boot before the database and cache plugins', async () => {
     const app = Fastify({ logger: false });
     const boot = async () => {
