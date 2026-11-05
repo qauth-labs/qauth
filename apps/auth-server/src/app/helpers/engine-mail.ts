@@ -52,6 +52,9 @@ import type { RealmRow } from './request-realm';
  *   with no account), and the password-disabled notice of the failure
  *   ladder's hard action ({@link EngineMailer.passwordDisabledNotices}). A
  *   realm cannot switch either off: nothing here asks it.
+ * - **The recovery codes' 100-failures notice**
+ *   ({@link EngineMailer.recoveryCodesFailed}, #649): at most one per account
+ *   per 24 hours, with no pass. A realm cannot switch it off either.
  *
  * Every mail is dispatched after the caller's answer is built
  * (`createBackgroundTasks`): "sent", "not sent" and "capped quietly" take the
@@ -120,6 +123,19 @@ export interface EngineMailer {
   sendUncounted(realm: MailRealm, address: string, mail: EngineMail): void;
   /** The failure ladder's password-disabled notice (#615), with its pass. */
   readonly passwordDisabledNotices: PasswordDisabledNotices;
+  /**
+   * The recovery codes' 100-failures notice (#649; ADR-017 Decision 7):
+   * claim the account's notice for the next 24 hours and, when this call
+   * claimed it, mail `address` after the answer. `true` when this call
+   * claimed it, so the caller alerts the operator once a day per account.
+   * Rejects when the claim cannot be made.
+   */
+  recoveryCodesFailed(input: {
+    readonly realm: MailRealm;
+    readonly userId: string;
+    /** The account's address; none for an account without one. */
+    readonly address?: string;
+  }): Promise<boolean>;
 }
 
 /** A password account as the caps read it. */
@@ -294,6 +310,31 @@ export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer
         throw new Error('engine mail: a mail that carries a code goes through the send caps');
       }
       deps.tasks.run(() => send(realm, address, mail), 'an engine mail was not sent');
+    },
+
+    async recoveryCodesFailed({
+      realm,
+      userId,
+      address,
+    }: Parameters<EngineMailer['recoveryCodesFailed']>[0]): Promise<boolean> {
+      // Keyed on the account, not an address: the HMAC of `user:<id>`, which
+      // no address is.
+      const accountHmac = await deps.digests.identifierDigest({
+        realmId: realm.id,
+        identifier: `user:${userId}`,
+      });
+      const claimed = await deps.caps.claimNotice({
+        realmId: realm.id,
+        addressHmac: accountHmac,
+        kind: 'recovery_codes_failed',
+      });
+      if (claimed && address !== undefined) {
+        deps.tasks.run(
+          () => send(realm, address, { template: 'recovery_codes_failed' }),
+          'the recovery-codes-failed notice was not sent'
+        );
+      }
+      return claimed;
     },
 
     passwordDisabledNotices: Object.freeze({

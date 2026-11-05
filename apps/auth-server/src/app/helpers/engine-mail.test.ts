@@ -415,6 +415,42 @@ describe('the engine mail and its send caps (#637)', () => {
     expect(claimed.sent).toEqual([]);
   });
 
+  it('sends the recovery codes’ 100-failures notice once a day per account, with no pass (#649)', async () => {
+    const h = harness();
+    const mailer = createCappedMailer(h.deps);
+    const USER = '0199fa20-5e1a-7000-8000-000000000001';
+
+    expect(await mailer.recoveryCodesFailed({ realm: REALM, userId: USER, address: ADDRESS })).toBe(
+      true
+    );
+    await h.settle();
+    // Keyed on the account's own HMAC, not its address's.
+    expect(h.claims).toEqual([`claim:recovery_codes_failed:id-${`user:${USER}`.length}`]);
+    expect(h.sent).toEqual([
+      { to: ADDRESS, mail: { template: 'recovery_codes_failed' }, baseUrl: REALM.issuer },
+    ]);
+
+    // The day's notice went: no mail, and the caller raises no second alert.
+    const claimed = harness({ claim: false });
+    expect(
+      await createCappedMailer(claimed.deps).recoveryCodesFailed({
+        realm: REALM,
+        userId: USER,
+        address: ADDRESS,
+      })
+    ).toBe(false);
+    await claimed.settle();
+    expect(claimed.sent).toEqual([]);
+
+    // An account without an address: the claim still counts, nothing is mailed.
+    const silent = harness();
+    expect(
+      await createCappedMailer(silent.deps).recoveryCodesFailed({ realm: REALM, userId: USER })
+    ).toBe(true);
+    await silent.settle();
+    expect(silent.sent).toEqual([]);
+  });
+
   it('gives the day’s password-disabled notice back and rejects when the transport refuses it', async () => {
     const h = harness({ transportRefuses: true });
 
