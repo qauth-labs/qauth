@@ -78,3 +78,17 @@ describe('[GET /.well-known/openid-configuration] OpenID Connect Back-Channel Lo
     expect(body['backchannel_logout_session_supported']).toBe(true);
   });
 });
+
+describe('[GET /.well-known/openid-configuration] OpenID Connect Prompt Create 1.0 §4.2 — the prompt values the provider supports', () => {
+  it('lists none, login and consent in prompt_values_supported, and no value the endpoint does not know (§4.2)', async () => {
+    const { body } = await getJsonObject(documentUrl);
+    const values = body['prompt_values_supported'];
+
+    expect(Array.isArray(values)).toBe(true);
+    expect(values).toEqual(expect.arrayContaining(['none', 'login', 'consent']));
+    // `create` is listed only while the realm allows sign-up.
+    for (const value of values as unknown[]) {
+      expect(['none', 'login', 'consent', 'create']).toContain(value);
+    }
+  });
+});
