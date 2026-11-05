@@ -1,0 +1,569 @@
+# Recovery codes (F2c, #649; ADR-017 Decisions 4, 7 and 8, ADR-018 §3): a recovery code redeemed on the hosted pages
+# in place of a lost factor, after the first factor, and a new set shown once. Written before the code (status:
+# proposed), as ADR-021 Decision 4 asks of a new core flow. The sign-in engine (flows/core/sign-in) runs it at rule 8;
+# the CER issue adds the screens (ui.yaml).
+#
+# - Like the sign-in engine, this flow has no screen and no HTTP route of its own: a transport calls the engine once a
+#   round, and every round runs the sign-in's rules up to rule 8 first (the policy, the limiters, the request checks,
+#   the bot challenge, the identifier, the first factor, the account read again). So an exit here is the engine's
+#   answer, as data, named in camelCase; a step state ends the round with the transaction live, and the next round's
+#   answer is a new event from it.
+# - A set is 10 codes of 80 bits each from a CSPRNG, shown once as base32 in four groups of four. The store keeps
+#   only each code's salted hash from the password hasher (Argon2id); the transaction never holds a code. A code is
+#   checked against every unused hash of the set, padded to 10 with a decoy so the time says nothing of how many are
+#   left, and marked used in the same write that takes it: a code works once.
+# - A redeemed code stands in for the factor rule 8 asks for: the strongest bound factor (the downgrade rule), a
+#   second factor the MFA policy requires, or the factor beyond the password a forced update needs. It adds no amr
+#   value, never mfa, and never moves auth_time, so it never meets an MFA policy: the person binds a new second factor
+#   before the sign-in completes (the set-up step, a redirect until #651 and #653 add one).
+# - Across transactions, clients, transports and IPs, one counter per (realm, user) counts wrong codes: the ladder
+#   of PRO-12 (#615) from 5 failures, with no known-IP exemption and no hard stop. A correct password never clears
+#   it; a redeemed code does. At 100 failures in a row and beyond, the user and the operator are told, the user at
+#   most once a day.
+schema: delurio-graph/0
+kind: flow
+id: core.recovery-code
+status: proposed
+domain: qauth
+title: Redeem a recovery code in place of a lost factor, and show a new set once
+summary: >-
+  After a correct first factor, rule 8 asks for a factor the account holds. On the hosted pages a recovery code is
+  offered beside it, or alone when the transport can serve no step of that factor. A right code, answered outside the
+  account's recovery-code ladder's wait, is marked used, the user is told, and the sign-in goes on with no amr added;
+  under an MFA policy the person must bind a new second factor first. A wrong one is refused and counted. A transport
+  that serves no recovery step (a FiPA client) is sent to the hosted pages where a code is the only way on. Before a
+  sign-in that proved a factor beyond the password completes, an account that holds no set gets one, shown once
+  until the person confirms they saved it.
+
+scope:
+  shows: >-
+    the recovery_code step from its offer after a first factor to the code taken or refused, round by round, and the
+    recovery_codes step from a new set to the person's confirmation
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before rule 8, drawn by flows/core/sign-in: the transport's checks, the MFA policy, the
+      limiters, the request checks, the bot challenge (due as well while the account's recovery-code counter is past
+      its 5 free failures), the identifier, the first factor, and the account read again"
+    - "the factor's own steps (a passkey from #651, TOTP from #653): their offer, their answer and their ladders. A
+      recovery code is offered beside them, never in their place"
+    - 'a recovery code before any first factor, for the passkey of a passkey-only account (#655): no such account
+      exists before #655 adds passkey registration'
+    - "what follows the factors at rule 8, drawn by flows/core/account-verification and flows/core/sign-in: the
+      inline verification of an address and the forced password update"
+    - 'the step of a password reset that asks for any other authenticator the account holds (flows/core/password-reset,
+      step 3): the same offer and the same rounds as here, before the new password'
+    - "regenerating a set (#687, behind ACC-02's fresh authentication of at most 5 minutes): one write that replaces
+      the set, then the notice; drawn with the account page that asks for it"
+    - "the limiters' credential round (#636): reserved before the ladder, it refuses a round inside a delay or past a
+      hard limit exactly as the ladder's wait does here"
+    - 'a failure to settle a reservation, or to send a notice: reported, and it changes no answer'
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+
+context:
+  # Whether the transport serves the recovery steps: the Interaction API serves both, a FiPA client neither.
+  hostedPages:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'a FiPA client, which may not serve recovery_code or recovery_codes'
+      'true': 'the Interaction API, behind the hosted pages'
+  # Whether rule 8 owes a factor a recovery code may stand in for.
+  factorOwed:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'every factor rule 8 asks for is proved'
+      'true': 'rule 8 asks for the strongest bound factor, a second factor or the factor beyond the password'
+  # Whether the transport can serve a step of the factor rule 8 asks for.
+  factorStep:
+    values: [none, served]
+    initial: any
+    say:
+      none: 'no registered step of that factor, or none the transport serves'
+      served: 'a step of that factor the transport serves'
+  # The account's unused recovery codes, read when the factor is owed.
+  codesLeft:
+    values: [none, some]
+    initial: any
+    say:
+      none: 'the account holds no set, or every code of it is used'
+      some: 'the account holds at least one unused code'
+  # The account's recovery-code ladder, across transactions, when a code is answered.
+  ladder:
+    values: [open, inWait]
+    initial: any
+    say:
+      open: 'the account is outside a wait of its recovery-code ladder'
+      inWait: 'fewer than its wait has passed since the account counted 5 or more wrong codes in a row'
+  # What the answered code is to the account's set.
+  answer:
+    values: [unused, spent, wrong]
+    initial: any
+    say:
+      unused: 'an unused code of the set, not taken by another round since'
+      spent: 'a code of the set already used, by this round or by another one'
+      wrong: 'no code of the set'
+  # Whether a wrong code counts at the ladder's ceiling: its 100th failure in a row, or a later one.
+  ceiling:
+    values: [below, reached]
+    initial: any
+    say:
+      below: 'fewer than 100 failures in a row, this one included'
+      reached: '100 failures in a row or more, this one included'
+  # Whether the realm's or the client's MFA policy requires a second factor of this account.
+  mfaRequired:
+    values: [false, true]
+    initial: any
+  # Whether the account changed between the redemption and the read after it.
+  accountChanged:
+    values: [false, true]
+    initial: any
+    say:
+      'false': "the account is the subject's and enabled"
+      'true': 'the account was disabled or removed since the round read it'
+  # Whether a set is owed before the sign-in completes.
+  setOwed:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'the account holds a set, or holds no factor beyond the password, or this transaction proved none'
+      'true': >-
+        the account holds a factor beyond the password, this transaction proved one, and the account holds no set (or
+        this transaction issued one the person has not confirmed)
+  # this round reserved the attempt on the limiters and the recovery-code ladder, which count it until it settles
+  attemptReserved: { values: [false, true], initial: false }
+  # this round checked an answered code against the set's hashes
+  codeChecked: { values: [false, true], initial: false }
+  # a code was marked used and taken by this transaction
+  codeTaken: { values: [false, true], initial: false }
+  # the "a recovery code was used" notice and its security-log event were queued
+  usedNoticeQueued: { values: [false, true], initial: false }
+  # the user's "recovery codes failed 100 times" notice (at most once a day) and the operator's alert were queued
+  ceilingNoticed: { values: [false, true], initial: false }
+  # this round wrote an audit record of the step
+  audited: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # a new set replaced the account's, and its codes go to this round's answer alone
+  setIssued: { values: [false, true], initial: false }
+  # the person confirmed they saved the set this transaction showed
+  setConfirmed: { values: [false, true], initial: false }
+  # a recovery code added an amr value, made mfa or moved auth_time: never
+  factorClaimed: { values: [false, true], initial: false }
+  # the transaction kept a recovery code, shown or answered: never
+  codeKept: { values: [false, true], initial: false }
+
+guards:
+  notHosted: 'not hostedPages'
+  owed: 'factorOwed'
+  noFactorStep: "factorStep == 'none'"
+  noCodes: "codesLeft == 'none'"
+  inWait: "ladder == 'inWait'"
+  unusedCode: "answer == 'unused'"
+  atCeiling: "ceiling == 'reached'"
+  changed: 'accountChanged'
+  mfa: 'mfaRequired'
+  noSetOwed: 'not setOwed or codeTaken'
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      attemptReserved: false
+      codeChecked: false
+      audited: false
+      floorWaited: false
+  reserveAttempt: { set: { attemptReserved: true } }
+  checkCode: { set: { codeChecked: true } }
+  takeCode: { set: { codeTaken: true, usedNoticeQueued: true } }
+  noticeCeiling: { set: { ceilingNoticed: true } }
+  audit: { set: { audited: true } }
+  waitFloor: { set: { floorWaited: true } }
+  issueSet: { set: { setIssued: true } }
+  confirmSet: { set: { setConfirmed: true } }
+  # what another transaction or the clock may have changed by the next answer
+  moveOn: { havoc: [ladder, answer, ceiling] }
+
+failures:
+  readingCodes: { from: recoveryCodes, store: [unavailable] }
+  reservingAttempt: { from: ladder, store: [unavailable] }
+  checkingCode: { from: recoveryCodes, store: [unavailable] }
+  readingAccountAgain: { from: accountDirectory, store: [unavailable] }
+  issuingSet: { from: recoveryCodes, store: [unavailable] }
+
+# The main story: the person lost the factor the account holds, signs in with the password, and types a code from
+# the saved set on the hosted pages.
+main:
+  given:
+    hostedPages: true
+    factorOwed: true
+    factorStep: none
+    codesLeft: some
+    ladder: open
+    answer: unused
+    ceiling: below
+    mfaRequired: false
+    accountChanged: false
+    setOwed: false
+  events: [DONE, CODE, DONE, DONE, DONE]
+
+initial: afterFirstFactor
+states:
+  afterFirstFactor:
+    title: Ask whether rule 8 owes a factor
+    description: >-
+      A first factor proved the account, and the account was read again with every factor it holds, a disabled one
+      included. Rule 8 owes a factor while the transaction has not proved the strongest bound one (the downgrade
+      rule), while the MFA policy requires mfa it has not made, or while a forced update needs a factor beyond the
+      password it has not proved. A redeemed code meets the first and the last, never the MFA policy.
+    always:
+      - guard: owed
+        target: readingCodes
+        say: 'a factor is owed'
+      - target: checkingSet
+        say: 'every factor rule 8 asks for is proved'
+
+  readingCodes:
+    title: Read how many unused codes the account holds
+    description: >-
+      Only a transport that serves recovery_code reads them: the Interaction API. A FiPA client never gets the step,
+      so the read and the offer are the hosted pages' alone.
+    invoke: { external: recoveryCodes }
+    on:
+      DONE:
+        - guard: notHosted
+          target: factorOffered
+          effect: [waitFloor]
+          say: >-
+            a FiPA client: the factor's own step when it can serve one, else a redirect, which it answers with
+            redirect_to_web
+        - guard: noCodes
+          target: factorOffered
+          effect: [waitFloor]
+          say: 'the account holds no unused code: the factor alone, or a redirect when no step of it can be served'
+        - target: offeringRecoveryCode
+          effect: [waitFloor]
+          say: 'the hosted pages, and an unused code to redeem'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; nothing is offered'
+
+  reservingAttempt:
+    title: Reserve the answer on the recovery-code ladder
+    description: >-
+      The limiters' credential round first (#636), then the ladder hook of PRO-12 with the recovery_code counter,
+      keyed on the realm and the user: one atomic operation reads the wait, refuses an attempt inside it, and
+      otherwise counts the attempt as a failure until it settles. No end-user IP is known to it: the ladder has no
+      known-IP exemption. A store error refuses the round before any code is checked.
+    invoke: { external: ladder }
+    on:
+      DONE:
+        - guard: inWait
+          target: lockedOut
+          effect: [audit, waitFloor]
+          say: 'the account is inside a wait: refused, neither checked nor counted, audited as locked_out'
+        - target: checkingCode
+          effect: [reserveAttempt]
+          say: 'the attempt is reserved; it spends the bot challenge passed for it'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the ladder store fails; nothing is checked'
+
+  checkingCode:
+    title: Check the answer against the set, and take it once
+    description: >-
+      The answer, with case, spaces and dashes ignored, is checked against every unused hash of the set with the
+      password hasher, padded to 10 with a decoy; an answer that cannot be a code is checked against the decoy alone,
+      as long. A match is marked used in one write that only an unused code passes, with its security-log event, so
+      two rounds with the same code take it once. A taken code settles the reservation as a success, which clears the
+      recovery-code counter and no other.
+    invoke: { external: recoveryCodes }
+    on:
+      DONE:
+        - guard: unusedCode
+          target: readingAccountAgain
+          effect: [checkCode, takeCode, audit]
+          say: >-
+            the code is taken: recovery_code joins the transaction's verified steps with no amr, auth_time stays, the
+            step is audited as passed under the subject, and "a recovery code was used" is mailed
+        - guard: atCeiling
+          target: codeRefused
+          effect: [checkCode, noticeCeiling, audit, waitFloor]
+          say: >-
+            a wrong or used code, counted at or past the ceiling of 100: refused like any other, and the user (at
+            most once a day) and the operator are told
+        - target: codeRefused
+          effect: [checkCode, audit, waitFloor]
+          say: 'a wrong or used code: refused with invalid_credentials, counted, audited as invalid_code'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails: no code is taken, and the attempt stays counted'
+
+  readingAccountAgain:
+    title: Read the account again
+    description: The account the code was taken for, every factor included, as after any factor of rule 8.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: changed
+          target: ended
+          effect: [audit, waitFloor]
+          say: 'the account was disabled or removed since: the transaction ends'
+        - target: afterRedemption
+          say: 'the account is as it was'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; the code stays taken'
+
+  afterRedemption:
+    title: Ask whether the code met what rule 8 owed
+    description: >-
+      A code meets the downgrade rule and the forced update's factor beyond the password. It never makes mfa: under
+      an MFA policy that requires a second factor, the person binds a new one before the sign-in completes.
+    always:
+      - guard: mfa
+        target: redirected
+        effect: [waitFloor]
+        say: >-
+          the MFA policy requires a second factor the code does not make: the set-up step, which no transport can
+          serve until #651 and #653 add one, so a redirect
+      - target: checkingSet
+        say: 'nothing more is owed for the factor'
+
+  checkingSet:
+    title: Ask whether a set is owed before the sign-in completes
+    description: >-
+      The first enrolment of a second factor binds it within a transaction that proves it (#651, #653): an account
+      that holds a factor beyond the password, after a transaction that proved one, and no set gets one now. A
+      transaction that took a recovery code holds a set already.
+    always:
+      - guard: noSetOwed
+        target: completed
+        effect: [waitFloor]
+        say: 'no set is owed: the sign-in completes'
+      - guard: notHosted
+        target: redirected
+        effect: [waitFloor]
+        say: 'a FiPA client cannot show a set: a redirect, answered with redirect_to_web'
+      - target: issuingSet
+        say: 'a set is owed, and the hosted pages show it'
+
+  issuingSet:
+    title: Issue a new set
+    description: >-
+      Ten codes of 80 bits from a CSPRNG; their Argon2id hashes replace the account's set, if any, in one write. The
+      codes go to this round's answer alone, as the step's personal data, and the transaction marks only that a set
+      waits to be confirmed.
+    invoke: { external: recoveryCodes }
+    on:
+      DONE:
+        target: offeringSet
+        effect: [issueSet, waitFloor]
+        say: 'the set is written; its codes are shown'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails: no set is written'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringRecoveryCode:
+    title: Offer a recovery code
+    description: >-
+      The factor's own steps first, when the transport serves one, and recovery_code last; recovery_code alone when
+      it serves none. The personal data is the transaction's identifier.
+    response:
+      kind: step
+      body:
+        current: "the factor's first step, else recovery_code"
+        alternatives: "the factor's other steps, then recovery_code"
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringRecoveryCode
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer: the same offer'
+      CODE:
+        target: reservingAttempt
+        effect: [newRound, moveOn]
+        say: 'the person types a recovery code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not shaped like a code: refused as invalid_answer, nothing checked or counted'
+      FACTOR:
+        target: factorAnswered
+        effect: [newRound]
+        say: "the person answers the factor's own step instead"
+
+  codeRefused:
+    title: Ask for a recovery code again
+    description: The same offer, recovery_code current with invalid_credentials; nothing says how many codes are left.
+    response:
+      kind: step
+      body:
+        current: { step: recovery_code, params: {}, error: invalid_credentials }
+        alternatives: "the factor's steps the transport serves"
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringRecoveryCode
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer'
+      CODE:
+        target: reservingAttempt
+        effect: [newRound, moveOn]
+        say: 'the person types another code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not shaped like a code'
+      FACTOR:
+        target: factorAnswered
+        effect: [newRound]
+        say: "the person answers the factor's own step instead"
+
+  offeringSet:
+    title: Show the new set once
+    description: >-
+      The recovery_codes step with the set's 10 codes as its personal data. Nothing keeps them: a round that brings
+      no confirmation gets a new set, which replaces this one.
+    response:
+      kind: step
+      body:
+        current: { step: recovery_codes, params: { count: 10 } }
+        alternatives: []
+        personal: { codes: 'the 10 codes, in four groups of four base32 characters' }
+    on:
+      CONFIRM:
+        target: completed
+        effect: [newRound, confirmSet, audit, waitFloor]
+        say: 'the person confirms they saved the codes: recovery_codes joins the verified steps with no amr'
+      ROUND:
+        target: issuingSet
+        effect: [newRound]
+        say: 'the next round brings no confirmation: the shown codes are gone, so a new set replaces them'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the confirmation is not `true`: refused as invalid_answer'
+
+  # Exits
+
+  completed:
+    type: final
+    title: Complete the sign-in
+    description: >-
+      Rule 9, after whatever rule 8 still asks for (the inline verification, the forced update). The amr is the
+      proved factors' alone: a taken code adds none, and auth_time is the last factor's.
+    response:
+      kind: complete
+      body:
+        amr: "the proved factors' values; nothing for recovery_code or recovery_codes, and never mfa from a code"
+        authTime: "the last factor's, never the code's"
+
+  redirected:
+    type: final
+    title: Send the person to a page that can go on
+    description: >-
+      A step the transport cannot serve: a set to show on a FiPA client, or a new second factor to bind under an MFA
+      policy. The FiPA endpoint answers redirect_to_web; the Interaction API ends the interaction.
+    response:
+      kind: redirect
+      body: { reason: step_not_available, transaction: null }
+
+  factorOffered:
+    type: final
+    title: Offer the factor alone
+    description: >-
+      No recovery code: the transport serves none, or the account holds no unused one. The factor's own steps, or a
+      redirect when no step of the factor can be served, drawn by flows/core/sign-in.
+    response:
+      kind: step
+      body: { current: "the factor's first step, or a redirect with step_not_available" }
+
+  factorAnswered:
+    type: final
+    title: Go on with the factor's own answer
+    description: The person answered the factor's step offered beside the code, drawn with that step (#651, #653).
+    response:
+      kind: continue
+      body: { verified: "the factor's step, as its handler verifies it" }
+
+  lockedOut:
+    type: final
+    title: Refuse the answer inside the recovery-code ladder's wait
+    description: Neither checked nor counted; the transaction stays, and so does the offer.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the ladder's" }
+
+  ended:
+    type: final
+    title: End the transaction for an account that changed
+    description: The account was disabled or removed after its code was taken; the code stays used.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  answerRefused:
+    type: final
+    title: Refuse a malformed answer
+    description: A fault of the request, audited as invalid_answer; the transaction stays.
+    response:
+      kind: refused
+      body: { reason: invalid_answer }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: >-
+      The database or the ladder cannot be reached: fail closed. The transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: reserve-before-check
+    never: 'codeChecked and not attemptReserved'
+    say: 'Every checked code was reserved on the limiters and the recovery-code ladder first'
+  - id: nothing-checked-inside-a-wait
+    never: "state == 'lockedOut' and codeChecked"
+    say: 'An answer inside a wait of the recovery-code ladder is neither checked nor counted'
+  - id: only-an-unused-code-is-taken
+    never: "codeTaken and answer != 'unused'"
+    say: 'A used code and a code of no set are refused: a code works once'
+  - id: the-hosted-pages-alone-redeem
+    never: 'codeChecked and not hostedPages'
+    say: 'A recovery code is redeemed only on the hosted pages; a FiPA client is sent there'
+  - id: every-taken-code-is-told
+    never: 'codeTaken and not usedNoticeQueued'
+    say: 'Every taken code mails "a recovery code was used", which no realm can switch off'
+  - id: the-ceiling-is-told
+    never: "state == 'codeRefused' and ceiling == 'reached' and not ceilingNoticed"
+    say: 'A wrong code counted at or past the ceiling tells the user and the operator'
+  - id: a-code-is-never-a-factor
+    never: 'factorClaimed'
+    say: 'A recovery code adds no amr value, never makes mfa and never moves auth_time'
+  - id: a-code-never-meets-an-mfa-policy
+    never: "state == 'completed' and codeTaken and mfaRequired"
+    say: 'Under an MFA policy that requires a second factor, a taken code never completes the sign-in'
+  - id: a-code-is-never-kept
+    never: 'codeKept'
+    say: 'The transaction never holds a recovery code, shown or answered'
+  - id: a-new-set-is-confirmed
+    never: "state == 'completed' and setIssued and not setConfirmed"
+    say: 'A sign-in that issued a set completes only once the person confirmed they saved it'
+  - id: every-refusal-is-audited
+    never: "state in ['codeRefused', 'lockedOut', 'ended', 'answerRefused'] and not audited"
+    say: 'Every refused or ended answer writes an audit record under the subject'
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringRecoveryCode', 'codeRefused', 'offeringSet', 'completed', 'redirected', 'factorOffered',
+      'lockedOut', 'ended', 'answerRefused', 'unavailable'] and not floorWaited
+    say: 'Every round that ends here answers no earlier than 500 ms after it arrived'
