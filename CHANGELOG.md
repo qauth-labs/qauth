@@ -192,7 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plugin is one QAuth makes and releases, and it may live in its own
   repository, on its own version line, depending only on the published plugin
   SDK. The GitHub provider plugin, `@qauth-labs/plugin-github`, is the first,
-  built and released from `qauth-labs/qauth-plugin-github`; it is not on
+  built and released from `qauth-labs/plugin-github`; it is not on
   `FIRST_PARTY_AUTH_METHOD_PLUGINS`, so it loads only with
   `PLUGIN_API_ENABLED=true`, like any package the operator installs. The
   _Published images_ page gains _Add a plugin to the image_: a Dockerfile that

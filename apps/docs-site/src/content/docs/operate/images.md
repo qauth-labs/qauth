@@ -138,7 +138,7 @@ as you trust the server.
 For example, QAuth's own GitHub plugin, `@qauth-labs/plugin-github`, installs this way: the
 end-to-end suite of its repository builds its test image with this recipe on the released server
 image, and its README names the plugin version made for each QAuth release.
-The example's sources are in [qauth-labs/qauth-plugin-github](https://github.com/qauth-labs/qauth-plugin-github).
+The example's sources are in [qauth-labs/plugin-github](https://github.com/qauth-labs/plugin-github).
 
 ## What a release runs
 

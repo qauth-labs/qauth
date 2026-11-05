@@ -508,7 +508,7 @@ OAuth 2.0 provider with PKCE: QAuth's release dry run installs the packed SDK in
 project on every pull request, and builds and tests the example there.
 
 For example, QAuth's GitHub plugin is the example of a plugin in its own repository:
-`@qauth-labs/plugin-github`, from the example repository [qauth-labs/qauth-plugin-github](https://github.com/qauth-labs/qauth-plugin-github).
+`@qauth-labs/plugin-github`, from the example repository [qauth-labs/plugin-github](https://github.com/qauth-labs/plugin-github).
 It depends only on the published SDK, runs the kit in its CI, and runs an end-to-end suite against
 the released server image with the plugin added on top, as an operator adds it. QAuth makes and
 releases it, yet it is not on the server's first-party list: like any other package, it loads only
