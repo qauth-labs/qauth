@@ -198,6 +198,19 @@ describe('the proof of work', () => {
     expect(solvesProofOfWork({ ...params, difficulty: 32 }, nonce)).toBe(false);
   });
 
+  it('agrees with the page’s solver on a shared vector', () => {
+    // The vector of `@qauth-labs/shared-interaction-client`'s solver test.
+    const challenge = 'cWF1dGgtcG93LXRlc3QtdmVjdG9yLW9mLTMyLWJ5dGVz';
+    for (const [difficulty, nonce] of [
+      [12, '2596'],
+      [16, '4124'],
+    ] as const) {
+      const params = { provider: 'pow', challenge, difficulty } as const;
+      expect(solve(params)).toBe(nonce);
+      expect(solvesProofOfWork(params, nonce)).toBe(true);
+    }
+  });
+
   it('refuses a token that is not a plain decimal nonce, and hosted params', () => {
     const params = { provider: 'pow', challenge: 'a'.repeat(43), difficulty: 1 } as const;
     for (const token of ['', '01', '-1', '+1', '1e3', ' 1', '1 ', '0x1', '1'.repeat(17), '٣']) {
