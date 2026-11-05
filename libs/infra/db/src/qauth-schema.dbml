@@ -250,6 +250,7 @@ Table "authorization_codes" {
   "code_challenge_method" "code_challenge_method" [not null, default: 'S256']
   "nonce" text [note: "OIDC nonce parameter — opaque, client-owned, no spec length limit (#316)"]
   "auth_time" bigint [note: "OIDC Core §2 auth_time (epoch ms) — when the end-user actually authenticated"]
+  "amr" jsonb [note: "RFC 8176 methods of that authentication: NULL or a non-empty list, only beside auth_time (#662)"]
   "assurance_level" text [note: "eIDAS LoA of that authentication: 'substantial' | 'high' | NULL (no acr claim) — #237"]
   "scopes" jsonb [not null, default: `'[]'::jsonb`]
   "state" text [note: "CSRF protection state parameter — opaque, client-owned, no spec length limit (#316)"]
@@ -278,6 +279,8 @@ Table "refresh_tokens" {
   "revoked_at" bigint
   "revoked_reason" varchar(255) [note: "e.g., 'user_logout', 'security_breach'"]
   "previous_token_hash" text [note: "Hash of previous token if rotated"]
+  "auth_time" bigint [note: "The family's sign-in time (epoch ms), from the code; every rotation copies it (#662)"]
+  "amr" jsonb [note: "The family's RFC 8176 methods, from the code; NULL or a non-empty list, only beside auth_time (#662)"]
   "cnf_jkt" varchar(43) [note: "RFC 9449 §5: thumbprint of the DPoP key a public client's refresh token is bound to; kept across rotations (#480)"]
   "created_at" bigint [not null, default: `EXTRACT(EPOCH FROM NOW())::bigint * 1000`]
   "last_used_at" bigint

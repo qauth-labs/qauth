@@ -873,8 +873,8 @@ libs/infra/db/
 ### Token Tables
 
 - **email_verification_tokens**: Email verification tokens with expiration, pointed at a `credential_id`
-- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010); `session_id` (0042, #549) names the browser session behind the code, the ID token's `sid`, and a deleted session sets it to NULL
-- **refresh_tokens**: Refresh tokens with rotation support
+- **authorization_codes**: OAuth authorization codes with PKCE challenges, plus `auth_time` (0013) and `assurance_level` (0016, ADR-010); `session_id` (0042, #549) names the browser session behind the code, the ID token's `sid`, and a deleted session sets it to NULL; `amr` (0065, #662) holds the RFC 8176 methods the browser session proved, NULL or a non-empty list and only beside an `auth_time`, for the ID token's and the access token's `amr`
+- **refresh_tokens**: Refresh tokens with rotation support; `auth_time` and `amr` (0065, #662) hold the sign-in behind the family, copied from the code and kept by every rotation, for the access tokens' `auth_time` and `amr` (NULL when no sign-in backs the family or it predates 0065)
 
 ### Federation Tables
 
