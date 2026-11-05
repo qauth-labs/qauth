@@ -45,19 +45,23 @@ This library defines that abstraction (see
 > - `profiles/` — the `VerifierProfile` abstraction (#299)
 > - `providers/webauthn.provider.ts` and `webauthn/` — the **`WebAuthnProvider`**
 >   (#467) and the relying-party ID rules, below
-> - `auth-method/` — the **AuthMethod contract** (#599), EXPERIMENTAL: the
->   plugin API of ADR-018 §4. `AuthMethod` extends `CredentialProvider` with an
->   `id`, the contract version, display data, a config schema, the steps it
->   contributes, the routes it mounts under `/upstream/<type>` and `start()`;
->   the engine's checks around it (`startUpstreamStep`, `completeUpstreamStep`
->   with its assurance ceiling, `upstreamBindingMatches` for the host's binding
->   check before the pending transaction is taken) and the context a method is
->   handed (`createAuthMethodContext`). The registry hands an AuthMethod out
+> - `auth-method/` — the server's side of the **AuthMethod contract** (#599),
+>   EXPERIMENTAL: the plugin API of ADR-018 §4. The contract itself is declared
+>   once, in [`@qauth-labs/plugin-sdk`](../../sdk/plugin-sdk/README.md)
+>   (#1009), the package a plugin is written against in its own repository:
+>   `AuthMethod`, which extends `CredentialProvider` with an `id`, the contract
+>   version, display data, a config schema, the steps it contributes, the
+>   routes it mounts under `/upstream/<type>` and `start()`; the engine's checks
+>   around it (`startUpstreamStep`, `completeUpstreamStep` with its assurance
+>   ceiling, `upstreamBindingMatches` for the host's binding check before the
+>   pending transaction is taken); the context a method is handed
+>   (`createAuthMethodContext`); and the contract test kit (`checkAuthMethod`,
+>   from `@qauth-labs/plugin-sdk/testing`). This library re-exports the SDK's
+>   main and `/host` entry points, never `/testing`, and declares none of it
+>   again (`single-copy.test.ts`); what it adds is the plugin loader, the secret
+>   members and the server's own values. The registry hands an AuthMethod out
 >   only through `resolveAuthMethod`; `resolve()` answers a fail-closed
->   stand-in for its type. The
->   contract test kit (`checkAuthMethod`) is test support under `src/testing/`,
->   served from the `@qauth-labs/server-federation/testing` entry point and
->   never from the main one. See
+>   stand-in for its type. See
 >   [the docs page](../../../apps/docs-site/src/content/docs/extend/auth-method-contract.md).
 
 ## Usage
