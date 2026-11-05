@@ -1,3 +1,4 @@
+import rateLimit from '@fastify/rate-limit';
 import {
   type AuthMethodRouteHost,
   mountAuthMethodFamilyRoutes,
@@ -6,8 +7,10 @@ import {
 } from '@qauth-labs/fastify-plugin-federation';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 
+import { env } from '../../config/env';
 import { authMethodPluginEnabledIn } from '../helpers/auth-method-plugins';
 import { createInteractionEngines, type InteractionEngines } from '../helpers/interaction-engines';
+import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 import { answerRouteNotFound } from '../helpers/request-bounds';
 import { requestRealm } from '../helpers/request-realm';
 import { upstreamOidcRoutes, upstreamProviderCatalog } from '../helpers/upstream-providers';
@@ -58,6 +61,21 @@ const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
     engines: () => (engines ??= createInteractionEngines(fastify)),
   });
   const config = upstreamCallbackRateLimit();
+
+  // Every callback has the request ceiling of the app's `@fastify/rate-limit`,
+  // which `app.ts` registers before the route manifest loads this plugin, and
+  // its own `config.rateLimit`. CodeQL's `js/missing-rate-limiting` cannot
+  // follow that registration into this plugin, so it is registered here too
+  // when the app has none, as the admin pipeline does: never in the app, which
+  // registers it first, and never when an operator turned rate limiting off.
+  if (env.RATE_LIMIT_ENABLED && !fastify.hasDecorator('rateLimit')) {
+    await fastify.register(rateLimit, {
+      global: true,
+      max: env.LOGIN_RATE_LIMIT,
+      timeWindow: env.LOGIN_RATE_WINDOW * 1000,
+      keyGenerator: realmRateLimitKey,
+    });
+  }
 
   // The realm's generic OpenID Connect providers (#639), resolved per
   // request: in a scope of their own, outside the plugins' gate below.
