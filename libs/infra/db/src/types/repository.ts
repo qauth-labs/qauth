@@ -157,6 +157,8 @@ export interface UserCredentialsRepository {
     externalSub: string,
     tx?: DbClient
   ): Promise<UserCredential[]>;
+  /** Every credential a user holds, of every provider type (#639). */
+  findAllByUserId(userId: string, tx?: DbClient): Promise<UserCredential[]>;
   /** Every credential a user holds for one provider type (#238). */
   findAllByUserIdAndType(
     userId: string,

@@ -230,7 +230,7 @@ Each factory takes a `defaultDb: DbClient`. Methods below take an optional
   - `create()`, `findById()`, `findByIdOrThrow()`, `update()`, `updateLastLogin()`, `delete()`
   - Since ADR-002 / #230 the `users` table carries **no email or password columns**, so there is no `findByEmail()`, `findByEmailNormalized()` or `verifyEmail()`. Look an account up through `createUserCredentialsRepository(db).findByRealmProviderSub()` instead; duplicate registration is guarded by the credentials unique index, not by this insert.
 - **`createUserCredentialsRepository(db)`**: Credential rows per authentication method (ADR-002 / ADR-003)
-  - `create()`, `findById()`, `findByRealmProviderSub()`, `findByUserIdAndType()`, `findAllByUserIdAndType()`, `findAllByRealmAndExternalSub()`, `updateCredentialData()`, `setEmailVerified()`
+  - `create()`, `findById()`, `findByRealmProviderSub()`, `findByUserIdAndType()`, `findAllByUserId()`, `findAllByUserIdAndType()`, `findAllByRealmAndExternalSub()`, `updateCredentialData()`, `setEmailVerified()`
   - `findByRealmProviderSub(realmId, providerType, externalSub)` is the credential lookup that replaces the removed `findByEmail()`. It is not itself the duplicate guard — duplicates are caught by the `(realm_id, provider_type, external_sub)` **unique index**, which raises on insert even if this lookup is skipped or races.
 - **`createUserAttributesRepository(db)`**: Normalized claims per user (ADR-002)
   - `upsertMany()`, `findVerifiedByUserIdAndKey()`, `setVerified()`
