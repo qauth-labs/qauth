@@ -1,4 +1,5 @@
 export * from './lib/account-directory';
+export * from './lib/account-registrations';
 export * from './lib/address-verifier';
 export * from './lib/audit-events';
 export * from './lib/breached-passwords';
@@ -14,6 +15,8 @@ export * from './lib/round-limits';
 export * from './lib/send-caps';
 // What the auth server works with, from the engine library it may not import.
 export {
+  type AccountRegistration,
+  type AccountRegistrations,
   type AddressVerifier,
   type AuditSink,
   BREACH_CHECK_FAILURES,
@@ -41,6 +44,8 @@ export {
   type PasswordReplacement,
   type PasswordUpdates,
   readSignInTransaction,
+  REGISTRATION_NOT_ALLOWED,
+  type RegistrationMail,
   REQUIRED_ACTIONS,
   type RequiredAction,
   retryAfterSeconds,
