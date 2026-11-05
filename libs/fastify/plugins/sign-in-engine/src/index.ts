@@ -1,5 +1,6 @@
 export * from './lib/account-directory';
 export * from './lib/account-registrations';
+export * from './lib/account-resets';
 export * from './lib/address-verifier';
 export * from './lib/audit-events';
 export * from './lib/breached-passwords';
@@ -17,6 +18,9 @@ export * from './lib/send-caps';
 export {
   type AccountRegistration,
   type AccountRegistrations,
+  type AccountReset,
+  type AccountResetOutcome,
+  type AccountResets,
   type AddressVerifier,
   type AuditSink,
   BREACH_CHECK_FAILURES,
@@ -48,6 +52,8 @@ export {
   type RegistrationMail,
   REQUIRED_ACTIONS,
   type RequiredAction,
+  RESET_NOT_ALLOWED,
+  type ResetMail,
   retryAfterSeconds,
   ROUND_LIMIT_POLICY,
   type RoundAnswer,
@@ -66,6 +72,7 @@ export {
   type SendCapRefusingTier,
   type SendCapRequest,
   type SendCapStore,
+  type SessionEpochReader,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
   type SignInAuditRecord,
   type SignInEngine,
