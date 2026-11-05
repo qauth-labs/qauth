@@ -176,7 +176,9 @@ export function roundLimitPolicy(options: RoundLimitPolicyOptions = {}): RoundLi
       maxRoundsWindowMs,
     }),
     registrationStarts: Object.freeze({
-      endUserIp: Object.freeze({ ...(options.registrationPerIp ?? { limit: 3, windowMs: HOUR_MS }) }),
+      endUserIp: Object.freeze({
+        ...(options.registrationPerIp ?? { limit: 3, windowMs: HOUR_MS }),
+      }),
       client: Object.freeze({ limit: 1_000, windowMs: HOUR_MS }),
     }),
   });
@@ -348,18 +350,19 @@ function ipv4Bucket(octets: readonly number[]): string {
 /**
  * The network bucket of an end-user IP, for the distinct-identifier count
  * (ADR-017 Decision 7): an IPv4 address's /24, an IPv6 address's /48, as a
- * CIDR. An address in the RFC 6052 well-known prefix 64:ff9b::/96 stands
- * for one IPv4 client, and is bucketed by that client's /24. A value that is
- * not an address is its own bucket.
+ * CIDR. An address in the RFC 6052 well-known prefix 64:ff9b::/96, or an
+ * IPv4-mapped one (`::ffff:192.0.2.1`), stands for one IPv4 client, and is
+ * bucketed by that client's /24. A value that is not an address is its own
+ * bucket.
  */
 export function endUserIpBucket(endUserIp: string): string {
   if (isIPv4(endUserIp)) return ipv4Bucket(endUserIp.split('.').map(Number));
   const groups = ipv6Groups(endUserIp.split('%')[0] ?? endUserIp);
   if (groups === null) return endUserIp;
   const [g0, g1, g2, g3, g4, g5, g6 = 0, g7 = 0] = groups;
-  if (g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0) {
-    return ipv4Bucket([g6 >> 8, g6 & 0xff, g7 >> 8]);
-  }
+  const translated = g0 === 0x64 && g1 === 0xff9b && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0;
+  const mapped = g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0xffff;
+  if (translated || mapped) return ipv4Bucket([g6 >> 8, g6 & 0xff, g7 >> 8]);
   return `${[g0, g1, g2].map((group) => (group ?? 0).toString(16)).join(':')}::/48`;
 }
 
@@ -575,12 +578,14 @@ export function createRoundLimiter(
     };
   }
 
-  const alerted = (keys: RoundLimitKeys, clientId: string, alerts: readonly RoundLimitAlert[]) => {
-    for (const alert of alerts) {
+  const alerted = (keys: RoundLimitKeys, clientId: string, alerts: unknown) => {
+    if (!Array.isArray(alerts)) return;
+    for (const alert of alerts as unknown[]) {
+      if (typeof alert !== 'string') continue;
       if (!(ROUND_LIMIT_ALERTS as readonly string[]).includes(alert)) continue;
       report({
         realmId: keys.realmId,
-        alert,
+        alert: alert as RoundLimitAlert,
         ...(alert === 'end_user_ip_blocked' && keys.endUserIpHmac !== undefined
           ? { endUserIpHmac: keys.endUserIpHmac }
           : {}),
@@ -595,7 +600,10 @@ export function createRoundLimiter(
   const verdictOf = (decision: RoundLimitDecision): LimitVerdict =>
     decision.kind === 'admitted'
       ? Object.freeze({ kind: 'continue' })
-      : Object.freeze({ kind: 'throttled', retryAfterSeconds: retrySeconds(decision.retryAfterMs) });
+      : Object.freeze({
+          kind: 'throttled',
+          retryAfterSeconds: retrySeconds(decision.retryAfterMs),
+        });
 
   async function round(hookRound: HookRound): Promise<LimitVerdict> {
     const keys = await keysOf(hookRound);
@@ -633,7 +641,7 @@ export function createRoundLimiter(
             ? { accountKey: settleOptions.userId }
             : {}),
         });
-        alerted(keys, credential.clientId, Array.isArray(alerts) ? alerts : []);
+        alerted(keys, credential.clientId, alerts);
       },
     };
     return Object.freeze(reservation);

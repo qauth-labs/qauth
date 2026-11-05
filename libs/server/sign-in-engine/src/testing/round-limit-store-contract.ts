@@ -195,7 +195,9 @@ export function describeRoundLimitStore(
       expect(crossing.decision.kind).toBe('admitted');
       expect(crossing.alerts).toEqual(['ip_bucket_identifiers']);
       // Any IP of the bucket now waits; another bucket does not.
-      expect((await credential('failure', { ...ip(52), identifierHmac: 'id-22' })).decision).toMatchObject({
+      expect(
+        (await credential('failure', { ...ip(52), identifierHmac: 'id-22' })).decision
+      ).toMatchObject({
         kind: 'refused',
         limit: 'ip_bucket_delay',
         retryAfterMs: P.ipBucket.delayMs,
@@ -211,12 +213,12 @@ export function describeRoundLimitStore(
       expect(later.alerts).toEqual([]);
       // The identifiers age out of the window.
       advance(P.ipBucket.windowMs);
-      expect((await credential('failure', { ...ip(55), identifierHmac: 'id-24' })).decision.kind).toBe(
-        'admitted'
-      );
-      expect((await credential('failure', { ...ip(56), identifierHmac: 'id-25' })).decision.kind).toBe(
-        'admitted'
-      );
+      expect(
+        (await credential('failure', { ...ip(55), identifierHmac: 'id-24' })).decision.kind
+      ).toBe('admitted');
+      expect(
+        (await credential('failure', { ...ip(56), identifierHmac: 'id-25' })).decision.kind
+      ).toBe('admitted');
     });
 
     it('counts sign-ins to one account once toward a client’s failure ratio', async (context) => {
@@ -225,9 +227,9 @@ export function describeRoundLimitStore(
       // 199 failures and 199 sign-ins to one account: counted per round, the
       // ratio would be 50 %, not above it; counted once, 199 of 200.
       for (let i = 0; i < P.client.ratioMinRounds - 1; i += 1) {
-        expect((await credential('success', { ...client, accountKey: 'owned' })).decision.kind).toBe(
-          'admitted'
-        );
+        expect(
+          (await credential('success', { ...client, accountKey: 'owned' })).decision.kind
+        ).toBe('admitted');
       }
       const alerts: RoundLimitAlert[] = [];
       for (let i = 0; i < P.client.ratioMinRounds - 1; i += 1) {
@@ -338,9 +340,9 @@ export function describeRoundLimitStore(
       const { credential, store, keys } = await setup(context);
       const as = (environment: RoundEnvironment) => ({ environment });
       for (let i = 0; i < P.endUserIp.hardFailures; i += 1) {
-        expect((await credential('failure', { ...ip(1), ...as('development') })).decision.kind).toBe(
-          'admitted'
-        );
+        expect(
+          (await credential('failure', { ...ip(1), ...as('development') })).decision.kind
+        ).toBe('admitted');
       }
       for (let i = 0; i < P.registrationStarts.endUserIp.limit + 1; i += 1) {
         expect(

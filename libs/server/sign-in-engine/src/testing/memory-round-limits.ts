@@ -5,8 +5,8 @@ import {
   type RoundLimitDecision,
   type RoundLimitKeys,
   type RoundLimitName,
-  type RoundLimitPolicy,
   roundLimitPolicies,
+  type RoundLimitPolicy,
   roundLimitPolicyFor,
   type RoundLimitStore,
 } from '../lib/round-limits';
@@ -185,7 +185,9 @@ export function createMemoryRoundLimits(
       const outcome: CredentialRoundOutcome = round.outcome;
       const alerts: RoundLimitAlert[] = [];
       const bucketMember =
-        round.identifierHmac === undefined ? undefined : `${round.identifierHmac}:${round.reservation}`;
+        round.identifierHmac === undefined
+          ? undefined
+          : `${round.identifierHmac}:${round.reservation}`;
       if (outcome === 'failure') {
         if (round.endUserIpHmac !== undefined) {
           const ip = round.endUserIpHmac;
@@ -223,7 +225,10 @@ export function createMemoryRoundLimits(
           if (ratio && claim(k(round, 'client', client, 'alert', 'ratio'), p.client.windowMs, at)) {
             alerts.push('client_failure_ratio');
           }
-          if (budget && claim(k(round, 'client', client, 'alert', 'budget'), p.client.windowMs, at)) {
+          if (
+            budget &&
+            claim(k(round, 'client', client, 'alert', 'budget'), p.client.windowMs, at)
+          ) {
             alerts.push('client_failure_budget');
           }
         }
@@ -269,7 +274,10 @@ export function createMemoryRoundLimits(
           ? undefined
           : log(k(keys, 'registration', 'client', keys.clientKey), p.client.windowMs, at);
       if (clientLog !== undefined && clientLog.size >= p.client.limit) {
-        return refused('registration_client', retry(clientLog, p.client.limit, p.client.windowMs, at));
+        return refused(
+          'registration_client',
+          retry(clientLog, p.client.limit, p.client.windowMs, at)
+        );
       }
       const member = `${at}:${Math.random()}`;
       ipLog?.set(member, at);

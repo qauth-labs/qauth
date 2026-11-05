@@ -121,8 +121,8 @@ export {
   type CredentialRoundKeys,
   type CredentialRoundOutcome,
   DEVELOPMENT_ROUND_LIMIT_FACTOR,
-  type EndUserIpLimits,
   endUserIpBucket,
+  type EndUserIpLimits,
   FIRST_PARTY_CLIENT_MAX_ROUNDS_DEFAULT,
   type IpBucketLimits,
   isCredentialAnswer,
@@ -143,11 +143,11 @@ export {
   type RoundLimitKeys,
   type RoundLimitName,
   type RoundLimitPolicies,
-  type RoundLimitPolicy,
   roundLimitPolicies,
+  type RoundLimitPolicy,
   roundLimitPolicy,
-  type RoundLimitPolicyOptions,
   roundLimitPolicyFor,
+  type RoundLimitPolicyOptions,
   type RoundLimitStore,
 } from './lib/round-limits';
 export {
