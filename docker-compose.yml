@@ -155,6 +155,8 @@ services:
       # that still sets only the old name keeps its gate.
       REQUIRE_VERIFIED_ACCOUNT: ${REQUIRE_VERIFIED_ACCOUNT:-}
       REQUIRE_EMAIL_VERIFIED: ${REQUIRE_EMAIL_VERIFIED:-}
+      # Seeds accounts.allowSignUp of a new realm (#639).
+      ALLOW_SIGN_UP: ${ALLOW_SIGN_UP:-false}
       REGISTRATION_RATE_LIMIT: ${REGISTRATION_RATE_LIMIT:-3}
       REGISTRATION_RATE_WINDOW: ${REGISTRATION_RATE_WINDOW:-3600}
       LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-5}

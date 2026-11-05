@@ -27,6 +27,12 @@ export interface AccountPolicies {
    * sign-in is refused, with the answer a wrong password gets.
    */
   readonly requireVerifiedAccount: boolean;
+  /**
+   * `accounts.allowSignUp` (#639): whether a person may create a new account
+   * through the hosted sign-in; an unknown upstream identity creates one only
+   * while this is on. `POST /auth/register` does not read it.
+   */
+  readonly allowSignUp: boolean;
   /** `password.minScore`: the lowest zxcvbn score, 0 to 4, a new password may have. */
   readonly passwordMinScore: number;
   /**
@@ -72,6 +78,7 @@ export function accountPoliciesOf(
   const { accounts, password, bruteForce, mail } = sources.policyStore.ofRealm(realm).policies;
   return Object.freeze({
     requireVerifiedAccount: accounts.requireVerifiedAccount,
+    allowSignUp: accounts.allowSignUp,
     passwordMinScore: password.minScore,
     passwordMinLength: password.minLength,
     serviceName: mail.fromName,
