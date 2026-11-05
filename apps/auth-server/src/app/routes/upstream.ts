@@ -9,6 +9,7 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 
 import { env } from '../../config/env';
 import { authMethodPluginEnabledIn } from '../helpers/auth-method-plugins';
+import { createBackgroundTasks } from '../helpers/background-tasks';
 import { createInteractionEngines, type InteractionEngines } from '../helpers/interaction-engines';
 import { realmRateLimitKey } from '../helpers/realm-rate-limit';
 import { answerRouteNotFound } from '../helpers/request-bounds';
@@ -55,10 +56,14 @@ function routeType(url: string | undefined): string | undefined {
 
 const upstreamRoutes: FastifyPluginAsync = async (fastify) => {
   const catalog = upstreamProviderCatalog(fastify);
+  // The engines are built on the first callback, and their mail's background
+  // tasks now: those register a hook, which Fastify refuses once the server
+  // started.
+  const tasks = createBackgroundTasks(fastify);
   let engines: InteractionEngines | undefined;
   const host: AuthMethodRouteHost = upstreamRouteHost(fastify, {
     catalog,
-    engines: () => (engines ??= createInteractionEngines(fastify)),
+    engines: () => (engines ??= createInteractionEngines(fastify, { tasks })),
   });
   const config = upstreamCallbackRateLimit();
 

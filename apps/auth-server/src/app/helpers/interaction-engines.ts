@@ -14,6 +14,7 @@ import { TemporarilyUnavailableError, TooManyRequestsError } from '@qauth-labs/s
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import { accountPoliciesOf } from './account-policies';
+import { type BackgroundTasks } from './background-tasks';
 import { createEngineMailer, type EngineMailer } from './engine-mail';
 import type { InteractionDecision } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
@@ -84,9 +85,16 @@ function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailC
  * `update_password` required action (#635, ADR-020 §3): after the account's
  * second factor, or after an 8-digit recovery code to its address. The new
  * password meets the realm's password policy and the breach list too.
+ *
+ * Building them registers an `onClose` hook for the mail's background tasks,
+ * which Fastify refuses once the server started: a route that builds them
+ * on its first request passes `tasks` it created while it registered.
  */
-export function createInteractionEngines(fastify: FastifyInstance): InteractionEngines {
-  const mailer = createEngineMailer(fastify);
+export function createInteractionEngines(
+  fastify: FastifyInstance,
+  options: { readonly tasks?: BackgroundTasks } = {}
+): InteractionEngines {
+  const mailer = createEngineMailer(fastify, options.tasks);
   const ladder = createServerLadderParts(fastify, mailer.passwordDisabledNotices);
   const emailCodes = {
     digest: createServerEmailCodeDigest(fastify),

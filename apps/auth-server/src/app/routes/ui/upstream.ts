@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { accountPoliciesOf } from '../../helpers/account-policies';
+import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { answerInteraction, type InteractionAnswerResult } from '../../helpers/interaction';
 import { createInteractionEngines, decisionOf } from '../../helpers/interaction-engines';
 import { InteractionExpiredError } from '../../helpers/interaction-expired';
@@ -49,8 +50,12 @@ import {
  */
 export default async function (fastify: FastifyInstance) {
   const catalog = upstreamProviderCatalog(fastify);
+  // The engines are built on the first routed start, and their mail's
+  // background tasks now: those register a hook, which Fastify refuses once
+  // the server started.
+  const tasks = createBackgroundTasks(fastify);
   let engines: ReturnType<typeof createInteractionEngines> | undefined;
-  const enginesOf = () => (engines ??= createInteractionEngines(fastify));
+  const enginesOf = () => (engines ??= createInteractionEngines(fastify, { tasks }));
   const config = {
     surface: 'browser' as const,
     rateLimit: {
