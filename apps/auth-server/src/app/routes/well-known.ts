@@ -11,6 +11,7 @@ import {
   type DiscoveryMetadataInput,
 } from '../helpers/discovery';
 import { realmIssuer } from '../helpers/realm-url';
+import { realmOffersRegistration } from '../helpers/registration';
 import { type RealmRow, requestRealm } from '../helpers/request-realm';
 import { SsfNotFoundError } from '../helpers/ssf-errors';
 import { realmRunsTransmitter } from '../helpers/ssf-receiver';
@@ -89,6 +90,9 @@ export default async function (fastify: FastifyInstance) {
     // revocation queues the logout tokens, and the delivery role always
     // carries the route that sends them.
     backchannelLogoutSupported: true,
+    // OpenID Connect Prompt Create 1.0 §4.2 (#640): `create` is listed only
+    // while the realm offers sign-up.
+    registrationOffered: realmOffersRegistration(realm),
     experimentalItems,
   });
 
