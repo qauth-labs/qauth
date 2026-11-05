@@ -2,7 +2,10 @@ import { createHmac } from 'node:crypto';
 
 import type {
   AccountDirectory,
+  AddressVerification,
+  AddressVerifier,
   BoundFactor,
+  EmailCodeDigest,
   IdentifierDigest,
   MfaPolicy,
   MfaPolicyReader,
@@ -11,6 +14,7 @@ import type {
   SignInAuditRecord,
   SignInCandidate,
 } from '../lib/ports';
+import type { EmailCodeSender, EmailCodeSendOutcome } from '../lib/round';
 
 /**
  * Fakes of the engine's ports, for tests of the engine and of the
@@ -77,6 +81,7 @@ export class FakeDirectory implements AccountDirectory {
       userId,
       enabled: account.enabled,
       admin: account.admin,
+      verified: account.verified,
       factors: [
         ...(account.password === null
           ? []
@@ -104,6 +109,66 @@ export const fakeIdentifierDigest: IdentifierDigest = async ({ realmId, identifi
   createHmac('sha256', 'sign-in-engine-test-key')
     .update(`${realmId}\u0000${identifier}`)
     .digest('base64url');
+
+/** The email code's HMAC under a fixed test key, as the plugin's digest computes it. */
+export const fakeEmailCodeDigest: EmailCodeDigest = async ({ realmId, salt, code }) =>
+  createHmac('sha256', 'sign-in-engine-test-email-code-key')
+    .update(`${realmId}\u0000${salt}\u0000${code}`)
+    .digest('base64url');
+
+/** One code a {@link FakeCodeSender} was handed. */
+export type SentCode = Parameters<EmailCodeSender>[0];
+
+/**
+ * A capped sender that keeps every code it was handed, as the mailbox would,
+ * and answers `outcome` (accepted by default).
+ */
+export class FakeCodeSender {
+  readonly sent: SentCode[] = [];
+  outcome: EmailCodeSendOutcome = { kind: 'accepted' };
+
+  readonly send: EmailCodeSender = async (mail) => {
+    this.sent.push(Object.freeze({ ...mail }));
+    return this.outcome;
+  };
+
+  /** The last code mailed. */
+  get last(): string {
+    const mail = this.sent.at(-1);
+    if (mail === undefined) throw new Error('fake sender: no code was sent');
+    return mail.code;
+  }
+}
+
+/**
+ * An address verifier over a {@link FakeDirectory}: it marks the account the
+ * identifier names verified when it is the user's and enabled, recording
+ * each call.
+ */
+export class FakeAddresses implements AddressVerifier {
+  readonly calls: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly identifier: string;
+  }[] = [];
+
+  constructor(readonly directory: FakeDirectory) {}
+
+  async markVerified(input: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly identifier: string;
+  }): Promise<AddressVerification> {
+    this.calls.push(Object.freeze({ ...input }));
+    const account = this.directory.accounts.get(input.identifier);
+    if (account === undefined || account.userId !== input.userId || account.password === null) {
+      return { kind: 'refused', reason: 'subject_mismatch' };
+    }
+    if (!account.enabled) return { kind: 'refused', reason: 'account_disabled' };
+    this.directory.accounts.set(input.identifier, { ...account, verified: true });
+    return { kind: 'verified' };
+  }
+}
 
 /** An audit sink that keeps every record. */
 export function recordingAudit(): {

@@ -1,18 +1,20 @@
 import type { LadderHook, LadderReservation, LadderVerdict } from '../lib/hooks';
 import {
   checkLadderPolicy,
+  EMAIL_CODE_LADDER_POLICY,
   type LadderPolicy,
   ladderWaitMs,
   PASSWORD_LADDER_POLICY,
 } from '../lib/ladder';
-import type { FactorType } from '../lib/ports';
+import type { LadderCounter } from '../lib/ports';
 
 /**
  * TEST SUPPORT — the failure ladder in memory, on a clock the test moves: the
  * rules of {@link LadderPolicy} as the auth server's Redis script applies them
  * (`@qauth-labs/fastify-plugin-sign-in-engine`'s `failure-ladder.ts`). One
- * counter per (realm, identifier HMAC, factor), one known-IP list per (realm,
- * identifier HMAC). Not for production: nothing is shared between processes.
+ * counter per (realm, identifier HMAC, counter: a factor or the email codes),
+ * one known-IP list per (realm, identifier HMAC). Not for production: nothing
+ * is shared between processes.
  */
 
 /** One counter's state. */
@@ -34,26 +36,40 @@ export interface MemoryLadderRun {
 
 export interface MemoryLadder extends LadderHook {
   /** The counter of `factor` for the identifier, or `undefined` when no run is counted. */
-  counter(realmId: string, identifierHmac: string, factor: FactorType): MemoryLadderRun | undefined;
+  counter(
+    realmId: string,
+    identifierHmac: string,
+    factor: LadderCounter
+  ): MemoryLadderRun | undefined;
   /** The end-user IPs known to the identifier's account, with when each last signed in. */
   knownIps(realmId: string, identifierHmac: string): ReadonlyMap<string, number>;
   /** Every reservation, in order: what a test counts instead of verifications. */
-  readonly reservations: { readonly factor: FactorType; readonly outcome: 'reserved' | 'wait' }[];
+  readonly reservations: {
+    readonly factor: LadderCounter;
+    readonly outcome: 'reserved' | 'wait';
+  }[];
 }
 
-/** A ladder in memory over `now`, with `policy` for every factor (the password's by default). */
+/**
+ * A ladder in memory over `now`, with `factorPolicy` for every factor (the
+ * password's by default) and `emailCodePolicy` for the email codes' counter.
+ */
 export function createMemoryLadder(
   now: () => number,
-  policy: LadderPolicy = PASSWORD_LADDER_POLICY
+  factorPolicy: LadderPolicy = PASSWORD_LADDER_POLICY,
+  emailCodePolicy: LadderPolicy = EMAIL_CODE_LADDER_POLICY
 ): MemoryLadder {
-  checkLadderPolicy(policy);
+  checkLadderPolicy(factorPolicy);
+  checkLadderPolicy(emailCodePolicy);
+  const policyOf = (counter: LadderCounter) =>
+    counter === 'email_code' ? emailCodePolicy : factorPolicy;
   /** A run, and how many of its counted failures came from known IPs (#968). */
   type Counter = MemoryLadderRun & { readonly knownIpFailures: number };
   const counters = new Map<string, Counter>();
   const known = new Map<string, Map<string, number>>();
   const reservations: MemoryLadder['reservations'] = [];
   let runs = 0;
-  const counterKey = (realmId: string, hmac: string, factor: FactorType) =>
+  const counterKey = (realmId: string, hmac: string, factor: LadderCounter) =>
     `${realmId}\u0000${hmac}\u0000${factor}`;
   const knownKey = (realmId: string, hmac: string) => `${realmId}\u0000${hmac}`;
   const live = (key: string) => {
@@ -81,6 +97,7 @@ export function createMemoryLadder(
     knownIps: (realmId, hmac) => new Map(known.get(knownKey(realmId, hmac)) ?? []),
     async reserve({ realmId, identifierHmac, factor, endUserIp }): Promise<LadderVerdict> {
       const key = counterKey(realmId, identifierHmac, factor);
+      const policy = policyOf(factor);
       const at = now();
       const seen =
         endUserIp === undefined
@@ -114,7 +131,7 @@ export function createMemoryLadder(
       let settled = false;
       const reservation: LadderReservation = {
         kind: 'reserved',
-        async settle(outcome) {
+        async settle(outcome, options) {
           if (settled) throw new Error('memory ladder: settled twice');
           settled = true;
           if (outcome === 'success') {
@@ -124,7 +141,7 @@ export function createMemoryLadder(
               if (current.failures <= 1) counters.delete(key);
               else counters.set(key, { ...current, failures: current.failures - 1 });
             }
-            if (endUserIp !== undefined && policy.knownIpMs > 0) {
+            if (endUserIp !== undefined && policy.knownIpMs > 0 && options?.rememberIp !== false) {
               const ips = known.get(knownKey(realmId, identifierHmac)) ?? new Map<string, number>();
               ips.set(endUserIp, now());
               known.set(knownKey(realmId, identifierHmac), ips);

@@ -1,10 +1,12 @@
 import {
   type CookieSecretSource as DigestSecretSource,
+  createCookieSecretEmailCodeDigest,
   createCookieSecretIdentifierDigest,
   createHardActionArming,
   createPasswordAttempts,
   createPasswordHardAction,
   createRedisFailureLadder,
+  type EmailCodeDigest,
   END_USER_IP_HMAC_LABEL,
   type HardActionArming,
   type HardActionArmingSources,
@@ -92,6 +94,15 @@ export function createServerDigests(fastify: FastifyInstance): ServerDigests {
     identifierDigest: createCookieSecretIdentifierDigest(secrets, 'local'),
     ipDigest: createCookieSecretIdentifierDigest(secrets, 'local', END_USER_IP_HMAC_LABEL),
   };
+}
+
+/**
+ * The email-code digest of this process (#638), over its cookie key ring as
+ * the identifier's: the sign-in transaction holds an emailed code only as
+ * this keyed HMAC, under a label of its own.
+ */
+export function createServerEmailCodeDigest(fastify: FastifyInstance): EmailCodeDigest {
+  return createCookieSecretEmailCodeDigest(cookieRingSecrets(fastify), 'local');
 }
 
 /** The parts of the per-account failure ladder (#615) every password route of a process shares. */

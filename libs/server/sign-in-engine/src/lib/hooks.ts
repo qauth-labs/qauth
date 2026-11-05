@@ -1,6 +1,6 @@
 import type { StepName } from '@qauth-labs/server-step-grammar';
 
-import type { FactorType } from './ports';
+import type { LadderCounter } from './ports';
 import type { SignInTransaction } from './transaction';
 
 /**
@@ -62,15 +62,27 @@ export interface LadderSettlement {
 /** A settlement that fires nothing. */
 export const NOTHING_DUE: LadderSettlement = Object.freeze({ ceilingReached: false });
 
+/** How a success settles: whether it makes the attempt's end-user IP known to the account. */
+export interface LadderSuccessOptions {
+  /**
+   * `false` clears the counter and records no IP: the right password of an
+   * account whose address is not proved yet (#638), which has no owner whose
+   * IPs a later attempt may count as known. `true` by default.
+   */
+  readonly rememberIp?: boolean;
+}
+
 /** One reserved attempt of the ladder, settled once the credential is checked. */
 export interface LadderReservation {
   readonly kind: 'reserved';
   /**
-   * `success` clears the counter of the factor it proved, and no other, and
-   * makes the attempt's end-user IP known to the account; `failure` keeps the
-   * attempt counted, and says whether the hard action is due. Settled once.
+   * `success` clears the counter of the factor it proved (or of the email
+   * codes, for a right code), and no other, and makes the attempt's end-user
+   * IP known to the account unless `options.rememberIp` is `false`;
+   * `failure` keeps the attempt counted, and says whether the hard action is
+   * due. Settled once.
    */
-  settle(outcome: 'success' | 'failure'): Promise<LadderSettlement>;
+  settle(outcome: 'success' | 'failure', options?: LadderSuccessOptions): Promise<LadderSettlement>;
 }
 
 /** The ladder's answer to a reservation. */
@@ -90,7 +102,11 @@ export interface LadderHook {
   reserve(input: {
     readonly realmId: string;
     readonly identifierHmac: string;
-    readonly factor: FactorType;
+    /**
+     * The counter: a factor's, or `email_code`, the wrong email codes'
+     * (#638), a separate counter under the same key that is never a factor.
+     */
+    readonly factor: LadderCounter;
     /**
      * The end-user IP, as the limiters key it (an IPv6 address by its /64):
      * one with a successful sign-in to the account in the ladder's known-IP

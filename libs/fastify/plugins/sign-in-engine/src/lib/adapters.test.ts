@@ -17,10 +17,16 @@ import {
   type AccountDirectoryRepositories,
   createRepositoryAccountDirectory,
 } from './account-directory';
+import {
+  type AddressVerifierRepositories,
+  createRepositoryAddressVerifier,
+} from './address-verifier';
 import { signInAuditEvent } from './audit-events';
 import { signInEnginePlugin } from './fastify-plugin-sign-in-engine';
 import {
+  createCookieSecretEmailCodeDigest,
   createCookieSecretIdentifierDigest,
+  EMAIL_CODE_HMAC_LABEL,
   END_USER_IP_HMAC_LABEL,
   IDENTIFIER_HMAC_LABEL,
 } from './identifier-digest';
@@ -137,6 +143,7 @@ describe('the repository account directory', () => {
       userId: USER,
       enabled: true,
       admin: true,
+      verified: true,
       // A passkey of another realm's row is not this account's.
       factors: [
         { type: 'password', disabled: false },
@@ -147,6 +154,22 @@ describe('the repository account directory', () => {
     expect(
       await createRepositoryAccountDirectory(none, log()).findByUserId(REALM, USER)
     ).toBeNull();
+  });
+
+  it('reads the proved account as unverified while its password credential is (#638)', async () => {
+    const unverified = stubStores({ credential: { password_hash: 'hash', email_verified: false } });
+    expect(
+      await createRepositoryAccountDirectory(unverified.repos, log()).findByUserId(REALM, USER)
+    ).toMatchObject({ verified: false });
+    const unreadable = stubStores({ credential: { password_hash: 42 } });
+    expect(
+      await createRepositoryAccountDirectory(unreadable.repos, log()).findByUserId(REALM, USER)
+    ).toMatchObject({ verified: false });
+    // A passkey-only account has no address to prove.
+    const passkeyOnly = stubStores({ credential: undefined, passkeys: [{ realmId: REALM }] });
+    expect(
+      await createRepositoryAccountDirectory(passkeyOnly.repos, log()).findByUserId(REALM, USER)
+    ).toMatchObject({ verified: true });
   });
 
   it('reports a disabled, unverified account as such', async () => {
@@ -380,6 +403,119 @@ describe('the identifier HMAC', () => {
   });
 });
 
+describe('the email-code HMAC (#638)', () => {
+  const secret = Buffer.from('the realm cookie secret, 32 bytes');
+  const signer = () => ({
+    getCookieSecrets: vi.fn(async () => ({
+      current: { kid: 'cookie-1', secret: Buffer.from(secret) },
+      previous: null,
+    })),
+  });
+
+  it('is HMAC-SHA-256 under a key of its own label, over realm, salt and code', async () => {
+    const source = signer();
+    const digest = createCookieSecretEmailCodeDigest(source);
+    const value = await digest({ realmId: REALM, salt: 's'.repeat(22), code: '012345' });
+    const key = Buffer.from(hkdfSync('sha256', secret, Buffer.alloc(0), EMAIL_CODE_HMAC_LABEL, 32));
+    expect(value).toBe(
+      createHmac('sha256', key)
+        .update(`${REALM}\u0000${'s'.repeat(22)}\u0000012345`)
+        .digest('base64url')
+    );
+    expect(value).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(source.getCookieSecrets).toHaveBeenCalledWith('web', REALM);
+    const handed = await source.getCookieSecrets.mock.results[0].value;
+    expect(handed.current.secret.every((byte: number) => byte === 0)).toBe(true);
+    // Another salt, another code or another realm is another digest.
+    const again = createCookieSecretEmailCodeDigest(signer());
+    expect(await again({ realmId: REALM, salt: 't'.repeat(22), code: '012345' })).not.toBe(value);
+    expect(await again({ realmId: REALM, salt: 's'.repeat(22), code: '012346' })).not.toBe(value);
+    expect(await again({ realmId: OTHER_REALM, salt: 's'.repeat(22), code: '012345' })).not.toBe(
+      value
+    );
+  });
+});
+
+describe('the repository address verifier (#638)', () => {
+  function stubWrites(
+    overrides: Partial<{
+      credential: { id: string; userId: string } | undefined;
+      user: { id: string; enabled: boolean } | undefined;
+      attribute: unknown;
+    }> = {}
+  ) {
+    const state = {
+      credential: { id: 'cred-1', userId: USER } as { id: string; userId: string } | undefined,
+      user: { id: USER, enabled: true } as { id: string; enabled: boolean } | undefined,
+      attribute: { verified: true } as unknown,
+      ...overrides,
+    };
+    const calls: string[] = [];
+    const repos: AddressVerifierRepositories<string> = {
+      userCredentials: {
+        findByRealmProviderSub: async (realmId, providerType, externalSub, tx) => {
+          calls.push(`credential:${realmId}:${providerType}:${externalSub}:${tx}`);
+          return state.credential;
+        },
+        setEmailVerified: async (id, tx) => {
+          calls.push(`setEmailVerified:${id}:${tx}`);
+        },
+      },
+      users: {
+        findById: async (realmId, id, tx) => {
+          calls.push(`user:${realmId}:${id}:${tx}`);
+          return state.user;
+        },
+      },
+      userAttributes: {
+        setVerified: async (userId, source, attrKey, verified, tx) => {
+          calls.push(`attribute:${userId}:${source}:${attrKey}:${verified}:${tx}`);
+          return state.attribute;
+        },
+      },
+    };
+    const transaction = async <T>(work: (tx: string) => Promise<T>) => work('tx-1');
+    const warn = vi.fn();
+    return {
+      verifier: createRepositoryAddressVerifier(repos, transaction, { warn }),
+      calls,
+      warn,
+    };
+  }
+  const input = { realmId: REALM, userId: USER, identifier: IDENTIFIER };
+
+  it('marks the credential and the email attribute verified, in one transaction', async () => {
+    const { verifier, calls, warn } = stubWrites();
+    expect(await verifier.markVerified(input)).toEqual({ kind: 'verified' });
+    expect(calls).toEqual([
+      `credential:${REALM}:password:${IDENTIFIER}:tx-1`,
+      `user:${REALM}:${USER}:tx-1`,
+      'setEmailVerified:cred-1:tx-1',
+      `attribute:${USER}:self_reported:email:true:tx-1`,
+    ]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing for another user's address, an unknown one, or a disabled user", async () => {
+    for (const [overrides, reason] of [
+      [{ credential: { id: 'cred-2', userId: 'someone-else' } }, 'subject_mismatch'],
+      [{ credential: undefined }, 'subject_mismatch'],
+      [{ user: undefined }, 'subject_mismatch'],
+      [{ user: { id: USER, enabled: false } }, 'account_disabled'],
+    ] as const) {
+      const { verifier, calls } = stubWrites(overrides);
+      expect(await verifier.markVerified(input)).toEqual({ kind: 'refused', reason });
+      expect(calls.filter((call) => !/^(credential|user):/.test(call))).toEqual([]);
+    }
+  });
+
+  it('reports a missing attribute row and verifies all the same', async () => {
+    const { verifier, warn } = stubWrites({ attribute: undefined });
+    expect(await verifier.markVerified(input)).toEqual({ kind: 'verified' });
+    expect(warn).toHaveBeenCalledWith({ userId: USER }, expect.any(String));
+  });
+});
+
 describe('audit events', () => {
   const HMAC = 'h'.repeat(43);
 
@@ -393,6 +529,12 @@ describe('audit events', () => {
       { outcome: 'refused', step: 'password', reason: 'locked_out', identifierHmac: HMAC },
       { outcome: 'ended', step: 'identifier', reason: 'subject_mismatch', identifierHmac: HMAC },
       { outcome: 'ended', step: 'password', reason: 'subject_mismatch', userId: USER },
+      { outcome: 'passed', step: 'email_code', userId: USER },
+      { outcome: 'refused', step: 'email_code', reason: 'invalid_code', userId: USER },
+      { outcome: 'refused', step: 'email_code', reason: 'code_expired', userId: USER },
+      { outcome: 'refused', step: 'email_code', reason: 'locked_out', userId: USER },
+      { outcome: 'refused', step: 'email_code', reason: 'send_capped', userId: USER },
+      { outcome: 'ended', step: 'email_code', reason: 'code_burned', userId: USER },
     ];
     for (const record of records) {
       const event = signInAuditEvent(record);

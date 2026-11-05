@@ -1,5 +1,18 @@
-import { grammarStep, isStepName, type OfferedStep } from '@qauth-labs/server-step-grammar';
+import {
+  EMAIL_CODE_PURPOSES,
+  grammarStep,
+  isStepName,
+  type OfferedStep,
+} from '@qauth-labs/server-step-grammar';
 import { z } from 'zod';
+
+import {
+  EMAIL_CODE_HMAC_PATTERN,
+  EMAIL_CODE_MAX_WRONG_ANSWERS,
+  EMAIL_CODE_SALT_PATTERN,
+  emailCodeLength,
+  type HeldEmailCode,
+} from './email-code';
 
 /**
  * THE SIGN-IN TRANSACTION: what the engine keeps between the rounds of one
@@ -8,8 +21,9 @@ import { z } from 'zod';
  * it back on the next round; the engine never stores anything itself.
  *
  * It holds no policy (the MFA policy is read on every round, ADR-017
- * Decision 4), no answer, no password and no account state: only the realm
- * and the client it is for, when it began, who it is for, and what it proved.
+ * Decision 4), no answer, no password, no code and no account state: only the
+ * realm and the client it is for, when it began, who it is for, what it
+ * proved, and the HMAC of an email code it mailed (#638).
  *
  * It is not sealed: whoever can write it can claim any subject and any
  * verified step. The transport must keep it server-side, under an
@@ -64,6 +78,14 @@ export interface SignInTransaction {
   readonly verified: readonly OfferedStep[];
   /** When the last authenticator succeeded, in epoch milliseconds: the `auth_time` of a completed sign-in. */
   readonly authTime?: number;
+  /**
+   * The email code this transaction mailed and still waits for (#638): its
+   * salt and keyed HMAC, never the code, when it was issued, and the wrong
+   * answers the transaction counted, which a new code keeps. Gone once the
+   * code is answered right; a code answered right is no factor, so it moves
+   * no `authTime`.
+   */
+  readonly emailCode?: HeldEmailCode;
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, and when it began. */
@@ -105,6 +127,26 @@ const verifiedStepSchema = z
  */
 const SIGN_IN_CLIENT_ID_MAX_LENGTH = 2048;
 
+/** A held email code as the transaction stores it: a length its purpose takes, a count below the burn. */
+const heldEmailCodeSchema = z
+  .strictObject({
+    purpose: z.enum(EMAIL_CODE_PURPOSES),
+    length: z.union([z.literal(6), z.literal(8)]),
+    salt: z.string().regex(EMAIL_CODE_SALT_PATTERN),
+    hmac: z.string().regex(EMAIL_CODE_HMAC_PATTERN),
+    issuedAt: z.int().nonnegative(),
+    wrongAnswers: z
+      .int()
+      .min(0)
+      .max(EMAIL_CODE_MAX_WRONG_ANSWERS - 1),
+  })
+  .refine(
+    (held) =>
+      held.length === emailCodeLength(held.purpose, { afterPassword: true }) ||
+      held.length === emailCodeLength(held.purpose, { afterPassword: false }),
+    { message: 'a length its purpose does not take' }
+  );
+
 /**
  * The stored form of a transaction, for the transport to check what it
  * reads back. The engine parses every transaction it is given with it, and a
@@ -119,6 +161,7 @@ export const signInTransactionSchema = z.strictObject({
   subject: z.string().min(1).max(64).optional(),
   verified: z.array(verifiedStepSchema).max(MAX_VERIFIED_STEPS),
   authTime: z.int().positive().optional(),
+  emailCode: heldEmailCodeSchema.optional(),
 });
 
 /**
@@ -128,7 +171,8 @@ export const signInTransactionSchema = z.strictObject({
 export function readSignInTransaction(value: unknown): SignInTransaction | null {
   const parsed = signInTransactionSchema.safeParse(value);
   if (!parsed.success) return null;
-  const { realmId, clientId, createdAt, identifier, subject, verified, authTime } = parsed.data;
+  const { realmId, clientId, createdAt, identifier, subject, verified, authTime, emailCode } =
+    parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
   // names the account by itself.)
@@ -142,13 +186,20 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ...(subject === undefined ? {} : { subject }),
     verified,
     ...(authTime === undefined ? {} : { authTime }),
+    ...(emailCode === undefined ? {} : { emailCode }),
   });
 }
 
-/** A frozen copy, so no caller can change the state it was handed. */
+/**
+ * A frozen copy, so no caller can change the state it was handed. A member set
+ * to `undefined` (an email code consumed) is left out, so the stored form has
+ * no key the schema refuses.
+ */
 export function freezeTransaction(transaction: SignInTransaction): SignInTransaction {
+  const { emailCode, ...rest } = transaction;
   return Object.freeze({
-    ...transaction,
+    ...rest,
     verified: Object.freeze(transaction.verified.map((step) => Object.freeze({ ...step }))),
+    ...(emailCode === undefined ? {} : { emailCode: Object.freeze({ ...emailCode }) }),
   });
 }

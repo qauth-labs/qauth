@@ -4,6 +4,7 @@ import {
   type LadderHook,
   type LadderReservation,
   type LadderSettlement,
+  type LadderSuccessOptions,
   NOTHING_DUE,
 } from '../hooks';
 import type {
@@ -55,7 +56,10 @@ export interface PasswordStepDependencies {
  *    armed. A disabled user is never changed.
  * 5. Otherwise settle the attempt as a success: the password proved the
  *    account, and its counter is cleared. A disabled mark the lookup ignored
- *    (the hard action unarmed) is cleared too, as a reset would.
+ *    (the hard action unarmed) is cleared too, as a reset would. For an
+ *    account whose address is not proved yet (verified inline, #638) the
+ *    end-user IP is not made known and the mark stays: whoever chose the
+ *    password need not own the address.
  *
  * Settling and the hard action never change the answer: the attempt is
  * already counted as a failure, so a settle that fails is reported and leaves
@@ -72,10 +76,13 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
   };
   const settle = async (
     reservation: LadderReservation,
-    outcome: 'success' | 'failure'
+    outcome: 'success' | 'failure',
+    options?: LadderSuccessOptions
   ): Promise<LadderSettlement> => {
     try {
-      const settled = await reservation.settle(outcome);
+      const settled = await (options === undefined
+        ? reservation.settle(outcome)
+        : reservation.settle(outcome, options));
       return settled?.ceilingReached === true ? settled : NOTHING_DUE;
     } catch (error) {
       report('ladder', error);
@@ -153,10 +160,15 @@ export function createPasswordStep(deps: PasswordStepDependencies): StepHandler<
       if (!candidate.verified && deps.requireVerifiedAccount) {
         return refuse({ reason: 'email_not_verified' });
       }
-      await settle(reservation, 'success');
+      // The right password of an account whose address is not proved yet
+      // (#638) clears the counter, and makes no IP known: until the address
+      // is verified, whoever chose the password need not be its owner, and a
+      // known IP would later skip the owner's waits and send caps.
+      await settle(reservation, 'success', candidate.verified ? undefined : { rememberIp: false });
       // A mark the lookup ignored while the hard action is unarmed: a
-      // successful sign-in clears it, as a reset does (ADR-017 Decision 7).
-      if (password?.ignoredMark === true) {
+      // successful sign-in of the owner clears it, as a reset does (ADR-017
+      // Decision 7); an unverified account's sign-in leaves it.
+      if (password?.ignoredMark === true && candidate.verified) {
         await hardAction(() => deps.hardAction.clearIgnoredMark(target(candidate.userId)));
       }
       return {

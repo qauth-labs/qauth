@@ -12,6 +12,8 @@ through this one, which re-exports the types it needs.
 | `createRepositoryAccountDirectory`   | Before the password: its credential and users row only. After a proof: every password and passkey credential and the admin grants   |
 | `createArgon2PasswordVerifier`       | Argon2id through the server's hasher, and the dummy verification, which fails only as a real one does and always costs one Argon2id |
 | `createCookieSecretIdentifierDigest` | The identifier's keyed HMAC, under a key derived with HKDF from the realm's `cookie_hmac` secret and a label of its own             |
+| `createCookieSecretEmailCodeDigest`  | An emailed code's keyed HMAC over the realm, its salt and the code (#638), under the same derivation with a label of its own        |
+| `createRepositoryAddressVerifier`    | Marks a password credential's address verified, and its email attribute, in one database transaction, for an enabled subject only   |
 | `signInAuditEvent`                   | An audit record as `user.sign_in_step_passed` or `user.sign_in_failed`, with the user as subject once resolved and the HMAC before  |
 | `signInEnginePlugin`                 | Decorates `fastify.signInEngine` with an engine built from its options; in production only with a `ladder` hook                     |
 | `createRedisFailureLadder`           | The per-account failure ladder (#615) in Redis: one script reserves an attempt before its check; no key holds an address            |
@@ -34,7 +36,8 @@ is read, refused inside its wait, and settled after the check. The plugin also r
 `passwordHardAction` in production, the hard action the engine's password step calls at the
 ceiling.
 
-The ladder's keys are `sign-in-ladder:{<realm id>:<identifier HMAC>}:<factor>` (a hash: the run's
+The ladder's keys are `sign-in-ladder:{<realm id>:<identifier HMAC>}:<counter>`, one per factor
+and one for the wrong email codes (`email_code`, #638) (a hash: the run's
 consecutive failures, the end of its wait, the run's id and how many of its failures came from
 known IPs) and `…:known-ips` (a sorted set of
 end-user IP HMACs, scored by their last successful sign-in). The braces are a Redis Cluster hash
@@ -51,7 +54,7 @@ timeout of a reservation refuses the attempt before a credential is checked.
 - The hard action is never armed yet: the hosted reset (#642) and the owner's notice (#637) do not
   exist, so the 100th failure only logs a warning and a disabled mark is ignored and cleared by the
   next successful sign-in.
-- Only the password has a ladder. The second factors (#653) and the email code (#638) reuse it
+- Only the password and the email code (#638) have a ladder. The second factors (#653) reuse it
   with policies of their own; until then their reservations are refused.
 - No TOTP factor is reported until TOTP is stored (#653).
 

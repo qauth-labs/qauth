@@ -115,6 +115,33 @@ export const PASSWORD_LADDER_POLICY: LadderPolicy = Object.freeze({
   onSuccess: 'clear',
 });
 
+/**
+ * The email-code ladder (ADR-017 Decisions 5 and 7, #638): the password's
+ * ladder from 5 consecutive wrong codes, keyed on the same identifier HMAC
+ * with a counter of its own, for addresses with and without an account. It
+ * has no hard stop, so it can never close the reset that the password's
+ * disable relies on, and it never suppresses mail; a correct code outside a
+ * wait is accepted and clears this counter alone.
+ *
+ * The record leaves its known-IP bound to the ladder: 20, the password's. A
+ * code has 10^6 or 10^8 values, so the 20 failures a run lets known IPs skip
+ * the wait with are 4 burned codes. The engine hands this ladder no end-user
+ * IP while it verifies an account's address: an account whose address is
+ * not proved has no owner whose IPs are known (the send caps' exemption
+ * needs a verified account too).
+ */
+export const EMAIL_CODE_LADDER_POLICY: LadderPolicy = Object.freeze({
+  freeFailures: 5,
+  firstWaitMs: 1_000,
+  maxWaitMs: 15 * 60_000,
+  hardCeiling: null,
+  knownIpMs: 30 * DAY_MS,
+  knownIpFreeFailures: 20,
+  retentionMs: 30 * DAY_MS,
+  freeRetentionMs: 2 * DAY_MS,
+  onSuccess: 'clear',
+});
+
 /** The largest doubling the wait is computed through: past it every wait is `maxWaitMs`. */
 const MAX_DOUBLINGS = 40;
 

@@ -3,6 +3,8 @@ import {
   createArgon2PasswordVerifier,
   createCheckedSignInEngine,
   createRepositoryAccountDirectory,
+  createRepositoryAddressVerifier,
+  type EmailCodeSender,
   interactionPersonalView,
   interactionStepView,
   NO_SECOND_FACTOR_POLICY,
@@ -39,7 +41,7 @@ import {
   LOGOUT_CONFIRM_STEP,
   type LogoutDecision,
 } from '../helpers/end-session';
-import { createEngineMailer } from '../helpers/engine-mail';
+import { createEngineMailer, type EngineMailer } from '../helpers/engine-mail';
 import {
   answerInteraction,
   cancelInteraction,
@@ -54,7 +56,11 @@ import { ContentTooLargeError, InvalidAnswerError } from '../helpers/interaction
 import { InteractionExpiredError } from '../helpers/interaction-expired';
 import type { InteractionStep } from '../helpers/interaction-record';
 import { eventClientIdOf, interactionIdHash, isInteractionId } from '../helpers/interaction-record';
-import { createServerLadderParts, ladderEndUserIp } from '../helpers/password-attempts';
+import {
+  createServerEmailCodeDigest,
+  createServerLadderParts,
+  ladderEndUserIp,
+} from '../helpers/password-attempts';
 import { createPeerAddressList, type PeerAddressList } from '../helpers/peer-address-list';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../helpers/realm-rate-limit';
 import { buildRealmUrl, realmIssuer } from '../helpers/realm-url';
@@ -395,18 +401,64 @@ async function respondStale(
 /** The engines of a process, one per verified-account policy of a realm (#528). */
 interface InteractionEngines {
   readonly of: (requireVerifiedAccount: boolean) => SignInEngine;
+  /** The capped sender of email codes (PRO-14, #637), bound to one request. */
+  readonly sendCode: (request: FastifyRequest) => EmailCodeSender;
+}
+
+/**
+ * The engine's email codes through the process's capped mailer, for one
+ * request: counted on every send cap that applies and, unless a tier stops
+ * it, mailed after the answer is built. A code after the password skips the
+ * per-address ceiling, so it never meets the ceiling notice whose pass the
+ * flow names; the flow is the registration this verification completes.
+ */
+function engineCodeSender(mailer: EngineMailer, request: FastifyRequest): EmailCodeSender {
+  return async (mail) => {
+    const realm = requestRealm(request);
+    if (mail.realmId !== realm.id) throw new Error('an email code for another realm');
+    const outcome = await mailer.sendCode(request, {
+      realm,
+      address: mail.address,
+      mail: {
+        template: 'code',
+        purpose: mail.purpose,
+        code: mail.code,
+        expiresInSeconds: mail.expiresInSeconds,
+      },
+      flow: 'register',
+      afterFirstFactor: mail.afterFirstFactor,
+    });
+    return outcome.kind === 'capped'
+      ? { kind: 'capped', retryAfterSeconds: outcome.retryAfterSeconds }
+      : { kind: 'accepted' };
+  };
 }
 
 /**
  * The sign-in engine over the process's repositories, password hasher and
  * the per-account failure ladder its legacy login routes share (#615): one
  * account run of failures counts across every front door.
+ *
+ * Both engines verify an unverified account inline after its password, with
+ * an emailed code (#638, ADR-017 Decision 8): `REQUIRE_VERIFIED_ACCOUNT` no
+ * longer decides the Interaction API's answer, and an unverified account
+ * never completes a sign-in here without its code.
  */
 function createInteractionEngines(fastify: FastifyInstance): InteractionEngines {
-  const ladder = createServerLadderParts(
-    fastify,
-    createEngineMailer(fastify).passwordDisabledNotices
-  );
+  const mailer = createEngineMailer(fastify);
+  const ladder = createServerLadderParts(fastify, mailer.passwordDisabledNotices);
+  const emailCodes = {
+    digest: createServerEmailCodeDigest(fastify),
+    addresses: createRepositoryAddressVerifier(
+      {
+        userCredentials: fastify.repositories.userCredentials,
+        users: fastify.repositories.users,
+        userAttributes: fastify.repositories.userAttributes,
+      },
+      (work) => fastify.db.transaction(work),
+      fastify.log
+    ),
+  };
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(
@@ -423,6 +475,7 @@ function createInteractionEngines(fastify: FastifyInstance): InteractionEngines 
       policy: NO_SECOND_FACTOR_POLICY,
       identifierDigest: ladder.identifierDigest,
       requireVerifiedAccount,
+      emailCodes,
       hooks: { ladder: ladder.ladder },
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
@@ -430,7 +483,10 @@ function createInteractionEngines(fastify: FastifyInstance): InteractionEngines 
     });
   const verified = build(true);
   const unverified = build(false);
-  return { of: (requireVerifiedAccount) => (requireVerifiedAccount ? verified : unverified) };
+  return {
+    of: (requireVerifiedAccount) => (requireVerifiedAccount ? verified : unverified),
+    sendCode: (request) => engineCodeSender(mailer, request),
+  };
 }
 
 /** A consent answer that finished its interaction: the step it answered, and what it said. */
@@ -507,6 +563,7 @@ async function decideAnswer(
   request: FastifyRequest,
   reply: FastifyReply,
   engine: SignInEngine,
+  sendCode: EmailCodeSender,
   answer: {
     readonly fields: unknown;
     readonly encoding: AnswerEncoding;
@@ -530,6 +587,7 @@ async function decideAnswer(
     client: { id: state.request.client_id },
     receivedAt,
     ...ladderEndUserIp(request),
+    sendCode,
     audit: async (record) => {
       const event = signInAuditEvent(record);
       await emitUserEvent(request, event.type, event.data, {
@@ -758,6 +816,7 @@ export default async function (fastify: FastifyInstance) {
             request,
             reply,
             engine,
+            engines.sendCode(request),
             { fields, encoding: parsed.encoding, receivedAt },
             state,
             {

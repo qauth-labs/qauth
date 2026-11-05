@@ -56,6 +56,8 @@ describe('buildLoggerOptions', () => {
     expect(LOG_REDACT_PATHS).toContain('client_secret');
     expect(LOG_REDACT_PATHS).toContain('refresh_token');
     expect(LOG_REDACT_PATHS).toContain('code_verifier');
+    expect(LOG_REDACT_PATHS).toContain('otp');
+    expect(LOG_REDACT_PATHS).toContain('*.otp');
   });
 
   it('redacts passwords, tokens, secrets, authorization headers and cookies in log output', async () => {
@@ -79,7 +81,8 @@ describe('buildLoggerOptions', () => {
         access_token: 'eyJhbGciOi...',
         refresh_token: 'rt-leak',
         code_verifier: 'pkce-verifier',
-        nested: { password: 'nested-secret', token: 'nested-token' },
+        otp: '480213',
+        nested: { password: 'nested-secret', token: 'nested-token', otp: '731904' },
         req: {
           headers: {
             authorization: 'Bearer leaked-jwt',
@@ -100,6 +103,8 @@ describe('buildLoggerOptions', () => {
       'eyJhbGciOi...',
       'rt-leak',
       'pkce-verifier',
+      '480213',
+      '731904',
       'nested-secret',
       'nested-token',
       'Bearer leaked-jwt',

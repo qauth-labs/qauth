@@ -593,6 +593,41 @@ describe('the Redis failure ladder', () => {
     await expect(reservation.settle('success')).rejects.toThrow(/settled twice/);
   });
 
+  it('keeps the wrong email codes on a counter of their own by default, never a hard stop (#638)', async () => {
+    let clock = Date.UTC(2026, 10, 1);
+    const redis = new FakeRedis(() => clock);
+    const ladder = createRedisFailureLadder(redis, { ipDigest, now: () => clock });
+    const code = () =>
+      ladder.reserve({ realmId: REALM, identifierHmac: IDENTIFIER_HMAC, factor: 'email_code' });
+    for (let i = 0; i < 5; i += 1) {
+      const verdict = await code();
+      if (verdict.kind !== 'reserved') throw new Error('expected a reservation');
+      expect(await verdict.settle('failure')).toEqual({ ceilingReached: false });
+    }
+    expect(redis.hashes.get(ladderCounterKey(REALM, IDENTIFIER_HMAC, 'email_code'))?.get('n')).toBe(
+      '5'
+    );
+    // The password's counter is untouched, and the 6th code waits a second.
+    expect(redis.hashes.has(COUNTER)).toBe(false);
+    expect(await code()).toEqual({ kind: 'wait', retryAfterSeconds: 1 });
+    clock += 1_000;
+    const right = await code();
+    if (right.kind !== 'reserved') throw new Error('expected a reservation');
+    await right.settle('success');
+    expect(redis.hashes.has(ladderCounterKey(REALM, IDENTIFIER_HMAC, 'email_code'))).toBe(false);
+  });
+
+  it('clears the counter and makes no IP known on a success settled without it (#638)', async () => {
+    const { reserved, fail, redis } = setup();
+    await fail(2);
+    const reservation = await reserved();
+    await reservation.settle('success', { rememberIp: false });
+    expect(redis.hashes.has(COUNTER)).toBe(false);
+    expect(redis.sets.get(KNOWN_IPS)?.size ?? 0).toBe(0);
+    await (await reserved()).settle('success');
+    expect(redis.sets.get(KNOWN_IPS)?.size).toBe(1);
+  });
+
   it('resets a factor’s run for the owner’s reset', async () => {
     const { ladder, fail, attempt, counter } = setup();
     await fail(5);

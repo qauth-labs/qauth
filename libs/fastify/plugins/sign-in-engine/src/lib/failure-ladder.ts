@@ -2,8 +2,9 @@ import { createHash, randomBytes } from 'node:crypto';
 
 import {
   checkLadderPolicy,
-  type FactorType,
+  EMAIL_CODE_LADDER_POLICY,
   type IdentifierDigest,
+  type LadderCounter,
   type LadderHook,
   type LadderPolicy,
   type LadderReservation,
@@ -29,10 +30,11 @@ import {
  *
  * Keys hold no address. A counter is keyed on the identifier's keyed HMAC
  * (realm and normalised identifier, whether or not an account holds it) and
- * the factor; the end-user IPs known to an account are kept as their own
- * keyed HMACs, never as addresses:
+ * the counter: a factor, or `email_code` for the wrong email codes (#638,
+ * ADR-017 Decision 7: the same key, a separate counter); the end-user IPs
+ * known to an account are kept as their own keyed HMACs, never as addresses:
  *
- * - `sign-in-ladder:{<realm id>:<identifier HMAC>}:<factor>`: a hash of the
+ * - `sign-in-ladder:{<realm id>:<identifier HMAC>}:<counter>`: a hash of the
  *   run's consecutive counted failures (`n`), until when an attempt waits
  *   (`until`, epoch ms), the run's id (`run`) and, once one came from a known
  *   IP, how many of them did (`k`, #968), kept after the last counted
@@ -81,8 +83,11 @@ export interface RedisFailureLadderOptions {
    * Redis learns no address.
    */
   readonly ipDigest: IdentifierDigest;
-  /** The rules of each factor's ladder; a factor without one is refused (fail closed). */
-  readonly policies?: Partial<Record<FactorType, LadderPolicy>>;
+  /**
+   * The rules of each counter's ladder; a counter without one is refused
+   * (fail closed). The password's and the email codes' by default.
+   */
+  readonly policies?: Partial<Record<LadderCounter, LadderPolicy>>;
   /** The clock, in epoch ms. `Date.now` by default. */
   readonly now?: () => number;
   /** How long one Redis call may take. {@link LADDER_REDIS_TIMEOUT_MS} by default. */
@@ -95,7 +100,7 @@ export interface RedisFailureLadder extends LadderHook {
   reset(input: {
     readonly realmId: string;
     readonly identifierHmac: string;
-    readonly factor: FactorType;
+    readonly factor: LadderCounter;
   }): Promise<void>;
 }
 
@@ -197,8 +202,8 @@ const sha1 = (script: string) => createHash('sha1').update(script).digest('hex')
 export const RESERVE_SCRIPT_SHA = sha1(RESERVE_SCRIPT);
 export const SETTLE_SUCCESS_SCRIPT_SHA = sha1(SETTLE_SUCCESS_SCRIPT);
 
-/** The counter key of one factor of one identifier in one realm. */
-export function ladderCounterKey(realmId: string, identifierHmac: string, factor: FactorType) {
+/** The counter key of one counter (a factor, or the email codes) of one identifier in one realm. */
+export function ladderCounterKey(realmId: string, identifierHmac: string, factor: LadderCounter) {
   return `${LADDER_KEY_PREFIX}:{${realmId}:${identifierHmac}}:${factor}`;
 }
 
@@ -238,8 +243,11 @@ export function createRedisFailureLadder(
   redis: LadderRedis,
   options: RedisFailureLadderOptions
 ): RedisFailureLadder {
-  const policies: Partial<Record<FactorType, LadderPolicy>> = Object.freeze({
-    ...(options.policies ?? { password: PASSWORD_LADDER_POLICY }),
+  const policies: Partial<Record<LadderCounter, LadderPolicy>> = Object.freeze({
+    ...(options.policies ?? {
+      password: PASSWORD_LADDER_POLICY,
+      email_code: EMAIL_CODE_LADDER_POLICY,
+    }),
   });
   for (const policy of Object.values(policies)) if (policy !== undefined) checkLadderPolicy(policy);
   const now = options.now ?? (() => Date.now());
@@ -275,7 +283,7 @@ export function createRedisFailureLadder(
   async function reserve(input: {
     readonly realmId: string;
     readonly identifierHmac: string;
-    readonly factor: FactorType;
+    readonly factor: LadderCounter;
     readonly endUserIp?: string;
   }): Promise<LadderVerdict> {
     const { realmId, identifierHmac, factor, endUserIp } = input;
@@ -319,15 +327,17 @@ export function createRedisFailureLadder(
     let settled = false;
     const reservation: LadderReservation = {
       kind: 'reserved',
-      async settle(outcome): Promise<LadderSettlement> {
+      async settle(outcome, options): Promise<LadderSettlement> {
         if (settled) throw new Error('sign-in ladder: a reservation settled twice');
         settled = true;
         if (outcome === 'success') {
+          // An empty IP HMAC records no known IP: the script skips it.
+          const remembered = options?.rememberIp === false ? '' : ip;
           await run(
             SETTLE_SUCCESS_SCRIPT,
             SETTLE_SUCCESS_SCRIPT_SHA,
             [counter, known],
-            [now(), policy.onSuccess, runId, policy.knownIpMs, ip, LADDER_MAX_KNOWN_IPS],
+            [now(), policy.onSuccess, runId, policy.knownIpMs, remembered, LADDER_MAX_KNOWN_IPS],
             'settle'
           );
           return NOTHING_DUE;

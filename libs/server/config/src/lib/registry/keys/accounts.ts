@@ -16,7 +16,7 @@ export const ACCOUNT_KEYS = defineKeys([
     default: 'true',
     since: '0.1.0',
     aliases: [{ name: 'REQUIRE_EMAIL_VERIFIED', deprecatedSince: '0.1.0' }],
-    docs: "Refuse a password login, with the same answer as a wrong password, until the account is verified (for a password account, by its confirmed email address), that seeds `accounts.requireVerifiedAccount` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
+    docs: "Refuse a password login on the legacy login routes (`POST /auth/login`, `POST /ui/login`), with the same answer as a wrong password, until the account is verified (for a password account, by its confirmed email address); a sign-in through the Interaction API verifies an unverified account inline with an emailed code after its password instead, whatever this says; it seeds `accounts.requireVerifiedAccount` of a new realm, and of a realm that had no policies at the first boot after the upgrade that put them on the row; once the realm has its policies, the server reads the realm row's value, never this key, so a later change leaves every such realm as it is (a realm a node of the previous release created during a rolling upgrade runs on this key until a node of this release boots again).",
   },
   {
     name: 'SYSTEM_CLIENT_ID',

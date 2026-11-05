@@ -85,9 +85,9 @@ needs what its strictest change needs.
 
 ### `accounts`
 
-| Field                             | Default | Seeded from                | Stricter when | Class                                                      | Description                                                                                                                                     |
-| --------------------------------- | ------- | -------------------------- | ------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `accounts.requireVerifiedAccount` | `true`  | `REQUIRE_VERIFIED_ACCOUNT` | `true`        | `security` when loosened (`credential-path`), else `write` | Whether an account must be verified before a password sign-in succeeds; an unverified account is refused with the answer a wrong password gets. |
+| Field                             | Default | Seeded from                | Stricter when | Class                                                      | Description                                                                                                                                                                                                                                               |
+| --------------------------------- | ------- | -------------------------- | ------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts.requireVerifiedAccount` | `true`  | `REQUIRE_VERIFIED_ACCOUNT` | `true`        | `security` when loosened (`credential-path`), else `write` | Whether the legacy login routes (`POST /auth/login`, `POST /ui/login`) refuse an unverified account's right password with the answer a wrong password gets; the Interaction API verifies such an account inline with an emailed code, whatever this says. |
 
 ### `password`
 
