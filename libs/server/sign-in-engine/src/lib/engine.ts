@@ -2108,13 +2108,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
 
     /**
      * The identifier this round is for, before rule 6 fixes it: the
-     * transaction's, else the request's `login_hint`, else the one the
+     * transaction's (or the address an upstream provider proved, #639), else
+     * the request's `login_hint`, else the one the
      * pending answer brings (a password answer that names its account). Only
      * the ladder's soft threshold reads it; rule 6 still decides which one the
      * transaction holds, and ends one that brings another.
      */
     const roundIdentifier = (): string | undefined => {
-      if (state.transaction.identifier !== undefined) return state.transaction.identifier;
+      const held = state.transaction.identifier ?? state.transaction.upstream?.address;
+      if (held !== undefined) return held;
       if (context.loginHint !== undefined) {
         const identifier = readIdentifier(context.loginHint);
         if (identifier !== null) return identifier;
@@ -2172,6 +2174,11 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const challengeDue = async (): Promise<'registration' | 'threshold' | null> => {
       if (await registrationOwesChallenge()) return 'registration';
       if (state.transaction.captchaPassed === true) return null;
+      // An upstream provider's callback (#639) carries the provider's proof,
+      // no credential anyone could guess here: holding it for a challenge
+      // would throw the proof away and send the person back to the provider.
+      // The rounds after it meet this rule as any other.
+      if (upstreamRound.proof !== undefined) return null;
       if (limitsSoft || (await ladderSoft())) return 'threshold';
       if (botChallenge === undefined) return null;
       const verdict = await fromStore('botChallenge', () => botChallenge(hookRound));
