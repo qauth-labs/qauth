@@ -1,0 +1,798 @@
+# TOTP (F2c, #653; ADR-017 Decisions 4, 7 and 8, ADR-020 §3): the totp step a bound authenticator app answers after
+# the first factor, the account's TOTP ladder and its hard action, and the totp_setup step that binds a new secret
+# when the MFA policy needs a second factor the account lacks. Written before the code (status: proposed), as ADR-021
+# Decision 4 asks of a new core flow. The sign-in engine (flows/core/sign-in) runs it at rule 8; the CER issue adds the
+# screens (ui.yaml), and until then the server-rendered pages /ui/totp and /ui/totp-setup serve the two steps.
+#
+# - Like the sign-in engine, this flow has no screen and no HTTP route of its own: a transport calls the engine once a
+#   round, and every round runs the sign-in's rules up to rule 8 first (the policy, the limiters, the request checks,
+#   the bot challenge, the identifier, the first factor, the account read again, the downgrade rule). So an exit here
+#   is the engine's answer, as data, named in camelCase; a step state ends the round with the transaction live, and
+#   the next round's answer is a new event from it.
+# - The parameters are fixed (ADR-020 §3): HMAC-SHA-1, 6 digits, a 30-second step, one step of tolerance either way
+#   (RFC 6238). A secret is 160 bits from a CSPRNG, shown as unpadded base32 and as an otpauth:// URI. The store keeps
+#   it only as a data_at_rest ciphertext of the realm (ADR-019 Decision 9), with the last time step it accepted: a code
+#   for that step or an earlier one is refused, so an accepted value is never accepted twice (RFC 6238 §5.2).
+# - An account that holds a TOTP owes it after the first factor, a disabled one counting as bound (ADR-017 Decision 4:
+#   disabling a factor never lowers what a sign-in must prove), unless the transaction proved mfa another way (a
+#   passkey) or took a recovery code in its place on the hosted pages. The amr is ["pwd","otp","mfa"].
+# - Across transactions, clients, transports and IPs, one counter per (realm, user) counts wrong codes: the ladder of
+#   PRO-12 (#615) from 5 failures, with no known-IP exemption, never cleared by a correct first factor. At 100 in a row
+#   the TOTP is disabled, only while the hosted pages are on and the account keeps an unused recovery code or another
+#   usable factor beyond the password: then a password holder gets at most about 100 guesses between two sign-ins by
+#   the owner, who comes back with a recovery code. Otherwise the ladder alone holds.
+schema: delurio-graph/0
+kind: flow
+id: core.totp
+status: proposed
+domain: qauth
+title: Prove a bound TOTP after the first factor, and bind a new one when the MFA policy needs it
+summary: >-
+  After a correct first factor, an account that holds a TOTP is asked for a code. The code is reserved on the
+  limiters and on the account's TOTP ladder, then checked against the decrypted secret within one step either way and
+  taken only for a later time step than the last one accepted: a right code proves the TOTP, clears its counter and
+  adds otp and mfa to the amr. A wrong one is counted; after a correct password the user is told, at most once a
+  day, and at 100 in a row the TOTP is disabled while the account keeps a way back. Under an MFA policy, an account
+  with no second factor (or one that took a recovery code for its lost one) gets the set-up step on the hosted pages:
+  a new secret, bound only after a first valid code, within 5 minutes of the factor the transaction proved, and, for
+  the first second factor of a password-only account, after a code mailed to its address. Then the first set of
+  recovery codes is shown.
+
+scope:
+  shows: >-
+    the totp step from its offer after a first factor to the code taken or refused, the TOTP ladder's wait and its hard
+    action, and the totp_setup step from its offer to the secret bound
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before rule 8, drawn by flows/core/sign-in: the transport's checks, the MFA policy's
+      read, the limiters' other rounds, the request checks, the bot challenge (due as well while the account's TOTP
+      counter is past its 5 free failures), the identifier and the first factor"
+    - 'the downgrade rule, drawn by flows/core/passkey: a passkey-bound account proves its passkey first, which makes
+      mfa, so no TOTP is asked of it'
+    - 'a recovery code in place of the TOTP, drawn by flows/core/recovery-code: offered beside totp on the hosted
+      pages, and alone when the TOTP is disabled; and the set shown once after the first enrolment'
+    - 'the rounds of an emailed code, drawn by flows/core/account-verification: the inline verification of an address
+      not proved yet, before any second factor, and the mailbox proof before a binding, with the purpose recovery and
+      8 digits'
+    - 'removing or replacing a TOTP from the account page, and an admin deleting it (#687, ADR-020): the same fresh
+      authentication of at most 5 minutes, drawn with those pages'
+    - "the limiters' credential round (#636): reserved before the ladder, it refuses a round inside a delay or past a
+      hard limit exactly as the ladder's wait does here"
+    - 'a failure to settle a reservation, to clear a counter, to disable a TOTP or to send a notice: reported, and it
+      changes no answer'
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+
+context:
+  # Whether the transport serves the TOTP steps it may: the Interaction API serves totp and totp_setup, a FiPA client
+  # totp alone, and only when it listed the step.
+  hostedPages:
+    values: [false, true]
+    initial: any
+    say:
+      'false': 'a FiPA client, which may serve totp and never totp_setup'
+      'true': 'the Interaction API, behind the hosted pages'
+  servesTotp:
+    values: [false, true]
+    initial: any
+  # The account's TOTP, read again after the first factor with every factor it holds.
+  totp:
+    values: [none, usable, disabled]
+    initial: any
+    say:
+      none: 'the account holds no TOTP'
+      usable: 'the account holds a TOTP that is not disabled'
+      disabled: 'the account holds a TOTP its ladder disabled'
+  # Whether the transaction proved mfa another way: a passkey, after the downgrade rule.
+  mfaProved:
+    values: [false, true]
+    initial: any
+  # Whether the transaction took a recovery code in place of a factor (flows/core/recovery-code).
+  codeTaken:
+    values: [false, true]
+    initial: any
+  # Whether the realm's or the client's MFA policy requires a second factor of this account.
+  mfaRequired:
+    values: [false, true]
+    initial: any
+  # Whether the transaction proved a password: the first factor this round follows.
+  afterPassword:
+    values: [false, true]
+    initial: any
+  # The account's TOTP ladder, across transactions, when a code is answered.
+  ladder:
+    values: [open, inWait]
+    initial: any
+    say:
+      open: 'the account is outside a wait of its TOTP ladder'
+      inWait: 'fewer than its wait has passed since the account counted 5 or more wrong codes in a row'
+  # What the answered code is to the account's secret.
+  code:
+    values: [right, replayed, wrong]
+    initial: any
+    say:
+      right: 'the code of a time step within one of now, later than the last step the TOTP accepted'
+      replayed: 'the code of a step within one of now that the TOTP accepted already, or an earlier one'
+      wrong: 'the code of no step within one of now'
+  # Whether a wrong code counts at the ladder's ceiling: its 100th failure in a row, or a later one.
+  ceiling:
+    values: [below, reached]
+    initial: any
+  # Whether the hard action is armed: the hosted pages are on (INTERACTION_UI_ENABLED) and the account keeps an
+  # unused recovery code or another usable factor beyond the password.
+  armed:
+    values: [false, true]
+    initial: any
+  # Whether the account's address is proved: verified, or proved by a code in this transaction. An account with a
+  # password whose address is not proved is unclaimed (ADR-017 Decision 8).
+  addressProved:
+    values: [false, true]
+    initial: any
+  # Whether the account holds no factor beyond the password: its first second factor needs its mailbox.
+  passwordOnly:
+    values: [false, true]
+    initial: any
+  # A code mailed to the account's address was answered right in this transaction, for any purpose.
+  mailboxProved:
+    values: [false, true]
+    initial: any
+  # How long ago the transaction's last factor was proved, when a set-up is offered or bound.
+  authAge:
+    values: [fresh, stale]
+    initial: any
+    say:
+      fresh: 'at most 5 minutes'
+      stale: 'more than 5 minutes'
+  # What the first code answered to the set-up step is to the new secret.
+  setupCode:
+    values: [valid, wrong]
+    initial: any
+  # this round reserved the attempt on the limiters (and, for totp, the TOTP ladder), which count it until it settles
+  attemptReserved: { values: [false, true], initial: false }
+  # this round checked an answered code against a secret
+  codeChecked: { values: [false, true], initial: false }
+  # the transaction proved the TOTP: totp joined its verified steps
+  totpProved: { values: [false, true], initial: false }
+  # a right code cleared the account's TOTP counter
+  counterCleared: { values: [false, true], initial: false }
+  # the "a wrong second factor was entered after a correct password" notice was queued (once a day at most)
+  wrongNoticed: { values: [false, true], initial: false }
+  # the TOTP was disabled, and the "a second factor was disabled" notice was queued
+  totpDisabled: { values: [false, true], initial: false }
+  # this round disabled the TOTP
+  disabledNow: { values: [false, true], initial: false }
+  # the transaction holds a new secret, as a data_at_rest ciphertext
+  secretSealed: { values: [false, true], initial: false }
+  # the set-up's first code was valid for the new secret
+  setupConfirmed: { values: [false, true], initial: false }
+  # the new secret was bound to the account
+  secretBound: { values: [false, true], initial: false }
+  # the "TOTP added" notice was queued
+  bindingNoticed: { values: [false, true], initial: false }
+  # this round wrote an audit record of the step
+  audited: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # a secret was stored, logged or kept by the transaction in clear: never
+  secretInClear: { values: [false, true], initial: false }
+  # an emailed code was offered in place of the second factor: never
+  codeForFactor: { values: [false, true], initial: false }
+
+guards:
+  owed: "totp != 'none' and not mfaProved and not codeTaken"
+  usable: "totp == 'usable' and servesTotp"
+  setupOwed: "mfaRequired and not mfaProved and (totp == 'none' or codeTaken)"
+  notHosted: 'not hostedPages'
+  inWait: "ladder == 'inWait'"
+  rightCode: "code == 'right'"
+  password: 'afterPassword'
+  hardAction: "ceiling == 'reached' and armed"
+  unclaimed: 'not addressProved'
+  stale: "authAge == 'stale'"
+  validSetupCode: "setupCode == 'valid'"
+  mailboxOwed: 'passwordOnly and not mailboxProved'
+  disabled: 'totpDisabled'
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      attemptReserved: false
+      codeChecked: false
+      audited: false
+      floorWaited: false
+      disabledNow: false
+  reserveAttempt: { set: { attemptReserved: true } }
+  checkCode: { set: { codeChecked: true } }
+  proveTotp: { set: { totpProved: true, counterCleared: true } }
+  noticeWrong: { set: { wrongNoticed: true } }
+  disableTotp: { set: { totpDisabled: true, disabledNow: true } }
+  sealSecret: { set: { secretSealed: true } }
+  confirmSetup: { set: { setupConfirmed: true } }
+  proveAddress: { set: { addressProved: true, mailboxProved: true } }
+  proveMailbox: { set: { mailboxProved: true } }
+  # the binding's first code is the bound TOTP's proof: totp joins the verified steps, and the amr carries otp and mfa
+  bindSecret: { set: { secretBound: true, bindingNoticed: true, totpProved: true } }
+  audit: { set: { audited: true } }
+  waitFloor: { set: { floorWaited: true } }
+  # what another transaction or the clock may have changed by the next answer
+  moveOn: { havoc: [ladder, code, ceiling] }
+  answerSetup: { havoc: [setupCode, authAge] }
+  timePasses: { havoc: [authAge] }
+
+failures:
+  reservingAttempt: { from: ladder, store: [unavailable] }
+  checkingCode: { from: totpCredentials, store: [unavailable] }
+  verifyingAddress:
+    from: core.account-verification
+    throttled: [sendCapped, lockedOut]
+    ended: [burned, ended]
+    invalid: [answerRefused]
+    store: [unavailable]
+  startingSetup: { from: totpCredentials, store: [unavailable] }
+  reservingSetupCode: { from: limiters, store: [unavailable] }
+  checkingSetupCode: { from: totpCredentials, store: [unavailable] }
+  provingMailbox:
+    from: core.account-verification
+    throttled: [sendCapped, lockedOut]
+    ended: [burned, ended]
+    invalid: [answerRefused]
+    store: [unavailable]
+  bindingSecret:
+    from: userCredentials
+    ended: [account_disabled, subject_mismatch, account_unclaimed]
+    store: [unavailable]
+
+# The main story: a person with an authenticator app signs in with the password and types the code the app shows.
+main:
+  given:
+    hostedPages: true
+    servesTotp: true
+    totp: usable
+    mfaProved: false
+    codeTaken: false
+    mfaRequired: false
+    afterPassword: true
+    ladder: open
+    code: right
+    ceiling: below
+    armed: true
+    addressProved: true
+    passwordOnly: false
+    mailboxProved: false
+    authAge: fresh
+    setupCode: valid
+  events: [CODE, DONE, DONE]
+
+initial: afterFirstFactor
+states:
+  afterFirstFactor:
+    title: Ask whether rule 8 owes a TOTP, or a new one (rule 8)
+    description: >-
+      A first factor proved the account, and the account was read again with every factor it holds, a disabled one
+      included. An account that holds a TOTP owes it, unless the transaction proved mfa another way or took a
+      recovery code in its place; an account the MFA policy needs a second factor of, with none bound (or with a lost
+      one a recovery code stood in for), owes a new one. The inline verification of an address not proved yet comes
+      first, drawn by flows/core/account-verification.
+    always:
+      - guard: owed and usable
+        target: offeringTotp
+        effect: [waitFloor]
+        say: 'the account holds a usable TOTP the transport serves: the totp step'
+      - guard: owed
+        target: totpUnavailable
+        effect: [waitFloor]
+        say: >-
+          the TOTP is disabled, or the transport does not serve totp: no step of it can be served, and a recovery code
+          or a redirect follows
+      - guard: setupOwed
+        target: checkingSetup
+        say: 'the MFA policy needs a second factor the account lacks: the set-up step'
+      - target: goesOn
+        say: 'no TOTP is owed'
+
+  reservingAttempt:
+    title: Reserve the code on the limiters and the TOTP ladder
+    description: >-
+      The limiters' credential round first (#636), then the ladder hook of PRO-12 with the totp counter, keyed on the
+      realm and the user: one atomic operation reads the wait, refuses an attempt inside it, and otherwise counts the
+      attempt as a failure until it settles. No end-user IP is handed to it: the ladder has no known-IP exemption. A
+      store error refuses the round before any code is checked.
+    invoke: { external: ladder }
+    on:
+      DONE:
+        - guard: inWait
+          target: lockedOut
+          effect: [audit, waitFloor]
+          say: 'the account is inside a wait: 429, neither checked nor counted, audited as locked_out'
+        - target: checkingCode
+          effect: [reserveAttempt]
+          say: 'the attempt is reserved; it spends the bot challenge passed for it'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the ladder store fails; nothing is checked'
+
+  checkingCode:
+    title: Check the code against the secret, and take its time step once
+    description: >-
+      The secret is decrypted with the realm's data_at_rest key and never leaves the port. The code is compared in
+      constant time with the codes of the steps one before now, now and one after, and a match is taken only in one
+      conditional write that moves the TOTP's last accepted step forward to it, so two rounds with the same code take
+      it once. A taken code settles the reservation as a success, which clears the TOTP counter and no other; a
+      correct password never clears it.
+    invoke: { external: totpCredentials }
+    on:
+      DONE:
+        - guard: rightCode
+          target: proved
+          effect: [checkCode, proveTotp, audit]
+          say: >-
+            the code is taken: totp joins the verified steps, the amr carries otp and mfa, auth_time moves, and the step
+            is audited as passed
+        - target: countingFailure
+          effect: [checkCode]
+          say: 'a wrong code, or a step the TOTP accepted already: counted as a failure'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database or the signer fails: no code is taken, and the attempt stays counted'
+
+  countingFailure:
+    title: Tell the user of a wrong code after a correct password
+    description: >-
+      The "a wrong second factor was entered after a correct password" notice, which no realm can switch off, claimed
+      at most once a day per account and mailed after the answer.
+    always:
+      - guard: password
+        target: checkingCeiling
+        effect: [noticeWrong]
+        say: 'the transaction proved a password: the user is told, at most once a day'
+      - target: checkingCeiling
+        say: 'the first factor was not a password'
+
+  checkingCeiling:
+    title: Disable the TOTP at the ladder's ceiling, while the account keeps a way back
+    description: >-
+      A failure counted at or past 100 in a row fires the hard action, only while it is armed: the TOTP's disabled
+      mark is set, which leaves it bound for the downgrade rule and the MFA policy, and the "a second factor was
+      disabled" notice is mailed once. Unarmed, the ladder alone holds.
+    always:
+      - guard: hardAction
+        target: codeRefused
+        effect: [disableTotp, audit, waitFloor]
+        say: 'at the ceiling and armed: the TOTP is disabled and the user is told; the code is refused'
+      - target: codeRefused
+        effect: [audit, waitFloor]
+        say: 'refused with invalid_credentials, audited as invalid_credentials'
+
+  checkingSetup:
+    title: Ask whether a new TOTP may be bound here
+    description: >-
+      Only the hosted pages serve totp_setup. An unclaimed account never reaches it: its address is verified inline
+      first, which claims it, since the same person then proved the password and the mailbox. A binding needs a factor
+      proved at most 5 minutes ago (ADR-017 Decision 8), so a set-up is not shown past it.
+    always:
+      - guard: notHosted
+        target: redirected
+        effect: [waitFloor]
+        say: 'a FiPA client cannot bind a TOTP: a redirect, answered with redirect_to_web'
+      - guard: unclaimed
+        target: verifyingAddress
+        say: "the account's address is not proved: it is verified first, never in the second factor's place"
+      - guard: stale
+        target: ended
+        effect: [audit, waitFloor]
+        say: 'the last factor is more than 5 minutes old: the transaction ends, and a fresh sign-in starts again'
+      - target: startingSetup
+        say: 'the set-up may be shown'
+
+  verifyingAddress:
+    title: Verify the account's address first
+    description: >-
+      The inline verification of flows/core/account-verification, with the purpose verify_account and 6 digits: a
+      right code claims the account and proves its mailbox in this transaction. It adds no amr value.
+    invoke: { flow: core.account-verification }
+    on:
+      DONE:
+        target: checkingSetup
+        effect: [proveAddress, timePasses]
+        say: 'the address is verified: the account is claimed'
+      FAIL.throttled:
+        target: throttled
+        effect: [audit, waitFloor]
+        say: "the send caps or the email-code ladder's wait refuse the round"
+      FAIL.ended:
+        target: ended
+        effect: [waitFloor]
+        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
+      FAIL.invalid:
+        target: answerRefused
+        effect: [audit, waitFloor]
+        say: 'the code is not of the offered length'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send caps, the ladder or the database fail'
+
+  startingSetup:
+    title: Draw a new secret, or keep the one the transaction holds
+    description: >-
+      160 bits from a CSPRNG, sealed at once with the realm's data_at_rest key under a context that names the realm
+      and the user; the transaction keeps only the ciphertext. A round that offers the step again opens the same
+      ciphertext and shows the same secret.
+    invoke: { external: totpCredentials }
+    on:
+      DONE:
+        target: offeringSetup
+        effect: [sealSecret, waitFloor]
+        say: 'the secret is sealed, and shown for this round alone'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the signer fails: nothing is shown'
+
+  reservingSetupCode:
+    title: Reserve the first code on the limiters
+    description: >-
+      The limiters' credential round (#636). A code for a secret just shown guesses nothing of the account, so no
+      ladder counter is reserved.
+    invoke: { external: limiters }
+    on:
+      DONE:
+        target: checkingSetupCode
+        effect: [reserveAttempt]
+        say: 'the round is reserved'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the limiters fail closed'
+
+  checkingSetupCode:
+    title: Check the first code against the new secret
+    description: >-
+      The held ciphertext is opened and the code compared with the steps one before now, now and one after. The secret
+      is not bound yet: the transaction holds the step the code matched, which becomes the TOTP's last accepted step.
+    invoke: { external: totpCredentials }
+    on:
+      DONE:
+        - guard: validSetupCode
+          target: checkingBinding
+          effect: [checkCode, confirmSetup]
+          say: 'the code is valid: the person holds the secret'
+        - target: setupRefused
+          effect: [checkCode, audit, waitFloor]
+          say: 'refused as invalid_credentials, with the same secret'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the signer fails: nothing is checked'
+
+  checkingBinding:
+    title: Ask what the binding still needs
+    description: >-
+      Binding the first second factor of a password-only account needs a code mailed to its address in the same
+      transaction, unless the transaction proved that mailbox already, and a factor proved at most 5 minutes ago
+      (ADR-017 Decision 8).
+    always:
+      - guard: mailboxOwed
+        target: provingMailbox
+        say: 'the mailbox is not proved in this transaction: a code is mailed'
+      - guard: stale
+        target: ended
+        effect: [audit, waitFloor]
+        say: 'the last factor is more than 5 minutes old: nothing is bound, and the transaction ends'
+      - target: bindingSecret
+        say: 'the binding may go ahead'
+
+  provingMailbox:
+    title: Prove the account's mailbox with an emailed code
+    description: >-
+      The code rounds of flows/core/account-verification, with the purpose recovery and 8 digits. A right code proves
+      the mailbox and adds no amr value.
+    invoke: { flow: core.account-verification }
+    on:
+      DONE:
+        target: checkingBinding
+        effect: [proveMailbox, timePasses]
+        say: 'the code is right: the mailbox is proved'
+      FAIL.throttled:
+        target: throttled
+        effect: [audit, waitFloor]
+        say: "the send caps or the email-code ladder's wait refuse the round"
+      FAIL.ended:
+        target: ended
+        effect: [waitFloor]
+        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
+      FAIL.invalid:
+        target: answerRefused
+        effect: [audit, waitFloor]
+        say: 'the code is not of the offered length'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send caps, the ladder or the database fail'
+
+  bindingSecret:
+    title: Bind the secret to the account
+    description: >-
+      One write stores the ciphertext and the accepted step as the account's TOTP, replacing a disabled one, while the
+      account is enabled and claimed; then the account's TOTP counter ends, so a new secret starts a new run, and the
+      "TOTP added" notice is mailed. The binding's first code counts as the bound TOTP's proof: totp joins the
+      verified steps, and totp_setup is audited as passed.
+    invoke: { external: userCredentials }
+    on:
+      DONE:
+        target: owingRecoveryCodes
+        effect: [bindSecret, audit]
+        say: 'the TOTP is bound, and the user is told'
+      FAIL.ended:
+        target: ended
+        effect: [audit, waitFloor]
+        say: 'the account was disabled, removed or found unclaimed since: the transaction ends'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; nothing is bound'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringTotp:
+    title: Ask for a code from the authenticator app
+    description: >-
+      The totp step, with a recovery code beside it on the hosted pages when the account holds an unused one
+      (flows/core/recovery-code). The personal data is the transaction's identifier.
+    response:
+      kind: step
+      body:
+        current: { step: totp, params: { digits: 6 } }
+        alternatives: 'recovery_code, on the hosted pages'
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: offeringTotp
+        effect: [newRound, waitFloor]
+        say: 'the next round carries no answer: the same offer'
+      CODE:
+        target: reservingAttempt
+        effect: [newRound, moveOn]
+        say: 'the person types the code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not six digits: refused as invalid_answer, nothing checked or counted'
+      RECOVERY:
+        target: recoveryAnswered
+        effect: [newRound]
+        say: 'the person types a recovery code instead'
+
+  codeRefused:
+    title: Ask for a code again
+    description: >-
+      The same offer, totp current with invalid_credentials; nothing says whether the code was wrong or used already.
+      A disabled TOTP is offered no more: the next round goes on with a recovery code or a redirect.
+    response:
+      kind: step
+      body:
+        current: { step: totp, params: { digits: 6 }, error: invalid_credentials }
+        alternatives: 'recovery_code, on the hosted pages'
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      CODE:
+        - guard: disabled
+          target: totpUnavailable
+          effect: [newRound, waitFloor]
+          say: 'the TOTP was disabled: its step is offered no more'
+        - target: reservingAttempt
+          effect: [newRound, moveOn]
+          say: 'the person types another code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not six digits'
+      RECOVERY:
+        target: recoveryAnswered
+        effect: [newRound]
+        say: 'the person types a recovery code instead'
+
+  offeringSetup:
+    title: Show a new secret and ask for its first code
+    description: >-
+      The totp_setup step with the fixed parameters. Its personal data is the secret, as text and as an otpauth://
+      URI the page draws as a QR code, readable with the flow cookie while the step is current and never after.
+    response:
+      kind: step
+      body:
+        current: { step: totp_setup, params: { algorithm: SHA1, digits: 6, period: 30 } }
+        alternatives: []
+        personal:
+          identifier: "the transaction's identifier"
+          secret: 'the secret, 32 base32 characters'
+          otpauth_uri: 'otpauth://totp/<issuer>:<identifier>?secret=…&issuer=…&algorithm=SHA1&digits=6&period=30'
+    on:
+      ROUND:
+        target: startingSetup
+        effect: [newRound]
+        say: 'the next round carries no answer: the same secret'
+      CODE:
+        target: reservingSetupCode
+        effect: [newRound, answerSetup]
+        say: 'the person types the code the app shows'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not six digits'
+
+  setupRefused:
+    title: Ask for the first code again
+    description: The same secret, totp_setup current with invalid_credentials.
+    response:
+      kind: step
+      body:
+        current: { step: totp_setup, error: invalid_credentials }
+        personal: { secret: 'the same secret', otpauth_uri: 'the same URI' }
+    on:
+      CODE:
+        target: reservingSetupCode
+        effect: [newRound, answerSetup]
+        say: 'the person types another code'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not six digits'
+
+  # Exits
+
+  proved:
+    type: final
+    title: Go on with the rest of rule 8
+    description: >-
+      The TOTP is proved. The forced update and the first set of recovery codes, if owed, follow (flows/core/sign-in,
+      flows/core/recovery-code); then rule 9 completes with ["pwd","otp","mfa"] after a password.
+    response:
+      kind: continue
+      body: { next: 'flows/core/recovery-code, from checkingSet' }
+
+  goesOn:
+    type: final
+    title: Go on with no TOTP owed
+    description: Nothing of a TOTP is owed; the rest of rule 8 follows, drawn by flows/core/sign-in.
+    response:
+      kind: continue
+      body: { next: 'flows/core/sign-in, after the second factor' }
+
+  owingRecoveryCodes:
+    type: final
+    title: Show the first set of recovery codes
+    description: >-
+      The TOTP is bound and proved: before the sign-in completes, flows/core/recovery-code issues a set and shows it
+      once, unless the account holds one the person confirmed.
+    response:
+      kind: continue
+      body: { next: 'flows/core/recovery-code, from checkingSet' }
+
+  totpUnavailable:
+    type: final
+    title: Go on without a TOTP step
+    description: >-
+      On the hosted pages, flows/core/recovery-code offers a recovery code in place of a disabled TOTP; with none, or
+      on a transport that cannot serve totp, the engine answers a redirect, which the FiPA endpoint answers with
+      redirect_to_web and the hosted pages, where no step is left to ask for, with the end of the interaction. The
+      password never completes the sign-in.
+    response:
+      kind: continue
+      body:
+        {
+          next: 'flows/core/recovery-code, from readingCodes; else a redirect with step_not_available',
+        }
+
+  recoveryAnswered:
+    type: final
+    title: Go on with a recovery code
+    description: The person answered recovery_code, offered beside totp, drawn by flows/core/recovery-code.
+    response:
+      kind: continue
+      body: { next: 'flows/core/recovery-code, from reservingAttempt' }
+
+  redirected:
+    type: final
+    title: Send the person to a page that can go on
+    description: >-
+      The set-up step on a FiPA client, which serves none: the FiPA endpoint answers redirect_to_web. Never an emailed
+      code in the second factor's place.
+    response:
+      kind: redirect
+      body: { reason: step_not_available, transaction: null }
+
+  lockedOut:
+    type: final
+    title: Refuse the code inside the TOTP ladder's wait
+    description: Neither checked nor counted; the transaction stays, and so does the offer.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the ladder's" }
+
+  throttled:
+    type: final
+    title: Refuse the round for a limit
+    description: Nothing is checked; the transaction stays, and so does the offer.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the limit's" }
+
+  ended:
+    type: final
+    title: End the transaction
+    description: >-
+      The binding cannot go on: the factor is more than 5 minutes old, the emailed code was burned, or the account was
+      disabled, removed or found unclaimed. Nothing is bound.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  answerRefused:
+    type: final
+    title: Refuse a malformed answer
+    description: A fault of the request, audited as invalid_answer; the transaction stays.
+    response:
+      kind: refused
+      body: { reason: invalid_answer }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: >-
+      The database, the ladder, the limiters or the signer cannot be reached: fail closed. The transaction stays as far
+      as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: reserve-before-check
+    never: 'codeChecked and not attemptReserved'
+    say: 'Every checked code was reserved on the limiters (and a totp code on the TOTP ladder) first'
+  - id: nothing-checked-inside-a-wait
+    never: "state == 'lockedOut' and codeChecked"
+    say: 'A code inside a wait of the TOTP ladder is neither checked nor counted'
+  - id: a-step-is-accepted-once
+    never: "totpProved and not secretBound and code != 'right'"
+    say: 'A code for a time step the TOTP accepted already, or an earlier one, is refused'
+  - id: a-wrong-code-after-a-password-is-told
+    never: "state == 'codeRefused' and afterPassword and not wrongNoticed"
+    say: 'A wrong code after a correct password tells the user, at most once a day'
+  - id: disabled-only-at-the-ceiling-while-armed
+    never: "disabledNow and (ceiling != 'reached' or not armed)"
+    say: 'A TOTP is disabled only at 100 failures in a row, while the hosted pages are on and the account keeps a way back'
+  - id: disabled-at-the-ceiling-while-armed
+    never: "state == 'codeRefused' and ceiling == 'reached' and armed and not disabledNow"
+    say: 'A wrong code counted at or past the ceiling disables an armed TOTP and tells the user'
+  - id: bound-only-after-a-first-code
+    never: 'secretBound and not setupConfirmed'
+    say: 'A new secret is bound only after a first valid code'
+  - id: an-unclaimed-account-never-enrols
+    never: 'secretBound and not addressProved'
+    say: 'An unclaimed account cannot bind a TOTP'
+  - id: a-mailbox-before-the-first-second-factor
+    never: 'secretBound and passwordOnly and not mailboxProved'
+    say: 'The first second factor of a password-only account is bound only after a code mailed to its address'
+  - id: a-fresh-factor-before-a-binding
+    never: "secretBound and authAge == 'stale'"
+    say: 'A TOTP is bound only within 5 minutes of the factor the transaction proved'
+  - id: every-binding-is-told
+    never: 'secretBound and not bindingNoticed'
+    say: 'Every bound TOTP mails the binding notice'
+  - id: never-a-code-for-the-factor
+    never: 'codeForFactor'
+    say: 'An emailed code never stands in for the second factor: an account without one gets the set-up step'
+  - id: never-a-secret-in-clear
+    never: 'secretInClear'
+    say: 'A secret is stored only as a data_at_rest ciphertext, and never logged or kept in clear'
+  - id: every-refusal-is-audited
+    never: "state in ['codeRefused', 'setupRefused', 'lockedOut', 'throttled', 'answerRefused'] and not audited"
+    say: 'Every refused answer writes an audit record under the subject'
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringTotp', 'codeRefused', 'offeringSetup', 'setupRefused', 'redirected', 'lockedOut',
+      'throttled', 'ended', 'answerRefused', 'unavailable', 'totpUnavailable'] and not floorWaited
+    say: 'Every round that ends here answers no earlier than 500 ms after it arrived'

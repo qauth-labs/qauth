@@ -24,6 +24,8 @@ operations:
   GET /ui/recovery-codes/{interactionId}: { flow: [recovery-code] }
   GET /ui/passkey/{interactionId}: { flow: [passkey] }
   GET /ui/passkey-enrolment/{interactionId}: { flow: [passkey] }
+  GET /ui/totp/{interactionId}: { flow: [totp] }
+  GET /ui/totp-setup/{interactionId}: { flow: [totp] }
   GET /interaction/v1-rc.0/{interactionId}: { flow: [consent, logout] }
   GET /interaction/v1-rc.0/{interactionId}/personal: { flow: [consent, logout] }
   POST /interaction/v1-rc.0/{interactionId}/answer: { flow: [consent, logout] }
