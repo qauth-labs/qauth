@@ -127,6 +127,17 @@ describe('mintAuthorizationCode (ADR-017 Decision 10)', () => {
     expect(registered.create.mock.calls[0]?.[0]).toMatchObject({ authTime: null, amr: null });
   });
 
+  it('writes no sign-in methods for an empty list, or for a list without an authentication time (#662)', async () => {
+    // What the column's CHECK refuses never reaches it.
+    const empty = stub();
+    await mintAuthorizationCode(empty.fastify, { ...GRANT, amr: [] });
+    expect(empty.create.mock.calls[0]?.[0]).toMatchObject({ authTime: GRANT.authTime, amr: null });
+
+    const untimed = stub();
+    await mintAuthorizationCode(untimed.fastify, { ...GRANT, authTime: null, amr: ['pwd'] });
+    expect(untimed.create.mock.calls[0]?.[0]).toMatchObject({ authTime: null, amr: null });
+  });
+
   it('opens its own READ COMMITTED transaction when the caller has none', async () => {
     const { fastify, transaction } = stub();
 

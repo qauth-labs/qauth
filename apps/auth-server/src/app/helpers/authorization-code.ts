@@ -62,8 +62,8 @@ export interface AuthorizationCodeGrant {
   readonly authTime: number | null;
   /**
    * The RFC 8176 methods of that authentication (#662), for the same tokens'
-   * `amr`. Null when none is known; never an empty list (the column's CHECK
-   * refuses one), and never without an `authTime`.
+   * `amr`. Null when none is known. An empty list, or a list without an
+   * `authTime`, is written as `null`: the column's CHECK refuses both.
    */
   readonly amr: readonly string[] | null;
   /** The stored assurance level (`toStoredAssuranceLevel`), for the ID token's `acr`. */
@@ -157,6 +157,16 @@ export async function mintAuthorizationCode(
   return mintIn(fastify, grant, tx);
 }
 
+/**
+ * The code's `amr` column: a list of its own, or `null` for a grant with no
+ * method or no authentication time. The column's CHECK refuses an empty list
+ * and a list without an `auth_time`, so no grant can make the mint fail on it.
+ */
+function storedAmr(grant: Pick<AuthorizationCodeGrant, 'authTime' | 'amr'>): string[] | null {
+  if (grant.authTime === null || grant.amr === null || grant.amr.length === 0) return null;
+  return [...grant.amr];
+}
+
 /** {@link mintAuthorizationCode}'s writes, in `tx`. */
 async function mintIn(
   fastify: Pick<FastifyInstance, 'repositories'>,
@@ -191,7 +201,7 @@ async function mintIn(
       codeChallengeMethod: 'S256' as const,
       nonce: grant.nonce,
       authTime: grant.authTime,
-      amr: grant.amr === null ? null : [...grant.amr],
+      amr: storedAmr(grant),
       assuranceLevel: grant.assuranceLevel,
       sessionExpiresAt: grant.sessionExpiresAt,
       sessionId: grant.session?.sid ?? null,
