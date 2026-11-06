@@ -457,6 +457,23 @@ function decideLogout(
  * runs no engine round ({@link decideConsent}), nor does one to a logout's
  * confirm step ({@link decideLogout}).
  */
+/** How a completed sign-in proved the person, for `user.signed_in`'s method. */
+type SignedInMethod = 'password' | 'upstream' | 'passkey';
+
+/**
+ * The method of a completed sign-in: an upstream provider when one proved the
+ * account in an earlier round (#639); a passkey when the `amr` holds `pop`,
+ * which only a passkey assertion adds (#651), alone or after the password
+ * (the downgrade rule); else the password.
+ */
+export function signedInMethodOf(
+  verified: readonly { readonly step: string }[],
+  amr: readonly string[]
+): SignedInMethod {
+  if (verified.some((step) => step.step === 'upstream')) return 'upstream';
+  return amr.includes('pop') ? 'passkey' : 'password';
+}
+
 async function decideAnswer(
   request: FastifyRequest,
   reply: FastifyReply,
@@ -477,7 +494,7 @@ async function decideAnswer(
      * The sign-in completed: whether an upstream provider proved the account
      * (#639), for `user.signed_in`'s method.
      */
-    readonly signedIn: (method: 'password' | 'upstream') => void;
+    readonly signedIn: (method: SignedInMethod) => void;
   },
   catalog: UpstreamProviderCatalog
 ): Promise<InteractionDecision> {
@@ -560,9 +577,9 @@ async function decideAnswer(
     // A sign-in an upstream provider proved, that a later step (a code)
     // completed here: the provider is how the person signed in. A
     // registration (#640) and a password reset (#642) sign nobody in.
-    const throughUpstream =
-      state.signInTransaction?.verified.some((step) => step.step === 'upstream') === true;
-    answered.signedIn(throughUpstream ? 'upstream' : 'password');
+    answered.signedIn(
+      signedInMethodOf(state.signInTransaction?.verified ?? [], result.signIn.amr ?? [])
+    );
   }
   return decisionOf(reply, result, answer.receivedAt);
 }
@@ -700,7 +717,7 @@ export default async function (fastify: FastifyInstance) {
       let consent: AnsweredConsent | undefined;
       let logout: LogoutDecision | undefined;
       let upstream: UpstreamStarted | undefined;
-      let signedInMethod: 'password' | 'upstream' = 'password';
+      let signedInMethod: SignedInMethod = 'password';
       const result = await answerInteraction(
         request,
         reply,

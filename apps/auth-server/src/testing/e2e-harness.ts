@@ -408,6 +408,11 @@ export interface BootAuthServerOptions {
    */
   readonly authMethodPlugins?: AppOptions['authMethodPlugins'];
   /**
+   * Turn the passkey sign-in steps on (#651) while `WEBAUTHN_ENABLED` is
+   * refused at boot. The app refuses it outside NODE_ENV=test.
+   */
+  readonly passkeySignIn?: boolean;
+  /**
    * The OID4VP request key the default realm's key store holds from an
    * earlier boot (#546), as a PEM: the leaf key of the configured chain. The
    * harness boots once with `OID4VP_VERIFIER_SIGNING_KEY` set to it, which
@@ -630,6 +635,7 @@ export async function bootAuthServer(
     ...(options.authMethodPlugins === undefined
       ? {}
       : { authMethodPlugins: options.authMethodPlugins }),
+    ...(options.passkeySignIn === undefined ? {} : { passkeySignIn: options.passkeySignIn }),
   });
   const { routes } = options;
   if (routes !== undefined) {

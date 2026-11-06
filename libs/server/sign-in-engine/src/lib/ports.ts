@@ -827,8 +827,9 @@ export interface PasskeyCeremonies {
   /**
    * Bind a registration {@link verifyRegistration} verified to `userId`, while
    * the account is enabled, then queue the binding notice of NIST SP 800-63B-4
-   * §4.1.2.1 and write its security-log event. A notice that fails is
-   * reported and binds the passkey all the same.
+   * §4.1.2.1. A notice that fails is reported and binds the passkey all the
+   * same. The engine records the binding as the `webauthn_create` step passed;
+   * the security log's own event comes with its account pages (#686).
    */
   bind(input: {
     readonly realmId: string;

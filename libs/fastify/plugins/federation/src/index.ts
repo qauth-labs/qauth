@@ -453,3 +453,25 @@ export {
   resolveRelyingPartyId,
   WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/server-federation';
+
+// The passkey sign-in steps (#651): the app's adapter starts and checks
+// ceremonies through the provider, keeps their state in Redis, and updates a
+// passkey's stored record after an accepted assertion. The provider comes
+// only from `createPasskeyProvider`, with the verifier QAuth ships.
+export { createPasskeyProvider } from './lib/passkey-provider';
+export type {
+  WebAuthnCeremonyState,
+  WebAuthnChallengeStore,
+  WebAuthnCredentialData,
+  WebAuthnProvider,
+  WebAuthnRawClaims,
+  WebAuthnRejectionReason,
+} from '@qauth-labs/server-federation';
+export {
+  generateWebAuthnUserHandle,
+  WEBAUTHN_CEREMONY_TIMEOUT_MS,
+  webauthnCeremonyStateSchema,
+  webauthnCredentialDataAfterAssertion,
+  webauthnCredentialDataSchema,
+  WebAuthnRejection,
+} from '@qauth-labs/server-federation';

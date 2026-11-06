@@ -225,4 +225,14 @@ export const REDIS_KEYS = {
    * needs no list of realms.
    */
   INTERACTION_EXPIRY_INDEX: () => 'interaction-expiry',
+  /**
+   * The state of one WebAuthn ceremony between its options and its answer
+   * (#651): what the answer must match (challenge, RP ID, origins), as JSON,
+   * under the provider's transaction id (the realm and the sign-in engine's
+   * ceremony key), {@link digest}ed. Written with `SET … PX` when a ceremony
+   * starts, replacing any the transaction had, and taken with `GETDEL`
+   * before an answer is checked, so a challenge answers once. Expires with
+   * the ceremony's timeout.
+   */
+  WEBAUTHN_CEREMONY: (transactionId: string) => `webauthn-ceremony:${digest(transactionId)}`,
 } as const;
