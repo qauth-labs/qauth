@@ -1241,6 +1241,31 @@ Without it, every request that reads a browser session (the authorization
 endpoint among them) and every Interaction API sign-in fails, with
 `permission denied for table user_session_epochs` in the log.
 
+### Tokens record how the user signed in
+
+From this release the ID token and the access token of a browser sign-in carry
+`amr` and `auth_time`, and every refresh keeps both
+([#662](https://github.com/qauth-labs/qauth/issues/662)). Migration 0065 adds
+three empty columns for them: `authorization_codes.amr`,
+`refresh_tokens.auth_time` and `refresh_tokens.amr`. It rewrites no row and
+reads neither table: its CHECKs are added `NOT VALID`, because every existing
+row is empty in the new columns. It first locks `authorization_codes` and then
+`refresh_tokens`, in a redemption's order, so minting a code, redeeming one and
+a refresh wait until the runner commits, which takes moments. The migration
+sets no `lock_timeout`: run it when no long transaction holds either table.
+
+Tokens issued from what existed before the upgrade carry less, until the user
+signs in again:
+
+- A browser session from before the upgrade gives its codes `auth_time` but no
+  `amr`.
+- A refresh family from before the upgrade, and one a node of the previous
+  release refreshes during a rolling upgrade, gives its access tokens neither
+  claim.
+
+Both fail closed: a resource server that asks for a recent sign-in, or for a
+given method, sends the user to sign in again.
+
 ## Upgrading within 1.x
 
 :::caution[Back up first]
