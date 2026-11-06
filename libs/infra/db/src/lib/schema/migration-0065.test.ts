@@ -4,7 +4,8 @@
  * `refresh_tokens.auth_time` and `refresh_tokens.amr`. Three nullable columns
  * with no default and their CHECKs, after the locks in the writers' order, so
  * every existing row reads NULL and an earlier release, which never names the
- * columns, keeps working during a rolling upgrade.
+ * columns, keeps working during a rolling upgrade. The CHECKs are NOT VALID:
+ * no existing row can fail them, so no scan holds the locks.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -55,14 +56,14 @@ describe('migration 0065 (token sign-in methods)', () => {
     ]);
   });
 
-  it('adds three nullable columns with no default, and their CHECKs, and nothing else', () => {
+  it('adds three nullable columns with no default, and their CHECKs without a scan, and nothing else', () => {
     expect(statements.slice(2)).toEqual([
       'ALTER TABLE "authorization_codes" ADD COLUMN "amr" jsonb;',
       'ALTER TABLE "refresh_tokens" ADD COLUMN "auth_time" bigint;',
       'ALTER TABLE "refresh_tokens" ADD COLUMN "amr" jsonb;',
-      `ALTER TABLE "authorization_codes" ADD CONSTRAINT "authorization_codes_amr_valid" CHECK ("authorization_codes"."amr" IS NULL OR ("authorization_codes"."auth_time" IS NOT NULL AND jsonb_typeof("authorization_codes"."amr") = 'array' AND "authorization_codes"."amr" <> '[]'::jsonb));`,
-      'ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_auth_time_positive" CHECK ("refresh_tokens"."auth_time" IS NULL OR "refresh_tokens"."auth_time" > 0);',
-      `ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_amr_valid" CHECK ("refresh_tokens"."amr" IS NULL OR ("refresh_tokens"."auth_time" IS NOT NULL AND jsonb_typeof("refresh_tokens"."amr") = 'array' AND "refresh_tokens"."amr" <> '[]'::jsonb));`,
+      `ALTER TABLE "authorization_codes" ADD CONSTRAINT "authorization_codes_amr_valid" CHECK ("authorization_codes"."amr" IS NULL OR ("authorization_codes"."auth_time" IS NOT NULL AND jsonb_typeof("authorization_codes"."amr") = 'array' AND "authorization_codes"."amr" <> '[]'::jsonb)) NOT VALID;`,
+      'ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_auth_time_positive" CHECK ("refresh_tokens"."auth_time" IS NULL OR "refresh_tokens"."auth_time" > 0) NOT VALID;',
+      `ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_amr_valid" CHECK ("refresh_tokens"."amr" IS NULL OR ("refresh_tokens"."auth_time" IS NOT NULL AND jsonb_typeof("refresh_tokens"."amr") = 'array' AND "refresh_tokens"."amr" <> '[]'::jsonb)) NOT VALID;`,
     ]);
     expect(statements.join('\n')).not.toMatch(/\b(DROP|UPDATE|DELETE|INSERT|RENAME|DEFAULT)\b/);
   });
