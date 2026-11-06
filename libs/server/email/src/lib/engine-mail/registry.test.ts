@@ -40,6 +40,7 @@ const EVERY_MAIL: readonly EngineMail[] = [
   { template: 'recovery_code_used', unusedCodes: 0 },
   { template: 'recovery_codes_regenerated' },
   { template: 'recovery_codes_failed' },
+  { template: 'passkey_added' },
 ];
 
 /** Every `href` and `src` of the HTML, and every URL the plain text spells out. */
@@ -160,6 +161,17 @@ describe('the engine mail registry (#637)', () => {
       expect(isSwitchedOffByRealm(name, everything), name).toBe(false);
       expect(ENGINE_MAIL_TEMPLATES[name].realmMaySwitchOff, name).toBe(false);
     }
+  });
+
+  it('tells the owner a passkey was added, with no link of its own (#651)', async () => {
+    const { subject, text } = await renderEngineMail(
+      { template: 'passkey_added' },
+      { baseUrl: BASE_URL, brand: DEFAULT_MAIL_BRAND }
+    );
+    expect(subject).toBe('A passkey was added to your account');
+    expect(text.replace(/\s+/g, ' ')).toContain('tell the administrator of this service at once');
+    expect(engineMailCarriesCode({ template: 'passkey_added' })).toBe(false);
+    expect(isSwitchedOffByRealm('passkey_added', new Set(ENGINE_MAIL_NAMES))).toBe(false);
   });
 
   it.each([

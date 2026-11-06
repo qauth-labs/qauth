@@ -14,6 +14,7 @@ import {
   PASSWORD_DISABLED_SUBJECT,
   PasswordDisabledEmail,
 } from '../templates/engine/password-disabled';
+import { PASSKEY_ADDED_SUBJECT, PasskeyAddedEmail } from '../templates/engine/passkey-added';
 import {
   RECOVERY_CODE_USED_SUBJECT,
   RECOVERY_CODES_FAILED_SUBJECT,
@@ -94,7 +95,8 @@ export type EngineMail =
       readonly unusedCodes: number;
     }
   | { readonly template: 'recovery_codes_regenerated' }
-  | { readonly template: 'recovery_codes_failed' };
+  | { readonly template: 'recovery_codes_failed' }
+  | { readonly template: 'passkey_added' };
 
 /** The name of an engine mail template. */
 export type EngineMailName = EngineMail['template'];
@@ -262,6 +264,14 @@ export const ENGINE_MAIL_TEMPLATES: {
     subject: () => RECOVERY_CODES_FAILED_SUBJECT,
     element: (_mail: MailOf<'recovery_codes_failed'>, { baseUrl, brand }: EngineMailContext) =>
       createElement(RecoveryCodesFailedEmail, { brand, baseUrl }),
+  }),
+  passkey_added: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => PASSKEY_ADDED_SUBJECT,
+    element: (_mail: MailOf<'passkey_added'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(PasskeyAddedEmail, { brand, baseUrl }),
   }),
   send_ceiling: Object.freeze({
     realmMaySwitchOff: false,
