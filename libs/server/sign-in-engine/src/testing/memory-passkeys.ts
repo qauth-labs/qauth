@@ -19,6 +19,9 @@ import type {
 /** The RP ID every ceremony runs under. */
 export const MEMORY_PASSKEY_RP_ID = 'auth.example.com';
 
+/** The name the memory gives an account with no address (#655). */
+export const MEMORY_PASSKEY_ACCOUNT_NAME = 'account-memory';
+
 /** One passkey the memory holds. */
 export interface MemoryPasskey {
   readonly id: string;
@@ -172,8 +175,17 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
     async startRegistration({ key, userId, identifier }): Promise<PasskeyRegistrationStart> {
       calls.push('startRegistration');
       const started = challenge();
-      ceremonies.set(key, { kind: 'registration', challenge: started, userId });
-      const excluded = [...passkeys.values()].filter((passkey) => passkey.userId === userId);
+      ceremonies.set(key, {
+        kind: 'registration',
+        challenge: started,
+        ...(userId === undefined ? {} : { userId }),
+      });
+      // A registration's ceremony (#655) names no account, and excludes nothing.
+      const excluded =
+        userId === undefined
+          ? []
+          : [...passkeys.values()].filter((passkey) => passkey.userId === userId);
+      const name = identifier ?? MEMORY_PASSKEY_ACCOUNT_NAME;
       return {
         options: {
           challenge: started,
@@ -188,7 +200,7 @@ export function createMemoryPasskeys(initial: readonly MemoryPasskey[] = []): Me
           attestation: 'none',
         },
         personal: {
-          user: { id: 'dXNlci1oYW5kbGU', name: identifier, displayName: identifier },
+          user: { id: 'dXNlci1oYW5kbGU', name, displayName: name },
           excludeCredentials: excluded.map((passkey) => ({ type: 'public-key', id: passkey.id })),
         },
       };

@@ -378,7 +378,17 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   // names the account by itself.) A reset's mailbox fixes its subject with no
   // auth_time (#642): an emailed code is no factor.
   if (authTime !== undefined && subject === undefined) return null;
-  if (subject !== undefined && authTime === undefined && flow !== 'reset') return null;
+  // A registration by passkey (#655) creates its account at its ceremony,
+  // which signs nobody in: a subject with no identifier and no auth_time.
+  const registeredByPasskey =
+    flow === 'register' &&
+    identifier === undefined &&
+    subject !== undefined &&
+    authTime === undefined &&
+    verified.some((step) => step.step === 'webauthn_create');
+  if (subject !== undefined && authTime === undefined && flow !== 'reset' && !registeredByPasskey) {
+    return null;
+  }
   // A reset names its account by the address it proves, and never goes out
   // to an upstream provider (#642).
   if (flow === 'reset' && identifier === undefined && subject !== undefined) return null;
@@ -391,8 +401,12 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (upstream?.address !== undefined && subject === undefined) return null;
   // A registration never goes out to an upstream provider (#640).
   if (flow === 'register' && upstream !== undefined) return null;
-  // A recovery-code set is issued only to the account a factor proved (#649).
-  if (recoveryCodesShown !== undefined && (subject === undefined || authTime === undefined)) {
+  // A recovery-code set is issued only to the account a factor proved (#649),
+  // or that a registration by passkey created (#655).
+  if (
+    recoveryCodesShown !== undefined &&
+    (subject === undefined || (authTime === undefined && !registeredByPasskey))
+  ) {
     return null;
   }
   // A passkey is offered for enrolment only to the account a factor proved
@@ -400,7 +414,15 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (passkeyEnrolment !== undefined && (subject === undefined || authTime === undefined)) {
     return null;
   }
-  if (ceremony?.step === 'webauthn_create' && (subject === undefined || authTime === undefined)) {
+  // A registration's own ceremony (#655) comes before its account: no
+  // subject, no identifier.
+  const registrationCeremony =
+    flow === 'register' && subject === undefined && identifier === undefined;
+  if (
+    ceremony?.step === 'webauthn_create' &&
+    (subject === undefined || authTime === undefined) &&
+    !registrationCeremony
+  ) {
     return null;
   }
   // A TOTP is set up only for the account a factor proved (#653).

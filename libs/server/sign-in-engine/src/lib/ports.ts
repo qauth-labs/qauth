@@ -300,12 +300,15 @@ export interface PasswordUpdates {
 /** How a realm or a client sets MFA (ADR-020): off, optional, required, or required for admins. */
 /** What creating an account found (#640). */
 export type AccountRegistration =
-  /** The account was created: its `users` row, its verified password credential and its verified address. */
+  /**
+   * The account was created: its `users` row, and its verified password
+   * credential and its verified address, or its passkey (#655).
+   */
   | { readonly kind: 'created'; readonly userId: string }
   /**
-   * Nothing was written: another account took the address first (a
-   * unique-constraint race). The transaction ends, as FiPA's
-   * `invalid_session` does.
+   * Nothing was written: another account took the address first, or the
+   * realm holds the passkey's credential id already (a unique-constraint
+   * race). The transaction ends, as FiPA's `invalid_session` does.
    */
   | { readonly kind: 'conflict' };
 
@@ -349,6 +352,22 @@ export interface AccountRegistrations {
     readonly identifier: string;
     readonly password: string;
     readonly normalization: PasswordNormalization;
+  }): Promise<AccountRegistration>;
+  /**
+   * Create an account whose primary identity is a passkey, with no address
+   * (#655; ADR-017 Decision 8, question 30), from a registration
+   * {@link PasskeyCeremonies.verifyRegistration} verified with no account
+   * named: in one database transaction, the `users` row, the `webauthn`
+   * credential, and the account's `user.registered` event. No email
+   * attribute and no password are written: the registration ceremony
+   * proved the account, which is verified from its first moment. A
+   * credential id the realm holds by then is a `conflict`, with nothing
+   * written. Absent: the engine registers password accounts alone.
+   */
+  createWithPasskey?(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly registration: string;
   }): Promise<AccountRegistration>;
 }
 
@@ -503,6 +522,19 @@ export interface RecoveryCodes {
    * no longer work, and nothing is confirmed.
    */
   confirm(input: RecoveryCodeAccount & { readonly setId: string }): Promise<boolean>;
+  /**
+   * The account `code`, as the person typed it, is an unused code of, when
+   * that account's set can be found by the code alone (#655): only the
+   * sets of accounts whose primary identity is a passkey, with no address,
+   * carry what finds them. `null` for any other code, the same whatever it
+   * is. It takes nothing: {@link redeem} checks and takes the code after the
+   * engine read the account. The work costs the same for any answer.
+   * Absent: no code is redeemed before a first factor.
+   */
+  findAccount?(input: {
+    readonly realmId: string;
+    readonly code: string;
+  }): Promise<{ readonly userId: string } | null>;
 }
 
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;
@@ -823,21 +855,28 @@ export interface PasskeyCeremonies {
   }): Promise<PasskeyAssertion>;
   /**
    * Start a registration ceremony under `key`, for a discoverable passkey of
-   * `userId` with user verification required and attestation `none`.
+   * `userId` with user verification required and attestation `none`, named
+   * by `identifier`. With no `userId`, the ceremony is a registration's
+   * (#655): a new user handle, nothing excluded. With no `identifier` (an
+   * account with no address), the port makes the account's name.
    */
   startRegistration(input: {
     readonly realmId: string;
     readonly clientId: string;
     readonly key: string;
-    readonly userId: string;
-    readonly identifier: string;
+    readonly userId?: string;
+    readonly identifier?: string;
   }): Promise<PasskeyRegistrationStart>;
-  /** Take the ceremony under `key` and verify the registration `response`, without binding it. */
+  /**
+   * Take the ceremony under `key` and verify the registration `response`,
+   * without binding it. `userId` is the account the ceremony was started
+   * for; none for a registration's (#655).
+   */
   verifyRegistration(input: {
     readonly realmId: string;
     readonly clientId: string;
     readonly key: string;
-    readonly userId: string;
+    readonly userId?: string;
     readonly response: string;
   }): Promise<PasskeyRegistration>;
   /**

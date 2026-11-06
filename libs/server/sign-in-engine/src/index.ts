@@ -158,6 +158,7 @@ export {
   RECOVERY_CODE_COUNT,
   RECOVERY_CODE_PATTERN,
   type RecoveryCodeHasher,
+  type RecoveryCodeLookup,
   type RecoveryCodeService,
   type RecoveryCodeServiceDependencies,
   type RecoveryCodeStore,

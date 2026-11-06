@@ -691,22 +691,29 @@ function upstreamParams(
 
 /**
  * The creation options and personal data a port started a registration
- * with (#651), checked against the step grammar with `identifier` added to
- * the personal data: anything else is a store fault.
+ * with (#651), checked against the step grammar with `identifier` as the
+ * personal data's, none for an account with no address (#655), and
+ * `optional` as the step's: anything else is a store fault.
  */
 function checkedRegistrationStart(
   started: unknown,
-  identifier: string
+  identifier: string | undefined,
+  optional: boolean
 ): {
   readonly params: StepParams<'webauthn_create'>;
   readonly personal: Readonly<Record<string, unknown>>;
 } {
   const value = started as Partial<PasskeyRegistrationStart> | null;
   const step = grammarStep('webauthn_create');
-  const params = step.params.safeParse({ optional: true, options: value?.options });
-  const personal = step.personal.safeParse(
-    isRecord(value?.personal) ? { ...value.personal, identifier } : undefined
-  );
+  const params = step.params.safeParse({ optional, options: value?.options });
+  let shown: Record<string, unknown> | undefined;
+  if (isRecord(value?.personal)) {
+    // The identifier is the transaction's, never the port's.
+    const rest: Record<string, unknown> = { ...value.personal };
+    delete rest['identifier'];
+    shown = identifier === undefined ? rest : { ...rest, identifier };
+  }
+  const personal = step.personal.safeParse(shown);
   if (!params.success || !personal.success) {
     throw new SignInStoreUnavailableError('passkeys', new Error('not creation options'));
   }
@@ -875,12 +882,18 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       return endUnusable(answer, context, 'transaction_invalid', proof);
     }
     // A subject without an identifier comes only from a discoverable factor,
-    // or from an upstream provider's callback (#639).
+    // or from an upstream provider's callback (#639); or, for an account
+    // with no address (#655), from the registration by passkey that created
+    // it, or from a recovery code that found it before any first factor.
     if (
       found.subject !== undefined &&
       found.identifier === undefined &&
       !found.verified.some(
-        (step) => step.step === 'upstream' || handlers.byStep.get(step.step)?.discoverable === true
+        (step) =>
+          step.step === 'upstream' ||
+          handlers.byStep.get(step.step)?.discoverable === true ||
+          (found.flow === 'register' && step.step === 'webauthn_create') ||
+          (found.flow === undefined && step.step === 'recovery_code')
       )
     ) {
       return endUnusable(answer, context, 'transaction_invalid', proof);
@@ -1108,6 +1121,81 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         },
       };
       return params;
+    };
+    /**
+     * The `webauthn_create` step of a registration ceremony the port starts
+     * (#651, #655): for the passkey enrolment and the rebind of `userId`, or,
+     * with no `userId`, for the account a registration creates; named by
+     * `identifier`, or by a name the port makes for an account with no
+     * address. Its personal data is the ceremony's, held with it.
+     */
+    const creationStep = (
+      passkeys: PasskeyCeremonies,
+      input: { readonly userId?: string; readonly identifier?: string; readonly optional: boolean }
+    ): Offerable => {
+      let personal: Readonly<Record<string, unknown>> | undefined;
+      return {
+        step: 'webauthn_create',
+        ceremony: true,
+        params: async ({ ceremonyKey }: StepRound) => {
+          if (ceremonyKey === undefined) {
+            throw new Error('sign-in engine: a passkey registration without its ceremony');
+          }
+          const started = await fromStore('passkeys', () =>
+            passkeys.startRegistration({
+              realmId,
+              clientId,
+              key: ceremonyKey,
+              ...(input.userId === undefined ? {} : { userId: input.userId }),
+              ...(input.identifier === undefined ? {} : { identifier: input.identifier }),
+            })
+          );
+          const checked = checkedRegistrationStart(started, input.identifier, input.optional);
+          personal = checked.personal;
+          return checked.params;
+        },
+        ceremonyPersonal: () => personal,
+      };
+    };
+    /**
+     * Take the held `webauthn_create` ceremony and verify the pending
+     * registration `response` under it (#651, #655): the port takes the
+     * ceremony first, whatever it finds, and an answer whose ceremony the
+     * transaction no longer holds is refused. The checked registration, or
+     * `null` when the port refused it.
+     */
+    const verifyCreation = async (
+      passkeys: PasskeyCeremonies,
+      response: string,
+      userId: string | undefined
+    ): Promise<string | null> => {
+      const held = state.transaction.ceremony;
+      state.transaction = { ...state.transaction, ceremony: undefined };
+      spendChallenge();
+      const key = held?.step === 'webauthn_create' ? held.key : undefined;
+      const verified: unknown =
+        key === undefined
+          ? { kind: 'refused' }
+          : await fromStore('passkeys', () =>
+              passkeys.verifyRegistration({
+                realmId,
+                clientId,
+                key,
+                ...(userId === undefined ? {} : { userId }),
+                response,
+              })
+            );
+      const outcome = verified as Partial<{ kind: string; registration: unknown }> | null;
+      if (outcome?.kind === 'refused') return null;
+      if (
+        outcome?.kind !== 'verified' ||
+        typeof outcome.registration !== 'string' ||
+        outcome.registration.length === 0 ||
+        outcome.registration.length > PASSKEY_REGISTRATION_MAX_LENGTH
+      ) {
+        throw new SignInStoreUnavailableError('passkeys', new Error('not a registration'));
+      }
+      return outcome.registration;
     };
     /** The offer of `steps`, the first one current, with their params for this round. */
     const offerOf = async (
@@ -1544,6 +1632,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const tookRecoveryCode = (): boolean =>
       state.transaction.verified.some((step) => step.step === 'recovery_code');
     /**
+     * Whether a recovery code found the account before any first factor
+     * (#655): the code stood in for the lost passkey of an account with no
+     * address, and no factor of this transaction proved the account yet.
+     */
+    const codeAlone = (): boolean =>
+      tookRecoveryCode() &&
+      !state.transaction.verified.some((step) => factorOf(step.step) !== undefined);
+    /**
      * Whether this transaction proved a password: the one first factor that
      * makes `mfa` with a TOTP (an upstream sign-in adds no `amr` value).
      */
@@ -1705,16 +1801,19 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     const showRecoveryCodes = async (
       codes: RecoveryCodes,
       current: SignInAccount,
-      subject: string
+      subject: string,
+      options: { readonly owed?: boolean } = {}
     ): Promise<RoundResult | null> => {
       const shown = state.transaction.recoveryCodesShown;
       const waiting = shown !== undefined;
       if (!waiting) {
         // The first enrolment of a passkey issues a set (#651), as a factor
-        // beyond the password this transaction proved does.
+        // beyond the password this transaction proved does; a registration
+        // by passkey owes one whatever else holds (#655).
         if (
-          tookRecoveryCode() ||
-          (!enrolledPasskey() && (!boundBeyondPassword(current) || !provedBeyondPassword()))
+          options.owed !== true &&
+          (tookRecoveryCode() ||
+            (!enrolledPasskey() && (!boundBeyondPassword(current) || !provedBeyondPassword())))
         ) {
           return null;
         }
@@ -2241,9 +2340,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
 
     /**
      * Count a registration start on the limiters (#640; ADR-017 Decision 7):
-     * the round's refusal, audited as `rate_limited`, or `null` to go on.
+     * the round's refusal, audited as `rate_limited` under `step`, or `null`
+     * to go on.
      */
-    const reserveRegistrationStart = async (): Promise<RoundResult | null> => {
+    const reserveRegistrationStart = async (
+      step: StepName = 'email_code'
+    ): Promise<RoundResult | null> => {
       const { limits } = hooks;
       if (limits?.reserveRegistrationStart === undefined) return null;
       const reserve = limits.reserveRegistrationStart.bind(limits);
@@ -2256,13 +2358,218 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         })
       );
       if (verdict?.kind === 'throttled') {
-        await audit('refused', 'email_code', 'rate_limited');
+        await audit('refused', step, 'rate_limited');
         return throttled(Math.max(1, Math.ceil(verdict.retryAfterSeconds)));
       }
       if (verdict?.kind !== 'continue') {
         throw new SignInStoreUnavailableError('limits', new Error('not a limit verdict'));
       }
       return null;
+    };
+
+    /**
+     * The registration ceremony of an account whose primary identity is a
+     * passkey, with no address (#655; ADR-017 Decision 8, question 30;
+     * `graphs/flows/core/passkey-sign-up`): `webauthn_create` with `optional`
+     * false, for a new user handle with nothing excluded. Offered first,
+     * preferred, beside the address step, when the engine holds the passkeys,
+     * the recovery codes and the registration's passkey write, and the
+     * transport serves the step and `recovery_codes` (the set is owed before
+     * the registration completes): the hosted pages. `null` otherwise.
+     */
+    const passkeyRegistration = (): Offerable | null => {
+      const { passkeys, registrations } = deps;
+      if (
+        passkeys === undefined ||
+        registrations?.createWithPasskey === undefined ||
+        recoveryCodes === undefined ||
+        !served.has('webauthn_create') ||
+        !served.has('recovery_codes')
+      ) {
+        return null;
+      }
+      return creationStep(passkeys, { optional: false });
+    };
+
+    /**
+     * Register by the passkey the pending `webauthn_create` answer of
+     * `offer` created (#655): a credential round on the limiters and a
+     * registration start, then the port verifies the response with user
+     * verification and no account named, and the account is created with
+     * that passkey and no address in one write. The ceremony proved it: the
+     * transaction's subject is the new account, `webauthn_create` joins its
+     * verified steps with no `amr`, and no `auth_time` is set (a registration
+     * signs nobody in). Returns the round's result, or `null` once the
+     * account exists and the rules go on to its recovery codes. A credential
+     * id the realm holds by then ends the transaction
+     * (`registration_conflict`).
+     */
+    const registerByPasskey = async (
+      offer: StepOffer,
+      steps: readonly Offerable[]
+    ): Promise<RoundResult | null> => {
+      const { passkeys, registrations } = deps;
+      const createWithPasskey = registrations?.createWithPasskey;
+      if (
+        passkeys === undefined ||
+        registrations === undefined ||
+        createWithPasskey === undefined
+      ) {
+        throw new Error('sign-in engine: a registration by passkey without its ports');
+      }
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('webauthn_create');
+      turn.pending = null;
+      const { webauthn_response: response } = read.answer as StepAnswer<'webauthn_create'>;
+      if (response === undefined) return invalidAnswer('webauthn_create');
+      const limited = await reserveCredentialRound('webauthn_create');
+      if ('refused' in limited) return limited.refused;
+      const capped = await reserveRegistrationStart('webauthn_create');
+      if (capped !== null) {
+        await settleRound(limited.reservation, 'withdrawn');
+        return capped;
+      }
+      const registration = await verifyCreation(passkeys, response, undefined);
+      if (registration === null) {
+        await settleRound(limited.reservation, 'failure');
+        // The same offer under a new ceremony: the refused one was taken.
+        await audit('refused', 'webauthn_create', 'invalid_credentials');
+        const renewed = await offerOf(steps, { preferred: true });
+        return offerStep(refusedOffer(renewed, 'webauthn_create'), 'invalid_credentials');
+      }
+      const created = await fromStore('registrations', () =>
+        createWithPasskey.call(registrations, { realmId, clientId, registration })
+      );
+      if (created?.kind === 'conflict') {
+        await settleRound(limited.reservation, 'failure');
+        return ended('webauthn_create', 'registration_conflict');
+      }
+      if (
+        created?.kind !== 'created' ||
+        typeof created.userId !== 'string' ||
+        created.userId.length === 0
+      ) {
+        throw new SignInStoreUnavailableError('registrations', new Error('not a registration'));
+      }
+      await settleRound(limited.reservation, 'success', created.userId);
+      state.transaction = {
+        ...state.transaction,
+        subject: created.userId,
+        verified: [
+          ...state.transaction.verified,
+          { step: 'webauthn_create', params: read.params } as OfferedStep,
+        ],
+      };
+      await audit('passed', 'webauthn_create');
+      return null;
+    };
+
+    /**
+     * Whether the sign-in's first offer carries a recovery code (#655;
+     * ADR-017 Decision 4, "Try another way"): on a transport that serves it
+     * (the hosted pages), for every account alike, when the engine can find
+     * an account by its code alone and holds the passkeys the code's account
+     * binds a new one with.
+     */
+    const codeBeforeFirstFactor = (): boolean =>
+      recoveryCodes?.findAccount !== undefined &&
+      deps.passkeys !== undefined &&
+      served.has('recovery_code');
+
+    /**
+     * Redeem the pending `recovery_code` answer of the sign-in's first offer
+     * (#655; ADR-017 Decision 8): the code stands in for the lost passkey of
+     * an account with no address. A credential round on the limiters first,
+     * keyed on the IP alone, since nobody is named; then the port finds the
+     * account whose set holds the code, by the code alone. Only an enabled
+     * account with no address whose every factor is a passkey may be found;
+     * anything else is refused as a wrong code, the same answer whatever was
+     * typed. Then the account's recovery-code ladder and the take, as after a
+     * first factor ({@link redeemPending}). A taken code makes the account
+     * the subject, joins the verified steps with no `amr`, and sets
+     * `auth_time` to the redemption: what bounds the new passkey's binding,
+     * which rule 8 asks for before anything else, and which the sign-in's
+     * own passkey assertion replaces.
+     */
+    const redeemBeforeFirstFactor = async (offer: StepOffer): Promise<RoundResult | null> => {
+      const codes = recoveryCodes;
+      const findAccount = codes?.findAccount;
+      if (codes === undefined || findAccount === undefined) {
+        throw new Error('sign-in engine: a recovery code before a first factor without its port');
+      }
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('recovery_code');
+      turn.pending = null;
+      const { recovery_code: typed } = read.answer as StepAnswer<'recovery_code'>;
+      const limited = await reserveCredentialRound('recovery_code');
+      if ('refused' in limited) return limited.refused;
+      const refuse = async (reason: SignInAuditReason): Promise<RoundResult> => {
+        await settleRound(limited.reservation, 'failure');
+        return refuseAnswer(offer, 'recovery_code', 'invalid_credentials', reason);
+      };
+      // The code is checked now: it spends the bot challenge passed for it (#643).
+      spendChallenge();
+      const found: unknown = await fromStore('recoveryCodes', () =>
+        findAccount.call(codes, { realmId, code: typed })
+      );
+      if (found === null) return refuse('invalid_credentials');
+      const userId = (found as { userId?: unknown } | undefined)?.userId;
+      if (typeof userId !== 'string' || userId.length === 0) {
+        throw new SignInStoreUnavailableError('recoveryCodes', new Error('not an account'));
+      }
+      const account = await fromStore('accounts', () =>
+        deps.accounts.findByUserId(realmId, userId)
+      );
+      if (
+        account === null ||
+        account.userId !== userId ||
+        account.identifier !== undefined ||
+        account.factors.length === 0 ||
+        !account.factors.every((factor) => factor.type === 'passkey')
+      ) {
+        return refuse('invalid_credentials');
+      }
+      if (!account.enabled) return refuse('account_disabled');
+      const reservation = await fromStore('ladder', () =>
+        ladder.reserve({ realmId, userId, factor: 'recovery_code' })
+      );
+      if (reservation.kind === 'wait') {
+        await settleRound(limited.reservation, 'withdrawn');
+        await audit('refused', 'recovery_code', 'locked_out');
+        return throttled(reservation.retryAfterSeconds);
+      }
+      const redeemed: unknown = await fromStore('recoveryCodes', () =>
+        codes.redeem({ realmId, userId, clientId, code: typed })
+      );
+      const kind = (redeemed as { kind?: unknown } | null)?.kind;
+      if (kind === 'redeemed') {
+        await settleCode(reservation, 'success');
+        await settleRound(limited.reservation, 'success', userId);
+        state.transaction = {
+          ...state.transaction,
+          subject: userId,
+          verified: [
+            ...state.transaction.verified,
+            { step: 'recovery_code', params: read.params } as OfferedStep,
+          ],
+          authTime: clock.now(),
+        };
+        await audit('passed', 'recovery_code');
+        return null;
+      }
+      if (kind !== 'refused') {
+        throw new SignInStoreUnavailableError('recoveryCodes', new Error('not a redemption'));
+      }
+      // Another round took the code first: counted as a wrong one.
+      const settled = await settleCode(reservation, 'failure');
+      if (settled.ceilingReached) {
+        try {
+          await codes.ceilingReached({ realmId, userId });
+        } catch (error) {
+          report('recoveryCodes', error);
+        }
+      }
+      return refuse('invalid_credentials');
     };
 
     /** The reset gate's verdict (#642): a value that is not a boolean is a store fault. */
@@ -2889,11 +3196,29 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
 
     if (state.transaction.subject === undefined) {
       if (state.transaction.identifier === undefined && registering) {
-        // A registration asks for the address alone (#640): no factor, no
-        // upstream provider.
-        return offerStep(await offerOf([handlers.identifier]));
-      }
-      if (state.transaction.identifier === undefined) {
+        // A registration asks for the address (#640): no factor, no upstream
+        // provider. On the hosted pages a passkey comes first, preferred,
+        // with the address beside it (#655).
+        const byPasskey = passkeyRegistration();
+        let offer: StepOffer | null = null;
+        const steps: Offerable[] = byPasskey === null ? [] : [byPasskey, handlers.identifier];
+        if (byPasskey !== null) {
+          try {
+            offer = await offerOf(steps, { preferred: true });
+          } catch (error) {
+            // A ceremony that cannot start (a store that failed, options the
+            // grammar refuses) leaves the address: reported, and the address
+            // step alone. An answer to the held ceremony starts nothing.
+            if (turn.pending?.name === 'webauthn_create') throw error;
+            report('passkeys', error);
+            state.transaction = { ...state.transaction, ceremony: undefined };
+          }
+        }
+        if (offer === null) return offerStep(await offerOf([handlers.identifier]));
+        if (turn.pending?.name !== 'webauthn_create') return offerStep(offer);
+        const result = await registerByPasskey(offer, steps);
+        if (result !== null) return result;
+      } else if (state.transaction.identifier === undefined) {
         // Nobody is named yet: the identifier step, the same for everyone, or
         // a discoverable first factor before it, with the identifier step and
         // the other first factors beside it (ADR-017 Decision 4); and the
@@ -2917,7 +3242,14 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
               ? [handlers.identifier]
               : [...others, handlers.identifier]
             : [...discoverable, ...others, handlers.identifier];
-        const offer = await offerOf([...firstSteps, ...upstreamStep], { preferred: true });
+        // On the hosted pages a recovery code comes last, for every account
+        // alike (#655; ADR-017 Decision 4): it finds an account with no
+        // address whose passkey was lost.
+        const codeOffered = codeBeforeFirstFactor();
+        const offer = await offerOf(
+          [...firstSteps, ...upstreamStep, ...(codeOffered ? [RECOVERY_CODE_STEP] : [])],
+          { preferred: true }
+        );
         const pendingName = turn.pending?.name;
         // The authorization request routes to a provider (#639): at round 0,
         // with no answer, it starts at once. The way back is this offer.
@@ -2926,9 +3258,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           return pickUpstream(offer, upstreamRoute);
         }
         if (upstreamOffered !== null && pendingName === 'upstream') return pickUpstream(offer);
-        if (!discoverable.some((handler) => handler.step === pendingName)) return offerStep(offer);
-        const result = await verifyPending(offer);
-        if (result !== null) return result;
+        if (codeOffered && pendingName === 'recovery_code') {
+          const result = await redeemBeforeFirstFactor(offer);
+          if (result !== null) return result;
+        } else {
+          if (!discoverable.some((handler) => handler.step === pendingName))
+            return offerStep(offer);
+          const result = await verifyPending(offer);
+          if (result !== null) return result;
+        }
       } else {
         if (heldBefore === undefined) {
           // The identifier is fixed together with its audit record: a round
@@ -3009,6 +3347,25 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     if (provenAccount === null || provenAccount.userId !== subject)
       return ended('identifier', 'subject_mismatch');
     if (!provenAccount.enabled) return ended('identifier', 'account_disabled');
+    // A registration by passkey (#655; ADR-017 Decision 8, question 30): the
+    // account exists, and its recovery codes are mandatory. The set is shown
+    // once, and the registration completes only once the person confirmed
+    // they saved it, with no amr and no auth_time (ADR-017 Decision 10).
+    if (registering && state.transaction.identifier === undefined) {
+      if (
+        recoveryCodes === undefined ||
+        !state.transaction.verified.some((step) => step.step === 'webauthn_create')
+      ) {
+        throw new Error('sign-in engine: a registration with no address and no passkey');
+      }
+      const shown = await showRecoveryCodes(recoveryCodes, provenAccount, subject, { owed: true });
+      if (shown !== null) return shown;
+      return Object.freeze({
+        kind: 'complete',
+        transaction: null,
+        signIn: Object.freeze({ subject, registered: true as const }),
+      });
+    }
     let account: SignInAccount = provenAccount;
     // An `update_password` this transaction saw stays owed to it (#635):
     // another sign-in that sets a new password, and so removes the action,
@@ -3143,29 +3500,7 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const { authTime } = state.transaction;
         return authTime !== undefined && clock.now() - authTime <= PASSKEY_BINDING_MAX_AUTH_AGE_MS;
       };
-      let personal: Readonly<Record<string, unknown>> | undefined;
-      const create: Offerable = {
-        step: 'webauthn_create',
-        ceremony: true,
-        params: async ({ ceremonyKey }: StepRound) => {
-          if (ceremonyKey === undefined) {
-            throw new Error('sign-in engine: a passkey enrolment without its ceremony');
-          }
-          const started = await fromStore('passkeys', () =>
-            passkeys.startRegistration({
-              realmId,
-              clientId,
-              key: ceremonyKey,
-              userId: subject,
-              identifier,
-            })
-          );
-          const checked = checkedRegistrationStart(started, identifier);
-          personal = checked.personal;
-          return checked.params;
-        },
-        ceremonyPersonal: () => personal,
-      };
+      const create = creationStep(passkeys, { userId: subject, identifier, optional: true });
       /** Offer the step again with a new ceremony, the refused answer audited. */
       const refuseEnrolment = async (): Promise<RoundResult> => {
         await audit('refused', 'webauthn_create', 'invalid_credentials');
@@ -3204,7 +3539,6 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         if (read === null) return invalidAnswer('webauthn_create');
         turn.pending = null;
         const { webauthn_response: response } = read.answer as StepAnswer<'webauthn_create'>;
-        const held = state.transaction.ceremony;
         if (response === undefined) {
           // Declined: the offer is not made again in this transaction.
           state.transaction = {
@@ -3216,31 +3550,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         }
         const limited = await reserveCredentialRound('webauthn_create');
         if ('refused' in limited) return limited.refused;
-        // The port takes the ceremony first, whatever it finds.
-        state.transaction = { ...state.transaction, ceremony: undefined };
-        spendChallenge();
-        const key = held?.step === 'webauthn_create' ? held.key : undefined;
-        const verified: unknown =
-          key === undefined
-            ? { kind: 'refused' }
-            : await fromStore('passkeys', () =>
-                passkeys.verifyRegistration({ realmId, clientId, key, userId: subject, response })
-              );
-        const outcome = verified as Partial<{ kind: string; registration: unknown }> | null;
-        if (outcome?.kind === 'refused') {
+        const verified = await verifyCreation(passkeys, response, subject);
+        if (verified === null) {
           await settleRound(limited.reservation, 'failure');
           return refuseEnrolment();
         }
-        if (
-          outcome?.kind !== 'verified' ||
-          typeof outcome.registration !== 'string' ||
-          outcome.registration.length === 0 ||
-          outcome.registration.length > PASSKEY_REGISTRATION_MAX_LENGTH
-        ) {
-          throw new SignInStoreUnavailableError('passkeys', new Error('not a registration'));
-        }
         await settleRound(limited.reservation, 'success', subject);
-        registration = outcome.registration;
+        registration = verified;
         state.transaction = { ...state.transaction, passkeyEnrolment: { registration } };
       }
       // The first passkey of a password-only account: its mailbox, proved in
@@ -3273,6 +3589,76 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       }
       if (reason === 'account_disabled' || reason === 'subject_mismatch') {
         state.transaction = { ...state.transaction, passkeyEnrolment: undefined };
+        return ended('webauthn_create', reason);
+      }
+      throw new SignInStoreUnavailableError('passkeys', new Error('not a binding'));
+    };
+
+    /**
+     * The new passkey a recovery code binds before any first factor (#655;
+     * ADR-017 Decision 8, `graphs/flows/core/passkey-sign-up`): the code
+     * stood in for the lost passkey of an account with no address, and the
+     * only rebind it lets through is one passkey in its place. `webauthn_create`
+     * with `optional` false, for the account's user handle, on a transport
+     * that serves it; the binding needs the code taken at most
+     * {@link PASSKEY_BINDING_MAX_AUTH_AGE_MS} ago, so past it the transaction
+     * ends (`authentication_stale`). A response is a credential round on the
+     * limiters; the port verifies it for the account and binds it, with no
+     * mailbox to prove and no mail to send. `webauthn_create` then joins the
+     * verified steps with no `amr`: a registration response proves no
+     * possession, so the sign-in completes only once the downgrade rule's
+     * passkey assertion proves the account. Returns the round's result, or
+     * `null` once the passkey is bound.
+     */
+    const rebindPasskey = async (subject: string): Promise<RoundResult | null> => {
+      const { passkeys } = deps;
+      if (passkeys === undefined || !served.has('webauthn_create')) {
+        return redirect('step_not_available');
+      }
+      const fresh = (): boolean => {
+        const { authTime } = state.transaction;
+        return authTime !== undefined && clock.now() - authTime <= PASSKEY_BINDING_MAX_AUTH_AGE_MS;
+      };
+      if (!fresh()) return ended('webauthn_create', 'authentication_stale');
+      const create = creationStep(passkeys, { userId: subject, optional: false });
+      const offer = await offerOf([create]);
+      if (turn.pending?.name !== 'webauthn_create') return offerStep(offer);
+      const read = readPending(offer);
+      if (read === null) return invalidAnswer('webauthn_create');
+      turn.pending = null;
+      const { webauthn_response: response } = read.answer as StepAnswer<'webauthn_create'>;
+      if (response === undefined) return invalidAnswer('webauthn_create');
+      const limited = await reserveCredentialRound('webauthn_create');
+      if ('refused' in limited) return limited.refused;
+      const registration = await verifyCreation(passkeys, response, subject);
+      const refuseRebind = async (): Promise<RoundResult> => {
+        await audit('refused', 'webauthn_create', 'invalid_credentials');
+        return offerStep(await offerOf([create]), 'invalid_credentials');
+      };
+      if (registration === null) {
+        await settleRound(limited.reservation, 'failure');
+        return refuseRebind();
+      }
+      await settleRound(limited.reservation, 'success', subject);
+      if (!fresh()) return ended('webauthn_create', 'authentication_stale');
+      const bound: unknown = await fromStore('passkeys', () =>
+        passkeys.bind({ realmId, clientId, userId: subject, registration })
+      );
+      const binding = bound as Partial<{ kind: string; reason: unknown }> | null;
+      if (binding?.kind === 'bound') {
+        state.transaction = {
+          ...state.transaction,
+          verified: [
+            ...state.transaction.verified,
+            { step: 'webauthn_create', params: read.params } as OfferedStep,
+          ],
+        };
+        await audit('passed', 'webauthn_create');
+        return null;
+      }
+      const reason = binding?.kind === 'refused' ? binding.reason : undefined;
+      if (reason === 'credential_exists') return refuseRebind();
+      if (reason === 'account_disabled' || reason === 'subject_mismatch') {
         return ended('webauthn_create', reason);
       }
       throw new SignInStoreUnavailableError('passkeys', new Error('not a binding'));
@@ -3457,6 +3843,23 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       throw new SignInStoreUnavailableError('totp', new Error('not a binding'));
     };
 
+    // A recovery code that found the account before any first factor (#655):
+    // a new passkey in place of the lost one, before anything else rule 8
+    // asks for.
+    if (
+      !registering &&
+      codeAlone() &&
+      !state.transaction.verified.some((step) => step.step === 'webauthn_create')
+    ) {
+      const result = await rebindPasskey(subject);
+      if (result !== null) return result;
+      const reread = await readAccount();
+      if (reread === null || reread.userId !== subject)
+        return ended('identifier', 'subject_mismatch');
+      if (!reread.enabled) return ended('identifier', 'account_disabled');
+      account = reread;
+    }
+
     for (;;) {
       const current: SignInAccount = account;
       const verifiedSteps = new Set(state.transaction.verified.map((step) => step.step));
@@ -3470,12 +3873,15 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       const strongest = strongestBoundFactor(current);
       if (
         provenFactorStrength(state.transaction.verified, factorOf) < strongest &&
-        !tookRecoveryCode() &&
+        (!tookRecoveryCode() || codeAlone()) &&
         !enrolledPasskey()
       ) {
         // The downgrade rule: only a factor as strong as the strongest bound
         // one, a disabled one included, completes the sign-in; on the hosted
-        // pages a recovery code may stand in for it (ADR-017 Decision 4).
+        // pages a recovery code may stand in for it (ADR-017 Decision 4). A
+        // code that found the account before any first factor stood in for
+        // its lost passkey only to bind a new one (#655): the new one proves
+        // the account here.
         needed = [
           ...handlers.firstFactors.filter(
             (handler) => candidate(handler) && factorStrength(handler.factor) >= strongest

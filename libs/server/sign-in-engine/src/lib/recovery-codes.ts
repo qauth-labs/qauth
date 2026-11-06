@@ -105,6 +105,29 @@ export interface RecoveryCodeHasher {
   verify(hash: string, code: string): Promise<boolean>;
 }
 
+/**
+ * What finds an account by one of its codes alone (#655; ADR-017 Decision 8):
+ * an account whose primary identity is a passkey, with no address, has
+ * nothing else to name it by when its passkey is lost. Only such an
+ * account's sets carry a lookup digest of each code; any other account's
+ * codes are found only after a first factor named it.
+ */
+export interface RecoveryCodeLookup {
+  /**
+   * The lookup digest of `code`, already normalized, in the realm: the same
+   * for the same code and realm, and slow (the auth server's is Argon2id
+   * under a salt of the realm), so a stolen table costs a password hash a
+   * guess. Never the code.
+   */
+  digest(input: { readonly realmId: string; readonly code: string }): Promise<string>;
+  /**
+   * Whether the account's sets carry lookup digests: an account with no
+   * address and no password, whose credentials are passkeys. Read when a set
+   * is issued.
+   */
+  findable(account: RecoveryCodeAccount): Promise<boolean>;
+}
+
 /** One unused code of a set, as the store holds it. */
 export interface StoredRecoveryCode {
   /** The row's id: what {@link RecoveryCodeStore.take} marks used. */
@@ -131,15 +154,26 @@ export interface RecoveryCodeStore {
    * Replace the account's set, if any, with these hashes, in one write: the
    * new set is unconfirmed. Returns its id, which only this set holds. With
    * `keepConfirmed`, a set the person confirmed stays, nothing is written,
-   * and the answer is `null`.
+   * and the answer is `null`. `lookupDigests`, when given, are the codes'
+   * lookup digests (#655), one for each hash, in the same order.
    */
   replace(
     account: RecoveryCodeAccount & {
       readonly hashes: readonly string[];
+      readonly lookupDigests?: readonly string[];
       readonly at: number;
       readonly keepConfirmed: boolean;
     }
   ): Promise<string | null>;
+  /**
+   * The account an unused code whose lookup digest is `digest` belongs to,
+   * in the realm (#655); `null` when there is none, or when two accounts'
+   * codes share it. Absent: no set carries lookup digests.
+   */
+  findByLookupDigest?(input: {
+    readonly realmId: string;
+    readonly digest: string;
+  }): Promise<{ readonly userId: string } | null>;
   /**
    * Mark the code `id` of the account used at `at`, only while it is unused,
    * in one write: `true` when this call took it, `false` when another one did
@@ -162,10 +196,18 @@ export interface RecoveryCodeServiceDependencies {
   readonly clock?: Clock;
   /** The source of random bytes; a CSPRNG. Tests only. */
   readonly random?: RandomBytes;
+  /**
+   * What finds an account by a code alone (#655), with the store's
+   * `findByLookupDigest`. Absent: no code is found before a first factor.
+   */
+  readonly lookup?: RecoveryCodeLookup;
 }
 
 /** The recovery codes' rules over a store: what the engine's port needs but the notices. */
-export type RecoveryCodeService = Pick<RecoveryCodes, 'status' | 'issue' | 'redeem' | 'confirm'> & {
+export type RecoveryCodeService = Pick<
+  RecoveryCodes,
+  'status' | 'issue' | 'redeem' | 'confirm' | 'findAccount'
+> & {
   /** A new set in place of the account's, confirmed or not: a regeneration. */
   replace(account: RecoveryCodeAccount): Promise<RecoveryCodeSet>;
 };
@@ -185,6 +227,11 @@ export type RecoveryCodeService = Pick<RecoveryCodes, 'status' | 'issue' | 'rede
  *   nothing of how many codes are left. An answer that cannot be a code is
  *   checked as long. A match is then taken in one write that only an unused
  *   code passes, so two rounds with the same code take it once.
+ * - With a `lookup` (#655), a set issued to an account the lookup calls
+ *   findable carries each code's lookup digest, and `findAccount` names the
+ *   account an unused code belongs to by the code alone: one digest for any
+ *   answer, one that cannot be a code included. It takes nothing; `redeem`
+ *   checks and takes the code against the account's salted hashes after.
  */
 export function createRecoveryCodeService(
   deps: RecoveryCodeServiceDependencies
@@ -212,24 +259,56 @@ export function createRecoveryCodeService(
     }
   };
 
+  const { lookup } = deps;
+  const findByLookupDigest = store.findByLookupDigest?.bind(store);
+
   const newSet = async (
     { realmId, userId }: RecoveryCodeAccount,
     keepConfirmed: boolean
   ): Promise<RecoveryCodeSet | null> => {
     const codes = generateRecoveryCodeSet(random);
-    const hashes = await Promise.all(
-      codes.map((code) => {
-        const normalized = normalizeRecoveryCode(code);
-        if (normalized === null) throw new Error('recovery codes: a code that cannot be typed');
-        return hasher.hash(normalized);
-      })
-    );
-    const setId = await store.replace({ realmId, userId, hashes, at: clock.now(), keepConfirmed });
+    const normalized = codes.map((code) => {
+      const typed = normalizeRecoveryCode(code);
+      if (typed === null) throw new Error('recovery codes: a code that cannot be typed');
+      return typed;
+    });
+    const hashes = await Promise.all(normalized.map((code) => hasher.hash(code)));
+    const findable =
+      lookup !== undefined &&
+      findByLookupDigest !== undefined &&
+      (await lookup.findable({ realmId, userId }));
+    const lookupDigests = findable
+      ? await Promise.all(normalized.map((code) => lookup.digest({ realmId, code })))
+      : undefined;
+    const setId = await store.replace({
+      realmId,
+      userId,
+      hashes,
+      ...(lookupDigests === undefined ? {} : { lookupDigests }),
+      at: clock.now(),
+      keepConfirmed,
+    });
     if (setId === null) return null;
     return Object.freeze({ codes: Object.freeze(codes), setId });
   };
 
+  const findAccount =
+    lookup === undefined || findByLookupDigest === undefined
+      ? undefined
+      : async ({ realmId, code }: { readonly realmId: string; readonly code: string }) => {
+          const normalized = normalizeRecoveryCode(code);
+          // One digest for every answer: one that cannot be a code costs as much.
+          const digest = await lookup.digest({
+            realmId,
+            code: normalized ?? (typeof code === 'string' ? code.slice(0, 64) : ''),
+          });
+          if (normalized === null) return null;
+          const found = await findByLookupDigest({ realmId, digest });
+          return found === null ? null : Object.freeze({ userId: found.userId });
+        };
+
   return Object.freeze({
+    ...(findAccount === undefined ? {} : { findAccount }),
     status: (account: RecoveryCodeAccount) => store.status(account),
 
     confirm: ({ realmId, userId, setId }: RecoveryCodeAccount & { readonly setId: string }) =>
