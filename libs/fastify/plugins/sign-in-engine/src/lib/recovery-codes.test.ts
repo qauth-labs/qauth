@@ -4,6 +4,7 @@ import {
   RECOVERY_CODE_COUNT,
   RECOVERY_CODE_PATTERN,
   type RecoveryCodeHasher,
+  type RecoveryCodeLookup,
 } from '@qauth-labs/server-sign-in-engine';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -39,11 +40,12 @@ interface FakeRow {
   realmId: string;
   userId: string;
   codeHash: string;
+  lookupDigest?: string;
   usedAt?: number;
   confirmedAt?: number;
 }
 
-function setup() {
+function setup(options: { readonly lookup?: RecoveryCodeLookup } = {}) {
   const rows: FakeRow[] = [];
   const writesIn: (FakeTx | undefined)[] = [];
   let next = 0;
@@ -71,7 +73,19 @@ function setup() {
           )
           .map(({ id, codeHash }) => ({ id, codeHash }));
       },
-      async replaceSet({ realmId, userId, codeHashes, keepConfirmed }, tx) {
+      async findByLookupDigest(realmId, digest) {
+        const owners = new Set(
+          rows
+            .filter(
+              (row) =>
+                row.realmId === realmId && row.lookupDigest === digest && row.usedAt === undefined
+            )
+            .map((row) => row.userId)
+        );
+        const [userId] = owners;
+        return owners.size === 1 && userId !== undefined ? { userId } : null;
+      },
+      async replaceSet({ realmId, userId, codeHashes, lookupDigests, keepConfirmed }, tx) {
         writesIn.push(tx);
         const mine = (row: FakeRow) => row.realmId === realmId && row.userId === userId;
         if (
@@ -83,9 +97,16 @@ function setup() {
         const kept = rows.filter((row) => !mine(row));
         rows.splice(0, rows.length, ...kept);
         const setId = `code-${next + 1}`;
-        for (const codeHash of codeHashes) {
+        for (const [index, codeHash] of codeHashes.entries()) {
           next += 1;
-          rows.push({ id: `code-${next}`, realmId, userId, codeHash });
+          const lookupDigest = lookupDigests?.[index];
+          rows.push({
+            id: `code-${next}`,
+            realmId,
+            userId,
+            codeHash,
+            ...(lookupDigest === undefined ? {} : { lookupDigest }),
+          });
         }
         return setId;
       },
@@ -130,6 +151,7 @@ function setup() {
     regenerated,
     ceilingReached,
     report,
+    ...(options.lookup === undefined ? {} : { lookup: options.lookup }),
   });
   return {
     codes,
@@ -278,5 +300,31 @@ describe('the recovery codes over the repository (#649)', () => {
     const { codes, ceilingReached } = setup();
     await codes.ceilingReached(ACCOUNT);
     expect(ceilingReached).toHaveBeenCalledWith(ACCOUNT);
+  });
+});
+
+describe('the recovery codes found by a code alone (#655)', () => {
+  const lookup: RecoveryCodeLookup = {
+    digest: async ({ realmId, code }) =>
+      createHash('sha256').update(`${realmId}|${code}`).digest('hex'),
+    findable: async ({ userId }) => userId === USER,
+  };
+
+  it('stores a lookup digest of each code of a findable account, and finds the account by one', async () => {
+    const { codes, rows } = setup({ lookup });
+    const { codes: set } = await issue(codes);
+    expect(rows.every((row) => typeof row.lookupDigest === 'string')).toBe(true);
+    const stored = JSON.stringify(rows);
+    for (const code of set) expect(stored).not.toContain(code.replaceAll('-', ''));
+    await expect(codes.findAccount?.({ realmId: REALM, code: set[5] })).resolves.toEqual({
+      userId: USER,
+    });
+    await expect(
+      codes.findAccount?.({ realmId: REALM, code: 'aaaa-aaaa-aaaa-aaaa' })
+    ).resolves.toBeNull();
+  });
+
+  it('has no lookup without one', () => {
+    expect(setup().codes.findAccount).toBeUndefined();
   });
 });
