@@ -164,6 +164,18 @@
 > Failures from other addresses never use the bound up, so a guesser elsewhere cannot take the
 > owner's exemption away. Decision 7 is edited in place, and the threat model's rows on lockout
 > and on a forged or shared end-user IP with it.
+>
+> **Amended 2026-11-06** with #662, which moves `amr` on browser logins from F5 into the 1.0
+> train: the account console's rule of a fresh authentication that includes the strongest bound
+> factor (Decision 8, ADR-020 §3) cannot be checked without it. A browser session stores the `amr`
+> and `auth_time` of its sign-in. The code copies both at mint time, the refresh family at the code
+> exchange, and the ID token and the JWT access token carry both, fixed across the refreshes of
+> one family (RFC 9068 §2.2.1). They live in Decision 10's columns (`authorization_codes.amr`,
+> `refresh_tokens.auth_time`, `refresh_tokens.amr`), which the challenge codes of F1 will use too.
+> A registration or reset code still carries neither. A session that stored no method, because it
+> was created before the change or by a sign-in that adds no `amr` value, gives tokens without
+> `amr`. Discovery lists `amr` and `auth_time` in `claims_supported` whatever the switch.
+> Decisions 10 and 11 and F5 are edited in place.
 
 ## Context
 
@@ -1322,8 +1334,9 @@ refresh_tokens.authorization_code_id uuid NULL → authorization_codes(id) ON DE
   set, it caps every refresh family in that realm. When it is unset, today's sliding
   `REFRESH_TOKEN_LIFESPAN` is unchanged. As of 2026-10-09 the column exists on `realms`, is
   nullable, and nothing reads it.
-- `amr` and `auth_time` appear in the ID token and the JWT access token for challenge-issued codes,
-  fixed across refreshes. Browser-flow tokens are unchanged in F1; `amr` on browser logins is F5.
+- `amr` and `auth_time` appear in the ID token and the JWT access token for challenge-issued codes
+  and for browser sign-ins alike, fixed across refreshes (browser sign-ins since #662, amended
+  2026-11-06; this was F5).
 - A registration or reset code carries neither `amr` nor `auth_time`, and neither do the tokens it
   yields. RFC 9470 §6.1 "JWT Access Tokens" uses `auth_time` to tell a resource server when the user
   authenticated, and §3 "Authentication Requirements Challenge" measures `max_age` from that event.
@@ -1387,7 +1400,7 @@ HMACs.**
 | `private_key_jwt` in `revocation_endpoint_auth_methods_supported` and `introspection_endpoint_auth_methods_supported`, with `revocation_endpoint_auth_signing_alg_values_supported` and `introspection_endpoint_auth_signing_alg_values_supported` from the same constant as the token endpoint's list (`ASSERTION_SIGNING_ALG_VALUES_SUPPORTED`) | F0, when those endpoints accept it (RFC 8414 §2 "Authorization Server Metadata": MUST when `private_key_jwt` is listed)                                                                           |
 | `end_session_endpoint`                                                                                                                                                                                                                                                                                                                            | F0, once the browser end-session route exists (OpenID Connect RP-Initiated Logout 1.0 §2.1 "OpenID Provider Discovery Metadata")                                                                  |
 | `backchannel_logout_supported`                                                                                                                                                                                                                                                                                                                    | F0, once back-channel logout ships (OpenID Connect Back-Channel Logout 1.0 §2.1 "Indicating OP Support for Back-Channel Logout")                                                                  |
-| `amr` in `claims_supported`                                                                                                                                                                                                                                                                                                                       | F1, switch on                                                                                                                                                                                     |
+| `amr` and `auth_time` in `claims_supported`                                                                                                                                                                                                                                                                                                       | Since #662, whatever the switch (amended 2026-11-06)                                                                                                                                              |
 | `prompt_values_supported` listing every supported prompt value, `create` included                                                                                                                                                                                                                                                                 | F1's release, when both endpoints honour it (F2a ships in the same train)                                                                                                                         |
 | `dpop_signing_alg_values_supported`                                                                                                                                                                                                                                                                                                               | `DPOP_ENABLED` (RFC 9449 §5.1 "Authorization Server Metadata"); its algorithms apply at the token endpoint and, from F3, at the authorization challenge endpoint, which refuses `DPoP` until then |
 | `attest_jwt_client_auth_dpop` in `token_endpoint_auth_methods_supported`; the attestation algorithm members                                                                                                                                                                                                                                       | F4 (attestation -11 §8 "Authorization Server and Resource Server Metadata")                                                                                                                       |
@@ -1925,9 +1938,9 @@ on. A phase whose target is the train ships no later than F1's release.
 - F5 — later, unscheduled: an established post-code `auth_session` and FiPA §6.2 refresh-time
   step-up; a pushed-request `request_uri` (RFC 9126 §2.2 "Successful Response") in `redirect_to_web`
   once [WG issue #179](https://github.com/oauth-wg/oauth-first-party-apps/issues/179) settles; the
-  FiPA Appendix A.4 "Email Confirmation Code" link variant; `amr` on browser logins; an
-  authenticator-strength `acr`; OpenID Connect Native SSO. The breached-password corpus left F5:
-  ADR-018 and ADR-020 put it in 1.0 on 2026-10-10.
+  FiPA Appendix A.4 "Email Confirmation Code" link variant; an authenticator-strength `acr`;
+  OpenID Connect Native SSO. The breached-password corpus left F5: ADR-018 and ADR-020 put it in
+  1.0 on 2026-10-10. `amr` on browser logins left it with #662 on 2026-11-06.
 
 | What the first release refuses                                           | Answer                                  | Lifted in                             |
 | ------------------------------------------------------------------------ | --------------------------------------- | ------------------------------------- |

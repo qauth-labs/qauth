@@ -479,7 +479,8 @@ Key contract facts:
 ```
 
 `id_token` is a separate, client-audienced (`aud` = your `client_id`) EdDSA JWT
-asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time`, `sid`
+asserting the sign-in event: `sub`, `nonce` (when sent), `auth_time` and
+`amr` (when a sign-in backs the code), `sid`
 (the browser session, when one backs the code), `name` (only under the
 `profile` scope, and only when set on the user), and `email` /
 `email_verified` (only under the `email` scope, same trust-ordered resolution
