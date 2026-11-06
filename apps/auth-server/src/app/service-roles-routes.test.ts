@@ -143,7 +143,9 @@ const ROUTES_ADDED_SINCE: readonly string[] = [
   // The recovery codes' pages (#649): "use a recovery code" and "save your
   // recovery codes".
   'GET /ui/recovery-code/:interactionId',
-  'GET /ui/recovery-codes/:interactionId',
+  'GET /ui/recovery-codes/:interactionId', // The passkey pages (#651): "sign in with a passkey" and "add a passkey".
+  'GET /ui/passkey/:interactionId',
+  'GET /ui/passkey-enrolment/:interactionId',
 ];
 
 /**

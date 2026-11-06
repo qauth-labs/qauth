@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Passkey sign-in steps, passkey-first order and the downgrade rule**
+  ([#651], ADR-017 Decisions 4 and 10; `graphs/flows/core/passkey`). The
+  sign-in engine gains the `webauthn_get` step (request options with user
+  verification required and no `allowCredentials`, answered with
+  `webauthn_response`) and the optional `webauthn_create` enrolment step.
+  With no `login_hint` the first response asks for a discoverable passkey and
+  offers the password and the identifier; with one, it asks for the password
+  and offers the passkey, the same for every account. A login completes only
+  after the account's strongest bound factor, a disabled passkey included:
+  after a right password a passkey-bound account is asked for the passkey,
+  and an email code never stands in for it. An assertion without the UV flag
+  in its signed authenticator data is refused. `amr` is `["pop","mfa"]` for
+  a passkey and `["pwd","pop","mfa"]` for a password then a passkey. After a
+  password sign-in on the hosted pages the engine offers to add a passkey: a
+  fresh password (5 minutes), a mailbox proved by an 8-digit code when this
+  sign-in did not prove it, then a recovery set shown once; the new
+  `passkey_added` mail tells the owner, and `user.signed_in` and
+  `user.sign_in_failed` name the new `passkey` method. `/auth/login` and
+  `/ui/login` refuse a right password of a passkey-bound account as a wrong
+  one. The FiPA mapper answers `redirect_to_web` for a client that did not
+  list `webauthn_get`. Two pages in the current `/ui` style run the
+  ceremonies: `GET /ui/passkey/{id}` and `GET /ui/passkey-enrolment/{id}`.
+  Passkey sign-in stays off while `WEBAUTHN_ENABLED=true` is refused at boot
+  (#655 lifts the refusal).
 - **`amr` and `auth_time` on the tokens of browser sign-ins** ([#662],
   ADR-017 Decision 10 as amended 2026-11-06, ADR-020 §3; RFC 9068 §2.2.1,
   RFC 8176). A browser session now stores the methods its sign-in proved
@@ -3240,6 +3264,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#643]: https://github.com/qauth-labs/qauth/issues/643
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#649]: https://github.com/qauth-labs/qauth/issues/649
+[#651]: https://github.com/qauth-labs/qauth/issues/651
 [#662]: https://github.com/qauth-labs/qauth/issues/662
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675

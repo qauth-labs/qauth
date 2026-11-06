@@ -470,6 +470,14 @@ export const ROUTE_MANIFEST: readonly RouteModule[] = [
     load: () => import('./routes/ui/login'),
   },
   {
+    module: 'ui/passkey',
+    prefix: '/ui',
+    roles: ['web'],
+    plugins: ['sessions'],
+    repositories: ['events', 'userCredentials', 'users'],
+    load: () => import('./routes/ui/passkey'),
+  },
+  {
     module: 'ui/recovery-codes',
     prefix: '/ui',
     roles: ['web'],
