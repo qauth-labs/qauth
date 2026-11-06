@@ -1,4 +1,10 @@
-import { PASSWORD_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-federation';
+import { createHash } from 'node:crypto';
+
+import {
+  PASSWORD_PROVIDER_TYPE,
+  WEBAUTHN_PROVIDER_TYPE,
+} from '@qauth-labs/fastify-plugin-federation';
+import { argon2idDigest } from '@qauth-labs/fastify-plugin-password';
 import {
   createRepositoryRecoveryCodes,
   type RepositoryRecoveryCodes,
@@ -29,8 +35,33 @@ import { emitUserEvent, type EventTransaction } from './user-events';
  *
  * The account's address is its password credential's identifier: the
  * address it signs in with and the reset's codes go to. An account without
- * one gets no mail; the event and the alert still go.
+ * one (an account whose primary identity is a passkey, #655) gets no mail;
+ * the event, which its security log shows, and the alert still go.
+ *
+ * The sets of an account whose every credential is a passkey also carry
+ * each code's lookup digest ({@link recoveryCodeLookupDigest}), so a code
+ * alone finds the account when its passkey is lost (#655).
  */
+
+/**
+ * The realm's salt of the recovery codes' lookup digests (#655): 16 bytes of
+ * SHA-256 over a fixed label and the realm id, so the same code has another
+ * digest in every realm and no table of digests serves two realms. Not a
+ * secret: the digest's cost is Argon2id's.
+ */
+export function recoveryCodeLookupSalt(realmId: string): Uint8Array {
+  return createHash('sha256')
+    .update('urn:qauth:recovery-code-lookup:v1-rc.0')
+    .update('\u0000')
+    .update(realmId)
+    .digest()
+    .subarray(0, 16);
+}
+
+/** The lookup digest of a recovery code, normalized, in its realm (#655). */
+export function recoveryCodeLookupDigest(realmId: string, code: string): Promise<string> {
+  return argon2idDigest(code, recoveryCodeLookupSalt(realmId));
+}
 
 /** The message of the operator's alert when an account's wrong recovery codes reach 100 in a row. */
 export const RECOVERY_CODES_FAILED_ALERT = "an account's wrong recovery codes reached the ceiling";
@@ -80,6 +111,20 @@ export function createServerRecoveryCodes(
       hasher: {
         hash: (code) => fastify.passwordHasher.hashPassword(code),
         verify: (hash, code) => fastify.passwordHasher.verifyPassword(hash, code),
+      },
+      // An account with no address and no password, whose credentials are
+      // passkeys, is found by a code alone when its passkey is lost (#655).
+      lookup: {
+        digest: ({ realmId, code }) => recoveryCodeLookupDigest(realmId, code),
+        findable: async ({ realmId, userId }) => {
+          const credentials = (
+            await fastify.repositories.userCredentials.findAllByUserId(userId)
+          ).filter((credential) => credential.realmId === realmId);
+          return (
+            credentials.length > 0 &&
+            credentials.every((credential) => credential.providerType === WEBAUTHN_PROVIDER_TYPE)
+          );
+        },
       },
       // The use commits with the take (ADR-019 Decision 8).
       used: async ({ realmId, userId, clientId, unusedCodes }, tx) => {

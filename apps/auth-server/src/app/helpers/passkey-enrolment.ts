@@ -54,25 +54,74 @@ export async function storePasskeyEnrolment(
     readonly enrolment: WebAuthnEnrolment;
   }
 ): Promise<UserCredential> {
-  type Transaction = Parameters<
-    Parameters<PasskeyEnrolmentDependencies['db']['transaction']>[0]
-  >[0];
-  return deps.db.transaction(async (tx: Transaction) => {
-    const lock = await deps.realms.lockRpIdForEnrolment(tx, input.realmId);
-    if (lock.rpId !== input.enrolment.rpId) {
-      throw new BadRequestError(
-        "Passkey was created under another RP ID than the realm's; start the enrolment again"
-      );
-    }
-    return deps.userCredentials.create(
-      {
-        userId: input.userId,
-        realmId: input.realmId,
-        providerType: WEBAUTHN_PROVIDER_TYPE,
-        externalSub: input.enrolment.externalSub,
-        credentialData: { ...input.enrolment.credentialData },
-      },
-      tx
+  return deps.db.transaction(async (tx: EnrolmentTransaction) => writePasskey(deps, tx, input));
+}
+
+/** The database transaction an enrolment writes in. */
+export type EnrolmentTransaction = Parameters<
+  Parameters<PasskeyEnrolmentDependencies['db']['transaction']>[0]
+>[0];
+
+/** Steps 1 to 3 of {@link storePasskeyEnrolment}, in the caller's transaction. */
+async function writePasskey(
+  deps: PasskeyEnrolmentDependencies,
+  tx: EnrolmentTransaction,
+  input: {
+    readonly realmId: string;
+    readonly userId: string;
+    readonly enrolment: WebAuthnEnrolment;
+  }
+): Promise<UserCredential> {
+  const lock = await deps.realms.lockRpIdForEnrolment(tx, input.realmId);
+  if (lock.rpId !== input.enrolment.rpId) {
+    throw new BadRequestError(
+      "Passkey was created under another RP ID than the realm's; start the enrolment again"
     );
+  }
+  return deps.userCredentials.create(
+    {
+      userId: input.userId,
+      realmId: input.realmId,
+      providerType: WEBAUTHN_PROVIDER_TYPE,
+      externalSub: input.enrolment.externalSub,
+      credentialData: { ...input.enrolment.credentialData },
+    },
+    tx
+  );
+}
+
+/**
+ * Create an account whose primary identity is a passkey, with no address
+ * (#655; ADR-017 Decision 8, question 30), from a verified registration: in
+ * one transaction, the `users` row, the passkey as {@link storePasskeyEnrolment}
+ * stores one (the realm's RP ID locked and checked, the `webauthn`
+ * credential), and the caller's `recorded` write (the account's
+ * `user.registered` event), so a refusal or a failure rolls back the user
+ * with it. No email attribute and no password credential are written.
+ *
+ * @returns the new account's user id
+ * @throws BadRequestError when the passkey was created under another RP ID
+ * than the realm's
+ * @throws UniqueConstraintError when the realm already has the credential id
+ */
+export async function storePasskeyAccount(
+  deps: PasskeyEnrolmentDependencies & {
+    readonly users: Pick<FastifyInstance['repositories']['users'], 'create'>;
+  },
+  input: {
+    readonly realmId: string;
+    readonly enrolment: WebAuthnEnrolment;
+    readonly recorded: (tx: EnrolmentTransaction, userId: string) => Promise<void>;
+  }
+): Promise<string> {
+  return deps.db.transaction(async (tx: EnrolmentTransaction) => {
+    const user = await deps.users.create({ realmId: input.realmId }, tx);
+    await writePasskey(deps, tx, {
+      realmId: input.realmId,
+      userId: user.id,
+      enrolment: input.enrolment,
+    });
+    await input.recorded(tx, user.id);
+    return user.id;
   });
 }

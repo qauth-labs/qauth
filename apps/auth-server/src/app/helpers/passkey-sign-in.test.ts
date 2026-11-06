@@ -11,7 +11,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { REDIS_KEYS } from '../constants/redis-keys';
 import type { EngineMailer } from './engine-mail';
-import { createRedisWebAuthnChallenges, createServerPasskeys } from './passkey-sign-in';
+import {
+  accountNameOf,
+  createRedisWebAuthnChallenges,
+  createServerPasskeyAccounts,
+  createServerPasskeys,
+} from './passkey-sign-in';
 
 const REALM_ID = 'realm-1';
 const USER_ID = 'user-1';
@@ -412,6 +417,42 @@ describe('the server passkey ceremonies (#651)', () => {
       expect(input.user.handle).toMatch(/^[A-Za-z0-9_-]{43}$/);
     });
 
+    it('names no account at a registration by passkey: a new handle, nothing excluded (#655)', async () => {
+      const started = await build().startRegistration({
+        realmId: REALM_ID,
+        clientId: CLIENT_ID,
+        key: KEY,
+      });
+
+      expect(credentials.findAllByUserIdAndType).not.toHaveBeenCalled();
+      const [input] = provider.startRegistration.mock.calls[0] as [
+        { user: { handle: string; name: string; displayName: string }; excludeCredentials: [] },
+      ];
+      expect(input.user.handle).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(input.user.name).toBe(accountNameOf(input.user.handle));
+      expect(input.user.displayName).toBe(input.user.name);
+      expect(input.excludeCredentials).toEqual([]);
+      expect(started.personal).toEqual({
+        user: { id: input.user.handle, name: input.user.name, displayName: input.user.name },
+        excludeCredentials: [],
+      });
+    });
+
+    it('names an account by its handle, not "Account", when its address is no display text', async () => {
+      await build().startRegistration({
+        realmId: REALM_ID,
+        clientId: CLIENT_ID,
+        key: KEY,
+        userId: USER_ID,
+        identifier: '\u3164',
+      });
+
+      const [input] = provider.startRegistration.mock.calls[0] as [
+        { user: { handle: string; name: string } },
+      ];
+      expect(input.user.name).toBe(`account-${input.user.handle.slice(0, 8)}`);
+    });
+
     it('holds a verified registration as JSON, without binding it', async () => {
       const outcome = await build().verifyRegistration({
         realmId: REALM_ID,
@@ -503,6 +544,106 @@ describe('the server passkey ceremonies (#651)', () => {
         })
       ).rejects.toThrow('not well formed');
     });
+  });
+});
+
+/**
+ * The registration's passkey write (#655): the account, its passkey and its
+ * `user.registered` event in one transaction, with no address and no
+ * password.
+ */
+describe('the server passkey accounts (#655)', () => {
+  let writes: string[];
+  let users: { create: ReturnType<typeof vi.fn> };
+  let credentials: { create: ReturnType<typeof vi.fn> };
+  let lockRpIdForEnrolment: ReturnType<typeof vi.fn>;
+  let registered: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writes = [];
+    users = {
+      create: vi.fn(async (input: unknown, tx: string) => {
+        writes.push(`user ${JSON.stringify(input)} ${tx}`);
+        return { id: 'new-user' };
+      }),
+    };
+    credentials = {
+      create: vi.fn(async (input: { providerType: string }, tx: string) => {
+        writes.push(`credential ${input.providerType} ${tx}`);
+        return passkeyRow();
+      }),
+    };
+    lockRpIdForEnrolment = vi.fn(async (tx: string) => {
+      writes.push(`lock ${tx}`);
+      return { rpId: 'auth.example.test' };
+    });
+    registered = vi.fn(async (_input: unknown, tx: string) => {
+      writes.push(`event ${tx}`);
+    });
+  });
+
+  const create = (registration: string = JSON.stringify(ENROLMENT)) =>
+    createServerPasskeyAccounts(
+      {
+        repositories: {
+          realms: { lockRpIdForEnrolment },
+          users,
+          userCredentials: credentials,
+        },
+        db: { transaction: async (work: (tx: string) => Promise<unknown>) => work('tx') },
+      } as unknown as FastifyInstance,
+      { registered }
+    )({ realmId: REALM_ID, clientId: CLIENT_ID, registration });
+
+  it('writes the user, the passkey and the event in one transaction, with no address', async () => {
+    expect(await create()).toEqual({ kind: 'created', userId: 'new-user' });
+
+    expect(writes).toEqual([
+      `user {"realmId":"${REALM_ID}"} tx`,
+      'lock tx',
+      'credential webauthn tx',
+      'event tx',
+    ]);
+    expect(credentials.create).toHaveBeenCalledWith(
+      {
+        userId: 'new-user',
+        realmId: REALM_ID,
+        providerType: 'webauthn',
+        externalSub: ENROLMENT.externalSub,
+        credentialData: ENROLMENT.credentialData,
+      },
+      'tx'
+    );
+    expect(registered).toHaveBeenCalledWith(
+      { realmId: REALM_ID, clientId: CLIENT_ID, userId: 'new-user' },
+      'tx'
+    );
+  });
+
+  it('answers conflict for a credential id the realm holds by then', async () => {
+    credentials.create.mockRejectedValueOnce(new UniqueConstraintError('UserCredential'));
+
+    expect(await create()).toEqual({ kind: 'conflict' });
+    expect(registered).not.toHaveBeenCalled();
+  });
+
+  it('answers conflict for an RP ID that changed under the ceremony, and writes no passkey', async () => {
+    lockRpIdForEnrolment.mockResolvedValueOnce({ rpId: 'other.example.test' });
+
+    expect(await create()).toEqual({ kind: 'conflict' });
+    expect(credentials.create).not.toHaveBeenCalled();
+    expect(registered).not.toHaveBeenCalled();
+  });
+
+  it('lets a store fault through', async () => {
+    registered.mockRejectedValueOnce(new Error('database down'));
+
+    await expect(create()).rejects.toThrow('database down');
+  });
+
+  it('throws for a held registration that is not one', async () => {
+    await expect(create(JSON.stringify({ externalSub: 'x' }))).rejects.toThrow('not well formed');
+    expect(users.create).not.toHaveBeenCalled();
   });
 });
 

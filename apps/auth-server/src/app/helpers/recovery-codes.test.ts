@@ -34,6 +34,7 @@ describe('the server recovery codes (#649)', () => {
     markUsed: ReturnType<typeof vi.fn>;
   };
   let findCredential: ReturnType<typeof vi.fn>;
+  let listCredentials: ReturnType<typeof vi.fn>;
   let mailer: {
     sendUncounted: ReturnType<typeof vi.fn>;
     recoveryCodesFailed: ReturnType<typeof vi.fn>;
@@ -50,6 +51,10 @@ describe('the server recovery codes (#649)', () => {
       markUsed: vi.fn(async () => true),
     };
     findCredential = vi.fn(async () => ({ realmId: REALM_ID, externalSub: ADDRESS }));
+    listCredentials = vi.fn(async () => [
+      { realmId: REALM_ID, providerType: 'email', externalSub: ADDRESS },
+      { realmId: REALM_ID, providerType: 'webauthn', externalSub: 'credential-1' },
+    ]);
     mailer = {
       sendUncounted: vi.fn(),
       recoveryCodesFailed: vi.fn(async () => true),
@@ -63,7 +68,10 @@ describe('the server recovery codes (#649)', () => {
       {
         repositories: {
           userRecoveryCodes: repos,
-          userCredentials: { findByUserIdAndType: findCredential },
+          userCredentials: {
+            findByUserIdAndType: findCredential,
+            findAllByUserId: listCredentials,
+          },
         },
         db: { transaction: async (work: (tx: string) => Promise<unknown>) => work(TX) },
         passwordHasher: {
@@ -144,6 +152,27 @@ describe('the server recovery codes (#649)', () => {
     );
   });
 
+  it('stores no lookup digest for an account with an address (#655)', async () => {
+    await build().regenerate({ realmId: REALM_ID, userId: USER_ID });
+
+    expect(listCredentials).toHaveBeenCalledWith(USER_ID);
+    expect(repos.replaceSet.mock.calls[0]?.[0]).not.toHaveProperty('lookupDigests');
+  });
+
+  it('stores a lookup digest per code for an account whose credentials are passkeys (#655)', async () => {
+    listCredentials.mockResolvedValue([
+      { realmId: REALM_ID, providerType: 'webauthn', externalSub: 'credential-1' },
+      // Another realm's credential does not count.
+      { realmId: 'realm-2', providerType: 'email', externalSub: ADDRESS },
+    ]);
+    const { codes } = await build().regenerate({ realmId: REALM_ID, userId: USER_ID });
+
+    const stored = repos.replaceSet.mock.calls[0]?.[0] as { lookupDigests: string[] };
+    expect(stored.lookupDigests).toHaveLength(codes.length);
+    expect(new Set(stored.lookupDigests).size).toBe(codes.length);
+    for (const digest of stored.lookupDigests) expect(digest).toMatch(/^argon2id\$/);
+  });
+
   it('at the ceiling tells the user, the operator and the security log, once a day', async () => {
     await build().ceilingReached({ realmId: REALM_ID, userId: USER_ID });
 
@@ -183,5 +212,19 @@ describe('the server recovery codes (#649)', () => {
       RECOVERY_CODES_FAILED_ALERT
     );
     expect(emitUserEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the recovery-code lookup digest (#655)', () => {
+  it('is the same for a code in one realm, and differs across realms and codes', async () => {
+    const { recoveryCodeLookupDigest, recoveryCodeLookupSalt } = await import('./recovery-codes');
+    const code = 'abcdefghijklmnop';
+    const first = await recoveryCodeLookupDigest('realm-1', code);
+
+    expect(first).toMatch(/^argon2id\$m=19456,t=2,p=1\$/);
+    await expect(recoveryCodeLookupDigest('realm-1', code)).resolves.toBe(first);
+    await expect(recoveryCodeLookupDigest('realm-2', code)).resolves.not.toBe(first);
+    await expect(recoveryCodeLookupDigest('realm-1', 'bcdefghijklmnopa')).resolves.not.toBe(first);
+    expect(recoveryCodeLookupSalt('realm-1')).toHaveLength(16);
   });
 });

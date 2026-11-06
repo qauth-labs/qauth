@@ -196,6 +196,29 @@ describe('the recovery-code pages (#649)', () => {
       expect(response.body).toContain('aria-invalid="true"');
     });
 
+    it('asks for a code offered beside the first steps, for a lost passkey (#655)', async () => {
+      vi.mocked(readInteractionStep).mockResolvedValue({
+        step: {
+          name: stepUrn('webauthn_get'),
+          params: {},
+          alternatives: [stepUrn('identifier'), RECOVERY_CODE],
+          // The current step's error is not the code's.
+          error: 'invalid_credentials',
+        },
+        csrf: CSRF,
+        revision: 3,
+        expiresAt: Date.now() + 60_000,
+        deadline: Date.now() + 60_000,
+      } as never);
+
+      const response = await open();
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toContain(`name="type" value="${RECOVERY_CODE}"`);
+      expect(response.body).toContain(`name="csrf" value="${CSRF}"`);
+      expect(response.body).not.toContain('role="alert"');
+    });
+
     it('sends an interaction at another step to its ceremony page', async () => {
       vi.mocked(readInteractionStep).mockResolvedValue(viewAt(stepUrn('password')));
 

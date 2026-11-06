@@ -33,7 +33,8 @@ import { requestRealm } from '../../helpers/request-realm';
  *   the new set shown once (the step's personal data), for the browser whose
  *   flow cookie binds the interaction, and never from another site;
  * - `GET /ui/recovery-code/<interaction id>`: "use a recovery code", in
- *   place of the second factor the sign-in asks for.
+ *   place of the second factor the sign-in asks for, or, in the sign-in's
+ *   first offer, of the lost passkey of an account with no address (#655).
  *
  * Each form posts to the Interaction API's answer endpoint
  * (`/interaction/v1-rc.0/<id>/answer`), which checks the origin, the flow
@@ -147,7 +148,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          'The "use a recovery code" page (#649): the form of the interaction\'s `recovery_code` step, with the error of a refused code. `Cache-Control: no-store`.',
+          'The "use a recovery code" page (#649): the form of the interaction\'s `recovery_code` step, current or offered beside another step (the sign-in\'s first offer, for the lost passkey of an account with no address, #655), with the error of a refused code. `Cache-Control: no-store`.',
         tags: ['UI'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [410],
@@ -161,12 +162,17 @@ export default async function (fastify: FastifyInstance) {
         if (!isInteractionId(id)) throw new InteractionExpiredError();
         const view = await readInteractionStep(request, id);
         const urls = urlsOf(request, id);
-        if (view.step.name !== RECOVERY_CODE_STEP) return reply.redirect(urls.ceremony, 303);
+        // Current, or offered beside the factor or the sign-in's first steps
+        // (#655: a passkey-only account's lost passkey).
+        const current = view.step.name === RECOVERY_CODE_STEP;
+        if (!current && !view.step.alternatives.includes(RECOVERY_CODE_STEP)) {
+          return reply.redirect(urls.ceremony, 303);
+        }
         return sendPage(
           reply,
           recoveryCodePage({
             cspNonce: reply.cspNonce.style,
-            refused: view.step.error === 'invalid_credentials',
+            refused: current && view.step.error === 'invalid_credentials',
             action: urls.action,
             type: RECOVERY_CODE_STEP,
             csrf: view.csrf,
