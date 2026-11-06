@@ -87,6 +87,8 @@ export function requiredRealmArgument(db: DbClient): void {
   void recoveryCodes.markUsed({ userId: ID, id: OTHER_ID, usedAt: 1 });
   // @ts-expect-error a recovery-code set is written for a user of a realm (#649)
   void recoveryCodes.replaceSet({ userId: ID, codeHashes: ['h'], createdAt: 1 });
+  // @ts-expect-error a recovery-code set is confirmed in a realm (#649)
+  void recoveryCodes.confirmSet({ userId: ID, setId: OTHER_ID, confirmedAt: 1 });
 
   // @ts-expect-error a provider is looked up in a realm (#639)
   void upstreamProviders.find('oidc_google');

@@ -1,5 +1,5 @@
 import { NotFoundError } from '@qauth-labs/shared-errors';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import type { DbClient } from '../../types';
 import { users } from '../schema/core';
@@ -38,6 +38,13 @@ export interface ReplaceRecoveryCodeSetInput {
   readonly codeHashes: readonly string[];
   /** When the set is issued, in epoch ms on the auth server's clock. */
   readonly createdAt: number;
+  /**
+   * Leave a confirmed set in place, and write nothing: the sign-in engine's
+   * own issuance, which must not void a set another sign-in showed and the
+   * person confirmed meanwhile. A regeneration leaves it out and replaces
+   * whatever the account holds.
+   */
+  readonly keepConfirmed?: boolean;
 }
 
 /** What {@link UserRecoveryCodesRepository.markUsed} writes. */
@@ -54,6 +61,8 @@ export interface MarkRecoveryCodeUsedInput {
 export interface ConfirmRecoveryCodeSetInput {
   readonly realmId: string;
   readonly userId: string;
+  /** The set the person was shown: the id {@link UserRecoveryCodesRepository.replaceSet} returned. */
+  readonly setId: string;
   /** When the person confirmed they saved the set, in epoch ms on the auth server's clock. */
   readonly confirmedAt: number;
 }
@@ -67,13 +76,17 @@ export interface UserRecoveryCodesRepository {
   /**
    * Replace the account's set, if any, with `codeHashes`, in one transaction
    * (a savepoint inside `tx`): every code of the old set stops working. Two
-   * replacements of one account run one after the other (the user's row is
-   * locked first), so an account never holds two sets.
+   * replacements of one account, and a replacement and a confirmation, run
+   * one after the other (the user's row is locked first), so an account never
+   * holds two sets.
    *
+   * @returns The new set's id: the id of one of its rows, which only this set
+   *   holds, since a replacement deletes every row of the set before. `null`
+   *   when `keepConfirmed` met a confirmed set, and nothing was written.
    * @throws NotFoundError when the realm has no such user (another realm's
    *   user included), so no caller can write another realm's user's codes.
    */
-  replaceSet(input: ReplaceRecoveryCodeSetInput, tx?: DbClient): Promise<void>;
+  replaceSet(input: ReplaceRecoveryCodeSetInput, tx?: DbClient): Promise<string | null>;
   /**
    * Mark the code `id` of the account used, only while it is unused, in one
    * statement: `true` when this call took it, `false` when it was used
@@ -81,12 +94,20 @@ export interface UserRecoveryCodesRepository {
    */
   markUsed(input: MarkRecoveryCodeUsedInput, tx?: DbClient): Promise<boolean>;
   /**
-   * Mark the account's set confirmed: the person said they saved it. A set
-   * confirmed before keeps its time, and an account with no set is left as
-   * it is.
+   * Mark the set `setId` confirmed, if it is still the account's: the person
+   * said they saved it. Under the same lock as a replacement, so a set
+   * replaced by another sign-in is never confirmed in place of the one shown.
+   * A set confirmed before keeps its time.
+   *
+   * @returns `true` when `setId` is the account's set (confirmed now or
+   *   before); `false` when another set replaced it, or the account holds
+   *   none: the codes shown no longer work.
    */
-  confirmSet(input: ConfirmRecoveryCodeSetInput, tx?: DbClient): Promise<void>;
+  confirmSet(input: ConfirmRecoveryCodeSetInput, tx?: DbClient): Promise<boolean>;
 }
+
+/** A set id is a row's id: a UUID. Anything else names no set. */
+const SET_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A time in epoch ms that a row may hold. */
 function checkedTime(at: number, what: string): number {
@@ -106,6 +127,22 @@ export function createUserRecoveryCodesRepository(
 ): UserRecoveryCodesRepository {
   const ofAccount = (realmId: string, userId: string) =>
     and(eq(userRecoveryCodes.realmId, realmId), eq(userRecoveryCodes.userId, userId));
+  /**
+   * Lock the user's row: it holds the user to its realm (an insert's foreign
+   * key would refuse another realm's user with an error that aborts the
+   * caller's transaction), and it serializes every replacement and
+   * confirmation of one account. `NO KEY UPDATE` lets every insert that only
+   * references the user through. `false` when the realm has no such user.
+   */
+  const lockUser = async (inner: DbClient, realmId: string, userId: string): Promise<boolean> => {
+    const [user] = await inner
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.realmId, realmId), eq(users.id, userId)))
+      .limit(1)
+      .for('no key update');
+    return user !== undefined;
+  };
   return {
     async status(realmId, userId, tx) {
       const [row] = await (tx ?? defaultDb)
@@ -133,28 +170,28 @@ export function createUserRecoveryCodesRepository(
         .orderBy(userRecoveryCodes.id);
     },
 
-    async replaceSet({ realmId, userId, codeHashes, createdAt }, tx) {
+    async replaceSet({ realmId, userId, codeHashes, createdAt, keepConfirmed = false }, tx) {
       checkedTime(createdAt, 'issue time');
       if (codeHashes.length === 0 || codeHashes.some((hash) => hash.length === 0)) {
         throw new RangeError('a recovery-code set holds at least one non-empty hash');
       }
-      await (tx ?? defaultDb).transaction(async (inner) => {
-        // The user's row is locked first: it holds the user to its realm (the
-        // insert's foreign key would refuse another realm's user with an error
-        // that aborts the caller's transaction), and it serializes two
-        // replacements of one account. `NO KEY UPDATE` lets every insert that
-        // only references the user through.
-        const [user] = await inner
-          .select({ id: users.id })
-          .from(users)
-          .where(and(eq(users.realmId, realmId), eq(users.id, userId)))
-          .limit(1)
-          .for('no key update');
-        if (user === undefined) throw new NotFoundError('User', userId);
+      return (tx ?? defaultDb).transaction(async (inner) => {
+        if (!(await lockUser(inner, realmId, userId))) throw new NotFoundError('User', userId);
+        if (keepConfirmed) {
+          const [confirmed] = await inner
+            .select({ id: userRecoveryCodes.id })
+            .from(userRecoveryCodes)
+            .where(and(ofAccount(realmId, userId), isNotNull(userRecoveryCodes.confirmedAt)))
+            .limit(1);
+          if (confirmed !== undefined) return null;
+        }
         await inner.delete(userRecoveryCodes).where(ofAccount(realmId, userId));
-        await inner
+        const [first] = await inner
           .insert(userRecoveryCodes)
-          .values(codeHashes.map((codeHash) => ({ realmId, userId, codeHash, createdAt })));
+          .values(codeHashes.map((codeHash) => ({ realmId, userId, codeHash, createdAt })))
+          .returning({ id: userRecoveryCodes.id });
+        if (first === undefined) throw new Error('a recovery-code set was not written');
+        return first.id;
       });
     },
 
@@ -174,12 +211,25 @@ export function createUserRecoveryCodesRepository(
       return taken.length === 1;
     },
 
-    async confirmSet({ realmId, userId, confirmedAt }, tx) {
+    async confirmSet({ realmId, userId, setId, confirmedAt }, tx) {
       checkedTime(confirmedAt, 'confirmation time');
-      await (tx ?? defaultDb)
-        .update(userRecoveryCodes)
-        .set({ confirmedAt })
-        .where(and(ofAccount(realmId, userId), isNull(userRecoveryCodes.confirmedAt)));
+      if (!SET_ID_PATTERN.test(setId)) return false;
+      return (tx ?? defaultDb).transaction(async (inner) => {
+        if (!(await lockUser(inner, realmId, userId))) return false;
+        // A replacement deletes every row of the set before it: a row of the
+        // set shown that is still there means the set is the account's.
+        const [shown] = await inner
+          .select({ id: userRecoveryCodes.id })
+          .from(userRecoveryCodes)
+          .where(and(ofAccount(realmId, userId), eq(userRecoveryCodes.id, setId)))
+          .limit(1);
+        if (shown === undefined) return false;
+        await inner
+          .update(userRecoveryCodes)
+          .set({ confirmedAt })
+          .where(and(ofAccount(realmId, userId), isNull(userRecoveryCodes.confirmedAt)));
+        return true;
+      });
     },
   };
 }

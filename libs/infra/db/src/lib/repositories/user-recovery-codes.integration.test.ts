@@ -22,6 +22,8 @@ import {
 } from './user-recovery-codes.repository';
 
 const HASHES = Array.from({ length: 10 }, (_, index) => `$argon2id$v=19$hash-${index}`);
+/** A set id of the right form that names no set. */
+const SOME_SET = '0190d3c4-5e6f-7a8b-9c0d-1e2f3a4b5c6d';
 
 describe('recovery codes (real Postgres, #649)', () => {
   let ctx: IntegrationDb | undefined;
@@ -129,22 +131,34 @@ describe('recovery codes (real Postgres, #649)', () => {
   it('confirms the set the person saved, and a new set is unconfirmed until its own confirmation', async () => {
     const { realmId, userId } = await seedUser('realm-confirm');
     // No set: nothing to confirm, and nothing written.
-    await codes.confirmSet({ realmId, userId, confirmedAt: 1_500 });
+    await expect(
+      codes.confirmSet({ realmId, userId, setId: SOME_SET, confirmedAt: 1_500 })
+    ).resolves.toBe(false);
     await expect(codes.status(realmId, userId)).resolves.toEqual({
       issued: false,
       unused: 0,
       confirmed: false,
     });
 
-    await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
-    await codes.confirmSet({ realmId, userId, confirmedAt: 2_000 });
+    const setId = await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES,
+      createdAt: 1_000,
+    });
+    if (setId === null) throw new Error('no set');
+    await expect(codes.confirmSet({ realmId, userId, setId, confirmedAt: 2_000 })).resolves.toBe(
+      true
+    );
     await expect(codes.status(realmId, userId)).resolves.toEqual({
       issued: true,
       unused: 10,
       confirmed: true,
     });
     // A second confirmation keeps the first one's time.
-    await codes.confirmSet({ realmId, userId, confirmedAt: 3_000 });
+    await expect(codes.confirmSet({ realmId, userId, setId, confirmedAt: 3_000 })).resolves.toBe(
+      true
+    );
     const rows = await db()
       .select({ confirmedAt: userRecoveryCodes.confirmedAt })
       .from(userRecoveryCodes)
@@ -162,7 +176,116 @@ describe('recovery codes (real Postgres, #649)', () => {
       unused: 10,
       confirmed: false,
     });
-    await expect(codes.confirmSet({ realmId, userId, confirmedAt: 0 })).rejects.toThrow(RangeError);
+    await expect(codes.confirmSet({ realmId, userId, setId, confirmedAt: 0 })).rejects.toThrow(
+      RangeError
+    );
+  });
+
+  it('never confirms a set that replaced the one shown, nor one of another account', async () => {
+    const { realmId, userId } = await seedUser('realm-confirm-replaced');
+    const other = await seedUser('realm-confirm-other');
+    const shown = await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
+    if (shown === null) throw new Error('no set');
+    // Another sign-in replaced the set shown: its confirmation names a set
+    // the account no longer holds, and the replacement stays unconfirmed.
+    await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES.map((hash) => `${hash}-b`),
+      createdAt: 1_001,
+    });
+    await expect(
+      codes.confirmSet({ realmId, userId, setId: shown, confirmedAt: 2_000 })
+    ).resolves.toBe(false);
+    await expect(codes.status(realmId, userId)).resolves.toMatchObject({ confirmed: false });
+
+    const theirs = await codes.replaceSet({ ...other, codeHashes: HASHES, createdAt: 1_000 });
+    if (theirs === null) throw new Error('no set');
+    await expect(
+      codes.confirmSet({ realmId, userId, setId: theirs, confirmedAt: 2_000 })
+    ).resolves.toBe(false);
+    await expect(
+      codes.confirmSet({ realmId, userId, setId: 'not-a-set', confirmedAt: 2_000 })
+    ).resolves.toBe(false);
+    await expect(codes.status(other.realmId, other.userId)).resolves.toMatchObject({
+      confirmed: false,
+    });
+  });
+
+  it('keeps a confirmed set from an issuance that keeps one, and replaces it on a regeneration', async () => {
+    const { realmId, userId } = await seedUser('realm-keep');
+    // No set yet, and an unconfirmed one: an issuance that keeps a confirmed set writes.
+    const first = await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES,
+      createdAt: 1_000,
+      keepConfirmed: true,
+    });
+    if (first === null) throw new Error('no set');
+    const second = await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES.map((hash) => `${hash}-b`),
+      createdAt: 1_001,
+      keepConfirmed: true,
+    });
+    if (second === null) throw new Error('no set');
+    expect(second).not.toBe(first);
+    await codes.confirmSet({ realmId, userId, setId: second, confirmedAt: 2_000 });
+
+    await expect(
+      codes.replaceSet({
+        realmId,
+        userId,
+        codeHashes: HASHES.map((hash) => `${hash}-c`),
+        createdAt: 3_000,
+        keepConfirmed: true,
+      })
+    ).resolves.toBeNull();
+    const kept = await codes.findUnused(realmId, userId);
+    expect(kept.map((code) => code.codeHash).sort()).toEqual(
+      HASHES.map((hash) => `${hash}-b`).sort()
+    );
+
+    const regenerated = await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES.map((hash) => `${hash}-d`),
+      createdAt: 4_000,
+    });
+    expect(regenerated).not.toBeNull();
+    await expect(codes.status(realmId, userId)).resolves.toEqual({
+      issued: true,
+      unused: 10,
+      confirmed: false,
+    });
+  });
+
+  it('runs a confirmation and a replacement of one account one after the other', async () => {
+    const { realmId, userId } = await seedUser('realm-confirm-race');
+    const shown = await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });
+    if (shown === null) throw new Error('no set');
+    const [confirmed, replaced] = await Promise.all([
+      codes.confirmSet({ realmId, userId, setId: shown, confirmedAt: 2_000 }),
+      codes.replaceSet({
+        realmId,
+        userId,
+        codeHashes: HASHES.map((hash) => `${hash}-b`),
+        createdAt: 2_001,
+        keepConfirmed: true,
+      }),
+    ]);
+    const status = await codes.status(realmId, userId);
+    if (replaced === null) {
+      // The confirmation came first: the issuance kept the confirmed set.
+      expect(confirmed).toBe(true);
+      expect(status).toEqual({ issued: true, unused: 10, confirmed: true });
+    } else {
+      // The replacement came first: the set shown is gone, and none is confirmed.
+      expect(confirmed).toBe(false);
+      expect(status).toEqual({ issued: true, unused: 10, confirmed: false });
+    }
   });
 
   it('invalidates every code of the old set when a new one replaces it', async () => {
