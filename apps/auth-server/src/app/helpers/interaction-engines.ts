@@ -14,6 +14,7 @@ import {
   type EmailCodeSender,
   NO_SECOND_FACTOR_POLICY,
   REGISTRATION_NOT_ALLOWED,
+  type RepositoryRecoveryCodes,
   RESET_NOT_ALLOWED,
   type RoundResult,
   type SignInEngine,
@@ -37,6 +38,7 @@ import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
 import { resetAllowed, resetNotBefore } from './password-reset';
+import { createServerRecoveryCodes } from './recovery-codes';
 import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
 import { createServerRoundLimiter } from './round-limits';
@@ -67,11 +69,17 @@ export interface InteractionEngines {
    * closed: its transaction rolls back.
    */
   readonly forRequest: <T>(request: FastifyRequest, rounds: () => Promise<T>) => Promise<T>;
+  /**
+   * The accounts' recovery codes (#649), which the engines redeem and show
+   * once. The account API's regeneration (ACC-02, #687) calls `regenerate`,
+   * inside {@link forRequest}, after a fresh authentication.
+   */
+  readonly recoveryCodes: RepositoryRecoveryCodes;
 }
 
 /**
  * The request the engine's rounds run for, while one of them registers an
- * account (#640) or resets a password (#642). The engine's ports live as long as the process and a
+ * account (#640), resets a password (#642) or takes a recovery code (#649). The engine's ports live as long as the process and a
  * request one round, so the registration port reads the request here rather
  * than through a parameter, as the wallet verifier's status audit does
  * (`wallet-verification.ts`).
@@ -222,6 +230,12 @@ export function createInteractionEngines(
       return realm;
     })
   );
+  // The recovery codes (#649): taken with their event, and told to the user.
+  const recoveryCodes = createServerRecoveryCodes(fastify, {
+    mailer,
+    realmOf,
+    requestOf: () => roundRequests.getStore(),
+  });
   const passwordUpdates = createRepositoryPasswordUpdates(
     {
       userCredentials: fastify.repositories.userCredentials,
@@ -398,6 +412,7 @@ export function createInteractionEngines(
       upstream: upstreamProviderDirectory(fastify),
       registrations,
       resets,
+      recoveryCodes,
       // The session epoch (#642): a sign-in in progress that began before
       // its account's last reset ends.
       sessionEpochs: {
@@ -415,6 +430,7 @@ export function createInteractionEngines(
     of: (requireVerifiedAccount) => (requireVerifiedAccount ? verified : unverified),
     sendCode: (request) => engineCodeSender(mailer, request),
     forRequest: (request, rounds) => roundRequests.run(request, rounds),
+    recoveryCodes,
   };
 }
 

@@ -224,6 +224,37 @@ nothing a fresh authorize request would not.
 
 ---
 
+## The recovery-code pages
+
+A recovery code stands in for a lost second factor after the password (#649;
+ADR-017 Decision 8). Redemption, and showing a new set, happen only on the
+hosted pages: the sign-in engine never offers either step to the first-party
+login endpoint, which answers `redirect_to_web` instead. Two server-rendered
+pages serve them for an interaction of the Interaction API, until the
+design-system screens of #650 replace them:
+
+- `GET /ui/recovery-code/{interactionId}`: "Use a recovery code", one field,
+  with "That code did not work" after a refused one (the same for a wrong
+  code, a used one and one of another set).
+- `GET /ui/recovery-codes/{interactionId}`: "Save your recovery codes", the
+  ten codes of a new set and a confirmation that they are saved. The codes
+  are shown only to the browser whose flow cookie binds the interaction, and
+  never to a page another site opened (`403`).
+
+Both forms post to the Interaction API's answer endpoint
+(`/interaction/v1-rc.0/{interactionId}/answer`) with the step, its CSRF value
+and the answer, and work without JavaScript. An interaction at another step is
+sent to its ceremony page (`303`); one that ended gets a page saying so
+(`410`). Neither page puts a code in a URL, and both are sent with
+`Cache-Control: no-store`.
+
+A code is `xxxx-xxxx-xxxx-xxxx`, typed with any case, spaces and dashes. Each
+works once, adds no `amr` value and never meets an MFA policy. Wrong codes are
+counted on the account, whatever the transaction or the address: from five,
+each attempt waits longer, up to 15 minutes, after a bot challenge. A code
+used, a set regenerated and a run of 100 wrong codes (at most once a day) each
+mail the account a notice that no realm can switch off.
+
 ## Pending authorization: why the login bounce carries a handle, not a URL
 
 Before qauth-labs/qauth#319, every surface that bounced an unauthenticated
@@ -345,4 +376,4 @@ exactly as it would on a first request.
 - [OAuth 2.1 Flow](/integrate/oauth-flow/) — the `authorization_code` + PKCE
   walkthrough these screens sit inside.
 - [API Reference → Hosted UI](/integrate/api-reference/#hosted-ui) — the wire
-  contract (methods, parameters, status codes) for these three routes.
+  contract (methods, parameters, status codes) for these routes.

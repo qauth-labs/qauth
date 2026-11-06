@@ -32,6 +32,7 @@ import {
   createSsfStreamsRepository,
   createUserAttributesRepository,
   createUserCredentialsRepository,
+  createUserRecoveryCodesRepository,
   createUserRequiredActionsRepository,
   createUserSessionEpochsRepository,
   createUsersRepository,
@@ -54,6 +55,7 @@ import {
   type SsfStreamsRepository,
   type UserAttributesRepository,
   type UserCredentialsRepository,
+  type UserRecoveryCodesRepository,
   type UserRequiredActionsRepository,
   type UserSessionEpochsRepository,
   type UsersRepository,
@@ -93,6 +95,7 @@ declare module 'fastify' {
        * cache reads it, and a browser session or a sign-in in progress
        * created before it is treated as absent.
        */
+      userRecoveryCodes: UserRecoveryCodesRepository;
       userSessionEpochs: UserSessionEpochsRepository;
       /**
        * OID4VP presentation-request states (ADR-004, #233). Decorated
@@ -217,6 +220,7 @@ const ALL_REPOSITORIES: Readonly<Record<RepositoryName, true>> = {
   userCredentials: true,
   userAttributes: true,
   userRequiredActions: true,
+  userRecoveryCodes: true,
   userSessionEpochs: true,
   oid4vpRequestStates: true,
   events: true,
@@ -322,6 +326,7 @@ export const databasePlugin = fp<DatabasePluginOptions>(
       userCredentials: () => createUserCredentialsRepository(database.db),
       userAttributes: () => createUserAttributesRepository(database.db),
       userRequiredActions: () => createUserRequiredActionsRepository(database.db),
+      userRecoveryCodes: () => createUserRecoveryCodesRepository(database.db),
       userSessionEpochs: () => createUserSessionEpochsRepository(database.db),
       oid4vpRequestStates: () => createOid4vpRequestStatesRepository(database.db),
       events: sharedEvents,

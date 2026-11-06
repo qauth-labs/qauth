@@ -219,6 +219,8 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.registered:v1-rc.0`](#userregistered-v1-rc0)                                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.registration_failed:v1-rc.0`](#userregistration_failed-v1-rc0)                   | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.password_reset:v1-rc.0`](#userpassword_reset-v1-rc0)                             | user     | info     | v0.2.0 |
+| [`urn:qauth:event:user.recovery_code_used:v1-rc.0`](#userrecovery_code_used-v1-rc0)                     | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.recovery_codes_failed:v1-rc.0`](#userrecovery_codes_failed-v1-rc0)               | user     | critical | v0.2.0 |
 | [`urn:qauth:event:user.disabled:v1-rc.0`](#userdisabled-v1-rc0)                                         | admin    | warning  | v0.2.0 |
 | [`urn:qauth:event:user.enabled:v1-rc.0`](#userenabled-v1-rc0)                                           | admin    | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
@@ -396,6 +398,32 @@ A person reset their account's password: an emailed code proved the mailbox, eve
 - Subject: `user`, when known
 - Schema: [user.password_reset.v1-rc.0.json](/schemas/events/user.password_reset.v1-rc.0.json)
 - Security type · SSF: `https://schemas.openid.net/secevent/caep/event-type/credential-change` ([SSF events](/reference/ssf-events/))
+
+`data` has no members: the envelope carries the event.
+
+### user.recovery_code_used v1-rc.0
+
+A person used one of their recovery codes in place of a second factor on the hosted pages: after the password to sign in, or after the code mailed to their address to reset the password. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.
+
+- Identifier: `urn:qauth:event:user.recovery_code_used:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.recovery_code_used.v1-rc.0.json](/schemas/events/user.recovery_code_used.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
+
+| Member      | Type    | Required | Meaning                                                      |
+| ----------- | ------- | -------- | ------------------------------------------------------------ |
+| `remaining` | integer | yes      | How many of the set are left unused after this one: 0 to 10. |
+
+### user.recovery_codes_failed v1-rc.0
+
+Wrong recovery codes reached 100 in a row for an account, each after a first proof: the right password at sign-in, or the code mailed to the account’s address in a password reset. Someone who holds one of those is guessing its codes. Every further try waits up to 15 minutes; the person is told by email and the operator alerted. Recorded at most once a day per account.
+
+- Identifier: `urn:qauth:event:user.recovery_codes_failed:v1-rc.0`
+- Category: `user` · Severity: `critical` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.recovery_codes_failed.v1-rc.0.json](/schemas/events/user.recovery_codes_failed.v1-rc.0.json)
+- Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
 

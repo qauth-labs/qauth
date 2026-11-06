@@ -114,7 +114,7 @@ export const SECURITY_LOG_KINDS = {
   },
   recovery_code_used: {
     description: 'A recovery code was used in place of a second factor.',
-    sources: [planned('user.recovery_code_used', 649)],
+    sources: [registered('user.recovery_code_used')],
     reportable: false,
   },
   recovery_codes_regenerated: {
@@ -124,7 +124,7 @@ export const SECURITY_LOG_KINDS = {
   },
   recovery_codes_failed: {
     description: 'Recovery codes were tried and refused 100 times (ADR-017 Decision 7).',
-    sources: [planned('user.recovery_codes_failed', 649)],
+    sources: [registered('user.recovery_codes_failed')],
     reportable: false,
   },
   send_ceiling_reached: {

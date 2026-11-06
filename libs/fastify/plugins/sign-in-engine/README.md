@@ -23,6 +23,7 @@ through this one, which re-exports the types it needs.
 | `createPasswordAttempts`             | The ladder as the legacy login routes use it: reserve before the password, settle after, a store error as one error type                                                                             |
 | `END_USER_IP_HMAC_LABEL`             | The HKDF label of the end-user IP digest the ladder keeps known IPs under                                                                                                                            |
 | `createRedisRoundLimits`             | The round limits (#636) in Redis: per end-user IP, per IP bucket, per client and registration starts, one script per decision; no key holds an address                                               |
+| `createRepositoryRecoveryCodes`      | The recovery codes (#649) over `user_recovery_codes` and the hasher: a code's take and its event in one transaction, then the "used" notice; `regenerate` (ACC-02, #687) and the 100-failures notice |
 
 Nothing registers the plugin yet: the transports do, the Interaction API's answer route (#616)
 and the FiPA endpoint (#646), and they emit the mapped events with the server's event writer.
@@ -41,7 +42,9 @@ is read, refused inside its wait, and settled after the check. The plugin also r
 ceiling.
 
 The ladder's keys are `sign-in-ladder:{<realm id>:<identifier HMAC>}:<counter>`, one per factor
-and one for the wrong email codes (`email_code`, #638) (a hash: the run's
+and one for the wrong email codes (`email_code`, #638), and
+`sign-in-ladder:{<realm id>:user:<user id>}:recovery_code` for an account's wrong recovery codes
+(#649), keyed on the account so every identifier, transaction and end-user IP shares it (a hash: the run's
 consecutive failures, the end of its wait, the run's id and how many of its failures came from
 known IPs) and `…:known-ips` (a sorted set of
 end-user IP HMACs, scored by their last successful sign-in). The braces are a Redis Cluster hash
@@ -91,4 +94,6 @@ through the waits, still counting each, and a stopped Redis refuses the round be
 contract the memory store keeps, and holds them to #636's acceptance criteria: 30 failed rounds
 from one IP refuse its rounds for 15 minutes, failures for more than 20 identifiers from one bucket
 delay it and alert, the fourth registration start from one IP in an hour is refused, and a stopped
-Redis refuses rounds before any credential is checked.
+Redis refuses rounds before any credential is checked. `recovery-codes.test.ts` holds the
+recovery codes' adapter to its order: the take, its event and the status in one transaction, the
+notices only after it commits, and a notice that fails reported, never refusing the code.

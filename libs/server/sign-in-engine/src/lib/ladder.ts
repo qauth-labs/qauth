@@ -142,6 +142,30 @@ export const EMAIL_CODE_LADDER_POLICY: LadderPolicy = Object.freeze({
   onSuccess: 'clear',
 });
 
+/**
+ * The recovery-code ladder (#649; ADR-017 Decision 7, the second-factor row):
+ * one counter of wrong recovery codes per account, keyed on the realm and the
+ * user, shared by every transaction, client, transport and IP. The password's
+ * ladder from 5 consecutive failures, with no known-IP exemption: only a
+ * holder of the first factor reaches it, so the free failures are kept as
+ * long as a run with a wait. The hard ceiling of 100 disables nothing (a code
+ * carries 80 bits, and a stop would close the account's way back): it tells
+ * the user and the operator, on every failure of the run from then on, which
+ * the notice holds to once a day. A taken code clears the counter; a right
+ * password never does.
+ */
+export const RECOVERY_CODE_LADDER_POLICY: LadderPolicy = Object.freeze({
+  freeFailures: 5,
+  firstWaitMs: 1_000,
+  maxWaitMs: 15 * 60_000,
+  hardCeiling: 100,
+  knownIpMs: 0,
+  knownIpFreeFailures: 0,
+  retentionMs: 30 * DAY_MS,
+  freeRetentionMs: 30 * DAY_MS,
+  onSuccess: 'clear',
+});
+
 /** The largest doubling the wait is computed through: past it every wait is `maxWaitMs`. */
 const MAX_DOUBLINGS = 40;
 

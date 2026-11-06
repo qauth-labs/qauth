@@ -26,6 +26,7 @@ import {
   createSignInEngine,
   PASSWORD_LADDER_POLICY,
   type PasswordVerifier,
+  RECOVERY_CODE_LADDER_POLICY,
   type RoundContext,
   type RoundResult,
   type SignInEngine,
@@ -45,6 +46,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createRepositoryAccountDirectory } from './account-directory';
 import {
   createRedisFailureLadder,
+  ladderAccountCounterKey,
   ladderCounterKey,
   ladderKnownIpsKey,
   type LadderRedis,
@@ -578,6 +580,37 @@ describe('the failure ladder over real Redis and Postgres', () => {
     expect(ttl).toBeGreaterThan(PASSWORD_LADDER_POLICY.knownIpMs - 60_000);
     // The success ended the run: no counter is kept.
     expect(await counter('known-retention@example.com')).toEqual({});
+  });
+
+  it('keeps the wrong recovery codes on one counter of the account, whatever the IP: no known IP skips it and a right password leaves it (#649)', async (testCtx) => {
+    if (!dockerUp || redis === undefined) return testCtx.skip();
+    const cache = redis;
+    const userId = await seed('recovery-ladder@example.com');
+    const ladder = createRedisFailureLadder(cache, { ipDigest, now: () => now });
+    const reserve = (endUserIp: string) =>
+      ladder.reserve({ realmId, userId, factor: 'recovery_code', endUserIp });
+    // The free failures, from two addresses: one counter.
+    for (let i = 0; i < RECOVERY_CODE_LADDER_POLICY.freeFailures; i += 1) {
+      const verdict = await reserve(i % 2 === 0 ? KNOWN_IP : OTHER_IP);
+      if (verdict.kind !== 'reserved') throw new Error('expected a reservation');
+      expect(await verdict.settle('failure')).toEqual({ ceilingReached: false });
+    }
+    const key = ladderAccountCounterKey(realmId, userId, 'recovery_code');
+    expect(key).toBe(`sign-in-ladder:{${realmId}:user:${userId}}:recovery_code`);
+    expect(await cache.hgetall(key)).toMatchObject({ n: '5' });
+    // The right password, from the address it makes known, ends its own run
+    // only: the next code from that address still waits.
+    expect(await attempt('recovery-ladder@example.com', PASSWORD, KNOWN_IP)).toMatchObject({
+      kind: 'complete',
+    });
+    expect(await cache.hgetall(key)).toMatchObject({ n: '5' });
+    expect(await reserve(KNOWN_IP)).toEqual({ kind: 'wait', retryAfterSeconds: 1 });
+    expect(await reserve(OTHER_IP)).toEqual({ kind: 'wait', retryAfterSeconds: 1 });
+    // The account's counter knows no IP: no known-IP key of it is written.
+    expect(await cache.exists(ladderKnownIpsKey(realmId, `user:${userId}`))).toBe(0);
+    expect(await ladder.softThreshold?.({ realmId, userId, counters: ['recovery_code'] })).toBe(
+      true
+    );
   });
 
   it('keeps no address in any Redis key or value', async (testCtx) => {

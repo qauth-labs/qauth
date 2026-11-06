@@ -762,14 +762,16 @@ Server-rendered, cookie-authenticated pages back the browser leg of
 behaviour, including the pending-authorization mechanics behind the login
 bounce.
 
-| Endpoint                    | Method    | Purpose                                                                             |
-| --------------------------- | --------- | ----------------------------------------------------------------------------------- |
-| `/ui/login`                 | GET, POST | Session-cookie login page and form submission                                       |
-| `/ui/consent`               | GET, POST | OAuth consent screen and decision submission                                        |
-| `/ui/resume/{handle}`       | GET       | Resume a pending authorization after login (single-use, 10-minute TTL)              |
-| `/ui/verify`                | POST      | The form of the emailed verification link ([`GET /auth/verify`](#get-authverify))   |
-| `/ui/upstream/{type}`       | GET       | A provider button of the login page: back to the request with `qauth_upstream`      |
-| `/ui/upstream/{type}/start` | GET       | Start the routed upstream provider, then the waiting page that sends the browser on |
+| Endpoint                             | Method    | Purpose                                                                             |
+| ------------------------------------ | --------- | ----------------------------------------------------------------------------------- |
+| `/ui/login`                          | GET, POST | Session-cookie login page and form submission                                       |
+| `/ui/consent`                        | GET, POST | OAuth consent screen and decision submission                                        |
+| `/ui/resume/{handle}`                | GET       | Resume a pending authorization after login (single-use, 10-minute TTL)              |
+| `/ui/verify`                         | POST      | The form of the emailed verification link ([`GET /auth/verify`](#get-authverify))   |
+| `/ui/upstream/{type}`                | GET       | A provider button of the login page: back to the request with `qauth_upstream`      |
+| `/ui/upstream/{type}/start`          | GET       | Start the routed upstream provider, then the waiting page that sends the browser on |
+| `/ui/recovery-code/{interactionId}`  | GET       | "Use a recovery code": the `recovery_code` step's form (#649)                       |
+| `/ui/recovery-codes/{interactionId}` | GET       | "Save your recovery codes": a new set, shown once, and its confirmation (#649)      |
 
 The wallet-login screens below are registered **only** when
 `WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path

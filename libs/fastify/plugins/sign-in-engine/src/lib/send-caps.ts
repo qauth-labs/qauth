@@ -239,7 +239,11 @@ interface NoticeMark {
 
 /** The key of a notice's mark. */
 function noticeKey(input: NoticeMark): string {
-  if (input.kind !== 'send_ceiling' && input.kind !== 'password_disabled') {
+  if (
+    input.kind !== 'send_ceiling' &&
+    input.kind !== 'password_disabled' &&
+    input.kind !== 'recovery_codes_failed'
+  ) {
     throw new Error('send caps: not a once-a-day notice');
   }
   return sendCapKey(

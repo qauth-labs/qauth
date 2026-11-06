@@ -1,10 +1,11 @@
-import type { LadderHook, LadderReservation, LadderVerdict } from '../lib/hooks';
+import type { LadderHook, LadderReservation, LadderSubject, LadderVerdict } from '../lib/hooks';
 import {
   checkLadderPolicy,
   EMAIL_CODE_LADDER_POLICY,
   type LadderPolicy,
   ladderWaitMs,
   PASSWORD_LADDER_POLICY,
+  RECOVERY_CODE_LADDER_POLICY,
 } from '../lib/ladder';
 import type { LadderCounter } from '../lib/ports';
 
@@ -12,10 +13,21 @@ import type { LadderCounter } from '../lib/ports';
  * TEST SUPPORT — the failure ladder in memory, on a clock the test moves: the
  * rules of {@link LadderPolicy} as the auth server's Redis script applies them
  * (`@qauth-labs/fastify-plugin-sign-in-engine`'s `failure-ladder.ts`). One
- * counter per (realm, identifier HMAC, counter: a factor or the email codes),
- * one known-IP list per (realm, identifier HMAC). Not for production: nothing
- * is shared between processes.
+ * counter per (realm, identifier HMAC, counter: a factor or the email codes)
+ * and per (realm, user, recovery codes), one known-IP list per (realm,
+ * identifier HMAC). Not for production: nothing is shared between processes.
  */
+
+/**
+ * The key a ladder call names its subject by, in this ladder's maps and
+ * accessors: the identifier HMAC, or `user:` and the user id. No HMAC holds a
+ * colon, so the two never meet.
+ */
+export function memoryLadderSubject(subject: LadderSubject): string {
+  if (subject.userId !== undefined) return `user:${subject.userId}`;
+  if (subject.identifierHmac !== undefined) return subject.identifierHmac;
+  throw new Error('memory ladder: a call names no subject');
+}
 
 /** One counter's state. */
 export interface MemoryLadderRun {
@@ -35,7 +47,10 @@ export interface MemoryLadderRun {
 }
 
 export interface MemoryLadder extends LadderHook {
-  /** The counter of `factor` for the identifier, or `undefined` when no run is counted. */
+  /**
+   * The counter of `factor` for the identifier (or `user:` and a user id,
+   * {@link memoryLadderSubject}), or `undefined` when no run is counted.
+   */
   counter(
     realmId: string,
     identifierHmac: string,
@@ -52,17 +67,24 @@ export interface MemoryLadder extends LadderHook {
 
 /**
  * A ladder in memory over `now`, with `factorPolicy` for every factor (the
- * password's by default) and `emailCodePolicy` for the email codes' counter.
+ * password's by default), `emailCodePolicy` for the email codes' counter and
+ * `recoveryCodePolicy` for the recovery codes'.
  */
 export function createMemoryLadder(
   now: () => number,
   factorPolicy: LadderPolicy = PASSWORD_LADDER_POLICY,
-  emailCodePolicy: LadderPolicy = EMAIL_CODE_LADDER_POLICY
+  emailCodePolicy: LadderPolicy = EMAIL_CODE_LADDER_POLICY,
+  recoveryCodePolicy: LadderPolicy = RECOVERY_CODE_LADDER_POLICY
 ): MemoryLadder {
   checkLadderPolicy(factorPolicy);
   checkLadderPolicy(emailCodePolicy);
+  checkLadderPolicy(recoveryCodePolicy);
   const policyOf = (counter: LadderCounter) =>
-    counter === 'email_code' ? emailCodePolicy : factorPolicy;
+    counter === 'email_code'
+      ? emailCodePolicy
+      : counter === 'recovery_code'
+        ? recoveryCodePolicy
+        : factorPolicy;
   /** A run, and how many of its counted failures came from known IPs (#968). */
   type Counter = MemoryLadderRun & { readonly knownIpFailures: number };
   const counters = new Map<string, Counter>();
@@ -95,13 +117,15 @@ export function createMemoryLadder(
           };
     },
     knownIps: (realmId, hmac) => new Map(known.get(knownKey(realmId, hmac)) ?? []),
-    async softThreshold({ realmId, identifierHmac, counters: names }) {
+    async softThreshold({ realmId, counters: names, ...subject }) {
+      const identifierHmac = memoryLadderSubject(subject as LadderSubject);
       return names.some((factor) => {
         const state = live(counterKey(realmId, identifierHmac, factor));
         return state !== undefined && state.failures >= policyOf(factor).freeFailures;
       });
     },
-    async reserve({ realmId, identifierHmac, factor, endUserIp }): Promise<LadderVerdict> {
+    async reserve({ realmId, factor, endUserIp, ...subject }): Promise<LadderVerdict> {
+      const identifierHmac = memoryLadderSubject(subject as LadderSubject);
       const key = counterKey(realmId, identifierHmac, factor);
       const policy = policyOf(factor);
       const at = now();

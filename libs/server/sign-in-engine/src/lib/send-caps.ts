@@ -110,8 +110,12 @@ export type SendCapRefusingTier = (typeof SEND_CAP_REFUSING_TIERS)[number];
 /** What a mailed pass starts: a reset of the account, or the registration of its address. */
 export type MailPassFlow = 'reset' | 'register';
 
-/** The notices an address gets at most once per `noticeIntervalMs`. */
-export type OnceANoticeKind = 'send_ceiling' | 'password_disabled';
+/**
+ * The notices an address gets at most once per `noticeIntervalMs`: the
+ * send-ceiling and password-disabled notices, and the recovery codes'
+ * 100-failures notice (#649), keyed on the account's own HMAC.
+ */
+export type OnceANoticeKind = 'send_ceiling' | 'password_disabled' | 'recovery_codes_failed';
 
 /** One send the caps are asked about: a code about to be mailed, or a start that would mail one. */
 export interface SendCapRequest {

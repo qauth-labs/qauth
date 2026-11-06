@@ -47,6 +47,12 @@ export const LOG_REDACT_PATHS = [
   // A bot challenge's answer, as the captcha step carries it (#643).
   'captcha_token',
   '*.captcha_token',
+  // A recovery code, as an answer to the recovery_code step carries it, and
+  // a new set, as the recovery_codes step's personal data holds it (#649).
+  'recovery_code',
+  '*.recovery_code',
+  'codes',
+  '*.codes',
   'secret',
   '*.secret',
   'authorization',

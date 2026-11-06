@@ -118,6 +118,10 @@ const DEFAULT_ROUTES_ADDED_SINCE: readonly string[] = [
   'GET /ui/upstream/:type/start',
   'GET /upstream/:type/callback',
   'POST /upstream/:type/callback',
+  // The recovery-code pages (#649): "use a recovery code" and "save your
+  // recovery codes".
+  'GET /ui/recovery-code/:interactionId',
+  'GET /ui/recovery-codes/:interactionId',
 ];
 
 /** The routes removed since: the metrics moved to the internal listener (#500). */

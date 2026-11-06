@@ -218,6 +218,57 @@ export const userPasswordReset = defineEventType({
 });
 
 /**
+ * A recovery code used at sign-in (#649; ADR-017 Decision 8), recorded in
+ * the transaction that took the code, so a used code always has its event.
+ */
+export const userRecoveryCodeUsed = defineEventType({
+  name: 'user.recovery_code_used',
+  version: 1,
+  rc: 0,
+  description:
+    'A person used one of their recovery codes in place of a second factor on the hosted pages: after the password to sign in, or after the code mailed to their address to reset the password. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.',
+  category: 'user',
+  severity: 'warning',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({
+    // A set holds 10 codes (ADR-017 Decision 8): no payload says more are left.
+    remaining: z
+      .int()
+      .min(0)
+      .max(10)
+      .describe('How many of the set are left unused after this one: 0 to 10.'),
+  }),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'CAEP 1.0 has no event for a sign-in that used a fallback authenticator, and `credential-change` is for a credential created, revoked, updated or deleted: a used code is spent, not changed.',
+});
+
+/**
+ * The recovery codes' hard ceiling (#649; ADR-017 Decision 7): wrong codes
+ * reached 100 in a row for an account, counted per account across every
+ * transaction and IP. Recorded at most once a day per account, with the
+ * user's notice and the operator's alert.
+ */
+export const userRecoveryCodesFailed = defineEventType({
+  name: 'user.recovery_codes_failed',
+  version: 1,
+  rc: 0,
+  description:
+    'Wrong recovery codes reached 100 in a row for an account, each after a first proof: the right password at sign-in, or the code mailed to the account’s address in a password reset. Someone who holds one of those is guessing its codes. Every further try waits up to 15 minutes; the person is told by email and the operator alerted. Recorded at most once a day per account.',
+  category: 'user',
+  severity: 'critical',
+  since: FIRST_RELEASE,
+  subject: 'user',
+  data: z.strictObject({}),
+  security: true,
+  ssf: 'none',
+  ssfNote:
+    'Neither CAEP 1.0 nor RISC 1.0 has an event for failed attempts at an account’s credential: the account is not disabled and no credential changed.',
+});
+
+/**
  * An operator's switch of an account (#748). Until the admin API has user
  * operations (#681), the `db:disable-user` operator tool is the one path that
  * emits these, in the transaction of the change.
@@ -266,6 +317,8 @@ export const USER_EVENT_TYPES = [
   userRegistered,
   userRegistrationFailed,
   userPasswordReset,
+  userRecoveryCodeUsed,
+  userRecoveryCodesFailed,
   userDisabled,
   userEnabled,
 ] as const;

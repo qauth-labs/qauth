@@ -47,6 +47,11 @@ const STEP_METHODS: Readonly<
   // The bot challenge (#643) proves nothing about the account: like the
   // identifier step, it is part of the password sign-in it holds back.
   captcha: 'password',
+  // A recovery code stands in for a second factor after the password, and
+  // a new set is shown after it (#649): both are part of the password
+  // sign-in.
+  recovery_code: 'password',
+  recovery_codes: 'password',
 });
 
 /**

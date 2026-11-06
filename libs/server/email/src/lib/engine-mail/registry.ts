@@ -15,6 +15,14 @@ import {
   PasswordDisabledEmail,
 } from '../templates/engine/password-disabled';
 import {
+  RECOVERY_CODE_USED_SUBJECT,
+  RECOVERY_CODES_FAILED_SUBJECT,
+  RECOVERY_CODES_REGENERATED_SUBJECT,
+  RecoveryCodesFailedEmail,
+  RecoveryCodesRegeneratedEmail,
+  RecoveryCodeUsedEmail,
+} from '../templates/engine/recovery-codes';
+import {
   type MailPassFlow,
   SEND_CEILING_SUBJECT,
   SendCeilingEmail,
@@ -39,8 +47,9 @@ import { isMailBaseUrl, isMailPass, mailPassUrl } from './links';
  *   Decision 5: "Mail that carries no code does not count toward these caps
  *   and is never suppressed by them");
  * - whether a realm may switch it off. None of these may be: the code and
- *   "account exists" mails are steps of a flow, "password changed" is a
- *   notice about a credential change, and the send-ceiling and
+ *   "account exists" mails are steps of a flow, "password changed" and the
+ *   recovery codes' notices (#649: a code used, a set replaced, 100 wrong
+ *   codes in a row) are notices about a credential, and the send-ceiling and
  *   password-disabled notices carry the pass that keeps the owner's reset
  *   open (ADR-020 §3 "Emails": they "always go out").
  */
@@ -78,7 +87,14 @@ export type EngineMail =
       readonly flow: MailPassFlow;
       readonly pass: string;
       readonly passExpiresInSeconds: number;
-    };
+    }
+  | {
+      readonly template: 'recovery_code_used';
+      /** How many codes of the set are left unused after this one, 0 to 10. */
+      readonly unusedCodes: number;
+    }
+  | { readonly template: 'recovery_codes_regenerated' }
+  | { readonly template: 'recovery_codes_failed' };
 
 /** The name of an engine mail template. */
 export type EngineMailName = EngineMail['template'];
@@ -141,6 +157,14 @@ function checkLifetime(seconds: unknown, max: number, what: string): string {
     throw new EngineMailError(`${what} lives from 1 to ${max} seconds`);
   }
   return formatDuration(seconds);
+}
+
+/** A set holds 10 codes (#649), so at most 10 are left. */
+function checkUnusedCodes(count: unknown): number {
+  if (typeof count !== 'number' || !Number.isInteger(count) || count < 0 || count > 10) {
+    throw new EngineMailError('a set has 0 to 10 unused codes left');
+  }
+  return count;
 }
 
 function checkPass(pass: unknown): string {
@@ -210,6 +234,34 @@ export const ENGINE_MAIL_TEMPLATES: {
         passUrl: mailPassUrl(baseUrl, checkPass(mail.pass)),
         expiresIn: checkLifetime(mail.passExpiresInSeconds, PASS_MAX_EXPIRES_IN_SECONDS, 'a pass'),
       }),
+  }),
+  recovery_code_used: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => RECOVERY_CODE_USED_SUBJECT,
+    element: (mail: MailOf<'recovery_code_used'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(RecoveryCodeUsedEmail, {
+        brand,
+        baseUrl,
+        unusedCodes: checkUnusedCodes(mail.unusedCodes),
+      }),
+  }),
+  recovery_codes_regenerated: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => RECOVERY_CODES_REGENERATED_SUBJECT,
+    element: (_mail: MailOf<'recovery_codes_regenerated'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(RecoveryCodesRegeneratedEmail, { brand, baseUrl }),
+  }),
+  recovery_codes_failed: Object.freeze({
+    realmMaySwitchOff: false,
+    carriesPass: false,
+    carriesCode: () => false,
+    subject: () => RECOVERY_CODES_FAILED_SUBJECT,
+    element: (_mail: MailOf<'recovery_codes_failed'>, { baseUrl, brand }: EngineMailContext) =>
+      createElement(RecoveryCodesFailedEmail, { brand, baseUrl }),
   }),
   send_ceiling: Object.freeze({
     realmMaySwitchOff: false,
