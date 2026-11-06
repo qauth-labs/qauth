@@ -32,6 +32,10 @@ import {
 } from '@qauth-labs/fastify-plugin-realm-policy';
 import { sessionServicePlugin } from '@qauth-labs/fastify-plugin-sessions';
 import {
+  type MfaPolicyReader,
+  NO_SECOND_FACTOR_POLICY,
+} from '@qauth-labs/fastify-plugin-sign-in-engine';
+import {
   createRepositoryPublishedKeyReader,
   signerPlugin,
 } from '@qauth-labs/fastify-plugin-signer';
@@ -286,10 +290,23 @@ export interface AppOptions {
    * Refused unless NODE_ENV is `test`; `main.ts` never sets it.
    */
   passkeySignIn?: boolean;
+  /**
+   * TEST SUPPORT — the MFA policy the sign-in engines read (#653) while no
+   * policy is stored (Foundations, the admin console), for a suite that signs
+   * in under a required second factor. Refused unless NODE_ENV is `test`;
+   * `main.ts` never sets it.
+   */
+  mfaPolicy?: MfaPolicyReader;
 }
 
 declare module 'fastify' {
   interface FastifyInstance {
+    /**
+     * The MFA policy the sign-in engines read on every round (#653; ADR-017
+     * Decision 4): none required until its storage exists, or the test
+     * switch. Absent on a test's bare instance, which reads none required.
+     */
+    signInMfaPolicy?: MfaPolicyReader;
     /**
      * Whether the sign-in engines offer passkeys (#651): `webauthn_get`
      * beside the password, the downgrade rule's passkey step and the
@@ -648,6 +665,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     internalListener,
     authMethodPlugins: authMethodPluginTestSupport,
     passkeySignIn: passkeySignInTestSupport,
+    mfaPolicy: mfaPolicyTestSupport,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -1053,6 +1071,13 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     throw new Error('the passkeySignIn option is test support: refused unless NODE_ENV is test');
   }
   fastify.decorate('passkeySignIn', env.WEBAUTHN_ENABLED || passkeySignInTestSupport === true);
+
+  // The MFA policy (#653): none stored yet, so none required, but for a suite
+  // that asks. Read by the sign-in engines on every round.
+  if (mfaPolicyTestSupport !== undefined && env.NODE_ENV !== 'test') {
+    throw new Error('the mfaPolicy option is test support: refused unless NODE_ENV is test');
+  }
+  fastify.decorate('signInMfaPolicy', mfaPolicyTestSupport ?? NO_SECOND_FACTOR_POLICY);
 
   if (plugins.has('federation')) {
     await registerFederation(fastify, defaultRealmBoot);

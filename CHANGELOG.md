@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TOTP as a second factor, with its own failure ladder** ([#653], ADR-017
+  Decisions 7 and 8, ADR-020 §3; `graphs/flows/core/totp`). The sign-in
+  engine gains the `totp` step (answered with `otp`) after the first factor of
+  an account that holds an authenticator app, and the `totp_setup` step, which
+  an MFA policy needing a second factor the account lacks asks for instead of
+  sending a code. The parameters are fixed: SHA-1, six digits, a 30-second
+  step, one step of tolerance either way. The secret is stored in
+  `user_credentials`, sealed under the realm's `data_at_rest` key with a
+  context bound to the account (only the `api` signer role may open it), and
+  an accepted time step, or any earlier one, is never accepted again. A secret
+  is bound only after a first valid code, within 5 minutes of the
+  transaction's strongest factor, for a claimed account only, after a mailed
+  code for the first second factor of a password-only account whose mailbox
+  this sign-in did not prove, and the first binding issues a recovery set.
+  Password then code gives `amr` `["pwd","otp","mfa"]`. Wrong codes count per
+  account across transactions, clients and IP addresses, with no known-IP
+  exemption, and a password never clears them; from 5 failures the ladder
+  makes each attempt wait, and an early one gets `429` unchecked and
+  uncounted. Three mails no realm can switch off: `totp_added`,
+  `second_factor_failed` (a wrong code after a right password, at most once a
+  day) and `second_factor_disabled` (100 wrong codes in a row, only while the
+  hosted pages are on and the account keeps an unused recovery code or
+  another usable second factor). Two server-rendered pages serve the steps:
+  `GET /ui/totp/{interactionId}` and `GET /ui/totp-setup/{interactionId}`,
+  with a QR code and the text secret. No MFA policy is stored yet, so the
+  set-up step is reachable only once its storage exists.
+
 - **Passkey sign-in steps, passkey-first order and the downgrade rule**
   ([#651], ADR-017 Decisions 4 and 10; `graphs/flows/core/passkey`). The
   sign-in engine gains the `webauthn_get` step (request options with user
@@ -3266,6 +3293,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#649]: https://github.com/qauth-labs/qauth/issues/649
 [#651]: https://github.com/qauth-labs/qauth/issues/651
+[#653]: https://github.com/qauth-labs/qauth/issues/653
 [#662]: https://github.com/qauth-labs/qauth/issues/662
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675

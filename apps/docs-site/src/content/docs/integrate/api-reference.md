@@ -775,6 +775,8 @@ bounce.
 | `/ui/recovery-codes/{interactionId}`    | GET       | "Save your recovery codes": a new set, shown once, and its confirmation (#649)      |
 | `/ui/passkey/{interactionId}`           | GET       | "Sign in with a passkey": the `webauthn_get` step's ceremony (#651)                 |
 | `/ui/passkey-enrolment/{interactionId}` | GET       | "Add a passkey": the `webauthn_create` step's ceremony, or "Not now" (#651)         |
+| `/ui/totp/{interactionId}`              | GET       | "Enter the code from your authenticator app": the `totp` step's form (#653)         |
+| `/ui/totp-setup/{interactionId}`        | GET       | "Set up an authenticator app": the secret as a QR code and text, and a first code   |
 
 The wallet-login screens below are registered **only** when
 `WALLET_FEDERATION_ENABLED` is on; with the flag off (the default) every path

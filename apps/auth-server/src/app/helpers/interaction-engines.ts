@@ -27,6 +27,7 @@ import {
 } from '@qauth-labs/shared-errors';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
+import { env } from '../../config/env';
 import { accountPoliciesOf } from './account-policies';
 import { type BackgroundTasks } from './background-tasks';
 import { createServerBotChallenge, registrationChallengeRequired } from './bot-challenge';
@@ -43,6 +44,7 @@ import { createServerRecoveryCodes } from './recovery-codes';
 import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
 import { createServerRoundLimiter } from './round-limits';
+import { createServerTotp } from './totp-sign-in';
 import { upstreamProviderDirectory } from './upstream-providers';
 import { emitUserEvent, type EventTransaction } from './user-events';
 
@@ -394,6 +396,18 @@ export function createInteractionEngines(
   // only a recovery code stands in for it, and without one the round ends.
   const passkeys =
     fastify.passkeySignIn === true ? createServerPasskeys(fastify, { mailer }) : undefined;
+  // The authenticator app (#653): asked after the first factor of an account
+  // that holds one, set up when the MFA policy needs a second factor the
+  // account lacks. Its hard action is armed only while the hosted pages,
+  // where a recovery code is redeemed, are on.
+  const totp = createServerTotp(fastify, {
+    mailer,
+    realmOf,
+    recoveryCodes,
+    ladder: ladder.ladder,
+    hostedPages: env.INTERACTION_UI_ENABLED === true,
+    passkeys: passkeys !== undefined,
+  });
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(
@@ -407,8 +421,9 @@ export function createInteractionEngines(
         { hardActionArmed: ladder.hardActionArmed }
       ),
       passwords: createArgon2PasswordVerifier(fastify.passwordHasher, fastify.log),
-      // No MFA policy is stored yet: the password is the whole sign-in.
-      policy: NO_SECOND_FACTOR_POLICY,
+      // No MFA policy is stored yet (Foundations): none is required, but for
+      // a suite's test switch.
+      policy: fastify.signInMfaPolicy ?? NO_SECOND_FACTOR_POLICY,
       identifierDigest: ladder.identifierDigest,
       requireVerifiedAccount,
       emailCodes,
@@ -428,6 +443,7 @@ export function createInteractionEngines(
       hooks: { ladder: ladder.ladder, limits },
       steps: [captcha],
       ...(passkeys === undefined ? {} : { passkeys }),
+      totp,
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
         fastify.log.error({ err: error, port: error.port }, 'sign-in engine store unavailable'),
