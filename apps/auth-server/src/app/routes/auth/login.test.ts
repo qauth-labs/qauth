@@ -100,6 +100,8 @@ function createFastifyStub() {
       },
       userCredentials: {
         findByRealmProviderSub: vi.fn(),
+        // The account's passkeys (#651): none, so a right password signs in.
+        findAllByUserIdAndType: vi.fn(async () => []),
         findById: vi.fn(),
       },
       userAttributes: {

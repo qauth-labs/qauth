@@ -6,6 +6,7 @@ import {
   EngineAccountExistsEmail,
 } from '../templates/engine/account-exists';
 import { CodeEmail, codeEmailSubject, type MailCodePurpose } from '../templates/engine/code-email';
+import { PASSKEY_ADDED_SUBJECT, PasskeyAddedEmail } from '../templates/engine/passkey-added';
 import {
   PASSWORD_CHANGED_SUBJECT,
   PasswordChangedEmail,
@@ -14,7 +15,6 @@ import {
   PASSWORD_DISABLED_SUBJECT,
   PasswordDisabledEmail,
 } from '../templates/engine/password-disabled';
-import { PASSKEY_ADDED_SUBJECT, PasskeyAddedEmail } from '../templates/engine/passkey-added';
 import {
   RECOVERY_CODE_USED_SUBJECT,
   RECOVERY_CODES_FAILED_SUBJECT,
