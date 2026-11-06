@@ -463,6 +463,13 @@
       "when": 1793922217364,
       "tag": "0065_token_sign_in_methods",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1794008202681,
+      "tag": "0066_user_recovery_code_lookup",
+      "breakpoints": true
     }
   ]
 }

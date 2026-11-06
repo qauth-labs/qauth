@@ -348,6 +348,47 @@ describe('recovery codes (real Postgres, #649)', () => {
     });
   });
 
+  it('finds the account of an unused code by its lookup digest alone (#655)', async () => {
+    const { realmId, userId } = await seedUser('realm-lookup');
+    const digests = HASHES.map((_, index) => `lookup-${index}`);
+    await codes.replaceSet({
+      realmId,
+      userId,
+      codeHashes: HASHES,
+      lookupDigests: digests,
+      createdAt: 1_000,
+    });
+    await expect(codes.findByLookupDigest(realmId, 'lookup-3')).resolves.toEqual({ userId });
+    await expect(codes.findByLookupDigest(realmId, 'lookup-x')).resolves.toBeNull();
+    // Another realm's lookup finds nothing.
+    const other = await seedUser('realm-lookup-other');
+    await expect(codes.findByLookupDigest(other.realmId, 'lookup-3')).resolves.toBeNull();
+    // A used code is found no more.
+    const [row] = await db()
+      .select({ id: userRecoveryCodes.id })
+      .from(userRecoveryCodes)
+      .where(eq(userRecoveryCodes.lookupDigest, 'lookup-3'));
+    await codes.markUsed({ realmId, userId, id: row?.id ?? '', usedAt: 2_000 });
+    await expect(codes.findByLookupDigest(realmId, 'lookup-3')).resolves.toBeNull();
+    // A set issued without digests is never found by one.
+    await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 3_000 });
+    await expect(codes.findByLookupDigest(realmId, 'lookup-4')).resolves.toBeNull();
+  });
+
+  it('refuses a set whose lookup digests do not match its hashes', async () => {
+    const { realmId, userId } = await seedUser('realm-lookup-mismatch');
+    await expect(
+      codes.replaceSet({
+        realmId,
+        userId,
+        codeHashes: HASHES,
+        lookupDigests: ['only-one'],
+        createdAt: 1_000,
+      })
+    ).rejects.toThrow(RangeError);
+    await expect(codes.status(realmId, userId)).resolves.toMatchObject({ issued: false });
+  });
+
   it('goes with its user', async () => {
     const { realmId, userId } = await seedUser('realm-cascade');
     await codes.replaceSet({ realmId, userId, codeHashes: HASHES, createdAt: 1_000 });

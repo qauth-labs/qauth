@@ -36,6 +36,12 @@ export interface ReplaceRecoveryCodeSetInput {
   readonly userId: string;
   /** The new set's hashes, one row each. */
   readonly codeHashes: readonly string[];
+  /**
+   * The codes' lookup digests (#655), one for each hash and in its order:
+   * only for the set of an account whose primary identity is a passkey,
+   * with no address, which a code alone must find. Absent: none.
+   */
+  readonly lookupDigests?: readonly string[];
   /** When the set is issued, in epoch ms on the auth server's clock. */
   readonly createdAt: number;
   /**
@@ -104,6 +110,17 @@ export interface UserRecoveryCodesRepository {
    *   none: the codes shown no longer work.
    */
   confirmSet(input: ConfirmRecoveryCodeSetInput, tx?: DbClient): Promise<boolean>;
+  /**
+   * The account whose unused code has the lookup digest `digest` in the
+   * realm (#655): `null` when no unused code has it, or when the codes of two
+   * accounts do (which two codes of 80 bits never make), so a lookup names
+   * one account or none. It reads; it takes nothing.
+   */
+  findByLookupDigest(
+    realmId: string,
+    digest: string,
+    tx?: DbClient
+  ): Promise<{ readonly userId: string } | null>;
 }
 
 /** A set id is a row's id: a UUID. Anything else names no set. */
@@ -170,10 +187,20 @@ export function createUserRecoveryCodesRepository(
         .orderBy(userRecoveryCodes.id);
     },
 
-    async replaceSet({ realmId, userId, codeHashes, createdAt, keepConfirmed = false }, tx) {
+    async replaceSet(
+      { realmId, userId, codeHashes, lookupDigests, createdAt, keepConfirmed = false },
+      tx
+    ) {
       checkedTime(createdAt, 'issue time');
       if (codeHashes.length === 0 || codeHashes.some((hash) => hash.length === 0)) {
         throw new RangeError('a recovery-code set holds at least one non-empty hash');
+      }
+      if (
+        lookupDigests !== undefined &&
+        (lookupDigests.length !== codeHashes.length ||
+          lookupDigests.some((digest) => digest.length === 0))
+      ) {
+        throw new RangeError('a recovery-code set holds one non-empty lookup digest per hash');
       }
       return (tx ?? defaultDb).transaction(async (inner) => {
         if (!(await lockUser(inner, realmId, userId))) throw new NotFoundError('User', userId);
@@ -188,7 +215,15 @@ export function createUserRecoveryCodesRepository(
         await inner.delete(userRecoveryCodes).where(ofAccount(realmId, userId));
         const [first] = await inner
           .insert(userRecoveryCodes)
-          .values(codeHashes.map((codeHash) => ({ realmId, userId, codeHash, createdAt })))
+          .values(
+            codeHashes.map((codeHash, index) => ({
+              realmId,
+              userId,
+              codeHash,
+              lookupDigest: lookupDigests?.[index] ?? null,
+              createdAt,
+            }))
+          )
           .returning({ id: userRecoveryCodes.id });
         if (first === undefined) throw new Error('a recovery-code set was not written');
         return first.id;
@@ -209,6 +244,24 @@ export function createUserRecoveryCodesRepository(
         )
         .returning({ id: userRecoveryCodes.id });
       return taken.length === 1;
+    },
+
+    async findByLookupDigest(realmId, digest, tx) {
+      if (digest.length === 0) return null;
+      const owners = await (tx ?? defaultDb)
+        .selectDistinct({ userId: userRecoveryCodes.userId })
+        .from(userRecoveryCodes)
+        .where(
+          and(
+            eq(userRecoveryCodes.realmId, realmId),
+            eq(userRecoveryCodes.lookupDigest, digest),
+            isNotNull(userRecoveryCodes.lookupDigest),
+            isNull(userRecoveryCodes.usedAt)
+          )
+        )
+        .limit(2);
+      const [owner] = owners;
+      return owners.length === 1 && owner !== undefined ? { userId: owner.userId } : null;
     },
 
     async confirmSet({ realmId, userId, setId, confirmedAt }, tx) {
