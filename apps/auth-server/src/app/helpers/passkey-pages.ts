@@ -162,8 +162,21 @@ export const PASSKEY_SIGN_IN_TITLE = 'Sign in with a passkey';
 /** The refused-passkey error: the same whatever was wrong, and whoever's passkey it was. */
 export const PASSKEY_REFUSED = 'That passkey did not work. Try again, or use another passkey.';
 
-/** "Sign in with a passkey": the ceremony, and the error of a refused answer. */
-export function passkeySignInPage(opts: PasskeyPageOptions): string {
+/** The link back to the interaction's other ways in. */
+export const PASSKEY_OTHER_WAY = 'Sign in another way';
+
+/**
+ * "Sign in with a passkey": the ceremony, the error of a refused answer, and
+ * a link back to the interaction's ceremony page, where the password and the
+ * identifier the engine offers beside the passkey are, for a person with no
+ * usable passkey or a browser that cannot run the ceremony.
+ */
+export function passkeySignInPage(
+  opts: PasskeyPageOptions & {
+    /** The interaction's ceremony page, on the realm's origin. */
+    readonly otherWay: string;
+  }
+): string {
   return page({
     cspNonce: opts.cspNonce,
     scriptNonce: opts.scriptNonce,
@@ -174,7 +187,8 @@ export function passkeySignInPage(opts: PasskeyPageOptions): string {
         unlock it with your fingerprint, face, PIN or screen lock.
       </p>
       ${opts.refused ? html`<p class="error" role="alert">${PASSKEY_REFUSED}</p>` : ''}
-      ${ceremonyForm({ ...opts, mode: 'get', label: 'Use a passkey' })}`,
+      ${ceremonyForm({ ...opts, mode: 'get', label: 'Use a passkey' })}
+      <p><a href="${opts.otherWay}">${PASSKEY_OTHER_WAY}</a></p>`,
   });
 }
 

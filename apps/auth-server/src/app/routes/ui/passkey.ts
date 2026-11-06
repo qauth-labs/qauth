@@ -136,6 +136,7 @@ export default async function (fastify: FastifyInstance) {
             refused: current && view.step.error === 'invalid_credentials',
             options: options.data,
             action: urls.action,
+            otherWay: urls.ceremony,
             type: WEBAUTHN_GET_STEP,
             csrf: view.csrf,
           })

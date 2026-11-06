@@ -134,6 +134,10 @@ describe('the passkey pages (#651)', () => {
       expect(response.body).toContain('<script nonce="script-nonce">');
       expect(optionsOf(response.body)).toEqual(REQUEST_OPTIONS);
       expect(response.body).not.toContain('did not work');
+      // A way back to the password and the identifier, which works without JavaScript.
+      expect(response.body).toContain(
+        `<a href="${buildRealmUrl(REALM, `/ui/interaction/${ID}`)}">Sign in another way</a>`
+      );
     });
 
     it('offers the passkey beside the password, with the alternative’s options', async () => {

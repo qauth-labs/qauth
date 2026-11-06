@@ -274,7 +274,8 @@ Interaction API, until the design-system screens of #652 replace them:
 - `GET /ui/passkey/{interactionId}`: "Sign in with a passkey", for the
   `webauthn_get` step, current or offered beside the password. Its options
   name no account. After a refused answer it says "That passkey did not
-  work", the same whatever was wrong.
+  work", the same whatever was wrong. "Sign in another way" links back to the
+  interaction's ceremony page, for the password or the identifier.
 - `GET /ui/passkey-enrolment/{interactionId}`: "Add a passkey", for the
   `webauthn_create` step, with "Not now" beside it. The options carry the
   account's name, so the page is shown only to the browser whose flow cookie

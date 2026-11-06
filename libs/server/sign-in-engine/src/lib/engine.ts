@@ -3064,8 +3064,10 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * account's mailbox, proved in this transaction (by an emailed code with
      * the purpose `recovery`, as a reset asks, unless one was taken), and the
      * password still at most that old; a binding past it is dropped, and the
-     * sign-in goes on. The port binds it, queues the binding notice and writes
-     * its event. Returns the round's result, or `null` once nothing is owed.
+     * sign-in goes on. The port binds it and queues the binding notice; the
+     * engine audits the step as passed, and the transaction holds the binding
+     * as `passkeyEnrolment: 'bound'`, not among its verified steps (it adds no
+     * amr value). Returns the round's result, or `null` once nothing is owed.
      */
     const enrolPasskey = async (
       passkeys: PasskeyCeremonies,

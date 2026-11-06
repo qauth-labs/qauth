@@ -766,7 +766,10 @@ export const PASSKEY_REGISTRATION_MAX_LENGTH = 16384;
 
 /** What binding a verified passkey to an account found (#651). */
 export type PasskeyBinding =
-  /** The passkey is bound, the binding notice is queued and its security-log event written. */
+  /**
+   * The passkey is bound and the binding notice is queued. The security log's
+   * own event of it comes with the account pages (#686).
+   */
   | { readonly kind: 'bound' }
   /**
    * Nothing was bound: the realm holds the credential id already

@@ -155,7 +155,7 @@ context:
   enrolmentDeclined: { values: [false, true], initial: false }
   # a passkey was bound to the account
   passkeyStored: { values: [false, true], initial: false }
-  # the binding notice and its security-log event were queued
+  # the binding notice was queued (the security log's own event comes with #686)
   bindingNoticed: { values: [false, true], initial: false }
   # this round wrote an audit record of the step
   audited: { values: [false, true], initial: false }
@@ -526,8 +526,9 @@ states:
     title: Bind the passkey to the account
     description: >-
       One insert under the realm's RP ID, which a passkey of another RP ID never passes, named by its credential id.
-      Then the binding notice of NIST SP 800-63B-4 §4.1.2.1 is mailed, its security-log event is written, and
-      webauthn_create joins the verified steps with no amr value.
+      Then the binding notice of NIST SP 800-63B-4 §4.1.2.1 is mailed, and webauthn_create is audited as passed; the
+      transaction records the binding, not a verified step, so it adds no amr value. The security log's own event of
+      the binding comes with the account pages (#686).
     invoke: { external: userCredentials }
     on:
       DONE:
@@ -821,7 +822,7 @@ assertions:
     say: 'A passkey is bound only within 5 minutes of the factor the transaction proved'
   - id: every-binding-is-told
     never: 'passkeyStored and not bindingNoticed'
-    say: 'Every bound passkey mails the binding notice and writes its security-log event'
+    say: 'Every bound passkey mails the binding notice'
   - id: never-a-key-store
     never: 'keyStoreClaimed'
     say: 'The amr never claims hwk or swk'
