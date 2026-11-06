@@ -130,9 +130,4 @@ export {
   type TrustRegistryEnv,
   trustRegistryEnvSchema,
 } from './trust-registry';
-export {
-  type AndroidAppFingerprints,
-  WEBAUTHN_ENABLED_REFUSAL,
-  type WebAuthnEnv,
-  webauthnEnvSchema,
-} from './webauthn';
+export { type AndroidAppFingerprints, type WebAuthnEnv, webauthnEnvSchema } from './webauthn';

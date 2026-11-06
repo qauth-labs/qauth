@@ -15,7 +15,7 @@ export const PASSKEY_KEYS = defineKeys([
     owner: 'passkeys',
     default: 'false',
     since: '0.2.0',
-    docs: 'Turn passkeys on; refused at boot until passkey sign-in (ADR-017 phase F2b) is complete.',
+    docs: 'Turn passkeys on: passkey sign-in, the offer to add one after a password sign-in, and sign-up with a passkey alone (no email address) where the realm allows sign-up.',
   },
   {
     name: 'WEBAUTHN_RP_ID',

@@ -28,8 +28,7 @@ import { type SoftPasskey, softPasskey } from '../testing/soft-passkey';
 /**
  * PASSKEY SIGN-IN ON THE HOSTED PAGES (#651; ADR-017 Decisions 4 and 10,
  * `graphs/flows/core/passkey`), end to end against real Postgres and Redis,
- * with INTERACTION_UI_ENABLED on and the passkey steps on (the boot's test
- * option: `WEBAUTHN_ENABLED` is refused at boot until #655).
+ * with INTERACTION_UI_ENABLED and WEBAUTHN_ENABLED on.
  *
  * The passkey is a software authenticator (`testing/soft-passkey.ts`): an
  * ES256 key whose assertions the server's own WebAuthn verifier checks, as it
@@ -99,15 +98,13 @@ describe('passkey sign-in on the hosted pages (#651, real containers)', () => {
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
-    booted = await bootAuthServer(
-      {
-        ...baseEnvironment(infra, await generateJwtPem()),
-        INTERACTION_UI_ENABLED: 'true',
-        // Each test registers its accounts through POST /auth/register.
-        REGISTRATION_RATE_LIMIT: '10000',
-      },
-      { passkeySignIn: true }
-    );
+    booted = await bootAuthServer({
+      ...baseEnvironment(infra, await generateJwtPem()),
+      INTERACTION_UI_ENABLED: 'true',
+      // Each test registers its accounts through POST /auth/register.
+      REGISTRATION_RATE_LIMIT: '10000',
+      WEBAUTHN_ENABLED: 'true',
+    });
   }, 240_000);
 
   afterAll(async () => {

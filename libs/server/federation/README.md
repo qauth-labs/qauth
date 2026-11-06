@@ -218,8 +218,8 @@ checked for revocation (CRL/OCSP), name constraints or policy OIDs.
 The one WebAuthn `CredentialProvider` QAuth has
 ([ADR-017](../../../docs/adr/017-first-party-login.md) Decision 14, phase F2b):
 first-party sign-in, the hosted account pages, admin sign-in and the Authority
-Tree approval all use it. The deployment switch `WEBAUTHN_ENABLED` stays refused
-at boot until F2b's ceremonies land, so nothing calls it yet.
+Tree approval all use it. The sign-in engine's passkey steps call it while the
+deployment switch `WEBAUTHN_ENABLED` is on (default off).
 
 - `provider_type` is `webauthn` and `external_sub` is the credential id
   (base64url). `credential_data` holds the COSE public key, its algorithm, the

@@ -11,18 +11,6 @@ import { z } from 'zod';
  * checks them at boot, with the RP ID rules of `@qauth-labs/server-federation`.
  */
 
-/**
- * The boot error for `WEBAUTHN_ENABLED=true` while phase F2b is incomplete.
- *
- * ADR-017's phasing: until the change that completes F2b (the ceremony steps,
- * the hosted enrolment page and their end-to-end suite), the environment
- * schema refuses the switch with a clear error, so passkeys can never be
- * switched on before their abuse controls exist. That change removes the
- * refusal.
- */
-export const WEBAUTHN_ENABLED_REFUSAL =
-  'WEBAUTHN_ENABLED=true is not available yet. Passkey sign-in (ADR-017 phase F2b) is still being built, and this switch is refused until the change that completes it. Unset WEBAUTHN_ENABLED or set it to false.';
-
 /** Same parsing as `REQUIRE_VERIFIED_ACCOUNT`: `'true'` / `'false'`, blank is unset. */
 function strictBoolean(defaultValue: boolean) {
   return z
@@ -173,14 +161,13 @@ function parseAndroidApps(raw: string, ctx: z.RefinementCtx): AndroidAppFingerpr
  */
 export const webauthnEnvSchema = z.object({
   /**
-   * Turn passkeys on (ADR-017 F2b). Default off. REFUSED when `true` until F2b
-   * is complete (see {@link WEBAUTHN_ENABLED_REFUSAL}). The RP ID settings and
-   * the association files below do not depend on it: they are checked, and
-   * the files served, either way.
+   * Turn passkeys on (ADR-017 phase F2b, complete with #655): passkey sign-in,
+   * the enrolment offer after a password sign-in, and the registration of an
+   * account by passkey alone. Default off. The RP ID settings and the
+   * association files below do not depend on it: they are checked, and the
+   * files served, either way.
    */
-  WEBAUTHN_ENABLED: strictBoolean(false).refine((enabled) => !enabled, {
-    message: WEBAUTHN_ENABLED_REFUSAL,
-  }),
+  WEBAUTHN_ENABLED: strictBoolean(false),
 
   /**
    * The default realm's passkey RP ID (ADR-019 Decision 2). Unset: the realm's

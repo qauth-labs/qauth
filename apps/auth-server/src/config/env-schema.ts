@@ -155,10 +155,10 @@ export const envSchema = z
     // allowlisting an issuer with no key here can never verify anything — both
     // directions fail closed, which is why they do not share a variable.
     ...issuerKeysEnvSchema.shape,
-    // Passkeys (ADR-017 Decision 14, ADR-019 Decision 2, #467): WEBAUTHN_ENABLED,
-    // refused when true until phase F2b is complete, the default realm's RP ID
-    // with its parent-domain opt-in, and the app identifiers of the association
-    // files. Spread like the others: a plain z.object with per-field rules.
+    // Passkeys (ADR-017 Decision 14, ADR-019 Decision 2, #467, #655):
+    // WEBAUTHN_ENABLED, the default realm's RP ID with its parent-domain
+    // opt-in, and the app identifiers of the association files. Spread like
+    // the others: a plain z.object with per-field rules.
     ...webauthnEnvSchema.shape,
     // DPoP (RFC 9449; ADR-014 §3, ADR-017 Decision 14, #479, #480):
     // DPOP_ENABLED, the one switch for DPoP-bound tokens.
