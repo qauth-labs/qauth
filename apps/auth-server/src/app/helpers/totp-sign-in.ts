@@ -3,17 +3,21 @@ import {
   WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/fastify-plugin-federation';
 import {
+  base32Encode,
   createRepositoryTotp,
+  otpauthUri,
   type RecoveryCodes,
   type RedisFailureLadder,
+  TOTP_SECRET_BYTES,
   type TotpCipher,
   type TotpCredentials,
+  type TotpDisplay,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { TOTP_SECRET_CONTEXT_PREFIX } from '@qauth-labs/fastify-plugin-signer';
 import type { FastifyInstance } from 'fastify';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
-import { realmIssuer } from './realm-url';
+import { realmIssuer, type RealmUrlSource } from './realm-url';
 
 /**
  * TOTP AT SIGN-IN ON THE AUTH SERVER (#653; ADR-017 Decisions 7 and 8,
@@ -76,6 +80,50 @@ export function totpCipher(fastify: Pick<FastifyInstance, 'signer'>): TotpCipher
   return Object.freeze(cipher);
 }
 
+/** The issuer name an authenticator app shows beside the account: the host of the realm's issuer. */
+export function totpIssuerOf(realm: RealmUrlSource): string {
+  return new URL(realmIssuer(realm)).host;
+}
+
+/**
+ * The set-up step's secret as it is shown (#653): base32 and an
+ * `otpauth://` URI, opened from the ciphertext the sign-in transaction
+ * holds, for one read, and overwritten after. The interaction record never
+ * keeps them (the issue's "the secret is never stored in clear"): the set-up
+ * page and the Interaction API's personal-data read build them here, as
+ * each round of the engine does through the port.
+ */
+export async function totpSetupDisplay(
+  fastify: Pick<FastifyInstance, 'signer'>,
+  input: {
+    readonly realm: RealmUrlSource & { readonly id: string };
+    readonly userId: string;
+    readonly identifier: string;
+    readonly sealed: string;
+  }
+): Promise<TotpDisplay> {
+  const secret = await totpCipher(fastify).open({
+    realmId: input.realm.id,
+    userId: input.userId,
+    sealed: input.sealed,
+  });
+  try {
+    if (secret.length !== TOTP_SECRET_BYTES)
+      throw new Error('totp: the ciphertext holds no secret');
+    const text = base32Encode(secret);
+    return Object.freeze({
+      secret: text,
+      otpauthUri: otpauthUri({
+        secret: text,
+        issuer: totpIssuerOf(input.realm),
+        account: input.identifier,
+      }),
+    });
+  } finally {
+    secret.fill(0);
+  }
+}
+
 /** What {@link createServerTotp} works with. */
 export interface ServerTotpDependencies {
   readonly mailer: EngineMailer;
@@ -125,7 +173,7 @@ export function createServerTotp(
     (work) => fastify.db.transaction(work),
     {
       cipher: totpCipher(fastify),
-      issuerOf: async (realmId) => new URL(realmIssuer(await deps.realmOf(realmId))).host,
+      issuerOf: async (realmId) => totpIssuerOf(await deps.realmOf(realmId)),
       async hardActionArmed({ realmId, userId }) {
         if (!deps.hostedPages) return false;
         // Only a set the person confirmed counts as a way back: one nobody

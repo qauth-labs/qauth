@@ -1,5 +1,6 @@
 import { Writable } from 'node:stream';
 
+import { base32Encode } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { InvalidRequestError, TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import { INTERACTION_API_PREFIX, stepUrn } from '@qauth-labs/shared-interaction-contract';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
@@ -51,6 +52,7 @@ import {
   interactionIdHash,
   type InteractionStep,
   type InteractionTransaction,
+  keptPersonalData,
   readInteractionRecord,
   takeInteractionTurn,
   writeInteractionState,
@@ -110,6 +112,7 @@ type DecisionSpec =
       amr?: string[];
       /** The sign-in engine's transaction to keep (#616). */
       signInTransaction?: SignInTransaction | null;
+      personal?: Record<string, unknown>;
     }
   | {
       kind: 'authenticated';
@@ -745,6 +748,85 @@ describe('a registration that finishes the interaction (#640)', () => {
     const read = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}`);
     expect(read.statusCode).toBe(200);
     expect((read.json() as { revision: number }).revision).toBe(0);
+  });
+});
+
+describe('the TOTP set-up’s secret is never kept (#653)', () => {
+  const SECRET = 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP';
+  const TOTP_SETUP: InteractionStep = {
+    name: stepUrn('totp_setup'),
+    params: { algorithm: 'SHA1', digits: 6, period: 30 },
+    alternatives: [],
+  };
+
+  it('keeps neither the secret nor its URI in the record, and opens the held ciphertext for the read', async () => {
+    // The signer opens the set-up's ciphertext to 160 bits, as the engine's port does.
+    const decrypt = vi.fn(async () => Buffer.alloc(20, 7));
+    Object.assign(harness.sessions.signer, { decrypt });
+    const owner = new Browser();
+    const id = await owner.start();
+    const now = Date.now();
+    const answered = await owner.answer(id, 0, {
+      kind: 'step',
+      step: TOTP_SETUP,
+      personal: {
+        identifier: 'alice@example.com',
+        secret: SECRET,
+        otpauth_uri: `otpauth://totp/x:alice%40example.com?secret=${SECRET}`,
+      },
+      signInTransaction: {
+        v: 1,
+        realmId: REALM.id,
+        clientId: AUTHORIZE_REQUEST.client_id,
+        createdAt: now,
+        subject: USER_A,
+        authTime: now,
+        identifier: 'alice@example.com',
+        verified: [{ step: 'password', params: {} }],
+        totpEnrolment: { sealed: 'v1.sealed' },
+      },
+    });
+    expect(answered.statusCode, answered.body).toBe(200);
+
+    const stored = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    expect(stored?.personal).toEqual({ identifier: 'alice@example.com' });
+    expect(JSON.stringify(stored)).not.toContain(SECRET);
+    expect(decrypt).not.toHaveBeenCalled();
+
+    const read = await owner.request('GET', `${INTERACTION_API_PREFIX}/${id}/personal`);
+    expect(read.statusCode, read.body).toBe(200);
+    const shown = base32Encode(new Uint8Array(20).fill(7));
+    const { data } = read.json() as { data: Record<string, string> };
+    expect(data['identifier']).toBe('alice@example.com');
+    expect(data['secret']).toBe(shown);
+    const uri = new URL(data['otpauth_uri'] ?? '');
+    expect(uri.protocol).toBe('otpauth:');
+    expect(uri.searchParams.get('secret')).toBe(shown);
+    expect(uri.searchParams.get('issuer')).toBe(new URL(REALM.issuer ?? '').host);
+    expect(decrypt).toHaveBeenCalledWith('api', {
+      realmId: REALM.id,
+      ciphertext: 'v1.sealed',
+      context: `totp-secret:${REALM.id}:${USER_A}`,
+    });
+    // The read wrote nothing back.
+    const after = await readInteractionRecord(
+      harness.redis as unknown as FastifyInstance['redis'],
+      harness.app.log,
+      REALM.id,
+      interactionIdHash(id)
+    );
+    expect(JSON.stringify(after)).not.toContain(shown);
+  });
+
+  it('keeps the personal data of every other step as it is', () => {
+    const personal = { identifier: 'alice@example.com', secret: 'not a TOTP' };
+    expect(keptPersonalData(PASSWORD_STEP, personal)).toBe(personal);
+    expect(keptPersonalData(TOTP_SETUP, personal)).toEqual({ identifier: 'alice@example.com' });
   });
 });
 

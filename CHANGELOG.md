@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step, one step of tolerance either way. The secret is stored in
   `user_credentials`, sealed under the realm's `data_at_rest` key with a
   context bound to the account (only the `api` signer role may open it), and
-  an accepted time step, or any earlier one, is never accepted again. A secret
+  an accepted time step, or any earlier one, is never accepted again. The
+  interaction record keeps no secret during the set-up: each read of the
+  step opens the sign-in's ciphertext again. A secret
   is bound only after a first valid code, within 5 minutes of the
   transaction's strongest factor, for a claimed account only, after a mailed
   code for the first second factor of a password-only account whose mailbox

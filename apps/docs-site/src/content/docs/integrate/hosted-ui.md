@@ -311,7 +311,8 @@ Interaction API, until the design-system screens of #654 replace them:
   that code is valid, and that code stands for the sign-in's `totp` step. The
   secret is personal data, so the page is shown only to the browser whose
   flow cookie binds the interaction, and never to a page another site opened
-  (`403`). An account whose address is not proved cannot bind one, and the
+  (`403`). The interaction record does not keep it: each read opens the
+  sign-in's sealed copy again. An account whose address is not proved cannot bind one, and the
   first second factor of a password-only account also needs a code mailed to
   its address, unless the sign-in proved the mailbox already. The first
   binding issues a set of recovery codes.

@@ -48,6 +48,7 @@ import {
   returnInteractionTurn,
   SELECT_ACCOUNT_STEP,
   takeInteractionTurn,
+  TOTP_SETUP_STEP,
   writeInteractionState,
 } from './interaction-record';
 import { requestRealm } from './request-realm';
@@ -58,6 +59,7 @@ import {
   sessionCookieHeader,
   verifySessionCookie,
 } from './session-cookie';
+import { totpSetupDisplay } from './totp-sign-in';
 import { emitUserEvent } from './user-events';
 
 /**
@@ -774,7 +776,37 @@ export async function readInteractionPersonalData(
   id: unknown
 ): Promise<InteractionPersonalView> {
   const { record } = await locateBound(request, id);
-  return { step: record.step.name, data: record.personal, current: record.step };
+  return {
+    step: record.step.name,
+    data: await shownPersonalData(request, record),
+    current: record.step,
+  };
+}
+
+/**
+ * A record's personal data as its step shows it. The TOTP set-up's secret
+ * and URI are kept nowhere (#653): they are opened again from the ciphertext
+ * the sign-in transaction holds, for this read alone. A set-up step with no
+ * held secret is an engine bug, and fails the read.
+ */
+async function shownPersonalData(
+  request: FastifyRequest,
+  record: InteractionRecord
+): Promise<InteractionPersonalData> {
+  if (record.step.name !== TOTP_SETUP_STEP) return record.personal;
+  const sealed = record.signInTransaction?.totpEnrolment?.sealed;
+  const userId = record.signInTransaction?.subject;
+  const identifier = record.personal['identifier'];
+  if (sealed === undefined || userId === undefined || typeof identifier !== 'string') {
+    throw new Error('a totp_setup step with no TOTP secret held');
+  }
+  const display = await totpSetupDisplay(request.server, {
+    realm: requestRealm(request),
+    userId,
+    identifier,
+    sealed,
+  });
+  return { ...record.personal, secret: display.secret, otpauth_uri: display.otpauthUri };
 }
 
 /** The `amr` list with `added` appended, each value once. */

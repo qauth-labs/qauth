@@ -1,7 +1,11 @@
 import { createHmac, randomBytes } from 'node:crypto';
 
 import type { EngineMail } from '@qauth-labs/fastify-plugin-email';
-import type { MfaPolicyReader, TotpCredentials } from '@qauth-labs/fastify-plugin-sign-in-engine';
+import {
+  base32Encode,
+  type MfaPolicyReader,
+  type TotpCredentials,
+} from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { type ProofOfWorkParams, solveProofOfWork } from '@qauth-labs/shared-interaction-client';
 import {
   CEREMONY_PAGE_PREFIX,
@@ -460,6 +464,17 @@ describe('TOTP as a second factor on the hosted pages (#653, real containers)', 
   }
 
   /** The secret the set-up page shows, as text: the browser holding the flow cookie reads it. */
+  /** The keys of every string value in Redis that holds `text`. */
+  async function redisHolds(text: string): Promise<string[]> {
+    const redis = server().redis;
+    const holding: string[] = [];
+    for (const key of await redis.keys('*')) {
+      if ((await redis.type(key)) !== 'string') continue;
+      if ((await redis.get(key))?.includes(text) === true) holding.push(key);
+    }
+    return holding;
+  }
+
   async function shownSecret(signIn: SignIn): Promise<Buffer> {
     const page = await server().inject({
       method: 'GET',
@@ -649,6 +664,9 @@ describe('TOTP as a second factor on the hosted pages (#653, real containers)', 
     const secret = await shownSecret(signIn);
     expect(secret).toHaveLength(20);
     expect(await totpRow(userId)).toBeUndefined();
+    // The page opened the held ciphertext for its read: Redis keeps the
+    // secret nowhere, neither in the interaction record nor beside it.
+    await expect(redisHolds(base32Encode(secret))).resolves.toEqual([]);
 
     // A wrong first code binds nothing.
     const refused = await answer(signIn, TOTP_SETUP, { otp: wrongCodeAt(secret, Date.now()) });
