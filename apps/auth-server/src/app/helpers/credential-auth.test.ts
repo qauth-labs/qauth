@@ -133,7 +133,10 @@ describe('verifyPasswordCredential and a passkey-bound account (#651)', () => {
   });
 
   function serverWith(passkeys: readonly { readonly realmId: string }[], hash: string) {
-    const findAllByUserIdAndType = vi.fn(async () => passkeys);
+    const findAllByUserIdAndType = vi.fn(
+      async (_userId: string, _type: string): Promise<readonly { readonly realmId: string }[]> =>
+        passkeys
+    );
     const fastify = {
       passwordHasher: server.passwordHasher,
       repositories: {
@@ -185,6 +188,24 @@ describe('verifyPasswordCredential and a passkey-bound account (#651)', () => {
 
     expect(check).toEqual({ status: 'invalid', userId: 'user-1' });
     expect(findAllByUserIdAndType).not.toHaveBeenCalled();
+  });
+
+  it('refuses a right password of an account that holds an authenticator app (#653)', async () => {
+    const hash = await server.passwordHasher.hashPassword(COMPOSED);
+    const { fastify, findAllByUserIdAndType } = serverWith([], hash);
+    findAllByUserIdAndType.mockImplementation(async (_userId: string, type: string) =>
+      type === 'totp' ? [{ realmId: REALM_ID }] : []
+    );
+
+    const check = await verifyPasswordCredential(fastify, {
+      realmId: REALM_ID,
+      email: EMAIL,
+      password: COMPOSED,
+    });
+
+    // The password routes cannot ask for the code: refused as a wrong password.
+    expect(check).toEqual({ status: 'invalid' });
+    expect(findAllByUserIdAndType).toHaveBeenCalledWith('user-1', 'totp');
   });
 
   it('signs in an account whose passkey is in another realm only', async () => {

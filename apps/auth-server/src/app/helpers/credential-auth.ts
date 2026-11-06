@@ -5,6 +5,7 @@ import {
   type VerifiedIdentity,
   WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/fastify-plugin-federation';
+import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 
@@ -124,23 +125,28 @@ export async function verifyPasswordCredential(
     return { status: 'invalid', userId: credential.userId };
   }
 
-  // A passkey-bound account (#651; ADR-017 Decision 4, the downgrade rule): a
-  // login completes only after the account's strongest bound factor, a
-  // disabled passkey included, and these password-only routes cannot ask for
-  // it. Refused as a wrong password, naming no account, so the failure
-  // ladder's hard action never disables a right password and nothing tells
-  // the caller the account holds a passkey. The sign-in engine's pages ask
-  // for the passkey instead.
-  const passkeys = await fastify.repositories.userCredentials.findAllByUserIdAndType(
-    credential.userId,
-    WEBAUTHN_PROVIDER_TYPE
-  );
-  if (passkeys.some((row) => row.realmId === params.realmId)) {
-    fastify.log.info(
-      { credentialId: credential.id },
-      'a password login was refused: the account holds a passkey'
+  // A passkey-bound account (#651; ADR-017 Decision 4, the downgrade rule)
+  // or one with an authenticator app (#653): a login completes only after the
+  // account's strongest bound factor, a disabled one included, and these
+  // password-only routes cannot ask for it. Refused as a wrong password,
+  // naming no account, so the failure ladder's hard action never disables a
+  // right password and nothing tells the caller what else the account holds.
+  // The sign-in engine's pages ask for the factor instead.
+  for (const [providerType, held] of [
+    [WEBAUTHN_PROVIDER_TYPE, 'a passkey'],
+    [TOTP_PROVIDER_TYPE, 'an authenticator app'],
+  ] as const) {
+    const factors = await fastify.repositories.userCredentials.findAllByUserIdAndType(
+      credential.userId,
+      providerType
     );
-    return { status: 'invalid' };
+    if (factors.some((row) => row.realmId === params.realmId)) {
+      fastify.log.info(
+        { credentialId: credential.id },
+        `a password login was refused: the account holds ${held}`
+      );
+      return { status: 'invalid' };
+    }
   }
 
   const provider = fastify.providerRegistry.resolve(PASSWORD_PROVIDER_TYPE);
