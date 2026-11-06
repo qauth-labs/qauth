@@ -3,6 +3,7 @@ import {
   passwordCredentialDataSchema,
   presentedPasswordFor,
   type VerifiedIdentity,
+  WEBAUTHN_PROVIDER_TYPE,
 } from '@qauth-labs/fastify-plugin-federation';
 import { normalizeEmail } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
@@ -34,6 +35,9 @@ type UserCredential = NonNullable<
  *   password, never a 500 (a distinct status would leak account state)
  * - a credential that records the NFC marker (#634) is verified on the
  *   presented password in NFC, one without it on the password as typed
+ * - a right password of an account that holds a passkey (#651) → a generic
+ *   invalid result naming no account: the downgrade rule asks for the
+ *   passkey, which these routes cannot
  * - a password the failure ladder's hard action disabled
  *   (`user_credentials.disabled_at`, #615) → the same decoy and a generic
  *   invalid result, but only while the hard action is armed; while it is not,
@@ -118,6 +122,25 @@ export async function verifyPasswordCredential(
   );
   if (!passwordValid) {
     return { status: 'invalid', userId: credential.userId };
+  }
+
+  // A passkey-bound account (#651; ADR-017 Decision 4, the downgrade rule): a
+  // login completes only after the account's strongest bound factor, a
+  // disabled passkey included, and these password-only routes cannot ask for
+  // it. Refused as a wrong password, naming no account, so the failure
+  // ladder's hard action never disables a right password and nothing tells
+  // the caller the account holds a passkey. The sign-in engine's pages ask
+  // for the passkey instead.
+  const passkeys = await fastify.repositories.userCredentials.findAllByUserIdAndType(
+    credential.userId,
+    WEBAUTHN_PROVIDER_TYPE
+  );
+  if (passkeys.some((row) => row.realmId === params.realmId)) {
+    fastify.log.info(
+      { credentialId: credential.id },
+      'a password login was refused: the account holds a passkey'
+    );
+    return { status: 'invalid' };
   }
 
   const provider = fastify.providerRegistry.resolve(PASSWORD_PROVIDER_TYPE);
