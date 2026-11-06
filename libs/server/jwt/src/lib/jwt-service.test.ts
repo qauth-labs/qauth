@@ -123,6 +123,47 @@ describe('signAccessToken', () => {
     expect('cnf' in (await verifyAccessToken(token, publicKey))).toBe(false);
     expect('cnf' in decodeJwt(token)).toBe(false);
   });
+
+  it('emits auth_time in epoch seconds and amr, and round-trips both (RFC 9068 §2.2.1, #662)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    // A non-round millisecond value proves the floor to seconds.
+    const authTimeMs = 1_700_000_123_456;
+    const token = await signAccessToken(
+      { sub: 'user-signed-in', clientId: 'app-client', authTime: authTimeMs, amr: ['pwd'] },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect(decodeJwt(token)).toMatchObject({ auth_time: 1_700_000_123, amr: ['pwd'] });
+    const decoded = await verifyAccessToken(token, publicKey);
+    expect(decoded.authTime).toBe(1_700_000_123_000);
+    expect(decoded.amr).toEqual(['pwd']);
+  });
+
+  it('omits auth_time and amr when no sign-in backs the token, and amr when it is empty', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const none = await signAccessToken(
+      { sub: 'service-client', clientId: 'service-client' },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+    const noMethods = await signAccessToken(
+      { sub: 'user-old-session', clientId: 'app-client', authTime: 1_700_000_000_000, amr: [] },
+      privateKey,
+      'https://auth.example.com',
+      900
+    );
+
+    expect('auth_time' in decodeJwt(none)).toBe(false);
+    expect('amr' in decodeJwt(none)).toBe(false);
+    const decoded = await verifyAccessToken(none, publicKey);
+    expect('authTime' in decoded).toBe(false);
+    expect('amr' in decoded).toBe(false);
+    expect(decodeJwt(noMethods)['auth_time']).toBe(1_700_000_000);
+    expect('amr' in decodeJwt(noMethods)).toBe(false);
+  });
 });
 
 describe('signIdToken', () => {
@@ -191,6 +232,22 @@ describe('signIdToken', () => {
 
     const { payload } = await jwtVerify(token, publicKey, { algorithms: ['EdDSA'] });
     expect(payload['auth_time']).toBeUndefined();
+  });
+
+  it('emits amr when the sign-in proved methods, and omits it when none is known (#662)', async () => {
+    const { privateKey, publicKey } = await generateEdDSAKeyPair();
+    const sign = (amr?: readonly string[]) =>
+      signIdToken(
+        { sub: 'user-oidc-amr', audience: 'client-oidc-amr', ...(amr ? { amr } : {}) },
+        privateKey,
+        'https://auth.example.com',
+        900
+      );
+
+    const proved = await jwtVerify(await sign(['pwd', 'otp', 'mfa']), publicKey);
+    expect(proved.payload['amr']).toEqual(['pwd', 'otp', 'mfa']);
+    expect('amr' in (await jwtVerify(await sign([]), publicKey)).payload).toBe(false);
+    expect('amr' in (await jwtVerify(await sign(), publicKey)).payload).toBe(false);
   });
 
   it('emits acr verbatim when an assurance level was established (#237)', async () => {
@@ -493,6 +550,24 @@ describe('verifyAccessToken runtime claim-shape validation (F-10)', () => {
       const { privateKey, publicKey } = await generateEdDSAKeyPair();
       const token = await signRawClaims(
         { sub: 'user-mal', client_id: 'client-mal', cnf },
+        privateKey
+      );
+
+      await expect(verifyAccessToken(token, publicKey)).rejects.toThrow(JWTInvalidError);
+    }
+  );
+
+  it.each([
+    ['an amr that is not a list', { amr: 'pwd' }],
+    ['an amr with a value that is not a string', { amr: ['pwd', 1] }],
+    ['an auth_time that is not a number', { auth_time: '1700000000' }],
+    ['an auth_time that is not whole seconds', { auth_time: 1_700_000_000.5 }],
+  ])(
+    'rejects a correctly-signed token with %s, never reading it as no sign-in (#662)',
+    async (_name, claims) => {
+      const { privateKey, publicKey } = await generateEdDSAKeyPair();
+      const token = await signRawClaims(
+        { sub: 'user-mal', client_id: 'client-mal', ...claims },
         privateKey
       );
 

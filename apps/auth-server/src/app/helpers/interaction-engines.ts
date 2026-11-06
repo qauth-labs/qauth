@@ -480,7 +480,8 @@ export function decisionOf(
       // The sign-in is done: the interaction finishes with it, under a new
       // browser session (`authenticated` with no next step). The session's
       // issue time is when the request came, before the account was read
-      // (#748).
+      // (#748). It holds the engine's `amr` and `auth_time`, which the code
+      // carries to the tokens (#662).
       return {
         kind: 'authenticated',
         signIn: {
@@ -489,6 +490,7 @@ export function decisionOf(
             ? {}
             : { identifier: result.signIn.identifier }),
           amr: [...result.signIn.amr],
+          authTime: result.signIn.authTime,
           issuedAt: receivedAt,
         },
       };

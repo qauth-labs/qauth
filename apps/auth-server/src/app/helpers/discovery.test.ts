@@ -269,6 +269,18 @@ describe('buildOpenIdConfiguration', () => {
     );
   });
 
+  it('lists auth_time and amr among the claims it supplies (#662)', () => {
+    // How and when the user signed in: on the ID token and the JWT access
+    // token of a browser sign-in.
+    expect(buildOpenIdConfiguration({ issuer: ISSUER })['claims_supported']).toEqual(
+      expect.arrayContaining(['auth_time', 'amr'])
+    );
+    // Not an OAuth AS metadata member (RFC 8414): the OIDC document alone lists claims.
+    expect(buildAuthorizationServerMetadata({ issuer: ISSUER })).not.toHaveProperty(
+      'claims_supported'
+    );
+  });
+
   it('carries the RS256+EdDSA signing algorithms into the OIDC config (#309)', () => {
     const oidc = buildOpenIdConfiguration({
       issuer: ISSUER,

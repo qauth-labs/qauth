@@ -334,14 +334,15 @@ Notes:
 Beyond the standard `iss` / `sub` / `aud` / `exp` / `iat`, `id_token` carries
 (all via `signIdToken`, `libs/server/jwt/src/lib/jwt-service.ts:176-226`):
 
-| Claim            | Present when                                                                                   |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.                  |
-| `auth_time`      | Always for the code flow (the session's real authentication time, epoch seconds).              |
-| `sid`            | A browser session backs the code: its session id, the value the session cookie names.          |
-| `name`           | The granted scope includes `profile` **and** the user has a `firstName` and/or `lastName` set. |
-| `email`          | The granted scope includes `email` **and** a verified email attribute exists.                  |
-| `email_verified` | Same condition as `email`; always `true` when present.                                         |
+| Claim            | Present when                                                                                                                                                                      |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `nonce`          | The authorize request sent one (OIDC Core §3.1.3.6) — echoed back unmodified.                                                                                                     |
+| `auth_time`      | A sign-in backs the code: the session's real authentication time, epoch seconds. Not after a registration or a reset.                                                             |
+| `amr`            | A sign-in backs the code and stored its methods: RFC 8176 values, `["pwd"]` for a password. Not after a registration or a reset, nor for a session from before QAuth stored them. |
+| `sid`            | A browser session backs the code: its session id, the value the session cookie names.                                                                                             |
+| `name`           | The granted scope includes `profile` **and** the user has a `firstName` and/or `lastName` set.                                                                                    |
+| `email`          | The granted scope includes `email` **and** a verified email attribute exists.                                                                                                     |
+| `email_verified` | Same condition as `email`; always `true` when present.                                                                                                                            |
 
 `sid` names the browser session the user signed in with on the auth server,
 and is what back-channel logout will name when that session ends (ADR-019
@@ -363,6 +364,13 @@ and a verified address exists. A resource server that needs the address has
 the client request `email`, which puts it on the consent screen. A refresh or
 an exchange that narrows `email` out of the scope drops the claims, and
 `client_credentials` and the first-party `/auth/login` token never carry them.
+
+The access token of the code flow also carries the ID token's `auth_time` and
+`amr`, and every refresh of its family keeps them as they were (RFC 9068
+§2.2.1): they say when and how the user signed in, not when the token was
+issued, so a resource server can require a recent sign-in or a given method.
+Discovery lists both in `claims_supported`. The tokens of the other grants
+carry neither.
 
 ### 4. Call a protected resource
 

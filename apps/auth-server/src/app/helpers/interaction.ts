@@ -206,6 +206,11 @@ export interface InteractionSignIn {
   readonly assuranceLevel?: SessionAssuranceLevel | null;
   /** When the caller read the account; see `createBrowserSession`. */
   readonly issuedAt?: number;
+  /**
+   * When the last authenticator succeeded, in epoch milliseconds: the
+   * session's `auth_time` (#662). Absent, the session is created with now.
+   */
+  readonly authTime?: number;
   /** The RFC 8176 `amr` values the answer proved. */
   readonly amr: readonly string[];
 }
@@ -1084,12 +1089,16 @@ async function settleAnswer(
     // and the interaction stays with the first user.
     throw new Error('an interaction has one subject; switch users with a new interaction');
   }
+  // The session holds what this sign-in proved and when (#662): the methods
+  // and the time every code minted under it carries to the tokens.
   const session = await createBrowserSession(request.server, request, {
     realmId: taken.realmId,
     userId: signIn.userId,
     ...(signIn.identifier === undefined ? {} : { identifier: signIn.identifier }),
     ...(signIn.assuranceLevel === undefined ? {} : { assuranceLevel: signIn.assuranceLevel }),
     ...(signIn.issuedAt === undefined ? {} : { issuedAt: signIn.issuedAt }),
+    ...(signIn.authTime === undefined ? {} : { authTime: signIn.authTime }),
+    amr: signIn.amr,
   });
   settled.session = { realmId: session.realmId, sid: session.sid };
   // Signed now, with the realm's cookie key from the signer (#493): a signer

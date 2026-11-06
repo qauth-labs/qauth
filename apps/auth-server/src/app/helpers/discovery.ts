@@ -372,13 +372,18 @@ export function buildOpenIdConfiguration(input: DiscoveryMetadataInput): Record<
     // Discovery §3 lists claims the OP "MAY be able to supply" — conditional
     // emission is compliant. Since #229, email/email_verified are released
     // only when a VERIFIED email attribute exists (omitted entirely
-    // otherwise), so they stay listed here unchanged.
+    // otherwise), so they stay listed here unchanged. `auth_time` and `amr`
+    // (#662) say how and when the user signed in: on the ID token and the
+    // JWT access token of a browser sign-in, never after a registration or
+    // a reset, and `amr` only when the sign-in proved a method.
     claims_supported: [
       'sub',
       'iss',
       'aud',
       'exp',
       'iat',
+      'auth_time',
+      'amr',
       'nonce',
       'email',
       'email_verified',

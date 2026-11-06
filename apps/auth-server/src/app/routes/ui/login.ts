@@ -571,6 +571,9 @@ export default async function (fastify: FastifyInstance) {
         // #230: the credential's external_sub is the authenticated address.
         identifier: check.credential.externalSub,
         issuedAt,
+        // RFC 8176 §2 (#662): the password is the one method this page
+        // proves, and every code minted under the session says so.
+        amr: ['pwd'],
       });
 
       await fastify.repositories.users.updateLastLogin(realm.id, user.id);

@@ -47,18 +47,28 @@ describe('the subject of an authorization request', () => {
     }
   });
 
-  it("binds a session's auth_time, acr, end and sid to the code", () => {
+  it("binds a session's auth_time, amr, acr, end and sid to the code", () => {
     expect(subjectGrant(SESSION)).toEqual({
       authTime: 1_700_000_000_000,
+      amr: ['pwd'],
       assuranceLevel: 'substantial',
       sessionExpiresAt: 1_700_028_800_000,
       session: { realmId: 'realm-1', sid: 'sid-1' },
     });
   });
 
+  it('binds no amr for a session that stored no method, and keeps its auth_time (#662)', () => {
+    // A session created before sessions stored their methods, or by a sign-in
+    // that proved none this server names: its tokens carry no `amr`.
+    const unproved = { ...(SESSION as object), amr: [] } as never;
+
+    expect(subjectGrant(unproved)).toMatchObject({ authTime: 1_700_000_000_000, amr: null });
+  });
+
   it('binds none of them for a registration (ADR-017 Decision 10)', () => {
     expect(subjectGrant(REGISTERED)).toEqual({
       authTime: null,
+      amr: null,
       assuranceLevel: null,
       sessionExpiresAt: null,
       session: null,

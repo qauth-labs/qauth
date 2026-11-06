@@ -67,6 +67,12 @@ describe('[GET /.well-known/openid-configuration] OIDC Discovery 1.0 §3 — the
       expect.arrayContaining(['sub', 'iss', 'aud', 'exp', 'iat'])
     );
   });
+
+  it('lists auth_time and amr in claims_supported, the sign-in claims the tokens carry (§3; OIDC Core 1.0 §2)', async () => {
+    const { body } = await getJsonObject(documentUrl);
+
+    expect(body['claims_supported']).toEqual(expect.arrayContaining(['auth_time', 'amr']));
+  });
 });
 
 describe('[GET /.well-known/openid-configuration] OpenID Connect Back-Channel Logout 1.0 §2.1 — the OP metadata', () => {

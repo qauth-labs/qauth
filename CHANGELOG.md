@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`amr` and `auth_time` on the tokens of browser sign-ins** ([#662],
+  ADR-017 Decision 10 as amended 2026-11-06, ADR-020 §3; RFC 9068 §2.2.1,
+  RFC 8176). A browser session now stores the methods its sign-in proved
+  (`["pwd"]` for a password, on the hosted pages and on `/ui/login`). The
+  code copies them and the session's authentication time at mint time, the
+  refresh family at the code exchange (new columns `authorization_codes.amr`,
+  `refresh_tokens.auth_time` and `refresh_tokens.amr`, migration 0065), and
+  the ID token and the JWT access token carry `amr` and `auth_time`, unchanged
+  across every refresh of the family. The access token carried neither
+  before; the ID token already carried `auth_time`. A registration or reset
+  code still yields neither claim, and a session created before this release
+  (or by a wallet or upstream sign-in) yields no `amr`. Discovery lists `amr`
+  and `auth_time` in `claims_supported`. During a rolling upgrade, a refresh
+  served by a node of the previous release drops both claims from that family
+  for good.
 - **Recovery codes for a lost second factor** ([#649], ADR-017 Decisions 7
   and 8, ADR-018 §3; `graphs/flows/core/recovery-code`). A set is 10 codes of
   80 bits each from the CSPRNG, shown once as `xxxx-xxxx-xxxx-xxxx` and
@@ -3225,6 +3240,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#643]: https://github.com/qauth-labs/qauth/issues/643
 [#646]: https://github.com/qauth-labs/qauth/issues/646
 [#649]: https://github.com/qauth-labs/qauth/issues/649
+[#662]: https://github.com/qauth-labs/qauth/issues/662
 [#672]: https://github.com/qauth-labs/qauth/issues/672
 [#675]: https://github.com/qauth-labs/qauth/issues/675
 [#689]: https://github.com/qauth-labs/qauth/issues/689

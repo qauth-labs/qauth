@@ -229,6 +229,17 @@ export interface JwtUtils {
       /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
       cnf?: ConfirmationClaim;
       /**
+       * RFC 9068 §2.2.1 `auth_time` (#662): when the end user authenticated, in
+       * epoch MILLISECONDS; the claim is in epoch seconds (floored). Omitted
+       * when no sign-in is known (client credentials, registration, reset).
+       */
+      authTime?: number;
+      /**
+       * RFC 9068 §2.2.1 / RFC 8176 `amr` (#662): the methods of that sign-in.
+       * Omitted, as is an empty list, when none is known.
+       */
+      amr?: readonly string[];
+      /**
        * The access-token lifespan in seconds, in place of the configured one:
        * the lifetime of the token's realm (#527), or a shorter value the
        * caller computed (the token-exchange grant clamps the delegated token
@@ -275,6 +286,10 @@ export interface JwtUtils {
       act?: ActClaim;
       /** RFC 9449 §6.1 `cnf.jkt` of a DPoP-bound token; omitted for a Bearer token. */
       cnf?: ConfirmationClaim;
+      /** `auth_time`, in epoch milliseconds, as for {@link signAccessToken}. */
+      authTime?: number;
+      /** `amr`, as for {@link signAccessToken}. */
+      amr?: readonly string[];
       /** The lifespan in seconds, in place of the configured one, as for {@link signAccessToken}. */
       expiresInOverride?: number;
       /** The latest `exp`, in epoch seconds, as for {@link signAccessToken}. */
@@ -326,6 +341,11 @@ export interface JwtUtils {
        * `auth_time` claim in epoch SECONDS (floored). Omitted when unknown.
        */
       authTime?: number;
+      /**
+       * OIDC Core §2 `amr` — the RFC 8176 methods of that authentication (#662).
+       * Omitted, as is an empty list, when none is known.
+       */
+      amr?: readonly string[];
       /**
        * OIDC Core §2 `acr` — the authentication event's assurance level, already
        * mapped to the deployment's vocabulary (#237). Omitted (claim absent)

@@ -1268,6 +1268,8 @@ describe('finishConsent', () => {
           codeChallengeMethod: 'S256',
           nonce: 'n-0S6_WzA2Mj',
           authTime,
+          // The session's sign-in methods, which the tokens assert (#662).
+          amr: ['pwd'],
           assuranceLevel: 'substantial',
           sessionExpiresAt: session.expiresAt,
           session: { realmId: REALM.id, sid: 'sid-1' },

@@ -57,6 +57,11 @@ export const accessTokenClaimsSchema = z.looseObject({
       jkt: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
     })
     .optional(),
+  // RFC 9068 §2.2.1 (#662): when the user signed in, in epoch seconds, and
+  // the RFC 8176 methods. A malformed value is refused rather than read as
+  // no sign-in: an operation that asks for a fresh one reads both.
+  auth_time: z.number().int().nonnegative().optional(),
+  amr: z.array(z.string()).optional(),
   // Registered temporal/issuer claims.
   iat: z.number().optional(),
   exp: z.number().optional(),

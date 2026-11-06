@@ -551,6 +551,25 @@ function tokenTypeFor(ctx: { dpopThumbprint: string | undefined }): 'DPoP' | 'Be
   return ctx.dpopThumbprint === undefined ? 'Bearer' : 'DPoP';
 }
 
+/**
+ * How and when the user signed in, as a code or a refresh family records it
+ * (#662): `{ authTime, amr }` to spread into the ID token's and the access
+ * token's claims (OIDC Core §2, RFC 9068 §2.2.1), each left out when the
+ * record holds none, and `amr` never without `authTime`. A code from a
+ * registration or a reset, and a family it started, hold neither.
+ */
+function recordedSignIn(recorded: {
+  readonly authTime?: number | null;
+  readonly amr?: readonly string[] | null;
+}): { authTime?: number; amr?: readonly string[] } {
+  const { authTime, amr } = recorded;
+  if (authTime === null || authTime === undefined) return {};
+  return {
+    authTime,
+    ...(amr === null || amr === undefined || amr.length === 0 ? {} : { amr: [...amr] }),
+  };
+}
+
 /** A public client: it authenticates with nothing but its `client_id` (RFC 6749 §2.1). */
 function isPublicClient(client: OAuthClientLike): boolean {
   return client.tokenEndpointAuthMethod === 'none';
@@ -1143,6 +1162,10 @@ async function handleAuthorizationCode(
           familySessionExpiresAt: authCode.sessionExpiresAt ?? null,
         }
       : undefined;
+  // The sign-in behind the code (#662): its time and methods, on the ID token
+  // and on every access token of the family this code starts, unchanged
+  // across refreshes (RFC 9068 §2.2.1). None for a registration or a reset.
+  const signIn = recordedSignIn(authCode);
 
   // A QAuth API audience only when a `resource` named it (#509).
   const aud = resolveUserGrantAudience(client, effectiveResource);
@@ -1205,6 +1228,9 @@ async function handleAuthorizationCode(
           authorizationCodeId: authCode.id,
           familyCreatedAt: refresh.familyCreatedAt,
           familySessionExpiresAt: refresh.familySessionExpiresAt,
+          // The sign-in behind the code, which every rotation copies (#662).
+          authTime: signIn.authTime ?? null,
+          amr: signIn.amr === undefined ? null : [...signIn.amr],
           expiresAt: refresh.expiresAt,
           scopes: authCode.scopes,
           // RFC 8707: carry the resource set onto the refresh token so subsequent
@@ -1228,6 +1254,7 @@ async function handleAuthorizationCode(
       scope: scopeString,
       aud,
       ...dpopConfirmation(ctx),
+      ...signIn,
       expiresInOverride: accessTokenExpiresIn,
     });
     // Recorded against the code and the family it starts, before the commit,
@@ -1260,8 +1287,11 @@ async function handleAuthorizationCode(
           // OIDC Core §2 `auth_time`: the real end-user authentication time
           // (session establishment), captured on the auth code at mint time. In
           // epoch MS here; signIdToken floors to seconds. Nullable on in-flight
-          // codes minted before the column existed → omit the claim.
-          authTime: authCode.authTime ?? undefined,
+          // codes minted before the column existed → omit the claim. And its
+          // `amr` (#662), absent for a session that stored no method. Written
+          // out, not spread, so `id-token-sid.test.ts` reads every member.
+          authTime: signIn.authTime,
+          amr: signIn.amr,
           // OIDC Core §2 `acr` (#237, ADR-004/ADR-010): the eIDAS Level of
           // Assurance of the authentication this code represents, rendered into
           // the deployment's `acr` vocabulary here rather than at mint time. A
@@ -1779,6 +1809,10 @@ async function handleRefreshToken(
         // never restarts its clock or lifts the session's cap.
         familyCreatedAt: storedToken.familyCreatedAt,
         familySessionExpiresAt: storedToken.familySessionExpiresAt ?? null,
+        // The sign-in behind the family, unchanged (RFC 9068 §2.2.1, #662):
+        // a refresh never makes it look fresher.
+        authTime: storedToken.authTime ?? null,
+        amr: storedToken.amr ?? null,
         previousTokenHash: presentedHash,
         expiresAt: newRefreshTokenExpiresAt,
         scopes: familyScopes,
@@ -1805,6 +1839,9 @@ async function handleRefreshToken(
       scope: scopeString,
       aud,
       ...dpopConfirmation(ctx),
+      // The family's sign-in, as the code exchange put it on the first
+      // access token (#662).
+      ...recordedSignIn(storedToken),
       expiresInOverride: accessTokenExpiresIn,
     });
     // Recorded against the family before the commit, so a replay of its code

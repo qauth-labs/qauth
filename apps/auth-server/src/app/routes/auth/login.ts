@@ -293,6 +293,10 @@ export default async function (fastify: FastifyInstance) {
           familyId: randomUUID(),
           familyCreatedAt,
           familySessionExpiresAt: null,
+          // No `auth_time` or `amr` on this route's tokens: #662 puts them
+          // on the tokens of browser sign-ins.
+          authTime: null,
+          amr: null,
           expiresAt: refreshExpiresAt,
           scopes: [],
         });

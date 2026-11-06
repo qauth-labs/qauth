@@ -213,6 +213,8 @@ Signs an access token with the given payload. The protected header carries `typ:
   - `aud?: string | string[]` - Audience; defaults to `clientId`
   - `act?: ActClaim` - RFC 8693 actor claim, only on delegated tokens
   - `cnf?: { jkt: string }` - RFC 9449 key thumbprint, only on DPoP-bound tokens
+  - `authTime?: number` - When the user signed in, in epoch milliseconds; becomes `auth_time` in seconds (RFC 9068 §2.2.1)
+  - `amr?: readonly string[]` - RFC 8176 methods of that sign-in; an empty list is left out
 - `privateKey: KeyLike` - EdDSA private key for signing
 - `issuer: string` - JWT issuer (iss claim)
 - `expiresIn: number` - Expiration time in seconds
@@ -236,14 +238,14 @@ Signs an OIDC ID token with `typ: JWT` and `token_use: 'id'`.
 
 **Parameters:**
 
-- `payload: SignIdTokenPayload` - `sub`, `audience` (the client ID), and optional `email`, `email_verified`, `name`, `nonce`, `authTime`, `acr`
+- `payload: SignIdTokenPayload` - `sub`, `audience` (the client ID), and optional `email`, `email_verified`, `name`, `nonce`, `authTime`, `amr`, `acr`
 - `privateKey: KeyLike` - EdDSA or RS256 private key, matching `alg`
 - `issuer: string` - JWT issuer (iss claim)
 - `expiresIn: number` - Expiration time in seconds
 - `alg?: 'EdDSA' | 'RS256'` - Signature algorithm (default: `'EdDSA'`)
 - `kid?: string` - Key ID for the protected header, omitted when empty
 
-`authTime` is in epoch milliseconds and becomes `auth_time` in seconds. An empty `acr` is left out.
+`authTime` is in epoch milliseconds and becomes `auth_time` in seconds. An empty `amr` or `acr` is left out.
 
 #### `verifyAccessToken(token, publicKey, options?): Promise<JWTPayload>`
 

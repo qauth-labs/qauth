@@ -271,10 +271,14 @@ export type RefreshToken = InferSelectModel<typeof refreshTokens>;
  * A new refresh token. `familySessionExpiresAt` is required (null when no
  * browser session started the family), so a rotation that forgets to copy the
  * family's session end fails to compile rather than dropping the session's cap
- * (#552).
+ * (#552). So are `authTime` and `amr` (null when no sign-in backs the family,
+ * or it proved no method), so a rotation cannot drop the sign-in its tokens
+ * assert (#662).
  */
 export type NewRefreshToken = InferInsertModel<typeof refreshTokens> & {
   familySessionExpiresAt: number | null;
+  authTime: number | null;
+  amr: string[] | null;
 };
 
 /**

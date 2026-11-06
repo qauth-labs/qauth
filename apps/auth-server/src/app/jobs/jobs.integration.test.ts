@@ -304,6 +304,8 @@ describe('job runner on a real Postgres', () => {
           familyId,
           familyCreatedAt: past - 120_000,
           familySessionExpiresAt: null,
+          authTime: null,
+          amr: null,
           userId: user.id,
           oauthClientId: client.id,
           expiresAt,

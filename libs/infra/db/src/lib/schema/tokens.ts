@@ -90,6 +90,21 @@ export const authorizationCodes = pgTable(
      */
     authTime: bigint('auth_time', { mode: 'number' }),
     /**
+     * RFC 8176 `amr`: the authentication methods of the sign-in that backs
+     * this code, such as `["pwd"]` (ADR-017 Decision 10, #662), copied from
+     * the browser session at mint time. The code exchange puts it in the ID
+     * token and the JWT access token, and the refresh family it starts keeps
+     * it.
+     *
+     * NULL when no method is known: a code from a registration or a password
+     * reset (which proved a mailbox, not an authenticator), one from a browser
+     * session created before the session stored its methods, one from a
+     * sign-in that proved none (a wallet or upstream sign-in), and one minted
+     * before migration 0065. Never an empty list, so "no method" has one
+     * representation; and only beside an `auth_time`.
+     */
+    amr: jsonb('amr').$type<string[]>(),
+    /**
      * eIDAS Level of Assurance of the authentication that backs this code
      * (ADR-004, ADR-010, issue #237). `'substantial'` or `'high'`; NULL means no
      * assurance above `low` was established — which is every password login, and
@@ -194,6 +209,15 @@ export const authorizationCodes = pgTable(
       'authorization_codes_dpop_jkt_format',
       sql`${t.dpopJkt} IS NULL OR ${t.dpopJkt} ~ '^[A-Za-z0-9_-]{43}$'`
     ),
+    /**
+     * `amr` is NULL or a non-empty list, and only beside an `auth_time`: a
+     * method with no time could not tell a resource server whether the
+     * sign-in is fresh (#662).
+     */
+    check(
+      'authorization_codes_amr_valid',
+      sql`${t.amr} IS NULL OR (${t.authTime} IS NOT NULL AND jsonb_typeof(${t.amr}) = 'array' AND ${t.amr} <> '[]'::jsonb)`
+    ),
   ]
 );
 
@@ -250,6 +274,28 @@ export const refreshTokens = pgTable(
      * trigger copies it for the previous release during a rolling upgrade.
      */
     familySessionExpiresAt: bigint('family_session_expires_at', { mode: 'number' }),
+    /**
+     * When the user signed in, in epoch ms (ADR-017 Decision 10, #662): the
+     * authorization code's `auth_time`, which every access token of the family
+     * carries as `auth_time`. Every rotation copies it, so a refresh never
+     * makes a sign-in look fresher (RFC 9068 §2.2.1).
+     *
+     * NULL when no sign-in backs the family (a code from a registration or a
+     * reset, `/auth/login`), for a family that predates migration 0065, and
+     * for a token the previous release rotated during a rolling upgrade, which
+     * does not copy it: the family's tokens then carry neither claim, and an
+     * operation that asks for a fresh sign-in asks for one. The repository's
+     * insert type requires the key, so a rotation cannot forget to copy it.
+     */
+    authTime: bigint('auth_time', { mode: 'number' }),
+    /**
+     * RFC 8176 `amr` of that sign-in (#662): the authorization code's `amr`,
+     * copied by every rotation, as `auth_time` is. NULL when no method is
+     * known, in the cases `auth_time` lists and for a code that carried none.
+     * Never an empty list, and only beside an `auth_time`. The repository's
+     * insert type requires the key.
+     */
+    amr: jsonb('amr').$type<string[]>(),
     scopes: jsonb('scopes').notNull().default(JSONB_EMPTY_ARRAY).$type<string[]>(),
     /**
      * RFC 8707 resource indicator(s) carried from the originating
@@ -312,6 +358,12 @@ export const refreshTokens = pgTable(
     check(
       'refresh_tokens_cnf_jkt_format',
       sql`${t.cnfJkt} IS NULL OR ${t.cnfJkt} ~ '^[A-Za-z0-9_-]{43}$'`
+    ),
+    check('refresh_tokens_auth_time_positive', sql`${t.authTime} IS NULL OR ${t.authTime} > 0`),
+    /** As `authorization_codes_amr_valid`: NULL or a non-empty list, only beside an `auth_time`. */
+    check(
+      'refresh_tokens_amr_valid',
+      sql`${t.amr} IS NULL OR (${t.authTime} IS NOT NULL AND jsonb_typeof(${t.amr}) = 'array' AND ${t.amr} <> '[]'::jsonb)`
     ),
   ]
 );

@@ -313,6 +313,9 @@ describe('UI /ui/login — CSRF defence', () => {
       // /oauth/authorize copies this field onto the authorization code, and
       // /oauth/token renders `acr` only from a level that is present.
       assuranceLevel: null,
+      // RFC 8176 §2 (#662): the password, the one method this page proves,
+      // which every code minted under the session carries to its tokens.
+      amr: ['pwd'],
       ipAddress: '127.0.0.1',
       userAgent: 'TestBrowser/1.0',
       issuedAt: expect.any(Number),

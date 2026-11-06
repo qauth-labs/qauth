@@ -45,7 +45,7 @@ describe('decisionOf: a registration (#640)', () => {
     });
   });
 
-  it('still signs a completed sign-in in, with its amr, under a new browser session', () => {
+  it('still signs a completed sign-in in, with its amr and auth_time, under a new browser session', () => {
     const result: RoundResult = {
       kind: 'complete',
       transaction: null,
@@ -58,6 +58,8 @@ describe('decisionOf: a registration (#640)', () => {
         userId: 'user-1',
         identifier: 'a@example.com',
         amr: ['pwd'],
+        // The engine's time, which the session stores as its `auth_time` (#662).
+        authTime: 1,
         issuedAt: RECEIVED_AT,
       },
     });

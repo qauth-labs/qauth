@@ -57,14 +57,24 @@ export function subjectEnforcesDangerousStepUp(
 
 /**
  * What a code binds of its subject's authentication: the browser session's
- * `auth_time`, assurance level, end and `sid`, or, for a registration, none
- * of them (ADR-017 Decision 10: no `auth_time`, no `amr`, no session).
+ * `auth_time`, `amr`, assurance level, end and `sid`, or, for a registration
+ * or a reset, none of them (ADR-017 Decision 10: no `auth_time`, no `amr`, no
+ * session).
  */
 export function subjectGrant(
   subject: AuthorizationSubject
-): Pick<AuthorizationCodeGrant, 'authTime' | 'assuranceLevel' | 'sessionExpiresAt' | 'session'> {
+): Pick<
+  AuthorizationCodeGrant,
+  'authTime' | 'amr' | 'assuranceLevel' | 'sessionExpiresAt' | 'session'
+> {
   if (isRegisteredSubject(subject)) {
-    return { authTime: null, assuranceLevel: null, sessionExpiresAt: null, session: null };
+    return {
+      authTime: null,
+      amr: null,
+      assuranceLevel: null,
+      sessionExpiresAt: null,
+      session: null,
+    };
   }
   return {
     // OIDC Core §2 `auth_time`: the REAL end-user authentication time (the
@@ -72,6 +82,11 @@ export function subjectGrant(
     // /oauth/token can assert it in the ID token and a `max_age` check
     // evaluates the actual session age.
     authTime: subject.authTime,
+    // RFC 8176 `amr` (#662): the methods the session's sign-in proved, for
+    // the ID token and the access tokens. None for a session that proved no
+    // method this server names (a wallet or upstream sign-in), and for one
+    // created before sessions stored them: the tokens then carry no `amr`.
+    amr: subject.amr.length > 0 ? [...subject.amr] : null,
     // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, for the ID
     // token's `acr`. NULL on the password path (`'low'`, no claim).
     assuranceLevel: toStoredAssuranceLevel(subject.assuranceLevel),

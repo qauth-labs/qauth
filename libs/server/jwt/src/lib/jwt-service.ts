@@ -40,6 +40,28 @@ export const ACCESS_TOKEN_TYP = 'at+jwt';
 export const ID_TOKEN_TYP = 'JWT';
 
 /**
+ * The claims that say how and when the user signed in, shared by the ID token
+ * (OIDC Core §2) and the access token (RFC 9068 §2.2.1) so the two cannot
+ * drift: `auth_time` in epoch SECONDS, floored from the payload's epoch MS,
+ * and `amr`, a copy of the RFC 8176 values. Each is left out when unknown, and
+ * `amr` when empty: an empty list asserts no method, which QAuth never means
+ * to say (#662).
+ */
+function authenticationClaims(payload: {
+  readonly authTime?: number;
+  readonly amr?: readonly string[];
+}): Record<string, unknown> {
+  const claims: Record<string, unknown> = {};
+  if (payload.authTime !== undefined) {
+    claims['auth_time'] = Math.floor(payload.authTime / 1000);
+  }
+  if (payload.amr !== undefined && payload.amr.length > 0) {
+    claims['amr'] = [...payload.amr];
+  }
+  return claims;
+}
+
+/**
  * Sign an access token
  *
  * Creates a JWT access token with EdDSA algorithm.
@@ -106,6 +128,10 @@ export function buildAccessTokenClaims(payload: SignAccessTokenPayload): {
   if (payload.cnf !== undefined) {
     claims['cnf'] = { jkt: payload.cnf.jkt };
   }
+  // RFC 9068 §2.2.1 (#662): how and when the user signed in, for a resource
+  // server that asks for a fresh sign-in. The same values on every token of
+  // one refresh family; absent when no sign-in backs the token.
+  Object.assign(claims, authenticationClaims(payload));
 
   // `aud` claim: array → multi-audience, string → single, otherwise fall back
   // to the client_id (OAuth 2.1 RFC 8707 light-mode default).
@@ -204,9 +230,9 @@ export function buildIdTokenClaims(payload: SignIdTokenPayload): {
   // (session establishment time), so floor to seconds. REQUIRED when the
   // authorization request used `max_age`; emitted whenever tracked (always for
   // the code flow) and omitted when unknown so nothing breaks for legacy codes.
-  if (payload.authTime !== undefined) {
-    claims['auth_time'] = Math.floor(payload.authTime / 1000);
-  }
+  // OIDC Core §2 `amr` (#662): the RFC 8176 methods of that authentication,
+  // omitted when none is known.
+  Object.assign(claims, authenticationClaims(payload));
   // OIDC Core §2 `acr` (#237) — the assurance level of the authentication
   // event, already rendered into the deployment's vocabulary by the federation
   // layer. Emitted ONLY when a level above `low` was established, so a password
@@ -442,5 +468,10 @@ export async function verifyAccessToken(
     // consults any revocation store itself.
     jti: claims.jti,
     token_use: claims.token_use,
+    // RFC 9068 §2.2.1 (#662): how and when the user signed in, for an
+    // operation that asks for a fresh sign-in. `auth_time` back to epoch MS,
+    // the unit `SignAccessTokenPayload.authTime` holds.
+    ...(claims.auth_time === undefined ? {} : { authTime: claims.auth_time * 1000 }),
+    ...(claims.amr === undefined ? {} : { amr: claims.amr }),
   };
 }

@@ -6,9 +6,9 @@ import { z } from 'zod';
 
 import { env } from '../../../config/env';
 import { MINT_TRANSACTION, STEP_UP_FRESH_AUTH_WINDOW_MS } from '../../constants';
-import { toStoredAssuranceLevel } from '../../helpers/acr-claims';
 import { mintAuthorizationCode } from '../../helpers/authorization-code';
 import { sendAuthorizationError } from '../../helpers/authorization-error';
+import { subjectGrant } from '../../helpers/authorization-subject';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import {
   findExceedingAgentScopesForClient,
@@ -981,21 +981,15 @@ export default async function (fastify: FastifyInstance) {
             codeChallenge: body.code_challenge,
             codeChallengeMethod: body.code_challenge_method,
             nonce: body.nonce ?? null,
-            // OIDC Core §2 `auth_time`: the REAL end-user authentication time
-            // (browser-session establishment, epoch MS), so /oauth/token can
-            // assert `auth_time` in the ID token and `max_age` evaluates the
-            // actual session age rather than this code's mint time.
-            authTime: session.authTime,
-            // #237 (ADR-004/ADR-010): the authentication's eIDAS LoA, bound to
-            // the code so /oauth/token can assert `acr`. NULL for a password
-            // login (`'low'`), which is the "omit the claim" outcome.
-            assuranceLevel: toStoredAssuranceLevel(session.assuranceLevel),
-            // ADR-019 Decision 3 (#552): the session's absolute end, so the
-            // refresh family this code starts never outlives the session.
-            sessionExpiresAt: session.expiresAt,
-            // ADR-019 Decisions 3 and 4 (#549): the session whose `sid` the
-            // code exchange puts in the ID token, and which records this client.
-            session: { realmId: session.realmId, sid: session.sid },
+            // The session's authentication, as `/oauth/authorize` binds it
+            // (`subjectGrant`): OIDC Core §2 `auth_time`, the REAL end-user
+            // authentication time, so `max_age` evaluates the actual session
+            // age; its RFC 8176 `amr` (#662); its eIDAS LoA for `acr` (#237,
+            // NULL for a password login); its absolute end, which caps the
+            // refresh family (ADR-019 Decision 3, #552); and the session whose
+            // `sid` the ID token names and which records this client (ADR-019
+            // Decisions 3 and 4, #549).
+            ...subjectGrant(session),
             scopes,
             // RFC 8707: bind the resource(s) the screen named to this code so
             // /oauth/token can set the issued access token's `aud` claim.

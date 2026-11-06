@@ -2359,6 +2359,108 @@ describe('POST /oauth/token route — authorization_code grant', () => {
     expect(idClaims['authTime']).toBeUndefined();
   });
 
+  it('puts the code’s auth_time and amr on the ID token, the access token and the family it starts (#662)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const authTimeMs = 1_700_000_000_000;
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({
+      ...authCode,
+      scopes: ['openid', 'read:foo'],
+      authTime: authTimeMs,
+      amr: ['pwd'],
+    });
+    // A stored consent that covers the code, so the exchange starts a family.
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      userId: authCode.userId,
+      oauthClientId: authCode.oauthClientId,
+      scopes: ['openid', 'read:foo'],
+      resourceScopes: {},
+      revokedAt: null,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    // RFC 9068 §2.2.1 and OIDC Core §2: the same sign-in on both tokens.
+    expect(fastify.jwtUtils.signIdToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ authTime: authTimeMs, amr: ['pwd'] })
+    );
+    expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+      IN_REQUEST_REALM,
+      expect.objectContaining({ authTime: authTimeMs, amr: ['pwd'] })
+    );
+    // The family keeps them for every rotation.
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ authTime: authTimeMs, amr: ['pwd'] }),
+      expect.anything()
+    );
+  });
+
+  it('puts neither claim on any token of a code that carries no sign-in, as a registration’s or a reset’s (#662)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, scopes: ['openid', 'read:foo'], authTime: null, amr: null });
+    // A stored consent that covers the code, so the exchange starts a family.
+    (fastify.repositories.oauthConsents.findActive as unknown as Mock).mockResolvedValue({
+      id: 'consent-uuid-1',
+      userId: authCode.userId,
+      oauthClientId: authCode.oauthClientId,
+      scopes: ['openid', 'read:foo'],
+      resourceScopes: {},
+      revokedAt: null,
+    });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
+      string,
+      unknown
+    >;
+    expect(idClaims['authTime']).toBeUndefined();
+    expect(idClaims['amr']).toBeUndefined();
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][1] as Record<string, unknown>;
+    expect('authTime' in accessClaims).toBe(false);
+    expect('amr' in accessClaims).toBe(false);
+    expect(fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+      expect.objectContaining({ authTime: null, amr: null }),
+      expect.anything()
+    );
+  });
+
+  it('puts auth_time but no amr on the tokens of a session that stored no method (#662)', async () => {
+    const { fastify, ctx, authCode } = setupAuthCodeStub();
+    const authTimeMs = 1_700_000_000_000;
+    (
+      fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+    ).mockResolvedValue({ ...authCode, scopes: ['openid'], authTime: authTimeMs, amr: null });
+    await tokenRoute(fastify);
+    const handler = ctx.handler;
+    if (!handler) throw new Error('Handler missing');
+
+    await handler(baseRequest(), createReply());
+
+    const accessClaims = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+      .calls[0][1] as Record<string, unknown>;
+    expect(accessClaims['authTime']).toBe(authTimeMs);
+    expect('amr' in accessClaims).toBe(false);
+    const idClaims = (fastify.jwtUtils.signIdToken as unknown as Mock).mock.calls[0][1] as Record<
+      string,
+      unknown
+    >;
+    expect(idClaims['authTime']).toBe(authTimeMs);
+    expect(idClaims['amr']).toBeUndefined();
+  });
+
   it('threads the code assurance level into the id_token as acr (#237)', async () => {
     const { fastify, ctx, authCode } = setupAuthCodeStub();
     (
@@ -4545,6 +4647,39 @@ describe('POST /oauth/token route — refresh_token grant', () => {
         .calls[0][0] as { familySessionExpiresAt: number | null; expiresAt: number };
       expect(created.familySessionExpiresAt).toBe(sessionEnd);
       expect(created.expiresAt).toBe(sessionEnd);
+    });
+
+    it('keeps the family’s auth_time and amr on the rotated token and its access token (RFC 9068 §2.2.1, #662)', async () => {
+      const authTimeMs = Date.now() - 5 * MINUTE;
+      const setup = setupFamily(5 * MINUTE, { authTime: authTimeMs, amr: ['pwd'] });
+
+      await expect(refreshIn(setup, CAPPED_REALM)).resolves.toMatchObject({
+        refresh_token: 'new-refresh-token',
+      });
+      expect(setup.fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ authTime: authTimeMs, amr: ['pwd'] }),
+        expect.anything()
+      );
+      // The sign-in's own time, never the refresh's.
+      expect(setup.fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ authTime: authTimeMs, amr: ['pwd'] })
+      );
+    });
+
+    it('puts neither claim on the access token of a family that holds no sign-in (#662)', async () => {
+      const setup = setupFamily(5 * MINUTE, { authTime: null, amr: null });
+
+      await refreshIn(setup, CAPPED_REALM);
+
+      expect(setup.fastify.repositories.refreshTokens.create).toHaveBeenCalledWith(
+        expect.objectContaining({ authTime: null, amr: null }),
+        expect.anything()
+      );
+      const accessClaims = (setup.fastify.jwtUtils.signAccessToken as unknown as Mock).mock
+        .calls[0][1] as Record<string, unknown>;
+      expect('authTime' in accessClaims).toBe(false);
+      expect('amr' in accessClaims).toBe(false);
     });
 
     it('refuses once the session that started the family has ended', async () => {

@@ -743,6 +743,9 @@ describe('wallet login — completion', () => {
       realmId: 'realm-1',
       userId: 'user-1',
       authTime: expect.any(Number),
+      // No RFC 8176 method this server names for a wallet presentation: its
+      // tokens carry no `amr` (#662).
+      amr: [],
       assuranceLevel: null,
       ipAddress: '127.0.0.1',
       userAgent: 'TestWallet/1.0',
