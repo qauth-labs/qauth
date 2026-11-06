@@ -142,7 +142,13 @@ describe('migration 0065 — sign-in methods on codes and refresh families (seed
       `INSERT INTO refresh_tokens
          (token_hash, user_id, oauth_client_id, expires_at, family_created_at, auth_time, amr)
        VALUES ($1, $2, $3, 1, 1, $4, $5::jsonb)`,
-      [tokenHash, seeded.userId, seeded.clientId, authTime, amr === null ? null : JSON.stringify(amr)]
+      [
+        tokenHash,
+        seeded.userId,
+        seeded.clientId,
+        authTime,
+        amr === null ? null : JSON.stringify(amr),
+      ]
     );
   }
 
