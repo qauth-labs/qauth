@@ -41,7 +41,8 @@ import {
  * - No account exists before the code and the new password both passed.
  * - The account has a verified password credential and a verified email
  *   attribute.
- * - The code a registration ends in carries no `amr` and no `auth_time`.
+ * - The code a registration ends in carries no `amr` and no `auth_time`,
+ *   and neither do its ID token and access token (#662).
  * - A disabled account's address gets no mail, and nothing of the account
  *   changes.
  *
@@ -450,11 +451,11 @@ describe('registration through prompt=create (#640, real containers)', () => {
     const authorizationCode = callback.searchParams.get('code') as string;
     expect(authorizationCode).toMatch(/.+/);
 
-    const [stored] = await query<{ auth_time: unknown; session_id: unknown }>(
-      'SELECT auth_time, session_id FROM authorization_codes WHERE user_id = $1',
+    const [stored] = await query<{ auth_time: unknown; amr: unknown; session_id: unknown }>(
+      'SELECT auth_time, amr, session_id FROM authorization_codes WHERE user_id = $1',
       [userId]
     );
-    expect(stored).toEqual({ auth_time: null, session_id: null });
+    expect(stored).toEqual({ auth_time: null, amr: null, session_id: null });
 
     const token = await server().inject({
       method: 'POST',
@@ -474,6 +475,11 @@ describe('registration through prompt=create (#640, real containers)', () => {
     expect(idToken).not.toHaveProperty('auth_time');
     expect(idToken).not.toHaveProperty('amr');
     expect(idToken).not.toHaveProperty('sid');
+    // Nor does the access token (#662): a registration is no sign-in.
+    const accessToken = decodeJwtClaims((token.json() as { access_token: string }).access_token);
+    expect(accessToken['sub']).toBe(userId);
+    expect(accessToken).not.toHaveProperty('auth_time');
+    expect(accessToken).not.toHaveProperty('amr');
   });
 
   it('helps the owner of an existing verified account sign in after the code, creating nothing', async () => {

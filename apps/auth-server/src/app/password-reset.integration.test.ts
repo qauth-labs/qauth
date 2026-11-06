@@ -39,7 +39,8 @@ import { NOT_VALID_BEFORE_MARGIN_MS } from './helpers/account-validity';
  * - After a reset every refresh token of the user fails and every older
  *   browser session is refused.
  * - A passkey-bound account cannot finish a reset with email alone.
- * - The code a reset ends in carries no `amr` and no `auth_time`.
+ * - The code a reset ends in carries no `amr` and no `auth_time`, and
+ *   neither do its ID token and access token (#662).
  * - The reset is not offered under `max_age` or `prompt=login`.
  * - The password's failure counter and its disabled mark clear; a second
  *   factor's counter does not.
@@ -467,11 +468,11 @@ describe('the password reset and the session epoch (#642, real containers)', () 
 
     // Its code carries no amr and no auth_time, and binds no session.
     const code = await codeOf(reset.jar, done);
-    const [stored] = await query<{ auth_time: unknown; session_id: unknown }>(
-      'SELECT auth_time, session_id FROM authorization_codes WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
+    const [stored] = await query<{ auth_time: unknown; amr: unknown; session_id: unknown }>(
+      'SELECT auth_time, amr, session_id FROM authorization_codes WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1',
       [userId]
     );
-    expect(stored).toEqual({ auth_time: null, session_id: null });
+    expect(stored).toEqual({ auth_time: null, amr: null, session_id: null });
     const tokens = await exchange(code, reset.challenge.verifier);
     expect(tokens.statusCode, tokens.body).toBe(200);
     const idToken = decodeJwtClaims((tokens.json() as { id_token: string }).id_token);
@@ -479,6 +480,11 @@ describe('the password reset and the session epoch (#642, real containers)', () 
     expect(idToken).not.toHaveProperty('auth_time');
     expect(idToken).not.toHaveProperty('amr');
     expect(idToken).not.toHaveProperty('sid');
+    // Nor does the access token (#662): the mailbox is no sign-in.
+    const accessToken = decodeJwtClaims((tokens.json() as { access_token: string }).access_token);
+    expect(accessToken['sub']).toBe(userId);
+    expect(accessToken).not.toHaveProperty('auth_time');
+    expect(accessToken).not.toHaveProperty('amr');
 
     // The new password, the verified address, the cleared mark.
     const password = await passwordOf(OWNER_EMAIL);
