@@ -153,6 +153,16 @@ describe('OIDC Core 1.0 §3.1 — the authorization code flow end to end, with P
     expect(payload['auth_time'] as number).toBeGreaterThan(now - 600);
   });
 
+  it('asserts amr ["pwd"], the method of the password sign-in (§2; RFC 8176 §2)', async () => {
+    const { payload } = await verifyJwt(
+      tokens.id_token as string,
+      remoteKeySet(metadata['jwks_uri'] as string),
+      { issuer: baseUrl, audience: confidentialClient().id }
+    );
+
+    expect(payload['amr']).toEqual(['pwd']);
+  });
+
   it('issues an at+jwt access token for the client and the same user (RFC 9068 §2.1, §2.2)', async () => {
     const client = confidentialClient();
     const keys = remoteKeySet(metadata['jwks_uri'] as string);
@@ -175,6 +185,31 @@ describe('OIDC Core 1.0 §3.1 — the authorization code flow end to end, with P
     expect(payload.jti).toMatch(/\S/);
     expect(payload.exp as number).toBeGreaterThan(payload.iat as number);
     expectSignedWithAdvertisedKey(header, metadata);
+  });
+
+  it('[POST /oauth/token] carries the sign-in’s auth_time and amr on the access token, as the ID token does, and keeps both across a refresh (RFC 9068 §2.2.1)', async () => {
+    const keys = remoteKeySet(metadata['jwks_uri'] as string);
+    const { payload: idToken } = await verifyJwt(tokens.id_token as string, keys, {
+      issuer: baseUrl,
+      audience: confidentialClient().id,
+    });
+    const signIn = { auth_time: idToken['auth_time'], amr: idToken['amr'] };
+    expect(signIn.auth_time).toBeTypeOf('number');
+
+    const { payload: accessToken } = await verifyJwt(tokens.access_token, keys, {
+      issuer: baseUrl,
+      typ: 'at+jwt',
+    });
+    expect(accessToken).toMatchObject(signIn);
+
+    // A refresh issues a new access token for the same sign-in, not a new one.
+    const refreshed = await readTokenResponse(await refresh(tokens.refresh_token as string));
+    const { payload: rotated } = await verifyJwt(refreshed.access_token, keys, {
+      issuer: baseUrl,
+      typ: 'at+jwt',
+    });
+    expect(rotated.jti).not.toBe(accessToken.jti);
+    expect(rotated).toMatchObject(signIn);
   });
 });
 
