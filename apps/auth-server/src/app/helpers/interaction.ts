@@ -545,6 +545,13 @@ export interface StartInteractionInput {
    * `clientDisplay`'s output, which the step read returns as `client`.
    */
   readonly client?: ClientDisplay;
+  /**
+   * The sign-in engine's transaction the first step comes with, when the
+   * step is the engine's first round (passkey-first, #651): it holds the
+   * passkey ceremony the step offers. Absent, none: the engine starts one
+   * with the first answer.
+   */
+  readonly signInTransaction?: SignInTransaction;
 }
 
 /** What {@link startInteraction} returns. */
@@ -594,7 +601,7 @@ async function createInteraction(
     ...(input.client === undefined ? {} : { client: { ...input.client } }),
     flowBinding: flowBindingOf(secret),
     csrfKey: mintCsrfKey(),
-    signInTransaction: null,
+    signInTransaction: (input.signInTransaction ?? null) as InteractionRecord['signInTransaction'],
     revision: 0,
     createdAt: now,
     expiresAt: input.expiresAt ?? now + lifetimeMs(),

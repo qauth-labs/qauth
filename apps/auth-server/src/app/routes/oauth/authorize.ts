@@ -18,8 +18,10 @@ import {
   checkAuthorizationRequest,
   decideAuthorization,
 } from '../../helpers/authorization-request';
+import { createBackgroundTasks } from '../../helpers/background-tasks';
 import { resolveBrowserSession } from '../../helpers/browser-session';
 import { startInteraction } from '../../helpers/interaction';
+import { passkeyFirstStarter } from '../../helpers/passkey-first';
 import { redirectToLoginWithPendingAuthorization } from '../../helpers/pending-authorization';
 import { realmRateLimitKey, resolveRealmRateLimitMax } from '../../helpers/realm-rate-limit';
 import { createPromptRefusal } from '../../helpers/registration';
@@ -236,6 +238,15 @@ export default async function (fastify: FastifyInstance) {
    * you?" ends it when the screen shows its account (#964). A request too large to hold is refused with
    * `invalid_request`, as the stash refuses it.
    */
+  // The passkey-first start (#651), while passkey sign-in is on: it builds
+  // the sign-in engines on its first request; their mail's background tasks
+  // are created now, since those register a hook, which Fastify refuses once
+  // the server started.
+  const passkeyFirst =
+    fastify.passkeySignIn === true
+      ? passkeyFirstStarter(fastify, createBackgroundTasks(fastify))
+      : undefined;
+
   const startCeremony = async (
     request: FastifyRequest,
     reply: FastifyReply,
@@ -261,7 +272,18 @@ export default async function (fastify: FastifyInstance) {
     // The routing parameter named no provider the realm has on: the
     // interaction holds the request without it.
     const held = withoutUpstreamRoute(query);
-    const started = await startInteraction(request, reply, { request: held, ...start });
+    // Passkey-first (#651): while passkey sign-in is on, a sign-in with no
+    // `login_hint` starts at the engine's first round, the passkey asked for
+    // and the identifier step beside it.
+    const first =
+      outcome.kind === 'sign_in' && passkeyFirst !== undefined
+        ? await passkeyFirst(request, reply, target.realm, held)
+        : null;
+    const started = await startInteraction(request, reply, {
+      request: held,
+      ...start,
+      ...(first ?? {}),
+    });
     return reply.redirect(ceremonyPagePath(started.id), 302);
   };
 

@@ -251,7 +251,9 @@ describe('the server passkey ceremonies (#651)', () => {
     });
 
     it('reports the UV flag of the signed authenticator data as it is', async () => {
-      const verified = await provider.verify();
+      const verified = await (
+        provider.verify as unknown as () => Promise<{ rawClaims: Record<string, unknown> }>
+      )();
       provider.verify.mockResolvedValueOnce({
         ...verified,
         rawClaims: { ...verified.rawClaims, user_verified: false },
