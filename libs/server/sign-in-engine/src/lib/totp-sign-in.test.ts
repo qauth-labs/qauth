@@ -669,4 +669,30 @@ describe('the TOTP set-up under an MFA policy', () => {
     expect(personalOf(again).secret).toBe(personalOf(offered).secret);
     expect(built.totp.sealed).toHaveLength(1);
   });
+
+  it('names the set-up step in the audit record of a round the request checks refuse', async () => {
+    const built = await build({
+      deps: {
+        hooks: {
+          request: async (round) =>
+            round.answered === 'totp_setup'
+              ? { kind: 'refuse', code: 'unmet_authentication_requirements' }
+              : { kind: 'continue' },
+        },
+      },
+    });
+    built.policy.policy = { realm: 'required', client: 'off' };
+    const ctx = context(built);
+    const offered = await signIn(built, ctx);
+    expect(stepOf(offered)).toBe('totp_setup');
+    const refused = await built.engine.advance(
+      kept(offered),
+      answer('totp_setup', { otp: '000000' }),
+      ctx
+    );
+    expect(refused).toMatchObject({ kind: 'refused', reason: 'request_refused' });
+    expect(ctx.records).toContainEqual(
+      expect.objectContaining({ outcome: 'refused', step: 'totp_setup', reason: 'request_refused' })
+    );
+  });
 });

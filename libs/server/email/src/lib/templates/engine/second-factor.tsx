@@ -9,9 +9,10 @@ import { EngineMailLayout, Paragraph } from './layout';
  * after 100 wrong codes in a row, and a wrong code after a correct password.
  * None carries a link or a secret, and a realm switches none of them off:
  * the first two are about a credential, and ADR-017 Decision 7 names the
- * third. A code is asked for only after the password, so each notice says
- * what a person who did not act does: set a new password, and tell the
- * administrator.
+ * third. Each says what a person who did not act does: tell the
+ * administrator, and set a new password. The wrong-code notice is sent only
+ * after a correct password; the turned-off one may follow another first
+ * factor (an upstream sign-in), so it names none.
  */
 
 interface SecondFactorNoticeProps {
@@ -63,11 +64,15 @@ export function SecondFactorDisabledEmail({ brand, baseUrl }: SecondFactorNotice
     >
       <Paragraph brand={brand}>
         Wrong codes from an authenticator app were entered 100 times in a row for the account that
-        uses this email address, each after its password, so the app no longer signs in to it. To
-        sign in, enter one of your recovery codes in its place: the sign-in then asks you to set up
-        the app again. A passkey you added still signs you in.
+        uses this email address, each after a correct first sign-in step, so the app no longer signs
+        in to it. To sign in, enter one of your recovery codes in its place: the sign-in then asks
+        you to set up the app again.
       </Paragraph>
-      <NotYou brand={brand} />
+      <Paragraph brand={brand}>
+        If this was not you, someone got past the first step of signing in to your account, with
+        your password or another way you sign in: tell the administrator of this service, and if you
+        use a password, choose &quot;Forgot password&quot; on the sign-in page to set a new one.
+      </Paragraph>
     </EngineMailLayout>
   );
 }

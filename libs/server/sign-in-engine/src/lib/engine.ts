@@ -728,7 +728,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
   const ladder = deps.hooks?.ladder ?? NO_LADDER;
   /**
    * Whether the engine answers `step` itself: a handler's, the email code of
-   * the inline verification, or the new password of the forced update.
+   * the inline verification, the new password of the forced update, or a
+   * set-up the engine runs (a passkey's, a TOTP's).
    */
   const knows = (step: StepName) =>
     handlers.byStep.has(step) ||
@@ -737,7 +738,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     (step === 'upstream' && deps.upstream !== undefined) ||
     (step === 'password_reset' && deps.resets !== undefined) ||
     ((step === 'recovery_code' || step === 'recovery_codes') && recoveryCodes !== undefined) ||
-    (step === 'webauthn_create' && deps.passkeys !== undefined);
+    (step === 'webauthn_create' && deps.passkeys !== undefined) ||
+    (step === 'totp_setup' && deps.totp !== undefined);
   /** Report a failure that changes no answer: a reporter that throws changes nothing either. */
   const report = (port: string, error: unknown) => {
     try {
