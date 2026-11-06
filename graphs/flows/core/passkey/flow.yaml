@@ -52,8 +52,9 @@ scope:
       enrolment'
     - 'the rounds of the emailed code that proves the mailbox before a binding, drawn by
       flows/core/account-verification with the purpose recovery and 8 digits'
-    - 'registration of an account whose only factor is a passkey, with no address (#655), and the passkeys of the
-      account page: adding, renaming and removing one (ACC-02)'
+    - 'registration of an account whose only factor is a passkey, with no address, and the new passkey its recovery
+      code binds, drawn by flows/core/passkey-sign-up (#655); and the passkeys of the account page: adding, renaming
+      and removing one (ACC-02)'
     - 'the enrolment offer after a sign-in that proved no password (an upstream sign-in), which the account page
       serves instead'
     - 'a failure to settle a reservation, to update a sign counter or to send a notice: reported, and it changes no
