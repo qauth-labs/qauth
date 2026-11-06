@@ -5,6 +5,7 @@ import {
   type RecoveryCodeAccount,
   type RecoveryCodeRedemption,
   type RecoveryCodes,
+  type RecoveryCodeSet,
   type RecoveryCodeStatus,
   SYSTEM_CLOCK,
 } from './ports';
@@ -118,12 +119,27 @@ export interface RecoveryCodeStore {
   status(account: RecoveryCodeAccount): Promise<RecoveryCodeStatus>;
   /** The unused codes of the account's set: none when it holds none. */
   unused(account: RecoveryCodeAccount): Promise<readonly StoredRecoveryCode[]>;
-  /** Mark the account's set confirmed at `at`, if it holds one not confirmed yet. */
-  confirm(account: RecoveryCodeAccount & { readonly at: number }): Promise<void>;
-  /** Replace the account's set, if any, with these hashes, in one write: the new set is unconfirmed. */
+  /**
+   * Mark the set `setId` confirmed at `at`, if it is still the account's; a
+   * set confirmed before keeps its time. `false` when another set replaced it
+   * (or the account holds none). Serialized with {@link replace}.
+   */
+  confirm(
+    account: RecoveryCodeAccount & { readonly setId: string; readonly at: number }
+  ): Promise<boolean>;
+  /**
+   * Replace the account's set, if any, with these hashes, in one write: the
+   * new set is unconfirmed. Returns its id, which only this set holds. With
+   * `keepConfirmed`, a set the person confirmed stays, nothing is written,
+   * and the answer is `null`.
+   */
   replace(
-    account: RecoveryCodeAccount & { readonly hashes: readonly string[]; readonly at: number }
-  ): Promise<void>;
+    account: RecoveryCodeAccount & {
+      readonly hashes: readonly string[];
+      readonly at: number;
+      readonly keepConfirmed: boolean;
+    }
+  ): Promise<string | null>;
   /**
    * Mark the code `id` of the account used at `at`, only while it is unused,
    * in one write: `true` when this call took it, `false` when another one did
@@ -149,14 +165,20 @@ export interface RecoveryCodeServiceDependencies {
 }
 
 /** The recovery codes' rules over a store: what the engine's port needs but the notices. */
-export type RecoveryCodeService = Pick<RecoveryCodes, 'status' | 'issue' | 'redeem' | 'confirm'>;
+export type RecoveryCodeService = Pick<RecoveryCodes, 'status' | 'issue' | 'redeem' | 'confirm'> & {
+  /** A new set in place of the account's, confirmed or not: a regeneration. */
+  replace(account: RecoveryCodeAccount): Promise<RecoveryCodeSet>;
+};
 
 /**
  * The recovery codes over `store` and the password hasher.
  *
  * - `issue` draws a new set, hashes each code (salted, by the hasher) and
- *   replaces the account's set in one write; the codes go back to the caller
- *   once and are kept nowhere.
+ *   replaces the account's set in one write, unless the account holds a set
+ *   the person confirmed by now; the codes go back to the caller once and are
+ *   kept nowhere. `replace` (a regeneration) replaces a confirmed set too.
+ * - `confirm` confirms the set the person was shown, by its id, and only
+ *   while it is still the account's.
  * - `redeem` checks the typed code against every unused hash of the set,
  *   padded to {@link RECOVERY_CODE_COUNT} with the hash of a secret nobody
  *   holds, so a right code and a wrong one cost the same, and the time says
@@ -190,23 +212,35 @@ export function createRecoveryCodeService(
     }
   };
 
+  const newSet = async (
+    { realmId, userId }: RecoveryCodeAccount,
+    keepConfirmed: boolean
+  ): Promise<RecoveryCodeSet | null> => {
+    const codes = generateRecoveryCodeSet(random);
+    const hashes = await Promise.all(
+      codes.map((code) => {
+        const normalized = normalizeRecoveryCode(code);
+        if (normalized === null) throw new Error('recovery codes: a code that cannot be typed');
+        return hasher.hash(normalized);
+      })
+    );
+    const setId = await store.replace({ realmId, userId, hashes, at: clock.now(), keepConfirmed });
+    if (setId === null) return null;
+    return Object.freeze({ codes: Object.freeze(codes), setId });
+  };
+
   return Object.freeze({
     status: (account: RecoveryCodeAccount) => store.status(account),
 
-    confirm: (account: RecoveryCodeAccount) =>
-      store.confirm({ realmId: account.realmId, userId: account.userId, at: clock.now() }),
+    confirm: ({ realmId, userId, setId }: RecoveryCodeAccount & { readonly setId: string }) =>
+      store.confirm({ realmId, userId, setId, at: clock.now() }),
 
-    async issue(account: RecoveryCodeAccount) {
-      const codes = generateRecoveryCodeSet(random);
-      const hashes = await Promise.all(
-        codes.map((code) => {
-          const normalized = normalizeRecoveryCode(code);
-          if (normalized === null) throw new Error('recovery codes: a code that cannot be typed');
-          return hasher.hash(normalized);
-        })
-      );
-      await store.replace({ ...account, hashes, at: clock.now() });
-      return Object.freeze({ codes: Object.freeze(codes) });
+    issue: (account: RecoveryCodeAccount) => newSet(account, true),
+
+    async replace(account: RecoveryCodeAccount) {
+      const set = await newSet(account, false);
+      if (set === null) throw new Error('recovery codes: a regeneration wrote no set');
+      return set;
     },
 
     async redeem({ realmId, userId, clientId, code }): Promise<RecoveryCodeRedemption> {

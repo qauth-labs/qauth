@@ -1,6 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
-import type { RecoveryCodeAccount, RecoveryCodes } from '../lib/ports';
+import type { RecoveryCodeAccount, RecoveryCodes, RecoveryCodeSet } from '../lib/ports';
 import {
   createRecoveryCodeService,
   type RecoveryCodeHasher,
@@ -50,8 +50,16 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
         confirmed: set.length > 0 && set.every((row) => row.confirmedAt !== null),
       };
     },
-    async confirm({ realmId, userId, at }: RecoveryCodeAccount & { at: number }) {
-      for (const row of of({ realmId, userId })) row.confirmedAt ??= at;
+    async confirm({
+      realmId,
+      userId,
+      setId,
+      at,
+    }: RecoveryCodeAccount & { setId: string; at: number }) {
+      const set = of({ realmId, userId });
+      if (!set.some((row) => row.id === setId)) return false;
+      for (const row of set) row.confirmedAt ??= at;
+      return true;
     },
     async unused(account: RecoveryCodeAccount) {
       return of(account)
@@ -63,8 +71,12 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
       userId,
       hashes,
       at,
-    }: RecoveryCodeAccount & { hashes: readonly string[]; at: number }) {
-      for (const row of of({ realmId, userId })) rows.splice(rows.indexOf(row), 1);
+      keepConfirmed,
+    }: RecoveryCodeAccount & { hashes: readonly string[]; at: number; keepConfirmed: boolean }) {
+      const held = of({ realmId, userId });
+      if (keepConfirmed && held.some((row) => row.confirmedAt !== null)) return null;
+      for (const row of held) rows.splice(rows.indexOf(row), 1);
+      const setId = `code-${next + 1}`;
       for (const hash of hashes) {
         next += 1;
         rows.push({
@@ -78,6 +90,7 @@ export function createMemoryRecoveryCodeStore(): MemoryRecoveryCodeStore & {
           confirmedAt: null,
         });
       }
+      return setId;
     },
     async take({
       realmId,
@@ -130,6 +143,8 @@ export function createCountingHasher(): RecoveryCodeHasher & {
 
 /** The engine's recovery-code port over a memory store, recording each notice. */
 export interface MemoryRecoveryCodes extends RecoveryCodes {
+  /** A new set in place of the account's, confirmed or not: a regeneration, or a test's seed. */
+  replace(account: RecoveryCodeAccount): Promise<RecoveryCodeSet>;
   readonly store: ReturnType<typeof createMemoryRecoveryCodeStore>;
   readonly hasher: ReturnType<typeof createCountingHasher>;
   /** Every "a recovery code was used" notice, by account. */
@@ -156,6 +171,7 @@ export function createMemoryRecoveryCodes(now: () => number = Date.now): MemoryR
     ceilingNotices,
     status: service.status,
     issue: service.issue,
+    replace: service.replace,
     confirm: service.confirm,
     async redeem(input) {
       const redeemed = await service.redeem(input);

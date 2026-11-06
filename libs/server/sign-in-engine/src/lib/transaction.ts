@@ -145,12 +145,14 @@ export interface SignInTransaction {
    */
   readonly captchaPassed?: true;
   /**
-   * A recovery-code set this transaction issued waits for the person to
-   * confirm they saved it (#649): rule 8 offers `recovery_codes` until they
-   * do. The codes themselves are kept nowhere, so a round that brings no
+   * The id of the recovery-code set this transaction issued and showed,
+   * waiting for the person to confirm they saved it (#649): rule 8 offers
+   * `recovery_codes` until they do, and the confirmation names this set, so
+   * a set another sign-in put in its place is never confirmed instead. The
+   * codes themselves are kept nowhere, so a round that brings no
    * confirmation issues a new set, which replaces the one shown.
    */
-  readonly recoveryCodesShown?: true;
+  readonly recoveryCodesShown?: string;
 }
 
 /** What binds a transaction to its sign-in: its realm, its client, when it began, and its flow. */
@@ -246,7 +248,7 @@ export const signInTransactionSchema = z.strictObject({
     .transform((value) => value as StepParams<'captcha'>)
     .optional(),
   captchaPassed: z.literal(true).optional(),
-  recoveryCodesShown: z.literal(true).optional(),
+  recoveryCodesShown: z.string().min(1).max(128).optional(),
 });
 
 /**
@@ -292,7 +294,9 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   // A registration never goes out to an upstream provider (#640).
   if (flow === 'register' && upstream !== undefined) return null;
   // A recovery-code set is issued only to the account a factor proved (#649).
-  if (recoveryCodesShown === true && (subject === undefined || authTime === undefined)) return null;
+  if (recoveryCodesShown !== undefined && (subject === undefined || authTime === undefined)) {
+    return null;
+  }
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,

@@ -35,6 +35,16 @@ function service() {
   return { store, hasher, codes };
 }
 
+/** A new set for an account that holds no confirmed one. */
+async function issue(
+  codes: ReturnType<typeof service>['codes'],
+  account: typeof ACCOUNT | typeof OTHER
+) {
+  const set = await codes.issue(account);
+  if (set === null) throw new Error('no set issued');
+  return set;
+}
+
 describe('a recovery code', () => {
   it('carries 80 bits of the CSPRNG, shown as four groups of four base32 characters', () => {
     expect(RECOVERY_CODE_BITS).toBeGreaterThanOrEqual(64);
@@ -80,7 +90,7 @@ describe('a set of recovery codes', () => {
 
   it('is stored only as salted hashes from the hasher, and shown once', async () => {
     const { store, hasher, codes } = service();
-    const issued = await codes.issue(ACCOUNT);
+    const issued = await issue(codes, ACCOUNT);
     expect(issued.codes).toHaveLength(10);
     expect(hasher.hashes).toBe(10 + 1); // the set, and the decoy
     expect(store.rows).toHaveLength(10);
@@ -96,10 +106,47 @@ describe('a set of recovery codes', () => {
   });
 });
 
+describe('confirming a set', () => {
+  it('confirms the set shown, by its id, only while it is the account’s', async () => {
+    const { codes } = service();
+    const shown = await issue(codes, ACCOUNT);
+    // Another sign-in replaced it before the confirmation: nothing is confirmed.
+    const replacement = await issue(codes, ACCOUNT);
+    expect(replacement.setId).not.toBe(shown.setId);
+    expect(await codes.confirm({ ...ACCOUNT, setId: shown.setId })).toBe(false);
+    expect(await codes.status(ACCOUNT)).toMatchObject({ confirmed: false });
+    // Another account's set is never this one's.
+    const theirs = await issue(codes, OTHER);
+    expect(await codes.confirm({ ...ACCOUNT, setId: theirs.setId })).toBe(false);
+    expect(await codes.confirm({ ...ACCOUNT, setId: replacement.setId })).toBe(true);
+    expect(await codes.status(ACCOUNT)).toMatchObject({ confirmed: true });
+    expect(await codes.status(OTHER)).toMatchObject({ confirmed: false });
+  });
+
+  it('issues no set over one the person confirmed, and a regeneration replaces it', async () => {
+    const { codes } = service();
+    const saved = await issue(codes, ACCOUNT);
+    await codes.confirm({ ...ACCOUNT, setId: saved.setId });
+    expect(await codes.issue(ACCOUNT)).toBeNull();
+    expect(
+      await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: saved.codes[0] as string })
+    ).toEqual({ kind: 'redeemed' });
+
+    const regenerated = await codes.replace(ACCOUNT);
+    expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10, confirmed: false });
+    expect(
+      await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: saved.codes[1] as string })
+    ).toEqual({ kind: 'refused' });
+    expect(
+      await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: regenerated.codes[0] as string })
+    ).toEqual({ kind: 'redeemed' });
+  });
+});
+
 describe('redeeming a recovery code', () => {
   it('accepts a code once and then refuses it', async () => {
     const { codes } = service();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes, ACCOUNT);
     const code = set[3] as string;
     expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code })).toEqual({
       kind: 'redeemed',
@@ -117,8 +164,8 @@ describe('redeeming a recovery code', () => {
 
   it("refuses a wrong code, another account's code and one that cannot be a code", async () => {
     const { codes } = service();
-    const { codes: mine } = await codes.issue(ACCOUNT);
-    const { codes: theirs } = await codes.issue(OTHER);
+    const { codes: mine } = await issue(codes, ACCOUNT);
+    const { codes: theirs } = await issue(codes, OTHER);
     for (const code of [generateRecoveryCode(), theirs[0] as string, 'not-a-code-at-all']) {
       expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code })).toEqual({
         kind: 'refused',
@@ -132,7 +179,7 @@ describe('redeeming a recovery code', () => {
 
   it('checks 10 hashes whatever is left and whatever is typed', async () => {
     const { hasher, codes } = service();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes, ACCOUNT);
     const checked = async (code: string) => {
       const before = hasher.verifications;
       await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code });
@@ -154,7 +201,7 @@ describe('redeeming a recovery code', () => {
 
   it('refuses a code another round took first', async () => {
     const { store, codes } = service();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes, ACCOUNT);
     store.loseNextRace = true;
     expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: set[0] as string })).toEqual({
       kind: 'refused',
@@ -166,9 +213,9 @@ describe('redeeming a recovery code', () => {
 
   it('refuses every code of a set a new one replaced', async () => {
     const { codes } = service();
-    const { codes: old } = await codes.issue(ACCOUNT);
+    const { codes: old } = await issue(codes, ACCOUNT);
     await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code: old[0] as string });
-    const { codes: fresh } = await codes.issue(ACCOUNT);
+    const { codes: fresh } = await issue(codes, ACCOUNT);
     expect(await codes.status(ACCOUNT)).toEqual({ issued: true, unused: 10, confirmed: false });
     for (const code of old) {
       expect(await codes.redeem({ ...ACCOUNT, clientId: CLIENT, code })).toEqual({

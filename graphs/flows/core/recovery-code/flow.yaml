@@ -150,7 +150,8 @@ context:
   floorWaited: { values: [false, true], initial: false }
   # a new set replaced the account's, and its codes go to this round's answer alone
   setIssued: { values: [false, true], initial: false }
-  # the person confirmed they saved the set this transaction showed
+  # the account holds a set the person confirmed they saved: the one this transaction showed, or one another sign-in
+  # of the account showed and the person confirmed meanwhile
   setConfirmed: { values: [false, true], initial: false }
   # a recovery code added an amr value, made mfa or moved auth_time: never
   factorClaimed: { values: [false, true], initial: false }
@@ -185,6 +186,8 @@ effects:
   waitFloor: { set: { floorWaited: true } }
   issueSet: { set: { setIssued: true } }
   confirmSet: { set: { setConfirmed: true } }
+  # another sign-in's set, which the person confirmed meanwhile, stays: nothing is written
+  keepConfirmedSet: { set: { setConfirmed: true } }
   # what another transaction or the clock may have changed by the next answer
   moveOn: { havoc: [ladder, answer, ceiling] }
 
@@ -359,15 +362,21 @@ states:
   issuingSet:
     title: Issue a new set
     description: >-
-      Ten codes of 80 bits from a CSPRNG; their Argon2id hashes replace the account's set, if any, in one write. The
-      codes go to this round's answer alone, as the step's personal data, and the transaction marks only that a set
-      waits to be confirmed.
+      Ten codes of 80 bits from a CSPRNG; their Argon2id hashes replace the account's set, if any, in one write,
+      unless the account holds a set the person confirmed by now. The codes go to this round's answer alone, as the
+      step's personal data, and the transaction keeps only the new set's id, which waits to be confirmed.
     invoke: { external: recoveryCodes }
     on:
       DONE:
         target: offeringSet
         effect: [issueSet, waitFloor]
         say: 'the set is written; its codes are shown'
+      KEPT:
+        target: completed
+        effect: [keepConfirmedSet, waitFloor]
+        say: >-
+          another sign-in of the account showed a set and the person confirmed it meanwhile: that set stays, nothing
+          is written, and nothing is owed
       FAIL.store:
         target: unavailable
         effect: [waitFloor]
@@ -447,8 +456,14 @@ states:
         target: completed
         effect: [newRound, confirmSet, audit, waitFloor]
         say: >-
-          the person confirms they saved the codes: the store marks the set confirmed, and recovery_codes joins the
-          verified steps with no amr
+          the person confirms they saved the codes: the store marks the set this transaction showed confirmed, named
+          by its id, and recovery_codes joins the verified steps with no amr
+      REPLACED:
+        target: issuingSet
+        effect: [newRound]
+        say: >-
+          the person confirms, but another sign-in or a regeneration replaced the set shown meanwhile: those codes no
+          longer work, nothing is confirmed, and a new set is issued in their place
       ROUND:
         target: issuingSet
         effect: [newRound]

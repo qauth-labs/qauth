@@ -399,11 +399,15 @@ its `serves`) never sees them, and a round that needs one answers `redirect` (Fi
   the user and the operator; a failure there changes no answer. A right code clears the counter.
 - **A new set, shown once** (`recovery_codes`, its params `{ count: 10 }`): a sign-in that proved
   a factor beyond the password, of an account with no set the person confirmed, issues one before
-  it completes. The codes are the round's personal data alone; the step is answered
-  `acknowledged: true`, which marks the set confirmed (`recoveryCodes.confirm`), and a round
-  without that confirmation issues a new set in place of the one shown. A set nobody confirmed (a
-  closed tab, a lost answer) was never seen for sure, so the next such sign-in replaces it with a
-  new one. A transport that does not serve it answers `redirect`.
+  it completes. The codes are the round's personal data alone, and the transaction keeps only the
+  set's id; the step is answered `acknowledged: true`, which marks that set confirmed
+  (`recoveryCodes.confirm`, by its id), and a round without that confirmation issues a new set in
+  place of the one shown. A set nobody confirmed (a closed tab, a lost answer) was never seen for
+  sure, so the next such sign-in replaces it with a new one. Two sign-ins of one account at once
+  never leave it with a confirmed set nobody saw: a confirmation whose set another sign-in
+  replaced confirms nothing and shows a new set, and no issuance replaces a set the person
+  confirmed meanwhile (`issue` answers `null`, and nothing is owed). A transport that does not
+  serve it answers `redirect`.
 
 ## The forced password update
 

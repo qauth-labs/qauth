@@ -568,7 +568,7 @@ describe('an account with another authenticator', () => {
       ],
       { recoveryCodes: codes }
     );
-    const { codes: set } = await codes.issue({ realmId: REALM, userId: USER });
+    const { codes: set } = await codes.replace({ realmId: REALM, userId: USER });
     const ctx = context(built);
     const afterCode = await toAfterCode(built, ctx);
     expect(afterCode).toMatchObject({

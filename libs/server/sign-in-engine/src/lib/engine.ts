@@ -1450,10 +1450,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      * holds a set already.
      *
      * The codes go to this round's answer alone, as the step's personal
-     * data; the transaction marks only that a set waits to be confirmed. The
-     * confirmation marks the set confirmed in the store and records
-     * `recovery_codes` among the verified steps, with no `amr` value. A round
-     * that brings none issues a new set, which replaces the one shown. A transport that cannot show a set (a
+     * data; the transaction keeps only the id of the set that waits to be
+     * confirmed. The confirmation marks that set confirmed in the store and
+     * records `recovery_codes` among the verified steps, with no `amr` value;
+     * when another sign-in or a regeneration replaced it meanwhile, a new set
+     * is shown instead. A round that brings none issues a new set, which
+     * replaces the one shown. No issuance replaces a set the person confirmed
+     * meanwhile: nothing is owed then. A transport that cannot show a set (a
      * FiPA client) gets a redirect. Returns the round's result, or `null`
      * once nothing is owed.
      */
@@ -1462,7 +1465,8 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       current: SignInAccount,
       subject: string
     ): Promise<RoundResult | null> => {
-      const waiting = state.transaction.recoveryCodesShown === true;
+      const shown = state.transaction.recoveryCodesShown;
+      const waiting = shown !== undefined;
       if (!waiting) {
         if (!boundBeyondPassword(current) || !provedBeyondPassword() || tookRecoveryCode()) {
           return null;
@@ -1476,21 +1480,36 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         const read = readPending(offer);
         if (read === null) return invalidAnswer('recovery_codes');
         turn.pending = null;
-        await fromStore('recoveryCodes', () => codes.confirm({ realmId, userId: subject }));
-        state.transaction = {
-          ...state.transaction,
-          recoveryCodesShown: undefined,
-          verified: [
-            ...state.transaction.verified,
-            { step: 'recovery_codes', params: read.params } as OfferedStep,
-          ],
-        };
-        await audit('passed', 'recovery_codes');
-        return null;
+        const confirmed: unknown = await fromStore('recoveryCodes', () =>
+          codes.confirm({ realmId, userId: subject, setId: shown })
+        );
+        if (typeof confirmed !== 'boolean') {
+          throw new SignInStoreUnavailableError('recoveryCodes', new Error('not a confirmation'));
+        }
+        if (confirmed) {
+          state.transaction = {
+            ...state.transaction,
+            recoveryCodesShown: undefined,
+            verified: [
+              ...state.transaction.verified,
+              { step: 'recovery_codes', params: read.params } as OfferedStep,
+            ],
+          };
+          await audit('passed', 'recovery_codes');
+          return null;
+        }
+        // Another sign-in or a regeneration replaced the set shown: the codes
+        // the person saved no longer work. A new set is shown in its place,
+        // unless the account holds a confirmed one by now.
       }
       const issued = await fromStore('recoveryCodes', async () => {
-        const set: unknown = (await codes.issue({ realmId, userId: subject }))?.codes;
+        const result: unknown = await codes.issue({ realmId, userId: subject });
+        if (result === null) return null;
+        const { codes: set, setId } = (result ?? {}) as { codes?: unknown; setId?: unknown };
         if (
+          typeof setId !== 'string' ||
+          setId.length === 0 ||
+          setId.length > 128 ||
           !Array.isArray(set) ||
           set.length !== RECOVERY_CODE_COUNT ||
           new Set(set).size !== set.length ||
@@ -1498,10 +1517,20 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         ) {
           throw new Error('not a recovery-code set');
         }
-        return set as string[];
+        return { codes: set as string[], setId };
       });
-      state.transaction = { ...state.transaction, recoveryCodesShown: true };
-      return offerStep(offer, undefined, Object.freeze({ codes: Object.freeze([...issued]) }));
+      if (issued === null) {
+        // Another sign-in showed a set and the person confirmed it meanwhile:
+        // that set stays, and nothing is owed.
+        state.transaction = { ...state.transaction, recoveryCodesShown: undefined };
+        return null;
+      }
+      state.transaction = { ...state.transaction, recoveryCodesShown: issued.setId };
+      return offerStep(
+        offer,
+        undefined,
+        Object.freeze({ codes: Object.freeze([...issued.codes]) })
+      );
     };
 
     /**

@@ -235,7 +235,9 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
       },
     });
     await server().repositories.oauthConsents.upsertGrant(realmId, userId, clientRowId, SCOPES);
-    const { codes } = await recoveryCodes().issue({ realmId, userId });
+    const issued = await recoveryCodes().issue({ realmId, userId });
+    if (issued === null) throw new Error('no set issued');
+    const { codes } = issued;
     mails.clear();
     return { userId, codes };
   }

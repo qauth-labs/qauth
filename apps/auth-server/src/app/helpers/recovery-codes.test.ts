@@ -46,7 +46,7 @@ describe('the server recovery codes (#649)', () => {
     repos = {
       status: vi.fn(async () => ({ issued: true, unused: 9, confirmed: true })),
       findUnused: vi.fn(async () => [{ id: 'code-1', codeHash: `h:${NORMALIZED}` }]),
-      replaceSet: vi.fn(async () => undefined),
+      replaceSet: vi.fn(async (): Promise<string | null> => 'set-1'),
       markUsed: vi.fn(async () => true),
     };
     findCredential = vi.fn(async () => ({ realmId: REALM_ID, externalSub: ADDRESS }));

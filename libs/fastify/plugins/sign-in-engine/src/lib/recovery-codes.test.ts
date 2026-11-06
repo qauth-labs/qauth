@@ -57,11 +57,12 @@ function setup() {
           confirmed: mine.length > 0 && mine.every((row) => row.confirmedAt !== undefined),
         };
       },
-      async confirmSet({ realmId, userId, confirmedAt }, tx) {
+      async confirmSet({ realmId, userId, setId, confirmedAt }, tx) {
         writesIn.push(tx);
-        for (const row of rows) {
-          if (row.realmId === realmId && row.userId === userId) row.confirmedAt ??= confirmedAt;
-        }
+        const mine = rows.filter((row) => row.realmId === realmId && row.userId === userId);
+        if (!mine.some((row) => row.id === setId)) return false;
+        for (const row of mine) row.confirmedAt ??= confirmedAt;
+        return true;
       },
       async findUnused(realmId, userId) {
         return rows
@@ -70,14 +71,23 @@ function setup() {
           )
           .map(({ id, codeHash }) => ({ id, codeHash }));
       },
-      async replaceSet({ realmId, userId, codeHashes }, tx) {
+      async replaceSet({ realmId, userId, codeHashes, keepConfirmed }, tx) {
         writesIn.push(tx);
-        const kept = rows.filter((row) => row.realmId !== realmId || row.userId !== userId);
+        const mine = (row: FakeRow) => row.realmId === realmId && row.userId === userId;
+        if (
+          keepConfirmed === true &&
+          rows.some((row) => mine(row) && row.confirmedAt !== undefined)
+        ) {
+          return null;
+        }
+        const kept = rows.filter((row) => !mine(row));
         rows.splice(0, rows.length, ...kept);
+        const setId = `code-${next + 1}`;
         for (const codeHash of codeHashes) {
           next += 1;
           rows.push({ id: `code-${next}`, realmId, userId, codeHash });
         }
+        return setId;
       },
       async markUsed({ realmId, userId, id, usedAt }, tx) {
         writesIn.push(tx);
@@ -136,13 +146,20 @@ function setup() {
   };
 }
 
+/** A new set for the account, which holds no confirmed one. */
+async function issue(codes: ReturnType<typeof setup>['codes']) {
+  const set = await codes.issue(ACCOUNT);
+  if (set === null) throw new Error('no set issued');
+  return set;
+}
+
 const redeem = (codes: ReturnType<typeof setup>['codes'], code: string) =>
   codes.redeem({ ...ACCOUNT, clientId: 'client-a', code });
 
 describe('the recovery codes over the repository (#649)', () => {
   it('issues 10 codes of the shown form and stores only their hashes', async () => {
     const { codes, rows } = setup();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes);
     expect(set).toHaveLength(RECOVERY_CODE_COUNT);
     for (const code of set) expect(code).toMatch(RECOVERY_CODE_PATTERN);
     expect(rows).toHaveLength(RECOVERY_CODE_COUNT);
@@ -160,7 +177,7 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('takes a code once, records its use in the take’s transaction, and tells the user after', async () => {
     const { codes, used, committed, writesIn } = setup();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes);
     await expect(redeem(codes, set[3])).resolves.toEqual({ kind: 'redeemed' });
     await expect(redeem(codes, set[3])).resolves.toEqual({ kind: 'refused' });
     const use = { ...ACCOUNT, clientId: 'client-a', unusedCodes: 9 };
@@ -180,7 +197,7 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('refuses a wrong code with no record and no notice', async () => {
     const { codes, used, committed } = setup();
-    await codes.issue(ACCOUNT);
+    await issue(codes);
     await expect(redeem(codes, 'aaaa-aaaa-aaaa-aaaa')).resolves.toEqual({ kind: 'refused' });
     await expect(redeem(codes, 'not a code')).resolves.toEqual({ kind: 'refused' });
     expect(used).not.toHaveBeenCalled();
@@ -189,7 +206,7 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('keeps the code unused when its record fails, and refuses the round', async () => {
     const { codes, used, committed } = setup();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes);
     used.mockRejectedValueOnce(new Error('event store down'));
     await expect(redeem(codes, set[0])).rejects.toThrow('event store down');
     expect(committed).not.toHaveBeenCalled();
@@ -203,7 +220,7 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('keeps the code unused when the take does not commit', async () => {
     const { codes, committed, failCommit } = setup();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes);
     failCommit();
     await expect(redeem(codes, set[0])).rejects.toThrow('commit failed');
     expect(committed).not.toHaveBeenCalled();
@@ -216,7 +233,7 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('reports a notice that fails after the take, and the code stays used', async () => {
     const { codes, committed, report } = setup();
-    const { codes: set } = await codes.issue(ACCOUNT);
+    const { codes: set } = await issue(codes);
     committed.mockRejectedValueOnce(new Error('mail down'));
     await expect(redeem(codes, set[0])).resolves.toEqual({ kind: 'redeemed' });
     expect(report).toHaveBeenCalledWith(expect.any(Error), 'the recovery-code-used notice');
@@ -229,7 +246,7 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('regenerates: every code of the old set stops working, and the user is told', async () => {
     const { codes, regenerated } = setup();
-    const { codes: old } = await codes.issue(ACCOUNT);
+    const { codes: old } = await issue(codes);
     expect(regenerated).not.toHaveBeenCalled();
     const { codes: fresh } = await codes.regenerate(ACCOUNT);
     expect(regenerated).toHaveBeenCalledWith(ACCOUNT);
@@ -241,15 +258,20 @@ describe('the recovery codes over the repository (#649)', () => {
 
   it('confirms the set the person saved, and a regenerated set waits for its own confirmation', async () => {
     const { codes } = setup();
-    await codes.issue(ACCOUNT);
-    await codes.confirm(ACCOUNT);
+    const { setId } = await issue(codes);
+    await expect(codes.confirm({ ...ACCOUNT, setId })).resolves.toBe(true);
     await expect(codes.status(ACCOUNT)).resolves.toEqual({
       issued: true,
       unused: 10,
       confirmed: true,
     });
-    await codes.regenerate(ACCOUNT);
+    // A sign-in's issuance keeps the confirmed set; a regeneration replaces it.
+    await expect(codes.issue(ACCOUNT)).resolves.toBeNull();
+    const regenerated = await codes.regenerate(ACCOUNT);
     await expect(codes.status(ACCOUNT)).resolves.toMatchObject({ confirmed: false });
+    // The set confirmed before is gone: confirming it again confirms nothing.
+    await expect(codes.confirm({ ...ACCOUNT, setId })).resolves.toBe(false);
+    await expect(codes.confirm({ ...ACCOUNT, setId: regenerated.setId })).resolves.toBe(true);
   });
 
   it('passes the ceiling on to the caller', async () => {

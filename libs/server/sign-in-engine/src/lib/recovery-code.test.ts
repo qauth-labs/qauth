@@ -159,11 +159,10 @@ async function signIn(built: Built, ctx: RoundContext = context()): Promise<Roun
   return built.engine.advance(kept(first), answer('password', { password: PASSWORD }), ctx);
 }
 
-/** Issue the account a set, as its first second factor's enrolment will. */
 /** A set the person saved: issued and confirmed. */
 async function issued(built: Built): Promise<readonly string[]> {
-  const { codes } = await built.codes.issue({ realmId: REALM, userId: USER });
-  await built.codes.confirm({ realmId: REALM, userId: USER });
+  const { codes, setId } = await built.codes.replace({ realmId: REALM, userId: USER });
+  await built.codes.confirm({ realmId: REALM, userId: USER, setId });
   return codes;
 }
 
@@ -450,10 +449,12 @@ describe('a new set of recovery codes, shown once', () => {
     const codes = (shown.personal as { codes: string[] }).codes;
     expect(codes).toHaveLength(10);
     for (const code of codes) expect(code).toMatch(RECOVERY_CODE_PATTERN);
-    // The transaction marks the set and keeps no code.
+    // The transaction names the set and keeps no code.
     const stored = JSON.stringify(kept(shown));
     for (const code of codes) expect(stored).not.toContain(code);
-    expect(readSignInTransaction(kept(shown))?.recoveryCodesShown).toBe(true);
+    expect(readSignInTransaction(kept(shown))?.recoveryCodesShown).toBe(
+      built.codes.store.rows[0]?.id
+    );
     // The confirmation completes the sign-in, with the factors' amr alone.
     const done = await built.engine.advance(
       kept(shown),
@@ -525,6 +526,82 @@ describe('a new set of recovery codes, shown once', () => {
     expect(done).toMatchObject({ kind: 'complete' });
     // Confirmed, the set is not shown again.
     expect(await provedTotp(built, ctx)).toMatchObject({ kind: 'complete' });
+  });
+
+  it('is shown anew when another sign-in replaced the set before its confirmation', async () => {
+    const { built, ctx } = enrolled();
+    const mine = await provedTotp(built, ctx);
+    if (mine.kind !== 'step') throw new Error('no step');
+    const saved = (mine.personal as { codes: string[] }).codes;
+    // Another sign-in of the account, at the same time, replaced the set
+    // shown here with its own, which nobody confirmed.
+    const theirs = await provedTotp(built, ctx);
+    if (theirs.kind !== 'step') throw new Error('no step');
+
+    // The confirmation of the set shown here confirms nothing: those codes
+    // no longer work, so a new set is shown in their place.
+    const again = await built.engine.advance(
+      kept(mine),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(again).toMatchObject({ kind: 'step', offer: { current: { step: 'recovery_codes' } } });
+    if (again.kind !== 'step') throw new Error('no step');
+    const fresh = (again.personal as { codes: string[] }).codes;
+    expect(fresh).not.toEqual(saved);
+    await expect(built.codes.status({ realmId: REALM, userId: USER })).resolves.toMatchObject({
+      confirmed: false,
+    });
+    const done = await built.engine.advance(
+      kept(again),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete' });
+    // The set confirmed is the one shown last, and its codes work.
+    await expect(built.codes.status({ realmId: REALM, userId: USER })).resolves.toMatchObject({
+      confirmed: true,
+    });
+    expect(
+      await built.codes.redeem({
+        realmId: REALM,
+        userId: USER,
+        clientId: CLIENT,
+        code: fresh[0] as string,
+      })
+    ).toEqual({ kind: 'redeemed' });
+  });
+
+  it('replaces no set the person confirmed in another sign-in meanwhile', async () => {
+    const { built, ctx } = enrolled();
+    const mine = await provedTotp(built, ctx);
+    const theirs = await provedTotp(built, ctx);
+    if (theirs.kind !== 'step') throw new Error('no step');
+    const confirmedThere = (theirs.personal as { codes: string[] }).codes;
+    expect(
+      await built.engine.advance(
+        kept(theirs),
+        answer('recovery_codes', { acknowledged: true }),
+        ctx
+      )
+    ).toMatchObject({ kind: 'complete' });
+
+    // This sign-in's set was replaced, and the account holds a confirmed set
+    // now: nothing is owed, and that set stays.
+    const done = await built.engine.advance(
+      kept(mine),
+      answer('recovery_codes', { acknowledged: true }),
+      ctx
+    );
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'otp', 'mfa'] } });
+    expect(
+      await built.codes.redeem({
+        realmId: REALM,
+        userId: USER,
+        clientId: CLIENT,
+        code: confirmedThere[0] as string,
+      })
+    ).toEqual({ kind: 'redeemed' });
   });
 
   it('refuses a confirmation that is not true', async () => {

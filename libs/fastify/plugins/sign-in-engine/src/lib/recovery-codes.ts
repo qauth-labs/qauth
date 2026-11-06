@@ -4,6 +4,7 @@ import {
   type RecoveryCodeAccount,
   type RecoveryCodeHasher,
   type RecoveryCodes,
+  type RecoveryCodeSet,
   type RecoveryCodeStore,
 } from '@qauth-labs/server-sign-in-engine';
 
@@ -48,9 +49,10 @@ export interface RecoveryCodeRepositories<Tx> {
         readonly userId: string;
         readonly codeHashes: readonly string[];
         readonly createdAt: number;
+        readonly keepConfirmed?: boolean;
       },
       tx?: Tx
-    ): Promise<void>;
+    ): Promise<string | null>;
     markUsed(
       input: {
         readonly realmId: string;
@@ -61,9 +63,14 @@ export interface RecoveryCodeRepositories<Tx> {
       tx?: Tx
     ): Promise<boolean>;
     confirmSet(
-      input: { readonly realmId: string; readonly userId: string; readonly confirmedAt: number },
+      input: {
+        readonly realmId: string;
+        readonly userId: string;
+        readonly setId: string;
+        readonly confirmedAt: number;
+      },
       tx?: Tx
-    ): Promise<void>;
+    ): Promise<boolean>;
   };
 }
 
@@ -114,10 +121,11 @@ export interface RepositoryRecoveryCodes extends RecoveryCodes {
    * shown once; every code of the old set stops working, and the
    * "recovery codes were regenerated" notice goes out once the new set is
    * stored. The caller requires a fresh authentication first (ACC-02, #687),
-   * and calls `confirm` once the person says they saved the codes: an
-   * unconfirmed set is replaced by the next sign-in that owes one.
+   * and calls `confirm` with the set's id once the person says they saved
+   * the codes: an unconfirmed set is replaced by the next sign-in that owes
+   * one.
    */
-  regenerate(account: RecoveryCodeAccount): Promise<{ readonly codes: readonly string[] }>;
+  regenerate(account: RecoveryCodeAccount): Promise<RecoveryCodeSet>;
 }
 
 /**
@@ -146,9 +154,10 @@ export function createRepositoryRecoveryCodes<Tx>(
       const rows = await codes.findUnused(realmId, userId);
       return rows.map((row) => ({ id: row.id, hash: row.codeHash }));
     },
-    confirm: ({ realmId, userId, at }) => codes.confirmSet({ realmId, userId, confirmedAt: at }),
-    replace: ({ realmId, userId, hashes, at }) =>
-      codes.replaceSet({ realmId, userId, codeHashes: hashes, createdAt: at }),
+    confirm: ({ realmId, userId, setId, at }) =>
+      codes.confirmSet({ realmId, userId, setId, confirmedAt: at }),
+    replace: ({ realmId, userId, hashes, at, keepConfirmed }) =>
+      codes.replaceSet({ realmId, userId, codeHashes: hashes, createdAt: at, keepConfirmed }),
     async take({ realmId, userId, id, at, clientId }) {
       const use = await transaction(async (tx) => {
         if (!(await codes.markUsed({ realmId, userId, id, usedAt: at }, tx))) return undefined;
@@ -174,7 +183,7 @@ export function createRepositoryRecoveryCodes<Tx>(
     redeem: service.redeem,
     confirm: service.confirm,
     async regenerate(account: RecoveryCodeAccount) {
-      const issued = await service.issue(account);
+      const issued = await service.replace(account);
       await after('the recovery-codes-regenerated notice', () => options.regenerated(account));
       return issued;
     },

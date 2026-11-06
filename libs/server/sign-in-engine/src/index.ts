@@ -117,6 +117,7 @@ export {
   type RecoveryCodeAccount,
   type RecoveryCodeRedemption,
   type RecoveryCodes,
+  type RecoveryCodeSet,
   type RecoveryCodeStatus,
   REQUIRED_ACTIONS,
   type RequiredAction,

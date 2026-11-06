@@ -439,6 +439,14 @@ export interface RecoveryCodeStatus {
   readonly confirmed: boolean;
 }
 
+/** A new set of recovery codes (#649). */
+export interface RecoveryCodeSet {
+  /** The codes in their shown form: returned once and kept nowhere by the port. */
+  readonly codes: readonly string[];
+  /** The set's id, which only this set holds: what {@link RecoveryCodes.confirm} names. */
+  readonly setId: string;
+}
+
 /** What a recovery code answered at sign-in did (#649). */
 export type RecoveryCodeRedemption =
   /** An unused code of the account's set: it is used now, and the user is told. */
@@ -459,10 +467,12 @@ export interface RecoveryCodes {
   status(input: RecoveryCodeAccount): Promise<RecoveryCodeStatus>;
   /**
    * Replace the account's set, if any, with a new one, and return its codes
-   * in their shown form. They are returned once and never kept: the engine
-   * hands them to the round's answer alone.
+   * in their shown form and its id. The codes are returned once and never
+   * kept: the engine hands them to the round's answer alone. `null` when the
+   * account holds a set the person confirmed by now (another sign-in showed
+   * it): that set stays, and nothing is written.
    */
-  issue(input: RecoveryCodeAccount): Promise<{ readonly codes: readonly string[] }>;
+  issue(input: RecoveryCodeAccount): Promise<RecoveryCodeSet | null>;
   /**
    * Take `code`, as the person typed it, if it is an unused code of the
    * account's set: it is marked used in the write that takes it, so it works
@@ -479,11 +489,13 @@ export interface RecoveryCodes {
    */
   ceilingReached(input: RecoveryCodeAccount): Promise<void>;
   /**
-   * Mark the account's set confirmed: the person said they saved it. Until
+   * Mark the set `setId` confirmed: the person said they saved it. Until
    * then the set counts as never seen, and the next sign-in that owes one
-   * shows a new set in its place.
+   * shows a new set in its place. `false` when another set replaced it
+   * meanwhile (another sign-in, a regeneration): the codes the person saved
+   * no longer work, and nothing is confirmed.
    */
-  confirm(input: RecoveryCodeAccount): Promise<void>;
+  confirm(input: RecoveryCodeAccount & { readonly setId: string }): Promise<boolean>;
 }
 
 export const MFA_MODES = ['off', 'optional', 'required', 'required_for_admins'] as const;
