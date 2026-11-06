@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `webauthn_response`) and the optional `webauthn_create` enrolment step.
   With no `login_hint` the first response asks for a discoverable passkey and
   offers the password and the identifier; with one, it asks for the password
-  and offers the passkey, the same for every account. A login completes only
+  and offers the passkey, the same for every account. On the hosted pages
+  `/oauth/authorize` starts a sign-in with no `login_hint` at the passkey. A login completes only
   after the account's strongest bound factor, a disabled passkey included:
   after a right password a passkey-bound account is asked for the passkey,
   and an email code never stands in for it. An assertion without the UV flag
