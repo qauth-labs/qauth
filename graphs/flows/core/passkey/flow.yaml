@@ -484,7 +484,7 @@ states:
         say: 'the mailbox is not proved in this transaction: a code is mailed'
       - guard: stale
         target: completed
-        effect: [declineEnrolment, audit, waitFloor]
+        effect: [declineEnrolment, waitFloor]
         say: >-
           the last factor is more than 5 minutes old: nothing is bound, and the sign-in completes; the account page
           binds one after a fresh sign-in
@@ -662,7 +662,7 @@ states:
         say: 'the next round carries no answer: the same offer'
       DECLINE:
         target: completed
-        effect: [newRound, declineEnrolment, audit, waitFloor]
+        effect: [newRound, declineEnrolment, waitFloor]
         say: 'the answer carries no response: nothing is bound, and the offer is not made again in this transaction'
       REGISTRATION:
         target: verifyingRegistration
