@@ -288,7 +288,10 @@ describe('a recovery code in place of a lost factor', () => {
 });
 
 describe('a recovery code under an MFA policy', () => {
-  it('never satisfies it: the factor the account still holds is asked for after the code', async () => {
+  it('never satisfies it: the person binds a new second factor after the code, even while one is usable', async () => {
+    // ADR-017 Decision 8: where the policy requires a second factor, the user
+    // binds a new one before the transaction completes. With no set-up step
+    // in this engine, that is a redirect; the TOTP held is never asked for.
     const totp = fakeTotp();
     const built = build(totpAccount(), { steps: [totp.handler] });
     built.policy.policy = { realm: 'required', client: 'off' };
@@ -299,10 +302,8 @@ describe('a recovery code under an MFA policy', () => {
       codeAnswer(set[0] as string),
       context()
     );
-    expect(after).toMatchObject({
-      kind: 'step',
-      offer: { current: { step: 'totp' }, alternatives: [] },
-    });
+    expect(after).toEqual({ kind: 'redirect', reason: 'step_not_available', transaction: null });
+    expect(totp.verify).not.toHaveBeenCalled();
     expect(built.codes.usedNotices).toHaveLength(1);
   });
 
@@ -628,9 +629,13 @@ describe('a new set of recovery codes, shown once', () => {
     const { built, ctx } = enrolled();
     await issued(built);
     expect(await provedTotp(built, ctx)).toMatchObject({ kind: 'complete' });
-    // TOTP bound, no policy asks for it: the password alone completes, and shows nothing.
+    // TOTP bound, no policy: the password alone never completes (ADR-017
+    // Decision 4, rule 8), and it shows nothing before the TOTP.
     const bare = build(totpAccount(), { steps: [fakeTotp().handler] });
-    expect(await signIn(bare)).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+    expect(await signIn(bare)).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'totp' } },
+    });
     expect(bare.codes.store.rows).toEqual([]);
   });
 });

@@ -6,6 +6,7 @@ import {
   ladderWaitMs,
   PASSWORD_LADDER_POLICY,
   RECOVERY_CODE_LADDER_POLICY,
+  TOTP_LADDER_POLICY,
 } from '../lib/ladder';
 import type { LadderCounter } from '../lib/ports';
 
@@ -14,7 +15,7 @@ import type { LadderCounter } from '../lib/ports';
  * rules of {@link LadderPolicy} as the auth server's Redis script applies them
  * (`@qauth-labs/fastify-plugin-sign-in-engine`'s `failure-ladder.ts`). One
  * counter per (realm, identifier HMAC, counter: a factor or the email codes)
- * and per (realm, user, recovery codes), one known-IP list per (realm,
+ * and per (realm, user, recovery codes or TOTP), one known-IP list per (realm,
  * identifier HMAC). Not for production: nothing is shared between processes.
  */
 
@@ -67,24 +68,29 @@ export interface MemoryLadder extends LadderHook {
 
 /**
  * A ladder in memory over `now`, with `factorPolicy` for every factor (the
- * password's by default), `emailCodePolicy` for the email codes' counter and
- * `recoveryCodePolicy` for the recovery codes'.
+ * password's by default), `emailCodePolicy` for the email codes' counter,
+ * `recoveryCodePolicy` for the recovery codes' and `totpPolicy` for the
+ * TOTP's.
  */
 export function createMemoryLadder(
   now: () => number,
   factorPolicy: LadderPolicy = PASSWORD_LADDER_POLICY,
   emailCodePolicy: LadderPolicy = EMAIL_CODE_LADDER_POLICY,
-  recoveryCodePolicy: LadderPolicy = RECOVERY_CODE_LADDER_POLICY
+  recoveryCodePolicy: LadderPolicy = RECOVERY_CODE_LADDER_POLICY,
+  totpPolicy: LadderPolicy = TOTP_LADDER_POLICY
 ): MemoryLadder {
   checkLadderPolicy(factorPolicy);
   checkLadderPolicy(emailCodePolicy);
   checkLadderPolicy(recoveryCodePolicy);
+  checkLadderPolicy(totpPolicy);
   const policyOf = (counter: LadderCounter) =>
     counter === 'email_code'
       ? emailCodePolicy
       : counter === 'recovery_code'
         ? recoveryCodePolicy
-        : factorPolicy;
+        : counter === 'totp'
+          ? totpPolicy
+          : factorPolicy;
   /** A run, and how many of its counted failures came from known IPs (#968). */
   type Counter = MemoryLadderRun & { readonly knownIpFailures: number };
   const counters = new Map<string, Counter>();

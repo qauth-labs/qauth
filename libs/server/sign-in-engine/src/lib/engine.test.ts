@@ -623,28 +623,22 @@ describe('the MFA policy, read on every round', () => {
   });
 
   it('reads the policy on every round and keeps none of it in the transaction', async () => {
-    const totp = fakeFactorStep('totp', 'second_factor', 'totp', USER);
-    const built = build(
-      {
-        [IDENTIFIER]: passwordAccount(USER, PASSWORD, {
-          others: [{ type: 'totp', disabled: false }],
-        }),
-      },
-      { steps: [totp] }
-    );
+    const built = build();
     built.policy.policy = { realm: 'required', client: 'off' };
-    const { second } = await signIn(built, PASSWORD);
-    expect(second).toMatchObject({ kind: 'step', offer: { current: { step: 'totp' } } });
-    expect(JSON.stringify(second.transaction)).not.toMatch(/required|policy|mfa/);
-    // A policy change reaches the live transaction on its next round.
+    const ctx = context({ loginHint: IDENTIFIER });
+    const first = await built.engine.advance(null, null, ctx);
+    expect(first).toMatchObject({ kind: 'step', offer: { current: { step: 'password' } } });
+    expect(JSON.stringify(first.transaction)).not.toMatch(/required|policy|mfa/);
+    // A policy change reaches the live transaction on its next round: the
+    // password alone completes once the policy is off.
     built.policy.policy = { realm: 'off', client: 'off' };
-    const third = await built.engine.advance(
-      second.transaction as SignInTransaction,
-      null,
-      context()
+    const second = await built.engine.advance(
+      first.transaction as SignInTransaction,
+      passwordAnswer(PASSWORD),
+      ctx
     );
-    expect(third.kind).toBe('complete');
-    expect(built.policy.reads).toBe(3);
+    expect(second).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+    expect(built.policy.reads).toBe(2);
   });
 
   it('asks for the second factor and completes with mfa', async () => {

@@ -102,10 +102,11 @@ authentication, run before the call). The first unmet rule produces the answer.
    delay, a hard limit or the account's wait it is refused as `throttled`, neither verified nor
    counted.
 7. After a first factor (rule 8): the downgrade rule (the transaction must prove the account's
-   strongest bound factor; a disabled factor still counts as bound), then the MFA policy just read
-   (a policy that requires a second factor needs `mfa` in the `amr`). A rule no registered step can
-   meet answers `redirect`: an account that lacks the second factor the policy requires gets the
-   set-up step, never a code. On a transport that serves `recovery_code`, a recovery code may stand
+   strongest bound factor; a disabled factor still counts as bound), then, with `totp`, the TOTP an
+   account holds (a disabled one counting as bound), then the MFA policy just read (a policy that
+   requires a second factor needs `mfa` in the `amr`). A rule no registered step can meet answers
+   `redirect`: an account that lacks the second factor the policy requires gets the set-up step,
+   never a code (see [TOTP](#totp)). On a transport that serves `recovery_code`, a recovery code may stand
    in for the factor these rules ask for: see [Recovery codes](#recovery-codes). With
    `emailCodes`, an account whose address is not verified yet is
    verified inline before the second factor is asked for, or before completing when none is: see
@@ -389,9 +390,9 @@ its `serves`) never sees them, and a round that needs one answers `redirect` (Fi
   offers it beside the factor's own steps (the downgrade rule's, the MFA policy's, the forced
   update's factor beyond the password) while the account holds an unused code, once a transaction.
   It stands in for that factor and adds no `amr` value, never `mfa`, and leaves `auth_time` as the
-  first factor set it. So an MFA policy is never met by a code: the factor the account still holds
-  is asked for next, and with none the round is `redirect` to bind a new one (the set-up steps of
-  #651 and #653). A wrong code is refused with `invalid_credentials`, the same for a wrong code, a
+  first factor set it. So an MFA policy is never met by a code: the person binds a new second
+  factor before the sign-in completes (ADR-017 Decision 8), with `totp` on the `totp_setup` step
+  (see [TOTP](#totp)), and without it the round is `redirect`. A wrong code is refused with `invalid_credentials`, the same for a wrong code, a
   used one and one of another set.
 - **The ladder.** Wrong codes count on the `recovery_code` counter of the failure ladder, keyed on
   the account rather than an identifier, so every transaction and every end-user IP share it, and
@@ -500,6 +501,48 @@ step again sends the same challenge for 4 minutes, and a verified answer, right 
 The ladder has no passkey counter: an assertion names no account before it is verified, and cannot
 be guessed.
 
+## TOTP
+
+With `totp` (a `TotpCredentials` port, #653; ADR-017 Decisions 4, 7 and 8, ADR-020 §3;
+[`graphs/flows/core/totp/flow.yaml`](../../../graphs/flows/core/totp/flow.yaml)), the engine serves
+two steps. `createTotpService` (`src/lib/totp.ts`) builds the port over a store, a cipher and the
+notices; the auth server's keeps the secret in `user_credentials`, sealed under the realm's
+`data_at_rest` key.
+
+- **The parameters** are fixed: HMAC-SHA-1, 6 digits, a 30-second step and one step of tolerance
+  either way (RFC 6238). The secret is 160 bits from the CSPRNG, shown as 32 characters of base32
+  and as an `otpauth://totp/` URI. It is never stored, returned or reported in clear but as the
+  set-up step's personal data, and each secret the service opens is overwritten once used.
+- **`totp`** (its answer `otp`), a second factor, after the first factor: an account that holds a
+  TOTP owes a code, whatever the MFA policy says, unless the transaction proved `mfa` another way (a
+  passkey) or took a recovery code in its place; a disabled TOTP counts as bound, so only the
+  recovery code is offered for it. A code within the window and later than the last step the TOTP
+  accepted is taken in one conditional write, so a code works once. After a password it proves
+  `["pwd","otp","mfa"]`.
+- **The ladder.** Each answer is reserved on the `totp` counter, keyed on the realm and the user,
+  shared by every transaction, client, transport and end-user IP, with no known-IP exemption
+  (`TOTP_LADDER_POLICY`): from 5 failures the next attempt waits 2^(n−5) seconds up to 15 minutes,
+  and an attempt inside a wait is refused as `throttled`, neither checked nor counted. A right code
+  clears the counter; a right password never does. A wrong code after a correct password in the
+  same transaction calls `totp.failedAfterPassword` (the auth server tells the user at most once a
+  day), and one counted at or past the hard ceiling of 100 calls `totp.ceilingReached`, which
+  disables the TOTP only while its hard action is armed. Neither changes the answer.
+- **`totp_setup`** (params `{ algorithm: 'SHA1', digits: 6, period: 30 }`, answer `otp`): where the
+  MFA policy needs a second factor the account lacks, or after a recovery code stood in for a lost
+  one under that policy, on a transport that serves it and `recovery_codes`; any other gets a
+  `redirect`, with no secret drawn and no code mailed. An unclaimed account's address is verified
+  inline first. The port draws and seals the secret at once: the transaction keeps the ciphertext
+  (`totpEnrolment`), and every round that offers the step shows the same secret. A wrong first
+  code shows it again and binds nothing; a right one holds its time step. The first second factor
+  of a password-only account then needs an 8-digit `recovery` code mailed to its address, unless
+  the transaction proved the mailbox. The port binds the secret, with that step as its last
+  accepted one, replacing a TOTP the account holds, and queues the notice. The binding needs a
+  factor proved at most 5 minutes before (`TOTP_BINDING_MAX_AUTH_AGE_MS`); past it the transaction
+  ends (`authentication_stale`). The first code then counts as the bound TOTP's proof, so the
+  sign-in proves `["pwd","otp","mfa"]` after the first set of recovery codes it owes.
+
+`src/testing/memory-totp.ts` is the service over an in-memory store and cipher, for tests.
+
 ## Adding a step
 
 A step joins the engine as a `StepHandler` (`src/lib/steps/handler.ts`), passed in `steps`: its
@@ -507,8 +550,9 @@ role (`challenge`, `first_factor`, `second_factor`), the factor it proves, wheth
 use it, its params and personal data, and how it verifies an answer the step grammar has already
 read. A first factor may be `discoverable` (a passkey that names the account by itself): it is
 offered before any identifier, and after the password once one is held. A handler refuses a
-disabled account itself, settling its ladder as a failure. TOTP (#653) comes this way, and only as a
-second factor; the passkey step is the engine's own (see [Passkeys](#passkeys)). An `email_code` or `new_password` step handler is refused when
+disabled account itself, settling its ladder as a failure. A handler whose step is `totp` is a
+second factor; the engine's own, with `totp`, is described in [TOTP](#totp), and the passkey step
+is the engine's own too (see [Passkeys](#passkeys)). An `email_code` or `new_password` step handler is refused when
 the engine is built: the email code and the forced update are the engine's own, and never an
 authenticator.
 
@@ -535,3 +579,8 @@ authenticator.
   new account is offered none yet.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
   `complete_profile` wait for the steps that set them up.
+- The TOTP set-up is offered only where the MFA policy needs a second factor the account lacks, or
+  after a recovery code under that policy. Binding, replacing or removing a TOTP by choice is the
+  account page's (ACC-02).
+- An upstream sign-in adds no `amr` value, so after one a TOTP proves `["otp"]` alone, never
+  `mfa`: under an MFA policy such a sign-in is a `redirect`.

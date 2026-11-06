@@ -649,6 +649,12 @@ export const SIGN_IN_AUDIT_REASONS = [
    * proof and gives the mailbox owner a new one.
    */
   'account_unclaimed',
+  /**
+   * A binding needs a factor proved at most 5 minutes ago (ADR-017
+   * Decision 8), and the transaction's is older (#653): nothing is bound,
+   * and the transaction ends, so a fresh sign-in starts again.
+   */
+  'authentication_stale',
 ] as const;
 export type SignInAuditReason = (typeof SIGN_IN_AUDIT_REASONS)[number];
 
@@ -847,6 +853,121 @@ export interface PasskeyCeremonies {
     readonly userId: string;
     readonly registration: string;
   }): Promise<PasskeyBinding>;
+}
+
+/** One account of a realm, as the TOTP port names it (#653). */
+export interface TotpAccount {
+  readonly realmId: string;
+  readonly userId: string;
+}
+
+/** What a code answered to the account's bound TOTP did (#653). */
+export type TotpVerification =
+  /** A code of a later time step than the last one accepted: that step is taken now. */
+  | { readonly kind: 'accepted' }
+  /**
+   * Anything else: a wrong code, a step accepted already or an earlier one, a
+   * step another round took first, a disabled TOTP or none. The engine
+   * refuses every one alike, as `invalid_credentials`.
+   */
+  | { readonly kind: 'refused' };
+
+/** How the set-up step shows a secret: its personal data, for this round's answer alone. */
+export interface TotpDisplay {
+  /** The secret, 160 bits as 32 characters of unpadded uppercase base32 (RFC 4648 §6). */
+  readonly secret: string;
+  /** The same secret as an `otpauth://totp/` URI, for the page's QR code. */
+  readonly otpauthUri: string;
+}
+
+/** A new secret for the set-up step (#653). */
+export interface TotpEnrolmentStart {
+  /**
+   * The secret as a `data_at_rest` ciphertext of the realm (ADR-019
+   * Decision 9): what the transaction holds until it binds it, at most
+   * {@link TOTP_SEALED_MAX_LENGTH} characters. The transaction never holds
+   * the secret in clear.
+   */
+  readonly sealed: string;
+  readonly display: TotpDisplay;
+}
+
+/** What a first code answered to the set-up step is to its new secret (#653). */
+export type TotpSetupCheck =
+  /** Valid for `step`, which becomes the bound TOTP's last accepted step. */
+  { readonly kind: 'valid'; readonly step: number } | { readonly kind: 'refused' };
+
+/** What binding a new secret to an account found (#653). */
+export type TotpBinding =
+  /** The secret is the account's TOTP now, replacing a disabled one, and the notice is queued. */
+  | { readonly kind: 'bound' }
+  /**
+   * Nothing was bound: the account is disabled or gone (`account_disabled`,
+   * `subject_mismatch`), or its address was never proved
+   * (`account_unclaimed`, ADR-017 Decision 8). The transaction ends.
+   */
+  | {
+      readonly kind: 'refused';
+      readonly reason: 'account_disabled' | 'subject_mismatch' | 'account_unclaimed';
+    };
+
+/** The longest ciphertext of a new secret the engine keeps in a transaction. */
+export const TOTP_SEALED_MAX_LENGTH = 1024;
+
+/**
+ * The accounts' TOTPs (#653; ADR-017 Decisions 7 and 8, ADR-020 §3): the
+ * fixed parameters of `createTotpService`, a secret stored only as a
+ * `data_at_rest` ciphertext, and the last time step each TOTP accepted. The
+ * engine never sees a secret but the set-up step's display; it holds a new
+ * one only as its ciphertext. A throw is an outage, which refuses the round.
+ */
+export interface TotpCredentials {
+  /**
+   * Check `code` against the account's TOTP: one step of tolerance either
+   * way, and a later step than the last one accepted, which is taken in the
+   * write that accepts it, so a code works once.
+   */
+  verify(
+    input: TotpAccount & { readonly clientId: string; readonly code: string }
+  ): Promise<TotpVerification>;
+  /** Draw a new secret for the set-up step, sealed at once, with how it is shown. */
+  start(input: TotpAccount & { readonly identifier: string }): Promise<TotpEnrolmentStart>;
+  /** Show a secret {@link start} sealed again, for a round that offers the step again. */
+  display(
+    input: TotpAccount & { readonly identifier: string; readonly sealed: string }
+  ): Promise<TotpDisplay>;
+  /** Check a first code against a sealed secret, without binding it. */
+  check(
+    input: TotpAccount & { readonly sealed: string; readonly code: string }
+  ): Promise<TotpSetupCheck>;
+  /**
+   * Bind a sealed secret to the account, with `step` as its last accepted
+   * step, replacing the TOTP it holds, then queue the "TOTP added" notice; a
+   * notice that fails is reported and binds the secret all the same. The
+   * account's TOTP counter ends with the old secret.
+   */
+  bind(
+    input: TotpAccount & {
+      readonly clientId: string;
+      readonly sealed: string;
+      readonly step: number;
+    }
+  ): Promise<TotpBinding>;
+  /**
+   * A wrong code counted at or past the TOTP ladder's hard ceiling, 100 in a
+   * row (ADR-017 Decision 7): disable the TOTP and tell the user, only while
+   * the hard action is armed (the hosted pages are on, and the account keeps
+   * an unused recovery code or another usable factor beyond the password).
+   * Idempotent. A failure here is reported and changes no answer.
+   */
+  ceilingReached(input: TotpAccount): Promise<void>;
+  /**
+   * A wrong code after a correct password in the same transaction: tell the
+   * user, at most once per 24 hours per account. No realm can switch this
+   * notice off (ADR-020 "Emails"). A failure here is reported and changes no
+   * answer.
+   */
+  failedAfterPassword(input: TotpAccount & { readonly clientId: string }): Promise<void>;
 }
 
 /** The engine's clock: `now` in epoch milliseconds, and a wait. */

@@ -166,6 +166,29 @@ export const RECOVERY_CODE_LADDER_POLICY: LadderPolicy = Object.freeze({
   onSuccess: 'clear',
 });
 
+/**
+ * The TOTP ladder (#653; ADR-017 Decision 7, the second-factor row): one
+ * counter of wrong TOTP codes per account, keyed on the realm and the user,
+ * shared by every transaction, client, transport and IP. The password's
+ * ladder from 5 consecutive failures, with no known-IP exemption, and its
+ * free failures kept as long as a run with a wait, as the recovery codes'.
+ * The hard ceiling of 100 fires the TOTP's hard action, which disables it
+ * only while it is armed (the hosted pages are on, and the account keeps an
+ * unused recovery code or another usable second factor). A right code clears
+ * the counter; a right password never does.
+ */
+export const TOTP_LADDER_POLICY: LadderPolicy = Object.freeze({
+  freeFailures: 5,
+  firstWaitMs: 1_000,
+  maxWaitMs: 15 * 60_000,
+  hardCeiling: 100,
+  knownIpMs: 0,
+  knownIpFreeFailures: 0,
+  retentionMs: 30 * DAY_MS,
+  freeRetentionMs: 30 * DAY_MS,
+  onSuccess: 'clear',
+});
+
 /** The largest doubling the wait is computed through: past it every wait is `maxWaitMs`. */
 const MAX_DOUBLINGS = 40;
 

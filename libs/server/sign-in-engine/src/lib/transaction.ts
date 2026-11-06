@@ -14,7 +14,7 @@ import {
   emailCodeLength,
   type HeldEmailCode,
 } from './email-code';
-import { PASSKEY_REGISTRATION_MAX_LENGTH } from './ports';
+import { PASSKEY_REGISTRATION_MAX_LENGTH, TOTP_SEALED_MAX_LENGTH } from './ports';
 import type { SignInFlow } from './round';
 
 /**
@@ -172,6 +172,20 @@ export interface SignInTransaction {
    * held while the account's mailbox is proved before it is bound.
    */
   readonly passkeyEnrolment?: PasskeyEnrolment;
+  /**
+   * The TOTP set-up of this sign-in (#653): the new secret as the port sealed
+   * it (a `data_at_rest` ciphertext, never the secret in clear), shown again
+   * by every round that offers `totp_setup`; and, once a first code was valid
+   * for it, the time step that code matched, held while the account's
+   * mailbox is proved before the secret is bound. Dropped at the binding.
+   */
+  readonly totpEnrolment?: TotpEnrolment;
+}
+
+/** What a transaction holds of its TOTP set-up: see {@link SignInTransaction.totpEnrolment}. */
+export interface TotpEnrolment {
+  readonly sealed: string;
+  readonly step?: number;
 }
 
 /** The steps whose params carry a WebAuthn ceremony (#651). */
@@ -324,6 +338,12 @@ export const signInTransactionSchema = z.strictObject({
       }),
     ])
     .optional(),
+  totpEnrolment: z
+    .strictObject({
+      sealed: z.string().min(1).max(TOTP_SEALED_MAX_LENGTH),
+      step: z.int().nonnegative().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -351,6 +371,7 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     recoveryCodesShown,
     ceremony,
     passkeyEnrolment,
+    totpEnrolment,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -382,6 +403,10 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (ceremony?.step === 'webauthn_create' && (subject === undefined || authTime === undefined)) {
     return null;
   }
+  // A TOTP is set up only for the account a factor proved (#653).
+  if (totpEnrolment !== undefined && (subject === undefined || authTime === undefined)) {
+    return null;
+  }
   return freezeTransaction({
     v: SIGN_IN_TRANSACTION_VERSION,
     realmId,
@@ -408,6 +433,14 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ...(recoveryCodesShown === undefined ? {} : { recoveryCodesShown }),
     ...(ceremony === undefined ? {} : { ceremony }),
     ...(passkeyEnrolment === undefined ? {} : { passkeyEnrolment }),
+    ...(totpEnrolment === undefined
+      ? {}
+      : {
+          totpEnrolment: {
+            sealed: totpEnrolment.sealed,
+            ...(totpEnrolment.step === undefined ? {} : { step: totpEnrolment.step }),
+          },
+        }),
   });
 }
 
@@ -425,6 +458,7 @@ export function freezeTransaction(transaction: SignInTransaction): SignInTransac
     recoveryCodesShown,
     ceremony,
     passkeyEnrolment,
+    totpEnrolment,
     ...rest
   } = transaction;
   return Object.freeze({
@@ -453,5 +487,6 @@ export function freezeTransaction(transaction: SignInTransaction): SignInTransac
               ? passkeyEnrolment
               : Object.freeze({ ...passkeyEnrolment }),
         }),
+    ...(totpEnrolment === undefined ? {} : { totpEnrolment: Object.freeze({ ...totpEnrolment }) }),
   });
 }
