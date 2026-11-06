@@ -8,8 +8,8 @@ import { createUserCredentialsRepository } from './user-credentials.repository';
 /**
  * The TOTP writes of `user_credentials` (#653), by the statements they send:
  * a time step is taken by one conditional UPDATE, and a binding is one
- * INSERT that rewrites only the account's own row. Their behaviour against
- * PostgreSQL is in `identity-repositories.integration.test.ts`.
+ * INSERT that rewrites only the account's own row. Against PostgreSQL they
+ * run end to end in the auth server's `totp-sign-in.integration.test.ts`.
  */
 
 interface CapturedQuery {

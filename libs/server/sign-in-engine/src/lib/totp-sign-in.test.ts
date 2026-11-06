@@ -393,7 +393,7 @@ describe('the totp step after the first factor', () => {
     expect(totpCounter(built)?.failures).toBe(1);
   });
 
-  it('counts a disabled TOTP as bound: a recovery code stands in for it on the hosted pages', async () => {
+  it('counts a disabled TOTP as bound: a recovery code stands in for it, then a new one is set up', async () => {
     const built = await build({ totp: 'disabled' });
     const { set } = built;
     const ctx = context(built);
@@ -402,14 +402,31 @@ describe('the totp step after the first factor', () => {
       kind: 'step',
       offer: { current: { step: 'recovery_code' }, alternatives: [] },
     });
-    const done = await built.engine.advance(
+    const setUp = await built.engine.advance(
       kept(offered),
       answer('recovery_code', { recovery_code: set[0] }),
       ctx
     );
-    // No policy asks for mfa: the code stands in, and adds no amr value.
-    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
-    // A FiPA client cannot redeem a code: the hosted pages.
+    // No policy asks for mfa, yet the sign-in does not complete on the code
+    // alone: a disabled TOTP is set up again, or every sign-in would spend a
+    // recovery code until none is left.
+    expect(stepOf(setUp)).toBe('totp_setup');
+    let result = await firstCode(built, setUp, ctx);
+    // The account holds a factor beyond the password: no mailed code.
+    expect(built.sender.sent).toEqual([]);
+    expect(built.totp.rows.get(`${REALM}:${USER}`)?.disabled).toBe(false);
+    while (result.kind === 'step' && stepOf(result) === 'recovery_codes') {
+      result = await built.engine.advance(
+        kept(result),
+        answer('recovery_codes', { acknowledged: true }),
+        ctx
+      );
+    }
+    expect(result).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd', 'otp', 'mfa'] } });
+  });
+
+  it('sends a FiPA client to the hosted pages for a disabled TOTP: it cannot redeem a recovery code', async () => {
+    const built = await build({ totp: 'disabled' });
     const fipa = await signIn(built, context(built, { serves: FIPA_STEP_NAMES }));
     expect(fipa).toEqual({ kind: 'redirect', reason: 'step_not_available', transaction: null });
   });

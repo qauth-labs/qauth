@@ -128,8 +128,10 @@ export function createServerTotp(
       issuerOf: async (realmId) => new URL(realmIssuer(await deps.realmOf(realmId))).host,
       async hardActionArmed({ realmId, userId }) {
         if (!deps.hostedPages) return false;
+        // Only a set the person confirmed counts as a way back: one nobody
+        // confirmed (a closed tab, a lost answer) was never seen for sure.
         const status = await deps.recoveryCodes.status({ realmId, userId });
-        if (status.unused > 0) return true;
+        if (status.confirmed && status.unused > 0) return true;
         if (!deps.passkeys) return false;
         const passkeys = await credentials.findAllByUserIdAndType(userId, WEBAUTHN_PROVIDER_TYPE);
         return passkeys.some(

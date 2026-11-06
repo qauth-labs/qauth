@@ -30,11 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uncounted. Three mails no realm can switch off: `totp_added`,
   `second_factor_failed` (a wrong code after a right password, at most once a
   day) and `second_factor_disabled` (100 wrong codes in a row, only while the
-  hosted pages are on and the account keeps an unused recovery code or
-  another usable second factor). Two server-rendered pages serve the steps:
+  hosted pages are on and the account keeps an unused code of a recovery set
+  it confirmed, or another usable second factor). A recovery code that stands
+  in for a disabled app leads to its set-up before the sign-in completes,
+  whatever the MFA policy. Two server-rendered pages serve the steps:
   `GET /ui/totp/{interactionId}` and `GET /ui/totp-setup/{interactionId}`,
-  with a QR code and the text secret. No MFA policy is stored yet, so the
-  set-up step is reachable only once its storage exists.
+  with a QR code and the text secret. No MFA policy is stored yet, so a first
+  set-up is reachable only once its storage exists.
 
 - **Passkey sign-in steps, passkey-first order and the downgrade rule**
   ([#651], ADR-017 Decisions 4 and 10; `graphs/flows/core/passkey`). The

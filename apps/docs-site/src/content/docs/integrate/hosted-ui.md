@@ -328,7 +328,8 @@ gets `429` without being checked. A wrong code after a right password mails
 the account a notice, at most once a day. At 100 in a row, and only while
 these pages are on and the account keeps an unused recovery code or another
 usable second factor, the authenticator app is turned off and the account is
-told. No realm can switch these notices off.
+told. The next sign-in takes a recovery code in its place, then asks to set
+up the app again before it completes. No realm can switch these notices off.
 
 ## Pending authorization: why the login bounce carries a handle, not a URL
 

@@ -118,7 +118,7 @@ import type {
 import { createIdentifierStep } from './steps/identifier';
 import { createPasskeyStep } from './steps/passkey';
 import { checkBreachList, createPasswordStep } from './steps/password';
-import { createTotpStep, holdsTotp } from './steps/totp';
+import { createTotpStep, holdsTotp, holdsUsableTotp } from './steps/totp';
 import { fromStore, SignInStoreUnavailableError } from './store';
 import {
   type CeremonyStep,
@@ -1541,6 +1541,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
      */
     const tookRecoveryCode = (): boolean =>
       state.transaction.verified.some((step) => step.step === 'recovery_code');
+    /**
+     * Whether this transaction proved a password: the one first factor that
+     * makes `mfa` with a TOTP (an upstream sign-in adds no `amr` value).
+     */
+    const provedPassword = (): boolean =>
+      state.transaction.verified.some((step) => factorOf(step.step) === 'password');
     /**
      * Whether this transaction bound a passkey (#651): to an account whose
      * only factor was the password it proved, so the downgrade rule asks no
@@ -3276,11 +3282,13 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
     /**
      * The TOTP set-up (#653; ADR-017 Decisions 4 and 8,
      * `graphs/flows/core/totp/flow.yaml`): where the MFA policy needs a
-     * second factor the account lacks (or the lost one a recovery code stood
-     * in for), `totp_setup` binds a new secret before the sign-in completes,
-     * never an emailed code in the factor's place. Only on a transport that
-     * serves the step and the recovery codes it owes (the hosted pages); any
-     * other gets a redirect.
+     * second factor the account lacks after a password (or the lost one a
+     * recovery code stood in for), and, whatever the policy, after a
+     * recovery code stood in for a TOTP the hard action disabled,
+     * `totp_setup` binds a new secret before the sign-in completes, never an
+     * emailed code in the factor's place. Only on a transport that serves the
+     * step and the recovery codes it owes (the hosted pages); any other gets
+     * a redirect.
      *
      * An unclaimed account never reaches the step: its address is verified
      * inline first, which claims it, as the same person then proved the
@@ -3514,11 +3522,26 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
         } else {
           // An account that lacks a second factor, or one whose lost factor a
           // recovery code stood in for, gets the set-up step, never a code
-          // (#653). One that proved its TOTP with a first factor that adds no
-          // amr (an upstream sign-in) cannot make mfa this way: a redirect.
+          // (#653). After a first factor that adds no amr (an upstream
+          // sign-in) a TOTP cannot make mfa: a redirect, before any secret is
+          // drawn or bound.
           needed = [];
-          setUp = tookRecoveryCode() || !holdsTotp(current);
+          setUp = provedPassword() && (tookRecoveryCode() || !holdsTotp(current));
         }
+      } else if (
+        tookRecoveryCode() &&
+        holdsTotp(current) &&
+        !holdsUsableTotp(current) &&
+        !enrolledTotp() &&
+        !provesMfa(state.transaction.verified)
+      ) {
+        // A recovery code stood in for a TOTP the hard action disabled (#653;
+        // ADR-017 Decisions 7 and 8): a new one is bound before the sign-in
+        // completes, whatever the MFA policy says. A disabled TOTP still
+        // counts as bound, so without the rebind every later sign-in would
+        // spend another code until none is left.
+        needed = [];
+        setUp = true;
       } else if (updateDue(current) && boundBeyondPassword(current) && !metBeyondPassword()) {
         // The forced update (#635): an account with a factor beyond its
         // password proves it first, so a person who knows only the password,

@@ -186,7 +186,7 @@ describe('the engine mail registry (#637)', () => {
     [
       'second_factor_disabled',
       'Your authenticator app was turned off',
-      'use one of your recovery codes in its place',
+      'the sign-in then asks you to set up',
     ],
     ['second_factor_failed', 'A wrong code was entered after your password', 'at most once a day'],
   ] as const)(

@@ -556,7 +556,8 @@ describe('TOTP as a second factor on the hosted pages (#653, real containers)', 
 
     // Inside the wait the right code is refused, neither checked nor
     // counted: no address is exempt, and the step it names stays unused.
-    const right = codeAt(secret, now);
+    const at = now;
+    const right = codeAt(secret, at);
     const waited = await answer(c, TOTP, { otp: right });
     expect(waited.statusCode, waited.body).toBe(429);
     expect(waited.headers['retry-after']).toBe('1');
@@ -568,7 +569,9 @@ describe('TOTP as a second factor on the hosted pages (#653, real containers)', 
     const done = await answer(c, TOTP, { otp: right });
     expect(done.statusCode, done.body).toBe(303);
     expect(await failures(userId)).toBeNull();
-    expect((await totpRow(userId))?.credential_data['last_step']).toBe(Math.floor(now / STEP_MS));
+    // The code names the step it was read at, which the wait may have left
+    // behind by one: that step, within the tolerance, is the one taken.
+    expect((await totpRow(userId))?.credential_data['last_step']).toBe(Math.floor(at / STEP_MS));
     // The day's notice went with the first wrong code: none since.
     expect((mails.get(EMAIL) ?? []).map((mail) => mail.template)).toEqual(['second_factor_failed']);
   });

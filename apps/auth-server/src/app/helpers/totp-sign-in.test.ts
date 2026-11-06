@@ -183,6 +183,9 @@ describe('the server TOTPs (#653)', () => {
     expect(recoveryStatus).not.toHaveBeenCalled();
 
     hostedPages = true;
+    // A set nobody confirmed was never seen for sure: it is no way back.
+    recoveryStatus.mockResolvedValue({ issued: true, unused: 10, confirmed: false });
+    await reachCeiling();
     recoveryStatus.mockResolvedValue({ issued: true, unused: 0, confirmed: true });
     await reachCeiling();
     // A passkey counts only while passkey sign-in is on.

@@ -13,6 +13,8 @@ import {
   passwordAccount,
   recordingAudit,
 } from '../testing/fakes';
+import { createMemoryRecoveryCodes } from '../testing/memory-recovery-codes';
+import { createMemoryTotp } from '../testing/memory-totp';
 import { createProofOfWorkProvider } from './bot-challenge';
 import { createSignInEngine, type SignInEngineDependencies } from './engine';
 import type { Clock, SignInAccount, UpstreamProviderEntry } from './ports';
@@ -407,6 +409,24 @@ describe('the upstream provider’s callback (#639)', () => {
     const next = await built.engine.completeUpstream(await picked(built, ctx), proof(), ctx);
     // No second factor is bound and none can be set up here: the sign-in cannot complete.
     expect(next.kind).not.toBe('complete');
+  });
+
+  it('draws no TOTP secret for an upstream sign-in under an MFA policy (#653)', async () => {
+    const clock = manualClock();
+    const totp = createMemoryTotp(clock);
+    const built = build(upstreamAccount(), {
+      clock,
+      totp,
+      recoveryCodes: createMemoryRecoveryCodes(clock.now),
+    });
+    built.policy.policy = { realm: 'required', client: 'off' };
+    const ctx = context(built);
+    const next = await built.engine.completeUpstream(await picked(built, ctx), proof(), ctx);
+    // The set-up proves a password first (ADR-017 Decision 8): an account
+    // with no password is sent on, and binds nothing it could not use.
+    expect(next).toMatchObject({ kind: 'redirect', reason: 'step_not_available' });
+    expect(totp.sealed).toEqual([]);
+    expect(totp.rows.size).toBe(0);
   });
 
   it.each([

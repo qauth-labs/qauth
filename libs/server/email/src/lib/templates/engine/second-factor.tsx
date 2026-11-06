@@ -64,7 +64,8 @@ export function SecondFactorDisabledEmail({ brand, baseUrl }: SecondFactorNotice
       <Paragraph brand={brand}>
         Wrong codes from an authenticator app were entered 100 times in a row for the account that
         uses this email address, each after its password, so the app no longer signs in to it. To
-        sign in, use one of your recovery codes in its place; you can then set up the app again.
+        sign in, enter one of your recovery codes in its place: the sign-in then asks you to set up
+        the app again. A passkey you added still signs you in.
       </Paragraph>
       <NotYou brand={brand} />
     </EngineMailLayout>

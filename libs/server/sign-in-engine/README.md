@@ -528,9 +528,12 @@ notices; the auth server's keeps the secret in `user_credentials`, sealed under 
   day), and one counted at or past the hard ceiling of 100 calls `totp.ceilingReached`, which
   disables the TOTP only while its hard action is armed. Neither changes the answer.
 - **`totp_setup`** (params `{ algorithm: 'SHA1', digits: 6, period: 30 }`, answer `otp`): where the
-  MFA policy needs a second factor the account lacks, or after a recovery code stood in for a lost
-  one under that policy, on a transport that serves it and `recovery_codes`; any other gets a
-  `redirect`, with no secret drawn and no code mailed. An unclaimed account's address is verified
+  MFA policy needs a second factor the account lacks after a password, or after a recovery code
+  stood in for a lost one under that policy, and, whatever the policy, after a recovery code stood
+  in for a TOTP the hard action disabled (else every later sign-in would spend another code), on a
+  transport that serves it and `recovery_codes`; any other gets a `redirect`, with no secret drawn
+  and no code mailed. After an upstream sign-in under an MFA policy the set-up is not offered: a
+  TOTP could not make `mfa` there. An unclaimed account's address is verified
   inline first. The port draws and seals the secret at once: the transaction keeps the ciphertext
   (`totpEnrolment`), and every round that offers the step shows the same secret. A wrong first
   code shows it again and binds nothing; a right one holds its time step. The first second factor
@@ -580,7 +583,7 @@ authenticator.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
   `complete_profile` wait for the steps that set them up.
 - The TOTP set-up is offered only where the MFA policy needs a second factor the account lacks, or
-  after a recovery code under that policy. Binding, replacing or removing a TOTP by choice is the
+  after a recovery code under that policy, or after one that stood in for a disabled TOTP. Binding, replacing or removing a TOTP by choice is the
   account page's (ACC-02).
 - An upstream sign-in adds no `amr` value, so after one a TOTP proves `["otp"]` alone, never
   `mfa`: under an MFA policy such a sign-in is a `redirect`.
