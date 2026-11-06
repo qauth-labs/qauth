@@ -88,6 +88,23 @@ ${rows}
 `;
 }
 
+/**
+ * Netlify serves `.mmd` under an unrelated media type, so a language model fetching a graph's
+ * Mermaid source would not read it as text. One `_headers` rule per diagram fixes that; a
+ * `_headers` file copied from public/ is kept and extended, not replaced.
+ */
+function writeDiagramHeaders(siteDir: string, graphs: FlowGraph[]): void {
+  const file = join(siteDir, '_headers');
+  const existing = existsSync(file) ? `${readFileSync(file, 'utf8').trimEnd()}\n\n` : '';
+  const rules = graphs
+    .map(
+      (graph) =>
+        `${GRAPH_PAGES_ROUTE}/${graph.id}/flow.mmd\n  Content-Type: text/plain; charset=utf-8`
+    )
+    .join('\n');
+  writeFileSync(file, `${existing}${rules}\n`);
+}
+
 function injectAfterBody(file: string, html: string): void {
   const page = readFileSync(file, 'utf8');
   if (!page.includes(BODY_OPEN)) {
@@ -143,7 +160,9 @@ export function graphPages(): AstroIntegration {
             injectAfterBody(join(out, graph.id, 'index.html'), flowBanner(graph));
           }
           writeFileSync(join(out, 'index.html'), indexPage(graphs));
-          cpSync(out, join(fileURLToPath(dir), GRAPH_PAGES_ROUTE.slice(1)), { recursive: true });
+          const siteDir = fileURLToPath(dir);
+          cpSync(out, join(siteDir, GRAPH_PAGES_ROUTE.slice(1)), { recursive: true });
+          writeDiagramHeaders(siteDir, graphs);
           logger.info(`published ${graphs.length} flow graph pages at ${GRAPH_PAGES_ROUTE}/`);
         } finally {
           rmSync(out, { recursive: true, force: true });
