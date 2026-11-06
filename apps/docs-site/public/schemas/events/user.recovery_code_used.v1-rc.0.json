@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.qauth.dev/schemas/events/user.recovery_code_used.v1-rc.0.json",
   "title": "urn:qauth:event:user.recovery_code_used:v1-rc.0",
-  "description": "The user.recovery_code_used event, v1-rc.0. A person used one of their recovery codes in place of a second factor, after the password, to sign in on the hosted pages. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.",
+  "description": "The user.recovery_code_used event, v1-rc.0. A person used one of their recovery codes in place of a second factor on the hosted pages: after the password to sign in, or after the code mailed to their address to reset the password. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.",
   "type": "object",
   "properties": {
     "id": {
@@ -148,7 +148,7 @@
         "remaining": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 1000000,
+          "maximum": 10,
           "description": "How many of the set are left unused after this one: 0 to 10."
         }
       },

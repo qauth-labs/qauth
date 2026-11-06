@@ -7,9 +7,11 @@ import { EngineMailLayout, Paragraph } from './layout';
  * The recovery codes' notices (#649; ADR-017 Decisions 7 and 8): a code
  * used, a set replaced, and 100 wrong codes in a row. None carries a link or
  * a secret; a realm switches none of them off. A recovery code is asked for
- * only after the password, so each notice says what a person who did not act
- * does: set a new password through "Forgot password", which also needs the
- * second factor the account holds, and tell the administrator.
+ * only after a first proof: the password at sign-in, or the code mailed to the
+ * account's address in a password reset. So each notice says what a person
+ * who did not act does: secure their mailbox, set a new password through
+ * "Forgot password", which also needs the second factor the account holds,
+ * and tell the administrator.
  */
 
 interface RecoveryNoticeProps {
@@ -21,8 +23,9 @@ interface RecoveryNoticeProps {
 function NotYou({ brand }: { readonly brand: MailBrand }) {
   return (
     <Paragraph brand={brand}>
-      If this was not you, someone knows your password: choose &quot;Forgot password&quot; on the
-      sign-in page to set a new one, and tell the administrator of this service.
+      If this was not you, someone knows your password or can read the mail sent to this address:
+      secure your email account, choose &quot;Forgot password&quot; on the sign-in page to set a new
+      password, and tell the administrator of this service.
     </Paragraph>
   );
 }
@@ -47,7 +50,7 @@ export function RecoveryCodeUsedEmail({ brand, baseUrl, unusedCodes }: RecoveryC
     >
       <Paragraph brand={brand}>
         A recovery code was just used in place of the second factor to sign in to the account that
-        uses this email address. {left}
+        uses this email address, or to reset its password. {left}
       </Paragraph>
       <NotYou brand={brand} />
     </EngineMailLayout>
@@ -87,9 +90,9 @@ export function RecoveryCodesFailedEmail({ brand, baseUrl }: RecoveryNoticeProps
       title="Wrong recovery codes were tried"
     >
       <Paragraph brand={brand}>
-        Wrong recovery codes were entered 100 times in a row to sign in to the account that uses
-        this email address, each after the right password. Every further try now waits up to 15
-        minutes.
+        Wrong recovery codes were entered 100 times in a row for the account that uses this email
+        address, each after its password or after a code mailed to this address. Every further try
+        now waits up to 15 minutes.
       </Paragraph>
       <NotYou brand={brand} />
     </EngineMailLayout>

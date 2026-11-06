@@ -403,7 +403,7 @@ A person reset their account's password: an emailed code proved the mailbox, eve
 
 ### user.recovery_code_used v1-rc.0
 
-A person used one of their recovery codes in place of a second factor, after the password, to sign in on the hosted pages. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.
+A person used one of their recovery codes in place of a second factor on the hosted pages: after the password to sign in, or after the code mailed to their address to reset the password. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.
 
 - Identifier: `urn:qauth:event:user.recovery_code_used:v1-rc.0`
 - Category: `user` · Severity: `warning` · Since: v0.2.0
@@ -417,7 +417,7 @@ A person used one of their recovery codes in place of a second factor, after the
 
 ### user.recovery_codes_failed v1-rc.0
 
-Wrong recovery codes reached 100 in a row for an account, each after the right password: someone who knows the password is guessing its codes. Every further try waits up to 15 minutes; the person is told by email and the operator alerted. Recorded at most once a day per account.
+Wrong recovery codes reached 100 in a row for an account, each after a first proof: the right password at sign-in, or the code mailed to the account’s address in a password reset. Someone who holds one of those is guessing its codes. Every further try waits up to 15 minutes; the person is told by email and the operator alerted. Recorded at most once a day per account.
 
 - Identifier: `urn:qauth:event:user.recovery_codes_failed:v1-rc.0`
 - Category: `user` · Severity: `critical` · Since: v0.2.0

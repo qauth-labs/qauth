@@ -8,7 +8,6 @@ import {
   RISC_ACCOUNT_ENABLED,
 } from '../ssf-mapping';
 import {
-  count,
   FIRST_RELEASE,
   identifierHmac,
   reason,
@@ -227,13 +226,18 @@ export const userRecoveryCodeUsed = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'A person used one of their recovery codes in place of a second factor, after the password, to sign in on the hosted pages. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.',
+    'A person used one of their recovery codes in place of a second factor on the hosted pages: after the password to sign in, or after the code mailed to their address to reset the password. A code works once; it adds no `amr` value to the sign-in, and the person is told by email.',
   category: 'user',
   severity: 'warning',
   since: FIRST_RELEASE,
   subject: 'user',
   data: z.strictObject({
-    remaining: count('How many of the set are left unused after this one: 0 to 10.'),
+    // A set holds 10 codes (ADR-017 Decision 8): no payload says more are left.
+    remaining: z
+      .int()
+      .min(0)
+      .max(10)
+      .describe('How many of the set are left unused after this one: 0 to 10.'),
   }),
   security: true,
   ssf: 'none',
@@ -252,7 +256,7 @@ export const userRecoveryCodesFailed = defineEventType({
   version: 1,
   rc: 0,
   description:
-    'Wrong recovery codes reached 100 in a row for an account, each after the right password: someone who knows the password is guessing its codes. Every further try waits up to 15 minutes; the person is told by email and the operator alerted. Recorded at most once a day per account.',
+    'Wrong recovery codes reached 100 in a row for an account, each after a first proof: the right password at sign-in, or the code mailed to the account’s address in a password reset. Someone who holds one of those is guessing its codes. Every further try waits up to 15 minutes; the person is told by email and the operator alerted. Recorded at most once a day per account.',
   category: 'user',
   severity: 'critical',
   since: FIRST_RELEASE,
