@@ -36,6 +36,7 @@ export {
 export {
   createSignInEngine,
   type EmailCodeDependencies,
+  PASSKEY_BINDING_MAX_AUTH_AGE_MS,
   REGISTRATION_NOT_ALLOWED,
   RESET_NOT_ALLOWED,
   SIGN_IN_MIN_RESPONSE_TIME_MS,
@@ -109,6 +110,12 @@ export {
   NO_BREACH_CHECK,
   NO_HARD_ACTION,
   NO_SECOND_FACTOR_POLICY,
+  PASSKEY_REGISTRATION_MAX_LENGTH,
+  type PasskeyAssertion,
+  type PasskeyBinding,
+  type PasskeyCeremonies,
+  type PasskeyRegistration,
+  type PasskeyRegistrationStart,
   type PasswordHardAction,
   type PasswordHardActionInput,
   type PasswordReplacement,
@@ -227,9 +234,15 @@ export {
   type StepVerdict,
   type VerdictAudit,
 } from './lib/steps/handler';
+export { createPasskeyStep, holdsUsablePasskey } from './lib/steps/passkey';
 export { fromStore, SignInStoreUnavailableError } from './lib/store';
 export {
+  CEREMONY_KEY_PATTERN,
+  CEREMONY_STEPS,
+  type CeremonyStep,
+  type HeldCeremony,
   newSignInTransaction,
+  type PasskeyEnrolment,
   readSignInTransaction,
   SIGN_IN_TRANSACTION_CLOCK_SKEW_MS,
   SIGN_IN_TRANSACTION_MAX_AGE_MS,

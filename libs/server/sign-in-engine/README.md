@@ -92,9 +92,10 @@ authentication, run before the call). The first unmet rule produces the answer.
 5. The identifier (rule 6): the request's `login_hint`, else an answer's (the identifier step's,
    or a password answer's; no other answer's). It is checked (an email address of at most 254 bytes)
    and normalised. The first one is fixed; a different one ends the transaction, audited as
-   `subject_mismatch`. With none, the identifier step; or, once a discoverable first factor is
-   registered (#651), that factor first, preferred, with the password and the identifier step beside
-   it (ADR-017 Decision 4).
+   `subject_mismatch`. With none, the identifier step; or, with `passkeys` (#651), the discoverable
+   `webauthn_get` first, preferred, with the password and the identifier step beside it (ADR-017
+   Decision 4). With a `login_hint`, the password, with `webauthn_get` beside it. Either way the
+   offer reads no account: see [Passkeys](#passkeys).
 6. The first factor (rule 7), offered alike to every account until one succeeds: the password
    required, with any other first factor beside it. The password answer is reserved on the
    `limits` hook (#636), then on the `ladder` hook (PRO-12, #615), before it is verified: inside a
@@ -110,7 +111,9 @@ authentication, run before the call). The first unmet rule produces the answer.
    verified inline before the second factor is asked for, or before completing when none is: see
    [The email code](#the-email-code). Then a password update that is due (a password on the breach
    list, or an `update_password` required action) is asked for before completing: see
-   [The forced password update](#the-forced-password-update).
+   [The forced password update](#the-forced-password-update). Then, with `passkeys`, an optional
+   passkey after a password-only sign-in, and the first set of recovery codes it owes: see
+   [Passkeys](#passkeys).
 8. Complete (rule 9).
 
 A registration runs the same rules with its own gate and steps: see [Registration](#registration).
@@ -465,6 +468,38 @@ record after the step's own (`breach_check_failed`, with the failure), naming th
 adapters map them onto `user.sign_in_step_passed`, `user.sign_in_failed` and
 `user.password_breach_check_failed`.
 
+## Passkeys
+
+With `passkeys` (a `PasskeyCeremonies` port, #651; ADR-017 Decisions 4, 8 and 10;
+`graphs/flows/core/passkey/flow.yaml`), the engine serves two WebAuthn steps:
+
+- **`webauthn_get`**, a discoverable first factor, the strongest one (`FIRST_FACTOR_STRENGTH`). Its
+  params are request options with user verification required and no `allowCredentials`, so they name
+  no account. Before any identifier it is the preferred step of the first response; a transport that
+  does not serve it gets the password and the identifier step instead, never a redirect. With an
+  identifier it is offered beside the password. After a correct password on a passkey-bound account
+  (a disabled passkey included) it is required: the downgrade rule. With no usable passkey, a
+  recovery code may stand in on the hosted pages; otherwise, and on a transport that does not serve
+  it, the round is a `redirect`. An answer is reserved on the `limits` hook, then verified by the
+  port, which takes the ceremony first; an assertion whose signed authenticator data lacks the UV
+  flag is refused by the step as well as by the port. Every refusal is `invalid_credentials`, with a
+  new ceremony. A passkey alone completes with `["pop","mfa"]`, after a password with
+  `["pwd","pop","mfa"]`; `hwk` and `swk` are never claimed.
+- **`webauthn_create`**, offered once with `optional: true` after a sign-in that proved the password
+  of an account whose only factor it is, on a transport that serves it and `recovery_codes`, while
+  the password is at most 5 minutes old (`PASSKEY_BINDING_MAX_AUTH_AGE_MS`). An answer with no
+  response declines it. A verified registration is held in the transaction while the account's
+  mailbox is proved with an 8-digit `recovery` code, unless this transaction proved it already
+  (ADR-017 Decision 8); then, while the password is still that fresh, the port binds the passkey,
+  queues the binding notice and writes its event. The new passkey adds no `amr` value, meets the
+  downgrade rule for the rest of the transaction, and owes the first set of recovery codes.
+
+A ceremony's params, and a registration's personal data, are held in the transaction
+(`ceremony`) under a key from a CSPRNG that names the ceremony to the port: a round that offers the
+step again sends the same challenge for 4 minutes, and a verified answer, right or wrong, drops it.
+The ladder has no passkey counter: an assertion names no account before it is verified, and cannot
+be guessed.
+
 ## Adding a step
 
 A step joins the engine as a `StepHandler` (`src/lib/steps/handler.ts`), passed in `steps`: its
@@ -472,8 +507,8 @@ role (`challenge`, `first_factor`, `second_factor`), the factor it proves, wheth
 use it, its params and personal data, and how it verifies an answer the step grammar has already
 read. A first factor may be `discoverable` (a passkey that names the account by itself): it is
 offered before any identifier, and after the password once one is held. A handler refuses a
-disabled account itself, settling its ladder as a failure. Passkeys (#651) and TOTP (#653) come this
-way; `totp` only as a second factor. An `email_code` or `new_password` step handler is refused when
+disabled account itself, settling its ladder as a failure. TOTP (#653) comes this way, and only as a
+second factor; the passkey step is the engine's own (see [Passkeys](#passkeys)). An `email_code` or `new_password` step handler is refused when
 the engine is built: the email code and the forced update are the engine's own, and never an
 authenticator.
 
@@ -481,8 +516,8 @@ authenticator.
 
 - The per-transaction budgets of the FiPA `auth_session` (rounds, failures per step) are #647's.
 - An answer is read against the params the engine computes for the round, not a stored copy of the
-  ones it offered. The `captcha` step keeps its offered params in the transaction (#643); another
-  challenge handler whose params change every round needs the same first.
+  ones it offered. The `captcha` step (#643) and the WebAuthn steps (#651) keep their offered params
+  in the transaction; another handler whose params change every round needs the same first.
 - ADR-017 Decision 7 counts an end-user IP that changes within a transaction as a soft threshold.
   The transaction does not hold the IP, so that one is not applied yet.
 - The policy has no storage yet: `NO_SECOND_FACTOR_POLICY` is the default until it has one.
@@ -491,12 +526,12 @@ authenticator.
 - A registration for an unclaimed account (a password account whose address is not proved) is
   helped to sign in to it; PRO-17 (#641) ends that account and registers the mailbox owner instead.
   A reset of one is withheld (no mail, no change) until #641 applies the same rule there.
-- No step can prove a passkey in a hosted reset until the passkey step (#651) is registered: such an
-  account is answered `redirect` until then, unless a recovery code stands in for it (#649), and
-  keeps its password.
 - A recovery code stands in only after the first factor. A passkey-only account (PRO-30) has none
-  before its passkey, so a code in place of that passkey waits for the passkey step (#651) and
-  #655; such an account gets its set when it first proves the passkey, as every account with a
-  factor beyond the password does.
+  before its passkey, so a code in place of that passkey waits for #655; such an account gets its
+  set when it first proves the passkey, as every account with a factor beyond the password does.
+- The passkey enrolment is offered only after a password sign-in, on the hosted pages, to an account
+  whose only factor is the password. After an upstream sign-in, on the FiPA endpoint, and for a
+  second passkey, the account page (ACC-02) adds one. A registration that ends in the sign-in of a
+  new account is offered none yet.
 - Of the required actions only `update_password` is acted on; `setup_mfa`, `setup_passkey` and
   `complete_profile` wait for the steps that set them up.
