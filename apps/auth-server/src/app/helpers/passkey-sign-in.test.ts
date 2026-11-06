@@ -16,6 +16,7 @@ import {
   createRedisWebAuthnChallenges,
   createServerPasskeyAccounts,
   createServerPasskeys,
+  type ServerPasskeyAccountOptions,
 } from './passkey-sign-in';
 
 const REALM_ID = 'realm-1';
@@ -592,7 +593,7 @@ describe('the server passkey accounts (#655)', () => {
         },
         db: { transaction: async (work: (tx: string) => Promise<unknown>) => work('tx') },
       } as unknown as FastifyInstance,
-      { registered }
+      { registered: registered as unknown as ServerPasskeyAccountOptions['registered'] }
     )({ realmId: REALM_ID, clientId: CLIENT_ID, registration });
 
   it('writes the user, the passkey and the event in one transaction, with no address', async () => {
