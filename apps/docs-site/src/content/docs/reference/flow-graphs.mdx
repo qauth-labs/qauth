@@ -1,0 +1,29 @@
+---
+title: Flow graphs
+description: QAuth's flows as delurio semantic graphs, rendered as pages, each with its status and its YAML source on GitHub.
+sidebar:
+  order: 90
+lastVerified: '2026-11-06'
+---
+
+import GraphList from '../../../components/GraphList.astro';
+
+QAuth's flows are written as semantic graphs in delurio's `delurio-graph/0` format
+([ADR-021](/reference/records/adr/021-flows-and-ui-as-semantic-graphs/)). A graph is the
+specification of a flow: its states, every way it ends, and the guarantees it keeps. delurio
+renders each one as a page with its diagram, served under `/graphs/` (the links are in the list
+below; the pages are generated at build time, so they are not content pages of this site).
+
+**None of these graphs is approved yet.** Each one carries a status:
+
+- `captured` records what QAuth does today;
+- `proposed` is a design under review.
+
+The YAML in [`graphs/` on GitHub](https://github.com/qauth-labs/qauth/tree/main/graphs) is the
+source of record. A rendered page is a view of it and says so at its top; read a graph's status
+and history on GitHub. The graphs are outside QAuth's 1.0 stability promise (ADR-021 Decision 6).
+
+<GraphList />
+
+Every rendered page also has its diagram as Mermaid source, at `flow.mmd` next to the page. The
+same list, with links for language models, is in `/llms.txt`.

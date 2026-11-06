@@ -1,0 +1,45 @@
+---
+import { GRAPH_STATUS_MEANING, loadFlowGraphs } from '../lib/graphs.ts';
+import { resolveRepoRoot } from '../lib/repo-root.ts';
+
+// Read at build time from graphs/flows/*/flow.yaml, so the list follows the graphs on main.
+const graphs = loadFlowGraphs(resolveRepoRoot());
+---
+
+<p>
+  <a href="/graphs/">All rendered graphs</a> · <a href="https://github.com/qauth-labs/qauth/tree/main/graphs">graphs/ on GitHub</a> ·
+  <a href="/llms.txt">/llms.txt</a>
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Flow</th>
+      <th>Status</th>
+      <th>Rendered page</th>
+      <th>Source of record</th>
+    </tr>
+  </thead>
+  <tbody>
+    {
+      graphs.map((graph) => (
+        <tr>
+          <td>{graph.title}</td>
+          <td>
+            <code>{graph.status}</code>
+            <br />
+            <small>{GRAPH_STATUS_MEANING[graph.status] ?? graph.status}</small>
+          </td>
+          <td>
+            <a href={graph.pageHref}>Open</a>
+          </td>
+          <td>
+            <a href={graph.sourceUrl}>
+              <code>graphs/{graph.id}</code>
+            </a>
+          </td>
+        </tr>
+      ))
+    }
+  </tbody>
+</table>

@@ -38,14 +38,14 @@ It is built for three jobs:
 
 ## Status
 
-QAuth is pre-1.0. Releases are 0.x, and `main` runs ahead of the latest one.
-The [changelog](./CHANGELOG.md) lists every change.
+QAuth is ready for production. It is pre-1.0 only because the features planned
+for 1.0 are not finished yet: releases are 0.x, and `main` runs ahead of the
+latest one. The [changelog](./CHANGELOG.md) lists every change.
 
-The road to 1.0 runs through 0.x betas, one area at a time: the core and its
-UIs, then the Authority Tree, then federation.
-[ADR-018](./docs/adr/018-1-0-scope-and-stability.md) sets what 1.0 covers and
-what it promises. An independent security audit and OpenID Foundation
-certification come before 1.0.
+1.0 arrives one area at a time: the core and its UIs, then the Authority Tree,
+then federation. [ADR-018](./docs/adr/018-1-0-scope-and-stability.md) sets what
+1.0 covers and what it promises, including an independent security audit and
+OpenID Foundation certification.
 
 The [status page](https://docs.qauth.dev/reference/status/) tracks each
 feature. The [milestones](https://github.com/qauth-labs/qauth/milestones) hold
@@ -155,6 +155,12 @@ Guides and reference live at **[docs.qauth.dev](https://docs.qauth.dev)**:
 | [Operate](https://docs.qauth.dev/operate/)     | [Docker](https://docs.qauth.dev/operate/docker/) · [Topology](https://docs.qauth.dev/operate/topology/) · [Configuration](https://docs.qauth.dev/operate/configuration/) · [Keys](https://docs.qauth.dev/operate/keys/) · [Reverse proxy](https://docs.qauth.dev/operate/reverse-proxy/) · [Upgrades](https://docs.qauth.dev/operate/upgrades/) |
 | [Extend](https://docs.qauth.dev/extend/)       | [Architecture](https://docs.qauth.dev/extend/architecture/) · [Repository map](https://docs.qauth.dev/extend/repo-map/) · [Adding a credential provider](https://docs.qauth.dev/extend/adding-a-credential-provider/) · [Testing](https://docs.qauth.dev/extend/testing/)                                                                       |
 | [Reference](https://docs.qauth.dev/reference/) | [Status](https://docs.qauth.dev/reference/status/) · [Events](https://docs.qauth.dev/reference/events/) · [API conventions](https://docs.qauth.dev/reference/api-conventions/) · [Experimental features](https://docs.qauth.dev/reference/experimental-features/) · [Design records](https://docs.qauth.dev/reference/records/)                 |
+
+For language models, [docs.qauth.dev/llms.txt](https://docs.qauth.dev/llms.txt)
+indexes every page and [llms-full.txt](https://docs.qauth.dev/llms-full.txt) holds
+their full text. The flows, written as delurio graphs, are rendered at
+[docs.qauth.dev/graphs](https://docs.qauth.dev/graphs/). None of them is approved
+yet; [`graphs/`](./graphs/README.md) holds their source of record.
 
 In this repository:
 
