@@ -18,7 +18,7 @@ import { InteractionExpiredError } from './interaction-expired';
  * (`registration.test.ts` in the engine library).
  */
 
-const reply = { header: vi.fn() } as unknown as FastifyReply;
+const reply = { header: vi.fn(), log: { warn: vi.fn() } } as unknown as FastifyReply;
 const RECEIVED_AT = 1_700_000_000_000;
 const TRANSACTION: SignInTransaction = {
   v: 1,
@@ -86,6 +86,22 @@ describe('decisionOf: a registration (#640)', () => {
 
     expect(() => decisionOf(reply, result, RECEIVED_AT)).toThrow(/something_else/);
     expect(() => decisionOf(reply, result, RECEIVED_AT)).not.toThrow(InteractionExpiredError);
+  });
+});
+
+describe('decisionOf: a sign-in that cannot go on here (#651)', () => {
+  it('ends the interaction as an expired one, never a server error, and logs why', () => {
+    const result: RoundResult = {
+      kind: 'redirect',
+      reason: 'step_not_available',
+      transaction: null,
+    };
+
+    expect(() => decisionOf(reply, result, RECEIVED_AT)).toThrow(InteractionExpiredError);
+    expect(reply.log.warn).toHaveBeenCalledWith(
+      { reason: 'step_not_available' },
+      expect.any(String)
+    );
   });
 });
 

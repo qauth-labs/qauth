@@ -21,6 +21,7 @@ import type {
   PasskeyRegistrationStart,
 } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { BadRequestError, UniqueConstraintError } from '@qauth-labs/shared-errors';
+import { DISPLAY_TEXT_PATTERN } from '@qauth-labs/shared-interaction-contract';
 import { resolveRpId } from '@qauth-labs/shared-validation';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
@@ -110,18 +111,32 @@ export function createRedisWebAuthnChallenges(
   };
 }
 
-/** `value` as one line of display text the grammar takes: no markup, no control characters. */
+/** Hangul fillers: letters that render as nothing, which the grammar refuses. */
+const HANGUL_FILLERS = /[\u115F\u1160\u3164\uFFA0]/gu;
+
+/** The grammar's display text, compiled once. */
+const DISPLAY_TEXT = new RegExp(DISPLAY_TEXT_PATTERN, 'u');
+
+/**
+ * `value` as one line of display text the grammar takes: no markup, no
+ * control characters, no fillers, and at most 64 UTF-16 units, as the
+ * grammar counts them, never cut inside a surrogate pair. A value that is
+ * left blank, or that the grammar still refuses, gives `fallback`.
+ */
 function displayName(value: string, fallback: string): string {
-  const cleaned = Array.from(
-    value
-      .replace(/[<>\p{C}]/gu, '')
-      .replace(/\p{Z}+/gu, ' ')
-      .trim()
-  )
-    .slice(0, DISPLAY_NAME_MAX_LENGTH)
-    .join('')
+  let cleaned = value
+    .replace(/[<>\p{C}]/gu, '')
+    .replace(HANGUL_FILLERS, '')
+    .replace(/\p{Z}+/gu, ' ')
     .trim();
-  return cleaned === '' ? fallback : cleaned;
+  if (cleaned.length > DISPLAY_NAME_MAX_LENGTH) {
+    const last = cleaned.charCodeAt(DISPLAY_NAME_MAX_LENGTH - 1);
+    const highSurrogate = last >= 0xd800 && last <= 0xdbff;
+    cleaned = cleaned
+      .slice(0, highSurrogate ? DISPLAY_NAME_MAX_LENGTH - 1 : DISPLAY_NAME_MAX_LENGTH)
+      .trim();
+  }
+  return cleaned !== '' && DISPLAY_TEXT.test(cleaned) ? cleaned : fallback;
 }
 
 /** The `id` a browser's JSON response names, without trusting anything else in it. */

@@ -1229,6 +1229,12 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
       state.transaction = {
         ...state.transaction,
         subject: account.userId,
+        // A discoverable factor (a passkey) named the account by itself: the
+        // transaction goes on with the account's identifier, which the steps
+        // after it may name (an address check, a forced update, #651).
+        ...(identifier === undefined && account.identifier !== undefined
+          ? { identifier: account.identifier }
+          : {}),
         verified: [
           ...state.transaction.verified,
           { step: read.step, params: read.params } as OfferedStep,
@@ -3114,7 +3120,23 @@ export function createSignInEngine(deps: SignInEngineDependencies): SignInEngine
           state.transaction.verified.some((step) => step.step === 'password') &&
           (provedMailbox() || (emailCodes !== undefined && served.has('email_code')));
         if (!offered) return null;
-        const offer = await offerOf([create]);
+        let offer: StepOffer;
+        try {
+          offer = await offerOf([create]);
+        } catch (error) {
+          // The offer is optional: a registration that cannot start (a store
+          // that failed, options the grammar refuses) is reported and not
+          // offered in this transaction, and the sign-in goes on. An answer
+          // to the held ceremony reuses it and starts nothing.
+          if (turn.pending?.name === 'webauthn_create') throw error;
+          report('passkeys', error);
+          state.transaction = {
+            ...state.transaction,
+            ceremony: undefined,
+            passkeyEnrolment: 'declined',
+          };
+          return null;
+        }
         if (turn.pending?.name !== 'webauthn_create') return offerStep(offer);
         const read = readPending(offer);
         if (read === null) return invalidAnswer('webauthn_create');

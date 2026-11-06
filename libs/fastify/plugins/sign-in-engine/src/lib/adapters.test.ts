@@ -92,6 +92,7 @@ function stubStores(
                   userId,
                   realmId: REALM,
                   providerType: 'password',
+                  externalSub: IDENTIFIER,
                   credentialData: state.credential,
                   disabledAt: state.disabledAt,
                 },
@@ -176,6 +177,8 @@ describe('the repository account directory', () => {
         { type: 'passkey', disabled: false },
       ],
       requiredActions: [],
+      // The address a sign-in a passkey proved goes on with (#651).
+      identifier: IDENTIFIER,
     });
     const { repos: none } = stubStores({ user: undefined });
     expect(
@@ -285,6 +288,26 @@ describe('the repository account directory', () => {
     expect(
       await createRepositoryAccountDirectory(repos, log()).findByIdentifier(REALM, IDENTIFIER)
     ).toMatchObject({ password: { disabled: false, ignoredMark: true } });
+  });
+
+  it('honours a passkey’s mark whatever the arming: its assertions are refused (#651)', async () => {
+    const { repos } = stubStores({ passkeys: [{ realmId: REALM, disabledAt: 1 }] });
+    const armed = vi.fn(async () => false);
+    const directory = createRepositoryAccountDirectory(repos, log(), { hardActionArmed: armed });
+    expect(await directory.findByUserId(REALM, USER)).toMatchObject({
+      factors: [
+        { type: 'password', disabled: false },
+        { type: 'passkey', disabled: true },
+      ],
+    });
+    // The arming is the password ladder's: an unmarked password asks nothing.
+    expect(armed).not.toHaveBeenCalled();
+  });
+
+  it('names no identifier for an account with no password credential (#651)', async () => {
+    const { repos } = stubStores({ credential: undefined, passkeys: [{ realmId: REALM }] });
+    const account = await createRepositoryAccountDirectory(repos, log()).findByUserId(REALM, USER);
+    expect(account).not.toHaveProperty('identifier');
   });
 
   it('makes a marked credential unusable while armed, and still bound', async () => {

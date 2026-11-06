@@ -21,6 +21,8 @@ interface CredentialRow {
   readonly realmId: string;
   readonly providerType: string;
   readonly credentialData: Record<string, unknown>;
+  /** The credential's subject: a password credential's identifier, its address. */
+  readonly externalSub?: string;
   /**
    * The failure ladder's disabled mark (#615): when the hard action disabled
    * the credential, in epoch ms, else `null`. Absent reads as no mark.
@@ -187,15 +189,19 @@ export function createRepositoryAccountDirectory(
           log.error({ userId: user.id }, 'unknown required action on a user');
         }
       }
-      const disabled = await disabledOf(realmId, [...passwords, ...passkeys]);
+      const disabled = await disabledOf(realmId, passwords);
+      const address = passwords.length === 1 ? passwords[0]?.externalSub : undefined;
       const factors: BoundFactor[] = [
         ...passwords.map((_, index) => ({
           type: 'password' as const,
           disabled: disabled[index] === true,
         })),
-        ...passkeys.map((_, index) => ({
+        // A passkey's mark is honoured always (#651): the arming belongs to
+        // the password's failure ladder, and the server refuses an assertion
+        // of a marked passkey whatever it.
+        ...passkeys.map((row) => ({
           type: 'passkey' as const,
-          disabled: disabled[passwords.length + index] === true,
+          disabled: row.disabledAt !== undefined && row.disabledAt !== null,
         })),
       ];
       const verified =
@@ -217,6 +223,8 @@ export function createRepositoryAccountDirectory(
         verified,
         factors: Object.freeze(factors),
         requiredActions: Object.freeze(requiredActions),
+        // The address a sign-in a passkey proved goes on with (#651).
+        ...(address === undefined ? {} : { identifier: address }),
       });
     },
   });

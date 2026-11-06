@@ -304,9 +304,30 @@ describe('a passkey assertion', () => {
     expect(confirmed).toEqual({
       kind: 'complete',
       transaction: null,
-      signIn: { subject: USER, amr: ['pop', 'mfa'], authTime: expect.any(Number) },
+      // The passkey named the account; the sign-in goes on with its identifier.
+      signIn: {
+        subject: USER,
+        identifier: IDENTIFIER,
+        amr: ['pop', 'mfa'],
+        authTime: expect.any(Number),
+      },
     });
     expect(ctx.records).toContainEqual({ outcome: 'passed', step: 'webauthn_get', userId: USER });
+  });
+
+  it('goes on with the account’s identifier: an address not proved yet gets its code, not a redirect', async () => {
+    const built = build(passkeyAccount(false, { verified: false }));
+    const ctx = context(built);
+    const first = await built.engine.advance(null, null, ctx);
+
+    const next = await built.engine.advance(kept(first), assertion(first), ctx);
+
+    expect(next).toMatchObject({
+      kind: 'step',
+      offer: { current: { step: 'email_code' } },
+      personal: { identifier: IDENTIFIER },
+    });
+    expect(kept(next)).toMatchObject({ subject: USER, identifier: IDENTIFIER });
   });
 
   it('without the UV flag is refused, and a new ceremony is offered', async () => {
@@ -546,6 +567,20 @@ describe('the passkey enrolment', () => {
     const declined = await built.engine.advance(kept(offered), answer('webauthn_create', {}), ctx);
     expect(declined).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
     expect(built.passkeys.calls).toEqual(['startAssertion', 'startRegistration']);
+  });
+
+  it('is skipped, and the sign-in completes, when its registration cannot start', async () => {
+    const reported: unknown[] = [];
+    const built = build(passwordOnly(), { onUnavailable: (error) => reported.push(error) });
+    (built.passkeys as { startRegistration: unknown }).startRegistration = async () => {
+      throw new Error('challenge store down');
+    };
+    const ctx = context(built);
+
+    const done = await signInWithPassword(built, ctx);
+
+    expect(done).toMatchObject({ kind: 'complete', signIn: { amr: ['pwd'] } });
+    expect(reported).toEqual([expect.objectContaining({ port: 'passkeys' })]);
   });
 
   it('binds the passkey after a mailed code, tells the user, and shows the first set', async () => {

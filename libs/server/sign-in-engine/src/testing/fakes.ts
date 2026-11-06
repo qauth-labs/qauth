@@ -94,8 +94,9 @@ export class FakeDirectory implements AccountDirectory {
 
   async findByUserId(realmId: string, userId: string): Promise<SignInAccount | null> {
     this.reads.push(`user:${realmId}:${userId}`);
-    const account = [...this.accounts.values()].find((entry) => entry.userId === userId);
-    if (account === undefined) return null;
+    const found = [...this.accounts.entries()].find(([, entry]) => entry.userId === userId);
+    if (found === undefined) return null;
+    const [identifier, account] = found;
     return {
       userId,
       enabled: account.enabled,
@@ -108,6 +109,8 @@ export class FakeDirectory implements AccountDirectory {
         ...account.others,
       ],
       requiredActions: [...(account.requiredActions ?? [])],
+      // The password credential's identifier, as the server's directory reads it (#651).
+      ...(account.password === null ? {} : { identifier }),
     };
   }
 }

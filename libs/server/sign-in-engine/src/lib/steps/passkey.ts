@@ -108,6 +108,7 @@ export function createPasskeyStep(deps: PasskeyStepDependencies): StepHandler<'w
           userId: account.userId,
           enabled: account.enabled,
           verified: account.verified,
+          ...(account.identifier === undefined ? {} : { identifier: account.identifier }),
         }),
       });
     },

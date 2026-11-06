@@ -5,6 +5,7 @@ import {
   WebAuthnRejection,
 } from '@qauth-labs/fastify-plugin-federation';
 import { UniqueConstraintError } from '@qauth-labs/shared-errors';
+import { DISPLAY_TEXT_PATTERN } from '@qauth-labs/shared-interaction-contract';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -104,6 +105,7 @@ describe('the server passkey ceremonies (#651)', () => {
   let client: { webauthnAllowedOrigins: unknown } | undefined;
   let mailer: { sendUncounted: ReturnType<typeof vi.fn> };
   let logInfo: ReturnType<typeof vi.fn>;
+  let fromName: string;
 
   beforeEach(() => {
     provider = {
@@ -176,6 +178,7 @@ describe('the server passkey ceremonies (#651)', () => {
     client = { webauthnAllowedOrigins: ['https://app.example.test'] };
     mailer = { sendUncounted: vi.fn() };
     logInfo = vi.fn();
+    fromName = 'Example Notes';
   });
 
   const build = () =>
@@ -189,7 +192,7 @@ describe('the server passkey ceremonies (#651)', () => {
         },
         db: { transaction: async (work: (tx: string) => Promise<unknown>) => work('tx') },
         policyStore: {
-          ofRealm: () => ({ policies: { mail: { fromName: 'Example Notes' } } }),
+          ofRealm: () => ({ policies: { mail: { fromName } } }),
         },
         log: { info: logInfo, warn: vi.fn(), error: vi.fn() },
       } as unknown as FastifyInstance,
@@ -370,6 +373,30 @@ describe('the server passkey ceremonies (#651)', () => {
         user: { id: HANDLE, name: ADDRESS, displayName: ADDRESS },
         excludeCredentials: [{ type: 'public-key', id: CREDENTIAL_ID, transports: ['internal'] }],
       });
+    });
+
+    it('names the relying party in display text the grammar takes, however the realm wrote it', async () => {
+      const rpNameFor = async (name: string): Promise<string> => {
+        fromName = name;
+        provider.startRegistration.mockClear();
+        const started = await build().startRegistration({
+          realmId: REALM_ID,
+          clientId: CLIENT_ID,
+          key: KEY,
+          userId: USER_ID,
+          identifier: ADDRESS,
+        });
+        const rp = (started.options as { rp: { name: string } }).rp;
+        expect(new RegExp(DISPLAY_TEXT_PATTERN, 'u').test(rp.name), rp.name).toBe(true);
+        expect(rp.name.length).toBeLessThanOrEqual(64);
+        return rp.name;
+      };
+
+      // 63 letters then an emoji: 65 UTF-16 units, cut before the pair, not inside it.
+      expect(await rpNameFor(`${'a'.repeat(63)}🔑 Notes`)).toBe('a'.repeat(63));
+      // Hangul fillers render as nothing: a name of them alone falls back.
+      expect(await rpNameFor('\u3164\u3164')).not.toContain('\u3164');
+      expect(await rpNameFor('Notes\u3164App')).toBe('NotesApp');
     });
 
     it('makes a new user handle for an account with no passkey', async () => {

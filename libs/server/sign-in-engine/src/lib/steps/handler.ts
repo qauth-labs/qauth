@@ -75,7 +75,13 @@ export interface VerdictAudit {
 }
 
 /** The account a factor proved, as far as the engine checks it before fixing the subject. */
-export type ProvedAccount = Pick<SignInCandidate, 'userId' | 'enabled' | 'verified'>;
+export type ProvedAccount = Pick<SignInCandidate, 'userId' | 'enabled' | 'verified'> & {
+  /**
+   * The account's identifier, from a discoverable factor that named the
+   * account by itself (a passkey): the transaction goes on with it.
+   */
+  readonly identifier?: string;
+};
 
 /** What a handler made of an answer. */
 export type StepVerdict =

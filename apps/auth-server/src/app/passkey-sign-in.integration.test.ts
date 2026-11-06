@@ -374,8 +374,11 @@ describe('passkey sign-in on the hosted pages (#651, real containers)', () => {
     await answer(signIn, IDENTIFIER, { login_hint: PASSKEY_EMAIL });
     const afterPassword = await answer(signIn, PASSWORD, { password: E2E_PASSWORD });
 
-    expect(String(afterPassword.headers['location'])).not.toContain(REDIRECT_URI);
-    expect((await read(signIn.id)).step).toBe(WEBAUTHN_GET);
+    // No step can complete it: the passkey is disabled and the account holds
+    // no recovery code. The interaction ends as an expired one does, and no
+    // code reaches the client.
+    expect(afterPassword.statusCode, afterPassword.body).toBe(410);
+    expect(String(afterPassword.headers['location'] ?? '')).not.toContain(REDIRECT_URI);
   });
 
   it('answers the identifier the same for an account with a passkey and one without, in body and timing', async () => {

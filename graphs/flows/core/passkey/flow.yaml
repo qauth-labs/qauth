@@ -448,9 +448,11 @@ states:
         effect: [waitFloor]
         say: 'the ceremony is held'
       FAIL.store:
-        target: unavailable
-        effect: [waitFloor]
-        say: 'the challenge store fails; nothing is offered'
+        target: completed
+        effect: [declineEnrolment, waitFloor]
+        say: >-
+          the registration cannot start (the challenge store fails): the offer is optional, so it is reported and not
+          made again in this transaction, and the sign-in completes
 
   verifyingRegistration:
     title: Take the ceremony and verify the new passkey
@@ -705,7 +707,8 @@ states:
     description: >-
       On the hosted pages, flows/core/recovery-code offers a recovery code in place of a disabled passkey; with none, or
       on a transport that cannot serve webauthn_get, the engine answers a redirect, which the FiPA endpoint answers
-      with redirect_to_web. The password never completes the sign-in.
+      with redirect_to_web and the hosted pages, where no step is left to ask for, with the end of the interaction.
+      The password never completes the sign-in.
     response:
       kind: continue
       body:

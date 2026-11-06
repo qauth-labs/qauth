@@ -115,6 +115,13 @@ export interface SignInAccount {
    * forced update clears it.
    */
   readonly requiredActions: readonly RequiredAction[];
+  /**
+   * The identifier of its password credential, when it holds one: the
+   * address a sign-in a discoverable factor proved (a passkey, #651) goes on
+   * with, for the steps that name it (an inline address check, a forced
+   * password update, an enrolment's user name).
+   */
+  readonly identifier?: string;
 }
 
 /** Where the engine reads accounts. */

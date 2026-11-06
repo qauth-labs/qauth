@@ -527,7 +527,15 @@ export function decisionOf(
           throw new Error(`the sign-in engine refused a round: ${result.reason}`);
       }
     case 'redirect':
-      // The Interaction API serves every step and registers no request check.
-      throw new Error(`the sign-in engine asked to continue elsewhere: ${result.reason}`);
+      // The Interaction API serves every step and registers no request check,
+      // so the sign-in cannot go on anywhere: no step can complete it (a
+      // passkey-bound account whose passkeys are all disabled, with no
+      // recovery code, #651). It ends as an expired interaction does, and
+      // nothing was changed.
+      reply.log.warn(
+        { reason: result.reason },
+        'the sign-in engine asked to continue elsewhere: the interaction ends'
+      );
+      throw new InteractionExpiredError();
   }
 }
