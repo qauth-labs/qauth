@@ -14,6 +14,14 @@ import { userCredentials } from '../schema/identity';
 const PASSWORD_PROVIDER_TYPE = 'password';
 
 /**
+ * The `provider_type` of a TOTP credential (#653; `TOTP_PROVIDER_TYPE` of
+ * `@qauth-labs/fastify-plugin-sign-in-engine`): one per account, its
+ * `external_sub` the user id, its `credential_data` `{ secret, last_step }`
+ * (the secret a `data_at_rest` ciphertext, the last accepted time step).
+ */
+const TOTP_PROVIDER_TYPE = 'totp';
+
+/**
  * The keys of `credential_data` a password credential's password owns
  * (`passwordCredentialDataSchema` of `@qauth-labs/server-federation`): what
  * {@link UserCredentialsRepository.updatePassword} replaces.
@@ -291,6 +299,88 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
             isNull(userCredentials.disabledAt)
           )
         )
+        .returning();
+      return credential;
+    },
+
+    /**
+     * Take the TOTP time step `step` for the account (#653; RFC 6238 §5.2),
+     * in one statement that changes only an enabled TOTP whose last accepted
+     * step is lower: of two rounds with the same code, one takes the step.
+     * A last step that is not a number matches nothing rather than failing.
+     */
+    async acceptTotpStep(
+      realmId: string,
+      userId: string,
+      step: number,
+      tx?: DbClient
+    ): Promise<boolean> {
+      if (!Number.isSafeInteger(step) || step < 0) return false;
+      const invoker = tx ?? defaultDb;
+      const lastStep = sql`${userCredentials.credentialData} -> 'last_step'`;
+      const rows = await invoker
+        .update(userCredentials)
+        .set({
+          credentialData: sql`jsonb_set(${userCredentials.credentialData}, '{last_step}', to_jsonb(${step}::bigint))`,
+          updatedAt: Date.now(),
+        })
+        .where(
+          and(
+            eq(userCredentials.realmId, realmId),
+            eq(userCredentials.providerType, TOTP_PROVIDER_TYPE),
+            eq(userCredentials.externalSub, userId),
+            eq(userCredentials.userId, userId),
+            isNull(userCredentials.disabledAt),
+            sql`CASE WHEN jsonb_typeof(${lastStep}) = 'number' THEN (${lastStep})::numeric < ${step}::numeric ELSE false END`
+          )
+        )
+        .returning({ id: userCredentials.id });
+      return rows.length === 1;
+    },
+
+    /**
+     * Bind a TOTP to the account (#653), replacing the one it holds: one
+     * statement inserts the row, or rewrites the account's own with the new
+     * `credential_data` and clears its disabled mark. A row of the realm's
+     * `(totp, user id)` that names another user is never rewritten.
+     *
+     * @returns the credential; `undefined` when such a row of another user
+     *   stood in the way
+     */
+    async upsertTotp(
+      input: {
+        readonly realmId: string;
+        readonly userId: string;
+        readonly credentialData: Readonly<Record<string, unknown>>;
+        readonly at: number;
+      },
+      tx?: DbClient
+    ): Promise<UserCredential | undefined> {
+      const invoker = tx ?? defaultDb;
+      const [credential] = await invoker
+        .insert(userCredentials)
+        .values({
+          userId: input.userId,
+          realmId: input.realmId,
+          providerType: TOTP_PROVIDER_TYPE,
+          externalSub: input.userId,
+          credentialData: { ...input.credentialData },
+          createdAt: input.at,
+          updatedAt: input.at,
+        })
+        .onConflictDoUpdate({
+          target: [
+            userCredentials.realmId,
+            userCredentials.providerType,
+            userCredentials.externalSub,
+          ],
+          set: {
+            credentialData: sql`excluded.credential_data`,
+            disabledAt: null,
+            updatedAt: input.at,
+          },
+          setWhere: eq(userCredentials.userId, input.userId),
+        })
         .returning();
       return credential;
     },

@@ -88,6 +88,7 @@ export {
   SIGNER_POLICY,
   type SignerCaller,
   type SignerGrant,
+  TOTP_SECRET_CONTEXT_PREFIX,
   UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './lib/signer-policy';
 export {

@@ -14,6 +14,8 @@ import {
   type SignInCandidate,
 } from '@qauth-labs/server-sign-in-engine';
 
+import { TOTP_PROVIDER_TYPE } from './totp';
+
 /** A `user_credentials` row, as far as the directory reads it. */
 interface CredentialRow {
   readonly id: string;
@@ -97,7 +99,8 @@ export interface AccountDirectoryOptions {
  *   refuses like a wrong password.
  * - Once a factor proved the user (`findByUserId`) it reads the whole
  *   account: every credential it holds in the realm, in one read, of which
- *   the password and passkey (`webauthn`) ones are its factors, and whether
+ *   the password, passkey (`webauthn`) and TOTP (`totp`, #653) ones are its
+ *   factors, and whether
  *   it holds a live admin grant seen from the realm (#510). An account that
  *   exists so costs one read more than none before the password is checked,
  *   not four. It is verified when every password credential's
@@ -177,6 +180,7 @@ export function createRepositoryAccountDirectory(
       );
       const passwords = credentials.filter((row) => row.providerType === PASSWORD_PROVIDER_TYPE);
       const passkeys = credentials.filter((row) => row.providerType === WEBAUTHN_PROVIDER_TYPE);
+      const totps = credentials.filter((row) => row.providerType === TOTP_PROVIDER_TYPE);
       const upstreams = credentials.filter((row) => isUpstreamCredentialData(row.credentialData));
       const grants = await stores.adminGrants.listLive(realmId, user.id);
       const pending = await stores.userRequiredActions.listForUser(realmId, user.id);
@@ -201,6 +205,12 @@ export function createRepositoryAccountDirectory(
         // of a marked passkey whatever it.
         ...passkeys.map((row) => ({
           type: 'passkey' as const,
+          disabled: row.disabledAt !== undefined && row.disabledAt !== null,
+        })),
+        // A TOTP's mark is honoured always (#653): its hard action sets the
+        // mark only while it is armed, so a mark is never one to ignore.
+        ...totps.map((row) => ({
+          type: 'totp' as const,
           disabled: row.disabledAt !== undefined && row.disabledAt !== null,
         })),
       ];

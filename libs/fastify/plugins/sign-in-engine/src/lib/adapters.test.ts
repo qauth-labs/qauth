@@ -977,7 +977,7 @@ describe('audit events', () => {
     expect(() =>
       signInAuditEvent({
         outcome: 'refused',
-        step: 'totp',
+        step: 'select_account',
         reason: 'invalid_credentials',
         userId: USER,
       })

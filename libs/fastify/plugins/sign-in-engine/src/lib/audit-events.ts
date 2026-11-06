@@ -56,6 +56,10 @@ const STEP_METHODS: Readonly<
   // enrolment is offered only after a password sign-in, which it is part of.
   webauthn_get: 'passkey',
   webauthn_create: 'password',
+  // TOTP (#653) is a second factor after the password, and its set-up is
+  // part of the sign-in it holds back, as the recovery codes are.
+  totp: 'password',
+  totp_setup: 'password',
 });
 
 /**

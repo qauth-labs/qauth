@@ -53,8 +53,10 @@ import type { RealmRow } from './request-realm';
  *   ladder's hard action ({@link EngineMailer.passwordDisabledNotices}). A
  *   realm cannot switch either off: nothing here asks it.
  * - **The recovery codes' 100-failures notice**
- *   ({@link EngineMailer.recoveryCodesFailed}, #649): at most one per account
- *   per 24 hours, with no pass. A realm cannot switch it off either.
+ *   ({@link EngineMailer.recoveryCodesFailed}, #649) and **the notice of a
+ *   wrong second factor after a correct password**
+ *   ({@link EngineMailer.secondFactorFailed}, #653): at most one per account
+ *   per 24 hours each, with no pass. A realm cannot switch them off either.
  *
  * Every mail is dispatched after the caller's answer is built
  * (`createBackgroundTasks`): "sent", "not sent" and "capped quietly" take the
@@ -131,6 +133,18 @@ export interface EngineMailer {
    * Rejects when the claim cannot be made.
    */
   recoveryCodesFailed(input: {
+    readonly realm: MailRealm;
+    readonly userId: string;
+    /** The account's address; none for an account without one. */
+    readonly address?: string;
+  }): Promise<boolean>;
+  /**
+   * The notice of a wrong second factor after a correct password (#653;
+   * ADR-017 Decision 7), the same way: claimed per account for the next 24
+   * hours, mailed after the answer when this call claimed it. `true` when
+   * this call claimed it. Rejects when the claim cannot be made.
+   */
+  secondFactorFailed(input: {
     readonly realm: MailRealm;
     readonly userId: string;
     /** The account's address; none for an account without one. */
@@ -261,6 +275,32 @@ export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer
     }));
   }
 
+  /**
+   * A notice of the account claimed once a day, keyed on the account rather
+   * than an address: the HMAC of `user:<id>`, which no address is. Mailed
+   * after the answer when this call claimed it and the account has an
+   * address.
+   */
+  const onceADayForAccount = async (
+    { realm, userId, address }: { realm: MailRealm; userId: string; address?: string },
+    kind: 'recovery_codes_failed' | 'second_factor_failed',
+    what: string
+  ): Promise<boolean> => {
+    const accountHmac = await deps.digests.identifierDigest({
+      realmId: realm.id,
+      identifier: `user:${userId}`,
+    });
+    const claimed = await deps.caps.claimNotice({
+      realmId: realm.id,
+      addressHmac: accountHmac,
+      kind,
+    });
+    if (claimed && address !== undefined) {
+      deps.tasks.run(() => send(realm, address, { template: kind }), `${what} was not sent`);
+    }
+    return claimed;
+  };
+
   return Object.freeze({
     async sendCode(request: FastifyRequest, input: CappedSendInput): Promise<CappedSendOutcome> {
       const { realm, address, mail } = input;
@@ -312,30 +352,11 @@ export function createCappedMailer(deps: CappedMailerDependencies): EngineMailer
       deps.tasks.run(() => send(realm, address, mail), 'an engine mail was not sent');
     },
 
-    async recoveryCodesFailed({
-      realm,
-      userId,
-      address,
-    }: Parameters<EngineMailer['recoveryCodesFailed']>[0]): Promise<boolean> {
-      // Keyed on the account, not an address: the HMAC of `user:<id>`, which
-      // no address is.
-      const accountHmac = await deps.digests.identifierDigest({
-        realmId: realm.id,
-        identifier: `user:${userId}`,
-      });
-      const claimed = await deps.caps.claimNotice({
-        realmId: realm.id,
-        addressHmac: accountHmac,
-        kind: 'recovery_codes_failed',
-      });
-      if (claimed && address !== undefined) {
-        deps.tasks.run(
-          () => send(realm, address, { template: 'recovery_codes_failed' }),
-          'the recovery-codes-failed notice was not sent'
-        );
-      }
-      return claimed;
-    },
+    recoveryCodesFailed: (input: Parameters<EngineMailer['recoveryCodesFailed']>[0]) =>
+      onceADayForAccount(input, 'recovery_codes_failed', 'the recovery-codes-failed notice'),
+
+    secondFactorFailed: (input: Parameters<EngineMailer['secondFactorFailed']>[0]) =>
+      onceADayForAccount(input, 'second_factor_failed', 'the wrong-second-factor notice'),
 
     passwordDisabledNotices: Object.freeze({
       canSend: (realmId: string) => deps.mail.canSend(realmId, { mockSends: deps.mockSends }),

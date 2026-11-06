@@ -112,10 +112,15 @@ export type MailPassFlow = 'reset' | 'register';
 
 /**
  * The notices an address gets at most once per `noticeIntervalMs`: the
- * send-ceiling and password-disabled notices, and the recovery codes'
- * 100-failures notice (#649), keyed on the account's own HMAC.
+ * send-ceiling and password-disabled notices, and, keyed on the account's
+ * own HMAC, the recovery codes' 100-failures notice (#649) and the notice of
+ * a wrong second factor after a correct password (#653).
  */
-export type OnceANoticeKind = 'send_ceiling' | 'password_disabled' | 'recovery_codes_failed';
+export type OnceANoticeKind =
+  | 'send_ceiling'
+  | 'password_disabled'
+  | 'recovery_codes_failed'
+  | 'second_factor_failed';
 
 /** One send the caps are asked about: a code about to be mailed, or a start that would mail one. */
 export interface SendCapRequest {

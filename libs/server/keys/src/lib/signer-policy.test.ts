@@ -11,6 +11,7 @@ import {
   SIGNER_CALLERS,
   SIGNER_POLICY,
   type SignerCaller,
+  TOTP_SECRET_CONTEXT_PREFIX,
   UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
 } from './signer-policy';
 import { JWS_TYPS } from './signer-typ';
@@ -164,11 +165,13 @@ describe('SIGNER_POLICY', () => {
     expect(REALM_MAIL_SECRET_CONTEXT_PREFIX).toBe('realm_secrets:mail.');
     expect(UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX).toBe('upstream-oidc:client-secret:');
     expect(AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX).toBe('auth-method-plugin:');
+    expect(TOTP_SECRET_CONTEXT_PREFIX).toBe('totp-secret:');
     expect(SIGNER_POLICY.api.decrypt).toEqual([
       REALM_MAIL_SECRET_CONTEXT_PREFIX,
       UPSTREAM_CLIENT_SECRET_CONTEXT_PREFIX,
       AUTH_METHOD_PLUGIN_SECRET_CONTEXT_PREFIX,
       OID4VP_RESPONSE_KEY_CONTEXT_PREFIX,
+      TOTP_SECRET_CONTEXT_PREFIX,
     ]);
     // The contexts `realmSecretContext` of server-realm-policy,
     // `upstreamClientSecretContext` of server-upstream-oidc and
@@ -178,6 +181,7 @@ describe('SIGNER_POLICY', () => {
       'realm_secrets:mail.resend.apiKey',
       `upstream-oidc:client-secret:realm-1:oidc_corp:${'ab'.repeat(32)}`,
       'auth-method-plugin:corp:clientSecret',
+      'totp-secret:realm-1:user-1',
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), context).toBe(true);
     }
@@ -194,14 +198,21 @@ describe('SIGNER_POLICY', () => {
       'auth-method-pluginx:corp:clientSecret',
       'Auth-method-plugin:corp:clientSecret',
       'oid4vp_request_states.key:1',
+      'totp-secretx:realm-1:user-1',
+      'TOTP-secret:realm-1:user-1',
     ]) {
       expect(isSignerCallAllowed('api', 'decrypt', context), String(context)).toBe(false);
     }
-    // Neither the browser-facing role nor delivery opens a provider's or a plugin's secret.
+    // Neither the browser-facing role nor delivery opens a provider's, a
+    // plugin's or an account's TOTP secret, nor makes a TOTP ciphertext.
     for (const caller of ['web', 'delivery', 'admin'] as const) {
+      expect(isSignerCallAllowed(caller, 'encrypt', 'totp-secret:realm-1:user-1'), caller).toBe(
+        false
+      );
       for (const context of [
         'upstream-oidc:client-secret:realm-1:oidc_corp',
         'auth-method-plugin:corp:clientSecret',
+        'totp-secret:realm-1:user-1',
       ]) {
         expect(isSignerCallAllowed(caller, 'decrypt', context), `${caller} ${context}`).toBe(false);
       }

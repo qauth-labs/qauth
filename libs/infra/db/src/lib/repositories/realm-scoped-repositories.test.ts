@@ -343,6 +343,10 @@ const CALLS: readonly RealmScopedCall[] = [
       createUserCredentialsRepository(db).clearDisabledAt(REALM_ID, 'password', 'a@example.com'),
   ],
   [
+    'userCredentials.acceptTotpStep',
+    (db) => createUserCredentialsRepository(db).acceptTotpStep(REALM_ID, ID, 60_000_000),
+  ],
+  [
     'userRequiredActions.add',
     (db) =>
       createUserRequiredActionsRepository(db).add({

@@ -451,6 +451,33 @@ describe('the engine mail and its send caps (#637)', () => {
     expect(silent.sent).toEqual([]);
   });
 
+  it('sends the wrong-second-factor notice once a day per account, apart from the recovery codes’ (#653)', async () => {
+    const h = harness();
+    const mailer = createCappedMailer(h.deps);
+    const USER = '0199fa20-5e1a-7000-8000-000000000002';
+
+    expect(await mailer.secondFactorFailed({ realm: REALM, userId: USER, address: ADDRESS })).toBe(
+      true
+    );
+    await h.settle();
+    // Its own kind on the account's HMAC: the recovery codes' notice keeps its own day.
+    expect(h.claims).toEqual([`claim:second_factor_failed:id-${`user:${USER}`.length}`]);
+    expect(h.sent).toEqual([
+      { to: ADDRESS, mail: { template: 'second_factor_failed' }, baseUrl: REALM.issuer },
+    ]);
+
+    const claimed = harness({ claim: false });
+    expect(
+      await createCappedMailer(claimed.deps).secondFactorFailed({
+        realm: REALM,
+        userId: USER,
+        address: ADDRESS,
+      })
+    ).toBe(false);
+    await claimed.settle();
+    expect(claimed.sent).toEqual([]);
+  });
+
   it('gives the day’s password-disabled notice back and rejects when the transport refuses it', async () => {
     const h = harness({ transportRefuses: true });
 
