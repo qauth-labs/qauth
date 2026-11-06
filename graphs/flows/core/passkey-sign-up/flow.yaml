@@ -66,7 +66,7 @@ context:
     initial: any
     say:
       register: 'a registration interaction (prompt=create)'
-      recover: "a sign-in, on the hosted pages, whose person types a recovery code in the first offer"
+      recover: 'a sign-in, on the hosted pages, whose person types a recovery code in the first offer'
   # Whether the transport serves the steps this flow needs and the engine holds its ports.
   hostedPages:
     values: [false, true]
@@ -212,10 +212,12 @@ states:
     response:
       kind: step
       body:
-        current: { step: webauthn_create, params: { optional: false, options: 'the creation options' } }
+        current:
+          { step: webauthn_create, params: { optional: false, options: 'the creation options' } }
         alternatives: [identifier]
         required: false
-        personal: { user: 'a new user handle, and the account name made from it', excludeCredentials: [] }
+        personal:
+          { user: 'a new user handle, and the account name made from it', excludeCredentials: [] }
     on:
       ROUND:
         target: offeringPasskey
@@ -364,9 +366,11 @@ states:
     response:
       kind: step
       body:
-        current: { step: webauthn_create, params: { optional: false, options: 'the creation options' } }
+        current:
+          { step: webauthn_create, params: { optional: false, options: 'the creation options' } }
         alternatives: []
-        personal: { user: "the account's user handle", excludeCredentials: "the account's passkeys" }
+        personal:
+          { user: "the account's user handle", excludeCredentials: "the account's passkeys" }
     on:
       PASSKEY:
         target: bindingPasskey
@@ -460,7 +464,11 @@ states:
     description: The same offer with invalid_credentials on webauthn_create, under a new ceremony.
     response:
       kind: step
-      body: { current: { step: webauthn_create, error: invalid_credentials }, alternatives: [identifier] }
+      body:
+        {
+          current: { step: webauthn_create, error: invalid_credentials },
+          alternatives: [identifier],
+        }
 
   newPasskeyRefused:
     type: final
