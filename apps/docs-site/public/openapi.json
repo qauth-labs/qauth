@@ -14891,6 +14891,146 @@
         }
       }
     },
+    "/ui/passkey/{interactionId}": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "The \"sign in with a passkey\" page (#651): runs the browser's passkey ceremony for the interaction's `webauthn_get` step, current or offered beside the password, and posts the result to the answer endpoint. Its options name no account. `Cache-Control: no-store`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "path",
+            "name": "interactionId",
+            "required": true
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "410": {
+            "description": "Gone",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ui/passkey-enrolment/{interactionId}": {
+      "get": {
+        "tags": [
+          "UI"
+        ],
+        "description": "The \"add a passkey\" page (#651): runs the browser's registration ceremony for the interaction's `webauthn_create` step, offered after a sign-in, and posts the result to the answer endpoint, or declines the offer. Needs the flow cookie; refused from another site. `Cache-Control: no-store`.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "in": "path",
+            "name": "interactionId",
+            "required": true
+          }
+        ],
+        "x-qauth-stability": "stable",
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Gone",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "Misdirected Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/ui/recovery-codes/{interactionId}": {
       "get": {
         "tags": [

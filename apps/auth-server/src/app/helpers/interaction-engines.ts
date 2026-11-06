@@ -36,6 +36,7 @@ import type { InteractionDecision } from './interaction';
 import { InvalidAnswerError } from './interaction-errors';
 import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
+import { createServerPasskeys } from './passkey-sign-in';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
 import { resetAllowed, resetNotBefore } from './password-reset';
 import { createServerRecoveryCodes } from './recovery-codes';
@@ -387,6 +388,12 @@ export function createInteractionEngines(
       },
     }
   );
+  // Passkeys (#651): offered only while passkey sign-in is on
+  // (`WEBAUTHN_ENABLED`, refused at boot until #655). Off, an account that
+  // holds a passkey still owes it after its password (the downgrade rule):
+  // only a recovery code stands in for it, and without one the round ends.
+  const passkeys =
+    fastify.passkeySignIn === true ? createServerPasskeys(fastify, { mailer }) : undefined;
   const build = (requireVerifiedAccount: boolean) =>
     createCheckedSignInEngine({
       accounts: createRepositoryAccountDirectory(
@@ -420,6 +427,7 @@ export function createInteractionEngines(
       },
       hooks: { ladder: ladder.ladder, limits },
       steps: [captcha],
+      ...(passkeys === undefined ? {} : { passkeys }),
       passwordHardAction: ladder.hardAction,
       onUnavailable: (error) =>
         fastify.log.error({ err: error, port: error.port }, 'sign-in engine store unavailable'),
@@ -519,7 +527,15 @@ export function decisionOf(
           throw new Error(`the sign-in engine refused a round: ${result.reason}`);
       }
     case 'redirect':
-      // The Interaction API serves every step and registers no request check.
-      throw new Error(`the sign-in engine asked to continue elsewhere: ${result.reason}`);
+      // The Interaction API serves every step and registers no request check,
+      // so the sign-in cannot go on anywhere: no step can complete it (a
+      // passkey-bound account whose passkeys are all disabled, with no
+      // recovery code, #651). It ends as an expired interaction does, and
+      // nothing was changed.
+      reply.log.warn(
+        { reason: result.reason },
+        'the sign-in engine asked to continue elsewhere: the interaction ends'
+      );
+      throw new InteractionExpiredError();
   }
 }

@@ -1,4 +1,4 @@
-import type { StepName } from '@qauth-labs/server-step-grammar';
+import type { StepName, StepParams } from '@qauth-labs/server-step-grammar';
 import type { PasswordNormalization, PasswordRejectionReason } from '@qauth-labs/shared-validation';
 
 /**
@@ -115,6 +115,13 @@ export interface SignInAccount {
    * forced update clears it.
    */
   readonly requiredActions: readonly RequiredAction[];
+  /**
+   * The identifier of its password credential, when it holds one: the
+   * address a sign-in a discoverable factor proved (a passkey, #651) goes on
+   * with, for the steps that name it (an inline address check, a forced
+   * password update, an enrolment's user name).
+   */
+  readonly identifier?: string;
 }
 
 /** Where the engine reads accounts. */
@@ -719,6 +726,127 @@ export interface AddressVerifier {
     /** The upstream provider's type, for an account an upstream provider created (#639). */
     readonly upstream?: string;
   }): Promise<AddressVerification>;
+}
+
+/**
+ * What an assertion of the `webauthn_get` step proved (#651): the account the
+ * passkey belongs to, and whether the authenticator data it signed carries
+ * the user-verification (UV) flag. `refused` for anything else: no ceremony
+ * held under the key or one taken already, an unknown or disabled passkey,
+ * another challenge, RP ID or origin, a bad signature, a malformed response.
+ * The engine refuses every one alike, as `invalid_credentials`.
+ */
+export type PasskeyAssertion =
+  | { readonly kind: 'verified'; readonly userId: string; readonly userVerified: boolean }
+  | { readonly kind: 'refused' };
+
+/**
+ * The creation options of a `webauthn_create` step (#651) and its personal
+ * data, as the step grammar holds them: a new user handle, the account's
+ * identifier as its name, and the account's passkeys to exclude.
+ */
+export interface PasskeyRegistrationStart {
+  readonly options: StepParams<'webauthn_create'>['options'];
+  readonly personal: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * What a `webauthn_create` answer made (#651): a new passkey, verified with
+ * user verification and not bound yet, as an opaque string the engine holds
+ * in the transaction until it binds it (at most
+ * {@link PASSKEY_REGISTRATION_MAX_LENGTH} characters); or `refused`, for
+ * anything else.
+ */
+export type PasskeyRegistration =
+  | { readonly kind: 'verified'; readonly registration: string }
+  | { readonly kind: 'refused' };
+
+/** The longest held registration the engine keeps in a transaction: a passkey's public key and data. */
+export const PASSKEY_REGISTRATION_MAX_LENGTH = 16384;
+
+/** What binding a verified passkey to an account found (#651). */
+export type PasskeyBinding =
+  /**
+   * The passkey is bound and the binding notice is queued. The security log's
+   * own event of it comes with the account pages (#686).
+   */
+  | { readonly kind: 'bound' }
+  /**
+   * Nothing was bound: the realm holds the credential id already
+   * (`credential_exists`, the step is offered again), or the account is
+   * disabled or gone (`account_disabled`, `subject_mismatch`: the transaction
+   * ends).
+   */
+  | {
+      readonly kind: 'refused';
+      readonly reason: 'credential_exists' | 'account_disabled' | 'subject_mismatch';
+    };
+
+/**
+ * The WebAuthn ceremonies of the passkey steps (#651; ADR-017 Decisions 4, 8
+ * and 14): the realm's relying party, the challenge store and the realm's
+ * passkeys, behind one port. Each ceremony is named by a key the engine draws
+ * and holds in the transaction, so an answer is checked only against the
+ * ceremony its transaction started; the store keeps a ceremony at least 5
+ * minutes. Every verification takes the ceremony first, so a challenge is
+ * answered once, right or wrong. A throw is an outage, which refuses the
+ * round.
+ */
+export interface PasskeyCeremonies {
+  /**
+   * Start an assertion ceremony under `key`: the request options of the
+   * `webauthn_get` step, for the realm's RP ID, with user verification
+   * required and no `allowCredentials`, so they name no account.
+   */
+  startAssertion(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly key: string;
+  }): Promise<StepParams<'webauthn_get'>>;
+  /**
+   * Take the ceremony under `key` and verify `response`, the browser's
+   * `PublicKeyCredential.toJSON()` as a JSON string, against the realm's
+   * passkeys: a disabled one never verifies. A verified one has its sign
+   * counter and last use updated.
+   */
+  verifyAssertion(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly key: string;
+    readonly response: string;
+  }): Promise<PasskeyAssertion>;
+  /**
+   * Start a registration ceremony under `key`, for a discoverable passkey of
+   * `userId` with user verification required and attestation `none`.
+   */
+  startRegistration(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly key: string;
+    readonly userId: string;
+    readonly identifier: string;
+  }): Promise<PasskeyRegistrationStart>;
+  /** Take the ceremony under `key` and verify the registration `response`, without binding it. */
+  verifyRegistration(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly key: string;
+    readonly userId: string;
+    readonly response: string;
+  }): Promise<PasskeyRegistration>;
+  /**
+   * Bind a registration {@link verifyRegistration} verified to `userId`, while
+   * the account is enabled, then queue the binding notice of NIST SP 800-63B-4
+   * §4.1.2.1. A notice that fails is reported and binds the passkey all the
+   * same. The engine records the binding as the `webauthn_create` step passed;
+   * the security log's own event comes with its account pages (#686).
+   */
+  bind(input: {
+    readonly realmId: string;
+    readonly clientId: string;
+    readonly userId: string;
+    readonly registration: string;
+  }): Promise<PasskeyBinding>;
 }
 
 /** The engine's clock: `now` in epoch milliseconds, and a wait. */

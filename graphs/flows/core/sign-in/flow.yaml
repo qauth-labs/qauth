@@ -15,8 +15,8 @@
 #   so that every verified credential was reserved first.
 # - The identifier and password steps exist here, and the inline verification of an unverified account after its
 #   correct password (PRO-15, #638), which flows/core/account-verification draws: an emailed code that proves the
-#   address and is never a factor. Passkeys (#651) and TOTP (#653) are step handlers that later issues register;
-#   until then a sign-in that needs one of them is answered with a redirect.
+#   address and is never a factor. Passkeys (#651) are a step handler of the engine, drawn by flows/core/passkey; TOTP
+#   (#653) is one a later issue registers, and until then a sign-in that needs it is answered with a redirect.
 # - The breach-list check and the forced password update (#635; ADR-017 Decision 4 rule 8 and Decision 8, ADR-018 §3,
 #   ADR-020 §3): a right password is checked against the realm's breach list (password.breachListSource) before the
 #   subject is fixed, since QAuth keeps only its hash. A listed password, or an update_password required action an
@@ -61,9 +61,9 @@ scope:
     - "what the hooks decide inside: the limiters (#636), the request checks (#628, #665), the bot challenge and its
       captcha step (#643), the ladder's waits, counts and disable ceiling (#615); with no hook registered, each one lets
       the round through"
-    - 'the steps later issues add through the step-handler interface: passkeys and passkey-first (#651), TOTP (#653),
-      registration (#640), reset (#642), recovery codes (#649); until then the downgrade rule and an MFA policy that
-      requires a second factor answer a redirect'
+    - 'the steps drawn by their own flows: passkeys, passkey-first, the downgrade rule and the enrolment offer
+      (flows/core/passkey, #651), registration (#640), reset (#642), recovery codes (#649); and TOTP (#653), until
+      which an MFA policy that requires a second factor answers a redirect'
     - 'the rounds of the inline verification, drawn by flows/core/account-verification: the code, its mail through
       the send caps, its ladder, its expiry and its burn. An engine built without email codes, which no transport of
       the auth server is, refuses an unverified account under REQUIRE_VERIFIED_ACCOUNT like a wrong password instead'
@@ -499,9 +499,9 @@ states:
   choosingFirstFactor:
     title: Pick the first factor (rule 7)
     description: >-
-      The password in this issue, required; from #651 a passkey is offered beside it (ADR-017 Decision 4: the same
-      password-required shape for every account, with webauthn_get offered). An answer is verified only when its step
-      is the one the engine asks for next: here, a password answer.
+      The password, required, with a passkey offered beside it where the transport serves webauthn_get
+      (flows/core/passkey; ADR-017 Decision 4: the same password-required shape for every account). An answer is
+      verified only when its step is the one the engine asks for next: here, a password answer.
     always:
       - guard: passwordAnswered
         target: reservingAttempt
@@ -639,13 +639,13 @@ states:
       and a disabled factor still counts as bound. Then the MFA policy just read: when it requires a second factor, the
       transaction's amr must carry mfa, and an account with no usable second factor gets the set-up step, never a
       code. Then an address not proved yet is verified inline, before a second factor the account has is asked for
-      (ADR-017 Decision 4, rule 8). The step that would meet the first two is a later issue's; until it exists, the
-      engine answers a redirect.
+      (ADR-017 Decision 4, rule 8). flows/core/passkey draws the passkey the first rule asks for; the second factor the
+      MFA policy asks for is a later issue's (#653), and until it exists the engine answers a redirect.
     always:
       - guard: passkeyBound
-        target: redirected
+        target: passkeyOwed
         effect: [waitFloor]
-        say: 'the account has a passkey bound, and no passkey step exists yet (#651)'
+        say: 'the account has a passkey bound: the password does not complete the sign-in'
       - guard: mfaRequired
         target: redirected
         effect: [waitFloor]
@@ -972,6 +972,16 @@ states:
         identifier: "the transaction's identifier, normalised"
         amr: '["pwd"], from the step grammar''s transactionAmr over the verified steps'
         authTime: 'when the password was verified, in epoch milliseconds'
+
+  passkeyOwed:
+    type: final
+    title: Ask for the account's passkey
+    description: >-
+      The downgrade rule, drawn by flows/core/passkey: webauthn_get next, a recovery code beside it on the hosted
+      pages, or a redirect where no step of it can be served. The password alone never completes the sign-in.
+    response:
+      kind: continue
+      body: { next: 'flows/core/passkey, from afterFirstFactor' }
 
   redirected:
     type: final

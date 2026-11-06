@@ -186,7 +186,14 @@ export const FEATURE_STATUS: FeatureStatus[] = [
     feature: 'Upstream OpenID Connect sign-in',
     state: 'partial',
     summary:
-      "A person signs in, or signs up when the realm allows it (`ALLOW_SIGN_UP`, off by default), through one of the realm's upstream OpenID Connect providers (#639): a button per listed provider on the sign-in page and the `upstream` step of the Interaction API, or `qauth_upstream=<type>` on the authorization request, hidden providers included. The account is found by `(realm, provider type, sub)` and tied to the ID token's issuer, never matched by email; a new one gets the provider's claims as attributes, verified unless the provider's verified switch is off. Open: the admin API that manages the providers (#714), which are rows of `realm_upstream_providers` until then; provider icons; and the review-your-details page. An account that holds a passkey is refused rather than asked for it until the passkey step is served (#651), and while `INTERACTION_UI_ENABLED` is off an unverified account is refused rather than verified inline.",
+      "A person signs in, or signs up when the realm allows it (`ALLOW_SIGN_UP`, off by default), through one of the realm's upstream OpenID Connect providers (#639): a button per listed provider on the sign-in page and the `upstream` step of the Interaction API, or `qauth_upstream=<type>` on the authorization request, hidden providers included. The account is found by `(realm, provider type, sub)` and tied to the ID token's issuer, never matched by email; a new one gets the provider's claims as attributes, verified unless the provider's verified switch is off. Open: the admin API that manages the providers (#714), which are rows of `realm_upstream_providers` until then; provider icons; and the review-your-details page. An account that holds a passkey is refused rather than asked for it until passkey sign-in can be switched on (#655), and while `INTERACTION_UI_ENABLED` is off an unverified account is refused rather than verified inline.",
+  },
+  {
+    feature: 'Passkey sign-in',
+    state: 'partial',
+    summary:
+      'Built (#651): the sign-in engine\'s `webauthn_get` and `webauthn_create` steps, passkey-first order with no `login_hint`, the downgrade rule (a login completes only after the account\'s strongest bound factor, a disabled passkey included), an assertion refused without the user-verification flag, `amr` `["pop","mfa"]` or `["pwd","pop","mfa"]`, the optional enrolment after a password sign-in with a recovery set at the first one, and the two `/ui` pages that run the ceremonies. `/auth/login` and `/ui/login` already refuse a right password of an account that holds a passkey. Open: switching it on, since `WEBAUTHN_ENABLED=true` is refused at boot until #655; the FiPA endpoint (#646); the design-system screens (#652).',
+    flag: { name: 'WEBAUTHN_ENABLED', default: 'off' },
   },
   {
     feature: 'API keys',

@@ -14,6 +14,7 @@ import {
   emailCodeLength,
   type HeldEmailCode,
 } from './email-code';
+import { PASSKEY_REGISTRATION_MAX_LENGTH } from './ports';
 import type { SignInFlow } from './round';
 
 /**
@@ -153,7 +154,47 @@ export interface SignInTransaction {
    * confirmation issues a new set, which replaces the one shown.
    */
   readonly recoveryCodesShown?: string;
+  /**
+   * The WebAuthn ceremony this transaction holds (#651): the step it was
+   * offered for, the key the port keeps it under, the params (and, for
+   * `webauthn_create`, the personal data) it was offered with, and when it
+   * began. A round that offers the step again sends the same params while
+   * the ceremony is young; an answer is read against them and verified under
+   * the key, and the ceremony is dropped once verified, right or wrong: a
+   * challenge is answered once.
+   */
+  readonly ceremony?: HeldCeremony;
+  /**
+   * The passkey enrolment of this sign-in (#651): `declined` once the person
+   * went on without one, or the binding could not go ahead (the offer is not
+   * made again); `bound` once a passkey was bound to the account, which owes
+   * a first set of recovery codes; or the registration the port verified,
+   * held while the account's mailbox is proved before it is bound.
+   */
+  readonly passkeyEnrolment?: PasskeyEnrolment;
 }
+
+/** The steps whose params carry a WebAuthn ceremony (#651). */
+export const CEREMONY_STEPS = Object.freeze(['webauthn_get', 'webauthn_create'] as const);
+export type CeremonyStep = (typeof CEREMONY_STEPS)[number];
+
+/** A WebAuthn ceremony a transaction holds: see {@link SignInTransaction.ceremony}. */
+export interface HeldCeremony {
+  readonly step: CeremonyStep;
+  /** The port's key for it: 32 random bytes, base64url. */
+  readonly key: string;
+  readonly params: StepParams<CeremonyStep>;
+  /** For `webauthn_create`: the step's personal data, as it was offered. */
+  readonly personal?: Readonly<Record<string, unknown>>;
+  /** When it began, in epoch milliseconds. */
+  readonly startedAt: number;
+}
+
+/** What a transaction holds of its passkey enrolment: see {@link SignInTransaction.passkeyEnrolment}. */
+export type PasskeyEnrolment = 'declined' | 'bound' | { readonly registration: string };
+
+/** The key of a held ceremony: 32 bytes, base64url without padding. */
+export const CEREMONY_KEY_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 /** What binds a transaction to its sign-in: its realm, its client, when it began, and its flow. */
 export interface SignInTransactionBinding {
@@ -249,6 +290,40 @@ export const signInTransactionSchema = z.strictObject({
     .optional(),
   captchaPassed: z.literal(true).optional(),
   recoveryCodesShown: z.string().min(1).max(128).optional(),
+  ceremony: z
+    .strictObject({
+      step: z.enum(CEREMONY_STEPS),
+      key: z.string().regex(CEREMONY_KEY_PATTERN),
+      params: z.unknown(),
+      personal: z.record(z.string(), z.unknown()).optional(),
+      startedAt: z.int().nonnegative(),
+    })
+    .superRefine((held, context) => {
+      const step = grammarStep(held.step);
+      if (!step.params.safeParse(held.params).success) {
+        context.addIssue({ code: 'custom', message: 'params outside the step’s schema' });
+      }
+      // The personal data of a registration is what it was offered with; an
+      // assertion's comes from the round.
+      if (
+        held.step === 'webauthn_create'
+          ? !step.personal.safeParse(held.personal).success
+          : held.personal !== undefined
+      ) {
+        context.addIssue({ code: 'custom', message: 'personal data outside the step’s schema' });
+      }
+    })
+    .transform((held) => held as HeldCeremony)
+    .optional(),
+  passkeyEnrolment: z
+    .union([
+      z.literal('declined'),
+      z.literal('bound'),
+      z.strictObject({
+        registration: z.string().min(1).max(PASSKEY_REGISTRATION_MAX_LENGTH),
+      }),
+    ])
+    .optional(),
 });
 
 /**
@@ -274,6 +349,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     captcha,
     captchaPassed,
     recoveryCodesShown,
+    ceremony,
+    passkeyEnrolment,
   } = parsed.data;
   // An auth_time without a subject, or a subject without one, is no state the
   // engine writes. (A subject without an identifier is: a discoverable factor
@@ -295,6 +372,14 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
   if (flow === 'register' && upstream !== undefined) return null;
   // A recovery-code set is issued only to the account a factor proved (#649).
   if (recoveryCodesShown !== undefined && (subject === undefined || authTime === undefined)) {
+    return null;
+  }
+  // A passkey is offered for enrolment only to the account a factor proved
+  // (#651), and so is its registration ceremony.
+  if (passkeyEnrolment !== undefined && (subject === undefined || authTime === undefined)) {
+    return null;
+  }
+  if (ceremony?.step === 'webauthn_create' && (subject === undefined || authTime === undefined)) {
     return null;
   }
   return freezeTransaction({
@@ -321,6 +406,8 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
     ...(captcha === undefined ? {} : { captcha }),
     ...(captchaPassed === undefined ? {} : { captchaPassed }),
     ...(recoveryCodesShown === undefined ? {} : { recoveryCodesShown }),
+    ...(ceremony === undefined ? {} : { ceremony }),
+    ...(passkeyEnrolment === undefined ? {} : { passkeyEnrolment }),
   });
 }
 
@@ -330,7 +417,16 @@ export function readSignInTransaction(value: unknown): SignInTransaction | null 
  * no key the schema refuses.
  */
 export function freezeTransaction(transaction: SignInTransaction): SignInTransaction {
-  const { emailCode, upstream, captcha, captchaPassed, recoveryCodesShown, ...rest } = transaction;
+  const {
+    emailCode,
+    upstream,
+    captcha,
+    captchaPassed,
+    recoveryCodesShown,
+    ceremony,
+    passkeyEnrolment,
+    ...rest
+  } = transaction;
   return Object.freeze({
     ...rest,
     verified: Object.freeze(transaction.verified.map((step) => Object.freeze({ ...step }))),
@@ -339,5 +435,23 @@ export function freezeTransaction(transaction: SignInTransaction): SignInTransac
     ...(captcha === undefined ? {} : { captcha: Object.freeze({ ...captcha }) }),
     ...(captchaPassed === undefined ? {} : { captchaPassed }),
     ...(recoveryCodesShown === undefined ? {} : { recoveryCodesShown }),
+    ...(ceremony === undefined
+      ? {}
+      : {
+          ceremony: Object.freeze({
+            ...ceremony,
+            ...(ceremony.personal === undefined
+              ? {}
+              : { personal: Object.freeze({ ...ceremony.personal }) }),
+          }),
+        }),
+    ...(passkeyEnrolment === undefined
+      ? {}
+      : {
+          passkeyEnrolment:
+            typeof passkeyEnrolment === 'string'
+              ? passkeyEnrolment
+              : Object.freeze({ ...passkeyEnrolment }),
+        }),
   });
 }

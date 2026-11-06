@@ -255,6 +255,40 @@ each attempt waits longer, up to 15 minutes, after a bot challenge. A code
 used, a set regenerated and a run of 100 wrong codes (at most once a day) each
 mail the account a notice that no realm can switch off.
 
+---
+
+## The passkey pages
+
+A passkey is the strongest factor an account can bind (#651; ADR-017
+Decisions 4 and 10). While passkey sign-in is on, the sign-in engine offers
+it first: with no `login_hint`, the first step asks for a passkey and offers
+the password and the identifier beside it; with one, it asks for the password
+and offers the passkey. A login completes only after the account's strongest
+bound factor, so after a right password an account that holds a passkey is
+asked for it. On these pages `/oauth/authorize` starts a sign-in with no
+`login_hint` at that first step, and one with a hint at the identifier step,
+which the hint fills in. After a password sign-in, the engine may offer to add
+one. Two server-rendered pages run the ceremonies for an interaction of the
+Interaction API, until the design-system screens of #652 replace them:
+
+- `GET /ui/passkey/{interactionId}`: "Sign in with a passkey", for the
+  `webauthn_get` step, current or offered beside the password. Its options
+  name no account. After a refused answer it says "That passkey did not
+  work", the same whatever was wrong. "Sign in another way" links back to the
+  interaction's ceremony page, for the password or the identifier.
+- `GET /ui/passkey-enrolment/{interactionId}`: "Add a passkey", for the
+  `webauthn_create` step, with "Not now" beside it. The options carry the
+  account's name, so the page is shown only to the browser whose flow cookie
+  binds the interaction, and never to a page another site opened (`403`).
+
+Each page runs the browser's ceremony (`navigator.credentials.get()` or
+`.create()`, so it needs JavaScript) and posts the credential's JSON as
+`webauthn_response` to the Interaction API's answer endpoint with the step and
+its CSRF value. The server refuses an assertion whose authenticator did not
+verify the user. An interaction at another step is sent to its ceremony page
+(`303`); one that ended gets a page saying so (`410`). Both are sent with
+`Cache-Control: no-store`.
+
 ## Pending authorization: why the login bounce carries a handle, not a URL
 
 Before qauth-labs/qauth#319, every surface that bounced an unauthenticated

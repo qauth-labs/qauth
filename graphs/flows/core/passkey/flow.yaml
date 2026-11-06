@@ -1,0 +1,837 @@
+# Passkeys (F2b, #651; ADR-017 Decisions 4, 8 and 10, ADR-014 §14): the webauthn_get step that signs a person in with
+# a passkey, passkey-first, the downgrade rule that makes a passkey-bound account prove it, and the optional
+# webauthn_create enrolment after a sign-in. Written before the code (status: proposed), as ADR-021 Decision 4 asks of a
+# new core flow. The sign-in engine (flows/core/sign-in) runs it at rules 6 to 8; the CER issue adds the screens
+# (ui.yaml), and until then the server-rendered pages /ui/passkey and /ui/passkey-enrolment serve the two steps.
+#
+# - Like the sign-in engine, this flow has no screen and no HTTP route of its own: a transport calls the engine once a
+#   round, and every round runs the sign-in's rules up to rule 6 first (the policy, the limiters, the request checks,
+#   the bot challenge). So an exit here is the engine's answer, as data, named in camelCase; a step state ends the
+#   round with the transaction live, and the next round's answer is a new event from it.
+# - A WebAuthn ceremony is one challenge of 32 bytes from a CSPRNG. The challenge store keeps its state for 5 minutes
+#   under a random key the transaction holds, with the step's params, so a round that offers the step again sends the
+#   same challenge while more than a minute of it is left. Verifying an answer takes the state first, in one GETDEL,
+#   whatever the answer turns out to be: a challenge is answered once, and a refused answer gets a new ceremony.
+# - The relying party is the realm's (its RP ID, the realm's exact host unless WEBAUTHN_RP_ID names a parent domain);
+#   the origins an answer may come from are the realm's own and the client's webauthn_allowed_origins. A sign-in
+#   assertion must carry user presence and user verification in its signed authenticator data: the provider refuses
+#   one without UV, and the step refuses it again. The amr is ["pop","mfa"] for a passkey alone and
+#   ["pwd","pop","mfa"] after a password; QAuth asks for attestation "none" and never claims hwk or swk.
+# - The ladder of PRO-12 has no passkey row (ADR-017 Decision 7): an assertion names no account before it is verified,
+#   and a passkey cannot be guessed. The limiters' credential round still reserves every answered assertion.
+schema: delurio-graph/0
+kind: flow
+id: core.passkey
+status: proposed
+domain: qauth
+title: Sign in with a passkey, prove it on a passkey-bound account, and bind one after a sign-in
+summary: >-
+  With no login_hint, the first response asks for a discoverable passkey and offers the password and the identifier;
+  with one, it asks for the password and offers the passkey. Either way it is the same for every account, and it reads
+  none. An assertion is reserved on the limiters, its ceremony is taken, and it is verified with user verification; a
+  right one proves its account with ["pop","mfa"]. A password on a passkey-bound account proves nothing that completes
+  the sign-in: the next step is the passkey, a disabled one still counting as bound, and a transport that cannot serve
+  it is sent to the hosted pages. After a sign-in that proved only a password, the hosted pages offer a passkey; a
+  password-only account proves its mailbox with an emailed code before the passkey is bound, the user is told, and the
+  first set of recovery codes is shown.
+
+scope:
+  shows: >-
+    the webauthn_get step from the first response to a proved passkey, the downgrade rule after a password, and the
+    webauthn_create step from its offer to the passkey bound or declined
+  world: open # what is not drawn is not ruled out; only `outOfView` and `assertions` are binding
+  outOfView:
+    - "what every round runs before rule 6, drawn by flows/core/sign-in: the transport's checks, the MFA policy, the
+      limiters' other rounds, the request checks and the bot challenge"
+    - "the identifier and password steps themselves, drawn by flows/core/sign-in: the ladder's reservation, the one
+      Argon2id verification, the breach list, and a wrong password's answer, which is the same for every account"
+    - 'what rule 8 runs between the downgrade rule and the enrolment offer, drawn by flows/core/sign-in: the MFA
+      policy, the inline verification of an address and the forced password update'
+    - 'a recovery code in place of the passkey, drawn by flows/core/recovery-code: offered beside webauthn_get on the
+      hosted pages, and alone when every passkey of the account is disabled; and the set shown once after the first
+      enrolment'
+    - 'the rounds of the emailed code that proves the mailbox before a binding, drawn by
+      flows/core/account-verification with the purpose recovery and 8 digits'
+    - 'registration of an account whose only factor is a passkey, with no address (#655), and the passkeys of the
+      account page: adding, renaming and removing one (ACC-02)'
+    - 'the enrolment offer after a sign-in that proved no password (an upstream sign-in), which the account page
+      serves instead'
+    - 'a failure to settle a reservation, to update a sign counter or to send a notice: reported, and it changes no
+      answer'
+    - 'a store failure while an audit record is written: the round fails, and the transport answers it as a failed
+      round of its own'
+
+context:
+  # The authorization request carries a login_hint, frozen at round 0.
+  loginHint:
+    values: [absent, given]
+    initial: any
+  # Whether the transport serves webauthn_get: the Interaction API always, a FiPA client only when it listed the step.
+  servesGet:
+    values: [false, true]
+    initial: any
+  # Whether the transport serves the enrolment and what it owes: webauthn_create, email_code and recovery_codes. Only
+  # the Interaction API does; a FiPA client cannot show a set of recovery codes.
+  hostedPages:
+    values: [false, true]
+    initial: any
+  # The limiters' credential round, when an assertion is answered.
+  limits:
+    values: [open, closed]
+    initial: any
+    say:
+      open: 'the limiters let the round through'
+      closed: 'a delay or a hard limit of the limiters refuses the round'
+  # What the answered assertion is to the realm's passkeys.
+  assertion:
+    values: [verified, unverified, refused]
+    initial: any
+    say:
+      verified: >-
+        a passkey of the realm, not disabled, signed this round's challenge for the realm's RP ID from an allowed
+        origin, with user presence and user verification
+      unverified: 'the same, but its authenticator data does not carry the UV flag'
+      refused: >-
+        anything else: no ceremony held or the ceremony taken already, an unknown or disabled passkey, another
+        challenge, RP ID or origin, a bad signature, a malformed response
+  # Whose passkey signed the assertion, against the account the transaction names.
+  assertionAccount:
+    values: [same, other]
+    initial: any
+    say:
+      same: "the transaction names no account yet, or the passkey is that account's"
+      other: "the transaction names an account (a login_hint, or the password's subject) and the passkey is another's"
+  # Whether the account the assertion named is enabled, read again after it.
+  accountEnabled:
+    values: [false, true]
+    initial: any
+  # The password answered on the password-first offer.
+  password:
+    values: [right, wrong]
+    initial: any
+  # The account holds a passkey, a disabled one included (ADR-017 Decision 4: disabling a factor never lowers what a
+  # sign-in must prove).
+  passkeyBound:
+    values: [false, true]
+    initial: any
+  # The account holds a passkey that is not disabled.
+  passkeyUsable:
+    values: [false, true]
+    initial: any
+  # How long ago the transaction's last factor was proved, when a binding is offered or stored.
+  authAge:
+    values: [fresh, stale]
+    initial: any
+    say:
+      fresh: 'at most 5 minutes'
+      stale: 'more than 5 minutes'
+  # What the answered webauthn_create response is.
+  registration:
+    values: [valid, refused, bound]
+    initial: any
+    say:
+      valid: >-
+        a new passkey for this round's challenge and the realm's RP ID, from an allowed origin, discoverable, with
+        user verification, an allowed algorithm and attestation "none"
+      refused: 'anything else, the ceremony taken already included'
+      bound: 'a valid passkey whose credential id the realm holds already'
+  # A code mailed to the account's address was answered right in this transaction, for any purpose.
+  mailboxProved:
+    values: [false, true]
+    initial: any
+  # this round reserved the assertion on the limiters, which count it until it settles
+  attemptReserved: { values: [false, true], initial: false }
+  # this round took the held ceremony from the challenge store
+  ceremonyTaken: { values: [false, true], initial: false }
+  # this round verified an assertion's signature and flags
+  assertionChecked: { values: [false, true], initial: false }
+  # the transaction proved a passkey: webauthn_get joined its verified steps
+  passkeyProved: { values: [false, true], initial: false }
+  # the transaction proved a password
+  passwordProved: { values: [false, true], initial: false }
+  # an account was read: never before a factor named it
+  accountRead: { values: [false, true], initial: false }
+  # the person declined the offered passkey
+  enrolmentDeclined: { values: [false, true], initial: false }
+  # a passkey was bound to the account
+  passkeyStored: { values: [false, true], initial: false }
+  # the binding notice was queued (the security log's own event comes with #686)
+  bindingNoticed: { values: [false, true], initial: false }
+  # this round wrote an audit record of the step
+  audited: { values: [false, true], initial: false }
+  # the round waited out MIN_RESPONSE_TIME_MS.LOGIN (500 ms), counted from the round's arrival
+  floorWaited: { values: [false, true], initial: false }
+  # the amr claimed hwk or swk: never
+  keyStoreClaimed: { values: [false, true], initial: false }
+
+guards:
+  hinted: "loginHint == 'given'"
+  notServed: 'not servesGet'
+  closed: "limits == 'closed'"
+  withoutUv: "assertion == 'unverified'"
+  badAssertion: "assertion == 'refused'"
+  mismatch: "assertionAccount == 'other' and (loginHint == 'given' or passwordProved)"
+  disabledBeforeFactor: 'not accountEnabled and not passwordProved'
+  disabledAfterFactor: 'not accountEnabled'
+  wrongPassword: "password == 'wrong'"
+  passkeyOwed: 'passkeyBound and not passkeyProved'
+  passkeyAskable: 'servesGet and passkeyUsable'
+  enrolmentOffered: >-
+    hostedPages and passwordProved and not passkeyProved and not passkeyBound and not enrolmentDeclined and authAge ==
+    'fresh'
+  badRegistration: "registration == 'refused'"
+  alreadyBound: "registration == 'bound'"
+  mailboxOwed: 'not mailboxProved'
+  stale: "authAge == 'stale'"
+
+effects:
+  # each round starts with nothing done
+  newRound:
+    set:
+      attemptReserved: false
+      ceremonyTaken: false
+      assertionChecked: false
+      audited: false
+      floorWaited: false
+  reserveAttempt: { set: { attemptReserved: true } }
+  takeCeremony: { set: { ceremonyTaken: true } }
+  checkAssertion: { set: { assertionChecked: true } }
+  provePasskey: { set: { passkeyProved: true } }
+  provePassword: { set: { passwordProved: true } }
+  readAccount: { set: { accountRead: true } }
+  declineEnrolment: { set: { enrolmentDeclined: true } }
+  proveMailbox: { set: { mailboxProved: true } }
+  storePasskey: { set: { passkeyStored: true, bindingNoticed: true } }
+  audit: { set: { audited: true } }
+  waitFloor: { set: { floorWaited: true } }
+  # what the person, another transaction or the clock may have changed by the next answer
+  moveOn: { havoc: [limits, assertion, assertionAccount, accountEnabled, password] }
+  answerRegistration: { havoc: [registration, authAge] }
+  timePasses: { havoc: [authAge] }
+
+failures:
+  startingCeremony: { from: webauthnCeremonies, store: [unavailable] }
+  reservingAssertion: { from: limiters, store: [unavailable] }
+  verifyingAssertion: { from: webauthnProvider, store: [unavailable] }
+  readingAccount: { from: accountDirectory, store: [unavailable] }
+  verifyingPassword: { from: passwordVerifier, store: [unavailable] }
+  startingDowngrade: { from: webauthnCeremonies, store: [unavailable] }
+  startingRegistration: { from: webauthnCeremonies, store: [unavailable] }
+  verifyingRegistration: { from: webauthnProvider, store: [unavailable] }
+  provingMailbox:
+    from: core.account-verification
+    throttled: [sendCapped, lockedOut]
+    ended: [burned, ended]
+    invalid: [answerRefused]
+    store: [unavailable]
+  storingPasskey:
+    from: userCredentials
+    bound: [credential_exists]
+    ended: [account_disabled, subject_mismatch]
+    store: [unavailable]
+
+# The main story: a browser ceremony with no login_hint; the person taps the passkey the browser offers.
+main:
+  given:
+    loginHint: absent
+    servesGet: true
+    hostedPages: true
+    limits: open
+    assertion: verified
+    assertionAccount: same
+    accountEnabled: true
+    password: right
+    passkeyBound: true
+    passkeyUsable: true
+    authAge: fresh
+    registration: valid
+    mailboxProved: false
+  events: [DONE, ASSERTION, DONE, DONE, DONE]
+
+initial: firstRound
+states:
+  firstRound:
+    title: Choose the first response (rules 6 and 7)
+    description: >-
+      Passkey-first: the first response is the same for every account, and no account is read for it. With no
+      login_hint it asks for a discoverable passkey, preferred rather than required, and offers the password and the
+      identifier; with one, it asks for the password and offers the passkey. A transport that does not serve
+      webauthn_get gets the password-and-identifier shape of flows/core/sign-in, never a redirect.
+    always:
+      - guard: notServed
+        target: passwordOnlyOffer
+        effect: [waitFloor]
+        say: 'the transport does not serve webauthn_get: the preferred passkey gives way to the password'
+      - target: startingCeremony
+        say: 'the transport serves webauthn_get'
+
+  startingCeremony:
+    title: Start, or keep, the transaction's assertion ceremony
+    description: >-
+      The transaction's held ceremony is kept while more than a minute of it is left, with the same params. Otherwise a
+      new key from a CSPRNG names a new ceremony: a 32-byte challenge, the realm's RP ID, user verification required,
+      no allowCredentials, kept 5 minutes in the challenge store. The params name no account.
+    invoke: { external: webauthnCeremonies }
+    on:
+      DONE:
+        - guard: hinted
+          target: offeringPasswordFirst
+          effect: [waitFloor]
+          say: 'a login_hint: the password, with the passkey offered'
+        - target: offeringPasskeyFirst
+          effect: [waitFloor]
+          say: 'no login_hint: the discoverable passkey, with the password and the identifier offered'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the challenge store fails; nothing is offered'
+
+  reservingAssertion:
+    title: Reserve the assertion on the limiters
+    description: >-
+      The limiters' credential round (#636) for the client, the end-user IP and the session, before anything of the
+      answer is verified. No per-account ladder: the assertion names no account until it is verified.
+    invoke: { external: limiters }
+    on:
+      DONE:
+        - guard: closed
+          target: throttled
+          effect: [audit, waitFloor]
+          say: 'a delay or a hard limit refuses the round: nothing is verified'
+        - target: verifyingAssertion
+          effect: [reserveAttempt]
+          say: 'the round is reserved, and counted as a failure until it settles'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the limiters fail closed'
+
+  verifyingAssertion:
+    title: Take the ceremony and verify the assertion
+    description: >-
+      The held ceremony's state is taken from the challenge store first, so a challenge is answered once, right or
+      wrong. The credential is looked up by its id among the realm's passkeys, and a disabled one is refused. The
+      signature, the challenge, the origin, the RP ID hash, user presence, user verification and the backup flags are
+      verified; a sign counter that went back is logged. The step checks user verification again from the verified
+      result. A right assertion updates the passkey's counter and last use.
+    invoke: { external: webauthnProvider }
+    on:
+      DONE:
+        - guard: withoutUv
+          target: assertionRefused
+          effect: [takeCeremony, checkAssertion, audit, waitFloor]
+          say: 'no UV flag in the signed authenticator data: refused as invalid_credentials'
+        - guard: badAssertion
+          target: assertionRefused
+          effect: [takeCeremony, checkAssertion, audit, waitFloor]
+          say: 'refused as invalid_credentials, the same for every reason'
+        - guard: mismatch
+          target: ended
+          effect: [takeCeremony, checkAssertion, audit, waitFloor]
+          say: "another account's passkey: the transaction ends, audited as subject_mismatch"
+        - target: readingAccount
+          effect: [takeCeremony, checkAssertion]
+          say: 'the assertion is right, with user verification'
+      FAIL.store:
+        target: unavailable
+        effect: [takeCeremony, waitFloor]
+        say: 'the challenge store or the database fails; the ceremony is gone and nothing is proved'
+
+  readingAccount:
+    title: Read the account the passkey names
+    description: The account the verified passkey belongs to, with every factor it holds, a disabled one included.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        - guard: disabledBeforeFactor
+          target: assertionRefused
+          effect: [readAccount, audit, waitFloor]
+          say: 'a disabled account, before any factor: refused like any other assertion, as invalid_credentials'
+        - guard: disabledAfterFactor
+          target: ended
+          effect: [readAccount, audit, waitFloor]
+          say: 'the account was disabled after its password: the transaction ends'
+        - target: afterFirstFactor
+          effect: [readAccount, provePasskey, audit]
+          say: >-
+            the passkey is proved: webauthn_get joins the verified steps, the subject is fixed, auth_time moves, and
+            the step is audited as passed
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; nothing is proved'
+
+  verifyingPassword:
+    title: Verify the password
+    description: >-
+      Drawn by flows/core/sign-in: the ladder's reservation, one Argon2id verification, the breach list. A wrong one
+      gets the same answer for every account, a passkey-bound one included.
+    invoke: { external: passwordVerifier }
+    on:
+      DONE:
+        - guard: wrongPassword
+          target: passwordRefused
+          effect: [audit, waitFloor]
+          say: 'a wrong password, or none to verify: the password step again, the same for every account'
+        - target: readingProvenAccount
+          effect: [provePassword]
+          say: 'the password is right: the subject is fixed and pwd joins the amr'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the verifier or the ladder fails'
+
+  readingProvenAccount:
+    title: Read the account the password proved
+    description: The account, with every factor it holds, a disabled passkey included.
+    invoke: { external: accountDirectory }
+    on:
+      DONE:
+        target: afterFirstFactor
+        effect: [readAccount]
+        say: 'the account is read with every factor'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails'
+
+  afterFirstFactor:
+    title: Apply the downgrade rule, then offer a passkey (rule 8)
+    description: >-
+      A sign-in completes only after the account's strongest bound factor: a passkey above a password, a disabled one
+      still counting. An emailed code never stands in for it; on the hosted pages a recovery code may
+      (flows/core/recovery-code). After the rest of rule 8, a sign-in that proved a password on an account with no
+      passkey is offered one, on the hosted pages, while the password is at most 5 minutes old.
+    always:
+      - guard: passkeyOwed and passkeyAskable
+        target: startingDowngrade
+        say: 'a passkey-bound account proved its password only: the next step is webauthn_get'
+      - guard: passkeyOwed
+        target: passkeyUnavailable
+        effect: [waitFloor]
+        say: >-
+          the transport does not serve webauthn_get, or every passkey of the account is disabled: no step the
+          transport serves can complete the sign-in here
+      - guard: enrolmentOffered
+        target: startingRegistration
+        say: 'a password-only sign-in on the hosted pages: a passkey is offered'
+      - target: completed
+        effect: [waitFloor]
+        say: 'the strongest bound factor is proved, and no passkey is offered'
+
+  startingDowngrade:
+    title: Start, or keep, the ceremony for the passkey the account must prove
+    description: >-
+      The same ceremony as the first response's: the one held is kept while more than a minute of it is left. Its
+      params name no account, and its answer must be the subject's passkey.
+    invoke: { external: webauthnCeremonies }
+    on:
+      DONE:
+        target: offeringPasskey
+        effect: [waitFloor]
+        say: 'the ceremony is held'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the challenge store fails'
+
+  startingRegistration:
+    title: Start, or keep, the transaction's registration ceremony
+    description: >-
+      Creation options for the realm's relying party: a 32-byte challenge, a new random user handle, the account's
+      identifier as its name, a discoverable credential with user verification required, Ed25519, ES256 or RS256,
+      attestation "none", and the account's passkeys as excludeCredentials. Kept 5 minutes in the challenge store.
+    invoke: { external: webauthnCeremonies }
+    on:
+      DONE:
+        target: offeringEnrolment
+        effect: [waitFloor]
+        say: 'the ceremony is held'
+      FAIL.store:
+        target: completed
+        effect: [declineEnrolment, waitFloor]
+        say: >-
+          the registration cannot start (the challenge store fails): the offer is optional, so it is reported and not
+          made again in this transaction, and the sign-in completes
+
+  verifyingRegistration:
+    title: Take the ceremony and verify the new passkey
+    description: >-
+      The held ceremony's state is taken first. The attestation object and client data are verified against the
+      challenge, the origins and the RP ID, with user presence and user verification, a discoverable credential and an
+      allowed algorithm. The passkey is not bound yet.
+    invoke: { external: webauthnProvider }
+    on:
+      DONE:
+        - guard: badRegistration
+          target: registrationRefused
+          effect: [audit, waitFloor]
+          say: 'refused as invalid_credentials, with a new ceremony'
+        - target: checkingBinding
+          say: 'the new passkey is verified, and the transaction holds it until it is bound'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the challenge store fails'
+
+  checkingBinding:
+    title: Ask what the binding still needs
+    description: >-
+      Binding the first passkey of a password-only account needs a code mailed to its address in the same
+      transaction, unless the transaction proved that mailbox already, and a factor proved at most 5 minutes ago
+      (ADR-017 Decision 8).
+    always:
+      - guard: mailboxOwed
+        target: provingMailbox
+        say: 'the mailbox is not proved in this transaction: a code is mailed'
+      - guard: stale
+        target: completed
+        effect: [declineEnrolment, waitFloor]
+        say: >-
+          the last factor is more than 5 minutes old: nothing is bound, and the sign-in completes; the account page
+          binds one after a fresh sign-in
+      - target: storingPasskey
+        say: 'the binding may go ahead'
+
+  provingMailbox:
+    title: Prove the account's mailbox with an emailed code
+    description: >-
+      The code rounds of flows/core/account-verification, with the purpose recovery and 8 digits: the send caps, the
+      email-code ladder, the 10 minutes, the burn at the 5th wrong answer. A right code proves the mailbox and adds no
+      amr value.
+    invoke: { flow: core.account-verification }
+    on:
+      DONE:
+        target: checkingBinding
+        effect: [proveMailbox, timePasses]
+        say: 'the code is right: the mailbox is proved'
+      FAIL.throttled:
+        target: throttled
+        effect: [audit, waitFloor]
+        say: "the send caps or the email-code ladder's wait refuse the round"
+      FAIL.ended:
+        target: ended
+        effect: [waitFloor]
+        say: 'the fifth wrong code burned the code, or the account changed: the transaction ends'
+      FAIL.invalid:
+        target: answerRefused
+        effect: [audit, waitFloor]
+        say: 'the code is not of the offered length'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the send caps, the ladder or the database fail'
+
+  storingPasskey:
+    title: Bind the passkey to the account
+    description: >-
+      One insert under the realm's RP ID, which a passkey of another RP ID never passes, named by its credential id.
+      Then the binding notice of NIST SP 800-63B-4 §4.1.2.1 is mailed, and webauthn_create is audited as passed; the
+      transaction records the binding, not a verified step, so it adds no amr value. The security log's own event of
+      the binding comes with the account pages (#686).
+    invoke: { external: userCredentials }
+    on:
+      DONE:
+        target: owingRecoveryCodes
+        effect: [storePasskey, audit]
+        say: 'the passkey is bound, and the user is told'
+      FAIL.bound:
+        target: registrationRefused
+        effect: [audit, waitFloor]
+        say: 'the realm holds that credential id already: refused as invalid_credentials'
+      FAIL.ended:
+        target: ended
+        effect: [audit, waitFloor]
+        say: 'the account was disabled or removed since: the transaction ends'
+      FAIL.store:
+        target: unavailable
+        effect: [waitFloor]
+        say: 'the database fails; nothing is bound'
+
+  # Steps: the round ends, the transaction stays live, and the next round answers from here.
+
+  offeringPasskeyFirst:
+    title: Ask for a passkey, with the password and the identifier offered
+    description: >-
+      The uniform first response with no login_hint. webauthn_get is preferred, not required, and its params are
+      request options with no allowCredentials, so the browser offers every passkey of the realm's RP ID.
+    response:
+      kind: step
+      body:
+        current:
+          step: webauthn_get
+          required: false
+          params:
+            {
+              challenge: "the ceremony's",
+              rpId: "the realm's",
+              timeout: 300000,
+              userVerification: required,
+            }
+        alternatives: [password, identifier]
+        personal: {}
+    on:
+      ROUND:
+        target: startingCeremony
+        effect: [newRound]
+        say: 'the next round carries no answer: the same offer'
+      ASSERTION:
+        target: reservingAssertion
+        effect: [newRound, moveOn]
+        say: 'the person taps a passkey'
+      OTHER:
+        target: otherStepAnswered
+        effect: [newRound]
+        say: 'the person answers the password or the identifier instead'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not a JSON assertion of at most 8192 characters: refused as invalid_answer'
+
+  offeringPasswordFirst:
+    title: Ask for the password, with a passkey offered
+    description: >-
+      The uniform first response with a login_hint: the password step for every account, with or without a passkey,
+      and webauthn_get beside it with the same params as with no hint.
+    response:
+      kind: step
+      body:
+        current: { step: password, params: {} }
+        alternatives: ["webauthn_get, with the ceremony's params"]
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: startingCeremony
+        effect: [newRound]
+        say: 'the next round carries no answer: the same offer'
+      ASSERTION:
+        target: reservingAssertion
+        effect: [newRound, moveOn]
+        say: 'the person taps a passkey'
+      PASSWORD:
+        target: verifyingPassword
+        effect: [newRound, moveOn]
+        say: 'the person types the password'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer does not fit its step'
+
+  offeringPasskey:
+    title: Ask a passkey-bound account for its passkey
+    description: >-
+      After a password on a passkey-bound account. webauthn_get is required and never gives way; on the hosted pages
+      a recovery code is offered beside it when the account holds an unused one (flows/core/recovery-code).
+    response:
+      kind: step
+      body:
+        current: { step: webauthn_get, params: "the ceremony's, as in the first response" }
+        alternatives: 'recovery_code, on the hosted pages'
+        personal: { identifier: "the transaction's identifier" }
+    on:
+      ROUND:
+        target: startingDowngrade
+        effect: [newRound]
+        say: 'the next round carries no answer: the same offer'
+      ASSERTION:
+        target: reservingAssertion
+        effect: [newRound, moveOn]
+        say: 'the person taps the passkey'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not a JSON assertion'
+
+  offeringEnrolment:
+    title: Offer a passkey
+    description: >-
+      webauthn_create with optional true: the person may create a passkey or go on without one. Its personal data is
+      the new user handle, the account's identifier and the passkeys to exclude.
+    response:
+      kind: step
+      body:
+        current:
+          {
+            step: webauthn_create,
+            params: { optional: true, options: "the ceremony's creation options" },
+          }
+        alternatives: []
+        personal:
+          { user: '{ id, name, displayName }', excludeCredentials: "the account's passkeys" }
+    on:
+      ROUND:
+        target: startingRegistration
+        effect: [newRound]
+        say: 'the next round carries no answer: the same offer'
+      DECLINE:
+        target: completed
+        effect: [newRound, declineEnrolment, waitFloor]
+        say: 'the answer carries no response: nothing is bound, and the offer is not made again in this transaction'
+      REGISTRATION:
+        target: verifyingRegistration
+        effect: [newRound, answerRegistration]
+        say: 'the person creates a passkey'
+      MALFORMED:
+        target: answerRefused
+        effect: [newRound, audit, waitFloor]
+        say: 'the answer is not a JSON attestation of at most 16384 characters'
+
+  # Exits
+
+  completed:
+    type: final
+    title: Complete the sign-in
+    description: >-
+      Rule 9, after whatever rule 8 still asks for. The amr comes from the verified steps: a passkey alone gives
+      ["pop","mfa"], a password then a passkey ["pwd","pop","mfa"]; webauthn_create adds nothing. hwk and swk are never
+      claimed.
+    response:
+      kind: complete
+      body:
+        amr: '["pop","mfa"], ["pwd","pop","mfa"] or ["pwd"]'
+        authTime: "the last factor's"
+        transaction: null
+
+  owingRecoveryCodes:
+    type: final
+    title: Show the first set of recovery codes
+    description: >-
+      The passkey is the account's first factor beyond the password: before the sign-in completes, flows/core/recovery-code
+      issues a set and shows it once, unless the account holds one the person confirmed.
+    response:
+      kind: continue
+      body: { next: 'flows/core/recovery-code, from checkingSet' }
+
+  passkeyUnavailable:
+    type: final
+    title: Go on without a passkey step
+    description: >-
+      On the hosted pages, flows/core/recovery-code offers a recovery code in place of a disabled passkey; with none, or
+      on a transport that cannot serve webauthn_get, the engine answers a redirect, which the FiPA endpoint answers
+      with redirect_to_web and the hosted pages, where no step is left to ask for, with the end of the interaction.
+      The password never completes the sign-in.
+    response:
+      kind: continue
+      body:
+        {
+          next: 'flows/core/recovery-code, from readingCodes; else a redirect with step_not_available',
+        }
+
+  passwordOnlyOffer:
+    type: final
+    title: Ask for the password and the identifier
+    description: >-
+      The transport does not serve webauthn_get: the first response of flows/core/sign-in, password required and
+      identifier offered.
+    response:
+      kind: step
+      body: { current: password, alternatives: [identifier] }
+
+  otherStepAnswered:
+    type: final
+    title: Go on with the password or the identifier
+    description: The person answered a step offered beside the passkey, drawn by flows/core/sign-in.
+    response:
+      kind: continue
+      body: { next: 'flows/core/sign-in, at the answered step' }
+
+  passwordRefused:
+    type: final
+    title: Ask for the password again
+    description: Drawn by flows/core/sign-in; the same answer for every account, with webauthn_get offered again.
+    response:
+      kind: step
+      body:
+        { current: { step: password, error: invalid_credentials }, alternatives: [webauthn_get] }
+
+  assertionRefused:
+    type: final
+    title: Ask for the passkey again
+    description: >-
+      The same offer with a new ceremony and webauthn_get current with invalid_credentials; nothing says why. Before a
+      factor it is the same for every account.
+    response:
+      kind: step
+      body: { current: { step: webauthn_get, error: invalid_credentials } }
+
+  registrationRefused:
+    type: final
+    title: Offer a passkey again
+    description: The same offer with a new ceremony, webauthn_create current with invalid_credentials.
+    response:
+      kind: step
+      body: { current: { step: webauthn_create, error: invalid_credentials } }
+
+  throttled:
+    type: final
+    title: Refuse the round for a limit
+    description: Nothing is verified; the transaction stays, and so does the offer.
+    response:
+      kind: refused
+      body: { reason: throttled, retryAfterSeconds: "the limit's" }
+
+  ended:
+    type: final
+    title: End the transaction
+    description: >-
+      One subject per transaction: another account's passkey, or an account disabled or removed after its first
+      factor, ends it.
+    response:
+      kind: refused
+      body: { reason: transaction_ended, transaction: null }
+
+  answerRefused:
+    type: final
+    title: Refuse a malformed answer
+    description: A fault of the request, audited as invalid_answer; the transaction and its ceremony stay.
+    response:
+      kind: refused
+      body: { reason: invalid_answer }
+
+  unavailable:
+    type: final
+    title: Refuse the round while a store is down
+    description: Fail closed; the transaction stays as far as the round took it.
+    response:
+      kind: refused
+      body: { reason: unavailable }
+
+assertions:
+  - id: the-first-response-reads-no-account
+    never: "state in ['offeringPasskeyFirst', 'offeringPasswordFirst', 'passwordOnlyOffer'] and accountRead"
+    say: 'The first response is built before any account is read: nothing in it says who holds a passkey'
+  - id: reserve-before-verify
+    never: 'assertionChecked and not attemptReserved'
+    say: 'Every verified assertion was reserved on the limiters first'
+  - id: a-ceremony-is-taken-before-it-is-checked
+    never: 'assertionChecked and not ceremonyTaken'
+    say: 'An assertion is checked only after its ceremony was taken: a challenge is answered once'
+  - id: user-verification-or-nothing
+    never: "passkeyProved and assertion != 'verified'"
+    say: 'A passkey is proved only by an assertion whose signed authenticator data carries the UV flag'
+  - id: the-downgrade-rule
+    never: "state == 'completed' and passkeyBound and not passkeyProved"
+    say: >-
+      A sign-in of a passkey-bound account completes only after its passkey, a disabled one counting as bound; a
+      password or an emailed code never completes it
+  - id: a-mailbox-before-the-first-passkey
+    never: 'passkeyStored and not mailboxProved'
+    say: 'The first passkey of a password-only account is bound only after a code mailed to its address'
+  - id: a-fresh-factor-before-a-binding
+    never: "passkeyStored and authAge == 'stale'"
+    say: 'A passkey is bound only within 5 minutes of the factor the transaction proved'
+  - id: every-binding-is-told
+    never: 'passkeyStored and not bindingNoticed'
+    say: 'Every bound passkey mails the binding notice'
+  - id: never-a-key-store
+    never: 'keyStoreClaimed'
+    say: 'The amr never claims hwk or swk'
+  - id: every-refusal-is-audited
+    never: "state in ['assertionRefused', 'registrationRefused', 'throttled', 'answerRefused'] and not audited"
+    say: 'Every refused answer writes an audit record'
+  - id: every-round-waits-the-floor
+    never: >-
+      state in ['offeringPasskeyFirst', 'offeringPasswordFirst', 'offeringPasskey', 'offeringEnrolment', 'completed',
+      'passkeyUnavailable', 'passwordOnlyOffer', 'passwordRefused', 'assertionRefused', 'registrationRefused',
+      'throttled', 'ended', 'answerRefused', 'unavailable'] and not floorWaited
+    say: 'Every round that ends here answers no earlier than 500 ms after it arrived'

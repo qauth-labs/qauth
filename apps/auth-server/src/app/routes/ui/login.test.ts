@@ -137,6 +137,8 @@ function makeFastify() {
       },
       userCredentials: {
         findByRealmProviderSub: vi.fn(),
+        // The account's passkeys (#651): none, so a right password signs in.
+        findAllByUserIdAndType: vi.fn(async () => []),
         findById: vi.fn(),
       },
       // The realm's upstream providers (#639): none.

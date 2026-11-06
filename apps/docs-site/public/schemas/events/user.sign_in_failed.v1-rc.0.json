@@ -147,11 +147,12 @@
       "properties": {
         "method": {
           "type": "string",
-          "description": "`password`: an identifier and a password. `wallet`: a credential presented from a wallet (OpenID4VP). `upstream`: an upstream identity provider the person signed in through. The set may grow in a minor release.",
+          "description": "`password`: an identifier and a password. `wallet`: a credential presented from a wallet (OpenID4VP). `upstream`: an upstream identity provider the person signed in through. `passkey`: a passkey whose authenticator verified the user (WebAuthn). The set may grow in a minor release.",
           "x-extensible-enum": [
             "password",
             "wallet",
-            "upstream"
+            "upstream",
+            "passkey"
           ]
         },
         "reason": {

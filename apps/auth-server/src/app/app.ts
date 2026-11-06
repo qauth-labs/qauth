@@ -279,10 +279,23 @@ export interface AppOptions {
    * plugins. Refused unless NODE_ENV is `test`; `main.ts` never sets it.
    */
   authMethodPlugins?: AuthMethodPluginTestSupport;
+  /**
+   * TEST SUPPORT — turns the passkey sign-in steps on (#651) while
+   * `WEBAUTHN_ENABLED=true` is still refused at boot (ADR-017 phase F2b;
+   * #655 lifts the refusal), for a suite that signs in with a passkey.
+   * Refused unless NODE_ENV is `test`; `main.ts` never sets it.
+   */
+  passkeySignIn?: boolean;
 }
 
 declare module 'fastify' {
   interface FastifyInstance {
+    /**
+     * Whether the sign-in engines offer passkeys (#651): `webauthn_get`
+     * beside the password, the downgrade rule's passkey step and the
+     * enrolment offer. `WEBAUTHN_ENABLED`, or the test switch.
+     */
+    passkeySignIn: boolean;
     /**
      * The OpenTelemetry log export of events (#541), present only when
      * OTEL_EVENTS_ENABLED is on.
@@ -634,6 +647,7 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
     adminListener,
     internalListener,
     authMethodPlugins: authMethodPluginTestSupport,
+    passkeySignIn: passkeySignInTestSupport,
   } = opts;
 
   // The service roles (ADR-019 Decision 8, #495): which routes, plugins,
@@ -1032,6 +1046,13 @@ export async function app(fastify: FastifyInstance, opts: AppOptions) {
         )
       : authMethodPluginRuntime([])
   );
+
+  // Passkey sign-in (#651): off while WEBAUTHN_ENABLED is refused at boot,
+  // on for a suite that asks. Read by the sign-in engines when they are built.
+  if (passkeySignInTestSupport !== undefined && env.NODE_ENV !== 'test') {
+    throw new Error('the passkeySignIn option is test support: refused unless NODE_ENV is test');
+  }
+  fastify.decorate('passkeySignIn', env.WEBAUTHN_ENABLED || passkeySignInTestSupport === true);
 
   if (plugins.has('federation')) {
     await registerFederation(fastify, defaultRealmBoot);

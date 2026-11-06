@@ -53,6 +53,12 @@ export interface StepRound {
   /** The round's end-user IP, for the ladder's known-IP exemption (`RoundContext.endUserIp`). */
   readonly endUserIp?: string;
   /**
+   * For a ceremony step ({@link StepHandler.ceremony}): the key of the
+   * ceremony the engine holds for it, which `params` starts and `verify`
+   * answers. Absent when the transaction holds no ceremony of the step.
+   */
+  readonly ceremonyKey?: string;
+  /**
    * The identifier's keyed HMAC, computed at most once a round. Throws
    * `SignInStoreUnavailableError` when the key cannot be read.
    */
@@ -69,7 +75,13 @@ export interface VerdictAudit {
 }
 
 /** The account a factor proved, as far as the engine checks it before fixing the subject. */
-export type ProvedAccount = Pick<SignInCandidate, 'userId' | 'enabled' | 'verified'>;
+export type ProvedAccount = Pick<SignInCandidate, 'userId' | 'enabled' | 'verified'> & {
+  /**
+   * The account's identifier, from a discoverable factor that named the
+   * account by itself (a passkey): the transaction goes on with it.
+   */
+  readonly identifier?: string;
+};
 
 /** What a handler made of an answer. */
 export type StepVerdict =
@@ -118,6 +130,14 @@ export interface StepHandler<N extends StepName = StepName> {
    * identifier it is offered after them (ADR-017 Decision 4).
    */
   readonly discoverable?: boolean;
+  /**
+   * Whether the step's params carry a one-time challenge (a WebAuthn
+   * ceremony, #651). The engine then holds the params in the transaction and
+   * offers them again while the ceremony is young, starts a new ceremony
+   * under a new key when it is old or spent, and drops it once an answer was
+   * verified, right or wrong, so a refused step is offered with new params.
+   */
+  readonly ceremony?: boolean;
   /**
    * Whether `account` can answer this step now: the authenticator is bound
    * and usable. Asked only after a first factor succeeded, never before, so

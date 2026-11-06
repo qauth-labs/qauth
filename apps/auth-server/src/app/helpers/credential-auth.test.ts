@@ -39,8 +39,14 @@ describe('verifyPasswordCredential and the normalisation marker (#634)', () => {
     await server.close();
   });
 
-  /** A server whose realm holds one password credential of `credentialData`. */
-  function serverWith(credentialData: Record<string, unknown>): FastifyInstance {
+  /**
+   * A server whose realm holds one password credential of `credentialData`,
+   * and the account's `webauthn` credentials `passkeys`.
+   */
+  function serverWith(
+    credentialData: Record<string, unknown>,
+    passkeys: readonly { readonly realmId: string }[] = []
+  ): FastifyInstance {
     return {
       passwordHasher: server.passwordHasher,
       repositories: {
@@ -54,11 +60,12 @@ describe('verifyPasswordCredential and the normalisation marker (#634)', () => {
             credentialData,
             disabledAt: null,
           })),
+          findAllByUserIdAndType: vi.fn(async () => passkeys),
         },
       },
       passwordAttempts: { hardActionArmed: vi.fn(async () => false) },
       providerRegistry: { resolve: () => createPasswordProvider() },
-      log: { error: vi.fn() },
+      log: { error: vi.fn(), info: vi.fn() },
     } as unknown as FastifyInstance;
   }
 
@@ -102,5 +109,94 @@ describe('verifyPasswordCredential and the normalisation marker (#634)', () => {
       { credentialId: 'cred-1' },
       'malformed credential_data on password credential'
     );
+  });
+});
+
+/**
+ * The password-only login routes and a passkey-bound account (#651; ADR-017
+ * Decision 4, the downgrade rule): a right password does not sign it in, and
+ * the refusal is a wrong password's, naming no account.
+ */
+describe('verifyPasswordCredential and a passkey-bound account (#651)', () => {
+  let server: FastifyInstance;
+
+  beforeAll(async () => {
+    server = Fastify();
+    await server.register(passwordPlugin, {
+      hashConfig: { memoryCost: 1024, timeCost: 1, parallelism: 1 },
+    });
+    await server.ready();
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  function serverWith(passkeys: readonly { readonly realmId: string }[], hash: string) {
+    const findAllByUserIdAndType = vi.fn(async () => passkeys);
+    const fastify = {
+      passwordHasher: server.passwordHasher,
+      repositories: {
+        userCredentials: {
+          findByRealmProviderSub: vi.fn(async () => ({
+            id: 'cred-1',
+            userId: 'user-1',
+            realmId: REALM_ID,
+            providerType: 'password',
+            externalSub: EMAIL,
+            credentialData: buildPasswordCredentialData(hash, true, null),
+            disabledAt: null,
+          })),
+          findAllByUserIdAndType,
+        },
+      },
+      passwordAttempts: { hardActionArmed: vi.fn(async () => false) },
+      providerRegistry: { resolve: () => createPasswordProvider() },
+      log: { error: vi.fn(), info: vi.fn() },
+    } as unknown as FastifyInstance;
+    return { fastify, findAllByUserIdAndType };
+  }
+
+  it('refuses a right password of an account that holds a passkey, naming no account', async () => {
+    const hash = await server.passwordHasher.hashPassword(COMPOSED);
+    const { fastify, findAllByUserIdAndType } = serverWith([{ realmId: REALM_ID }], hash);
+
+    const check = await verifyPasswordCredential(fastify, {
+      realmId: REALM_ID,
+      email: EMAIL,
+      password: COMPOSED,
+    });
+
+    // `invalid` with no user: the failure ladder's hard action never
+    // disables a password that was right.
+    expect(check).toEqual({ status: 'invalid' });
+    expect(findAllByUserIdAndType).toHaveBeenCalledWith('user-1', 'webauthn');
+  });
+
+  it('refuses a wrong password as before, without reading the passkeys', async () => {
+    const hash = await server.passwordHasher.hashPassword(COMPOSED);
+    const { fastify, findAllByUserIdAndType } = serverWith([{ realmId: REALM_ID }], hash);
+
+    const check = await verifyPasswordCredential(fastify, {
+      realmId: REALM_ID,
+      email: EMAIL,
+      password: 'café-terrace-at-noon',
+    });
+
+    expect(check).toEqual({ status: 'invalid', userId: 'user-1' });
+    expect(findAllByUserIdAndType).not.toHaveBeenCalled();
+  });
+
+  it('signs in an account whose passkey is in another realm only', async () => {
+    const hash = await server.passwordHasher.hashPassword(COMPOSED);
+    const { fastify } = serverWith([{ realmId: 'another-realm' }], hash);
+
+    const check = await verifyPasswordCredential(fastify, {
+      realmId: REALM_ID,
+      email: EMAIL,
+      password: COMPOSED,
+    });
+
+    expect(check.status).toBe('ok');
   });
 });
