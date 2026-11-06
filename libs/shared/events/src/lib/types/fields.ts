@@ -59,10 +59,10 @@ export const identifierHmac = () =>
     );
 
 /** How a person proved who they are. */
-export const SIGN_IN_METHODS = ['password', 'wallet', 'upstream'] as const;
+export const SIGN_IN_METHODS = ['password', 'wallet', 'upstream', 'passkey'] as const;
 export const signInMethod = () =>
   extensibleEnum(SIGN_IN_METHODS).describe(
-    '`password`: an identifier and a password. `wallet`: a credential presented from a wallet (OpenID4VP). `upstream`: an upstream identity provider the person signed in through. The set may grow in a minor release.'
+    '`password`: an identifier and a password. `wallet`: a credential presented from a wallet (OpenID4VP). `upstream`: an upstream identity provider the person signed in through. `passkey`: a passkey whose authenticator verified the user (WebAuthn). The set may grow in a minor release.'
   );
 
 /** The verifier profile of a wallet presentation (ADR-009), such as `haip-1.0`. */

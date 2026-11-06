@@ -921,6 +921,35 @@ describe('audit events', () => {
     }
   });
 
+  it('maps a passkey’s records to the passkey method, and its enrolment’s to the password’s (#651)', () => {
+    const assertion = signInAuditEvent({
+      outcome: 'refused',
+      step: 'webauthn_get',
+      reason: 'invalid_credentials',
+    });
+    const enrolment = signInAuditEvent({
+      outcome: 'refused',
+      step: 'webauthn_create',
+      reason: 'invalid_credentials',
+      userId: USER,
+    });
+    const bound = signInAuditEvent({ outcome: 'passed', step: 'webauthn_create', userId: USER });
+    expect(assertion).toEqual({
+      type: 'urn:qauth:event:user.sign_in_failed:v1-rc.0',
+      data: { method: 'passkey', reason: 'invalid_credentials' },
+      userId: null,
+    });
+    expect(enrolment.data).toEqual({ method: 'password', reason: 'invalid_credentials' });
+    expect(bound).toEqual({
+      type: 'urn:qauth:event:user.sign_in_step_passed:v1-rc.0',
+      data: { step: STEP_URNS.webauthn_create },
+      userId: USER,
+    });
+    for (const event of [assertion, enrolment, bound]) {
+      expect(getEventType(event.type)?.data.safeParse(event.data).success).toBe(true);
+    }
+  });
+
   it('refuses a step it has no sign-in method for', () => {
     expect(() =>
       signInAuditEvent({

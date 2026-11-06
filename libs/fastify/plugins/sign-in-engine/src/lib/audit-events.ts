@@ -52,6 +52,10 @@ const STEP_METHODS: Readonly<
   // sign-in.
   recovery_code: 'password',
   recovery_codes: 'password',
+  // A passkey (#651): its assertion is a sign-in method of its own. Its
+  // enrolment is offered only after a password sign-in, which it is part of.
+  webauthn_get: 'passkey',
+  webauthn_create: 'password',
 });
 
 /**
