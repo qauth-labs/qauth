@@ -1,6 +1,7 @@
 import starlight from '@astrojs/starlight';
 import { defineConfig } from 'astro/config';
 
+import { graphPages } from './src/integrations/graph-pages.ts';
 import { GITHUB_REPO_BLOB_BASE } from './src/lib/records.ts';
 import { resolveRepoRoot } from './src/lib/repo-root.ts';
 import { remarkRewriteRecordLinks } from './src/plugins/remark-rewrite-record-links.ts';
@@ -35,6 +36,8 @@ export default defineConfig({
     ],
   },
   integrations: [
+    // The rendered flow graphs at /graphs/, each linking its YAML on GitHub (ADR-021).
+    graphPages(),
     starlight({
       title: 'QAuth',
       // A page with `experimental: true` in its frontmatter gets the
