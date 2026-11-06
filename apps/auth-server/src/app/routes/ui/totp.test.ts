@@ -245,6 +245,22 @@ describe('the authenticator app pages (#653)', () => {
       expect(response.body).not.toContain('<script>');
     });
 
+    it.each([
+      ['a quote', `otpauth://totp/a"b?secret=${SECRET}`],
+      ['an angle bracket', `otpauth://totp/a<b?secret=${SECRET}`],
+      ['a bracket', `otpauth://totp/a[b?secret=${SECRET}`],
+      ['a space', `otpauth://totp/a b?secret=${SECRET}`],
+    ])('shows no URI holding %s, which the set-up never builds', async (_name, uri) => {
+      vi.mocked(readInteractionPersonalData).mockResolvedValue(
+        setupPersonal({ secret: SECRET, otpauth_uri: uri })
+      );
+
+      const response = await open();
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain(SECRET);
+    });
+
     it('answers its own page, 410, for an interaction that has ended', async () => {
       vi.mocked(readInteractionPersonalData).mockRejectedValue(new InteractionExpiredError());
 

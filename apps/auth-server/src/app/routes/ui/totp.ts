@@ -41,13 +41,17 @@ const TOTP_STEP = stepUrn('totp');
 const TOTP_SETUP_STEP = stepUrn('totp_setup');
 const RECOVERY_CODE_STEP = stepUrn('recovery_code');
 
-/** The set-up step's personal data: the secret, and the URI the QR code holds. */
+/**
+ * The set-up step's personal data: the secret, and the URI the QR code holds.
+ * The URI's label and issuer are `encodeURIComponent` output, joined by
+ * `:`, `?`, `=` and `&`: nothing else is shown.
+ */
 const setupPersonalSchema = z.object({
   secret: z.string().regex(/^[A-Z2-7]{32}$/),
   otpauth_uri: z
     .string()
     .max(1024)
-    .regex(/^otpauth:\/\/totp\/[!#-;=?-[\]-~]+$/),
+    .regex(/^otpauth:\/\/totp\/[A-Za-z0-9_.!~*'()%:?=&-]+$/),
 });
 
 export default async function (fastify: FastifyInstance) {
