@@ -155,7 +155,7 @@ describe('passkey sign-in on the hosted pages (#651, real containers)', () => {
   ): Promise<string> {
     const userId = await registerPasswordAccount(server(), email);
     if (passkey !== undefined) {
-      const row = await server().repositories.userCredentials.create({
+      await server().repositories.userCredentials.create({
         userId,
         realmId,
         providerType: 'webauthn',
@@ -163,9 +163,12 @@ describe('passkey sign-in on the hosted pages (#651, real containers)', () => {
         credentialData: passkey.credentialData,
       });
       if (options.disabled === true) {
-        await server().dbPool.query(
-          'UPDATE user_credentials SET disabled_at = now() WHERE id = $1',
-          [row.id]
+        // The disabled mark, in epoch ms, as the failure ladder's hard action sets it.
+        await server().repositories.userCredentials.setDisabledAt(
+          realmId,
+          'webauthn',
+          passkey.credentialId,
+          Date.now()
         );
       }
     }
