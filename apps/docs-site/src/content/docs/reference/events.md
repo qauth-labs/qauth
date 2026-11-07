@@ -231,6 +231,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:user.credential_removed:v1-rc.0`](#usercredential_removed-v1-rc0)                     | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:user.passkey_renamed:v1-rc.0`](#userpasskey_renamed-v1-rc0)                           | user     | info     | v0.2.0 |
 | [`urn:qauth:event:user.recovery_codes_regenerated:v1-rc.0`](#userrecovery_codes_regenerated-v1-rc0)     | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:user.agent_ownership_refused:v1-rc.0`](#useragent_ownership_refused-v1-rc0)           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:authorization.completed:v1-rc.0`](#authorizationcompleted-v1-rc0)                     | user     | info     | v0.2.0 |
 | [`urn:qauth:event:authorization.failed:v1-rc.0`](#authorizationfailed-v1-rc0)                           | user     | warning  | v0.2.0 |
 | [`urn:qauth:event:step_up.required:v1-rc.0`](#step_uprequired-v1-rc0)                                   | user     | info     | v0.2.0 |
@@ -571,6 +572,21 @@ A person issued a new set of recovery codes on the hosted account page, after a 
 - Security type · SSF: none ([SSF events](/reference/ssf-events/))
 
 `data` has no members: the envelope carries the event.
+
+### user.agent_ownership_refused v1-rc.0
+
+QAuth refused to make an account the owner of an agent, because the account is not verified: its primary identity, the credential that created it, is not proved (ADR-015 Decision 8). A password account proves it with the code mailed to its address, a passkey account with a registration that checked user verification, a wallet account with the presentation QAuth verified, and an upstream account with the sign-in that created it while the provider’s verified switch is on. A credential added later never counts, and the setting that makes password sign-in ask for a confirmed address does not change the rule.
+
+- Identifier: `urn:qauth:event:user.agent_ownership_refused:v1-rc.0`
+- Category: `user` · Severity: `warning` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [user.agent_ownership_refused.v1-rc.0.json](/schemas/events/user.agent_ownership_refused.v1-rc.0.json)
+
+| Member            | Type                                                                                                                               | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `action`          | one of `client_registration`, or a later value                                                                                     | yes      | `client_registration`: an RFC 7591 dynamic registration of an agent client (`is_agent: true`) with the account’s developer access token, which would have made the account the client’s owner. The set may grow in a minor release.                                                                                                                                                                                                                                                                           |
+| `reason`          | one of `no_primary_identity`, `address_unverified`, `passkey_unverified`, `upstream_unverified`, `unproved_type`, or a later value | yes      | `no_primary_identity`: the account has no primary credential (it was removed). `address_unverified`: a password account whose address was never confirmed. `passkey_unverified`: a passkey whose registration did not check user verification. `upstream_unverified`: an upstream account whose provider’s verified switch is off, or that the realm no longer offers. `unproved_type`: a primary credential of a type with no proof, or whose stored data is malformed. The set may grow in a minor release. |
+| `primaryIdentity` | one of `password`, `passkey`, `wallet`, `upstream`, `other`, `none`, or a later value                                              | yes      | The kind of the account’s primary identity: `password`, `passkey`, `wallet`, `upstream`, `other`, or `none` when it has none. The set may grow in a minor release.                                                                                                                                                                                                                                                                                                                                            |
 
 ### authorization.completed v1-rc.0
 

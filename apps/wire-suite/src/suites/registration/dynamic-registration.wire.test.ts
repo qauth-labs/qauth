@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { serverPath, wireConfig } from '../../config';
 import { authorizationRequest } from '../../fixtures/authorization';
+import { createSignInAccount } from '../../fixtures/users';
 import { expectOAuthError } from '../../helpers/error-shape';
 import { getJsonObject } from '../../helpers/http';
 import { call } from '../../helpers/operations';
@@ -103,6 +104,40 @@ describe('[POST /oauth/register] RFC 7591 §3 — open dynamic registration on a
     expect(client['grant_types']).toEqual(['authorization_code', 'refresh_token']);
     expect(client['response_types']).toEqual(['code']);
     expect(client['redirect_uris']).toEqual(['http://127.0.0.1:9/wire-suite/registered-callback']);
+  });
+});
+
+// Only a verified account owns an agent (ADR-015 Decision 8, #846): an agent
+// client registered with a developer's access token makes the developer its
+// owner. With a mail sink the suite verifies every account it signs in, which
+// then owns the client; without one the target signs in unverified accounts
+// (REQUIRE_VERIFIED_ACCOUNT=false), and such an account is refused, whatever
+// that setting says.
+describe('[POST /oauth/register] RFC 7591 §3 — an agent client registered with an access token', () => {
+  it('registers it to a verified account, and refuses it with 403 access_denied to one whose address is unconfirmed (§3.2.1, §3.2.2)', async () => {
+    const user = await createSignInAccount();
+    const login = await call('POST /auth/login', {
+      json: { email: user.email, password: user.password },
+    });
+    const signedIn = await login.text();
+    expect(login.status, signedIn).toBe(200);
+    const token = (JSON.parse(signedIn) as { access_token: string }).access_token;
+
+    const response = await call('POST /oauth/register', {
+      headers: { authorization: `Bearer ${token}` },
+      json: {
+        client_name: `wire-suite agent ${randomUUID()}`,
+        redirect_uris: ['http://127.0.0.1:9/wire-suite/agent-callback'],
+        is_agent: true,
+      },
+    });
+
+    if (wireConfig().mailUrl !== undefined) {
+      const client = await readRegistration(response);
+      expect(client['is_agent']).toBe(true);
+    } else {
+      await expectOAuthError(response, { status: 403, error: 'access_denied' });
+    }
   });
 });
 

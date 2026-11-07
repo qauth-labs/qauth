@@ -50,3 +50,4 @@ operations:
   POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/enable: { flow: [plugin-enable] }
   POST /admin/v1-rc.0/realms/{realmId}/plugins/{plugin}/disable: { flow: [plugin-enable] }
   DELETE /account/v1-rc.0/linked-accounts/{linkedAccountId}: { flow: [unlink-upstream] }
+  POST /oauth/register: { flow: [client-registration] }

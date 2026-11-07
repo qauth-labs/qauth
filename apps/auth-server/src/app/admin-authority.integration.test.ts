@@ -1,4 +1,4 @@
-import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
+import { requireDockerOrSkip, testPrimaryCredential } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -158,7 +158,7 @@ describe('admin roles and grants with the issuer-bound realm rule (#510, real co
 
   /** An account of `realmId`, written directly: no sign-in needed. */
   async function account(realmId: string): Promise<string> {
-    return (await app().repositories.users.create({ realmId })).id;
+    return (await app().repositories.users.create({ realmId }, testPrimaryCredential())).id;
   }
 
   /** The default realm as the JWT plugin takes it: its id and its issuer (#491). */

@@ -624,11 +624,10 @@ export async function resolveUpstreamAccount(
     if (refusal !== null) return { kind: 'refused', reason: refusal };
     try {
       const userId = await fastify.db.transaction(async (tx) => {
-        const user = await repositories.users.create({ realmId: realm.id }, tx);
-        await repositories.userCredentials.create(
+        // The provider's identity is the account's primary identity (#846).
+        const user = await repositories.users.create(
+          { realmId: realm.id },
           {
-            userId: user.id,
-            realmId: realm.id,
             providerType: type,
             externalSub: subject.externalSub,
             credentialData: {

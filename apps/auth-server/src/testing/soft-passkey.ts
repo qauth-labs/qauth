@@ -102,6 +102,8 @@ export function softPasskey(rpId: string, userHandle = b64url(randomBytes(32))):
       backup_eligible: false,
       backed_up: false,
       aaguid: '00000000-0000-0000-0000-000000000000',
+      // A registration that set the UV flag, which the provider checked (#846).
+      user_verified: true,
       rp_id: rpId,
       user_handle: userHandle,
       nickname: null,

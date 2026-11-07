@@ -2,6 +2,7 @@ import {
   requireDockerOrSkip,
   startPostgresContainer,
   startRedisContainer,
+  testPrimaryCredential,
 } from '@qauth-labs/shared-testing';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -511,7 +512,9 @@ describe('each service role on a database user of its own (#498)', () => {
     if (adminApi === undefined) throw new Error('the admin listener was not booted');
     // An administrator of the realm, and a DPoP-bound admin token the
     // signer minted for them (#520).
-    const userId = (await fixture.app.repositories.users.create({ realmId: realm.id })).id;
+    const userId = (
+      await fixture.app.repositories.users.create({ realmId: realm.id }, testPrimaryCredential())
+    ).id;
     await fixture.app.repositories.adminGrants.create({
       userId,
       role: { kind: 'built-in', name: 'security-admin' },

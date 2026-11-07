@@ -576,7 +576,12 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
         expect(await users(app)).toBe(usersBefore + 1);
         expect(await credentialsOf(app, TYPE)).toBe(1);
         const credential = await credentialOf(app, server.realmId());
-        expect(credential).toMatchObject({ providerType: TYPE, externalSub: PERSON.sub });
+        // The credential that created the account is its primary identity (#846).
+        expect(credential).toMatchObject({
+          providerType: TYPE,
+          externalSub: PERSON.sub,
+          isPrimary: true,
+        });
         expect(credential.credentialData).toEqual({
           kind: 'upstream',
           iss: provider.issuer,
@@ -1000,14 +1005,14 @@ describe('the upstream sign-in flow and new accounts (#639, real containers)', (
       it('still signs in: sign-up off creates nothing, it refuses no account', async () => {
         const app = server.app();
         const realmId = server.realmId();
-        const user = await app.repositories.users.create({ realmId });
-        await app.repositories.userCredentials.create({
-          userId: user.id,
-          realmId,
-          providerType: TYPE,
-          externalSub: PERSON.sub,
-          credentialData: { kind: 'upstream', iss: provider.issuer, verified: true },
-        });
+        const user = await app.repositories.users.create(
+          { realmId },
+          {
+            providerType: TYPE,
+            externalSub: PERSON.sub,
+            credentialData: { kind: 'upstream', iss: provider.issuer, verified: true },
+          }
+        );
         const jar = new CookieJar();
 
         await codeAfterPages(app, jar, await signInAtProvider(app, jar));

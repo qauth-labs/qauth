@@ -43,7 +43,7 @@ entities:
 actions:
   User.findById:
     # internal: invoked by core.sign-in-page and core.sign-in-token, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/users.repository.ts:88
+    source: libs/infra/db/src/lib/repositories/users.repository.ts:137
     body:
       type: object
       required: [realmId, id]
@@ -58,7 +58,7 @@ actions:
 
   User.updateLastLogin:
     # internal: invoked by core.sign-in-page and core.sign-in-token, with no route and no actor policy
-    source: libs/infra/db/src/lib/repositories/users.repository.ts:158
+    source: libs/infra/db/src/lib/repositories/users.repository.ts:207
     body:
       type: object
       required: [realmId, id]
@@ -69,6 +69,6 @@ actions:
     refusals:
       NOT_FOUND:
         note: 'the id is not a UUID, or names no row in the realm; the sign-in flows answer it with 500'
-        source: libs/infra/db/src/lib/repositories/users.repository.ts:174
+        source: libs/infra/db/src/lib/repositories/users.repository.ts:223
     sideEffects:
       - 'the User gets lastLoginAt = now and updatedAt = now'

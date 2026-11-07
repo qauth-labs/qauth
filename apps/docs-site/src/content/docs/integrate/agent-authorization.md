@@ -98,6 +98,29 @@ curl -s -X POST http://localhost:3000/oauth/register \
 > rejected by every provisioning path, so it had to be written straight into the
 > `oauth_clients.grant_types` JSONB column.)_
 
+### An agent's owner is a verified account
+
+A registration that carries a developer's access token (the developer portal's
+token, with `qauth:developer:write`) makes the developer the client's owner.
+For an agent client that makes the developer the owner of an agent, and only a
+**verified account** may own one (ADR-015 Decision 8). An account is verified
+when the identity it was created with — its primary identity — is proved:
+
+| The account was created with | It is verified when                                                                               |
+| ---------------------------- | ------------------------------------------------------------------------------------------------- |
+| a password                   | the code mailed to its address was entered                                                        |
+| a passkey                    | its registration checked the authenticator's user-verification flag                               |
+| a wallet credential          | always: only QAuth's own verifier writes one                                                      |
+| an upstream provider         | the realm still offers the provider, and the provider's "accounts count as verified" switch is on |
+
+A credential added later never counts: an account created with an unconfirmed
+address stays unverified after it adds a passkey. `REQUIRE_VERIFIED_ACCOUNT`,
+which only decides whether an unconfirmed password account may sign in, plays
+no part. Otherwise the registration is refused with `403`
+`{"error": "access_denied"}`, no client is created, and the refusal is recorded
+as the `user.agent_ownership_refused` event on the account, with the reason. A
+registration with no token has no owner and is not checked.
+
 ### `is_agent` is self-asserted and untrusted
 
 `is_agent` is **client-controlled input** — the client sets it in its own DCR

@@ -270,45 +270,45 @@ states:
       The callback's binding names the pending sign-in; it is read first, and taken once only when the request
       carries the flow cookie it is bound to, of the same realm and provider type. A callback in another browser
       spends nothing: the method never runs, no code is redeemed and the pending sign-in stays for its own browser.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:826
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:825
     always:
       - guard: notTheStartingBrowser
         target: bad_request.transaction_mismatch
         say: 'no pending sign-in for this browser: a replay in another browser, a forged callback, or a spent one'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:874
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:873
       - target: completingCallback
         effect: [takePending]
         say: "the pending sign-in is taken and handed to the method's callback"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:846
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:845
 
   completingCallback:
     title: Turn the method's answer into the step's completion
     description: federation.upstream-step's exits, one by one.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:868
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:867
     always:
       - guard: personDeclined
         target: provider_error.declined
         say: 'the person cancelled or declined at the provider'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:879
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:878
       - guard: providerErrored
         target: provider_error.provider_error
         say: 'the provider answered another error'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:880
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:879
       - guard: checkFailed
         target: bad_request.invalid_response
         say: "the provider's answer failed a check, or the provider could not be reached"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:897
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:896
       - guard: methodFault
         target: bad_request.method_fault
         say: 'the method broke the contract; its error is logged for the operator'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:872
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:871
       - guard: issuerMissing
         target: bad_request.invalid_response
         say: "the identity names no issuer: its sub could not be told apart from another issuer's"
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:909
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:908
       - target: lookingUpCredential
         say: 'an identity and its attributes'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:914
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:913
 
   lookingUpCredential:
     title: Look the credential up by (realm, provider type, sub) alone
@@ -348,7 +348,7 @@ states:
         say: >-
           an unknown identity on the ceremony page: nothing is written yet, and the person chooses between a new
           account and an existing one at the upstream_link step (#670)
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:959
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:958
       - guard: signUpOff
         target: bad_request.sign_up_disabled
         say: 'an unknown identity, in a realm that does not allow sign-up'
@@ -361,7 +361,7 @@ states:
         source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:590
       - target: creatingAccount
         say: 'an unknown identity, in a realm that allows sign-up'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:984
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:983
 
   creatingAccount:
     title: Create the user, the credential and the attributes in one transaction
@@ -387,7 +387,7 @@ states:
     description: >-
       The upstream step ranks with a password, below a passkey, under the realm's MFA policy. The interaction is
       answered at the revision the start recorded, so a callback for an interaction that moved on is refused.
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1007
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1006
     invoke: { external: signInEngine }
     on:
       DONE:
@@ -396,11 +396,11 @@ states:
       FAIL.unavailable:
         target: bad_request.unavailable
         say: 'the interaction store or the failure ladder cannot answer'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1033
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1032
 
   decidingRound:
     title: Go on as the engine's round says
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1036
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1035
     always:
       - guard: engineRefuses
         target: bad_request.refused
@@ -413,16 +413,16 @@ states:
       - guard: needsFurtherStep
         target: step_continues.ceremony_page
         say: 'a further step (the passkey, a code): the ceremony page shows it'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1042
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1041
       - guard: pagesMode
         target: signed_in.authorization_request
         effect: [signIn]
         say: 'signed in: the pages start the authorization request again under the new session'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1058
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1057
       - target: code_issued
         effect: [signIn]
         say: 'signed in: the interaction finishes the authorization request as the Interaction API does'
-        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1059
+        source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:1058
 
   # Exits: success
 
@@ -609,11 +609,11 @@ assertions:
     say: >-
       A callback replayed in another browser, forwarded or forged never signs anyone in, and never takes the pending
       sign-in
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:841
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:840
   - id: a-foreign-callback-spends-nothing
     never: 'pendingTaken and notTheStartingBrowser'
     say: 'Only the browser whose flow cookie the start bound takes the pending sign-in'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:846
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:845
   - id: no-account-without-sign-up
     never: 'accountCreated and signUpOff'
     say: 'An unknown identity creates an account only in a realm that allows sign-up'
@@ -645,4 +645,4 @@ assertions:
   - id: a-cancel-is-not-a-failure
     never: "state == 'provider_error.declined' and not personDeclined"
     say: 'Only a cancel at the provider shows the cancel page'
-    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:879
+    source: apps/auth-server/src/app/helpers/upstream-sign-in.ts:878

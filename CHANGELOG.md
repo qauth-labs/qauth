@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **An agent's owner is a verified account** ([#846], ADR-015 Decision 8
+  and question 13, ADR-020 §3). Every account now marks its primary
+  identity: `user_credentials.is_primary` (migration 0068) is set on the
+  credential that created the account, in the same call that creates it, at
+  most one per account; it never moves to another credential, and an
+  authenticator app is never one. The migration marks each existing
+  account's oldest credential that is no authenticator app, which is the one
+  that created it unless that one was removed; a database trigger marks the
+  credential an older release writes with a new account during a rolling
+  upgrade, and no credential written later. An account whose primary
+  credential is deleted has none. An account is a verified owner when that
+  identity is proved: a password whose mailbox code was entered, a passkey
+  whose registration checked user verification (now stored as
+  `user_verified`; a passkey registered before has no such key, and every
+  such registration required the flag), a wallet credential, or an upstream
+  account whose provider the realm still offers with its verified switch
+  on. No later credential counts, and
+  `REQUIRE_VERIFIED_ACCOUNT` is not read. `POST /oauth/register` refuses an
+  agent client (`is_agent: true`) registered with the token of a developer
+  whose account is not a verified owner, with `403 access_denied`, and
+  records the new user event `user.agent_ownership_refused` with the reason.
+  An anonymous registration is unchanged.
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
@@ -3538,6 +3563,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#827]: https://github.com/qauth-labs/qauth/issues/827
 [#844]: https://github.com/qauth-labs/qauth/issues/844
 [#845]: https://github.com/qauth-labs/qauth/issues/845
+[#846]: https://github.com/qauth-labs/qauth/issues/846
 [#857]: https://github.com/qauth-labs/qauth/issues/857
 [#891]: https://github.com/qauth-labs/qauth/issues/891
 [#896]: https://github.com/qauth-labs/qauth/issues/896

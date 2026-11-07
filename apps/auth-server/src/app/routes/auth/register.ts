@@ -300,8 +300,9 @@ export default async function (fastify: FastifyInstance) {
       // re-registration, so the writes commit together, with the account's
       // event.
       //
-      // Ordering: users first because user_credentials.user_id FKs users.id.
-      // Since #230 the credentials unique index (realm_id, provider_type,
+      // The users row and its password credential, the account's primary
+      // identity (ADR-015 Decision 8, #846), are written in one call. Since
+      // #230 the credentials unique index (realm_id, provider_type,
       // external_sub) is the SOLE duplicate-registration guard — a duplicate
       // surfaces from the credential insert and rolls the anchor back.
       let createdUserId: string | undefined;
@@ -309,18 +310,10 @@ export default async function (fastify: FastifyInstance) {
         createdUserId = await fastify.db.transaction(async (tx) => {
           // Pure identity anchor (#230): no email or password fields exist on
           // users; credential data lives only in user_credentials.
-          const created = await fastify.repositories.users.create(
-            {
-              realmId: realm.id,
-            },
-            tx
-          );
-
-          const credential = await fastify.repositories.userCredentials
+          const created = await fastify.repositories.users
             .create(
+              { realmId: realm.id },
               {
-                userId: created.id,
-                realmId: realm.id,
                 providerType: PASSWORD_PROVIDER_TYPE,
                 externalSub: identity.externalSub,
                 credentialData: buildPasswordCredentialData(
@@ -337,6 +330,7 @@ export default async function (fastify: FastifyInstance) {
               }
               throw error;
             });
+          const credential = created.primaryCredential;
 
           await fastify.repositories.userAttributes.upsertMany(
             created.id,

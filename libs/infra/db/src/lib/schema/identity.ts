@@ -98,6 +98,20 @@ export const userCredentials = pgTable(
      * sign-in clears it, as the owner's next reset does.
      */
     disabledAt: bigint('disabled_at', { mode: 'number' }),
+    /**
+     * Whether this credential is the account's primary identity: the one that
+     * created the account (ADR-015 Decision 8 and question 13, #846). An
+     * account is a verified owner of an agent only when this credential is
+     * proved, whatever any later credential proves.
+     *
+     * Migration 0068 holds the rule. At most one per user (the partial unique
+     * index below). The database marks a user's first credential, unless it
+     * is an authenticator app, whatever the writer passed, and refuses a
+     * later credential that claims the mark. The mark never moves in 1.0: no
+     * update sets or clears it, and a marked row never changes its user.
+     * Deleting the primary credential leaves the account with none.
+     */
+    isPrimary: boolean('is_primary').notNull().default(false),
   },
   (t) => [
     uniqueIndex('idx_user_credentials_realm_provider_sub_unique').on(
@@ -105,6 +119,9 @@ export const userCredentials = pgTable(
       t.providerType,
       t.externalSub
     ),
+    uniqueIndex('idx_user_credentials_primary_unique')
+      .on(t.userId)
+      .where(sql`${t.isPrimary}`),
     index('idx_user_credentials_user_id').on(t.userId),
     index('idx_user_credentials_realm_id').on(t.realmId),
     check(

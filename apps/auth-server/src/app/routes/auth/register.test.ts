@@ -137,7 +137,11 @@ function createFastifyStub() {
     redis: createMemoryRedis(),
     repositories: {
       users: {
-        create: vi.fn().mockResolvedValue(createdUser),
+        // The account and its primary credential in one call (#846).
+        create: vi.fn().mockResolvedValue({
+          ...createdUser,
+          primaryCredential: { id: 'cred-1', userId: 'user-1' },
+        }),
         findById: vi.fn().mockResolvedValue({ id: 'user-existing', enabled: true }),
       },
       userCredentials: {
@@ -187,7 +191,7 @@ function createFastifyStub() {
 
 /** Make the credential insert find the address taken, as the unique index does. */
 function addressTaken(fastify: FastifyInstance) {
-  (fastify.repositories.userCredentials.create as unknown as Mock).mockRejectedValue(
+  (fastify.repositories.users.create as unknown as Mock).mockRejectedValue(
     new UniqueConstraintError(
       'idx_user_credentials_realm_provider_sub_unique',
       // The real cause chain carries the insert's parameters, hash included.
@@ -236,14 +240,12 @@ describe('POST /auth/register', () => {
     // Single transaction wraps the whole identity write set.
     expect(fastify.db.transaction).toHaveBeenCalledOnce();
 
-    // Pure identity anchor (#230): realmId only — no credential fields.
-    expect(fastify.repositories.users.create).toHaveBeenCalledWith({ realmId: 'realm-1' }, TX);
-
-    // Credential row: exact snake_case credential_data shape, normalized sub.
-    expect(fastify.repositories.userCredentials.create).toHaveBeenCalledWith(
+    // Pure identity anchor (#230): realmId only — no credential fields. The
+    // password credential is written with it, as its primary identity (#846):
+    // exact snake_case credential_data shape, normalized sub.
+    expect(fastify.repositories.users.create).toHaveBeenCalledWith(
+      { realmId: 'realm-1' },
       {
-        userId: 'user-1',
-        realmId: 'realm-1',
         providerType: 'password',
         externalSub: ADDRESS,
         credentialData: {
@@ -254,6 +256,7 @@ describe('POST /auth/register', () => {
       },
       TX
     );
+    expect(fastify.repositories.userCredentials.create).not.toHaveBeenCalled();
     expect(fastify.passwordHasher.hashPassword).toHaveBeenCalledExactlyOnceWith('Str0ng-Passw0rd!');
 
     // Attribute row from extractAttributes(): unverified self-reported email.
@@ -290,14 +293,6 @@ describe('POST /auth/register', () => {
       { method: 'password' },
       { tx: TX, realmId: 'realm-1', userId: 'user-1', actor: 'user' }
     );
-
-    // ORDER GUARD: the users insert precedes the credentials insert
-    // (user_credentials.user_id FKs users.id).
-    const usersOrder = (fastify.repositories.users.create as unknown as Mock).mock
-      .invocationCallOrder[0];
-    const credsOrder = (fastify.repositories.userCredentials.create as unknown as Mock).mock
-      .invocationCallOrder[0];
-    expect(usersOrder).toBeLessThan(credsOrder);
 
     // The one answer every address gets: no id, no timestamps, no flag.
     expect(reply.state.statusCode).toBe(202);
@@ -577,7 +572,11 @@ describe('POST /auth/register', () => {
       { ...fixture, realm, body: { ...fixture.body, realmId: realm.id.toUpperCase() } },
       createReply()
     );
-    expect(fastify.repositories.users.create).toHaveBeenCalledWith({ realmId: realm.id }, TX);
+    expect(fastify.repositories.users.create).toHaveBeenCalledWith(
+      { realmId: realm.id },
+      expect.objectContaining({ providerType: 'password' }),
+      TX
+    );
 
     vi.mocked(fastify.repositories.users.create).mockClear();
     vi.mocked(fastify.passwordHasher.hashPassword).mockClear();
@@ -595,7 +594,7 @@ describe('POST /auth/register', () => {
     const { fastify, ctx } = createFastifyStub();
     await registerRoute(fastify);
     if (!ctx.handler) throw new Error('Handler missing');
-    (fastify.repositories.userCredentials.create as unknown as Mock).mockRejectedValue(
+    (fastify.repositories.users.create as unknown as Mock).mockRejectedValue(
       new Error('connection terminated')
     );
 
@@ -715,7 +714,8 @@ describe('POST /auth/register', () => {
 
       expect(outcome).toBe('accepted');
       expect(fastify.passwordHasher.hashPassword).toHaveBeenCalledExactlyOnceWith(composed);
-      expect(fastify.repositories.userCredentials.create).toHaveBeenCalledWith(
+      expect(fastify.repositories.users.create).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           credentialData: {
             password_hash: '$argon2id$hashed',

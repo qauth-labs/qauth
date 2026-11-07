@@ -94,6 +94,21 @@ export {
   UPSTREAM_OIDC_TYPE_PATTERN,
   upstreamCredentialDataSchema,
 } from '@qauth-labs/server-federation';
+// An agent owner is a verified account (ADR-015 Decision 8, #846): the rule
+// that reads an account's primary identity, for the auth server's check.
+export type {
+  PrimaryIdentity,
+  PrimaryIdentityKind,
+  UpstreamProviderSwitch,
+  VerifiedOwnerDecision,
+  VerifiedOwnerRefusalReason,
+} from '@qauth-labs/server-federation';
+export {
+  decideVerifiedOwner,
+  PRIMARY_IDENTITY_KINDS,
+  primaryIdentityKindOf,
+  VERIFIED_OWNER_REFUSAL_REASONS,
+} from '@qauth-labs/server-federation';
 export type { UpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
 export { createUpstreamOidcMethod, openUpstreamOidcConfig } from '@qauth-labs/server-upstream-oidc';
 

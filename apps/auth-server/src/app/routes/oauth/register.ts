@@ -16,6 +16,7 @@ import { realmRateLimitKey } from '../../helpers/realm-rate-limit';
 import { resolveRegistrationDeveloperId } from '../../helpers/registration-attribution';
 import { requestRealm } from '../../helpers/request-realm';
 import { emitUserEvent } from '../../helpers/user-events';
+import { assertVerifiedOwner } from '../../helpers/verified-owner';
 import {
   type DynamicClientRegistrationRequest,
   dynamicClientRegistrationRequestSchema,
@@ -44,7 +45,7 @@ export default async function (fastify: FastifyInstance) {
     {
       schema: {
         description:
-          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list, which never holds a scope in QAuth's reserved qauth: namespace.",
+          "OAuth 2.0 Dynamic Client Registration (RFC 7591). Open-mode — no initial_access_token required. Scope requests are capped to the realm's dynamic_registration_allowed_scopes list, which never holds a scope in QAuth's reserved qauth: namespace. A registration with a developer's access token makes the developer the client's owner; an agent client (is_agent: true) so registered needs an owner whose account is verified, its primary identity proved, and is otherwise refused with 403 access_denied.",
         tags: ['OAuth', 'Registration'],
         'x-qauth-stability': 'stable',
         'x-qauth-errors': [400, 401, 403],
@@ -103,6 +104,20 @@ export default async function (fastify: FastifyInstance) {
       // error classes on policy violations; the global error handler answers
       // them with HTTP 400 and the bare code in `error`.
       const normalized = validateAndNormalize(body, allowedScopes, env.REDIRECT_URI_CUSTOM_SCHEMES);
+
+      // ADR-015 Decision 8 (#846): an agent client attributed to a developer
+      // makes that developer its owner, and only a verified account owns an
+      // agent, whatever REQUIRE_VERIFIED_ACCOUNT says. Refused with 403
+      // `access_denied` and recorded as `user.agent_ownership_refused`, before
+      // anything is written. An anonymous registration has no owner, and a
+      // client that is no agent owns nothing, so neither is checked.
+      if (developerId !== null && normalized.isAgent) {
+        await assertVerifiedOwner(
+          request,
+          { realmId: realm.id, userId: developerId },
+          'client_registration'
+        );
+      }
 
       // OpenID Connect Back-Channel Logout 1.0 §2.2 (#624; ADR-019 Decision
       // 8): the URI's form passed above; its host must resolve, and only to
@@ -186,7 +201,8 @@ export default async function (fastify: FastifyInstance) {
         // developer instead.
         developerId,
         // ADR-007 §2: first-class agent classification. Defaults to false
-        // (standard client); nothing is gated on it yet.
+        // (standard client); an attributed agent client needs a verified
+        // owner (ADR-015 Decision 8, checked above).
         isAgent: normalized.isAgent,
         // ADR-008 §4 (#196): `environment` is OPERATOR-SET, never self-asserted.
         // We deliberately do NOT pass it here, so a self-declared
