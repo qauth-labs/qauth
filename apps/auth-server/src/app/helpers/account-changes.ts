@@ -28,6 +28,7 @@ import type { EngineMailer } from './engine-mail';
 import type { InteractionEngines } from './interaction-engines';
 import { ACCOUNT_PAGES_ENGINE_CLIENT_ID } from './interaction-record';
 import { ladderEndUserIp } from './password-attempts';
+import { recordPasswordChange } from './password-reset';
 import { requestRealm } from './request-realm';
 import { csrfTokensEqual, generateCsrfToken } from './session-cookie';
 import { readSessionSideRecord, writeSessionSideRecord } from './session-side-record';
@@ -356,7 +357,10 @@ export type PasswordChangeResult =
   | { readonly kind: 'changed' }
   /** The account has no password: setting a first one is no change here. */
   | { readonly kind: 'no_password' }
-  /** The current password was wrong, and it counted on the failure ladder. */
+  /**
+   * The current password was wrong, and it counted on the failure ladder; or
+   * a reset replaced it while the change was made, and nothing was written.
+   */
   | { readonly kind: 'wrong_password' }
   /** The ladder holds the account's password attempts back. */
   | { readonly kind: 'wait'; readonly retryAfterSeconds: number }
@@ -377,11 +381,14 @@ export const BREACHED_PASSWORD_MESSAGE =
  * The current password is checked as a sign-in checks it, reserved on the
  * account's failure ladder first, so a wrong one counts. The new one meets
  * the realm's one password policy (#634) and its breach list. In one
- * transaction the new hash is written, the account's `update_password`
- * action cleared, its unredeemed codes and refresh tokens ended (a refresh
- * family names no session, so none of them is this session's to keep) and
- * `user.password_changed` recorded. Then every other browser session ends,
- * this one stays, and the "password changed" notice goes out.
+ * transaction the new hash is written, over the hash just checked only (a
+ * reset that committed meanwhile replaced it, and the change writes
+ * nothing), the account's `update_password` action cleared, its unredeemed
+ * codes and refresh tokens ended (a refresh family names no session, so none
+ * of them is this session's to keep) and `user.password_changed` recorded.
+ * Then every sign-in in progress that began before ends at its next round
+ * (`recordPasswordChange`), every other browser session ends, this one
+ * stays, and the "password changed" notice goes out.
  */
 export async function changePassword(
   fastify: FastifyInstance,
@@ -450,16 +457,18 @@ export async function changePassword(
   }
 
   const passwordHash = await fastify.passwordHasher.hashPassword(checked.password);
-  await fastify.db.transaction(async (tx) => {
+  const written = await fastify.db.transaction(async (tx): Promise<boolean> => {
+    // Over the hash the current password was checked against only: a reset
+    // that committed since replaced it, and its password stays.
     const updated = await fastify.repositories.userCredentials.updatePassword(
       realm.id,
       credential.id,
       buildPasswordCredentialData(passwordHash, stored.data.email_verified, checked.normalization),
-      tx
+      tx,
+      { expectedPasswordHash: stored.data.password_hash }
     );
-    if (updated === undefined || updated.userId !== userId) {
-      throw new Error('the password credential to change is gone');
-    }
+    if (updated === undefined) return false;
+    if (updated.userId !== userId) throw new Error('the password credential changed hands');
     await fastify.repositories.userRequiredActions.remove(realm.id, userId, 'update_password', tx);
     await fastify.repositories.authorizationCodes.invalidateForUser(userId, tx);
     await fastify.repositories.refreshTokens.revokeAllForUser(userId, 'password_changed', tx);
@@ -469,9 +478,21 @@ export async function changePassword(
       {},
       { tx, realmId: realm.id, userId, clientId: null, actor: 'user' }
     );
+    return true;
   });
+  if (!written) return { kind: 'wrong_password' };
 
   // None of these can undo the change, and none may fail it: each is logged.
+  // The cutoff first: a sign-in that proved the old password and finishes
+  // after it gets no session, and one that finished before is ended below.
+  try {
+    await recordPasswordChange(fastify, realm.id, userId, Date.now());
+  } catch (error) {
+    fastify.log.error(
+      { err: error, realmId: realm.id },
+      'a password changed, but the sign-ins in progress could not be ended'
+    );
+  }
   try {
     await endBrowserSessions(fastify, realm.id, userId, {
       reason: 'reset',

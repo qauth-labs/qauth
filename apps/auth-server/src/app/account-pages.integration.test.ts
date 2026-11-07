@@ -865,6 +865,80 @@ describe('the hosted account pages (#844, real containers)', () => {
     );
   });
 
+  it('writes no change over a reset that committed while it was made', async () => {
+    const who = await account();
+    const browser = await signedIn(who, ['pwd']);
+    const hashOf = async () =>
+      (
+        await query<{ hash: string }>(
+          "SELECT credential_data->>'password_hash' AS hash FROM user_credentials WHERE user_id = $1 AND provider_type = 'password'",
+          [who.userId]
+        )
+      )[0]?.hash;
+
+    // A reset commits after the current password was checked, while the new
+    // one is hashed.
+    const hasher = server().passwordHasher;
+    const hashPassword = hasher.hashPassword.bind(hasher);
+    const resetHash = await hashPassword('A-Reset-Owner-Password-31!');
+    vi.spyOn(hasher, 'hashPassword').mockImplementationOnce(async (password: string) => {
+      await query(
+        "UPDATE user_credentials SET credential_data = jsonb_set(credential_data, '{password_hash}', to_jsonb($2::text)) WHERE user_id = $1 AND provider_type = 'password'",
+        [who.userId, resetHash]
+      );
+      return hashPassword(password);
+    });
+    const refused = await submit(browser, `${ACCOUNT}/password`, {
+      current_password: E2E_PASSWORD,
+      new_password: NEW_PASSWORD,
+    });
+
+    // The reset's password stays, and nothing was changed.
+    expect(refused.statusCode, refused.body).toBe(400);
+    expect(refused.body).toContain(escaped('That is not your current password.'));
+    expect(await hashOf()).toBe(resetHash);
+    expect(await eventsOf('user.password_changed', who.userId)).toEqual([]);
+  });
+
+  it('ends a sign-in in progress that proved the old password: it gets no session', async () => {
+    const who = await account();
+    const browser = await signedIn(who, ['pwd']);
+
+    // Another browser proves the old password and waits at the passkey offer.
+    const other: Browser = { jar: new CookieJar() };
+    const started = await open(other, ACCOUNT);
+    const flow: Flow = {
+      jar: other.jar,
+      id: locationOf(started).slice(CEREMONY_PAGE_PREFIX.length),
+    };
+    for (let round = 0; round < 4; round += 1) {
+      const view = await read(flow.id);
+      if (view.step === WEBAUTHN_CREATE) break;
+      const response =
+        view.step === PASSWORD
+          ? await answer(flow, PASSWORD, { password: E2E_PASSWORD })
+          : await answer(flow, IDENTIFIER, { login_hint: who.email });
+      expect(response.statusCode, response.body).toBe(303);
+    }
+    expect((await read(flow.id)).step).toBe(WEBAUTHN_CREATE);
+
+    const changed = await submit(browser, `${ACCOUNT}/password`, {
+      current_password: E2E_PASSWORD,
+      new_password: NEW_PASSWORD,
+    });
+    expect(locationOf(changed)).toBe(`${ACCOUNT}?notice=password_changed`);
+
+    // Declining the offer signs nobody in: the sign-in starts again.
+    const declined = await answer(flow, WEBAUTHN_CREATE);
+    expect(declined.statusCode, declined.body).toBe(303);
+    expect([IDENTIFIER, WEBAUTHN_GET]).toContain((await read(flow.id)).step);
+    const signedOut = await open(other, ACCOUNT);
+    expect(signedOut.statusCode, signedOut.body).toBe(303);
+    expect(locationOf(signedOut).startsWith(CEREMONY_PAGE_PREFIX)).toBe(true);
+    // The browser that changed it stays signed in.
+    await overview(browser);
+  });
+
   it('refuses to remove the account’s last way to sign in', async () => {
     // A passkey-only account: its passkey is the last way in.
     const passkey = softPasskey(RP_ID);

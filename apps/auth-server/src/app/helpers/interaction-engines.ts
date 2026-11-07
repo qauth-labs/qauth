@@ -39,7 +39,7 @@ import { InteractionExpiredError } from './interaction-expired';
 import { EVENT_CLIENT_ID_MAX_LENGTH } from './interaction-record';
 import { createServerPasskeyAccounts, createServerPasskeys } from './passkey-sign-in';
 import { createServerEmailCodeDigest, createServerLadderParts } from './password-attempts';
-import { resetAllowed, resetNotBefore } from './password-reset';
+import { resetAllowed, signInNotBefore } from './password-reset';
 import { createServerRecoveryCodes } from './recovery-codes';
 import { registrationAllowed } from './registration';
 import { requestRealm } from './request-realm';
@@ -467,9 +467,10 @@ export function createInteractionEngines(
       resets,
       recoveryCodes,
       // The session epoch (#642): a sign-in in progress that began before
-      // its account's last reset ends.
+      // its account's last reset ends, as does one that began before the
+      // account page last changed its password (#844).
       sessionEpochs: {
-        notBefore: ({ realmId, userId }) => resetNotBefore(fastify, realmId, userId),
+        notBefore: ({ realmId, userId }) => signInNotBefore(fastify, realmId, userId),
       },
       hooks: { ladder: ladder.ladder, limits },
       steps: [captcha],
