@@ -205,6 +205,49 @@ describe('IntrospectionValidator — sender-constrained tokens (RFC 9449 §6.2, 
     });
   });
 
+  // `token_type` is an allow-list: another AS may name a bound token type
+  // this SDK has never heard of, and a deny-list would accept it as Bearer.
+  it.each([
+    ['absent', undefined],
+    ['Bearer', 'Bearer'],
+    ['bearer', 'bearer'],
+    ['BEARER', 'BEARER'],
+  ])('accepts token_type %s', async (_label, tokenType) => {
+    const validator = makeValidator(
+      fakeFetch({
+        body: { ...ACTIVE, ...(tokenType === undefined ? {} : { token_type: tokenType }) },
+      })
+    );
+    await expect(validator.validate('x')).resolves.toMatchObject({ sub: 'user-1' });
+  });
+
+  it.each([
+    ['PoP', 'PoP'],
+    ['DPoP with a trailing space', 'DPoP '],
+    ['Bearer with a trailing space', 'Bearer '],
+    ['N_A', 'N_A'],
+    ['an empty string', ''],
+    ['an array', ['DPoP']],
+    ['an object', { type: 'Bearer' }],
+    ['null', null],
+    ['a number', 1],
+  ])('refuses token_type %s without cnf as not Bearer', async (_label, tokenType) => {
+    const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, token_type: tokenType } }));
+    const rejection = validator.validate('x');
+    await expect(rejection).rejects.toBeInstanceOf(InvalidTokenError);
+    await expect(rejection).rejects.toMatchObject({ reason: 'token type is not Bearer' });
+  });
+
+  it.each([
+    ['a null cnf', null],
+    ['an empty cnf object', {}],
+  ])('fails closed on %s', async (_label, cnf) => {
+    const validator = makeValidator(fakeFetch({ body: { ...ACTIVE, token_type: 'Bearer', cnf } }));
+    await expect(validator.validate('x')).rejects.toMatchObject({
+      reason: 'sender-constrained token presented without a proof',
+    });
+  });
+
   it('still answers an inactive bound token with "not active"', async () => {
     const validator = makeValidator(
       fakeFetch({ body: { active: false, token_type: 'DPoP', cnf: DPOP_CNF } })

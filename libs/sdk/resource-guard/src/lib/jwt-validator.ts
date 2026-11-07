@@ -24,7 +24,7 @@ import {
 import type { ValidatedToken } from '../types.js';
 import { InvalidTokenError } from './errors.js';
 import { parseScopes } from './scope.js';
-import { refuseSenderConstrainedToken } from './sender-constraint.js';
+import { refuseNonBearerToken } from './sender-constraint.js';
 
 export interface JwtValidatorOptions {
   /** JWKS document URL. */
@@ -143,7 +143,7 @@ export class JwtValidator {
     // RFC 9449 §7.2: a token bound to a key (`cnf`) needs a proof of
     // possession, and this SDK verifies none, so it is refused rather than
     // accepted as a plain bearer. Read from the verified payload only.
-    refuseSenderConstrainedToken(payload['cnf']);
+    refuseNonBearerToken(payload['cnf']);
     return toValidatedToken(payload);
   }
 
