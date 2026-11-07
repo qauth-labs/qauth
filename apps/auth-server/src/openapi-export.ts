@@ -47,8 +47,8 @@
  *
  * Each surface sets every switch that decides whether a route registers
  * (`WALLET_FEDERATION_ENABLED`, `METRICS_ENABLED`, `SSF_TRANSMITTER_ENABLED`,
- * `SERVICE_ROLES`, and the passkey app lists `WEBAUTHN_APPLE_APP_IDS` and
- * `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
+ * `INTERACTION_UI_ENABLED`, `SERVICE_ROLES`, and the passkey app lists
+ * `WEBAUTHN_APPLE_APP_IDS` and `WEBAUTHN_ANDROID_APPS`) explicitly, so a value in
  * the caller's shell cannot change which operations an export contains.
  * The maximal surface also turns on every built experimental item of the
  * registry (`@qauth-labs/shared-stability`), and the default surface none, or
@@ -236,6 +236,8 @@ function setEphemeralEnv(surface: FlagSurface): void {
       // The plugin API stays off (#600): the default surface turns on no
       // experimental item.
       PLUGIN_API_ENABLED: 'false',
+      // No hosted pages, so no account page is registered (#844).
+      INTERACTION_UI_ENABLED: 'false',
     });
     return;
   }
@@ -277,6 +279,8 @@ function setEphemeralEnv(surface: FlagSurface): void {
     // The plugin API (#600), a built experimental item: on, as every one is
     // here. With no plugin listed it registers no route.
     PLUGIN_API_ENABLED: 'true',
+    // The hosted pages, with which the account pages register (#844).
+    INTERACTION_UI_ENABLED: 'true',
   });
 }
 

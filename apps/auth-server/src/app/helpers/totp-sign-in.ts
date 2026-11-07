@@ -18,7 +18,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 import type { EngineMailer, MailRealm } from './engine-mail';
 import { realmIssuer, type RealmUrlSource } from './realm-url';
-import { emitUserEvent } from './user-events';
+import { emitUserEvent, type EventTransaction } from './user-events';
 
 /**
  * TOTP AT SIGN-IN ON THE AUTH SERVER (#653; ADR-017 Decisions 7 and 8,
@@ -175,7 +175,7 @@ export function createServerTotp(
       'a TOTP write committed, but a step after it failed'
     );
 
-  return createRepositoryTotp(
+  return createRepositoryTotp<EventTransaction>(
     { userCredentials: credentials, users: fastify.repositories.users },
     (work) => fastify.db.transaction(work),
     {
