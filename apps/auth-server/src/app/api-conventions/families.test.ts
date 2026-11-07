@@ -1,10 +1,16 @@
-import { isReservedAudience, RESERVED_AUDIENCE_PREFIX } from '@qauth-labs/shared-validation';
+import {
+  isReservedAudience,
+  isReservedQauthScope,
+  RESERVED_AUDIENCE_PREFIX,
+} from '@qauth-labs/shared-validation';
 import { describe, expect, it } from 'vitest';
 
 import {
   API_FAMILY_AUDIENCES,
   API_FAMILY_PREFIXES,
+  API_FAMILY_SCOPES,
   apiFamilyOf,
+  familyScopeOf,
   isUnversionedFamilyPath,
 } from './families';
 
@@ -67,5 +73,41 @@ describe('API_FAMILY_AUDIENCES (#509)', () => {
       expect(audience).toBe(`${RESERVED_AUDIENCE_PREFIX}${prefix.slice(1).replace('/', ':')}`);
       expect(isReservedAudience(audience)).toBe(true);
     }
+  });
+});
+
+describe('API_FAMILY_SCOPES (#933)', () => {
+  it('gives the account and developer families a read and a write scope each', () => {
+    expect(API_FAMILY_SCOPES).toEqual({
+      account: { read: 'qauth:account:read', write: 'qauth:account:write' },
+      developer: { read: 'qauth:developer:read', write: 'qauth:developer:write' },
+    });
+  });
+
+  it("puts every one in QAuth's reserved scope namespace", () => {
+    for (const scopes of Object.values(API_FAMILY_SCOPES)) {
+      for (const scope of Object.values(scopes)) expect(isReservedQauthScope(scope)).toBe(true);
+    }
+  });
+
+  it('reads each scope back as its family and class', () => {
+    expect(familyScopeOf('qauth:developer:write')).toEqual({
+      family: 'developer',
+      operationClass: 'write',
+    });
+    expect(familyScopeOf('qauth:account:read')).toEqual({
+      family: 'account',
+      operationClass: 'read',
+    });
+  });
+
+  it.each([
+    'qauth:admin:read',
+    'QAuth:developer:read',
+    'qauth:developer:read ',
+    'qauth:developer:security',
+    'developer:read',
+  ])('reads %j as no family scope', (scope) => {
+    expect(familyScopeOf(scope)).toBeUndefined();
   });
 });

@@ -46,6 +46,65 @@ export const API_FAMILY_AUDIENCES: Readonly<Record<ApiFamily, string>> = {
   developer: DEVELOPER_API_AUDIENCE,
 };
 
+/** The families a token reaches by scope alone: the account and developer APIs (#933). */
+export type ScopedApiFamily = Exclude<ApiFamily, 'admin'>;
+
+/**
+ * The class of an account or developer operation, its `x-qauth-class`.
+ * `security` belongs to the admin API alone.
+ */
+export type FamilyOperationClass = 'read' | 'write';
+
+/**
+ * The scopes of the account and developer APIs (#933), one per operation
+ * class, in QAuth's reserved `qauth:` namespace beside the admin API's
+ * (ADR-019 Decision 7).
+ *
+ * An operation needs the scope of its class (`x-qauth-class`), which is the
+ * class of its permission (`x-qauth-permission`): `qauth:developer:read` to
+ * list or read, `qauth:developer:write` to create, change, delete or revoke.
+ * The two are independent, as the admin scopes are: the write scope does not
+ * reach a read. A token needs its family's audience as well, and the scope of
+ * one family reaches nothing in another.
+ *
+ * The token endpoint issues one only to a client whose `audience` lists that
+ * family's audience, which only an operator sets, for a token that names a
+ * user (`helpers/admin-issuance.ts`). The developer portal's token carries
+ * both developer scopes (`SYSTEM_CLIENT_SCOPES`). Unlike the admin scopes, no
+ * role is intersected with them: the family's operations act on the token's
+ * own user, its account or the clients it owns.
+ */
+export const API_FAMILY_SCOPES: Readonly<
+  Record<ScopedApiFamily, Readonly<Record<FamilyOperationClass, string>>>
+> = Object.freeze({
+  account: Object.freeze({ read: 'qauth:account:read', write: 'qauth:account:write' }),
+  developer: Object.freeze({ read: 'qauth:developer:read', write: 'qauth:developer:write' }),
+});
+
+/** A scope of {@link API_FAMILY_SCOPES}: its family and the class it reaches. */
+export interface FamilyScope {
+  readonly family: ScopedApiFamily;
+  readonly operationClass: FamilyOperationClass;
+}
+
+const FAMILY_SCOPE_BY_NAME: ReadonlyMap<string, FamilyScope> = new Map(
+  (Object.keys(API_FAMILY_SCOPES) as ScopedApiFamily[]).flatMap((family) =>
+    (Object.keys(API_FAMILY_SCOPES[family]) as FamilyOperationClass[]).map(
+      (operationClass) =>
+        [API_FAMILY_SCOPES[family][operationClass], { family, operationClass }] as const
+    )
+  )
+);
+
+/**
+ * The family and class a scope of {@link API_FAMILY_SCOPES} reaches, or
+ * `undefined` for any other string. Exact match only, as a scope is
+ * case-sensitive (RFC 6749 §3.3): `QAuth:developer:read` reaches nothing.
+ */
+export function familyScopeOf(scope: string): FamilyScope | undefined {
+  return FAMILY_SCOPE_BY_NAME.get(scope);
+}
+
 /**
  * `/<family>/v<major>` or `/<family>/v<major>-rc.<M>` at the start of a path,
  * followed by `/` or the end.
