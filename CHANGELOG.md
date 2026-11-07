@@ -14,11 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   identity: `user_credentials.is_primary` (migration 0068) is set on the
   credential that created the account, in the same call that creates it, at
   most one per account; it never moves to another credential, and an
-  authenticator app is never one. The migration marks each existing
-  account's oldest credential that is no authenticator app, which is the one
-  that created it unless that one was removed; a database trigger marks the
-  credential an older release writes with a new account during a rolling
-  upgrade, and no credential written later. An account whose primary
+  authenticator app is never one. The migration marks the credential each
+  existing account was created with, the one that carries the account's own
+  creation time, and no other: an account that removed it before the upgrade
+  has none. A database trigger marks the credential an older release writes
+  with a new account during a rolling upgrade, and no credential written
+  later. An account whose primary
   credential is deleted has none. An account is a verified owner when that
   identity is proved: a password whose mailbox code was entered, a passkey
   whose registration checked user verification (now stored as

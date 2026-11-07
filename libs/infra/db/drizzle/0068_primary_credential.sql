@@ -6,14 +6,16 @@
 --
 -- 1. At most one primary credential per user (the partial unique index).
 -- 2. The backfill marks, for every user, the credential that created the
---    account: the user's oldest credential (by `created_at`, then `id`), never
---    an authenticator app (`totp`), which is a second factor bound to an
---    account that already exists. A user whose only credential is an
---    authenticator app, or who has none, gets no primary credential. An
---    account cannot delete its password, nor its last way to sign in, so the
---    oldest credential left is the one that created the account, except where
---    the owner removed that one (a passkey, or an upstream identity, unlinked)
---    after adding the next: then the next, which the owner added, is marked.
+--    account: the one written with it, which carries the user's own
+--    `created_at`. Every account-creation path has written the user and that
+--    credential in one transaction since #228, and the identity backfill of
+--    #226 copied each user's `created_at` to the credential it wrote. It is
+--    never an authenticator app (`totp`), a second factor bound to an account
+--    that already exists; of two such credentials the lower `id` is the older.
+--    A user whose creating credential is gone (a passkey removed, or an
+--    upstream identity unlinked, after the next was added), whose only
+--    credential is an authenticator app, or who has none, gets no primary
+--    credential: a credential added later never becomes the primary identity.
 -- 3. From now on a credential is the primary identity only when it is written
 --    with the account: it is the user's first credential, it is no
 --    authenticator app, and it carries the account's own `created_at`, which
@@ -34,10 +36,11 @@ CREATE UNIQUE INDEX "idx_user_credentials_primary_unique" ON "user_credentials" 
 UPDATE "user_credentials" AS c
 SET "is_primary" = true
 FROM (
-  SELECT DISTINCT ON ("user_id") "id"
-  FROM "user_credentials"
-  WHERE "provider_type" <> 'totp'
-  ORDER BY "user_id", "created_at", "id"
+  SELECT DISTINCT ON (uc."user_id") uc."id"
+  FROM "user_credentials" AS uc
+  JOIN "users" AS u ON u."id" = uc."user_id" AND u."created_at" = uc."created_at"
+  WHERE uc."provider_type" <> 'totp'
+  ORDER BY uc."user_id", uc."id"
 ) AS creating
 WHERE c."id" = creating."id";
 --> statement-breakpoint

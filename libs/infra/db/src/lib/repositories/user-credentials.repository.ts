@@ -78,8 +78,8 @@ export function createUserCredentialsRepository(defaultDb: DbClient): UserCreden
     /**
      * The account's primary identity (ADR-015 Decision 8, #846): the
      * credential that created it, or `undefined` when the account has none
-     * (its primary credential was deleted, or it predates every credential
-     * the backfill could mark). A credential of another realm is none.
+     * (its primary credential was deleted, before migration 0068 marked it
+     * or after). A credential of another realm is none.
      */
     async findPrimaryByUserId(
       realmId: string,

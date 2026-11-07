@@ -2,10 +2,12 @@
  * Seed-then-migrate test for migration 0068: each account's primary identity
  * (ADR-015 Decision 8 and question 13, #846).
  *
- * After the backfill every user with a credential that is no authenticator app
- * has exactly one primary credential, and it is the oldest such credential;
- * from then on the database marks the credential written with the account,
- * marks no other, and never moves the mark.
+ * After the backfill every user whose creating credential is still there has
+ * exactly one primary credential, that one: the credential written with the
+ * account, which carries the user's `created_at`, and no authenticator app; a
+ * user who removed it has none. From then on the database marks the
+ * credential written with the account, marks no other, and never moves the
+ * mark.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
  * and upgraded through 0067, then 0068, so a later migration cannot change
@@ -169,38 +171,52 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     return byUser;
   }
 
-  it('marks exactly one primary credential per user, the oldest one, never an authenticator app', async () => {
+  it('marks the credential written with each account, never a later one nor an authenticator app', async () => {
     const realmId = await realm();
-    // A password account that later bound a passkey; its authenticator app
-    // claims an earlier time (a JS clock against the database's rounded one).
-    const password = await user(realmId);
+    // Each account below was created at 1 000, and the credential written
+    // with it carries that time. A password account that later bound a
+    // passkey; its authenticator app claims an earlier time (a JS clock
+    // against the database's rounded one).
+    const password = await oldUser(realmId);
     await credential(realmId, password, 'totp', password, 900);
     const passwordFirst = await credential(realmId, password, 'password', 'a@example.com', 1_000);
     await credential(realmId, password, 'webauthn', 'cred-a', 2_000, { data: PASSKEY_DATA });
     // A passkey-only account with a second passkey.
-    const passkey = await user(realmId);
+    const passkey = await oldUser(realmId);
     const passkeyFirst = await credential(realmId, passkey, 'webauthn', 'cred-b', 1_000, {
       data: PASSKEY_DATA,
     });
     await credential(realmId, passkey, 'webauthn', 'cred-c', 3_000, { data: PASSKEY_DATA });
     // An upstream account that later set a password.
-    const upstream = await user(realmId);
+    const upstream = await oldUser(realmId);
     const upstreamFirst = await credential(realmId, upstream, 'oidc_corp', 'sub-1', 1_000, {
       data: { kind: 'upstream', iss: 'https://idp.example.com', verified: true },
     });
     await credential(realmId, upstream, 'password', 'u@example.com', 5_000);
-    // Two credentials written in the same second: the lower id is the older.
-    const tied = await user(realmId);
+    // Two credentials written with the account: the lower id is the older.
+    const tied = await oldUser(realmId);
     const tiedFirst = await credential(realmId, tied, 'password', 't@example.com', 1_000, {
       id: '00000000-0000-7000-8000-000000000001',
     });
     await credential(realmId, tied, 'wallet', 'did:example:t', 1_000, {
       id: '00000000-0000-7000-8000-000000000002',
     });
+    // Accounts whose creating credential was removed before the upgrade: a
+    // passkey account that removed its first passkey, and an upstream account
+    // that unlinked its identity once it had set a password.
+    const removedPasskey = await oldUser(realmId);
+    await credential(realmId, removedPasskey, 'webauthn', 'cred-d', 3_000, {
+      data: PASSKEY_DATA,
+    });
+    const unlinked = await oldUser(realmId);
+    await credential(realmId, unlinked, 'password', 'v@example.com', 5_000);
     // An account with only an authenticator app, and one with no credential.
-    const totpOnly = await user(realmId);
+    const totpOnly = await oldUser(realmId);
     await credential(realmId, totpOnly, 'totp', totpOnly, 1_000);
-    const bare = await user(realmId);
+    const bare = await oldUser(realmId);
+    // An account written as a release before 0068 writes one, on the
+    // database's clock.
+    const live = await account(realmId, 'password', 'w@example.com');
 
     await migrate();
 
@@ -209,22 +225,31 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     expect(marked.get(passkey)).toEqual([passkeyFirst]);
     expect(marked.get(upstream)).toEqual([upstreamFirst]);
     expect(marked.get(tied)).toEqual([tiedFirst]);
+    expect(marked.get(live.userId)).toEqual([live.credentialId]);
+    expect(marked.has(removedPasskey)).toBe(false);
+    expect(marked.has(unlinked)).toBe(false);
     expect(marked.has(totpOnly)).toBe(false);
     expect(marked.has(bare)).toBe(false);
 
-    // Every user with a credential that is no authenticator app has exactly
-    // one primary, and it is that user's oldest such credential.
-    const { rows } = await db().query<{ user_id: string; oldest: string; primary_ids: string[] }>(
+    // Every user has at most one primary credential, and it is the one
+    // written with the account.
+    const { rows } = await db().query<{
+      user_id: string;
+      creating: string | null;
+      primary_ids: string[];
+    }>(
       `SELECT u.id AS user_id,
               (SELECT c.id FROM user_credentials c
                 WHERE c.user_id = u.id AND c.provider_type <> 'totp'
-                ORDER BY c.created_at, c.id LIMIT 1)::text AS oldest,
+                  AND c.created_at = u.created_at
+                ORDER BY c.id LIMIT 1)::text AS creating,
               ARRAY(SELECT c.id::text FROM user_credentials c
                      WHERE c.user_id = u.id AND c.is_primary) AS primary_ids
          FROM users u`
     );
+    expect(rows.length).toBeGreaterThanOrEqual(9);
     for (const row of rows) {
-      expect(row.primary_ids).toEqual(row.oldest === null ? [] : [row.oldest]);
+      expect(row.primary_ids).toEqual(row.creating === null ? [] : [row.creating]);
     }
   });
 

@@ -1,9 +1,9 @@
 /**
  * Migration 0068 marks each account's primary identity (ADR-015 Decision 8
  * and question 13, #846): `user_credentials.is_primary`, at most one per user,
- * backfilled from the user's oldest credential that is no authenticator app,
- * marked by the database from then on on the credential written with the
- * account, and never moved. The column has a constant default, so Postgres
+ * backfilled from the credential written with the account (its `created_at`
+ * is the user's) that is no authenticator app, marked by the database from
+ * then on on the credential written with the account, and never moved. The column has a constant default, so Postgres
  * adds it without rewriting the table and a release before this one keeps
  * inserting credentials during a rolling upgrade; the insert trigger marks the
  * one it writes with a new account.
@@ -66,8 +66,9 @@ describe('migration 0068 (primary credential)', () => {
     );
     expect(backfill).toBeGreaterThan(1);
     expect(trigger).toBeGreaterThan(backfill);
-    expect(statements[backfill]).toContain(`WHERE "provider_type" <> 'totp'`);
-    expect(statements[backfill]).toContain('ORDER BY "user_id", "created_at", "id"');
+    expect(statements[backfill]).toContain(`WHERE uc."provider_type" <> 'totp'`);
+    expect(statements[backfill]).toContain('AND u."created_at" = uc."created_at"');
+    expect(statements[backfill]).toContain('ORDER BY uc."user_id", uc."id"');
   });
 
   it('pins the search path of its function', () => {
