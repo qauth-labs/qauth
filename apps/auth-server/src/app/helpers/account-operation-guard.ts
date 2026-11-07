@@ -4,11 +4,11 @@ import { TOTP_PROVIDER_TYPE } from '@qauth-labs/fastify-plugin-sign-in-engine';
 import { TemporarilyUnavailableError } from '@qauth-labs/shared-errors';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import type { FamilyOperationClass } from '../api-conventions/families';
 import {
   DelegatedTokenRefusedError,
   InsufficientUserAuthenticationError,
 } from './account-operation-errors';
-import type { FamilyOperationClass } from '../api-conventions/families';
 import { familyOperation } from './family-token';
 import { requestRealm } from './request-realm';
 import { emitUserEvent } from './user-events';
