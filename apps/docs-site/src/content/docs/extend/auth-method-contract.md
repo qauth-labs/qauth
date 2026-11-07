@@ -3,7 +3,7 @@ title: The AuthMethod contract
 description: The experimental plugin API for sign-in methods — what an AuthMethod adds to CredentialProvider, the upstream step it serves, what a method is handed, where its routes mount, the test kit that checks a method against the contract, and how to write a plugin in its own repository with @qauth-labs/plugin-sdk.
 sidebar:
   order: 6
-lastVerified: '2026-11-05'
+lastVerified: '2026-11-07'
 experimental: true
 ---
 
@@ -264,10 +264,18 @@ since it checks that client's methods too; the plugin loader refuses them, and t
 such as a client secret. The runtime reads the marks from the schema's JSON Schema, from its input
 side and from its output side. A secret is a string, or a nullable one, at any depth of nested
 objects, marked on the input side or on the output side of a pipe that keeps its path and its
-string. A schema that is not an object, that holds a part JSON Schema cannot describe (a `Set`, a
-`Map`, a date, a custom check), or that marks a member inside a list, a union, a record or a
-recursive part, behind a pipe that reshapes or renames it, or one that is not a string, is refused
-at boot: the runtime could not keep it write-only. So is a schema built with a Zod copy that keeps
+string. It may sit inside a union whose branches are all objects, such as a discriminated union of
+client authentication methods, when every branch with a member at its path marks it there, on the
+same side of the schema: a branch without the member (`private_key_jwt` beside
+`client_secret_basic`) takes no secret. The
+runtime puts a stored secret back at its path whatever branch the plain config takes, so a
+configure that switches to a branch without the member clears the secret in the same request
+(`"secrets": { "<path>": null }`), or a plugin whose branches are strict objects refuses the
+config. A schema that is not an object, that holds a part JSON Schema cannot describe (a `Set`, a
+`Map`, a date, a custom check), or that marks a member inside a list, a record, a recursive part
+or a union with a branch that is not an object (a nullable object among them), in one branch of a
+union and as a plain member of another, behind a pipe that reshapes or renames it, or one that is
+not a string, is refused at boot: the runtime could not keep it write-only. So is a schema built with a Zod copy that keeps
 a metadata registry of its own (Zod 4.6 shares one between copies): build a plugin against the
 server's Zod, as a peer dependency.
 
@@ -443,6 +451,68 @@ apart is #497's.
 and the egress client's address checks on every endpoint without calling it, and answers one
 finding: `invalid_config`, `discovery_unavailable`, `invalid_document` or `destination_refused`.
 Each use checks again, since every call goes through the egress client.
+
+## Preset plugins on the generic client
+
+A preset is a plugin for one named provider that runs the generic client's code under its own id,
+type and config (#951); the first-party provider plugins of #671 are built this way.
+`createUpstreamOidcPresetMethod` of `@qauth-labs/server-upstream-oidc` builds its AuthMethod, which
+the package exports as `authMethod`. That library is QAuth's own and is not published, so a preset
+is built in QAuth's repository:
+
+```ts
+import { createUpstreamOidcPresetMethod } from '@qauth-labs/server-upstream-oidc';
+import { z } from 'zod';
+
+export const authMethod = createUpstreamOidcPresetMethod({
+  id: 'example-idp',
+  type: 'example_idp',
+  display: { name: 'Example IdP' },
+  origins: ['https://idp.example.com'],
+  configSchema: z.strictObject({
+    clientId: z.string().min(1).max(255),
+    clientSecret: z.string().min(1).max(1024).meta({ writeOnly: true }),
+  }),
+  upstreamConfig: (config) => ({
+    issuer: 'https://idp.example.com',
+    clientId: config.clientId,
+    clientAuthentication: { method: 'client_secret_basic', clientSecret: config.clientSecret },
+  }),
+});
+```
+
+- **Its own names.** Its `id` is never `oidc` and its `type` never `oidc_<alias>`, so the plugin
+  loader takes it as any plugin, and on QAuth's first-party list it loads with
+  `PLUGIN_API_ENABLED` off. Its callback is `/upstream/<type>/callback` on the realm host: the
+  `redirect_uri` to register at the provider.
+- **Its own config.** An admin configures it with the plugin operations
+  ([above](#installing-and-enabling-a-plugin)). `upstreamConfig` turns the parsed config into the
+  generic client's config at every use; discovery, PKCE with S256, the callback, the ID token
+  checks, `verify()` and the attributes are the generic client's, under the preset's type.
+- **Its client secret stays write-only.** It is a member the preset's schema marks `writeOnly`,
+  inside a discriminated union of client authentication methods if the preset offers several, so
+  the runtime seals it under the plugin's own context and no response, event or log line shows it.
+  A config whose client secret is not the value of such a member is refused: it would be stored in
+  the clear.
+- **Its secret is bound to its provider.** The generic client binds a stored secret to the issuer
+  and token endpoint it was entered for; a plugin's secret is bound to the plugin. So a preset
+  names the `https` origins its provider answers on (`origins`), every host its endpoints are on
+  included, and the client calls no endpoint off them. A config whose issuer, or any endpoint set
+  by hand, is on none of them is refused where the host parses it: at the configure (400, naming
+  no value) and at every use. A discovery document that names an endpoint off them is refused at
+  the sign-in, before any call to it. Whatever a realm's admin sets, the secret goes to that
+  provider's origins and to no other host. Within them it is not bound to a tenant: a member that
+  shapes the issuer's path, such as a tenant, may change while the stored secret is kept, where the
+  generic client asks for the secret again. A provider whose host the admin chooses is a generic
+  provider, not a preset.
+- **No secret elsewhere.** A config whose provider config carries a secret member's value anywhere
+  but in the client secret (the client id, a scope, a URL) is refused: it would go out, and be
+  logged, in the clear.
+- **No allowlisted address.** Every call goes out as a `remote_document` destination unless the
+  preset's own config names its origin (the context's rule, [above](#what-a-method-is-handed)), so
+  a preset whose config names no URL never reaches a private address the egress allowlist opens.
+
+A preset passes the contract test kit as the generic client does.
 
 ## Checking a method: the contract test kit
 

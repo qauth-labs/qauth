@@ -21,6 +21,7 @@ import {
   type UserAttribute,
   type VerifiedIdentity,
 } from '@qauth-labs/server-federation';
+import type { z } from 'zod';
 
 import { claimAttributes } from './attributes';
 import { type UpstreamOidcConfig, upstreamOidcConfigSchema } from './config';
@@ -169,6 +170,53 @@ export function createUpstreamOidcMethod(
   if (typeof type !== 'string' || !UPSTREAM_OIDC_TYPE_PATTERN.test(type)) {
     throw new TypeError('type must be oidc_ and a lower-case alias, such as oidc_corp');
   }
+  return upstreamOidcClientMethod({
+    id: UPSTREAM_OIDC_METHOD_ID,
+    type,
+    display,
+    configSchema: upstreamOidcConfigSchema,
+    providerConfig: (config) => config,
+  });
+}
+
+/**
+ * What {@link upstreamOidcClientMethod} builds a method from: the method's
+ * own names and config, and the provider's config, which the client runs
+ * on, read from the method's parsed config at every use.
+ *
+ * @experimental
+ */
+export interface UpstreamOidcClientParts<TConfig> {
+  readonly id: string;
+  readonly type: string;
+  readonly display: AuthMethodDisplay;
+  readonly configSchema: z.ZodType<TConfig>;
+  /**
+   * The provider's config, parsed, for the method's parsed config: the
+   * config itself for the generic client, a preset's mapping for a preset
+   * plugin (#951).
+   */
+  readonly providerConfig: (config: TConfig) => UpstreamOidcConfig;
+  /**
+   * The only origins the provider's endpoints may be on, discovered ones
+   * included: a preset's `origins` (#951). Without it, as for the generic
+   * client, a discovered endpoint may be on any host.
+   */
+  readonly endpointOrigins?: ReadonlySet<string>;
+}
+
+/**
+ * The client as an AuthMethod under the names and the config `parts` give
+ * it: the generic client's (`oidc`, `oidc_<alias>`, its own config) or a
+ * preset plugin's (`createUpstreamOidcPresetMethod`). Each method keeps its
+ * own discovery documents, key sets and results.
+ *
+ * @experimental
+ */
+export function upstreamOidcClientMethod<TConfig>(
+  parts: UpstreamOidcClientParts<TConfig>
+): AuthMethod<TConfig, UpstreamOidcTransaction> {
+  const { type, display } = parts;
   /** Results the callback produced and `verify()` has not taken yet. */
   const issued = new WeakSet<object>();
   const documents = new TtlCache<Record<string, unknown>>(
@@ -186,22 +234,27 @@ export function createUpstreamOidcMethod(
    * {@link UPSTREAM_DISCOVERY_FAILURE_TTL_MS}. Only the fetch is kept: the
    * checks against the config run at every use.
    */
-  const metadataFor = (
+  const metadataFor = async (
     context: AuthMethodContext<UpstreamOidcConfig>
   ): Promise<UpstreamProviderMetadata> => {
     const { config } = context;
     const scope = context.routeUrl(UPSTREAM_OIDC_CALLBACK_PATH);
-    return resolveProviderMetadata(config, () =>
+    const metadata = await resolveProviderMetadata(config, () =>
       documents.get(JSON.stringify([scope, config.issuer]), () =>
         fetchDiscoveryDocument(context.egress, config.issuer)
       )
     );
+    if (parts.endpointOrigins !== undefined) {
+      requireEndpointsOn(metadata, parts.endpointOrigins);
+    }
+    return metadata;
   };
 
   async function start(
     request: UpstreamStartRequest,
-    context: AuthMethodContext<UpstreamOidcConfig>
+    methodContext: AuthMethodContext<TConfig>
   ): Promise<UpstreamStart<UpstreamOidcTransaction>> {
+    const context = providerContext(methodContext, parts.providerConfig);
     const { config } = context;
     const metadata = await metadataFor(context);
     const redirectUri = context.routeUrl(UPSTREAM_OIDC_CALLBACK_PATH);
@@ -248,8 +301,9 @@ export function createUpstreamOidcMethod(
 
   async function callback(
     request: AuthMethodCallbackRequest<UpstreamOidcTransaction>,
-    context: AuthMethodContext<UpstreamOidcConfig>
+    methodContext: AuthMethodContext<TConfig>
   ): Promise<UpstreamCallbackOutcome<UpstreamOidcResult>> {
+    const context = providerContext(methodContext, parts.providerConfig);
     const { config } = context;
     const { query } = request;
     const transaction = ownTransaction(request.transaction, type, config, context);
@@ -316,12 +370,12 @@ export function createUpstreamOidcMethod(
     return { kind: 'result', result };
   }
 
-  const method: AuthMethod<UpstreamOidcConfig, UpstreamOidcTransaction> = {
+  const method: AuthMethod<TConfig, UpstreamOidcTransaction> = {
     contract: AUTH_METHOD_CONTRACT,
-    id: UPSTREAM_OIDC_METHOD_ID,
+    id: parts.id,
     type,
     display,
-    configSchema: upstreamOidcConfigSchema,
+    configSchema: parts.configSchema,
     steps: Object.freeze([UPSTREAM_STEP_URN]),
     routes: Object.freeze([
       {
@@ -373,6 +427,53 @@ export function createUpstreamOidcMethod(
     },
   };
   return Object.freeze(method);
+}
+
+/**
+ * Refuse metadata with an endpoint off `origins`: a discovery document that
+ * names a token endpoint on another host would have the client send the
+ * client secret there, and one whose authorization endpoint or key set is
+ * elsewhere would hand the browser, or the ID token's trust, to that host.
+ */
+function requireEndpointsOn(
+  metadata: UpstreamProviderMetadata,
+  origins: ReadonlySet<string>
+): void {
+  const endpoints: [name: string, url: string | undefined][] = [
+    ['authorization endpoint', metadata.authorizationEndpoint],
+    ['token endpoint', metadata.tokenEndpoint],
+    ['JWKS URI', metadata.jwksUri],
+    ['userinfo endpoint', metadata.userinfoEndpoint],
+  ];
+  for (const [name, url] of endpoints) {
+    if (url === undefined) continue;
+    let origin: string | undefined;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      origin = undefined;
+    }
+    if (origin === undefined || !origins.has(origin)) {
+      throw invalidResponse(`the provider names its ${name} off the preset's origins`);
+    }
+  }
+}
+
+/**
+ * The context the client runs on: the method's own, with the provider's
+ * config in place of the method's (the same object for the generic client,
+ * whose config is the provider's). Every other member is the host's
+ * adapter, as the method was handed it.
+ */
+function providerContext<TConfig>(
+  context: AuthMethodContext<TConfig>,
+  providerConfig: (config: TConfig) => UpstreamOidcConfig
+): AuthMethodContext<UpstreamOidcConfig> {
+  const config = providerConfig(context.config);
+  if ((config as unknown) === context.config) {
+    return context as unknown as AuthMethodContext<UpstreamOidcConfig>;
+  }
+  return Object.freeze({ ...context, config });
 }
 
 /**

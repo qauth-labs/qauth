@@ -53,9 +53,26 @@ describe('authMethodSecretPaths (#600)', () => {
       z.object({ keys: z.array(z.object({ s: z.string().meta({ writeOnly: true }) })) }),
     ],
     [
-      'a secret inside a union',
+      'a secret inside a union with a null branch',
       z.object({
         auth: z.union([z.object({ s: z.string().meta({ writeOnly: true }) }), z.null()]),
+      }),
+    ],
+    [
+      'a secret inside a union with a branch that is not an object',
+      z.object({
+        auth: z.union([z.object({ s: z.string().meta({ writeOnly: true }) }), z.string()]),
+      }),
+    ],
+    [
+      'a secret inside a nullable discriminated union',
+      z.object({
+        auth: z
+          .discriminatedUnion('method', [
+            z.object({ method: z.literal('a'), s: z.string().meta({ writeOnly: true }) }),
+            z.object({ method: z.literal('b') }),
+          ])
+          .nullable(),
       }),
     ],
     [
@@ -219,6 +236,143 @@ describe('authMethodSecretPaths (#600)', () => {
       Array.from({ length: 20_001 }, (_, index) => [`m${index}`, z.string()])
     );
     expect(() => authMethodSecretPaths(withSchema(z.object(wide)))).toThrow(unreadable);
+  });
+
+  describe('inside a union of objects (#951)', () => {
+    /** The shape of the generic OpenID Connect client's `clientAuthentication`. */
+    const clientSecret = z.string().min(1).meta({ writeOnly: true });
+    const clientAuthentication = z.discriminatedUnion('method', [
+      z.strictObject({ method: z.literal('client_secret_basic'), clientSecret }),
+      z.strictObject({ method: z.literal('client_secret_post'), clientSecret }),
+      z.strictObject({
+        method: z.literal('private_key_jwt'),
+        signingAlgorithm: z.enum(['RS256', 'ES256']).default('RS256'),
+      }),
+    ]);
+
+    it('reads a secret every branch with the member marks, and a branch without it takes none', () => {
+      const schema = z.object({ clientId: z.string(), clientAuthentication });
+      expect(authMethodSecretPaths(withSchema(schema))).toEqual([
+        'clientAuthentication.clientSecret',
+      ]);
+    });
+
+    it('reads it in an optional or defaulted union, a plain union and a union nested in a branch', () => {
+      const schema = z.object({
+        optional: clientAuthentication.optional(),
+        plain: z.union([
+          z.object({ kind: z.literal('a'), key: z.string().meta({ writeOnly: true }) }),
+          z.object({ kind: z.literal('b'), note: z.string() }),
+        ]),
+        nested: z.discriminatedUnion('mode', [
+          z.object({ mode: z.literal('mtls'), tls: z.object({ keyPassword: clientSecret }) }),
+          z.object({
+            mode: z.literal('shared'),
+            inner: z.discriminatedUnion('kind', [
+              z.object({ kind: z.literal('x'), token: clientSecret }),
+              z.object({ kind: z.literal('y') }),
+            ]),
+          }),
+        ]),
+      });
+      expect(authMethodSecretPaths(withSchema(schema))).toEqual([
+        'optional.clientSecret',
+        'plain.key',
+        'nested.tls.keyPassword',
+        'nested.inner.token',
+      ]);
+    });
+
+    it('reads a mark on the output side of a branch, where the input takes the string', () => {
+      const schema = z.object({
+        auth: z.discriminatedUnion('method', [
+          z.object({
+            method: z.literal('secret'),
+            value: z.string().pipe(z.string().trim().meta({ writeOnly: true })),
+          }),
+          z.object({ method: z.literal('none') }),
+        ]),
+      });
+      expect(authMethodSecretPaths(withSchema(schema))).toEqual(['auth.value']);
+    });
+
+    it.each<[string, z.ZodType]>([
+      [
+        'a member one branch marks and another takes as a plain string',
+        z.object({
+          auth: z.discriminatedUnion('method', [
+            z.object({ method: z.literal('a'), clientSecret }),
+            z.object({ method: z.literal('b'), clientSecret: z.string() }),
+          ]),
+        }),
+      ],
+      [
+        'a member one branch marks and another takes as an object',
+        z.object({
+          auth: z.union([
+            z.object({ key: clientSecret }),
+            z.object({ key: z.object({ id: z.string() }) }),
+          ]),
+        }),
+      ],
+      [
+        'a member one branch marks and another takes as a number',
+        z.object({
+          auth: z.union([z.object({ key: clientSecret }), z.object({ key: z.number() })]),
+        }),
+      ],
+      [
+        'a branch with a plain value on the way to the secret',
+        z.object({
+          auth: z.union([
+            z.object({ tls: z.object({ keyPassword: clientSecret }) }),
+            z.object({ tls: z.string() }),
+          ]),
+        }),
+      ],
+      [
+        'a secret that is not a string in a branch',
+        z.object({
+          auth: z.union([
+            z.object({ pin: z.number().meta({ writeOnly: true }) }),
+            z.object({ other: z.string() }),
+          ]),
+        }),
+      ],
+      [
+        'a branch that is itself marked',
+        z.object({
+          auth: z.union([
+            z.object({ key: z.string() }).meta({ writeOnly: true }),
+            z.object({ other: z.string() }),
+          ]),
+        }),
+      ],
+      ['a union of objects inside a list', z.object({ keys: z.array(clientAuthentication) })],
+      [
+        'a branch that marks a member inside a record',
+        z.object({
+          auth: z.union([
+            z.object({ keys: z.record(z.string(), clientSecret) }),
+            z.object({ other: z.string() }),
+          ]),
+        }),
+      ],
+    ])('refuses %s', (_case, schema) => {
+      expect(() => authMethodSecretPaths(withSchema(schema))).toThrow(AuthMethodContractError);
+    });
+
+    it('names the member and the union in the problem', () => {
+      const schema = z.object({
+        auth: z.discriminatedUnion('method', [
+          z.object({ method: z.literal('a'), clientSecret }),
+          z.object({ method: z.literal('b'), clientSecret: z.string() }),
+        ]),
+      });
+      expect(() => authMethodSecretPaths(withSchema(schema))).toThrow(
+        /auth\.clientSecret as a secret in one branch of the union at auth and not in another/
+      );
+    });
   });
 
   it('refuses a mark inside a recursive part', () => {
