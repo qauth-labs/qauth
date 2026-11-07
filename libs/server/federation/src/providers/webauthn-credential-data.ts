@@ -32,10 +32,12 @@ export const webauthnCredentialDataSchema = z.object({
    * Whether the registration's authenticator data carried the
    * user-verification flag, which QAuth checked (WebAuthn Level 3 §7.1): a
    * passkey that is an account's primary identity proves it only with the
-   * flag (ADR-015 Decision 8, #846). Migration 0068 wrote `true` on every
-   * passkey stored before it, each registered with the flag required; absent
-   * only on a passkey a release before that one stores during a rolling
-   * upgrade, which proves nothing.
+   * flag (ADR-015 Decision 8, #846). Every registration writes it from #846
+   * on. It is absent on a passkey a release before that one registered, and
+   * on one such a release rewrote at a sign-in, since its schema drops the
+   * key: each of those was registered for sign-in, which requires the flag
+   * and refuses an answer without it, so an absent key reads as checked.
+   * Only `false` says the flag was not set.
    */
   user_verified: z.boolean().optional(),
   /** The RP ID the credential was created under. */

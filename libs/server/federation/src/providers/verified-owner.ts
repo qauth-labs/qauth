@@ -20,7 +20,9 @@ import { webauthnCredentialDataSchema } from './webauthn-credential-data';
  * - `password`: the mailbox code for the address was entered, so
  *   `email_verified` is `true` on that credential;
  * - `webauthn`: the registration ceremony finished, and QAuth checked the
- *   user-verification flag in its authenticator data (`user_verified`);
+ *   user-verification flag in its authenticator data: `user_verified` is not
+ *   `false` (a passkey registered before the flag was stored has none, and
+ *   every such registration required the flag);
  * - `wallet`: QAuth's own verifier accepted the presentation, which is the
  *   only way a wallet credential is written;
  * - an upstream identity (`oidc_*`, or an AuthMethod plugin's type): QAuth
@@ -44,7 +46,7 @@ export const VERIFIED_OWNER_REFUSAL_REASONS = [
   'no_primary_identity',
   /** A password account whose address was never confirmed by its mailbox code. */
   'address_unverified',
-  /** A passkey whose registration did not check the user-verification flag. */
+  /** A passkey whose registration says the user-verification flag was not set. */
   'passkey_unverified',
   /** An upstream account whose provider's verified switch is off, or which is gone. */
   'upstream_unverified',
@@ -130,7 +132,7 @@ export function decideVerifiedOwner(
     case 'passkey': {
       const data = webauthnCredentialDataSchema.safeParse(primary.credentialData);
       if (!data.success) return refuse('unproved_type');
-      return data.data.user_verified === true
+      return data.data.user_verified !== false
         ? { verified: true, identity }
         : refuse('passkey_unverified');
     }

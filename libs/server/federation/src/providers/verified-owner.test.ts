@@ -68,12 +68,16 @@ describe('decideVerifiedOwner (ADR-015 Decision 8, #846)', () => {
       ).toEqual({ verified: true, identity: 'passkey' });
     });
 
-    it('is not verified when the flag was not set, or the passkey does not say', () => {
-      for (const flag of [false, undefined]) {
-        expect(
-          decideVerifiedOwner({ providerType: 'webauthn', credentialData: passkeyData(flag) })
-        ).toEqual({ verified: false, identity: 'passkey', reason: 'passkey_unverified' });
-      }
+    it('is verified when it was registered before the flag was stored, which every such registration required', () => {
+      expect(
+        decideVerifiedOwner({ providerType: 'webauthn', credentialData: passkeyData(undefined) })
+      ).toEqual({ verified: true, identity: 'passkey' });
+    });
+
+    it('is not verified when its registration says the flag was not set', () => {
+      expect(
+        decideVerifiedOwner({ providerType: 'webauthn', credentialData: passkeyData(false) })
+      ).toEqual({ verified: false, identity: 'passkey', reason: 'passkey_unverified' });
     });
   });
 

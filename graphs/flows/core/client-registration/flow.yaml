@@ -83,8 +83,10 @@ context:
     values: [checked, unchecked]
     initial: any
     say:
-      checked: "the passkey's registration checked the UV flag: user_verified is true on that credential"
-      unchecked: 'the credential does not say so'
+      checked:
+        "the passkey's registration checked the UV flag: user_verified is not false on that credential (one
+        registered before the flag was stored has none, and every such registration required it)"
+      unchecked: 'user_verified is false: the registration did not set the flag'
   providerSwitch:
     values: [on, off]
     initial: any
@@ -178,7 +180,7 @@ states:
         source: libs/server/federation/src/providers/verified-owner.ts:126
       - guard: uncheckedPasskey
         target: access_denied.passkey_unverified
-        say: 'a passkey whose registration did not check the UV flag'
+        say: 'a passkey whose registration says the UV flag was not set'
         source: libs/server/federation/src/providers/verified-owner.ts:133
       - guard: unprovedType
         target: access_denied.unproved_type
