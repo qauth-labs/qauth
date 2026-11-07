@@ -72,29 +72,28 @@ function page(opts: {
           ${walletPageStyles(opts.cspNonce)}
           <style nonce="${opts.cspNonce}">
             .card.wide {
-              max-width: 560px;
-              margin: 32px 0;
+              max-width: 35rem;
             }
             h2 {
-              margin: 28px 0 8px;
-              font-size: 16px;
+              margin: 1.75rem 0 0.5rem;
+              font-size: var(--text-base);
+              font-weight: var(--font-weight-semibold);
             }
             .item {
-              border-top: 1px solid #e5e7eb;
-              padding: 12px 0;
-              font-size: 14px;
+              padding: 0.75rem 0;
+              border-top: 1px solid var(--border);
             }
             .item .meta {
-              color: #6b7280;
-              font-size: 12px;
-              margin: 2px 0 0;
+              margin: 0.125rem 0 0;
+              color: var(--muted-foreground);
+              font-size: var(--text-xs);
             }
             .actions {
               display: flex;
               flex-wrap: wrap;
-              gap: 8px;
+              gap: 0.5rem;
               align-items: flex-end;
-              margin-top: 8px;
+              margin-top: 0.5rem;
             }
             .actions form {
               margin: 0;
@@ -103,22 +102,9 @@ function page(opts: {
             .actions input[type='text'] {
               width: auto;
               margin-top: 0;
-              padding: 6px 12px;
-              font-size: 13px;
-            }
-            input[type='password'] {
-              display: block;
-              width: 100%;
-              padding: 10px 12px;
-              margin-top: 6px;
-              border: 1px solid #d8dbe0;
-              border-radius: 6px;
-              font-size: 14px;
-              box-sizing: border-box;
             }
             .codes code {
-              font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-              font-size: 15px;
+              font-family: var(--font-mono);
             }
           </style>
         </head>
