@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { html, render } from '../../helpers/html';
 import { consumePendingAuthorization } from '../../helpers/pending-authorization';
+import { uiStylesheetLink } from '../../helpers/ui-assets';
 
 /**
  * Resume a pending authorization request (qauth-labs/qauth#316 follow-up).
@@ -37,7 +38,7 @@ import { consumePendingAuthorization } from '../../helpers/pending-authorization
  * which is the only correct recovery for an OAuth request whose PKCE
  * `code_verifier` still lives in the client.
  */
-function expiredPage(cspNonce: string): string {
+function expiredPage(): string {
   return render(
     html`<!doctype html>
       <html lang="en">
@@ -46,41 +47,7 @@ function expiredPage(cspNonce: string): string {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <meta name="robots" content="noindex" />
           <title>Sign-in request expired — QAuth</title>
-          <style nonce="${cspNonce}">
-            body {
-              font-family:
-                system-ui,
-                -apple-system,
-                Segoe UI,
-                Roboto,
-                sans-serif;
-              background: #f6f7f9;
-              color: #1a1a1a;
-              margin: 0;
-              min-height: 100vh;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-            }
-            .card {
-              background: #fff;
-              padding: 32px;
-              border-radius: 12px;
-              box-shadow: 0 4px 24px rgba(0, 0, 0, 0.06);
-              width: 100%;
-              max-width: 420px;
-            }
-            h1 {
-              margin: 0 0 12px;
-              font-size: 20px;
-            }
-            p {
-              margin: 0 0 8px;
-              font-size: 14px;
-              line-height: 1.5;
-              color: #374151;
-            }
-          </style>
+          ${uiStylesheetLink()}
         </head>
         <body>
           <div class="card">
@@ -120,7 +87,7 @@ export default async function (fastify: FastifyInstance) {
         // never a redirect to anything derived from the request.
         reply.header('Content-Type', 'text/html; charset=utf-8');
         reply.code(400);
-        return reply.send(expiredPage(reply.cspNonce.style));
+        return reply.send(expiredPage());
       }
 
       // `/oauth/authorize` re-validates client_id, redirect_uri, scope, PKCE

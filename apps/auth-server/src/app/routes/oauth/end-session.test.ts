@@ -618,7 +618,7 @@ describe('a client the operator did not set up (RFC 9700 §4.11.2, #675)', () =>
     });
     expect(response.statusCode).toBe(400);
     expect(response.headers.location).toBeUndefined();
-    expect(response.body).not.toContain('href=');
+    expect(response.body).not.toContain('<a ');
   });
 });
 

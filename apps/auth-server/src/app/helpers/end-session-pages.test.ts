@@ -79,7 +79,7 @@ describe('the refusal page (#675)', () => {
     expect(page).toContain('This sign-out request is not valid');
     expect(page).toContain('Reference: req-&lt;1&gt;');
     expect(page).not.toContain('<form');
-    expect(page).not.toContain('href=');
+    expect(page).not.toContain('<a ');
   });
 });
 
@@ -114,7 +114,7 @@ describe('the signed-out page of a client the operator did not set up (#675)', (
       NONCE
     );
     expect(page).toContain('com.example.app');
-    expect(page).not.toContain('href=');
+    expect(page).not.toContain('<a ');
   });
 });
 

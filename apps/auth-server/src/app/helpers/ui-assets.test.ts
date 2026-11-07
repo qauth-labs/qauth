@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -6,9 +8,12 @@ import { UI_ASSET_FILES, UI_STYLESHEET_URL, uiAsset, uiStylesheetLink } from './
 import { UI_PAGE_CSS } from './ui-page-css';
 
 /**
- * The /ui pages' stylesheet and fonts (#472): what the set holds and how its
- * files are named.
+ * The /ui pages' stylesheet and fonts (#472): what the set holds, how its
+ * files are named, and that no page draws a colour, a font or a shadow of
+ * its own.
  */
+
+const APP_DIR = join(__dirname, '..');
 
 /** The first 8 hex digits of the SHA-256 of `content`. */
 function hashOf(content: Buffer): string {
@@ -98,5 +103,64 @@ describe('the /ui pages’ asset set (#472)', () => {
     for (const name of UI_ASSET_FILES) {
       expect(`/ui/assets/${name}`, name).toMatch(cacheable);
     }
+  });
+});
+
+/**
+ * A colour, a font stack, a corner or a shadow written into a page's styles
+ * instead of taken from a token. The QR code box's white is the one literal,
+ * and it lives in `ui-page-css.ts`.
+ */
+const LITERAL_STYLE =
+  /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab|lab|lch|color)\(|system-ui|-apple-system|box-shadow|font-family:(?!\s*var\()|border-radius:(?!\s*var\()|(?<![\w-])(?:white|black)(?![\w-])/g;
+
+/** The inline `<style nonce="…">` blocks of a source file's pages. */
+function inlineStyles(source: string): string[] {
+  return [...source.matchAll(/<style nonce="[^"]*">([\s\S]*?)<\/style>/g)].map(([, css]) => css);
+}
+
+/** The app's non-test sources. */
+function sources(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) return sources(path);
+    return entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts') ? [path] : [];
+  });
+}
+
+describe('no page draws a colour of its own (#472)', () => {
+  it('takes every colour, font, corner and shadow in its inline styles from a token', () => {
+    const found = sources(APP_DIR).flatMap((file) =>
+      inlineStyles(readFileSync(file, 'utf8')).flatMap((css) =>
+        [...css.matchAll(LITERAL_STYLE)].map(
+          ([literal]) => `${relative(APP_DIR, file)}: ${literal}`
+        )
+      )
+    );
+    expect(found).toEqual([]);
+  });
+
+  it('finds the inline styles it checks', () => {
+    // Non-vacuity: the sign-in page and the consent screen keep one each.
+    const pages = sources(APP_DIR).filter(
+      (file) => inlineStyles(readFileSync(file, 'utf8')).length
+    );
+    expect(pages.map((file) => relative(APP_DIR, file))).toEqual(
+      expect.arrayContaining([join('routes', 'ui', 'login.ts'), join('routes', 'ui', 'consent.ts')])
+    );
+  });
+
+  it('keeps the shared rules on tokens, but for the QR code box’s white', () => {
+    const literals = [...UI_PAGE_CSS.matchAll(LITERAL_STYLE)].map(([literal]) => literal);
+    expect(literals).toEqual(['#fff']);
+    expect(UI_PAGE_CSS).toMatch(/\.qr \{[^}]*background-color: #fff;/);
+  });
+
+  it('never takes the focus ring away', () => {
+    const css = [
+      UI_PAGE_CSS,
+      ...sources(APP_DIR).flatMap((f) => inlineStyles(readFileSync(f, 'utf8'))),
+    ];
+    for (const block of css) expect(block).not.toMatch(/outline\s*:/);
   });
 });

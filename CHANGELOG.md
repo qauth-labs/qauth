@@ -2261,6 +2261,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   palette. The docs site maps Starlight's theme onto the same tokens and
   fonts. Both follow the system's light or dark setting and draw one focus
   outline, in the teal accent, on every control.
+- **The auth server's `/ui` pages use the design system** ([#472]). Sign-in,
+  consent, the second-factor, passkey, recovery-code and wallet pages, e-mail
+  verification and sign-out link one stylesheet: the tokens and fonts of
+  `libs/ui`, served by the auth server itself under `/ui/assets/` with
+  content-hashed names and a year's immutable cache. Square corners, flat
+  cards, DM Sans and Instrument Serif, light and dark after the system's
+  setting, and the teal focus outline on every control.
 - **A process whose only role is `delivery` skips the default realm's boot
   step** ([#498]). The step creates and updates the realm row, which the
   delivery role's database user may not write; any other role's process runs
