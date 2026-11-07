@@ -47,6 +47,7 @@ import { interactionIdHash, interactionRecordSchema } from '../../helpers/intera
 import { tokenRealm } from '../../helpers/realm-url';
 import { answerRouteNotFound } from '../../helpers/request-bounds';
 import { SESSION_COOKIE_NAME } from '../../helpers/session-cookie';
+import { UI_STYLESHEET_URL } from '../../helpers/ui-assets';
 import { emitUserEvent } from '../../helpers/user-events';
 import errorHandler from '../../plugins/error-handler';
 import { securityHeadersPlugin } from '../../plugins/security-headers';
@@ -618,7 +619,11 @@ describe('a client the operator did not set up (RFC 9700 §4.11.2, #675)', () =>
     });
     expect(response.statusCode).toBe(400);
     expect(response.headers.location).toBeUndefined();
-    expect(response.body).not.toContain('href=');
+    // No link and no refresh: the one href is the /ui stylesheet.
+    expect([...response.body.matchAll(/href="([^"]*)"/g)].map(([, href]) => href)).toEqual([
+      UI_STYLESHEET_URL,
+    ]);
+    expect(response.body).not.toMatch(/http-equiv/i);
   });
 });
 

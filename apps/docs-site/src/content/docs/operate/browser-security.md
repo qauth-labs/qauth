@@ -104,9 +104,12 @@ cookie, so CSRF does not apply.
   `default-src 'self'`, `script-src 'self'`, `style-src 'self' 'nonce-…'`,
   `img-src 'self' data:`, `font-src 'self' data:`, `connect-src 'self'`,
   `form-action 'self'`, `object-src 'none'`, `frame-ancestors 'none'`,
-  `base-uri 'self'`. A fresh per-request nonce authorises the inline `<style>`
-  on the login/consent pages; there is **no** `'unsafe-inline'` for scripts, so
-  an injected `<script>` is refused by the browser.
+  `base-uri 'self'`. The server-rendered pages link one stylesheet, the design
+  system's, and load its fonts: same-origin files under `/assets/ui/`, which
+  `style-src 'self'` and `font-src 'self'` allow without a nonce. A fresh
+  per-request nonce authorises the inline `<style>` a page adds for rules of its
+  own, such as the login and consent pages; there is **no** `'unsafe-inline'` for
+  scripts, so an injected `<script>` is refused by the browser.
 - **Strict-Transport-Security**: `max-age=31536000; includeSubDomains; preload`
   (one year, preload-eligible). Gated by `SECURITY_HSTS_ENABLED` /
   `SECURITY_HSTS_MAX_AGE`; keep enabled in production behind TLS.

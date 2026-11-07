@@ -23,7 +23,7 @@ import { walletPageStyles } from './wallet-ui';
  * `Cache-Control: no-store`.
  */
 
-/** The page's chrome: the shared `/ui` styles under the request's CSP nonce. */
+/** The page's chrome: the shared `/ui` stylesheet (#472). */
 function page(opts: {
   readonly cspNonce: string;
   readonly scriptNonce: string;
@@ -40,19 +40,6 @@ function page(opts: {
           <meta name="referrer" content="no-referrer" />
           <title>${opts.title} — QAuth</title>
           ${walletPageStyles(opts.cspNonce)}
-          <style nonce="${opts.cspNonce}">
-            .actions {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 0.5rem;
-              margin: 1rem 0;
-            }
-            .secondary {
-              background: transparent;
-              color: inherit;
-              border: 1px solid currentColor;
-            }
-          </style>
         </head>
         <body>
           <main class="card">${opts.body}</main>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { COLOR_TOKENS, contrastFailures, readTokens, STATIC_TOKENS } from './tokens';
+import { COLOR_TOKENS, contrastFailures, readTokens, STATIC_TOKENS } from './read-tokens';
 import tokenFile from './tokens.json';
 
 describe('the token file', () => {
