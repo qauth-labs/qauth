@@ -533,6 +533,12 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
 
   it('recovers a lost passkey with a recovery code on the hosted pages, then signs in with the new one', async () => {
     const { userId, codes, passkey: lost } = await registered();
+    /** The passkeys bound to the account, as its security log records them. */
+    const passkeysBound = async () =>
+      (await eventsOf('user.sign_in_step_passed', userId)).filter(
+        (data) => data['step'] === WEBAUTHN_CREATE
+      ).length;
+    const boundBefore = await passkeysBound();
     const flow = await start(false);
 
     // The hosted page asks for the code offered beside the first steps.
@@ -563,6 +569,9 @@ describe('passkey-only accounts on the hosted pages (#655, real containers)', ()
         [userId, replacement.credentialId]
       )
     ).toHaveLength(1);
+    // The account has no address: the new passkey's notice is its security
+    // log's entry alone (ADR-020 §3).
+    expect(await passkeysBound()).toBe(boundBefore + 1);
 
     // The new passkey proves the account: its assertion signs in.
     const proof = await read(flow.id);
