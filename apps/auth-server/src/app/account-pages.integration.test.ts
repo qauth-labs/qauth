@@ -13,7 +13,7 @@ import {
   stepUrn,
 } from '@qauth-labs/shared-interaction-contract';
 import { requireDockerOrSkip } from '@qauth-labs/shared-testing';
-import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import type { FastifyInstance, FastifyRequest, LightMyRequestResponse } from 'fastify';
 import { createLocalJWKSet, type JSONWebKeySet, jwtVerify } from 'jose';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -29,7 +29,7 @@ import {
   registerPasswordAccount,
   startE2eInfrastructure,
 } from '../testing/e2e-harness';
-import { type SoftPasskey, softPasskey,type SoftPasskeyCreation } from '../testing/soft-passkey';
+import { type SoftPasskey, softPasskey, type SoftPasskeyCreation } from '../testing/soft-passkey';
 import type { BackgroundTasks } from './helpers/background-tasks';
 import type { InteractionEngines } from './helpers/interaction-engines';
 
@@ -1040,17 +1040,31 @@ describe('the hosted account pages (#844, real containers)', () => {
     });
     expect(locationOf(stale)).toBe(`${ACCOUNT}?notice=recovery_codes_replaced`);
 
-    // Every old code is refused where a sign-in redeems it; a new one is taken.
-    const redeem = (code: string) =>
-      recoveryCodes().redeem({
-        realmId,
-        userId: who.userId,
-        clientId: 'urn:qauth:account-pages',
-        code,
-      });
+    // Every old code is refused where a sign-in redeems it; a new one is
+    // taken. A sign-in redeems a code inside its request, whose taking is
+    // recorded with it: this stands in for that request.
+    const signInRequest = {
+      id: 'recovery-code-sign-in',
+      ip: '192.0.2.10',
+      headers: {},
+      server: server(),
+      realm: { id: realmId },
+    } as unknown as FastifyRequest;
+    const redeem = (code: string) => {
+      if (engines === undefined) throw new Error('engines not built');
+      return engines.forRequest(signInRequest, () =>
+        recoveryCodes().redeem({
+          realmId,
+          userId: who.userId,
+          clientId: 'urn:qauth:account-pages',
+          code,
+        })
+      );
+    };
     for (const code of old.codes) expect(await redeem(code)).toEqual({ kind: 'refused' });
     expect(await redeem(fresh.codes[0] as string)).toEqual({ kind: 'redeemed' });
     expect(await eventsOf('user.recovery_codes_regenerated', who.userId)).toEqual([{}, {}]);
+    expect(await eventsOf('user.recovery_code_used', who.userId)).toEqual([{ remaining: 9 }]);
 
     // An account with no second factor has nothing for a set to stand in for.
     const plain = await account();
