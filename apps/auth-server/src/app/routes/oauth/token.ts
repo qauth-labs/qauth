@@ -570,6 +570,25 @@ function recordedSignIn(recorded: {
   };
 }
 
+/**
+ * The browser session behind a code, as the access token's `sid`, on the
+ * account API's token alone (#663; ADR-019 Decision 7): a token whose one
+ * audience is that family's. The account API finds the session through it,
+ * since a recovery code that stood in for a lost factor adds no `amr` value
+ * (ADR-017 Decision 8), and it is the session the caller's own token came
+ * through. Every other access token keeps it out (#549), and a refresh, whose
+ * family records no session, never adds it. Empty for a code no browser
+ * session backs.
+ */
+function accountSessionClaim(
+  aud: string | string[] | undefined,
+  sessionId: string | null | undefined
+): { sid?: string } {
+  const audiences = aud === undefined ? [] : [aud].flat();
+  if (audiences.length !== 1 || audiences[0] !== API_FAMILY_AUDIENCES.account) return {};
+  return typeof sessionId === 'string' && sessionId.length > 0 ? { sid: sessionId } : {};
+}
+
 /** A public client: it authenticates with nothing but its `client_id` (RFC 6749 §2.1). */
 function isPublicClient(client: OAuthClientLike): boolean {
   return client.tokenEndpointAuthMethod === 'none';
@@ -1255,6 +1274,7 @@ async function handleAuthorizationCode(
       aud,
       ...dpopConfirmation(ctx),
       ...signIn,
+      ...accountSessionClaim(aud, authCode.sessionId),
       expiresInOverride: accessTokenExpiresIn,
     });
     // Recorded against the code and the family it starts, before the commit,

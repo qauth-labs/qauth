@@ -30,6 +30,7 @@ import {
   problemCodeFor,
   type ProblemDocument,
 } from '../api-conventions/problem';
+import { InsufficientUserAuthenticationError } from '../helpers/account-operation-errors';
 import { SandboxCeilingError, UnprocessableContentError } from '../helpers/api-request-errors';
 
 /**
@@ -332,7 +333,11 @@ export function problemDocument(
   // The Interaction API's documents, and `interaction_expired` anywhere, name
   // nothing about the request: see `isBareProblem`.
   if (isBareProblem(code, request.url, request.routeOptions?.url)) {
-    return { type, title, status, code, trace_id: request.id };
+    const bare: ProblemDocument = { type, title, status, code, trace_id: request.id };
+    // The step-up challenge's document carries the challenge's `max_age`
+    // (RFC 9470 §3, #663), and nothing else beside its code.
+    if (error instanceof InsufficientUserAuthenticationError) bare.max_age = error.maxAge;
+    return bare;
   }
   const document: ProblemDocument = {
     type,
@@ -463,6 +468,31 @@ function bearerChallenge(
   return ['Bearer realm="OAuth"', ...parameters].join(', ');
 }
 
+/**
+ * The step-up challenge of RFC 9470 §3 for an account operation that needs a
+ * fresher sign-in, or one with the account's strongest bound factor (#663):
+ * `Bearer error="insufficient_user_authentication", max_age="<seconds>"`, as
+ * the account contract states it. A request that used the `DPoP` scheme while
+ * DPoP is on, and every request to a server that takes DPoP-bound tokens only,
+ * gets the same under the `DPoP` scheme, with the proof algorithms in `algs`
+ * (RFC 9449 §7.1). `max_age` is a whole number of seconds the error holds, so
+ * it never needs escaping.
+ */
+function stepUpChallenge(
+  error: InsufficientUserAuthenticationError,
+  dpopAlgs: string | undefined,
+  inDpopScheme: boolean
+): string {
+  const parameters = [
+    'error="insufficient_user_authentication"',
+    `max_age="${String(error.maxAge)}"`,
+  ];
+  if (dpopAlgs !== undefined && inDpopScheme) {
+    return `DPoP ${[...parameters, `algs="${dpopAlgs}"`].join(', ')}`;
+  }
+  return `Bearer ${parameters.join(', ')}`;
+}
+
 /** Options for the error handler plugin. */
 export interface ErrorHandlerOptions {
   /**
@@ -590,6 +620,14 @@ export default fp(async function (fastify: FastifyInstance, options: ErrorHandle
           dpopChallenge(request, dpopAlgs)
             ? `DPoP error="invalid_token", error_description="${description}", algs="${dpopAlgs}"`
             : `Bearer realm="OAuth", error="invalid_token", error_description="${description}"`
+        );
+      }
+      // RFC 9470 §3 (#663): the account API's step-up challenge, in either
+      // error format.
+      if (error instanceof InsufficientUserAuthenticationError) {
+        reply.header(
+          'WWW-Authenticate',
+          stepUpChallenge(error, dpopAlgs, dpopChallenge(request, dpopAlgs))
         );
       }
       if (error instanceof InvalidDpopProofError && error.statusCode === 401) {

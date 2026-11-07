@@ -386,7 +386,11 @@ describe('the ID token’s sid comes from the code exchange alone (#549)', () =>
     const inSignerHomes = scan.sidWrites.filter((site) =>
       SIGNER_HOMES.some((home) => site.file.startsWith(home))
     );
+    // The ID token's builder, and the access token's, which writes the
+    // `sid` of the account API's token alone (#663): the code exchange is the
+    // one caller that passes it, for that audience.
     expect(inSignerHomes).toEqual([
+      { file: 'libs/server/jwt/src/lib/jwt-service.ts', within: 'buildAccessTokenClaims' },
       { file: 'libs/server/jwt/src/lib/jwt-service.ts', within: 'buildIdTokenClaims' },
     ]);
   });

@@ -127,6 +127,12 @@
                 "too_weak"
               ]
             }
+          },
+          "max_age": {
+            "description": "For `insufficient_user_authentication`: the `max_age` of the challenge (RFC 9470 §3), in seconds. Send the person to the authorization endpoint with it, then repeat the call.",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -137,7 +143,7 @@
           "trace_id"
         ],
         "additionalProperties": {},
-        "description": "RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong. `reasons` lists why a new password was refused (`weak_password`)."
+        "description": "RFC 9457 problem details. Branch on `code`, never on `title` or `detail`. `trace_id` is the id the server logged the request under. `errors` lists each field the request got wrong. `reasons` lists why a new password was refused (`weak_password`). `max_age` says how fresh the next sign-in must be (`insufficient_user_authentication`)."
       },
       "OAuthError": {
         "type": "object",
@@ -962,6 +968,8 @@
         "x-qauth-stability": "stable",
         "x-qauth-class": "read",
         "x-qauth-permission": "consents.read",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
         "responses": {
           "200": {
             "description": "Default Response",
@@ -1104,6 +1112,8 @@
         "x-qauth-stability": "stable",
         "x-qauth-class": "write",
         "x-qauth-permission": "consents.write",
+        "x-qauth-fresh-authentication": "none",
+        "x-qauth-act-chain": "accepted",
         "responses": {
           "204": {
             "description": "Default Response"

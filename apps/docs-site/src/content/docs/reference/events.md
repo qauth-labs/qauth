@@ -258,6 +258,7 @@ file's `$id` is its URL. The envelope's own schema accepts an event of any type.
 | [`urn:qauth:event:interaction.cancelled:v1-rc.0`](#interactioncancelled-v1-rc0)                         | user     | info     | v0.2.0 |
 | [`urn:qauth:event:interaction.expired:v1-rc.0`](#interactionexpired-v1-rc0)                             | user     | info     | v0.2.0 |
 | [`urn:qauth:event:request.csrf_rejected:v1-rc.0`](#requestcsrf_rejected-v1-rc0)                         | user     | warning  | v0.2.0 |
+| [`urn:qauth:event:request.account_operation_refused:v1-rc.0`](#requestaccount_operation_refused-v1-rc0) | user     | info     | v0.2.0 |
 | [`urn:qauth:event:ssf.stream.verification_requested:v1-rc.0`](#ssfstreamverification_requested-v1-rc0)  | user     | info     | v0.2.0 |
 | [`urn:qauth:event:key.emergency_retired:v1-rc.0`](#keyemergency_retired-v1-rc0)                         | admin    | critical | v0.2.0 |
 | [`urn:qauth:event:admin.change_applied:v1-rc.0`](#adminchange_applied-v1-rc0)                           | admin    | info     | v0.2.0 |
@@ -962,6 +963,22 @@ A form post was refused because its CSRF check failed: the token was missing or 
 | Member | Type                                                                                                                | Required | Meaning                                                        |
 | ------ | ------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------- |
 | `form` | one of `sign_in`, `wallet_sign_in`, `wallet_link`, `consent`, `consent_revocation`, `interaction`, or a later value | yes      | The form that was posted. The set may grow in a minor release. |
+
+### request.account_operation_refused v1-rc.0
+
+An account API call was refused before its operation ran: the token was an act-chain token the operation does not take, the sign-in behind it was too old or lacked the account’s strongest bound factor (ADR-017 Decision 8), or what the guard decides on could not be read.
+
+- Identifier: `urn:qauth:event:request.account_operation_refused:v1-rc.0`
+- Category: `user` · Severity: `info` · Since: v0.2.0
+- Subject: `user`, when known
+- Schema: [request.account_operation_refused.v1-rc.0.json](/schemas/events/request.account_operation_refused.v1-rc.0.json)
+
+| Member           | Type                                                                                                              | Required | Meaning                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operation`      | string                                                                                                            | yes      | The refused operation: its `operationId` in the account API contract, such as `account.password.change`.                                                                                                                                                                                                                                                                                                                           |
+| `reason`         | one of `delegated_token`, `authentication_too_old`, `strongest_factor_missing`, `lookup_failed`, or a later value | yes      | `delegated_token`: an act-chain token at an operation that takes none. `authentication_too_old`: the sign-in is more than five minutes old, or the token gives no time for it or one more than a minute ahead of the server’s clock. `strongest_factor_missing`: the sign-in lacks the account’s strongest bound factor. `lookup_failed`: the bound factors or the session could not be read. The set may grow in a minor release. |
+| `requiredFactor` | one of `pop`, `otp`, `pwd`, or a later value                                                                      | no       | With `strongest_factor_missing` only: the RFC 8176 `amr` value the sign-in needed, the account’s strongest bound factor. The set may grow in a minor release.                                                                                                                                                                                                                                                                      |
+| `maxAge`         | integer                                                                                                           | no       | With `authentication_too_old` and `strongest_factor_missing` only: the `max_age` of the step-up challenge the call was answered with, in seconds.                                                                                                                                                                                                                                                                                  |
 
 ### ssf.stream.verification_requested v1-rc.0
 

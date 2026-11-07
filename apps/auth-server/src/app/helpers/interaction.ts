@@ -215,6 +215,12 @@ export interface InteractionSignIn {
   readonly authTime?: number;
   /** The RFC 8176 `amr` values the answer proved. */
   readonly amr: readonly string[];
+  /**
+   * The sign-in took a recovery code in place of a lost factor (#663), which
+   * no `amr` value says: the session records it for the account API's
+   * fresh-authentication guard.
+   */
+  readonly recoveryCodeUsed?: boolean;
 }
 
 /** What the engine made of an answer. */
@@ -1138,6 +1144,7 @@ async function settleAnswer(
     ...(signIn.issuedAt === undefined ? {} : { issuedAt: signIn.issuedAt }),
     ...(signIn.authTime === undefined ? {} : { authTime: signIn.authTime }),
     amr: signIn.amr,
+    ...(signIn.recoveryCodeUsed === true ? { recoveryCodeUsed: true } : {}),
   });
   settled.session = { realmId: session.realmId, sid: session.sid };
   // Signed now, with the realm's cookie key from the signer (#493): a signer

@@ -33,6 +33,12 @@ export interface SessionRecord {
   authTime: number;
   /** The authentication methods used (the `amr` claim). */
   amr: string[];
+  /**
+   * Whether the sign-in took a recovery code in place of a lost factor
+   * (#663), which no `amr` value says. Read from Postgres only: the cache
+   * does not hold it.
+   */
+  recoveryCodeUsed: boolean;
   /** NULL when nothing above `low` was established. */
   assuranceLevel: SessionAssuranceLevel | null;
   ipAddress: string | null;
@@ -81,7 +87,7 @@ export interface StoredSession {
  */
 export type CachedSessionRecord = Omit<
   SessionRecord,
-  'ipAddress' | 'userAgent' | 'revokedAt' | 'revokedReason'
+  'ipAddress' | 'userAgent' | 'revokedAt' | 'revokedReason' | 'recoveryCodeUsed'
 >;
 
 /**
@@ -133,6 +139,11 @@ export interface CreateSessionInput {
   authTime: number;
   /** The authentication methods used, such as `["pwd"]`. Defaults to none. */
   amr?: readonly string[];
+  /**
+   * The sign-in took a recovery code in place of a lost factor (#663).
+   * Defaults to `false`.
+   */
+  recoveryCodeUsed?: boolean;
   assuranceLevel?: SessionAssuranceLevel | null;
   /** The client address of the sign-in request. */
   ipAddress?: string | null;

@@ -67,6 +67,7 @@ const SESSION_ROW: unknown[] = [
   USER_ID,
   String(NOW - 5_000),
   ['pwd'],
+  false,
   null,
   '192.0.2.1',
   'test-agent',
@@ -79,7 +80,7 @@ const SESSION_ROW: unknown[] = [
 
 /** The same row, live: not revoked. */
 const LIVE_ROW: unknown[] = SESSION_ROW.map((value, index) =>
-  index === 9 || index === 10 ? null : value
+  index === 10 || index === 11 ? null : value
 );
 
 const NEW_SESSION: NewSession = {

@@ -3902,6 +3902,53 @@ describe('POST /oauth/token route — authorization_code grant', () => {
       );
     });
 
+    // #663: the account API finds the browser session behind its token,
+    // which a recovery code's sign-in says it took, through the token's sid.
+    it('carries the code’s browser session as sid on the account API’s token alone', async () => {
+      const sid = '0199f9a1-0000-7000-8000-000000000663';
+      const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+      client.audience = ['https://api.example.com', ACCOUNT_AUDIENCE];
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({ ...authCode, resource: [ACCOUNT_AUDIENCE], sessionId: sid });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(baseRequest(), createReply());
+      expect(fastify.jwtUtils.signAccessToken).toHaveBeenCalledWith(
+        IN_REQUEST_REALM,
+        expect.objectContaining({ aud: ACCOUNT_AUDIENCE, sid })
+      );
+    });
+
+    it.each([
+      ['another audience', ['https://api.example.com'], 'session'],
+      [
+        'the account audience beside another',
+        [ACCOUNT_AUDIENCE, 'https://api.example.com'],
+        'session',
+      ],
+      ['no browser session behind the code', [ACCOUNT_AUDIENCE], null],
+    ])('gives no sid to a token for %s (#549, #663)', async (_label, resource, session) => {
+      const sid = '0199f9a1-0000-7000-8000-000000000664';
+      const { fastify, ctx, client, authCode } = setupAuthCodeStub();
+      client.audience = ['https://api.example.com', ACCOUNT_AUDIENCE];
+      (
+        fastify.repositories.authorizationCodes.findByCodeIncludingUsed as unknown as Mock
+      ).mockResolvedValue({
+        ...authCode,
+        resource,
+        sessionId: session === null ? null : sid,
+      });
+      await tokenRoute(fastify);
+      if (!ctx.handler) throw new Error('Handler missing');
+
+      await ctx.handler(baseRequest(), createReply());
+      const [, accessClaims] = (fastify.jwtUtils.signAccessToken as unknown as Mock).mock.calls[0];
+      expect(Object.hasOwn(accessClaims as object, 'sid')).toBe(false);
+      expect(JSON.stringify(accessClaims)).not.toContain(sid);
+    });
+
     // #509: a family audience reaches a user's token only when a `resource`
     // named it, so the consent the user gave covers it.
     it("is left out of the client's default audience when the code binds no resource", async () => {

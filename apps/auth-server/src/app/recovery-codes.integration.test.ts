@@ -1,4 +1,5 @@
 import type { EngineMail } from '@qauth-labs/fastify-plugin-email';
+import * as accountContract from '@qauth-labs/shared-account-contract';
 import { type ProofOfWorkParams, solveProofOfWork } from '@qauth-labs/shared-interaction-client';
 import {
   CEREMONY_PAGE_PREFIX,
@@ -80,6 +81,17 @@ const IP_C = '192.0.2.30';
 const WRONG = 'zzzz-zzzz-zzzz-zzzz';
 const USED_EVENT = 'user.recovery_code_used';
 const FAILED_EVENT = 'user.recovery_codes_failed';
+/** The account API's audience, which the app lists for its console's calls (#663). */
+const ACCOUNT_AUDIENCE = accountContract.ACCOUNT_API_AUDIENCE;
+/** The account operations the suite mounts behind the account API's guard (#663). */
+const GUARDED = ['account.passkeys.delete', 'account.password.change'] as const;
+const PASSKEY_ID = '00000000-0000-4000-8000-0000000000e1';
+
+/** Where a guarded operation is called: its contract path, its parameter filled. */
+function guardedUrl(id: (typeof GUARDED)[number]): string {
+  const { path } = accountContract.operationNamed(id);
+  return `${accountContract.ACCOUNT_API_PREFIX}${path.replace(/\{[^}]+\}/g, PASSKEY_ID)}`;
+}
 /** The background tasks of the engines this suite builds: run now, failures dropped. */
 const TASKS: BackgroundTasks = {
   run: (task) => {
@@ -126,12 +138,36 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     dockerUp = await requireDockerOrSkip();
     if (!dockerUp) return;
     infra = await startE2eInfrastructure();
-    booted = await bootAuthServer({
-      ...baseEnvironment(infra, await generateJwtPem()),
-      INTERACTION_UI_ENABLED: 'true',
-      // Each test registers its account through POST /auth/register.
-      REGISTRATION_RATE_LIMIT: '10000',
-    });
+    booted = await bootAuthServer(
+      {
+        ...baseEnvironment(infra, await generateJwtPem()),
+        INTERACTION_UI_ENABLED: 'true',
+        // Each test registers its account through POST /auth/register.
+        REGISTRATION_RATE_LIMIT: '10000',
+      },
+      {
+        // The account operations a recovery code may and may not reach,
+        // behind the account API's guard with the contract's rules (#663).
+        // No route serves them yet; the guard is the app's own module.
+        routes: async (scope) => {
+          const { accountOperation } = await import('./helpers/account-operation-guard');
+          for (const id of GUARDED) {
+            const operation = accountContract.operationNamed(id);
+            scope.route({
+              method: operation.method.toUpperCase() as 'POST' | 'DELETE',
+              url: `${accountContract.ACCOUNT_API_PREFIX}${operation.path.replace(/\{([^}]+)\}/g, ':$1')}`,
+              preValidation: accountOperation({
+                operationId: operation.id,
+                freshAuthentication: operation.freshAuthentication,
+                actChain: operation.actChain,
+              }).guard,
+              config: { surface: 'api' },
+              handler: async () => ({ ran: id }),
+            });
+          }
+        },
+      }
+    );
     const { emailService } = booted.app;
     const original = emailService.sendEngineMail.bind(emailService);
     emailService.sendEngineMail = async (realm, to, mail: EngineMail, context) => {
@@ -199,6 +235,9 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
       redirectUris: [REDIRECT_URI],
       scopes: SCOPES,
       grantTypes: ['authorization_code', 'refresh_token'],
+      // The account console's audience, issued only when a request names
+      // it (#509): every other token's audience stays the client id.
+      audience: [ACCOUNT_AUDIENCE],
       enabled: true,
       requirePkce: true,
       // A seeded client: its redirect URI receives authorization errors.
@@ -277,8 +316,11 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     return response;
   }
 
-  /** A new sign-in from `ip`, answered up to the recovery-code step. */
-  async function atRecoveryCodeStep(ip: string): Promise<SignIn> {
+  /**
+   * A new sign-in from `ip`, answered up to the recovery-code step, for a code
+   * bound to the RFC 8707 `resource` given.
+   */
+  async function atRecoveryCodeStep(ip: string, resource?: string): Promise<SignIn> {
     const jar = new CookieJar();
     const { verifier, challenge } = pkcePair();
     const authorized = await server().inject({
@@ -292,6 +334,7 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
         code_challenge: challenge,
         code_challenge_method: 'S256',
         state: 'recovery-state',
+        ...(resource === undefined ? {} : { resource }),
       }).toString()}`,
     });
     jar.absorb(authorized.headers['set-cookie']);
@@ -421,13 +464,20 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     });
     expect(done.statusCode, done.body).toBe(303);
     // The sign-in proved the password alone: no value for the code, and
-    // never mfa.
+    // never mfa. The session it starts says it took a code (#663), where the
+    // account API's fresh-authentication guard reads it.
     expect(decided.mock.results.map((result) => result.value)).toEqual([
       {
         kind: 'authenticated',
-        signIn: expect.objectContaining({ userId, amr: ['pwd'] }),
+        signIn: expect.objectContaining({ userId, amr: ['pwd'], recoveryCodeUsed: true }),
       },
     ]);
+    expect(
+      await query<{ recovery_code_used: boolean; amr: string[] }>(
+        'SELECT recovery_code_used, amr FROM sessions WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
+        [userId]
+      )
+    ).toEqual([{ recovery_code_used: true, amr: ['pwd'] }]);
     const tokens = await exchange(await codeOf(signIn, done), signIn.verifier);
     expect(tokens.statusCode, tokens.body).toBe(200);
     expect(decodeJwtClaims((tokens.json() as { id_token: string }).id_token)['sub']).toBe(userId);
@@ -459,6 +509,56 @@ describe('the recovery codes on the hosted pages (#649, real containers)', () =>
     expect(refusedPage.body).toContain('That code did not work');
     expect(await eventsOf(USED_EVENT, userId)).toHaveLength(1);
     expect(await failures(userId)).toBe('1');
+  });
+
+  it('takes the code to the account API, through sid: a rebind passes, nothing else does (#663)', async () => {
+    const { userId, codes } = await passkeyAccount();
+    await server().repositories.oauthConsents.upsertGrant(realmId, userId, clientRowId, SCOPES, [
+      ACCOUNT_AUDIENCE,
+    ]);
+    const signIn = await atRecoveryCodeStep(IP_A, ACCOUNT_AUDIENCE);
+    const done = await answer(signIn, RECOVERY_CODE, { recovery_code: codes[0] as string });
+    expect(done.statusCode, done.body).toBe(303);
+    const tokens = await exchange(await codeOf(signIn, done), signIn.verifier);
+    expect(tokens.statusCode, tokens.body).toBe(200);
+
+    // The account API's token names the session the sign-in started, which
+    // records the code; its `amr` holds the password alone.
+    const accessToken = (tokens.json() as { access_token: string }).access_token;
+    const [session] = await query<{ id: string }>(
+      'SELECT id FROM sessions WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1',
+      [userId]
+    );
+    expect(decodeJwtClaims(accessToken)).toMatchObject({
+      aud: ACCOUNT_AUDIENCE,
+      sub: userId,
+      amr: ['pwd'],
+      sid: session?.id,
+    });
+
+    const call = (id: (typeof GUARDED)[number]) =>
+      server().inject({
+        method: accountContract.operationNamed(id).method.toUpperCase() as 'POST' | 'DELETE',
+        url: guardedUrl(id),
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+    // Removing the lost passkey, one half of the rebind, takes the code.
+    const rebind = await call('account.passkeys.delete');
+    expect(rebind.statusCode, rebind.body).toBe(200);
+    // Changing the password does not: it needs the passkey itself.
+    const change = await call('account.password.change');
+    expect(change.statusCode, change.body).toBe(401);
+    expect(change.headers['www-authenticate']).toBe(
+      'Bearer error="insufficient_user_authentication", max_age="0"'
+    );
+    expect(await eventsOf('request.account_operation_refused', userId)).toEqual([
+      {
+        operation: 'account.password.change',
+        reason: 'strongest_factor_missing',
+        requiredFactor: 'pop',
+        maxAge: 0,
+      },
+    ]);
   });
 
   it('invalidates every code of the old set when the set is regenerated, and tells the user', async () => {

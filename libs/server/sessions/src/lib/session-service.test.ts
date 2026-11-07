@@ -136,6 +136,7 @@ describe('create', () => {
         'ipAddress',
         'lastSeenAt',
         'realmId',
+        'recoveryCodeUsed',
         'revokedAt',
         'revokedReason',
         'userAgent',

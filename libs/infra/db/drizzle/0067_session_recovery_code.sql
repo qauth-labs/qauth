@@ -1,0 +1,1 @@
+ALTER TABLE "sessions" ADD COLUMN "recovery_code_used" boolean DEFAULT false NOT NULL;

@@ -204,6 +204,8 @@ export const NOT_IN_SECURITY_LOG: Readonly<Record<string, string>> = {
   'interaction.cancelled': 'A sign-in the person abandoned changes nothing on the account.',
   'interaction.expired': 'A sign-in that timed out changes nothing on the account.',
   'request.csrf_rejected': 'A refused request changes nothing on the account.',
+  'request.account_operation_refused':
+    'A refused account change changes nothing on the account; the change, once made, is the entry.',
 };
 
 /** How long the log keeps an entry by default; a realm setting (#689). */
