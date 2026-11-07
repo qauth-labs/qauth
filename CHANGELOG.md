@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-11-07
-
 ### Added
 
 - **An agent's owner is a verified account** ([#846], ADR-015 Decision 8
@@ -33,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whose account is not a verified owner, with `403 access_denied`, and
   records the new user event `user.agent_ownership_refused` with the reason.
   An anonymous registration is unchanged.
+
+## [0.2.0] - 2026-11-07
+
+### Added
+
 - **The hosted account pages** ([#844], ADR-017 Decision 8, ADR-020 §3).
   `/ui/account` gives a signed-in person their own account on the hosted
   pages, in the current server-rendered style, until the design-system
