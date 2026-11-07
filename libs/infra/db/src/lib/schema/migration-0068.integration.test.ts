@@ -4,8 +4,8 @@
  *
  * After the backfill every user with a credential that is no authenticator app
  * has exactly one primary credential, and it is the oldest such credential;
- * from then on the database marks a user's first credential and never moves
- * the mark.
+ * from then on the database marks the credential written with the account,
+ * marks no other, and never moves the mark.
  *
  * Requires Docker; self-skips without it. The schema is rebuilt from scratch
  * and upgraded through 0067, then 0068, so a later migration cannot change
@@ -25,7 +25,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const MIGRATION_IDX = 68;
 
-/** A passkey's `credential_data` as a release before 0068 stored it: no `user_verified`. */
+/** A passkey's `credential_data` as a release before 0068 stored it, with no `user_verified`. */
 const PASSKEY_DATA = { public_key: 'pk', rp_id: 'auth.example.com', user_handle: 'h' };
 
 describe('migration 0068 — primary credential (seed-then-migrate)', () => {
@@ -113,6 +113,52 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     return rows[0].id;
   }
 
+  /**
+   * A new account as every account-creation path writes it: the user and its
+   * first credential in one transaction, which gives both the same
+   * `created_at`; the credential names no `is_primary`, as a release before
+   * 0068 writes it.
+   */
+  async function account(
+    realmId: string,
+    providerType: string,
+    externalSub: string
+  ): Promise<{ userId: string; credentialId: string }> {
+    const client = await db().connect();
+    try {
+      await client.query('BEGIN');
+      const userId = (
+        await client.query<{ id: string }>(
+          `INSERT INTO users (realm_id) VALUES ($1) RETURNING id`,
+          [realmId]
+        )
+      ).rows[0].id;
+      const credentialId = (
+        await client.query<{ id: string }>(
+          `INSERT INTO user_credentials (user_id, realm_id, provider_type, external_sub)
+           VALUES ($1, $2, $3, $4) RETURNING id`,
+          [userId, realmId, providerType, externalSub]
+        )
+      ).rows[0].id;
+      await client.query('COMMIT');
+      return { userId, credentialId };
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  /** A user written long before anything this test writes next. */
+  async function oldUser(realmId: string): Promise<string> {
+    const { rows } = await db().query<{ id: string }>(
+      `INSERT INTO users (realm_id, created_at, updated_at) VALUES ($1, 1000, 1000) RETURNING id`,
+      [realmId]
+    );
+    return rows[0].id;
+  }
+
   /** Each user's primary credentials. */
   async function primaries(): Promise<Map<string, string[]>> {
     const { rows } = await db().query<{ user_id: string; id: string }>(
@@ -182,11 +228,10 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     }
   });
 
-  it('records on every stored passkey that its registration checked user verification', async () => {
+  it("leaves every credential's data as it was", async () => {
     const realmId = await realm();
     const owner = await user(realmId);
     await credential(realmId, owner, 'webauthn', 'cred-a', 1_000, { data: PASSKEY_DATA });
-    await credential(realmId, owner, 'webauthn', 'cred-b', 2_000, { data: PASSKEY_DATA });
     const password = await user(realmId);
     await credential(realmId, password, 'password', 'p@example.com', 1_000, {
       data: { password_hash: 'h', email_verified: false },
@@ -194,28 +239,47 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
 
     await migrate();
 
+    // A passkey with no user_verified was registered by a release whose
+    // registration required the flag: the rule reads it as checked.
     const { rows } = await db().query<{ provider_type: string; data: Record<string, unknown> }>(
-      `SELECT provider_type, credential_data AS data FROM user_credentials ORDER BY created_at, id`
+      `SELECT provider_type, credential_data AS data FROM user_credentials ORDER BY provider_type`
     );
-    for (const row of rows.filter((candidate) => candidate.provider_type === 'webauthn')) {
-      expect(row.data).toEqual({ ...PASSKEY_DATA, user_verified: true });
-    }
-    expect(rows.find((row) => row.provider_type === 'password')?.data).toEqual({
-      password_hash: 'h',
-      email_verified: false,
-    });
+    expect(rows).toEqual([
+      { provider_type: 'password', data: { password_hash: 'h', email_verified: false } },
+      { provider_type: 'webauthn', data: PASSKEY_DATA },
+    ]);
   });
 
   describe('after the migration', () => {
-    it("marks a new account's first credential, whatever the writer passed", async () => {
+    it('marks the credential written with the account, whatever the writer passed', async () => {
       await migrate();
       const realmId = await realm();
-      const owner = await user(realmId);
       // A release before 0068 names no column.
-      const first = await credential(realmId, owner, 'password', 'n@example.com', 1_000);
+      const { userId: owner, credentialId: first } = await account(
+        realmId,
+        'password',
+        'n@example.com'
+      );
       const later = await credential(realmId, owner, 'webauthn', 'cred-n', 2_000);
       expect((await primaries()).get(owner)).toEqual([first]);
       expect(later).not.toBe(first);
+    });
+
+    it('marks no credential written later to an account that has none, and refuses one that claims the mark', async () => {
+      await migrate();
+      const realmId = await realm();
+      const owner = await oldUser(realmId);
+      await credential(realmId, owner, 'webauthn', 'cred-late', 2_000);
+      expect((await primaries()).has(owner)).toBe(false);
+
+      const other = await oldUser(realmId);
+      await expect(
+        db().query(
+          `INSERT INTO user_credentials (user_id, realm_id, provider_type, external_sub, is_primary)
+           VALUES ($1, $2, 'webauthn', 'cred-claim', true)`,
+          [other, realmId]
+        )
+      ).rejects.toMatchObject({ code: '23514', constraint: 'user_credentials_primary_first' });
     });
 
     it('marks no authenticator app, and refuses one that claims the mark', async () => {
@@ -237,8 +301,7 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     it('refuses a later credential that claims the mark', async () => {
       await migrate();
       const realmId = await realm();
-      const owner = await user(realmId);
-      await credential(realmId, owner, 'password', 'l@example.com', 1_000);
+      const { userId: owner } = await account(realmId, 'password', 'l@example.com');
       await expect(
         db().query(
           `INSERT INTO user_credentials (user_id, realm_id, provider_type, external_sub, is_primary)
@@ -251,8 +314,11 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     it('never moves the mark', async () => {
       await migrate();
       const realmId = await realm();
-      const owner = await user(realmId);
-      const first = await credential(realmId, owner, 'password', 'm@example.com', 1_000);
+      const { userId: owner, credentialId: first } = await account(
+        realmId,
+        'password',
+        'm@example.com'
+      );
       const later = await credential(realmId, owner, 'webauthn', 'cred-m', 2_000);
       const stranger = await user(realmId);
 
@@ -278,12 +344,18 @@ describe('migration 0068 — primary credential (seed-then-migrate)', () => {
     it('leaves an account with no primary credential once it is deleted', async () => {
       await migrate();
       const realmId = await realm();
-      const owner = await user(realmId);
-      const first = await credential(realmId, owner, 'webauthn', 'cred-d1', 1_000);
-      await credential(realmId, owner, 'webauthn', 'cred-d2', 2_000);
+      const { userId: owner, credentialId: first } = await account(realmId, 'webauthn', 'cred-d1');
+      const second = await credential(realmId, owner, 'webauthn', 'cred-d2', 2_000);
+      expect((await primaries()).get(owner)).toEqual([first]);
       await db().query(`DELETE FROM user_credentials WHERE id = $1`, [first]);
       await credential(realmId, owner, 'webauthn', 'cred-d3', 3_000);
       expect((await primaries()).has(owner)).toBe(false);
+
+      // Nor once every credential is gone: the next one is written later.
+      await db().query(`DELETE FROM user_credentials WHERE user_id = $1`, [owner]);
+      await credential(realmId, owner, 'webauthn', 'cred-d4', 4_000);
+      expect((await primaries()).has(owner)).toBe(false);
+      expect(second).not.toBe(first);
     });
   });
 });

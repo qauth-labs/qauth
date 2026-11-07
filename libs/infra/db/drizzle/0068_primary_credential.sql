@@ -14,22 +14,20 @@
 --    oldest credential left is the one that created the account, except where
 --    the owner removed that one (a passkey, or an upstream identity, unlinked)
 --    after adding the next: then the next, which the owner added, is marked.
--- 3. From now on the database marks a user's first credential, unless it is an
---    authenticator app, whatever the writer passed: every account-creation path
---    writes the user and the credential that creates it in one transaction, the
---    credential first. A release before this one, which never names the column,
---    keeps creating accounts with their primary credential during a rolling
---    upgrade. A later credential that claims the mark is refused.
+-- 3. From now on a credential is the primary identity only when it is written
+--    with the account: it is the user's first credential, it is no
+--    authenticator app, and it carries the account's own `created_at`, which
+--    both rows take from the transaction that writes them (`NOW()`). Every
+--    account-creation path writes the user and the credential that creates it
+--    in one transaction. The database marks such a credential whatever the
+--    writer passed, so a release before this one, which never names the
+--    column, keeps creating accounts with their primary credential during a
+--    rolling upgrade. Any other credential that claims the mark is refused;
+--    one written later to an account that has none is not marked.
 -- 4. The mark never moves in 1.0: an update that sets or clears it, or moves a
 --    primary credential to another user, is refused. Deleting the primary
 --    credential leaves the account with none, and then it is not a verified
 --    owner: no later credential makes an account verified.
---
--- The backfill also records, on every stored passkey, that its registration
--- checked the user-verification flag (`credential_data.user_verified`): every
--- passkey this server stored before this migration was registered for sign-in,
--- where the registration requires the flag and the verifier refuses an answer
--- without it. From now on the registration writes the flag it checked.
 ALTER TABLE "user_credentials" ADD COLUMN "is_primary" boolean DEFAULT false NOT NULL;--> statement-breakpoint
 CREATE UNIQUE INDEX "idx_user_credentials_primary_unique" ON "user_credentials" USING btree ("user_id") WHERE "user_credentials"."is_primary";
 --> statement-breakpoint
@@ -42,10 +40,6 @@ FROM (
   ORDER BY "user_id", "created_at", "id"
 ) AS creating
 WHERE c."id" = creating."id";
---> statement-breakpoint
-UPDATE "user_credentials"
-SET "credential_data" = "credential_data" || '{"user_verified": true}'::jsonb
-WHERE "provider_type" = 'webauthn' AND NOT ("credential_data" ? 'user_verified');
 --> statement-breakpoint
 CREATE FUNCTION "user_credentials_primary_identity"() RETURNS trigger
 LANGUAGE plpgsql
@@ -60,20 +54,23 @@ BEGIN
             DETAIL = format('credential %s', OLD."id");
   END IF;
 
-  IF EXISTS (
-    SELECT 1 FROM public."user_credentials" c WHERE c."user_id" = NEW."user_id"
-  ) THEN
+  IF NEW."provider_type" = 'totp' THEN
     IF NEW."is_primary" THEN
-      RAISE EXCEPTION 'only the credential that creates an account is its primary identity'
+      RAISE EXCEPTION 'an authenticator app is never an account''s primary identity'
         USING ERRCODE = 'check_violation',
               CONSTRAINT = 'user_credentials_primary_first',
               TABLE = 'user_credentials',
-              DETAIL = format('user %s already has a credential', NEW."user_id");
+              DETAIL = format('user %s', NEW."user_id");
     END IF;
-  ELSIF NEW."provider_type" <> 'totp' THEN
+  ELSIF NOT EXISTS (
+    SELECT 1 FROM public."user_credentials" c WHERE c."user_id" = NEW."user_id"
+  ) AND EXISTS (
+    SELECT 1 FROM public."users" u
+    WHERE u."id" = NEW."user_id" AND u."created_at" = NEW."created_at"
+  ) THEN
     NEW."is_primary" := true;
   ELSIF NEW."is_primary" THEN
-    RAISE EXCEPTION 'an authenticator app is never an account''s primary identity'
+    RAISE EXCEPTION 'only the credential that creates an account is its primary identity'
       USING ERRCODE = 'check_violation',
             CONSTRAINT = 'user_credentials_primary_first',
             TABLE = 'user_credentials',

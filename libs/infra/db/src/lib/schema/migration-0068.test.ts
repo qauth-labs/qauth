@@ -2,11 +2,11 @@
  * Migration 0068 marks each account's primary identity (ADR-015 Decision 8
  * and question 13, #846): `user_credentials.is_primary`, at most one per user,
  * backfilled from the user's oldest credential that is no authenticator app,
- * marked by the database on a user's first credential from then on, and never
- * moved. The column has a constant default, so Postgres adds it without
- * rewriting the table and a release before this one keeps inserting
- * credentials during a rolling upgrade; the insert trigger marks the first one
- * it writes for a new account.
+ * marked by the database from then on on the credential written with the
+ * account, and never moved. The column has a constant default, so Postgres
+ * adds it without rewriting the table and a release before this one keeps
+ * inserting credentials during a rolling upgrade; the insert trigger marks the
+ * one it writes with a new account.
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -74,5 +74,10 @@ describe('migration 0068 (primary credential)', () => {
     const fn = statements.find((statement) => statement.startsWith('CREATE FUNCTION'));
     expect(fn).toContain('SET search_path = pg_catalog, pg_temp');
     expect(fn).toContain('public."user_credentials"');
+    expect(fn).toContain('public."users"');
+  });
+
+  it('rewrites no credential data', () => {
+    expect(statements.some((statement) => statement.includes('"credential_data" ='))).toBe(false);
   });
 });
